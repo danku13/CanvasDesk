@@ -438,6 +438,368 @@ pub fn build_frame_at(app: &App, viewport_logical: [f32; 2]) -> UiFrame {
     frame
 }
 
+// ============================================================================
+// FR-PERF-A: кэш UI-кадра с инвалидацией по сигнатуре
+// ============================================================================
+//
+// `build_frame(app)` вызывался 2× за кадр (hover hit-test в `on_cursor_moved`
+// + DebugOverlay в `RedrawRequested`) с полной пересборкой `build_registry` +
+// `UiFrame::from_registry` + sort + `fill_hit_rects` для каждой поверхности
+// (~сотни мкс–мс на кадр). Кэш + сигнатура инвалидации — пересборка только
+// при реальном изменении состояния; типичный случай (движение курсора без
+// прочих взаимодействий) — cache hit во втором вызове и между кадрами.
+//
+// Сигнатура `UiFrameSig` собирает всё, что влияет на выход `build_frame_at`:
+// вьюпорт, ревизия сцены, позиция/зум камеры (через `palette_anchor_screen`),
+// битовые флаги открытых поверхностей, хэш выделения (для `palette_target`),
+// скроллы/раскрытия отдельных панелей и т.д. Сравнение дешёвое (~80 байт
+// primitive compares), без аллокаций.
+
+/// FR-PERF-A: Битовые флаги открытых/активных поверхностей для сигнатуры
+/// кэша UI-кадра. Любое изменение → пересборка (hit-rect'ы зависят от
+/// состава кадра). Простые `pub const` вместо крейта `bitflags` — G7
+/// (0 внешних зависимостей у canvas-ui/canvas-app).
+pub mod ui_frame_flags {
+    /// Wheel-меню шаблонов открыто (`app.wheel_menu.is_some()`).
+    pub const WHEEL_OPEN: u32 = 1 << 0;
+    /// What-if активен (`app.scene.whatif_active || whatif_pill_visible`).
+    pub const WHATIF_ACTIVE: u32 = 1 << 1;
+    /// Список подмен whatif раскрыт (`app.whatif_list_open`).
+    pub const WHATIF_LIST_OPEN: u32 = 1 << 2;
+    /// Таблица сравнения whatif открыта (`app.whatif_compare_open`).
+    pub const WHATIF_COMPARE_OPEN: u32 = 1 << 3;
+    /// Панель хоткеев открыта (`app.hotkeys_open`).
+    pub const HOTKEYS_OPEN: u32 = 1 << 4;
+    /// Модалка настроек открыта (`app.settings_open`).
+    pub const SETTINGS_OPEN: u32 = 1 << 5;
+    /// Выпадающее меню строки настроек открыто (`app.settings_dropdown.open_row.is_some()`).
+    pub const SETTINGS_DROPDOWN_OPEN: u32 = 1 << 6;
+    /// Контекстное меню канваса открыто (`app.menu.is_some()`).
+    pub const MENU_OPEN: u32 = 1 << 7;
+    /// Подменю канваса раскрыто (`app.menu.as_ref().and_then(|m| m.submenu.as_ref()).is_some()`).
+    pub const MENU_SUBMENU_OPEN: u32 = 1 << 8;
+    /// Меню выбора (choice_menu) открыто (`app.choice_menu.is_some()`).
+    pub const CHOICE_MENU_OPEN: u32 = 1 << 9;
+    /// Док палитры шаблонов развёрнут (`app.template_panel.open`).
+    pub const TEMPLATE_PANEL_OPEN: u32 = 1 << 10;
+    /// Палитра выделения видима (`app.palette_geometry().is_some()`).
+    pub const PALETTE_VISIBLE: u32 = 1 << 11;
+    /// Hover-раскрытие группы палитры активно (`app.palette_hover.open.is_some()`).
+    pub const PALETTE_HOVER_OPEN: u32 = 1 << 12;
+    /// Просмотрщик документации открыт (`app.docs.is_some()`).
+    pub const DOCS_OPEN: u32 = 1 << 13;
+    /// Меню помощи «?» открыто (`app.help_menu.is_some()`).
+    pub const HELP_MENU_OPEN: u32 = 1 << 14;
+    /// Подменю документации в меню помощи раскрыто (`help_menu.docs_open`).
+    pub const HELP_MENU_DOCS_OPEN: u32 = 1 << 15;
+    /// Main stage открыт (`app.main_stage.is_some()`).
+    pub const STAGE_OPEN: u32 = 1 << 16;
+    /// Панель поиска открыта (`app.search.is_open()`).
+    pub const SEARCH_OPEN: u32 = 1 << 17;
+    /// Карта проливаний открыта (`app.flow_map_open`).
+    pub const FLOW_MAP_OPEN: u32 = 1 << 18;
+    /// Сессия инлайн-редактирования активна (`app.editing.is_some()`).
+    pub const EDITOR_OPEN: u32 = 1 << 19;
+    /// Окно проверки цепочки расчёта открыто (`app.explain.is_some()`).
+    pub const EXPLAIN_OPEN: u32 = 1 << 20;
+    /// Диалог ревью автосвязи открыт (`app.autolink_review.is_some()`).
+    pub const AUTOLINK_REVIEW_OPEN: u32 = 1 << 21;
+    /// Модальный диалог Да/Нет открыт (`app.dialog.is_some()`).
+    pub const DIALOG_OPEN: u32 = 1 << 22;
+    /// Галерея схем открыта (`app.scheme_gallery.open`).
+    pub const GALLERY_OPEN: u32 = 1 << 23;
+    /// Витрина кита открыта (`app.kit_gallery_open`).
+    pub const KIT_GALLERY_OPEN: u32 = 1 << 24;
+    /// UI-админпанель открыта (`app.admin_open`).
+    pub const ADMIN_OPEN: u32 = 1 << 25;
+    /// Онбординг-тур активен (`app.onboarding.is_some()`).
+    pub const ONBOARDING_OPEN: u32 = 1 << 26;
+    /// Empty-state карточка видна (`app.empty_state_visible()`).
+    pub const EMPTY_VISIBLE: u32 = 1 << 27;
+    /// Миникарта видна (`app.minimap_rect().is_some()`).
+    pub const MINIMAP_VISIBLE: u32 = 1 << 28;
+    /// Бейдж автосвязи виден (`app.autolink_badge_visible()`).
+    pub const AUTOLINK_BADGE_VISIBLE: u32 = 1 << 29;
+    /// Drag ноды активен — глушит `palette_target` (см. `palette_target()`).
+    pub const DRAGGING: u32 = 1 << 30;
+    /// Drag резиновой линии связи или рамки выделения активен — глушит
+    /// `palette_target` (см. `palette_target()`).
+    pub const EDGE_OR_SELECT_DRAG: u32 = 1 << 31;
+}
+
+/// FR-PERF-A: Сигнатура инвалидации кэша UI-кадра — всё, что влияет на
+/// `build_frame_at`. Любое изменение → пересборка. Сравнение дешёвое
+/// (primitive compares, без аллокаций). Хэш через `PartialEq` (derive).
+///
+/// Поля:
+/// * `viewport` — логический (w, h); влияет на все layout-функции.
+/// * `scene_revision` — `SceneState::revision` (правки нод/рёбер/групп,
+///   смена активного whatif-сценария — см. `recompute_flow`).
+/// * `camera` — (center_x, center_y, zoom); позиционирует PALETTE через
+///   `palette_anchor_screen` (`world_to_screen` от bbox выделения).
+/// * `flags` — битовые флаги открытых поверхностей (см. [`ui_frame_flags`]).
+/// * `selection_hash` — хэш `selected` + `selected_nodes` (PALETTE зависит
+///   от выделения; выделение НЕ меняет `scene_revision`).
+/// * `whatif_active` / `whatif_scenario_count` / `whatif_frozen_count` /
+///   `whatif_override_count` — состояние what-if (сценарии/заморозки/подмены
+///   НЕ меняют `scene_revision`, но влияют на `whatif_bar_layout`).
+/// * `flow_map_scroll_offset` — скролл списка карты проливаний.
+/// * `template_hover_open` / `template_hover_scroll` — hover-раскрытие
+///   категории template-strip (flyout влияет на TEMPLATE_STRIP hit-rect'ы).
+/// * `palette_hover_open` — раскрытая hover'ом группа палитры (PALETTE
+///   dropdown hit-rect).
+/// * `onboarding_step` — шаг онбординг-тура (ONBOARDING card_rect).
+/// * `language` — язык интерфейса (влияет на замеряемые ширины подписей
+///   палитры/меню/диалогов/онбординга).
+/// * `button_corner` — позиция угловых кнопок (CORNER_BUTTONS hit-rect'ы).
+/// * `settings_tab` — активный таб модалки настроек (SETTINGS modal_layout).
+/// * `search_scroll_top` / `search_rows_count` — состояние панели поиска
+///   (SEARCH layout: число видимых строк = clamp(rows − scroll, MAX)).
+/// * `admin_section` — активная секция админпанели (ADMIN tokens layout).
+/// * `wheel_template_count` — число шаблонов выбранной категории wheel-меню
+///   (WHEEL extent зависит от count; `wheel_menu.category` меняется кликом
+///   без смены флага `WHEEL_OPEN`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UiFrameSig {
+    /// Логический viewport (w, h) — влияет на все layout-функции.
+    pub viewport: [f32; 2],
+    /// `SceneState::revision` — ревизия модели (правки нод/рёбер/групп).
+    pub scene_revision: u64,
+    /// Камера (center_x, center_y, zoom) — PALETTE через world_to_screen.
+    pub camera: [f32; 3],
+    /// Битовые флаги открытых поверхностей (см. [`ui_frame_flags`]).
+    pub flags: u32,
+    /// Хэш выделения (selected + selected_nodes) — для PALETTE.
+    pub selection_hash: u64,
+    /// Активный whatif-сценарий (-1 = None/«База»).
+    pub whatif_active: i32,
+    /// Число whatif-сценариев (`scene.scenarios.len()`).
+    pub whatif_scenario_count: u32,
+    /// Число замороженных whatif-сценариев (`scene.frozen.len()`).
+    pub whatif_frozen_count: u32,
+    /// Число построчных подмен активного сценария (`whatif_override_count`).
+    pub whatif_override_count: u32,
+    /// Скролл списка карты проливаний (`flow_map_scroll.offset`).
+    pub flow_map_scroll_offset: f32,
+    /// Раскрытая категория template-strip (-1 = None, иначе индекс).
+    pub template_hover_open: i32,
+    /// Скролл flyout'а template-strip (`template_hover.scroll_top`).
+    pub template_hover_scroll: u32,
+    /// Раскрытая hover'ом группа палитры (-1 = None, иначе индекс).
+    pub palette_hover_open: i32,
+    /// Шаг онбординг-тура (0 если `ONBOARDING_OPEN` сброшен).
+    pub onboarding_step: u32,
+    /// Язык интерфейса (`settings.language`).
+    pub language: canvas_core::Language,
+    /// Позиция угловых кнопок (`settings.button_corner`).
+    pub button_corner: canvas_core::Corner,
+    /// Активный таб настроек (`settings_tab`).
+    pub settings_tab: u32,
+    /// Скролл списка результатов поиска (`search.scroll_top`).
+    pub search_scroll_top: u32,
+    /// Число строк поиска (`search.rows.len()`).
+    pub search_rows_count: u32,
+    /// Активная секция админпанели.
+    pub admin_section: crate::admin_ui::AdminSection,
+    /// Число шаблонов выбранной категории wheel-меню (0 — категория не
+    /// выбрана; влияет на `wheel_geometry.extent` → WHEEL hit-rect).
+    pub wheel_template_count: u32,
+}
+
+/// FR-PERF-A: Простой нечётный миксер хэша (FNV-1a вариант) для примитивов.
+/// Без аллокаций, без ветвлений (кроме цикла по selected_nodes). Достаточно
+/// для обнаружения любого изменения состава выделения (порядок важен —
+/// `selected_nodes` сохраняет порядок добавления).
+fn mix_u64(mut state: u64, value: u64) -> u64 {
+    state ^= value;
+    state = state.wrapping_mul(0x9E3779B97F4A7C15);
+    state.rotate_left(13)
+}
+
+/// FR-PERF-A: Хэш состояния выделения (`selected` + `selected_nodes`).
+/// Определяет `palette_target()` (без блокировок модалей — те в `flags`):
+/// None/Node(primary)/Edge(index) + состав `selected_nodes` (для bbox
+/// `palette_anchor_screen`). Любое изменение → другая сигнатура → пересборка.
+fn selection_hash(app: &App) -> u64 {
+    let mut h = 0u64;
+    match &app.selected {
+        Some(Selection::Node(i)) => {
+            h = mix_u64(h, 1);
+            h = mix_u64(h, *i as u64);
+        }
+        Some(Selection::Edge(i)) => {
+            h = mix_u64(h, 2);
+            h = mix_u64(h, *i as u64);
+        }
+        None => h = mix_u64(h, 0),
+    }
+    h = mix_u64(h, app.selected_nodes.len() as u64);
+    for &i in &app.selected_nodes {
+        h = mix_u64(h, i as u64);
+    }
+    h
+}
+
+/// FR-PERF-A: Сигнатура инвалидации кэша UI-кадра под текущее состояние
+/// приложения. Все вызовы `build_frame` в коде заменяются на `App::ui_frame`,
+/// который сравнивает сигнатуру с кэшем: совпала — возвращает кэш, иначе —
+/// пересборка и запись в кэш.
+///
+/// Полнота: поля покрывают все входы `build_registry` + `fill_hit_rects`.
+/// Известные неучтённые факторы (редкие, без visual-регрессии):
+/// * `app.templates` (TemplateRegistry) — меняется при импорте custom-шаблонов
+///   (явная инвалидация `cached_ui_frame = None` в точке изменения).
+/// * `app.dialog` содержимое (title/body инстанса) — стабильно на жизнь
+///   инстанса; закрытие+открытие другого диалога меняет флаг `DIALOG_OPEN`.
+/// * `app.scheme_gallery` (filter/category/scroll) — GALLERY hit-rect =
+///   panel_rect, зависит только от viewport.
+/// * `app.docs` (page/scroll) — DOCS hit-rect = viewer_rect(viewport).
+/// * `app.help_menu.origin` — стабильно на жизнь инстанса.
+/// * `app.menu.origin` / `app.choice_menu.origin` / `app.wheel_menu.screen`
+///   — стабильно на жизнь инстанса.
+pub fn build_frame_sig(app: &App) -> UiFrameSig {
+    let viewport = app.viewport_logical();
+    let camera_pos = app.camera.position();
+    let camera_zoom = app.camera.zoom();
+    // Битовые флаги открытых поверхностей — единственный источник
+    // «какие поверхности в кадре». Порядок проверок — произвольный (OR).
+    let mut flags: u32 = 0;
+    if app.wheel_menu.is_some() {
+        flags |= ui_frame_flags::WHEEL_OPEN;
+    }
+    if app.scene.whatif_active || whatif_pill_visible(app) {
+        flags |= ui_frame_flags::WHATIF_ACTIVE;
+    }
+    if app.whatif_list_open {
+        flags |= ui_frame_flags::WHATIF_LIST_OPEN;
+    }
+    if app.whatif_compare_open {
+        flags |= ui_frame_flags::WHATIF_COMPARE_OPEN;
+    }
+    if app.hotkeys_open {
+        flags |= ui_frame_flags::HOTKEYS_OPEN;
+    }
+    if app.settings_open {
+        flags |= ui_frame_flags::SETTINGS_OPEN;
+    }
+    if app.settings_dropdown.open_row.is_some() {
+        flags |= ui_frame_flags::SETTINGS_DROPDOWN_OPEN;
+    }
+    if app.menu.is_some() {
+        flags |= ui_frame_flags::MENU_OPEN;
+    }
+    if app.menu.as_ref().and_then(|m| m.submenu.as_ref()).is_some() {
+        flags |= ui_frame_flags::MENU_SUBMENU_OPEN;
+    }
+    if app.choice_menu.is_some() {
+        flags |= ui_frame_flags::CHOICE_MENU_OPEN;
+    }
+    if app.template_panel.open {
+        flags |= ui_frame_flags::TEMPLATE_PANEL_OPEN;
+    }
+    if app.palette_geometry().is_some() {
+        flags |= ui_frame_flags::PALETTE_VISIBLE;
+    }
+    if app.palette_hover.open.is_some() {
+        flags |= ui_frame_flags::PALETTE_HOVER_OPEN;
+    }
+    if app.docs.is_some() {
+        flags |= ui_frame_flags::DOCS_OPEN;
+    }
+    if let Some(help) = &app.help_menu {
+        flags |= ui_frame_flags::HELP_MENU_OPEN;
+        if help.docs_open {
+            flags |= ui_frame_flags::HELP_MENU_DOCS_OPEN;
+        }
+    }
+    if app.main_stage.is_some() {
+        flags |= ui_frame_flags::STAGE_OPEN;
+    }
+    if app.search.is_open() {
+        flags |= ui_frame_flags::SEARCH_OPEN;
+    }
+    if app.flow_map_open {
+        flags |= ui_frame_flags::FLOW_MAP_OPEN;
+    }
+    if app.editing.is_some() {
+        flags |= ui_frame_flags::EDITOR_OPEN;
+    }
+    if app.explain.is_some() {
+        flags |= ui_frame_flags::EXPLAIN_OPEN;
+    }
+    if app.autolink_review.is_some() {
+        flags |= ui_frame_flags::AUTOLINK_REVIEW_OPEN;
+    }
+    if app.dialog.is_some() {
+        flags |= ui_frame_flags::DIALOG_OPEN;
+    }
+    if app.scheme_gallery.open {
+        flags |= ui_frame_flags::GALLERY_OPEN;
+    }
+    if app.kit_gallery_open {
+        flags |= ui_frame_flags::KIT_GALLERY_OPEN;
+    }
+    if app.admin_open {
+        flags |= ui_frame_flags::ADMIN_OPEN;
+    }
+    if app.onboarding.is_some() {
+        flags |= ui_frame_flags::ONBOARDING_OPEN;
+    }
+    if app.empty_state_visible() {
+        flags |= ui_frame_flags::EMPTY_VISIBLE;
+    }
+    if app.minimap_rect().is_some() {
+        flags |= ui_frame_flags::MINIMAP_VISIBLE;
+    }
+    if app.autolink_badge_visible() {
+        flags |= ui_frame_flags::AUTOLINK_BADGE_VISIBLE;
+    }
+    if app.dragging.is_some() {
+        flags |= ui_frame_flags::DRAGGING;
+    }
+    if app.edge_drag.is_some() || app.select_rect.is_some() {
+        flags |= ui_frame_flags::EDGE_OR_SELECT_DRAG;
+    }
+    // Hover-раскрытия и скроллы отдельных панелей — влияют на hit-rect'ы
+    // внутри поверхности (не на состав кадра).
+    let (template_hover_open, template_hover_scroll) = match &app.template_hover {
+        Some(h) => (h.open.map_or(-1, |i| i as i32), h.scroll_top as u32),
+        None => (-1, 0),
+    };
+    let palette_hover_open = app.palette_hover.open.map_or(-1, |i| i as i32);
+    let flow_map_scroll_offset = app.flow_map_scroll.offset;
+    let onboarding_step = app.onboarding.as_ref().map(|s| s.step as u32).unwrap_or(0);
+    let wheel_template_count = app
+        .wheel_menu
+        .as_ref()
+        .and_then(|m| m.category.as_deref())
+        .map(|c| app.templates.by_category(c).len() as u32)
+        .unwrap_or(0);
+    UiFrameSig {
+        viewport,
+        scene_revision: app.scene.revision,
+        camera: [camera_pos[0], camera_pos[1], camera_zoom],
+        flags,
+        selection_hash: selection_hash(app),
+        whatif_active: app.scene.active_scenario.map_or(-1, |i| i as i32),
+        whatif_scenario_count: app.scene.scenarios.len() as u32,
+        whatif_frozen_count: app.scene.frozen.len() as u32,
+        whatif_override_count: app.scene.whatif_override_count() as u32,
+        flow_map_scroll_offset,
+        template_hover_open,
+        template_hover_scroll,
+        palette_hover_open,
+        onboarding_step,
+        language: app.settings.language,
+        button_corner: app.settings.button_corner,
+        settings_tab: app.settings_tab as u32,
+        search_scroll_top: app.search.scroll_top as u32,
+        search_rows_count: app.search.rows.len() as u32,
+        admin_section: app.admin_section,
+        wheel_template_count,
+    }
+}
+
 /// Hit-rect'ы поверхности из тех же чистых layout-функций, что использует
 /// ввод (детерминизм: pick ≡ поведению прежних веток).
 fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {

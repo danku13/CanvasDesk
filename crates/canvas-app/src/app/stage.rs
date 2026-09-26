@@ -238,8 +238,12 @@ fn paint_calc_panel_rows(
 
 impl App {
     /// Пересобрать/обновить миникарту (T13, SPEC §6.1): не каждый кадр, а по
-    /// dirty-условиям — правки сцены (dirty_until save), движение камеры
-    /// (пан/зум двигают рамку viewport) или смена размера буфера (DPI/resize).
+    /// факту изменения — мутация модели (`scene.revision`, FR-PERF-B),
+    /// движение камеры (пан/зум двигают рамку viewport) или смена размера
+    /// буфера (DPI/resize). Ранее проверяли `dirty_since`, но он висит 2 с
+    /// после правки (debounce автосейва) — каждый кадр в этом окне
+    /// пересобирал снимок с полным `Canvas::clone()`. Ревизия bumped только
+    /// при реальной мутации — между правками кадры дёшево пропускаются.
     pub(super) fn update_minimap(&mut self) {
         // Вычисления (immutable) — до mutable borrow рендерера
         let viewport = self.viewport_logical();
@@ -258,15 +262,16 @@ impl App {
         let size_changed = self
             .minimap_sig
             .is_some_and(|prev| prev.2 != width_px || prev.3 != height_px);
-        // dirty_until-автосейва: правки сцены пересобирают снимок; между
-        // правкой и сейвом (2 с debounce) каждый запрошенный кадр обновляет
-        // миникарту — это и есть видимость перемещений в реальном времени
-        let scene_dirty = self.scene.dirty_since.is_some();
-        if self.minimap.is_some() && self.minimap_sig == Some(sig) && !scene_dirty {
+        // FR-PERF-B: ревизия вместо dirty_since. dirty висит 2 с после правки
+        // (debounce автосейва) — прежняя логика клонировала Canvas каждый
+        // кадр всё это время. Ревизия bumped ТОЛЬКО при реальной мутации
+        // модели; между правками кадры дёшево пропускаются.
+        let scene_changed = self.scene.revision != self.minimap_revision;
+        if self.minimap.is_some() && self.minimap_sig == Some(sig) && !scene_changed {
             return;
         }
         let viewport_world = self.camera.visible_world_rect(viewport);
-        if self.minimap.is_none() || scene_dirty || size_changed {
+        if self.minimap.is_none() || scene_changed || size_changed {
             // сцена/размер изменились — полный снимок (T13-A)
             // FR-011: свернутые поддеревья не рисуются на миникарте
             let hidden = self.hidden_subtree_nodes();
@@ -294,6 +299,9 @@ impl App {
                 width_px,
                 height_px,
             ));
+            // FR-PERF-B: запоминаем ревизию, по которой собрали снимок —
+            // следующие кадры до новой мутации дёшево пропускаются.
+            self.minimap_revision = self.scene.revision;
         } else if let Some(minimap) = self.minimap.as_mut() {
             // только камера — пересчёт подгонки и рамки (дешевле снимка)
             minimap.set_viewport(viewport_world);

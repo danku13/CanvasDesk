@@ -1004,12 +1004,52 @@ pub struct App {
     /// Миникарта (T13): снимок сцены + подгонка (CPU, SPEC §6.1).
     minimap: Option<Minimap>,
     /// Сигнатура состояния последней растеризации миникарты:
-    /// (центр камеры, зум, размер буфера). Сцена отслеживается через
-    /// dirty_since — правки/перемещения пересобирают снимок.
+    /// (центр камеры, зум, размер буфера). Камера отслеживается через эту
+    /// сигнатуру; сцена — через `minimap_revision` (см. ниже).
     minimap_sig: Option<([f32; 2], f32, u32, u32)>,
     /// Drag по миникарте (T13): world-точка под курсором следует за ним
     /// (клик без движения = мгновенное центрирование).
     minimap_drag: bool,
+    /// FR-PERF-B: ревизия сцены, по которой собран текущий снимок миникарты.
+    /// Раньше `update_minimap` клонировал весь Canvas каждый dirty-кадр
+    /// (dirty_since висит 2 с после правки — десятки мс на больших канвасах).
+    /// Теперь: пересборка только при изменении revision (мутации модели),
+    /// а не на каждый кадр пока dirty.
+    minimap_revision: u64,
+    /// FR-PERF-A: кэш UI-кадра (`build_frame` вызывался 2× за кадр — hover
+    /// hit-test в `on_cursor_moved` + DebugOverlay в `RedrawRequested` — с
+    /// полной пересборкой `build_registry` + `UiFrame::from_registry` +
+    /// sort + `fill_hit_rects` для каждой поверхности). Кэш + сигнатура
+    /// инвалидации (вьюпорт + `scene.revision` + камера + флаги открытых
+    /// поверхностей + хэш выделения + скроллы/раскрытия панелей) —
+    /// пересборка только при реальном изменении состояния. Доступ — через
+    /// [`App::ui_frame`]; прямые вызовы `ui_registry::build_frame(self)` в
+    /// коде заменены на него. `None` — кэш пуст (первый кадр / явная
+    /// инвалидация `cached_ui_frame = None` в точке редкой смены состояния,
+    /// неучтённого сигнатурой — напр. импорт custom-шаблонов).
+    cached_ui_frame: Option<(ui_registry::UiFrameSig, canvas_ui::UiFrame)>,
+    /// FR-PERF-C: признак того, что для текущего dirty-окна уже запланирован
+    /// будящий кадр. Прежняя логика `about_to_wait` звала `request_redraw`
+    /// КАЖДЫЙ кадр пока `scene.dirty_since.is_some()` (2 с после правки) —
+    /// на web это 2 с непрерывного 98мс-рендера (~20 тяжёлых кадров на
+    /// правку). Теперь: на первой правке окна выставляется `true` и званится
+    /// ровно один `request_redraw`, который будит `about_to_wait` для
+    /// debounce-проверки автосейва; между правками кадры пропускаются
+    /// дёшево (Task A — `ui_frame` из кэша; Task B — `update_minimap`
+    /// пропускается по `minimap_revision`). Сбрасывается в `false`, когда
+    /// `dirty_since` становится `None` (т.е. `save_now` отработал) —
+    /// следующая правка снова пройдёт один redraw.
+    dirty_redraw_scheduled: bool,
+    /// FR-PERF-C: throttle hover-расчёта в `on_cursor_moved`. Прежде на
+    /// каждый pointermove (браузер шлёт 100+/сек) шли `ui_frame` +
+    /// `selective_hit` + `edge_at` (rstar + обход рёбер). Теперь: не чаще
+    /// 1 раза в 16мс + skip если сдвиг курсора от последней проверки <2px
+    /// (мелкий дрожь не пересчитывает hit-test). `None` — ни одной проверки
+    /// ещё не было (первое событие проходит безусловно).
+    hover_last_check: Option<Instant>,
+    /// FR-PERF-C: курсор (logical) на момент последнего не-throttled
+    /// hit-test; отсчитывает дистанцию 2px-порога. См. `hover_last_check`.
+    hover_last_cursor: Vec2,
     /// M5 (T20-F): менеджер виджетов — реестр пакетов, LOD-план, host.
     widgets: crate::widgets::WidgetManager,
     /// Панель поиска (T14): поле, строки, выбор, скролл.
@@ -1361,6 +1401,22 @@ impl App {
             minimap: None,
             minimap_sig: None,
             minimap_drag: false,
+            // FR-PERF-B: 0 = ни одного снимка ещё не собрано; первая же
+            // проверка `scene.revision != minimap_revision` даст true и
+            // запустит capture. Дальше — только при реальной мутации модели.
+            minimap_revision: 0u64,
+            // FR-PERF-A: кэш UI-кадра пуст до первого обращения (`App::ui_frame`
+            // заполнит его по сигнатуре; пересборка — при несовпадении sig).
+            cached_ui_frame: None,
+            // FR-PERF-C: dirty-окна ещё нет — будящий кадр не запланирован;
+            // первая правка выставит dirty_since и в about_to_wait званёт
+            // один request_redraw, выставив флаг.
+            dirty_redraw_scheduled: false,
+            // FR-PERF-C: throttle hover ещё не делался (первый pointermove
+            // пройдёт безусловно); курсор-якорь в нуле (до первого ввода
+            // self.cursor тоже [0,0] — синхронно).
+            hover_last_check: None,
+            hover_last_cursor: [0.0, 0.0],
             search: SearchPanel::default(),
             search_service,
             search_nodes: Vec::new(),
@@ -4015,14 +4071,36 @@ impl App {
     /// настроек, поиск, меню+подменю, палитра, хоткеи, миникарта, диалог).
     /// Практика canvas-приложений (Miro/Figma): колесо/пинч над плавающим
     /// UI холст не двигают.
-    fn cursor_over_screen_surface(&self) -> bool {
+    fn cursor_over_screen_surface(&mut self) -> bool {
         // FR-052 (U2 PRD-0009): колесо/пинч глушатся над экранной
         // поверхностью — решение из реестра (HitStack::absorbs по кадру),
         // а не из ручного списка rect'ов. Панели Capture — в своих rect'ах,
         // Block-модали — везде (инвариант 8: при stage колесо глушится
         // ранним return в on_mouse_wheel/on_pinch).
-        let frame = ui_registry::build_frame(self);
+        // FR-PERF-A: кадр берётся из кэша (`App::ui_frame`) — пересборка
+        // только при изменении сигнатуры (вьюпорт/сцена/камера/флаги/...).
+        let frame = self.ui_frame();
         HitStack::absorbs(&frame, UiPoint::new(self.cursor[0], self.cursor[1]))
+    }
+
+    /// FR-PERF-A: UI-кадр с кэшем (замена прямым вызовам
+    /// `ui_registry::build_frame(self)`). Сигнатура совпала — кэш, иначе —
+    /// пересборка и запись в кэш. Типичный случай (движение курсора без
+    /// прочих взаимодействий) — cache hit между двумя вызовами за кадр
+    /// (`on_cursor_moved` hover + `RedrawRequested` DebugOverlay) и между
+    /// кадрами. См. [`ui_registry::UiFrameSig`] — полный список учитываемых
+    /// полей; редкие неучтённые (напр. `app.templates` после импорта
+    /// custom-шаблонов) — инвалидировать присваиванием `cached_ui_frame = None`.
+    pub(crate) fn ui_frame(&mut self) -> canvas_ui::UiFrame {
+        let sig = ui_registry::build_frame_sig(self);
+        if let Some((cached_sig, frame)) = &self.cached_ui_frame {
+            if *cached_sig == sig {
+                return frame.clone();
+            }
+        }
+        let frame = ui_registry::build_frame(self);
+        self.cached_ui_frame = Some((sig, frame.clone()));
+        frame
     }
 
     /// Размер viewport в логических пикселях. Делитель — effective scale

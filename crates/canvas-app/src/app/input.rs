@@ -2473,7 +2473,9 @@ impl App {
                 // Block-модали глотают backdrop по контракту поверхности;
                 // Capture — только в своих rect'ах; None → dismiss
                 // транзиентов и прежняя canvas-цепочка (мир L0).
-                let ui_frame = ui_registry::build_frame(self);
+                // FR-PERF-A: кадр — из кэша (`App::ui_frame`), не прямой
+                // вызов `build_frame` (он же идёт в `RedrawRequested`).
+                let ui_frame = self.ui_frame();
                 let pick = HitStack::pick(&ui_frame, UiPoint::new(self.cursor[0], self.cursor[1]));
                 // Оракул браузерного дыма: кто забрал клик в точке (или None
                 // — клик уходит канвасу), ?log=debug
@@ -3342,55 +3344,89 @@ impl App {
                 // Модальность (практики UI): над открытым диалогом/поиском/
                 // меню канваса hover-порты гасятся — сквозь оверлей
                 // не подсвечивают
-                let world = self.cursor_world();
-                // FR-052 (U2): hover-порты гасятся, если клик в точке
-                // курсора перехватила экранная поверхность (pick по кадру
-                // реестра) — прежний список dialog/search/menu заменён
-                // правилом (модали/панели не подсвечивают мир под собой)
-                let hovered = {
-                    let frame = ui_registry::build_frame(self);
-                    if HitStack::absorbs(&frame, UiPoint::new(self.cursor[0], self.cursor[1])) {
-                        None
-                    } else {
-                        self.selective_hit(world)
+                // FR-PERF-C: throttle hit-test — не чаще 16мс и skip при
+                // сдвиге <2px от последней проверки. Браузер шлёт 100+
+                // pointermove/сек; hit-test нужен только при смене ноды под
+                // курсором, не на каждый пиксель. Курсор (`self.cursor`)
+                // уже обновлён выше — аффорданс (cursor-icon), drag/pan и
+                // рамка выделения работают как прежде; пропускаем только
+                // `ui_frame`+`selective_hit`+`edge_at`. Лаг смены hover —
+                // ≤ 16мс (один пропущенный pointermove), визуально незаметен;
+                // быстрое движение через ноды всегда проходит (moved_enough =
+                // true при сдвиге ≥2px — каждая нода на канвасе крупнее).
+                let now = Instant::now();
+                let dx = logical[0] - self.hover_last_cursor[0];
+                let dy = logical[1] - self.hover_last_cursor[1];
+                // 2px² порог: меньше — дрожь, не пересчитываем hit-test.
+                let moved_enough = dx * dx + dy * dy >= 4.0;
+                // `map_or(true, …)` = `is_none_or(…)` — но стабилен с 1.41
+                // (MSRV 1.80); true если проверки ещё не было, либо прошло
+                // ≥16мс с последней.
+                let time_ok = self
+                    .hover_last_check
+                    .map_or(true, |t| now.duration_since(t).as_millis() >= 16);
+                if moved_enough || time_ok {
+                    self.hover_last_check = Some(now);
+                    self.hover_last_cursor = logical;
+                    let world = self.cursor_world();
+                    // FR-052 (U2): hover-порты гасятся, если клик в точке
+                    // курсора перехватила экранная поверхность (pick по кадру
+                    // реестра) — прежний список dialog/search/menu заменён
+                    // правилом (модали/панели не подсвечивают мир под собой)
+                    // FR-PERF-A: кадр — из кэша (`App::ui_frame`), не прямой
+                    // вызов `build_frame` (он же идёт в `RedrawRequested` и
+                    // `on_mouse_press`). Mut-заём `ui_frame` освобождается
+                    // возвратом owned-кадра — последующие `&self.cursor` и
+                    // `self.selective_hit(world)` компилируются без конфликтов.
+                    let hovered = {
+                        let frame = self.ui_frame();
+                        if HitStack::absorbs(&frame, UiPoint::new(self.cursor[0], self.cursor[1])) {
+                            None
+                        } else {
+                            self.selective_hit(world)
+                        }
+                    };
+                    if hovered != self.hovered {
+                        self.hovered = hovered;
+                        self.request_redraw();
+                    } else if self.palette_target().is_some()
+                        || self.menu.is_some()
+                        || self.search.is_open()
+                        || self.settings_open
+                    {
+                        // Палитра/меню/поиск/настройки: hover-подсветка элементов
+                        // следует за курсором
+                        self.request_redraw();
                     }
-                };
-                if hovered != self.hovered {
-                    self.hovered = hovered;
-                    self.request_redraw();
-                } else if self.palette_target().is_some()
-                    || self.menu.is_some()
-                    || self.search.is_open()
-                    || self.settings_open
-                {
-                    // Палитра/меню/поиск/настройки: hover-подсветка элементов
-                    // следует за курсором
-                    self.request_redraw();
+                    // FR-042 (E2): BundleHover — ребро пучка веса ≥ 2 под
+                    // курсором (hover-бамп агрегированной линии + курсор);
+                    // вычисляется на кадр ввода, в кэш не пишется. Нода под
+                    // курсором / открытый stage / drag — hover пучка нет.
+                    let bundle_hover = if self.main_stage.is_none()
+                        && self.edge_drag.is_none()
+                        && self.settings.edge_aggregation
+                        && hovered.is_none()
+                    {
+                        edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes).filter(
+                            |&i| {
+                                self.scene
+                                    .bundles
+                                    .bundle_of_edge(i)
+                                    .is_some_and(|b| b.weight >= 2)
+                            },
+                        )
+                    } else {
+                        None
+                    };
+                    if bundle_hover != self.bundle_hover {
+                        self.bundle_hover = bundle_hover;
+                        self.request_redraw();
+                    }
                 }
-                // FR-042 (E2): BundleHover — ребро пучка веса ≥ 2 под
-                // курсором (hover-бамп агрегированной линии + курсор);
-                // вычисляется на кадр ввода, в кэш не пишется. Нода под
-                // курсором / открытый stage / drag — hover пучка нет.
-                let bundle_hover = if self.main_stage.is_none()
-                    && self.edge_drag.is_none()
-                    && self.settings.edge_aggregation
-                    && hovered.is_none()
-                {
-                    edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes).filter(
-                        |&i| {
-                            self.scene
-                                .bundles
-                                .bundle_of_edge(i)
-                                .is_some_and(|b| b.weight >= 2)
-                        },
-                    )
-                } else {
-                    None
-                };
-                if bundle_hover != self.bundle_hover {
-                    self.bundle_hover = bundle_hover;
-                    self.request_redraw();
-                }
+                // else: пропускаем тяжёлый hit-test на этом pointermove —
+                // курсор уже обновлён, sync_cursor_icon в конце on_cursor_moved
+                // отработает нормально; следующий move (≥2px или ≥16мс) поймает
+                // смену hover.
             }
         }
         // Аффорданс курсора (Grabbing/Text/NwseResize/Arrow) — после всех
