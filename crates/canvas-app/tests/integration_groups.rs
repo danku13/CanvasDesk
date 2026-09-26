@@ -407,6 +407,60 @@ fn test_insert_expand_drag_out() {
     assert_eq!(group_children(&canvas, 0), vec![1, 2]);
 }
 
+/// FR-012 v4: кидание ноды во ВЛОЖЕННУЮ группу расширяет не только её, но и
+/// родительскую цепочку — каждая рамка вмещает всё, что внутри неё.
+/// Полная цепочка жеста чистыми функциями: group_add_children (втягивание)
+/// → group_expand_to_children_deep (авторасширение вверх).
+#[test]
+fn test_nested_drop_expands_ancestor_chain() {
+    let mut canvas = Canvas::default();
+    // outer (0..500 × 0..400) ⊃ inner (50..250 × 50..200); нода n снаружи
+    let mut outer = Node::group("outer", 0.0, 0.0, 500.0, 400.0);
+    outer.children = Some(vec!["inner".to_owned()]);
+    let mut inner = Node::group("inner", 50.0, 50.0, 200.0, 150.0);
+    inner.children = Some(vec![]);
+    canvas.nodes.push(outer);
+    canvas.nodes.push(inner);
+    canvas
+        .nodes
+        .push(Node::file("n", "C:/n.png", 600.0, 80.0, 100.0, 80.0));
+    // Жест: нода брошена с центром внутри inner → membership + расширение
+    group_add_children(&mut canvas, 1, &["n".to_owned()]);
+    assert_eq!(group_children(&canvas, 1), vec![2]);
+    let expanded = canvas_core::group_expand_to_children_deep(&mut canvas, 1, GROUP_PADDING);
+    assert_eq!(expanded, vec![1, 0], "цель, затем родитель");
+    // inner: rect = bbox(дети [n]: 600..700 × 80..160) + padding —
+    // группа пересчитывается по содержимому (семантика group_expand)
+    let inner = &canvas.nodes[1];
+    assert_eq!(
+        (inner.x, inner.y, inner.width, inner.height),
+        (
+            600.0 - GROUP_PADDING,
+            80.0 - GROUP_PADDING,
+            700.0 - 600.0 + GROUP_PADDING * 2.0,
+            160.0 - 80.0 + GROUP_PADDING * 2.0
+        )
+    );
+    // outer вместил разувшуюся inner: bbox(inner) + padding — без v4
+    // outer остался 0..500 × 0..400, и inner торчал за правую границу
+    let outer = &canvas.nodes[0];
+    assert_eq!(
+        (outer.x, outer.y, outer.width, outer.height),
+        (
+            inner.x - GROUP_PADDING,
+            inner.y - GROUP_PADDING,
+            inner.x + inner.width + GROUP_PADDING - (inner.x - GROUP_PADDING),
+            inner.y + inner.height + GROUP_PADDING - (inner.y - GROUP_PADDING)
+        )
+    );
+    // Инвариант «вмещает»: rect outer покрывает rect inner целиком
+    assert!(outer.x <= inner.x && outer.y <= inner.y);
+    assert!(
+        outer.x + outer.width >= inner.x + inner.width
+            && outer.y + outer.height >= inner.y + inner.height
+    );
+}
+
 /// FR-012: мягкое раздвигание — план выталкивания детерминирован и пуст
 /// для нод без пересечения.
 #[test]
