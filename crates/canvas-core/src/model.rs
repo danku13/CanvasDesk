@@ -1999,7 +1999,7 @@ mod tests {
             "inner потерял n"
         );
         assert_eq!(
-            canvas.nodes[2].children.as_deref().map(|l| &l[..]),
+            canvas.nodes[2].children.as_deref(),
             Some(&["inner".to_owned(), "n".to_owned()][..]),
             "outer получил n"
         );
@@ -2013,12 +2013,12 @@ mod tests {
         canvas.nodes.push(third);
         group_add_children(&mut canvas, 3, &["inner".to_owned()]);
         assert_eq!(
-            canvas.nodes[2].children.as_deref().map(|l| &l[..]),
+            canvas.nodes[2].children.as_deref(),
             Some(&["n".to_owned()][..]),
             "outer потерял inner"
         );
         assert_eq!(
-            canvas.nodes[3].children.as_deref().map(|l| &l[..]),
+            canvas.nodes[3].children.as_deref(),
             Some(&["inner".to_owned()][..])
         );
     }

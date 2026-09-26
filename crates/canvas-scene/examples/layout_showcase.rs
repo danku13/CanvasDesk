@@ -57,9 +57,11 @@ fn main() {
             canvas_core::Language::Ru,
         )
         .unwrap_or_else(|e| panic!("{id}: {e:?}"));
-        let mut canvas = canvas_core::Canvas::default();
-        canvas.nodes = instance.nodes.clone();
-        canvas.edges = instance.edges.clone();
+        let canvas = canvas_core::Canvas {
+            nodes: instance.nodes.clone(),
+            edges: instance.edges.clone(),
+            ..canvas_core::Canvas::default()
+        };
         let json = canvas.to_json().expect("сериализация");
         let path = format!("{dir}/{file}");
         std::fs::write(&path, &json).expect("запись файла");
