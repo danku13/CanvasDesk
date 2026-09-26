@@ -1,11 +1,11 @@
 //! FR-071: умная раскладка нод при инстансировании шаблонных сцен (схем) —
 //! чистые функции над моделью канваса (без GPU/ОС/I-O, wasm-гейт ADR-0011).
 //!
-//! Запрос владельца: «…чтобы ноды минимально пересекались edge-ами,
-//! и группировались по смыслу». Координаты пакета схемы перестают быть
-//! геометрией: план строится по графу, исходные (x, y) остаются только
-//! семантическими подсказками порядка (seed barycenter, сторона и порядок
-//! аннотационных колонок).
+//! Запрос владельца (v1): «…чтобы ноды минимально пересекались edge-ами,
+//! и группировались по смыслу». Запрос владельца (v2): текущая раскладка
+//! «прилипает» ноды друг к другу и расставляет их хаотично — нужны ноды
+//! «приблизительно по сетке, так чтобы человеку было удобно их визуально
+//! считывать».
 //!
 //! Конвейер [`plan_scheme_layout`]:
 //! 1. Семантические кластеры — union-find по явным группам (`Node.children`,
@@ -17,17 +17,22 @@
 //! 3. Порядок в колонке — barycenter-проходы (2 полных свипа): ноды с общим
 //!    родителем стоят рядом (смысловая группировка); seed-порядок — исходные
 //!    координаты автора, тай-брейк по id.
-//! 4. Позиции: колонки — кумулятивно по максимальной ширине слоя +
-//!    [`LAYER_GAP`]; ряды — стек с [`ROW_GAP`]; колонка центрируется на
-//!    среднем центре родителей (компактный поток).
-//! 5. Минимизация пересечений «ребро × нода»: точная дельта для swap соседей
-//!    в колонке и для вертикальных сдвигов колонок целиком; ход принимается
-//!    при строгом падении стоимости (пересечения, тай-брейк — суммарная
-//!    длина отрезков); проходы ограничены [`MAX_REFINE_PASSES`].
+//! 4. СЕТКА (v2, заменяет свободные y-позиции v1): шаг колонки
+//!    `CELL_W = max_width + [`LAYER_GAP`]`, шаг ряда
+//!    `CELL_H = max_height + [`ROW_GAP`]` — по максимальным размерам нод
+//!    сцены. Позиция ноды — левый-верх ячейки: `x = колонка·CELL_W`,
+//!    `y = ряд·CELL_H`; колонка занимает подряд идущие ряды
+//!    `base..base+m-1`, `base` — по среднему ряду родителей. Ряды выровнены
+//!    между всеми колонками и кластерами (сцена читается как таблица), а
+//!    зазоры гарантированы конструктивно: по вертикали `≥ CELL_H − max_h ≥
+//!    ROW_GAP`, по горизонтали `≥ LAYER_GAP` — «прилипание» невозможно.
+//! 5. Минимизация пересечений «ребро × нода» — в единицах сетки: swap
+//!    соседних рядов колонки, перенос на другой ряд, сдвиг колонки целыми
+//!    рядами (±[`SHIFT_STEPS`]); ход — строгое падение стоимости
+//!    (пересечения, тай-брейк — суммарная длина отрезков порт→порт).
 //! 6. Рамки групп — bbox детей + [`GROUP_PAD`] (изнутри наружу); standalone
-//!    — аннотационные колонки слева/справа от потока (сторона — по исходному
-//!    x автора против исходного центра потока); кластеры потока стыкуются
-//!    по горизонтали с [`CLUSTER_GAP`].
+//!    — аннотационные колонки слева/справа от потока (через одну колонку
+//!    сетки; сторона — по исходному x против исходного центра потока).
 //!
 //! Детерминизм (образец `layout.rs` FR-010): сортировка по индексу/id,
 //! стабильные сортировки, никаких итераций по `HashMap` в порядковых
@@ -42,16 +47,22 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use crate::model::{Canvas, NodeKind};
 
-/// Зазор между колонками слоёв (world px).
+/// Зазор между соседними колонками сетки (world px): шаг колонки
+/// `CELL_W = max_width + LAYER_GAP` — минимум между правым краем ноды
+/// колонки `k` и левым краем ноды колонки `k+1`.
 pub const LAYER_GAP: f32 = 110.0;
-/// Зазор между рядами одной колонки (world px).
-pub const ROW_GAP: f32 = 64.0;
-/// Зазор между кластерами потока при сборке (world px).
-pub const CLUSTER_GAP: f32 = 160.0;
+/// Зазор между соседними рядами сетки (world px): шаг ряда
+/// `CELL_H = max_height + ROW_GAP` — минимум между нижним краем ноды ряда
+/// `k` и верхним краем ноды ряда `k+1` (для самой высокой ноды сцены).
+/// Также гарантирует зазор между рамками соседних групп (2×[`GROUP_PAD`]
+/// < ROW_GAP — рамки больше не соприкасаются, дефект v1).
+pub const ROW_GAP: f32 = 80.0;
+/// Пустых колонок сетки между кластерами потока при сборке.
+pub const CLUSTER_GAP_COLS: usize = 1;
+/// Отступ аннотационной колонки от потока (колонок сетки).
+pub const ANNOT_COL_OFFSET: usize = 1;
 /// Паддинг рамки группы вокруг bbox детей (world px).
 pub const GROUP_PAD: f32 = 32.0;
-/// Отступ аннотационной колонки от bbox потока (world px).
-pub const ANNOT_GAP: f32 = 120.0;
 /// Инфляция bbox нод при подсчёте пересечений «ребро × нода» (world px) —
 /// образец `edgegeom::AVOID_MARGIN`.
 pub const CROSSING_MARGIN: f32 = 12.0;
@@ -59,8 +70,21 @@ pub const CROSSING_MARGIN: f32 = 12.0;
 pub const MAX_REFINE_PASSES: usize = 8;
 /// Максимум проходов оптимизации сдвигами колонок.
 pub const MAX_SHIFT_PASSES: usize = 2;
-/// Диапазон сдвига колонки в шагах [`ROW_GAP`] (±4 шага = ±256 px).
+/// Диапазон сдвига колонки в шагах СЕТКИ (рядах, ±4 ряда).
 pub const SHIFT_STEPS: i32 = 4;
+/// Внешних раундов совместной оптимизации до фикспойнта (стадии строго
+/// улучшают стоимость кластера; ход, недоступный в начале раунда, может
+/// открыться после сдвигов/свапов соседних колонок).
+const MAX_JOINT_ROUNDS: usize = 8;
+/// Диапазон совместного сдвига ПАРЫ колонок (±2 ряда каждая).
+const JOINT_STEPS: i32 = 2;
+
+/// Шаг сетки сцены: ширина/высота ячейки (world px).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GridSpec {
+    cell_w: f32,
+    cell_h: f32,
+}
 
 /// План раскладки схемы: позиции всех нод (индекс → top-left) и новые
 /// размеры групп-рамок (индекс → [width, height]).
@@ -137,6 +161,13 @@ pub fn plan_scheme_layout(canvas: &Canvas) -> SchemeLayoutPlan {
     // Вершина потока: не группа, либо группа с рёбрами (v1 FR-071)
     let is_vertex: Vec<bool> = (0..count).map(|i| !is_group[i] || degree(i) > 0).collect();
 
+    // Размер имеет значение для сетки у всех, кроме рамочных групп
+    // (группа без рёбер с детьми — рамка пересчитывается по bbox детей).
+    let is_framed: Vec<bool> = (0..count)
+        .map(|i| is_group[i] && degree(i) == 0 && group_kids.contains_key(&i))
+        .collect();
+    let cell = grid_spec(canvas, &is_framed);
+
     // --- 1. Семантические кластеры: union-find по рёбрам и явным группам
     let mut parent: Vec<usize> = (0..count).collect();
     for (&from, targets) in &outgoing {
@@ -180,32 +211,33 @@ pub fn plan_scheme_layout(canvas: &Canvas) -> SchemeLayoutPlan {
         }
     }
 
-    // --- 2–5. Слоистая раскладка кластеров + оптимизация пересечений.
-    // Каждый кластер раскладывается в собственных координатах (от 0), затем
-    // кластеры стыкуются слева направо с CLUSTER_GAP (top-align).
+    // --- 2–5. Слоистая раскладка кластеров на сетке + оптимизация
+    // пересечений. Каждый кластер занимает свои колонки сетки; кластеры
+    // стыкуются слева направо с пустой колонкой-зазором; ряды — ОБЩАЯ
+    // координата всей сцены (ряды выровнены и между кластерами).
     let mut rects: HashMap<usize, Rect> = HashMap::new();
-    let mut cursor_x = 0.0f32;
+    let mut cursor_col: usize = 0;
+    let mut flow_max_col: usize = 0;
+    let mut flow_min_band = i32::MAX;
+    let mut flow_max_band = i32::MIN;
     for verts in &flow_clusters {
-        let local = layout_cluster(canvas, verts, &outgoing, &incoming);
+        let (local, cols_used) =
+            layout_cluster(canvas, verts, &outgoing, &incoming, cursor_col, cell);
         if local.is_empty() {
             continue;
         }
-        let cluster_max_x = local.values().map(|r| r[0] + r[2]).fold(f32::MIN, f32::max);
         for (i, r) in local {
-            rects.insert(i, [r[0] + cursor_x, r[1], r[2], r[3]]);
+            let band = (r[1] / cell.cell_h).round() as i32;
+            flow_min_band = flow_min_band.min(band);
+            flow_max_band = flow_max_band.max(band);
+            flow_max_col = flow_max_col.max((r[0] / cell.cell_w).round() as usize);
+            rects.insert(i, r);
         }
-        cursor_x += cluster_max_x + CLUSTER_GAP;
+        cursor_col += cols_used + CLUSTER_GAP_COLS;
     }
     let flow_has = !rects.is_empty();
-    let flow_min_x = rects.values().map(|r| r[0]).fold(f32::MAX, f32::min);
-    let flow_max_x = rects.values().map(|r| r[0] + r[2]).fold(f32::MIN, f32::max);
-    let flow_cy = if flow_has {
-        let min_y = rects.values().map(|r| r[1]).fold(f32::MAX, f32::min);
-        let max_y = rects.values().map(|r| r[1] + r[3]).fold(f32::MIN, f32::max);
-        (min_y + max_y) / 2.0
-    } else {
-        0.0
-    };
+    let flow_min_band = if flow_has { flow_min_band } else { 0 };
+    let flow_max_band = if flow_has { flow_max_band } else { 0 };
 
     // Исходный центр потока по координатам АВТОРА (для стороны аннотаций)
     let laid_vertices: Vec<usize> = flow_clusters.iter().flatten().copied().collect();
@@ -243,31 +275,29 @@ pub fn plan_scheme_layout(canvas: &Canvas) -> SchemeLayoutPlan {
         }
     }
     if flow_has {
-        // Левая колонка — правым краем к потоку, правая — левым краем
-        place_annotation_column(
-            canvas,
-            &left_annots,
-            flow_min_x - ANNOT_GAP,
-            flow_cy,
-            true,
-            &mut rects,
-        );
+        // Левая аннотационная колонка занимает колонку сетки слева от
+        // потока; поток всегда стартует с колонки 0 — при наличии левых
+        // аннотаций сдвигаем поток на одну колонку вправо (сетка цела).
+        if !left_annots.is_empty() {
+            for r in rects.values_mut() {
+                r[0] += cell.cell_w;
+            }
+            flow_max_col += 1;
+        }
+        let band_center = (flow_min_band + flow_max_band) as f32 / 2.0;
+        // Левая колонка — слева от потока, правая — справа
+        place_annotation_column(canvas, &left_annots, 0, band_center, cell, &mut rects);
         place_annotation_column(
             canvas,
             &right_annots,
-            flow_max_x + ANNOT_GAP,
-            flow_cy,
-            false,
+            flow_max_col + ANNOT_COL_OFFSET,
+            band_center,
+            cell,
             &mut rects,
         );
     } else {
         // Потока нет: одна колонка от (0, 0) в порядке автора
-        let mut y = 0.0f32;
-        for &i in &annots {
-            let n = &canvas.nodes[i];
-            rects.insert(i, [0.0, y, n.width, n.height]);
-            y += n.height + ROW_GAP;
-        }
+        place_annotation_column(canvas, &annots, 0, 0.0, cell, &mut rects);
     }
 
     // --- 7. Рамки групп (без рёбер, с детьми): bbox детей + GROUP_PAD,
@@ -327,16 +357,69 @@ pub fn plan_scheme_layout(canvas: &Canvas) -> SchemeLayoutPlan {
     }
 }
 
-/// Слоистая раскладка одного кластера потока (шаги 2–5 конвейера).
-/// Возвращает прямоугольники вершин в локальных координатах (от 0).
+/// Шаг сетки сцены: по максимальным размерам нод, участвующих в раскладке
+/// (вершины потока + аннотации, в т.ч. вырожденные группы; рамочные группы
+/// исключены — их размер пересчитывается по bbox детей). Гарантирует: любая
+/// нода помещается в ячейку, зазоры между соседними ячейками ≥
+/// [`LAYER_GAP`]/[`ROW_GAP`].
+fn grid_spec(canvas: &Canvas, is_framed: &[bool]) -> GridSpec {
+    let mut max_w = 0.0f32;
+    let mut max_h = 0.0f32;
+    for (i, n) in canvas.nodes.iter().enumerate() {
+        if is_framed[i] {
+            continue;
+        }
+        max_w = max_w.max(n.width);
+        max_h = max_h.max(n.height);
+    }
+    GridSpec {
+        cell_w: max_w + LAYER_GAP,
+        cell_h: max_h + ROW_GAP,
+    }
+}
+
+/// Состояние сеточной раскладки кластера: колонки (глобальный индекс →
+/// порядок нод) и ряд-верх каждой колонки. Позиции всегда производные:
+/// x = колонка·CELL_W, y = (base + позиция в колонке)·CELL_H.
+struct GridState<'a> {
+    canvas: &'a Canvas,
+    cell: GridSpec,
+    /// Глобальная колонка сетки → порядок нод колонки.
+    columns: BTreeMap<usize, Vec<usize>>,
+    /// Глобальная колонка сетки → ряд верха колонки (base).
+    bases: BTreeMap<usize, i32>,
+}
+
+impl<'a> GridState<'a> {
+    /// Материализовать прямоугольники всех нод состояния (позиции сетки).
+    fn rects(&self) -> HashMap<usize, Rect> {
+        let mut out = HashMap::new();
+        for (&gcol, col) in &self.columns {
+            let base = self.bases.get(&gcol).copied().unwrap_or(0);
+            for (k, &v) in col.iter().enumerate() {
+                let n = &self.canvas.nodes[v];
+                let x = gcol as f32 * self.cell.cell_w;
+                let y = (base + k as i32) as f32 * self.cell.cell_h;
+                out.insert(v, [x, y, n.width, n.height]);
+            }
+        }
+        out
+    }
+}
+
+/// Слоистая раскладка одного кластера потока на сетке (шаги 2–5 конвейера).
+/// `base_col` — глобальная колонка слоя 0. Возвращает прямоугольники вершин
+/// в глобальных координатах сетки и число занятых колонок.
 fn layout_cluster(
     canvas: &Canvas,
     verts: &BTreeSet<usize>,
     outgoing: &BTreeMap<usize, BTreeSet<usize>>,
     incoming: &BTreeMap<usize, BTreeSet<usize>>,
-) -> HashMap<usize, Rect> {
+    base_col: usize,
+    cell: GridSpec,
+) -> (HashMap<usize, Rect>, usize) {
     if verts.is_empty() {
-        return HashMap::new();
+        return (HashMap::new(), 0);
     }
 
     // Рёбра кластера (дедуп через BTreeSet-смежность, порядок детерминирован)
@@ -444,11 +527,12 @@ fn layout_cluster(
         }
     }
 
-    // --- Колонки: слой → порядок (seed: координаты автора, тай-брейк id)
+    // --- Колонки: слой → порядок (seed: координаты автора, тай-брейк id);
+    // ключ состояния — ГЛОБАЛЬНАЯ колонка сетки (base_col + слой)
     let mut columns: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for &v in verts {
         let lv = layer.get(&v).copied().unwrap_or(0);
-        columns.entry(lv).or_default().push(v);
+        columns.entry(base_col + lv).or_default().push(v);
     }
     for col in columns.values_mut() {
         col.sort_by(|&a, &b| seed_order(canvas, a, b));
@@ -461,35 +545,67 @@ fn layout_cluster(
         barycenter_pass(verts, outgoing, &mut columns);
     }
 
-    // --- Позиции: x кумулятивно по максимальной ширине колонки,
-    // y — стек рядов, колонка центрируется на среднем центре родителей
-    let mut x_cursor = 0.0f32;
-    let mut col_x: BTreeMap<usize, f32> = BTreeMap::new();
-    for (&lv, col) in &columns {
-        col_x.insert(lv, x_cursor);
-        let w = col
-            .iter()
-            .map(|&v| canvas.nodes[v].width)
-            .fold(0.0f32, f32::max);
-        x_cursor += w + LAYER_GAP;
+    // --- Сетка: base каждой колонки — по среднему ряду родителей
+    let mut state = GridState {
+        canvas,
+        cell,
+        columns,
+        bases: BTreeMap::new(),
+    };
+    assign_initial_bands(&mut state, incoming, verts);
+
+    // --- Оптимизация пересечений в единицах сетки: раунды до фикспойнта
+    // (свапы рядов → сдвиги колонок → переносы → совместные сдвиги пар);
+    // каждая стадия строго улучшает общую стоимость кластера, порядок
+    // фиксирован — детерминизм
+    for _round in 0..MAX_JOINT_ROUNDS {
+        let before = cluster_cost(verts, &edges, &state.rects());
+        refine_by_swaps(&edges, &mut state);
+        refine_by_column_shifts(verts, &edges, &mut state);
+        refine_by_insertions(&edges, &mut state);
+        refine_joint_column_shifts(verts, &edges, &mut state);
+        let after = cluster_cost(verts, &edges, &state.rects());
+        if after == before {
+            break;
+        }
     }
 
-    let mut rects_local: HashMap<usize, Rect> = HashMap::new();
-    for (&lv, col) in &columns {
-        let x = col_x.get(&lv).copied().unwrap_or(0.0);
-        let rows = col.len().saturating_sub(1) as f32;
-        let total_h = col.iter().map(|&v| canvas.nodes[v].height).sum::<f32>() + ROW_GAP * rows;
-        // цель-центр колонки: среднее (по нодам) средних центров предков
+    let cols_used = state
+        .columns
+        .keys()
+        .copied()
+        .max()
+        .map_or(0, |max| max - base_col + 1);
+    (state.rects(), cols_used)
+}
+
+/// Начальные ряды колонок: base колонки — округлённый средний ряд центров
+/// родителей минус половина высоты колонки (в рядах); колонки без
+/// размещённых предков — от ряда 0. Колонка занимает ПОДРЯД идущие ряды
+/// (base..base+m-1) — ряды выровнены между колонками, наложения внутри
+/// колонки исключены (у каждой ноды свой ряд).
+fn assign_initial_bands(
+    state: &mut GridState,
+    incoming: &BTreeMap<usize, BTreeSet<usize>>,
+    verts: &BTreeSet<usize>,
+) {
+    let cols: Vec<usize> = state.columns.keys().copied().collect();
+    let mut band_of: HashMap<usize, i32> = HashMap::new();
+    let half_band = |v: usize| state.canvas.nodes[v].height / (2.0 * state.cell.cell_h);
+    for &gcol in &cols {
+        let col = state.columns.get(&gcol).cloned().unwrap_or_default();
+        // цель: средний (по нодам колонки) средний ряд центров родителей —
+        // в единицах рядов (центр ноды = ряд + высота/2·CELL_H)
         let mut target_sum = 0.0f32;
         let mut target_cnt = 0usize;
-        for &v in col {
+        for &v in &col {
             let centers: Vec<f32> = incoming
                 .get(&v)
                 .into_iter()
                 .flatten()
                 .copied()
-                .filter(|&p| rects_local.contains_key(&p))
-                .filter_map(|p| rects_local.get(&p).map(|r| r[1] + r[3] / 2.0))
+                .filter(|&p| verts.contains(&p))
+                .filter_map(|p| band_of.get(&p).map(|&b| b as f32 + half_band(p)))
                 .collect();
             if centers.is_empty() {
                 continue;
@@ -497,28 +613,20 @@ fn layout_cluster(
             target_sum += centers.iter().sum::<f32>() / centers.len() as f32;
             target_cnt += 1;
         }
-        let target = if target_cnt == 0 {
-            total_h / 2.0 // первая колонка / без размещённых предков — центр 0
+        let m = col.len() as f32;
+        let own_offset = col.iter().map(|&v| half_band(v)).sum::<f32>() / m.max(1.0);
+        let base: i32 = if target_cnt == 0 {
+            0
         } else {
-            target_sum / target_cnt as f32
+            let target = target_sum / target_cnt as f32;
+            let base = (target - (m - 1.0) / 2.0 - own_offset).round();
+            base.max(0.0) as i32
         };
-        let mut y = target - total_h / 2.0;
-        for &v in col {
-            let n = &canvas.nodes[v];
-            rects_local.insert(v, [x, y, n.width, n.height]);
-            y += n.height + ROW_GAP;
+        state.bases.insert(gcol, base);
+        for (k, &v) in col.iter().enumerate() {
+            band_of.insert(v, base + k as i32);
         }
     }
-
-    // --- Оптимизация пересечений: swap соседей в колонке, сдвиги колонок,
-    // переносы на другие строки, финальный проход swap-ами (порядок стадий
-    // фиксирован — детерминизм)
-    refine_by_swaps(&edges, &mut columns, &mut rects_local);
-    refine_by_column_shifts(verts, &edges, &mut columns, &mut rects_local);
-    refine_by_swaps(&edges, &mut columns, &mut rects_local);
-    refine_by_insertions(&edges, &mut columns, &mut rects_local);
-
-    rects_local
 }
 
 /// Один barycenter-проход: упорядочить каждую колонку по среднему индексу
@@ -634,64 +742,45 @@ fn column_state_cost(
     (cross_old, cross_new, len_old, len_new)
 }
 
-/// Пере-стек колонки от текущего верха (порядок `order`) — гипотетические
-/// прямоугольники с сохранением накопительного зазора [`ROW_GAP`].
-fn restacked_column(col: &[usize], rects: &HashMap<usize, Rect>) -> HashMap<usize, Rect> {
-    let mut out = HashMap::new();
-    if let Some(&first) = col.first() {
-        let (x, top) = match rects.get(&first) {
-            Some(r) => (r[0], r[1]),
-            None => (0.0, 0.0),
-        };
-        let mut y = top;
-        for &v in col {
-            let (w, h) = match rects.get(&v) {
-                Some(r) => (r[2], r[3]),
-                None => (0.0, 0.0),
-            };
-            out.insert(v, [x, y, w, h]);
-            y += h + ROW_GAP;
-        }
-    }
-    out
-}
-
 /// Оптимизация пересечений перестановками соседних нод внутри колонки.
-/// Дельта стоимости ТОЧНА: обмен пере-стекует всю колонку от текущего
-/// верха (прямой обмен y-позициями валиден только при равных высотах),
-/// поэтому пересечения считаются всех рёбер против всех прямоугольников
-/// колонки (старые vs новые); ход принимается при строгом падении
-/// (пересечения, тай-брейк — суммарная длина инцидентных отрезков).
-/// Ограничено [`MAX_REFINE_PASSES`].
-fn refine_by_swaps(
-    edges: &[(usize, usize)],
-    columns: &mut BTreeMap<usize, Vec<usize>>,
-    rects: &mut HashMap<usize, Rect>,
-) {
+/// В единицах сетки обмен соседей = обмен их рядов (base колонки не меняется,
+/// остальные ряды не двигаются). Стоимость — та же модель
+/// [`column_state_cost`]; ход принимается при строгом падении (пересечения,
+/// тай-брейк — суммарная длина инцидентных отрезков). Ограничено
+/// [`MAX_REFINE_PASSES`].
+fn refine_by_swaps(edges: &[(usize, usize)], state: &mut GridState) {
     for _pass in 0..MAX_REFINE_PASSES {
         let mut changed = false;
-        let layers: Vec<usize> = columns.keys().copied().collect();
-        for lv in layers {
-            let col = columns.get(&lv).cloned().unwrap_or_default();
+        let cols: Vec<usize> = state.columns.keys().copied().collect();
+        for gcol in cols {
+            let col = state.columns.get(&gcol).cloned().unwrap_or_default();
             for pair in col.windows(2) {
                 let (a, b) = (pair[0], pair[1]);
-                if rects.get(&a).is_none() || rects.get(&b).is_none() {
+                let mut trial_columns = state.columns.clone();
+                let Some(c) = trial_columns.get_mut(&gcol) else {
                     continue;
-                }
-                let mut swapped_order = col.clone();
-                if let (Some(pa), Some(pb)) = (
-                    swapped_order.iter().position(|&x| x == a),
-                    swapped_order.iter().position(|&x| x == b),
-                ) {
-                    swapped_order.swap(pa, pb);
-                }
-                let new_rects = restacked_column(&swapped_order, rects);
+                };
+                let (Some(pa), Some(pb)) = (
+                    c.iter().position(|&x| x == a),
+                    c.iter().position(|&x| x == b),
+                ) else {
+                    continue;
+                };
+                c.swap(pa, pb);
+                let old_rects = state.rects();
+                let trial = GridState {
+                    canvas: state.canvas,
+                    cell: state.cell,
+                    columns: trial_columns.clone(),
+                    bases: state.bases.clone(),
+                };
+                let new_rects = trial.rects();
                 let (cross_old, cross_new, len_old, len_new) =
-                    column_state_cost(edges, &col, rects, &new_rects);
+                    column_state_cost(edges, &col, &old_rects, &new_rects);
                 let improves =
                     cross_new < cross_old || (cross_new == cross_old && len_new < len_old);
                 if improves {
-                    if let Some(c) = columns.get_mut(&lv) {
+                    if let Some(c) = state.columns.get_mut(&gcol) {
                         if let (Some(pa), Some(pb)) = (
                             c.iter().position(|&x| x == a),
                             c.iter().position(|&x| x == b),
@@ -699,90 +788,7 @@ fn refine_by_swaps(
                             c.swap(pa, pb);
                         }
                     }
-                    for (v, r) in new_rects {
-                        rects.insert(v, r);
-                    }
                     changed = true;
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-}
-
-/// Оптимизация пересечений переносом ноды на другую строку её колонки
-/// (обобщение swap: тянущаяся через колонку диагональ находит междурядный
-/// канал, которого нет у соседних обменов). Стоимость — та же модель
-/// пере-стека колонки, что в [`refine_by_swaps`]; ход — строгое улучшение.
-/// Ограничено [`MAX_REFINE_PASSES`].
-fn refine_by_insertions(
-    edges: &[(usize, usize)],
-    columns: &mut BTreeMap<usize, Vec<usize>>,
-    rects: &mut HashMap<usize, Rect>,
-) {
-    for _pass in 0..MAX_REFINE_PASSES {
-        let mut changed = false;
-        let layers: Vec<usize> = columns.keys().copied().collect();
-        for lv in layers {
-            let col = columns.get(&lv).cloned().unwrap_or_default();
-            if col.len() < 2 {
-                continue;
-            }
-            'node: for &v in &col {
-                let Some(_) = rects.get(&v) else {
-                    continue;
-                };
-                let from = match col.iter().position(|&x| x == v) {
-                    Some(p) => p,
-                    None => continue,
-                };
-                let (cross_old, _, _, _) = column_state_cost(edges, &col, rects, rects);
-                let mut best: Option<InsertionMove> = None;
-                for to in 0..col.len() {
-                    if to == from {
-                        continue;
-                    }
-                    let mut order = col.clone();
-                    order.remove(from);
-                    order.insert(to, v);
-                    let new_rects = restacked_column(&order, rects);
-                    let (_, cross_new, _, len_new) =
-                        column_state_cost(edges, &col, rects, &new_rects);
-                    // строгое улучшение против текущего состояния
-                    let cur = (cross_old, total_len(edges, &col, rects));
-                    let cand = (cross_new, len_new);
-                    if cand >= cur {
-                        continue;
-                    }
-                    let better = match &best {
-                        None => true,
-                        Some(InsertionMove { cost, len, .. }) => cand < (*cost, *len),
-                    };
-                    if better {
-                        best = Some(InsertionMove {
-                            cost: cross_new,
-                            len: len_new,
-                            order,
-                            rects: new_rects,
-                        });
-                    }
-                }
-                if let Some(InsertionMove {
-                    order,
-                    rects: new_rects,
-                    ..
-                }) = best
-                {
-                    if let Some(c) = columns.get_mut(&lv) {
-                        *c = order;
-                    }
-                    for (u, r) in new_rects {
-                        rects.insert(u, r);
-                    }
-                    changed = true;
-                    continue 'node;
                 }
             }
         }
@@ -798,7 +804,80 @@ struct InsertionMove {
     cost: u32,
     len: f32,
     order: Vec<usize>,
-    rects: HashMap<usize, Rect>,
+}
+
+/// Оптимизация пересечений переносом ноды на другую позицию её колонки
+/// (обобщение swap: тянущаяся через колонку диагональ находит междурядный
+/// канал, которого нет у соседних обменов). В единицах сетки перенос
+/// пере-стекает ряды колонки от её base. Стоимость — та же модель
+/// [`column_state_cost`]; ход — строгое улучшение. Ограничено
+/// [`MAX_REFINE_PASSES`].
+fn refine_by_insertions(edges: &[(usize, usize)], state: &mut GridState) {
+    for _pass in 0..MAX_REFINE_PASSES {
+        let mut changed = false;
+        let cols: Vec<usize> = state.columns.keys().copied().collect();
+        for gcol in cols {
+            let col = state.columns.get(&gcol).cloned().unwrap_or_default();
+            if col.len() < 2 {
+                continue;
+            }
+            'node: for &v in &col {
+                let from = match col.iter().position(|&x| x == v) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let old_rects = state.rects();
+                let (cross_old, _, _, _) = column_state_cost(edges, &col, &old_rects, &old_rects);
+                let mut best: Option<InsertionMove> = None;
+                for to in 0..col.len() {
+                    if to == from {
+                        continue;
+                    }
+                    let mut order = col.clone();
+                    order.remove(from);
+                    order.insert(to, v);
+                    let mut trial_columns = state.columns.clone();
+                    trial_columns.insert(gcol, order.clone());
+                    let trial = GridState {
+                        canvas: state.canvas,
+                        cell: state.cell,
+                        columns: trial_columns,
+                        bases: state.bases.clone(),
+                    };
+                    let new_rects = trial.rects();
+                    let (_, cross_new, _, len_new) =
+                        column_state_cost(edges, &col, &old_rects, &new_rects);
+                    // строгое улучшение против текущего состояния
+                    let cur = (cross_old, total_len(edges, &col, &old_rects));
+                    let cand = (cross_new, len_new);
+                    if cand >= cur {
+                        continue;
+                    }
+                    let better = match &best {
+                        None => true,
+                        Some(InsertionMove { cost, len, .. }) => cand < (*cost, *len),
+                    };
+                    if better {
+                        best = Some(InsertionMove {
+                            cost: cross_new,
+                            len: len_new,
+                            order,
+                        });
+                    }
+                }
+                if let Some(InsertionMove { order, .. }) = best {
+                    if let Some(c) = state.columns.get_mut(&gcol) {
+                        *c = order;
+                    }
+                    changed = true;
+                    continue 'node;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
 }
 
 /// Суммарная длина инцидентных колонке отрезков (тай-брейк стоимости).
@@ -816,75 +895,80 @@ fn total_len(edges: &[(usize, usize)], col: &[usize], rects: &HashMap<usize, Rec
     length
 }
 
-/// Оптимизация пересечений вертикальными сдвигами колонок целиком
-/// (шаг [`ROW_GAP`], диапазон ±[`SHIFT_STEPS`]): длинные диагональные рёбра
-/// проходят через междурядные каналы. Полная стоимость всех рёбер против
-/// всех вершин кластера; принимается строгое улучшение (тай-брейк — длина).
+/// Общая стоимость раскладки кластера: пересечения всех рёбер с всеми
+/// вершинами (тай-брейк — суммарная длина отрезков порт→порт).
+fn cluster_cost(
+    verts: &BTreeSet<usize>,
+    edges: &[(usize, usize)],
+    rects: &HashMap<usize, Rect>,
+) -> (u32, f32) {
+    let mut crossings = 0u32;
+    let mut length = 0.0f32;
+    for &(u, v) in edges {
+        let (Some(&ru), Some(&rv)) = (rects.get(&u), rects.get(&v)) else {
+            continue;
+        };
+        let p0 = right_center(ru);
+        let p1 = left_center(rv);
+        length += seg_len(p0, p1);
+        for &w in verts {
+            if w == u || w == v {
+                continue;
+            }
+            let Some(&rw) = rects.get(&w) else {
+                continue;
+            };
+            if seg_intersects_rect(p0, p1, rw, CROSSING_MARGIN) {
+                crossings += 1;
+            }
+        }
+    }
+    (crossings, length)
+}
+
+/// Оптимизация пересечений вертикальными сдвигами колонок ЦЕЛЫМИ РЯДАМИ
+/// сетки (шаг CELL_H, диапазон ±[`SHIFT_STEPS`] рядов): длинные диагональные
+/// рёбра проходят через свободные ячейки/междурядные каналы. Полная
+/// стоимость всех рёбер против всех вершин кластера; принимается строгое
+/// улучшение (тай-брейк — длина).
 fn refine_by_column_shifts(
     verts: &BTreeSet<usize>,
     edges: &[(usize, usize)],
-    columns: &mut BTreeMap<usize, Vec<usize>>,
-    rects: &mut HashMap<usize, Rect>,
+    state: &mut GridState,
 ) {
-    let total_cost = |rects: &HashMap<usize, Rect>| -> (u32, f32) {
-        let mut crossings = 0u32;
-        let mut length = 0.0f32;
-        for &(u, v) in edges {
-            let (Some(&ru), Some(&rv)) = (rects.get(&u), rects.get(&v)) else {
-                continue;
-            };
-            let p0 = right_center(ru);
-            let p1 = left_center(rv);
-            length += seg_len(p0, p1);
-            for &w in verts {
-                if w == u || w == v {
-                    continue;
-                }
-                let Some(&rw) = rects.get(&w) else {
-                    continue;
-                };
-                if seg_intersects_rect(p0, p1, rw, CROSSING_MARGIN) {
-                    crossings += 1;
-                }
-            }
-        }
-        (crossings, length)
-    };
     for _pass in 0..MAX_SHIFT_PASSES {
         let mut changed = false;
-        let layers: Vec<usize> = columns.keys().copied().collect();
-        for lv in layers {
-            let Some(col) = columns.get(&lv).cloned() else {
-                continue;
-            };
+        let cols: Vec<usize> = state.columns.keys().copied().collect();
+        for gcol in cols {
+            let col = state.columns.get(&gcol).cloned().unwrap_or_default();
             if col.is_empty() {
                 continue;
             }
-            let mut best_shift = 0.0f32;
-            let mut best_cost = total_cost(rects);
+            let old_rects = state.rects();
+            let mut best_step = 0i32;
+            let mut best_cost = cluster_cost(verts, edges, &old_rects);
             for step in -SHIFT_STEPS..=SHIFT_STEPS {
                 if step == 0 {
                     continue;
                 }
-                let shift = step as f32 * ROW_GAP;
-                let mut trial = rects.clone();
-                for &v in &col {
-                    if let Some(r) = trial.get_mut(&v) {
-                        r[1] += shift;
-                    }
-                }
-                let cost = total_cost(&trial);
+                let mut trial_bases = state.bases.clone();
+                let entry = trial_bases.entry(gcol).or_insert(0);
+                *entry += step;
+                let trial = GridState {
+                    canvas: state.canvas,
+                    cell: state.cell,
+                    columns: state.columns.clone(),
+                    bases: trial_bases,
+                };
+                let cost = cluster_cost(verts, edges, &trial.rects());
                 if cost.0 < best_cost.0 || (cost.0 == best_cost.0 && cost.1 < best_cost.1) {
                     best_cost = cost;
-                    best_shift = shift;
+                    best_step = step;
                 }
             }
-            if best_shift != 0.0 {
-                for &v in &col {
-                    if let Some(r) = rects.get_mut(&v) {
-                        r[1] += best_shift;
-                    }
-                }
+            if best_step != 0 {
+                let entry = state.bases.entry(gcol).or_insert(0);
+                *entry += best_step;
                 changed = true;
             }
         }
@@ -894,33 +978,79 @@ fn refine_by_column_shifts(
     }
 }
 
-/// Разложить аннотационную колонку (standalone-ноды): `align_right = true`
-/// — колонка правым краем к `edge_x` (левая сторона потока), иначе левым
-/// краем (правая сторона). Ряды — стек с [`ROW_GAP`], колонка центрируется
-/// по вертикали на `flow_cy`.
+/// Совместные сдвиги ПАР колонок целыми рядами (±[`JOINT_STEPS`] каждый):
+/// ходы, требующие одновременного перемещения двух колонок (встречные
+/// коридоры, разведение пучка на два канала). Стоимость — та же модель
+/// [`cluster_cost`]; ход — строгое улучшение; перебор детерминирован.
+fn refine_joint_column_shifts(
+    verts: &BTreeSet<usize>,
+    edges: &[(usize, usize)],
+    state: &mut GridState,
+) {
+    for _pass in 0..MAX_SHIFT_PASSES {
+        let mut changed = false;
+        let cols: Vec<usize> = state.columns.keys().copied().collect();
+        for i in 0..cols.len() {
+            for j in (i + 1)..cols.len() {
+                let (ci, cj) = (cols[i], cols[j]);
+                let old_rects = state.rects();
+                let mut best = (0i32, 0i32);
+                let mut best_cost = cluster_cost(verts, edges, &old_rects);
+                for si in -JOINT_STEPS..=JOINT_STEPS {
+                    for sj in -JOINT_STEPS..=JOINT_STEPS {
+                        if si == 0 && sj == 0 {
+                            continue;
+                        }
+                        let mut trial_bases = state.bases.clone();
+                        *trial_bases.entry(ci).or_insert(0) += si;
+                        *trial_bases.entry(cj).or_insert(0) += sj;
+                        let trial = GridState {
+                            canvas: state.canvas,
+                            cell: state.cell,
+                            columns: state.columns.clone(),
+                            bases: trial_bases,
+                        };
+                        let cost = cluster_cost(verts, edges, &trial.rects());
+                        if cost.0 < best_cost.0 || (cost.0 == best_cost.0 && cost.1 < best_cost.1) {
+                            best_cost = cost;
+                            best = (si, sj);
+                        }
+                    }
+                }
+                if best != (0, 0) {
+                    *state.bases.entry(ci).or_insert(0) += best.0;
+                    *state.bases.entry(cj).or_insert(0) += best.1;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+/// Разложить аннотационную колонку (standalone-ноды) на сетке: колонка
+/// `gcol`, ряды подряд от base, base — округлённый `band_center` минус
+/// половина высоты колонки, clamp ≥ 0 (ряды сетки, зазоры гарантированы).
 fn place_annotation_column(
     canvas: &Canvas,
     annots: &[usize],
-    edge_x: f32,
-    flow_cy: f32,
-    align_right: bool,
+    gcol: usize,
+    band_center: f32,
+    cell: GridSpec,
     rects: &mut HashMap<usize, Rect>,
 ) {
     if annots.is_empty() {
         return;
     }
-    let col_w = annots
-        .iter()
-        .map(|&i| canvas.nodes[i].width)
-        .fold(0.0f32, f32::max);
-    let rows = annots.len().saturating_sub(1) as f32;
-    let total_h = annots.iter().map(|&i| canvas.nodes[i].height).sum::<f32>() + ROW_GAP * rows;
-    let x = if align_right { edge_x - col_w } else { edge_x };
-    let mut y = flow_cy - total_h / 2.0;
-    for &i in annots {
-        let n = &canvas.nodes[i];
-        rects.insert(i, [x, y, n.width, n.height]);
-        y += n.height + ROW_GAP;
+    let n = annots.len() as f32;
+    let base = (band_center - (n - 1.0) / 2.0).round().max(0.0) as i32;
+    for (k, &i) in annots.iter().enumerate() {
+        let node = &canvas.nodes[i];
+        let x = gcol as f32 * cell.cell_w;
+        let y = (base + k as i32) as f32 * cell.cell_h;
+        rects.insert(i, [x, y, node.width, node.height]);
     }
 }
 
@@ -1034,6 +1164,12 @@ pub(crate) fn seg_intersects_rect(p0: [f32; 2], p1: [f32; 2], rect: Rect, margin
     true
 }
 
+/// Отладка (примеры/диагностика): публичная обёртка slab-теста отрезка
+/// с инфляцией прямоугольника — тем же правилом, что и внутренняя метрика.
+pub fn debug_seg_intersects(p0: [f32; 2], p1: [f32; 2], rect: Rect, margin: f32) -> bool {
+    seg_intersects_rect(p0, p1, rect, margin)
+}
+
 /// Диагностика и oracle-метрика тестов: число пересечений «ребро × нода»
 /// по прямым отрезкам порт→порт (right-центр → left-центр — конвенция
 /// инстансера схем). bbox нод инфлируется на [`CROSSING_MARGIN`]; группы
@@ -1141,6 +1277,27 @@ mod tests {
         out
     }
 
+    /// Шаг сетки канваса-результата (тем же правилом, что `grid_spec`):
+    /// максимум по не-групповым нодам + зазоры.
+    fn grid_of(canvas: &Canvas) -> GridSpec {
+        let max_w = canvas
+            .nodes
+            .iter()
+            .filter(|n| n.kind() != NodeKind::Group)
+            .map(|n| n.width)
+            .fold(0.0f32, f32::max);
+        let max_h = canvas
+            .nodes
+            .iter()
+            .filter(|n| n.kind() != NodeKind::Group)
+            .map(|n| n.height)
+            .fold(0.0f32, f32::max);
+        GridSpec {
+            cell_w: max_w + LAYER_GAP,
+            cell_h: max_h + ROW_GAP,
+        }
+    }
+
     /// Пересекаются ли bbox каких-то двух не-групповых нод.
     fn node_rects_overlap(canvas: &Canvas) -> bool {
         for (i, a) in canvas.nodes.iter().enumerate() {
@@ -1165,7 +1322,8 @@ mod tests {
 
     #[test]
     fn chain_reads_left_to_right() {
-        // a → b → c: поток слева направо (конвенция портов right→left)
+        // a → b → c: поток слева направо (конвенция портов right→left),
+        // все три ноды на одном ряду сетки
         let mut canvas = Canvas::default();
         sized(&mut canvas, "a", 1200.0, 500.0, 240.0, 140.0);
         sized(&mut canvas, "b", 0.0, 0.0, 240.0, 140.0);
@@ -1182,6 +1340,121 @@ mod tests {
             out.nodes[by_id(&out, "c")].x,
         );
         assert!(xa < xb && xb < xc, "a < b < c по x: {xa} {xb} {xc}");
+        let (ya, yb, yc) = (
+            out.nodes[by_id(&out, "a")].y,
+            out.nodes[by_id(&out, "b")].y,
+            out.nodes[by_id(&out, "c")].y,
+        );
+        assert!(
+            (ya - yb).abs() < 1.0 && (yb - yc).abs() < 1.0,
+            "цепочка — один ряд сетки: {ya} {yb} {yc}"
+        );
+        assert!(!node_rects_overlap(&out));
+        assert_eq!(count_edge_node_crossings(&out), 0);
+    }
+
+    #[test]
+    fn nodes_snap_to_uniform_grid() {
+        // Любая не-групповая нода стоит в ячейке сетки: x = col·CELL_W,
+        // y = row·CELL_H; разные ноды — в разных ячейках своей колонки.
+        let mut canvas = Canvas::default();
+        sized(&mut canvas, "hint", 0.0, 0.0, 360.0, 240.0);
+        let salaries = sized(&mut canvas, "salaries", 450.0, 60.0, 270.0, 150.0);
+        let teamtools = sized(&mut canvas, "teamtools", 450.0, 220.0, 270.0, 150.0);
+        group(&mut canvas, "group-team", &[salaries, teamtools]);
+        let subtotals = sized(&mut canvas, "subtotals", 840.0, 60.0, 290.0, 220.0);
+        let total = sized(&mut canvas, "total", 1220.0, 60.0, 290.0, 180.0);
+        let _verdict = sized(&mut canvas, "verdict", 1600.0, 60.0, 320.0, 200.0);
+        link(&mut canvas, "e1", salaries, subtotals);
+        link(&mut canvas, "e2", teamtools, subtotals);
+        link(&mut canvas, "e3", subtotals, total);
+
+        let plan = plan_scheme_layout(&canvas);
+        let out = apply_plan(&canvas, &plan);
+        let cell = grid_of(&out);
+        for n in out.nodes.iter().filter(|n| n.kind() != NodeKind::Group) {
+            let dx = n.x.rem_euclid(cell.cell_w);
+            let dy = n.y.rem_euclid(cell.cell_h);
+            assert!(
+                dx < 0.5 || dx > cell.cell_w - 0.5,
+                "{}: x={} не на колонке сетки (шаг {})",
+                n.id,
+                n.x,
+                cell.cell_w
+            );
+            assert!(
+                dy < 0.5 || dy > cell.cell_h - 0.5,
+                "{}: y={} не на ряду сетки (шаг {})",
+                n.id,
+                n.y,
+                cell.cell_h
+            );
+        }
+        // Зазоры гарантированы: пары в одной колонке разнесены минимум на
+        // CELL_H по вертикали, в соседних колонках — минимум на LAYER_GAP
+        // по горизонтали.
+        let texts: Vec<&Node> = out
+            .nodes
+            .iter()
+            .filter(|n| n.kind() == NodeKind::Text)
+            .collect();
+        for (i, a) in texts.iter().enumerate() {
+            for b in texts.iter().skip(i + 1) {
+                let same_col = (a.x - b.x).abs() < 0.5;
+                if same_col {
+                    let dy = (a.y - b.y).abs();
+                    assert!(
+                        dy + 0.5 >= cell.cell_h,
+                        "{} и {} в одной колонке слишком близко: {dy}",
+                        a.id,
+                        b.id
+                    );
+                } else {
+                    let gap = if b.x > a.x {
+                        b.x - (a.x + a.width)
+                    } else {
+                        a.x - (b.x + b.width)
+                    };
+                    assert!(
+                        gap + 0.5 >= LAYER_GAP,
+                        "{} и {}: горизонтальный зазор {gap} < LAYER_GAP",
+                        a.id,
+                        b.id
+                    );
+                }
+            }
+        }
+        assert!(!node_rects_overlap(&out));
+        assert_eq!(count_edge_node_crossings(&out), 0);
+    }
+
+    #[test]
+    fn rows_align_across_columns() {
+        // a, a2 → b → c: приёмники соседних колонок стоят на ОДНОМ ряду
+        // сетки (b и c выровнены; b — между рядами родителей a и a2)
+        let mut canvas = Canvas::default();
+        let a = sized(&mut canvas, "a", 0.0, 0.0, 240.0, 140.0);
+        let a2 = sized(&mut canvas, "a2", 0.0, 400.0, 240.0, 140.0);
+        let b = sized(&mut canvas, "b", 500.0, 0.0, 240.0, 140.0);
+        let c = sized(&mut canvas, "c", 1000.0, 0.0, 240.0, 140.0);
+        link(&mut canvas, "e1", a, b);
+        link(&mut canvas, "e2", a2, b);
+        link(&mut canvas, "e3", b, c);
+
+        let plan = plan_scheme_layout(&canvas);
+        let out = apply_plan(&canvas, &plan);
+        let (ya, ya2, yb, yc) = (
+            out.nodes[by_id(&out, "a")].y,
+            out.nodes[by_id(&out, "a2")].y,
+            out.nodes[by_id(&out, "b")].y,
+            out.nodes[by_id(&out, "c")].y,
+        );
+        assert!(ya < ya2, "a выше a2 (seed-порядок): {ya} {ya2}");
+        assert!(
+            ya - 1.0 <= yb && yb <= ya2 + 1.0,
+            "b между рядами родителей: {ya} ≤ {yb} ≤ {ya2}"
+        );
+        assert!((yb - yc).abs() < 1.0, "b и c на одном ряду: {yb} {yc}");
         assert!(!node_rects_overlap(&out));
         assert_eq!(count_edge_node_crossings(&out), 0);
     }
@@ -1238,7 +1511,7 @@ mod tests {
     #[test]
     fn group_frame_covers_children() {
         // Явная группа из двух детей, оба кормят общий сток: дети рядом
-        // (ряд через ROW_GAP), рамка покрывает bbox детей + GROUP_PAD.
+        // (соседние ряды сетки), рамка покрывает bbox детей + GROUP_PAD.
         let mut canvas = Canvas::default();
         let k1 = sized(&mut canvas, "k1", 450.0, 60.0, 270.0, 150.0);
         let k2 = sized(&mut canvas, "k2", 450.0, 220.0, 270.0, 150.0);
@@ -1263,20 +1536,26 @@ mod tests {
                 "ребёнок {kid_id} внутри рамки группы"
             );
         }
-        // дети рядом: вертикальный зазор ровно ROW_GAP
+        // дети в одной колонке на соседних рядах: шаг ровно CELL_H,
+        // зазор ≥ ROW_GAP
+        let cell = grid_of(&out);
         let (rk1, rk2) = (&out.nodes[by_id(&out, "k1")], &out.nodes[by_id(&out, "k2")]);
-        let gap = (rk2.y - (rk1.y + rk1.height)).abs();
         assert!(
-            (gap - ROW_GAP).abs() < 1.0 || (rk1.y - (rk2.y + rk2.height)).abs() - ROW_GAP < 1.0,
-            "ряд детей через ROW_GAP: {gap}"
+            ((rk2.y - rk1.y).abs() - cell.cell_h).abs() < 1.0,
+            "ряд детей через CELL_H ({}): {:+}",
+            cell.cell_h,
+            rk2.y - rk1.y
         );
+        let gap = (rk2.y - (rk1.y + rk1.height)).abs();
+        assert!(gap + 0.5 >= ROW_GAP, "зазор детей {gap} < ROW_GAP");
         assert!(!node_rects_overlap(&out));
         assert_eq!(count_edge_node_crossings(&out), 0);
     }
 
     #[test]
     fn standalone_nodes_go_to_annotation_columns() {
-        // hint (исходный x левее потока) — слева, verdict (правее) — справа
+        // hint (исходный x левее потока) — слева, verdict (правее) — справа;
+        // зазоры до потока ≥ LAYER_GAP (колонка сетки)
         let mut canvas = Canvas::default();
         sized(&mut canvas, "hint", 0.0, 0.0, 360.0, 240.0);
         let a = sized(&mut canvas, "a", 1200.0, 0.0, 260.0, 200.0);
@@ -1301,13 +1580,13 @@ mod tests {
             .map(|n| n.x + n.width)
             .fold(f32::MIN, f32::max);
         assert!(
-            hint.x + hint.width <= flow_min_x - ANNOT_GAP + 1.0,
-            "hint левее потока: {} <= {flow_min_x} - {ANNOT_GAP}",
+            hint.x + hint.width <= flow_min_x - LAYER_GAP + 1.0,
+            "hint левее потока с зазором ≥ LAYER_GAP: {} <= {flow_min_x} - {LAYER_GAP}",
             hint.x + hint.width
         );
         assert!(
-            verdict.x >= flow_max_x + ANNOT_GAP - 1.0,
-            "verdict правее потока: {} >= {flow_max_x} + {ANNOT_GAP}",
+            verdict.x >= flow_max_x + LAYER_GAP - 1.0,
+            "verdict правее потока с зазором ≥ LAYER_GAP: {} >= {flow_max_x} + {LAYER_GAP}",
             verdict.x
         );
         assert!(!node_rects_overlap(&out));
@@ -1381,7 +1660,8 @@ mod tests {
     #[test]
     fn long_edge_crossing_is_refined_away() {
         // Длинная диагональ через среднюю колонку: seed-порядок создаёт
-        // пересечение s1→t2 с m1 — оптимизация (shift/swap) обязана убрать.
+        // пересечение s1→t2 с m1 — оптимизация (сдвиг колонки целыми
+        // рядами сетки) обязана убрать.
         let mut canvas = Canvas::default();
         let s1 = sized(&mut canvas, "s1", 0.0, 0.0, 200.0, 120.0);
         let s2 = sized(&mut canvas, "s2", 0.0, 600.0, 200.0, 120.0);
@@ -1406,16 +1686,13 @@ mod tests {
         assert!(!node_rects_overlap(&out));
     }
 
-    /// Регресс (аудит схем 2026-09-25): обмен соседей при РАЗНЫХ высотах
-    /// не рвёт стек колонки — зазоры в каждой колонке ≥ [`ROW_GAP`],
-    /// наложений нет. Старый refine_by_swaps обменивал y-позиции дословно
-    /// и давал наложения-«внахлёст» (cohort-launch: план × удержание).
+    /// Регресс (аудит схем 2026-09-25): ноды РАЗНЫХ высот в одной колонке
+    /// не слипаются и не накладываются — в сеточной модели у каждой ноды
+    /// свой ряд, зазор между соседями по вертикали ≥ CELL_H − max_h ≥
+    /// ROW_GAP конструктивно (cohort-launch: план × удержание).
     #[test]
     fn swap_refine_keeps_row_gaps_with_unequal_heights() {
         let mut canvas = Canvas::default();
-        // Колонка источников трёх разных высот с общим родителем —
-        // barycenter стянет их к центру родителя, refine обязан
-        // сохранять стек.
         let a = sized(&mut canvas, "a", 0.0, 0.0, 260.0, 202.0);
         let b = sized(&mut canvas, "b", 0.0, 266.0, 260.0, 254.0);
         let c = sized(&mut canvas, "c", 0.0, 584.0, 260.0, 182.0);
@@ -1465,7 +1742,7 @@ mod tests {
             plan_scheme_layout(&Canvas::default()),
             SchemeLayoutPlan::default()
         );
-        // Только standalone: одна колонка от (0, 0)
+        // Только standalone: одна колонка от (0, 0), ряды сетки
         let mut canvas = Canvas::default();
         sized(&mut canvas, "h1", 100.0, 100.0, 300.0, 200.0);
         sized(&mut canvas, "h2", 100.0, 500.0, 300.0, 200.0);
@@ -1473,9 +1750,11 @@ mod tests {
         let out = apply_plan(&canvas, &plan);
         let (h1, h2) = (&out.nodes[by_id(&out, "h1")], &out.nodes[by_id(&out, "h2")]);
         assert!((h1.x - h2.x).abs() < f32::EPSILON, "одна колонка");
+        let cell = grid_of(&out);
         assert!(
-            (h2.y - (h1.y + h1.height + ROW_GAP)).abs() < 1.0,
-            "стек с ROW_GAP"
+            (h2.y - h1.y - cell.cell_h).abs() < 1.0,
+            "ряды сетки: шаг {}",
+            cell.cell_h
         );
     }
 

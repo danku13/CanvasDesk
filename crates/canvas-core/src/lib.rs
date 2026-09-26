@@ -149,7 +149,7 @@ pub use providers::{
     WidgetStateBackend,
 };
 pub use scheme_layout::{
-    count_edge_node_crossings, plan_scheme_layout, SchemeLayoutPlan, ANNOT_GAP, CLUSTER_GAP,
+    count_edge_node_crossings, plan_scheme_layout, SchemeLayoutPlan, CLUSTER_GAP_COLS,
     CROSSING_MARGIN, GROUP_PAD, LAYER_GAP, MAX_REFINE_PASSES, ROW_GAP,
 };
 pub use schemes::SchemeRegistry;
