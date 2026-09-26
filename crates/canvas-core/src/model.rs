@@ -1241,6 +1241,120 @@ pub fn group_expand_to_children(canvas: &mut Canvas, group_index: usize, padding
     true
 }
 
+/// Глубокое авторасширение (FR-012 v4): расширить целевую группу до
+/// bbox(дети)+`padding`, затем ВСЕ её группы-предки снизу вверх — каждая до
+/// bbox(своих детей)+padding. На момент расширения предка его дети-группы
+/// уже расширены на предыдущем шаге, поэтому цепочка «вмещает всё внутри»:
+/// вставка ноды во вложенную группу раздувает и родительские рамки
+/// (раньше расширялась только цель — внутренняя группа вылезала за
+/// пределы родителя). Вызывается ПОСЛЕ изменения membership.
+///
+/// Возвращает индексы изменённых групп в порядке расширения: цель — первая,
+/// далее предки от самого глубокого к внешнему (детерминизм: сортировка
+/// предков по (глубина, индекс) по убыванию; циклы/повреждённая иерархия —
+/// visited-защита `enclosing_group_indices` и `group_depths`). Предки-
+/// легаси (children = None) расширяются по геометрическому фолбэку
+/// [`group_children`] — inner-группа засчитывается, только если её ЦЕНТР
+/// внутри rect предка (существующая семантика легаси). Чистая функция.
+pub fn group_expand_to_children_deep(
+    canvas: &mut Canvas,
+    group_index: usize,
+    padding: f32,
+) -> Vec<usize> {
+    // Цепочка предков — ДО мутаций (расширения rect списки детей не меняют,
+    // но фиксируем порядок заранее — читается проще)
+    let mut ancestors = enclosing_group_indices(canvas, group_index);
+    let depths = group_depths(canvas);
+    // Снизу вверх: самый глубокий предок первым; (глубина, индекс) — desc
+    ancestors.sort_by_key(|&i| std::cmp::Reverse((depths.get(&i).copied().unwrap_or(0), i)));
+    let mut expanded = Vec::new();
+    if group_expand_to_children(canvas, group_index, padding) {
+        expanded.push(group_index);
+    }
+    for ancestor in ancestors {
+        if group_expand_to_children(canvas, ancestor, padding) {
+            expanded.push(ancestor);
+        }
+    }
+    expanded
+}
+
+/// Встраивание новой группы в иерархию (FR-012 v4, «Сгруппировать» внутри
+/// существующей группы): оборачиваемые ноды вычёркиваются из детей ВСЕХ
+/// прочих групп (инвариант одного членства — раньше `insert_group`
+/// вставлял группу как есть, и нода оставалась ребёнком и старой, и новой
+/// группы: двойной сдвиг при drag, разрыв поддерева), а сама новая группа
+/// становится ребёнком САМОЙ ВНУТРЕННЕЙ группы-предка оборачиваемых нод
+/// (макс. (глубина, индекс) — детерминизм). Родитель-легаси (children =
+/// None) материализуется из текущей геометрии ДО добавления — геометрические
+/// члены не теряются. Возвращает индекс родителя — если он был; None —
+/// обёртка верхнего уровня (или группа без детей/невалидный индекс).
+/// Вызывается ПОСЛЕ вставки новой группы в `canvas.nodes`.
+pub fn group_adopt_into_hierarchy(canvas: &mut Canvas, new_group_index: usize) -> Option<usize> {
+    let wrapped = canvas
+        .nodes
+        .get(new_group_index)?
+        .children
+        .clone()
+        .unwrap_or_default();
+    if wrapped.is_empty() {
+        return None;
+    }
+    let index_of: HashMap<&str, usize> = canvas
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+    let wrapped_set: HashSet<&str> = wrapped.iter().map(|id| id.as_str()).collect();
+    let wrapped_indices: Vec<usize> = wrapped
+        .iter()
+        .filter_map(|id| index_of.get(id.as_str()).copied())
+        .collect();
+    // Предки любого из обёрнутых — ДО вычёркивания (нужны живые списки
+    // детей); новая группа сама исключена — её список детей уже указывает
+    // на обёрнутых, но родителем она быть не может
+    let depths = group_depths(canvas);
+    let mut parent: Option<(usize, usize)> = None; // (глубина, индекс)
+    for &node_index in &wrapped_indices {
+        for ancestor in enclosing_group_indices(canvas, node_index) {
+            if ancestor == new_group_index {
+                continue;
+            }
+            let depth = depths.get(&ancestor).copied().unwrap_or(0);
+            // map_or вместо is_none_or — MSRV 1.80 (см. input.rs)
+            if parent.map_or(true, |(pd, pi)| (depth, ancestor) > (pd, pi)) {
+                parent = Some((depth, ancestor));
+            }
+        }
+    }
+    let (_, parent_index) = parent?;
+    // Легаси-родитель: материализация списка из геометрии ДО вычёркивания —
+    // иначе get_or_insert после strip заново включит обёрнутых геометрией
+    // (их центр по-прежнему в rect), а материализация после strip потеряла
+    // бы прежних геометрических членов. Материализация меняет только форму
+    // хранения членства (None → Some), не сам факт членства.
+    group_materialize_children(canvas, parent_index);
+    // Инвариант одного членства: обёрнутые ноды — дети ТОЛЬКО новой группы
+    // (сама новая группа не трогается — её список и есть новое членство)
+    for (gi, group) in canvas.nodes.iter_mut().enumerate() {
+        if gi == new_group_index {
+            continue;
+        }
+        if let Some(list) = group.children.as_mut() {
+            list.retain(|id| !wrapped_set.contains(id.as_str()));
+        }
+    }
+    let new_group_id = canvas.nodes.get(new_group_index)?.id.clone();
+    if let Some(group) = canvas.nodes.get_mut(parent_index) {
+        let list = group.children.get_or_insert_with(Vec::new);
+        if !list.contains(&new_group_id) {
+            list.push(new_group_id);
+        }
+    }
+    Some(parent_index)
+}
+
 /// Все группы, содержащие ноду — явно (список `children`), геометрически
 /// (легаси, центр внутри rect) или транзитивно через вложенные группы.
 /// Роутинг связей использует список как исключение из препятствий: линк
@@ -2056,6 +2170,129 @@ mod tests {
         let mut empty = Canvas::default();
         empty.nodes.push(Node::group("g2", 0.0, 0.0, 100.0, 100.0));
         assert!(!group_expand_to_children(&mut empty, 0, 40.0));
+    }
+
+    /// Глубокое авторасширение (FR-012 v4): вставка во вложенную группу
+    /// расширяет и цель, и всех предков снизу вверх — каждая рамка вмещает
+    /// своих детей (включая уже раздувшиеся дочерние группы) + padding.
+    #[test]
+    fn expand_to_children_deep_expands_ancestors_bottom_up() {
+        // Цепочка outer ⊃ mid ⊃ inner ⊃ {a}; нода n — снаружи всех
+        let mut canvas = Canvas::default();
+        let mut outer = Node::group("outer", 0.0, 0.0, 300.0, 200.0);
+        outer.children = Some(vec!["mid".to_owned()]);
+        let mut mid = Node::group("mid", 20.0, 20.0, 200.0, 150.0);
+        mid.children = Some(vec!["inner".to_owned()]);
+        let mut inner = Node::group("inner", 40.0, 40.0, 100.0, 80.0);
+        inner.children = Some(vec!["a".to_owned()]);
+        canvas.nodes.push(outer);
+        canvas.nodes.push(mid);
+        canvas.nodes.push(inner);
+        canvas
+            .nodes
+            .push(Node::file("a", "C:/a.png", 50.0, 50.0, 30.0, 30.0));
+        canvas
+            .nodes
+            .push(Node::file("n", "C:/n.png", 400.0, 60.0, 40.0, 40.0));
+        // Втягивание n в inner + глубокое расширение (padding 10)
+        group_add_children(&mut canvas, 2, &["n".to_owned()]);
+        let expanded = group_expand_to_children_deep(&mut canvas, 2, 10.0);
+        // Порядок: цель, затем предки от глубокого к внешнему
+        assert_eq!(expanded, vec![2, 1, 0]);
+        // inner: bbox(a 50..80×50..80, n 400..440×60..100) + 10
+        // → (40, 40, 410, 70)
+        let inner = &canvas.nodes[2];
+        assert_eq!(
+            (inner.x, inner.y, inner.width, inner.height),
+            (40.0, 40.0, 410.0, 70.0)
+        );
+        // mid: bbox(inner 40..450 × 40..110) + 10 → (30, 30, 430, 90)
+        let mid = &canvas.nodes[1];
+        assert_eq!(
+            (mid.x, mid.y, mid.width, mid.height),
+            (30.0, 30.0, 430.0, 90.0)
+        );
+        // outer: bbox(mid 30..460 × 30..120) + 10 → (20, 20, 450, 110)
+        let outer = &canvas.nodes[0];
+        assert_eq!(
+            (outer.x, outer.y, outer.width, outer.height),
+            (20.0, 20.0, 450.0, 110.0)
+        );
+        // Верхний уровень (без предков) — поведение как у обычного расширения
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::group("solo", 0.0, 0.0, 400.0, 300.0));
+        canvas
+            .nodes
+            .push(Node::file("x", "C:/x.png", 100.0, 100.0, 50.0, 50.0));
+        group_add_children(&mut canvas, 0, &["x".to_owned()]);
+        assert_eq!(
+            group_expand_to_children_deep(&mut canvas, 0, 40.0),
+            vec![0],
+            "без предков расширяется только цель"
+        );
+    }
+
+    /// Встраивание новой группы в иерархию (FR-012 v4): инвариант одного
+    /// членства + re-parent под самую внутреннюю группу-предка + материализация
+    /// легаси-родителя без потери геометрических членов.
+    #[test]
+    fn adopt_into_hierarchy_reparents_and_enforces_single_membership() {
+        // group_scene: in (100..150 × 100..130) лежит и в g (материализован:
+        // дети in/edge/nested), и геометрически в nested (50..150 × 50..130).
+        // Группируем in → родитель новой группы — САМАЯ ВНУТРЕННЯЯ
+        // содержащая группа: nested (глубина 1), а не g (глубина 0).
+        let mut canvas = group_scene();
+        group_materialize_children(&mut canvas, 0);
+        assert_eq!(
+            group_children(&canvas, 0),
+            vec![1, 2, 4],
+            "in/edge/nested — геометрия материализована"
+        );
+        // Новая группа вокруг in (индекс 1) — план plan_group_around
+        let mut new_group = Node::group("group-2", 90.0, 90.0, 70.0, 70.0);
+        new_group.children = Some(vec!["in".to_owned()]);
+        canvas.nodes.push(new_group); // индекс 5
+        let parent = group_adopt_into_hierarchy(&mut canvas, 5);
+        assert_eq!(
+            parent,
+            Some(4),
+            "родитель — nested: самая внутренняя из содержащих"
+        );
+        // Легаси-nested материализован (был None → геометрия: только in),
+        // in вычеркнут инвариантом, добавлена group-2
+        assert_eq!(group_children(&canvas, 4), vec![5]);
+        // in вычеркнут из детей g — одно членство
+        assert_eq!(group_children(&canvas, 0), vec![2, 4], "g: edge, nested");
+        assert!(!canvas.nodes[0]
+            .children
+            .as_ref()
+            .unwrap()
+            .contains(&"in".to_owned()));
+        // in — ребёнок только новой группы
+        assert_eq!(group_children(&canvas, 5), vec![1]);
+        // Иерархия стала явной: g ⊃ nested ⊃ group-2 ⊃ in
+        // (контракт group_depths: корни в карту не входят — неявно 0)
+        let depths = group_depths(&canvas);
+        assert_eq!(depths.get(&0), None, "g — корень (нет в карте)");
+        assert_eq!(depths.get(&4), Some(&1));
+        assert_eq!(depths.get(&5), Some(&2));
+    }
+
+    /// Встраивание на верхнем уровне (нет групп-предков у обёрнутых) —
+    /// None, канвас не меняется (кроме ничего).
+    #[test]
+    fn adopt_into_hierarchy_top_level_is_noop() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::file("a", "C:/a.png", 0.0, 0.0, 50.0, 50.0));
+        let mut g = Node::group("g", 0.0, 0.0, 100.0, 100.0);
+        g.children = Some(vec!["a".to_owned()]);
+        canvas.nodes.push(g);
+        assert_eq!(group_adopt_into_hierarchy(&mut canvas, 1), None);
+        assert_eq!(group_children(&canvas, 1), vec![0], "членство сохранено");
     }
 
     /// Мягкое раздвигание: минимальный осевой вектор, отсутствие

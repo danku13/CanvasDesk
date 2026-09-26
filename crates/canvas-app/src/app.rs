@@ -4009,6 +4009,30 @@ impl App {
         let index = self.scene.canvas.nodes.len() - 1;
         let node = &self.scene.canvas.nodes[index];
         self.scene.spatial.insert(index, node);
+        // FR-012 v4: «Сгруппировать» внутри существующей группы — явная
+        // вложенность: инвариант одного членства (обёрнутые вычёркиваются
+        // из детей прочих групп) + re-parent (новая группа — ребёнок самой
+        // внутренней группы-предка) + глубокое расширение цепочки (родитель
+        // вмещает новую подгруппу). Верхний уровень — без изменений.
+        let parent = canvas_core::group_adopt_into_hierarchy(&mut self.scene.canvas, index);
+        if parent.is_some() {
+            let chain: Vec<usize> = std::iter::once(index)
+                .chain(canvas_core::enclosing_group_indices(
+                    &self.scene.canvas,
+                    index,
+                ))
+                .collect();
+            let old_pos: std::collections::HashMap<usize, [f32; 2]> = chain
+                .iter()
+                .filter_map(|&i| self.scene.canvas.nodes.get(i).map(|g| (i, [g.x, g.y])))
+                .collect();
+            let expanded = canvas_core::group_expand_to_children_deep(
+                &mut self.scene.canvas,
+                index,
+                crate::ui::GROUP_PADDING,
+            );
+            self.apply_group_expansion(&expanded, &old_pos);
+        }
         self.selected = Some(Selection::Node(index));
         self.selected_nodes.clear();
         self.scene.mark_dirty();
@@ -7452,8 +7476,9 @@ impl App {
     }
 
     /// Вставить перетаскиваемые ноды в группу (FR-012, отпускание над
-    /// зоной): membership + авторасширение rect до bbox+padding + мягкое
-    /// раздвигание пересекаемых соседей (с анимацией). Один undo-шаг.
+    /// зоной): membership + глубокое авторасширение (v4) — цель и ВСЕ её
+    /// группы-предки снизу вверх вмещают содержимое + мягкое раздвигание
+    /// пересекаемых чужих нод (с анимацией). Один undo-шаг.
     fn group_insert_dragged(&mut self, group_index: usize) {
         let Some(drag) = self.dragging.as_ref() else {
             return;
@@ -7489,70 +7514,96 @@ impl App {
         }
         self.push_undo();
         canvas_core::group_add_children(&mut self.scene.canvas, group_index, &ids);
-        // Авторасширение: rect группы = bbox(дети) + GROUP_PADDING
-        let old = self
-            .scene
-            .canvas
-            .nodes
-            .get(group_index)
-            .map(|g| [g.x, g.y])
-            .unwrap_or([0.0, 0.0]);
-        canvas_core::group_expand_to_children(
+        // FR-012 v4: глубокое авторасширение — цель, затем предки снизу
+        // вверх: вставка ноды во вложенную группу раздувает и родительские
+        // рамки (раньше расширялась только цель — внутренняя группа вылезала
+        // за пределы родителя)
+        let chain: Vec<usize> = std::iter::once(group_index)
+            .chain(canvas_core::enclosing_group_indices(
+                &self.scene.canvas,
+                group_index,
+            ))
+            .collect();
+        let old_pos: std::collections::HashMap<usize, [f32; 2]> = chain
+            .iter()
+            .filter_map(|&i| self.scene.canvas.nodes.get(i).map(|g| (i, [g.x, g.y])))
+            .collect();
+        let expanded = canvas_core::group_expand_to_children_deep(
             &mut self.scene.canvas,
             group_index,
             crate::ui::GROUP_PADDING,
         );
-        let new_rect = self
-            .scene
-            .canvas
-            .nodes
-            .get(group_index)
-            .map(|g| [g.x, g.y, g.width, g.height])
-            .unwrap_or([0.0, 0.0, 0.0, 0.0]);
-        self.scene
-            .spatial
-            .update(group_index, &self.scene.canvas.nodes[group_index]);
-        // Мягкое раздвигание: не-дети, чьи bbox пересеклись с новым rect,
-        // сдвигаются на минимальный осевой вектор; группа и раздвинутые
-        // соседи едут плавно (settle-анимация ~250 мс)
-        let children: Vec<usize> = canvas_core::group_children(&self.scene.canvas, group_index);
-        let others: Vec<(usize, [f32; 4])> = self
-            .scene
-            .canvas
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(i, node)| {
-                *i != group_index && !children.contains(i) && node.kind() != NodeKind::Group
-            })
-            .map(|(i, node)| (i, [node.x, node.y, node.width, node.height]))
-            .collect();
-        let push_plan = canvas_core::plan_push_out(new_rect, &others);
+        self.apply_group_expansion(&expanded, &old_pos);
+        self.scene.mark_dirty();
+        self.show_toast(self.tr(keys::TOAST_NODE_INSERTED));
+    }
+
+    /// Применение глубокого расширения групп (FR-012 v4): spatial update
+    /// каждой расширенной группы, мягкое раздвигание чужих нод под её новым
+    /// rect и settle-анимация смещений. Чужие — не сама группа, не группы и
+    /// не её ТРАНЗИТИВНЫЕ потомки (дети вложенных подгрупп живут внутри
+    /// предка законно; раньше исключались только прямые дети — дети подгрупп
+    /// выталкивались из раздувшейся рамки предка). Позиции групп для
+    /// анимации — снапшот `old_pos` ДО расширения. Единый хелпер вставки
+    /// (drag-втягивание) и создания (Сгруппировать/меню ноды).
+    fn apply_group_expansion(
+        &mut self,
+        expanded: &[usize],
+        old_pos: &std::collections::HashMap<usize, [f32; 2]>,
+    ) {
         let mut moves: Vec<(usize, [f32; 2], [f32; 2])> = Vec::new();
-        let new_pos = [new_rect[0], new_rect[1]];
-        if (new_pos[0] - old[0]).abs() > f32::EPSILON || (new_pos[1] - old[1]).abs() > f32::EPSILON
-        {
-            moves.push((group_index, old, new_pos));
-        }
-        for (index, [dx, dy]) in push_plan {
-            let (Some(from), Some(to_target)) = (
-                self.scene.canvas.nodes.get(index).map(|n| [n.x, n.y]),
-                self.scene
-                    .canvas
-                    .nodes
-                    .get(index)
-                    .map(|n| [n.x + dx, n.y + dy]),
-            ) else {
-                continue;
+        for &gi in expanded {
+            let (rect, descendants) = {
+                let Some(group) = self.scene.canvas.nodes.get(gi) else {
+                    continue;
+                };
+                let rect = [group.x, group.y, group.width, group.height];
+                let descendants = canvas_core::group_descendants(&self.scene.canvas, gi);
+                (rect, descendants)
             };
-            if let Some(node) = self.scene.canvas.nodes.get_mut(index) {
-                node.x += dx;
-                node.y += dy;
+            self.scene.spatial.update(gi, &self.scene.canvas.nodes[gi]);
+            // Мягкое раздвигание: чужие не-группы, чьи bbox пересеклись с
+            // новым rect, сдвигаются на минимальный осевой вектор
+            let others: Vec<(usize, [f32; 4])> = self
+                .scene
+                .canvas
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(i, node)| {
+                    *i != gi && !descendants.contains(i) && node.kind() != NodeKind::Group
+                })
+                .map(|(i, node)| (i, [node.x, node.y, node.width, node.height]))
+                .collect();
+            for (index, [dx, dy]) in canvas_core::plan_push_out(rect, &others) {
+                let (Some(from), Some(to_target)) = (
+                    self.scene.canvas.nodes.get(index).map(|n| [n.x, n.y]),
+                    self.scene
+                        .canvas
+                        .nodes
+                        .get(index)
+                        .map(|n| [n.x + dx, n.y + dy]),
+                ) else {
+                    continue;
+                };
+                if let Some(node) = self.scene.canvas.nodes.get_mut(index) {
+                    node.x += dx;
+                    node.y += dy;
+                }
+                if let Some(node) = self.scene.canvas.nodes.get(index) {
+                    self.scene.spatial.update(index, node);
+                }
+                moves.push((index, from, to_target));
             }
-            if let Some(node) = self.scene.canvas.nodes.get(index) {
-                self.scene.spatial.update(index, node);
+            // Смещение самой группы (расширение меняет x/y) — в анимацию
+            if let (Some(old), Some(node)) = (old_pos.get(&gi), self.scene.canvas.nodes.get(gi)) {
+                let new_pos = [node.x, node.y];
+                if (new_pos[0] - old[0]).abs() > f32::EPSILON
+                    || (new_pos[1] - old[1]).abs() > f32::EPSILON
+                {
+                    moves.push((gi, *old, new_pos));
+                }
             }
-            moves.push((index, from, to_target));
         }
         if !moves.is_empty() {
             // FR-073: settle-анимация ведёт ноды к целям — их якоря =
@@ -7568,8 +7619,6 @@ impl App {
                 start: Instant::now(),
             });
         }
-        self.scene.mark_dirty();
-        self.show_toast(self.tr(keys::TOAST_NODE_INSERTED));
     }
 
     /// Вынос детей из групп после drag (FR-012): нода, отпущенная вне rect
