@@ -395,6 +395,20 @@ pub fn template_icon_rect(node: &Node) -> [f32; 4] {
     ]
 }
 
+/// FR-075 W2: UV-координаты иконки роли шаблонной ноды в SVG-атласе
+/// (sparse-набор "roles"). Ключ — поле `icon` манифеста шаблона; фолбэк
+/// неизвестного ключа — "custom" (рамка с ядром — семантика прежнего
+/// `_ =>` arm квад-строителя). `None` — ключа нет и в атласе (не бывает:
+/// все ключи квад-строителя покрыты, тест all_role_keys_have_uv).
+pub fn template_icon_uv(icon: &str) -> Option<([f32; 2], [f32; 2])> {
+    let name = if crate::icon_data::icon_rgba("roles", icon).is_some() {
+        icon
+    } else {
+        "custom"
+    };
+    crate::icon_pipeline::icon_uv("roles", name)
+}
+
 // --- Хедер по вёрстке прототипа (FR-075; prototype-unified drawNode) ---
 
 /// Геометрия чипа категории в шапке (prototype-unified: `roundRect(x+10,
@@ -1984,21 +1998,30 @@ mod tests {
 
         // Декоративный оверлей — отдельные инстансы, НЕ часть card_instance:
         // чип категории (header_chip_instance), линия-разделитель зон,
-        // полоса результата «ИТОГ» (result_strip_instance) и квад-иконка
-        // (template_icon_quads) — добавляются в renderer.rs поверх карточки.
-        // Это НАрост поверх card_instance, не отдельный путь (оракул
-        // байт-в-байт выше — инвариант I-шаблон). FR-075: полосы категории
-        // больше нет — чип в шапке по вёрстке prototype-unified; иконка
-        // роли — прежний декор FR-018.
-        // Иконка lb — композиция из нескольких квадратов (весы); это декор,
-        // не часть карточки: renderer вызывает template_icon_quads только
+        // полоса результата «ИТОГ» (result_strip_instance) и иконка роли —
+        // добавляются в renderer.rs поверх карточки. Это НАрост поверх
+        // card_instance, не отдельный путь (оракул байт-в-байт выше —
+        // инвариант I-шаблон). FR-075: полосы категории больше нет — чип
+        // в шапке по вёрстке prototype-unified; иконка роли — W2,
+        // SVG-атлас (sparse-набор "roles") вместо квад-кодов FR-018.
+        // Renderer строит WorldIconInstance из template_icon_uv только
         // когда node.template().is_some() — у обычной text-ноды вызова нет.
-        let icon = template_icon_quads(
-            &tpl.template().map(|t| t.icon).unwrap_or_default(),
-            template_icon_rect(&tpl),
-            [1.0; 4],
+        let role_key = tpl.template().map(|t| t.icon).unwrap_or_default();
+        let (uv_min, uv_max) = template_icon_uv(&role_key)
+            .unwrap_or_else(|| panic!("ключ роли «{role_key}» есть в SVG-атласе"));
+        let cell_w =
+            crate::icon_pipeline::ICON_CELL_PX as f32 / crate::icon_pipeline::ATLAS_W as f32;
+        let cell_h =
+            crate::icon_pipeline::ICON_CELL_PX as f32 / crate::icon_pipeline::ATLAS_H as f32;
+        assert!(
+            (uv_max[0] - uv_min[0] - cell_w).abs() < 1e-6,
+            "UV ячейки атласа"
         );
-        assert!(!icon.is_empty(), "у шаблонной ноды есть квад-иконка роли");
+        assert!(
+            (uv_max[1] - uv_min[1] - cell_h).abs() < 1e-6,
+            "UV ячейки атласа"
+        );
+        assert!(uv_min[1] >= 0.0 && uv_max[1] <= 1.0, "UV в границах атласа");
         // Чип — капсула в верхнем левом углу шапки (prototype-unified:
         // roundRect(x+10, y+8, метка+14, 16, 8)); иконка — в центре шапки.
         let chip = header_chip_instance(&tpl, 42.0, [0.3, 0.6, 1.0, 1.0]);

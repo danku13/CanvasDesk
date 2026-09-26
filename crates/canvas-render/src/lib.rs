@@ -45,7 +45,10 @@ pub mod zorder;
 pub use camera::Camera;
 pub use glyphon::Color;
 pub use guides::{GuideLine, GuideSource, GuidesFrame};
-pub use icon_pipeline::{icon_uv, IconInstance, IconPipeline, ATLAS_H, ATLAS_W, ICON_CELL_PX};
+pub use icon_pipeline::{
+    icon_uv, IconAtlas, IconInstance, IconPipeline, WorldIconInstance, WorldIconPipeline, ATLAS_H,
+    ATLAS_W, ICON_CELL_PX,
+};
 pub use renderer::{
     FrameOverlay, FrameStats, ParamDropView, Renderer, SceneView, ScreenBand, Selection, SpillView,
     WhatIfNode,

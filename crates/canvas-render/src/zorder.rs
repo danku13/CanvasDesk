@@ -176,8 +176,19 @@ pub fn plan_z_order(
 /// Возвращает `(world, screen)` — диапазоны мир- и screen-хвоста. Мир-диапазон
 /// рисует отдельным проходом только если сегментов не было: при наличии
 /// сегментов его квады уже нарисованы в составе последнего.
+///
+/// Диапазоны отрисовки z-сегмента: (карточки, тамбнейлы, иконки ролей
+/// FR-075 W2, текст-группа). Алиас — читаемость подписей и кламп
+/// type_complexity.
+pub type SegmentRanges = (
+    std::ops::Range<u32>,
+    std::ops::Range<u32>,
+    std::ops::Range<u32>,
+    Option<usize>,
+);
+
 pub fn plan_tail_ranges(
-    segments: &mut [(std::ops::Range<u32>, std::ops::Range<u32>, Option<usize>)],
+    segments: &mut [SegmentRanges],
     world_start: u32,
     world_end: u32,
     buffer_end: u32,
@@ -496,8 +507,8 @@ mod tests {
     /// screen-хвост — отдельным диапазоном после всех сегментов (фикс T14).
     #[test]
     fn tail_world_extends_last_segment_screen_separate() {
-        let mut segs: Vec<(std::ops::Range<u32>, std::ops::Range<u32>, Option<usize>)> =
-            vec![(2..5, 0..1, Some(0)), (5..9, 1..1, Some(1))];
+        let mut segs: Vec<SegmentRanges> =
+            vec![(2..5, 0..1, 0..0, Some(0)), (5..9, 1..1, 0..0, Some(1))];
         // Мир-хвост: 4 квада (9..13), screen-хвост: 2 квада (13..15)
         let (world, screen) = plan_tail_ranges(&mut segs, 9, 13, 15);
         assert_eq!(segs[0].0, 2..5, "первый сегмент не тронут");
@@ -514,7 +525,7 @@ mod tests {
     /// отдельным диапазоном — иначе его квады не попали бы в кадр вовсе.
     #[test]
     fn tail_without_segments_is_standalone() {
-        let mut segs: Vec<(std::ops::Range<u32>, std::ops::Range<u32>, Option<usize>)> = Vec::new();
+        let mut segs: Vec<SegmentRanges> = Vec::new();
         let (world, screen) = plan_tail_ranges(&mut segs, 0, 3, 4);
         assert!(segs.is_empty());
         assert_eq!(world, 0..3);
@@ -525,8 +536,7 @@ mod tests {
     /// сегменты не меняются.
     #[test]
     fn empty_tails_leave_segments_untouched() {
-        let mut segs: Vec<(std::ops::Range<u32>, std::ops::Range<u32>, Option<usize>)> =
-            vec![(0..4, 0..0, Some(0))];
+        let mut segs: Vec<SegmentRanges> = vec![(0..4, 0..0, 0..0, Some(0))];
         let (world, screen) = plan_tail_ranges(&mut segs, 4, 4, 4);
         assert_eq!(segs[0].0, 0..4);
         assert!(world.is_empty());

@@ -1,6 +1,6 @@
 # FR-075: Паритет элементов шелла карточки с web-ui (CSS-модель кита)
 
-- **Статус:** в работе (W0+W1 и выравнивание с вёрсткой прототипов — 2026-09-26)
+- **Статус:** в работе (W0+W0.5+W1+W2 исполнены; W3–W5 — будущие — 2026-09-26)
 - **Тип:** FR (архитектура + серия исправлений)
 - **Приоритет:** важно
 - **Владелец:** агент (deep dive по запросу владельца)
@@ -168,7 +168,7 @@ z-планом T5/136e9fb для тамбнейлов). Инстансы иду�
 аффордансы: порты сторон hover-ноды (T8), хэндлы выделенной связи (CR-002),
 draft-линия.
 
-### 4.2 Волна 2 — мировые SVG-иконки (примитив Icon в мире) — БУДУЩЕЕ
+### 4.2 Волна 2 — мировые SVG-иконки (примитив Icon в мире) — исполнено 2026-09-26
 
 `icons.wgsl` получает `CameraUniform` (или world-вариант пайплайна) →
 `IconInstance` в world-координатах; квад-иконки ролей заменяются SVG-атласом
@@ -328,3 +328,31 @@ fr-074:80–82 для обоих доменов.
 - `docs/prototypes/prototype-unified.html` — drawNode/drawStrip/drawPorts/
   drawDataRow (метрики M/F/PAL); `prototype-mainstage-anatomy.html` — анатомия
   A–E; `ux-node-body-fill.html` — DOM `.strip-d`/`.chip`.
+- `2026-09-26` — агент (продолжение deep dive: «продолжай deep dive»): исполнена
+  волна W2 (§4.2) — иконки ролей шаблонных нод переведены с квад-кодов FR-018
+  на SVG-атлас (мировой примитив Icon):
+  1. **Атлас:** sparse-набор `roles` — 20 имён (ключи квад-строителя + custom),
+     SVG 24×24 (stroke 2, lucide-стиль; семантические аналоги квад-композиций),
+     растеризация `scripts/rasterize_icons.py` (cairosvg) → `icon_data.rs`
+     (5 наборов × 36 имён = 1152×160; чужие ячейки прозрачны, upload — trace
+     без warn-спама).
+  2. **Мировой пайплайн:** `IconAtlas` (текстура+view+sampler, общие для
+     screen/world; bind group держит сильные ссылки), `WorldIconInstance`
+     (pos/size в world px, раскладка 12 float — байт-в-байт экранная),
+     `WorldIconPipeline` + `shaders/world_icons.wgsl` (CameraUniform,
+     world_to_screen — иконки зумятся с карточкой).
+  3. **Z-сегменты:** инстансы строятся в z-сегменте своей ноды (после
+     тамбнейлов, до карточек перекрывающих нод) — окклюзия как W1; draw_ranges
+     расширен третьим диапазоном (`zorder::SegmentRanges`), план_tail_ranges
+     не тронут; culling бесплатно (сегменты из видимых нод).
+  4. **Dim (T23):** альфа tint × фактор (аналог dim_instance карточек).
+  5. **Квад-иконки палитры/wheel (FR-018/FR-024) СОХРАНЕНЫ** — канал иконок в
+     band-системе screen-полос отсутствует; перенос — W2.1 (после W3).
+  Гейты: workspace lib-тесты 0 failed (новые: `roles_set_is_sparse`,
+  `all_role_keys_have_uv`, `world_instance_writes_12_floats`,
+  `atlas_size_matches_repositories` 180 ячеек; оракул I-шаблон переведён на
+  `template_icon_uv`), clippy `-D warnings`, fmt, wasm-gate ступень 1;
+  скриншот-приёмка wasm-витриной (shell_showcase, 10 вариантов): SVG-иконки
+  ролей читаемы (глобус CDN, арка API-шлюза, слои Kafka, бар-чарт A/B),
+  масштабируются с карточкой, окклюзия/чипы/ИТОГ/зебра/порты без регресса;
+  backend=BrowserWebGpu, pageerror нет.

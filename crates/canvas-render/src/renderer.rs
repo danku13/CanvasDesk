@@ -18,9 +18,9 @@ use crate::cards::{
     build_line_port_instances, build_param_port_instances, build_port_instances, card_instance,
     chip_fill, dim_instance, header_chip_instance, header_separator_instance,
     make_widget_transparent, result_strip_instance, result_strip_line_instance,
-    selection_ring_instance, severity_border, severity_text, template_icon_quads,
-    template_icon_rect, widget_header_hover_instance, BundleContext, CardInstance, CardsPipeline,
-    FocusView, SpillWaveView,
+    selection_ring_instance, severity_border, severity_text, template_icon_rect, template_icon_uv,
+    widget_header_hover_instance, BundleContext, CardInstance, CardsPipeline, FocusView,
+    SpillWaveView,
 };
 use crate::config::{
     choose_present_mode, choose_surface_format, clamp_surface_extent, surface_size_valid,
@@ -29,7 +29,9 @@ use crate::edit::{session_area, EditTarget, EditingSession};
 use crate::gpu::GpuContext;
 use crate::grid::{GridLook, GridPipeline};
 use crate::guides::{self, GuidePalette, GuidesFrame, GuidesPipeline};
-use crate::icon_pipeline::{IconInstance, IconPipeline};
+use crate::icon_pipeline::{
+    IconAtlas, IconInstance, IconPipeline, WorldIconInstance, WorldIconPipeline,
+};
 use crate::minimap::MinimapImage;
 use crate::minimap_pass::{quad_rect, quad_rect_logical, MinimapPipeline, MinimapTexture};
 use crate::sectors::{SectorInstance, SectorsPipeline};
@@ -510,6 +512,10 @@ pub struct Renderer {
     /// FR-ICONS: атлас SVG-иконок + screen-space пайплайн (instanced + tint).
     /// Рисуется поверх всех полос/текстов (как виджет-снапшоты/направляющие).
     icons: IconPipeline,
+    /// FR-075 W2: мировые иконки ролей шаблонных нод — тот же атлас,
+    /// но world-координаты и камера; рисуются внутри z-сегмента своей ноды
+    /// (окклюзия карточками переднего плана — гарантии W1).
+    world_icons: WorldIconPipeline,
     text: TextSystem,
     /// Пайплайн миникарты (T13-B) + текущий кадр (None — не задан).
     minimap_pipeline: MinimapPipeline,
@@ -718,9 +724,14 @@ impl Renderer {
         let sectors = SectorsPipeline::new(&gpu.device, format);
         let guides = GuidesPipeline::new(&gpu.device, format);
         let thumbs = ThumbsPipeline::new(&gpu.device, format);
-        let icons = IconPipeline::new(&gpu.device, format);
+        // FR-075 W2: один атлас на оба пайплайна иконок (screen + world):
+        // bind group держит сильные ссылки на view/sampler, upload — один
+        // раз при init.
+        let icon_atlas = IconAtlas::new(&gpu.device);
+        let icons = IconPipeline::with_atlas(&gpu.device, format, &icon_atlas);
+        let world_icons = WorldIconPipeline::new(&gpu.device, format, &icon_atlas);
         // FR-ICONS: загрузка атласа из вшитых байт — один раз при init.
-        icons.upload_atlas(&gpu.queue);
+        icon_atlas.upload(&gpu.queue);
         let minimap_pipeline = MinimapPipeline::new(&gpu.device, format);
         let widget_pass = crate::widget_pass::WidgetPass::new(&gpu.device, format);
         let text = TextSystem::new(&gpu.device, &gpu.queue, format);
@@ -736,6 +747,7 @@ impl Renderer {
             guides_frame: GuidesFrame::default(),
             thumbs,
             icons,
+            world_icons,
             text,
             minimap_pipeline,
             minimap: None,
@@ -1435,6 +1447,9 @@ impl Renderer {
         // z-позициях нод) и тамбнейлы, посегментно с границами для draw_range.
         let mut instances: Vec<CardInstance> = Vec::with_capacity(indices.len() + 8);
         let mut thumb_instances: Vec<crate::thumbs::ThumbInstance> = Vec::new();
+        // FR-075 W2: мировые иконки ролей (SVG-атлас) — по диапазону на
+        // z-сегмент, рисуются после тамбнейлов сегмента (окклюзия как W1).
+        let mut world_icon_instances: Vec<WorldIconInstance> = Vec::new();
         // FR-016 (CP5): бейджи узких мест видимых нод — world-якорь + цвет
         // серьёзности; шейпятся/рисуются в text.rs (финальная группа).
         let mut analysis_badges: Vec<AnalysisBadge> = Vec::new();
@@ -1459,8 +1474,7 @@ impl Renderer {
         ));
         let edges_end = instances.len() as u32;
         // (диапазон инстансов карточек, диапазон тамбнейлов, текст-группа).
-        let mut draw_ranges: Vec<(std::ops::Range<u32>, std::ops::Range<u32>, Option<usize>)> =
-            Vec::new();
+        let mut draw_ranges: Vec<zorder::SegmentRanges> = Vec::new();
         // FR-075 W1: построчные порты/якоря параметров строятся ВНУТРИ
         // z-сегмента своей ноды (после её тамбнейла, до карточек перекрывающих
         // нод): порт фоновой ноды больше не рисуется поверх карточек
@@ -1476,6 +1490,7 @@ impl Renderer {
         for seg in &zplan.segments {
             let cards_start = instances.len() as u32;
             let thumbs_start = thumb_instances.len() as u32;
+            let icons_start = world_icon_instances.len() as u32;
             for pos in seg.nodes.clone() {
                 let Some(&index) = indices.get(pos) else {
                     continue;
@@ -1587,27 +1602,34 @@ impl Renderer {
                     }
                     instances.push(strip_line);
                 }
-                // FR-018: квад-иконка роли шаблонной ноды справа в шапке
-                // (снимки canvasdesk.template — реестр рендеру не нужен).
+                // FR-075 W2: иконка роли шаблонной ноды — SVG-атлас (sparse
+                // набор "roles") в world-координатах, справа в шапке (снимки
+                // canvasdesk.template — реестр рендеру не нужен). Tint —
+                // theme.icon (glyphon Color → rgba); dim — альфа × фактор
+                // (dim_color-семантика, аналог dim_instance карточек).
                 if node.template().is_some() {
-                    // Tint иконки — theme.icon (glyphon Color → rgba)
                     let tint = self.theme.icon;
-                    let mut icon = template_icon_quads(
-                        &node.template().map(|t| t.icon).unwrap_or_default(),
-                        template_icon_rect(node),
-                        [
+                    if let Some((uv_min, uv_max)) =
+                        template_icon_uv(&node.template().map(|t| t.icon).unwrap_or_default())
+                    {
+                        let rect = template_icon_rect(node);
+                        let mut tint_rgba = [
                             tint.r() as f32 / 255.0,
                             tint.g() as f32 / 255.0,
                             tint.b() as f32 / 255.0,
                             tint.a() as f32 / 255.0,
-                        ],
-                    );
-                    for quad in &mut icon {
+                        ];
                         if dim_it {
-                            dim_instance(quad, dim_factor);
+                            tint_rgba[3] *= dim_factor;
                         }
+                        world_icon_instances.push(WorldIconInstance {
+                            pos: [rect[0], rect[1]],
+                            size: [rect[2], rect[3]],
+                            uv_min,
+                            uv_max,
+                            tint: tint_rgba,
+                        });
                     }
-                    instances.extend(icon);
                 }
                 // CR-004 v1: лёгкая подсветка полосы заголовка при hover —
                 // видимый след хрома drag-зоны (0–28 px); у выделенной —
@@ -1686,6 +1708,7 @@ impl Renderer {
             draw_ranges.push((
                 cards_start..instances.len() as u32,
                 thumbs_start..thumb_instances.len() as u32,
+                icons_start..world_icon_instances.len() as u32,
                 seg.group,
             ));
         }
@@ -1900,6 +1923,16 @@ impl Renderer {
             [self.size.width as f32, self.size.height as f32],
             overlay.icons,
         );
+        // FR-075 W2: мировые иконки ролей — камера + инстансы до encoder
+        // (как screen-иконки: пересоздание буфера требует device без pass).
+        self.world_icons.update(
+            &self.gpu.device,
+            &self.gpu.queue,
+            camera,
+            [self.size.width as f32, self.size.height as f32],
+            self.scale_factor,
+            &world_icon_instances,
+        );
         let mut encoder = self
             .gpu
             .device
@@ -1930,9 +1963,12 @@ impl Renderer {
             if edges_end > 0 {
                 self.cards.draw_range(&mut pass, 0..edges_end);
             }
-            for (cards_range, thumbs_range, group) in &draw_ranges {
+            for (cards_range, thumbs_range, icons_range, group) in &draw_ranges {
                 self.cards.draw_range(&mut pass, cards_range.clone());
                 self.thumbs.draw_range(&mut pass, thumbs_range.clone());
+                // FR-075 W2: иконки ролей — после тамбнейлов сегмента, до
+                // карточек следующего (перекрывающего) сегмента.
+                self.world_icons.draw_range(&mut pass, icons_range.clone());
                 if let Some(g) = group {
                     if let Err(err) = self.text.draw_group(&mut pass, *g) {
                         tracing::warn!(?err, "отрисовка текста пропущена");

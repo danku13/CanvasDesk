@@ -1,13 +1,21 @@
 //! FR-ICONS: screen-space wgpu-пайплайн SVG-иконок.
 //!
 //! Атлас собирается один раз при init из растеризованных байт (`icon_data.rs`):
-//! 4 набора × 16 иконок × 32×32 px (bootstrap 24×24 дополнен до 32×32)
-//! = 16×4 сетка = 512×128 px атлас. Все 4 набора в одном атласе — переключение
+//! 5 наборов × 36 имён × 32×32 px (bootstrap 24×24 дополнен до 32×32;
+//! набор `roles` — sparse: только свои 20 имён, чужие ячейки прозрачны)
+//! = 36×5 ячеек = 1152×160 px атлас. Все наборы в одном атласе — переключение
 //! набора не требует ребинда bind-группы (выбор набора = выбор UV в атласе).
 //!
 //! Инстанс = pos/size в экранных px + UV в атласе + tint (RGBA). Shader —
 //! screen-space (без camera uniform), рисуется в общем render pass ПОВЕРХ
 //! карточек/полос/текстов (как виджет-снапшоты и направляющие снапа).
+//!
+//! FR-075 W2: мировой вариант — `WorldIconInstance` + `WorldIconPipeline`
+//! (shader `world_icons.wgsl`, CameraUniform вместо ViewportUniform,
+//! pos/size в world px). Иконки ролей шаблонных нод рисуются ВНУТРИ
+//! z-сегмента своей ноды (после тамбнейлов, до карточек перекрывающих нод)
+//! — тот же класс occlusion-гарантий, что порты W1. Атлас общий
+//! (`IconAtlas` — одна текстура на оба пайплайна).
 //!
 //! Tint — цвет слота `icon` темы (или `text` для инлайн-иконок). Атлас хранит
 //! белый силуэт (rgb=1, alpha — форма) — tint в шейдере даёт монохромный цвет.
@@ -17,13 +25,13 @@
 use crate::icon_data::{icon_rgba, icon_set_px, ICON_NAMES, ICON_SETS};
 
 /// Сторона ячейки иконки в атласе, px (максимальный размер растра — 32 для
-/// lucide/material/feather; bootstrap 24 дополнен до 32).
+/// lucide/material/feather/roles; bootstrap 24 дополнен до 32).
 pub const ICON_CELL_PX: u32 = 32;
 /// Иконок в строке атласа (= число имён).
 pub const ICONS_PER_ROW: u32 = ICON_NAMES.len() as u32;
 /// Сторона атласа: ICONS_PER_ROW × ICON_SETS.len() ячеек ICON_CELL_PX².
-pub const ATLAS_W: u32 = ICONS_PER_ROW * ICON_CELL_PX; // 13 * 32 = 416
-pub const ATLAS_H: u32 = ICON_SETS.len() as u32 * ICON_CELL_PX; // 4 * 32 = 128
+pub const ATLAS_W: u32 = ICONS_PER_ROW * ICON_CELL_PX; // 36 * 32 = 1152
+pub const ATLAS_H: u32 = ICON_SETS.len() as u32 * ICON_CELL_PX; // 5 * 32 = 160
 
 /// Инстанс иконки для GPU (layout — attributes в icons.wgsl).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -56,6 +64,46 @@ impl IconInstance {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &ATTRS,
         }
+    }
+
+    pub(crate) fn write_to(&self, out: &mut Vec<u8>) {
+        for group in [
+            &self.pos[..],
+            &self.size[..],
+            &self.uv_min[..],
+            &self.uv_max[..],
+            &self.tint[..],
+        ] {
+            for value in group {
+                out.extend_from_slice(&value.to_ne_bytes());
+            }
+        }
+    }
+}
+
+/// FR-075 W2: мировой инстанс иконки — pos/size в world px (зумятся
+/// вместе с карточкой), UV/tint — как у экранного `IconInstance`.
+/// Раскладка вершин идентична экранному инстансу — shader отличается
+/// только трансформацией (CameraUniform вместо ViewportUniform).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorldIconInstance {
+    /// Левый верх квада, world px.
+    pub pos: [f32; 2],
+    /// Размер квада, world px (квадратный; vec2 — для общности раскладки).
+    pub size: [f32; 2],
+    /// UV левого верха в атласе.
+    pub uv_min: [f32; 2],
+    /// UV правого низа в атласе.
+    pub uv_max: [f32; 2],
+    /// RGBA tint (премультипликации нет; alpha умножается на alpha силуэта).
+    pub tint: [f32; 4],
+}
+
+impl WorldIconInstance {
+    pub(crate) const FLOATS: usize = IconInstance::FLOATS; // одинаковая раскладка
+
+    pub(crate) fn vertex_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
+        IconInstance::vertex_buffer_layout()
     }
 
     pub(crate) fn write_to(&self, out: &mut Vec<u8>) {
@@ -107,20 +155,24 @@ pub struct IconPipeline {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    atlas_texture: wgpu::Texture,
     instance_buffer: wgpu::Buffer,
     instance_capacity: usize,
 }
 
-impl IconPipeline {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("icons"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/icons.wgsl").into()),
-        });
+/// Атлас иконок: текстура + view + sampler, ОБЩИЕ для screen- и world-
+/// пайплайнов (FR-075 W2). Пайплайны не владеют атласом: bind group держит
+/// сильные ссылки на view/sampler, а `upload` вызывается один раз при init
+/// рендера до создания пайплайнов.
+pub struct IconAtlas {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    sampler: wgpu::Sampler,
+}
 
-        // Атлас: 416×128 Rgba8Unorm, заполняется один раз при init.
-        let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
+impl IconAtlas {
+    pub fn new(device: &wgpu::Device) -> Self {
+        // Атлас: ATLAS_W×ATLAS_H Rgba8Unorm, заполняется один раз при init.
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("icon atlas"),
             size: wgpu::Extent3d {
                 width: ATLAS_W,
@@ -134,12 +186,98 @@ impl IconPipeline {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let atlas_view = atlas_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("icon atlas"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
+        });
+        Self {
+            texture,
+            view,
+            sampler,
+        }
+    }
+
+    /// Загрузить атлас из вшитых байт (все наборы; sparse-пары — прозрачные
+    /// ячейки). Один раз при init рендера.
+    pub fn upload(&self, queue: &wgpu::Queue) {
+        for (set_idx, set_name) in ICON_SETS.iter().enumerate() {
+            for (name_idx, icon_name) in ICON_NAMES.iter().enumerate() {
+                let Some(rgba) = icon_rgba(set_name, icon_name) else {
+                    tracing::trace!(
+                        set = set_name,
+                        icon = icon_name,
+                        "sparse-ячейка атласа (набор не объявляет имя) — прозрачная"
+                    );
+                    continue;
+                };
+                let px = icon_set_px(set_name) as usize;
+                debug_assert_eq!(
+                    rgba.len(),
+                    px * px * 4,
+                    "размер растра не совпадает с заявленным"
+                );
+                // Bootstrap (24×24) дополняем до 32×32 прозрачными полями
+                // по центру; остальные наборы уже 32×32.
+                let target_px = ICON_CELL_PX as usize;
+                let (data, bytes_per_row) = if px == target_px {
+                    (rgba.to_vec(), target_px * 4)
+                } else {
+                    let mut padded = vec![0u8; target_px * target_px * 4];
+                    let offset = (target_px - px) / 2;
+                    for y in 0..px {
+                        let src_row = &rgba[y * px * 4..(y + 1) * px * 4];
+                        let dst_y = y + offset;
+                        let dst_x = offset;
+                        let dst_start = (dst_y * target_px + dst_x) * 4;
+                        padded[dst_start..dst_start + src_row.len()].copy_from_slice(src_row);
+                    }
+                    (padded, target_px * 4)
+                };
+                let origin_x = (name_idx as u32) * ICON_CELL_PX;
+                let origin_y = (set_idx as u32) * ICON_CELL_PX;
+                queue.write_texture(
+                    wgpu::ImageCopyTexture {
+                        texture: &self.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: origin_x,
+                            y: origin_y,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &data,
+                    wgpu::ImageDataLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bytes_per_row as u32),
+                        rows_per_image: None,
+                    },
+                    wgpu::Extent3d {
+                        width: ICON_CELL_PX,
+                        height: ICON_CELL_PX,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        }
+    }
+}
+
+impl IconPipeline {
+    /// FR-075 W2: пайплайн на ОБЩЕМ атласе (Renderer создаёт один `IconAtlas`
+    /// и отдаёт ссылку обоим пайплайнам — одна GPU-текстура; bind group
+    /// держит сильные ссылки на view/sampler, upload — `IconAtlas::upload`).
+    pub fn with_atlas(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        atlas: &IconAtlas,
+    ) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("icons"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/icons.wgsl").into()),
         });
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -190,11 +328,11 @@ impl IconPipeline {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                    resource: wgpu::BindingResource::TextureView(&atlas.view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::Sampler(&atlas.sampler),
                 },
             ],
         });
@@ -243,74 +381,8 @@ impl IconPipeline {
             pipeline,
             uniform_buffer,
             bind_group,
-            atlas_texture,
             instance_buffer,
             instance_capacity,
-        }
-    }
-
-    /// Загрузить атлас из вшитых байт. Вызывается один раз при init рендера
-    /// (после `new()`). Загружает все 4 набора × 16 иконок в общий атлас.
-    pub fn upload_atlas(&self, queue: &wgpu::Queue) {
-        for (set_idx, set_name) in ICON_SETS.iter().enumerate() {
-            for (name_idx, icon_name) in ICON_NAMES.iter().enumerate() {
-                let Some(rgba) = icon_rgba(set_name, icon_name) else {
-                    tracing::warn!(
-                        set = set_name,
-                        icon = icon_name,
-                        "иконка отсутствует в реестре"
-                    );
-                    continue;
-                };
-                let px = icon_set_px(set_name) as usize;
-                debug_assert_eq!(
-                    rgba.len(),
-                    px * px * 4,
-                    "размер растра не совпадает с заявленным"
-                );
-                // Bootstrap (24×24) дополняем до 32×32 прозрачными полями
-                // по центру; остальные наборы уже 32×32.
-                let target_px = ICON_CELL_PX as usize;
-                let (data, bytes_per_row) = if px == target_px {
-                    (rgba.to_vec(), target_px * 4)
-                } else {
-                    let mut padded = vec![0u8; target_px * target_px * 4];
-                    let offset = (target_px - px) / 2;
-                    for y in 0..px {
-                        let src_row = &rgba[y * px * 4..(y + 1) * px * 4];
-                        let dst_y = y + offset;
-                        let dst_x = offset;
-                        let dst_start = (dst_y * target_px + dst_x) * 4;
-                        padded[dst_start..dst_start + src_row.len()].copy_from_slice(src_row);
-                    }
-                    (padded, target_px * 4)
-                };
-                let origin_x = (name_idx as u32) * ICON_CELL_PX;
-                let origin_y = (set_idx as u32) * ICON_CELL_PX;
-                queue.write_texture(
-                    wgpu::ImageCopyTexture {
-                        texture: &self.atlas_texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d {
-                            x: origin_x,
-                            y: origin_y,
-                            z: 0,
-                        },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &data,
-                    wgpu::ImageDataLayout {
-                        offset: 0,
-                        bytes_per_row: Some(bytes_per_row as u32),
-                        rows_per_image: Some(ICON_CELL_PX),
-                    },
-                    wgpu::Extent3d {
-                        width: ICON_CELL_PX,
-                        height: ICON_CELL_PX,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
         }
     }
 
@@ -360,6 +432,188 @@ impl IconPipeline {
     }
 }
 
+/// FR-075 W2: мировой пайплайн иконок — тот же атлас, но pos/size инстансов
+/// в world px и CameraUniform (world_to_screen) вместо ViewportUniform.
+/// Иконки ролей шаблонных нод рисуются ВНУТРИ z-сегмента своей ноды
+/// (после тамбнейлов, до карточек перекрывающих нод) — порт фона не
+/// просвечивает (гарантии occlusion W1, перенесённые на иконки).
+pub struct WorldIconPipeline {
+    pipeline: wgpu::RenderPipeline,
+    uniform_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    instance_buffer: wgpu::Buffer,
+    instance_capacity: usize,
+}
+
+impl WorldIconPipeline {
+    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, atlas: &IconAtlas) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("world_icons"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/world_icons.wgsl").into()),
+        });
+
+        // CameraUniform (cards.wgsl-раскладка): position.xy, viewport.xy,
+        // effective_zoom, pad — 32 байта.
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("world_icons camera"),
+            size: 32,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("world_icons"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("world_icons"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&atlas.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&atlas.sampler),
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("world_icons"),
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("world_icons"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[WorldIconInstance::vertex_buffer_layout()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let instance_capacity = 256;
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("world_icons instances"),
+            size: (WorldIconInstance::FLOATS * 4 * instance_capacity) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        Self {
+            pipeline,
+            uniform_buffer,
+            bind_group,
+            instance_buffer,
+            instance_capacity,
+        }
+    }
+
+    /// Загрузить камеру и инстансы кадра; вернуть число инстансов.
+    /// Раскладка юниформа — `CameraUniform::to_bytes` (cards.rs, 32 байта).
+    pub fn update(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        camera: &crate::camera::Camera,
+        viewport: [f32; 2],
+        scale_factor: f32,
+        instances: &[WorldIconInstance],
+    ) -> u32 {
+        let uniform = crate::cards::CameraUniform::new(camera, viewport, scale_factor);
+        queue.write_buffer(&self.uniform_buffer, 0, &uniform.to_bytes());
+
+        if instances.len() > self.instance_capacity {
+            self.instance_capacity = instances.len().next_power_of_two();
+            self.instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("world_icons instances"),
+                size: (WorldIconInstance::FLOATS * 4 * self.instance_capacity)
+                    as wgpu::BufferAddress,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        let mut bytes = Vec::with_capacity(instances.len() * WorldIconInstance::FLOATS * 4);
+        for instance in instances {
+            instance.write_to(&mut bytes);
+        }
+        queue.write_buffer(&self.instance_buffer, 0, &bytes);
+        instances.len() as u32
+    }
+
+    /// Нарисовать инстансы диапазона `range` (z-сегмент кадра).
+    pub fn draw_range<'pass>(
+        &'pass self,
+        pass: &mut wgpu::RenderPass<'pass>,
+        range: std::ops::Range<u32>,
+    ) {
+        if range.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_vertex_buffer(0, self.instance_buffer.slice(..));
+        pass.set_vertex_buffer(
+            1,
+            self.instance_buffer.slice(..), // уголки квада берём из vertex_index
+        );
+        // Диапазон инстансов сегмента: first_instance = range.start
+        // (вершины всегда 0..6 — квадрат из vertex_index).
+        pass.draw(0..6, range);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,10 +630,11 @@ mod tests {
     }
 
     /// UV-координаты иконки в конце атласа — правый нижний угол.
+    /// FR-075 W2: атлас — ОБЪЕДИНЕНИЕ имён (последняя колонка = последнее
+    /// имя `roles`, т.е. "custom") × наборы (последняя строка = "roles").
     #[test]
     fn uv_last_icon_is_corner() {
-        let (min, max) =
-            icon_uv("bootstrap", "chevron_right").expect("bootstrap/chevron_right есть в реестре");
+        let (min, max) = icon_uv("roles", "custom").expect("roles/custom есть в реестре");
         let cell_w = ICON_CELL_PX as f32 / ATLAS_W as f32;
         let cell_h = ICON_CELL_PX as f32 / ATLAS_H as f32;
         // Последняя колонка + последняя строка
@@ -389,6 +644,54 @@ mod tests {
         assert!((min[1] - expected_min_y).abs() < 1e-6, "min.y: {min:?}");
         assert!((max[0] - 1.0).abs() < 1e-6, "max.x: {max:?}");
         assert!((max[1] - 1.0).abs() < 1e-6, "max.y: {max:?}");
+    }
+
+    /// FR-075 W2: sparse-набор roles — свои имена в реестре есть, чужие
+    /// наборы эти имена НЕ объявляют (прозрачные ячейки атласа).
+    #[test]
+    fn roles_set_is_sparse() {
+        assert!(icon_rgba("roles", "lb").is_some(), "roles/lb растеризован");
+        assert!(
+            icon_rgba("roles", "custom").is_some(),
+            "roles/custom растеризован"
+        );
+        // UI-наборы не объявляют роли — ячейки прозрачны (None, без warn)
+        assert!(icon_rgba("lucide", "lb").is_none());
+        assert!(icon_rgba("bootstrap", "db").is_none());
+        // и наоборот: roles не объявляет UI-имена
+        assert!(icon_rgba("roles", "close").is_none());
+    }
+
+    /// FR-075 W2: все ключи иконок ролей (match-arms quad-строителя) имеют
+    /// UV в наборе roles — замена quad-иконок атласом полная.
+    #[test]
+    fn all_role_keys_have_uv() {
+        const ROLE_KEYS: &[&str] = &[
+            "lb",
+            "db",
+            "cache",
+            "http",
+            "queue",
+            "gateway",
+            "worker",
+            "storage",
+            "auth",
+            "grpc",
+            "graphql",
+            "money",
+            "burn",
+            "users",
+            "retention",
+            "churn",
+            "funnel",
+            "chart",
+            "clock",
+            "custom",
+        ];
+        for key in ROLE_KEYS {
+            assert!(icon_uv("roles", key).is_some(), "roles/{key} нет UV");
+            assert!(icon_rgba("roles", key).is_some(), "roles/{key} нет растра");
+        }
     }
 
     /// Неизвестная пара — None (фолбэк на глиф в app.rs).
@@ -424,13 +727,40 @@ mod tests {
         assert_eq!(bytes.len(), 48, "12 float × 4 bytes");
     }
 
-    /// Атлас вмещает все 4 набора × 16 иконок = 64 ячейки 32×32.
+    /// FR-075 W2: мировой инстанс — та же раскладка 12 float, что и
+    /// экранный (общий vertex layout, отлична только семантика координат).
+    #[test]
+    fn world_instance_writes_12_floats() {
+        let inst = WorldIconInstance {
+            pos: [10.0, 20.0],
+            size: [16.0, 16.0],
+            uv_min: [0.0, 0.8],
+            uv_max: [0.03, 1.0],
+            tint: [1.0, 1.0, 1.0, 1.0],
+        };
+        let mut bytes = Vec::new();
+        inst.write_to(&mut bytes);
+        assert_eq!(bytes.len(), 48, "12 float × 4 bytes");
+        // Байтовая раскладка совпадает с экранным инстансом при тех же полях
+        let screen = IconInstance {
+            pos: inst.pos,
+            size: inst.size,
+            uv_min: inst.uv_min,
+            uv_max: inst.uv_max,
+            tint: inst.tint,
+        };
+        let mut screen_bytes = Vec::new();
+        screen.write_to(&mut screen_bytes);
+        assert_eq!(bytes, screen_bytes, "раскладка идентична экранной");
+    }
+
+    /// Атлас вмещает все 5 наборов × 36 имён (16 UI + 20 ролей) = 180 ячеек.
     #[test]
     fn atlas_size_matches_repositories() {
         let total_cells = ICONS_PER_ROW * ICON_SETS.len() as u32;
-        assert_eq!(total_cells, 64, "4 набора × 16 иконок");
-        assert_eq!(ATLAS_W, 16 * 32);
-        assert_eq!(ATLAS_H, 4 * 32);
+        assert_eq!(total_cells, 180, "5 наборов × 36 имён (FR-075 W2)");
+        assert_eq!(ATLAS_W, 36 * 32);
+        assert_eq!(ATLAS_H, 5 * 32);
     }
 
     /// Регрессия wasm-чёрного экрана: упаковка юниформа — vec2 на смещении 0
