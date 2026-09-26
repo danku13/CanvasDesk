@@ -40,7 +40,13 @@ export function createHighlight(
   overlay.className = "cd-tour-dim";
   overlay.style.cssText =
     `position:fixed;inset:0;z-index:${baseZIndex};` +
-    `pointer-events:auto;background:transparent;` +
+    // FR-075 (дефект найден верификацией витрины 2026-09-26): оверлей создаётся
+    // при `new Tour()` — до первого шага сценария paint() ещё не исполнялся,
+    // и стартовый pointer-events:auto делал НЕВИДИМЫЙ оверлей на весь экран
+    // щитом, глотавшим все клики страницы (канвас мёртв до запуска тура).
+    // Неактивный оверлей не перехватывает указатель; paint() вернёт auto,
+    // когда шаг сценария затемнит экран.
+    `pointer-events:none;background:transparent;` +
     `transition:opacity 180ms ease;opacity:0;`;
   container.appendChild(overlay);
 
