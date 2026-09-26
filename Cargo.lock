@@ -353,9 +353,13 @@ dependencies = [
  "canvas-ui",
  "cosmic-text",
  "glyphon",
+ "js-sys",
  "pollster",
  "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
+ "web-sys",
  "wgpu",
  "winit",
 ]

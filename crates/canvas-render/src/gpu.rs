@@ -26,9 +26,7 @@ impl GpuContext {
         // canvas только что вставлен в DOM), но работает при повторном. Браузер
         // пишет в console `No available adapters.` — это его нативное сообщение,
         // не наше. Retry с задержкой + явный power_preference решают timing-race.
-        let backend_name = format!("{:?}", instance.enumerate_adapters(wgpu::Backends::all()));
         tracing::info!(
-            backends = %backend_name,
             has_surface = compatible_surface.is_some(),
             "GpuContext::new: запрос адаптера"
         );
@@ -165,11 +163,11 @@ async fn wait_briefly() {
     #[cfg(target_arch = "wasm32")]
     {
         use wasm_bindgen_futures::JsFuture;
-        let promise = js_sys::Promise::new(|resolve, _| {
-            web_sys::window()
-                .unwrap()
-                .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 50)
-                .ok();
+        let promise = js_sys::Promise::new(&mut |resolve, _| {
+            let _ = web_sys::window().and_then(|w| {
+                w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 50)
+                    .ok()
+            });
         });
         let _ = JsFuture::from(promise).await;
     }
