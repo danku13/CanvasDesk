@@ -17,11 +17,13 @@ fn node_rect(node: &Node) -> WorldRect {
     [node.x, node.y, node.x + node.width, node.y + node.height]
 }
 
-/// Элемент R-tree: AABB ноды + её индекс в `Canvas.nodes`.
+/// Элемент R-tree: AABB ноды + её индекс в `Canvas.nodes` + признак группы
+/// (кinds не меняются в течение жизни ноды — флаг актуален всегда).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct NodeEntry {
     index: usize,
     rect: WorldRect,
+    group: bool,
 }
 
 impl RTreeObject for NodeEntry {
@@ -61,6 +63,7 @@ impl SpatialIndex {
             .map(|(index, node)| NodeEntry {
                 index,
                 rect: node_rect(node),
+                group: node.kind() == crate::model::NodeKind::Group,
             })
             .collect();
         Self {
@@ -73,6 +76,7 @@ impl SpatialIndex {
         self.tree.insert(NodeEntry {
             index,
             rect: node_rect(node),
+            group: node.kind() == crate::model::NodeKind::Group,
         });
     }
 
@@ -93,10 +97,30 @@ impl SpatialIndex {
     /// Индексы нод, пересекающих `rect`, **отсортированные по возрастанию**
     /// (z-порядок рендера = порядок нод в `Canvas.nodes`).
     pub fn query_rect(&self, rect: WorldRect) -> Vec<usize> {
+        self.query(rect, |_| true)
+    }
+
+    /// Индексы нод-НЕ-групп, пересекающих `rect` (по возрастанию).
+    /// Запросы «коллизий нод» (порты, тамбнейлы, hover-кандидаты) должны
+    /// вызывать его, а не `query_rect`: группа — контейнер, её rect
+    /// накрывает детей и без фильтра перехватывает их коллизии.
+    pub fn query_rect_nodes(&self, rect: WorldRect) -> Vec<usize> {
+        self.query(rect, |entry| !entry.group)
+    }
+
+    /// Индексы только групп, пересекающих `rect` (по возрастанию) —
+    /// выбор цели «втягивания» (FR-012) и групповые оверлеи.
+    pub fn query_rect_groups(&self, rect: WorldRect) -> Vec<usize> {
+        self.query(rect, |entry| entry.group)
+    }
+
+    /// Общий запрос с предикатом по элементу; выдача — по возрастанию индексов.
+    fn query(&self, rect: WorldRect, take: impl Fn(&NodeEntry) -> bool) -> Vec<usize> {
         let envelope = AABB::from_corners([rect[0], rect[1]], [rect[2], rect[3]]);
         let mut indices: Vec<usize> = self
             .tree
             .locate_in_envelope_intersecting(&envelope)
+            .filter(|entry| take(entry))
             .map(|entry| entry.index)
             .collect();
         indices.sort_unstable();

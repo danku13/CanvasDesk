@@ -4,7 +4,7 @@
 //! сохраняются в `extra` (serde flatten) и не теряются при round-trip;
 //! неизвестные типы нод не ломают парсинг (`node_type` — строка).
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -950,23 +950,26 @@ impl Canvas {
         removed
     }
 
-    /// Сдвинуть группу и всех её детей на (dx, dy): каждая нода сдвигается
-    /// ровно один раз (вложенные группы — как обычные ноды, рекурсии нет).
-    /// Возвращает индексы сдвинутых нод (группа — первой); пусто, если
-    /// индекс группы невалиден.
+    /// Сдвинуть группу и ВСЕХ её потомков на (dx, dy) — транзитивно через
+    /// вложенные группы (FR-012 v2): [`group_descendants`] раскрывает
+    /// группы-дети до их собственных детей, поэтому рамка уровня 5+
+    /// переезжает вместе со всем поддеревом. Каждая нода сдвигается ровно
+    /// один раз (visited-защита от двойного сдвига через разные пути
+    /// членства: явный список + легаси-геометрия). Возвращает индексы
+    /// сдвинутых нод (группа — первой); пусто, если индекс невалиден.
     pub fn translate_group(&mut self, group_index: usize, dx: f32, dy: f32) -> Vec<usize> {
         if self.nodes.get(group_index).is_none() {
             return Vec::new();
         }
-        let children = group_children(self, group_index);
-        for index in std::iter::once(group_index).chain(children.iter().copied()) {
+        let descendants = group_descendants(self, group_index);
+        for index in std::iter::once(group_index).chain(descendants.iter().copied()) {
             if let Some(node) = self.nodes.get_mut(index) {
                 node.x += dx;
                 node.y += dy;
             }
         }
         let mut moved = vec![group_index];
-        moved.extend(children);
+        moved.extend(descendants);
         moved
     }
 }
@@ -987,14 +990,7 @@ pub fn group_children(canvas: &Canvas, group_index: usize) -> Vec<usize> {
             .enumerate()
             .map(|(i, n)| (n.id.as_str(), i))
             .collect();
-        let mut indices: Vec<usize> = children
-            .iter()
-            .filter_map(|id| index_of.get(id.as_str()).copied())
-            .filter(|&i| i != group_index)
-            .collect();
-        indices.sort_unstable();
-        indices.dedup();
-        return indices;
+        return group_children_explicit_with_map(group_index, children, &index_of);
     }
     let (gx, gy) = (group.x, group.y);
     let (gx1, gy1) = (group.x + group.width, group.y + group.height);
@@ -1014,7 +1010,134 @@ pub fn group_children(canvas: &Canvas, group_index: usize) -> Vec<usize> {
         .collect()
 }
 
+/// Дети группы по явному списку `children`, разрешённому через готовую
+/// карту id → индекс (без пересборки карты на каждый вызов — групповые
+/// запросы по всем группам канваса не должны быть O(G×N) на карты id).
+fn group_children_explicit_with_map(
+    group_index: usize,
+    children: &[String],
+    index_of: &HashMap<&str, usize>,
+) -> Vec<usize> {
+    let mut indices: Vec<usize> = children
+        .iter()
+        .filter_map(|id| index_of.get(id.as_str()).copied())
+        .filter(|&i| i != group_index)
+        .collect();
+    indices.sort_unstable();
+    indices.dedup();
+    indices
+}
+
+/// Глубина вложенности каждой группы канваса: индекс группы → число её
+/// групп-предков (внешняя группа — 0, вложенная в неё — 1, и так далее
+/// до 5+ уровней). Иерархия строится ТОЛЬКО по явным спискам `children`
+/// (нативный формат FR-012): у легаси-групп (членство по геометрии)
+/// прямоугольники могут вкладываться друг в друга в обе стороны — центр
+/// внешней группы лежит внутри rect вложенной, — геометрическая «иерархия»
+/// даёт циклы и недетерминизм, поэтому легаси-группы считаются верхним
+/// уровнем (глубина 0, порядок как раньше — по индексу). При повреждённом
+/// двойном членстве родителем фиксируется первая по индексу группа.
+/// Циклы в явных списках не вешают обход (visited-защита, глубина — по
+/// частичной цепочке; обход ключей отсортирован — результат одинаковый
+/// при каждом запуске). Чистая функция; карту id → индекс строит один раз.
+pub fn group_depths(canvas: &Canvas) -> HashMap<usize, usize> {
+    let index_of: HashMap<&str, usize> = canvas
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+    // Прямой родитель каждой группы-ребёнка — только из явных списков
+    let mut parent: HashMap<usize, usize> = HashMap::new();
+    for (gi, group) in canvas.nodes.iter().enumerate() {
+        if group.kind() != NodeKind::Group {
+            continue;
+        }
+        let children = match &group.children {
+            Some(list) => group_children_explicit_with_map(gi, list, &index_of),
+            None => continue, // легаси-группа: иерархию по геометрии не строим
+        };
+        for child in children {
+            if child != gi
+                && canvas
+                    .nodes
+                    .get(child)
+                    .is_some_and(|node| node.kind() == NodeKind::Group)
+            {
+                parent.entry(child).or_insert(gi);
+            }
+        }
+    }
+    // Глубина подъёмом по цепочке родителей: мемоизация промежуточных
+    // результатов + visited-защита от циклов. Ключи — в отсортированном
+    // порядке: HashMap итерируется в непредсказуемом порядке, а глубины
+    // в циклических данных зависят от точки старта — фиксируем его.
+    let mut keys: Vec<usize> = parent.keys().copied().collect();
+    keys.sort_unstable();
+    let mut depths: HashMap<usize, usize> = HashMap::new();
+    for child in keys {
+        let mut visited: HashSet<usize> = HashSet::new();
+        let mut depth = 0usize;
+        let mut current = child;
+        loop {
+            if !visited.insert(current) {
+                break; // цикл — глубина по частичной цепочке
+            }
+            match parent.get(&current) {
+                Some(&p) => {
+                    if let Some(&d) = depths.get(&p) {
+                        depth += 1 + d; // мемоизированный хвост цепочки
+                        break;
+                    }
+                    depth += 1;
+                    current = p;
+                }
+                None => break,
+            }
+        }
+        depths.insert(child, depth);
+    }
+    depths
+}
+
 // --- FR-012: явное членство групп (жест «втягивания») ---
+
+/// Все потомки группы — транзитивно через вложенные группы (FR-012 v2):
+/// прямые дети группы, дети групп-детей и так далее на любую глубину
+/// (кейс 5+ уровней вложенности). Членство каждого уровня — как в
+/// [`group_children`]: явный список `children` имеет приоритет; легаси-
+/// группа (списка нет) — геометрия (центр ноды внутри rect). Результат —
+/// в порядке возрастания индексов, без дубликатов: нода, достижимая по
+/// нескольким путям членства (явный список + геометрия промежуточной
+/// легаси-группы), входит один раз. Циклозащита: visited-множество —
+/// повреждённые данные (A ⊃ B ⊃ A) не вешают обход. Группы-потомки
+/// возвращаются наравне с обычными нодами (они тоже переезжают при
+/// translate). Чистая функция.
+pub fn group_descendants(canvas: &Canvas, group_index: usize) -> Vec<usize> {
+    let mut result: Vec<usize> = Vec::new();
+    let mut visited: HashSet<usize> = HashSet::new();
+    visited.insert(group_index);
+    // BFS по уровням вложенности: порядок добавления не важен — в конце
+    // сортировка по индексам
+    let mut frontier: VecDeque<usize> = VecDeque::from([group_index]);
+    while let Some(current) = frontier.pop_front() {
+        for child in group_children(canvas, current) {
+            if !visited.insert(child) {
+                continue;
+            }
+            result.push(child);
+            if canvas
+                .nodes
+                .get(child)
+                .is_some_and(|node| node.kind() == NodeKind::Group)
+            {
+                frontier.push_back(child);
+            }
+        }
+    }
+    result.sort_unstable();
+    result
+}
 
 /// Материализовать явный список детей группы из текущего membership
 /// (легаси-группа становится группой с `children`). Повторный вызов — no-op.
@@ -1037,8 +1160,26 @@ pub fn group_materialize_children(canvas: &mut Canvas, group_index: usize) {
 /// Добавить ноды в группу по id (жест «втягивания», FR-012): список детей
 /// материализуется (легаси — из геометрии) и расширяется новыми id.
 /// Дубликаты и id самой группы игнорируются.
+///
+/// ИНВАРИАНТ ОДНОГО ЧЛЕНСТВА (FR-012 v2): втягиваемая нода вычёркивается
+/// из детей ВСЕХ прочих групп с явным списком. Иначе втягивание ноды во
+/// внешнюю группу (не вынося из внутренней) оставляло её ребёнком обеих:
+/// двойной сдвиг при translate/drag, дубли предков в
+/// `enclosing_group_indices`, петли в routing-исключениях. Легаси-группы
+/// (списка нет) не трогаются — их членство чисто геометрическое и
+/// пересчитывается само.
 pub fn group_add_children(canvas: &mut Canvas, group_index: usize, node_ids: &[String]) {
     group_materialize_children(canvas, group_index);
+    // Инвариант одного членства: единственный родитель — целевая группа
+    let removing: HashSet<&str> = node_ids.iter().map(|id| id.as_str()).collect();
+    for (gi, group) in canvas.nodes.iter_mut().enumerate() {
+        if gi == group_index {
+            continue;
+        }
+        if let Some(list) = group.children.as_mut() {
+            list.retain(|id| !removing.contains(id.as_str()));
+        }
+    }
     let Some(group) = canvas.nodes.get_mut(group_index) else {
         return;
     };
@@ -1383,6 +1524,116 @@ mod tests {
         assert_eq!((canvas.nodes[0].x, canvas.nodes[0].y), (10.0, -5.0));
     }
 
+    /// FR-012 v2 (вложенность 5 уровней, явные children): group_descendants
+    /// раскрывает группы-дети транзитивно; translate_group внешней группы
+    /// переезжает всем поддеревом — без разрыва рамки внутренней группы.
+    #[test]
+    fn group_descendants_recursive_explicit_children() {
+        // Цепочка g1 ⊃ g2 ⊃ g3 ⊃ g4 ⊃ g5 ⊃ leaf — 5 уровней групп + нода
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::group("g1", 0.0, 0.0, 900.0, 900.0));
+        canvas
+            .nodes
+            .push(Node::group("g2", 10.0, 10.0, 800.0, 800.0));
+        canvas
+            .nodes
+            .push(Node::group("g3", 20.0, 20.0, 700.0, 700.0));
+        canvas
+            .nodes
+            .push(Node::group("g4", 30.0, 30.0, 600.0, 600.0));
+        canvas
+            .nodes
+            .push(Node::group("g5", 40.0, 40.0, 500.0, 500.0));
+        canvas
+            .nodes
+            .push(Node::file("leaf", "C:/l.png", 50.0, 50.0, 100.0, 80.0));
+        for (parent, child) in [("g1", "g2"), ("g2", "g3"), ("g3", "g4"), ("g4", "g5")] {
+            let idx = canvas.nodes.iter().position(|n| n.id == parent).unwrap();
+            canvas.nodes[idx].children = Some(vec![child.to_owned()]);
+        }
+        canvas.nodes[4].children = Some(vec!["leaf".to_owned()]);
+
+        // Потомки g1: все 5 нод поддерева, без самой g1
+        assert_eq!(
+            group_descendants(&canvas, 0),
+            vec![1, 2, 3, 4, 5],
+            "транзитивное поддерево g1"
+        );
+        // Потомки g3: только g4, g5, leaf
+        assert_eq!(group_descendants(&canvas, 2), vec![3, 4, 5]);
+        // Лист — не группа: потомков нет
+        assert!(group_descendants(&canvas, 5).is_empty());
+
+        // translate_group(g1) переезжает всем поддеревом ровно по дельте
+        let moved = canvas.translate_group(0, 100.0, 50.0);
+        assert_eq!(moved, vec![0, 1, 2, 3, 4, 5]);
+        // g2..g5: x = 110..140, y = x - 50 (дельта (100, 50) поверх исходных
+        // диагональных координат 10..40); каждая нода — ровно один сдвиг
+        for i in 1..=4 {
+            let x = 100.0 + 10.0 * i as f32;
+            assert_eq!(
+                (canvas.nodes[i].x, canvas.nodes[i].y),
+                (x, x - 50.0),
+                "нода {i} сдвинута ровно один раз"
+            );
+        }
+        // leaf: (50,50) + (100,50) = (150,100)
+        assert_eq!((canvas.nodes[5].x, canvas.nodes[5].y), (150.0, 100.0));
+    }
+
+    /// Циклозащита: повреждённые данные (A ⊃ B ⊃ A, двойное членство)
+    /// не вешают group_descendants и не дублируют ноды в результате.
+    #[test]
+    fn group_descendants_cycle_safe() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::group("a", 0.0, 0.0, 400.0, 300.0));
+        canvas
+            .nodes
+            .push(Node::group("b", 10.0, 10.0, 300.0, 200.0));
+        canvas
+            .nodes
+            .push(Node::file("in", "C:/i.png", 50.0, 50.0, 50.0, 50.0));
+        // Порча: a.children = [b, in], b.children = [a, in] — цикл a→b→a
+        canvas.nodes[0].children = Some(vec!["b".to_owned(), "in".to_owned()]);
+        canvas.nodes[1].children = Some(vec!["a".to_owned(), "in".to_owned()]);
+
+        // Обход завершается; a и in входят по одному разу
+        assert_eq!(group_descendants(&canvas, 0), vec![1, 2]);
+        assert_eq!(group_descendants(&canvas, 1), vec![0, 2]);
+
+        // translate по циклу тоже завершается и сдвигает каждую ноду один раз
+        let moved = canvas.translate_group(0, 5.0, 5.0);
+        assert_eq!(moved, vec![0, 1, 2]);
+        assert_eq!((canvas.nodes[2].x, canvas.nodes[2].y), (55.0, 55.0));
+    }
+
+    /// Смешанное членство (явный список у внешней + легаси-геометрия у
+    /// внутренней): нода, достижимая обоими путями, входит в потомки и
+    /// сдвигается ровно один раз.
+    #[test]
+    fn group_descendants_mixed_membership_single_move() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::group("outer", 0.0, 0.0, 400.0, 300.0));
+        canvas
+            .nodes
+            .push(Node::group("inner", 50.0, 50.0, 200.0, 150.0));
+        canvas
+            .nodes
+            .push(Node::file("both", "C:/b.png", 100.0, 100.0, 40.0, 40.0));
+        // outer — явный список [inner] (геометрия к нему не применяется);
+        // inner — легаси: центр both (120,120) внутри inner → both дитя
+        // inner. Оба пути членства дают both в потомках outer — ровно один
+        // раз (visited).
+        canvas.nodes[0].children = Some(vec!["inner".to_owned()]);
+
+        assert_eq!(group_descendants(&canvas, 0), vec![1, 2]);
+        let moved = canvas.translate_group(0, 10.0, 10.0);
+        assert_eq!(moved, vec![0, 1, 2]);
+        assert_eq!((canvas.nodes[2].x, canvas.nodes[2].y), (110.0, 110.0));
+    }
+
     /// Удаление группы детей не удаляет (как Obsidian): remove_node каскадит
     /// только связи удаляемой ноды.
     #[test]
@@ -1720,6 +1971,56 @@ mod tests {
         // Повторная вставка — дубликат игнорируется
         group_add_children(&mut canvas, 0, &["random".to_owned()]);
         assert_eq!(group_children(&canvas, 0), vec![1, 2, 4, 5]);
+    }
+
+    /// Инвариант одного членства (FR-012 v2): втягивание ноды во внешнюю
+    /// группу вычёркивает её из детей внутренней — нода не может остаться
+    /// ребёнком двух групп (двойной translate, дубли предков, петли).
+    #[test]
+    fn group_add_children_enforces_single_membership() {
+        // Внешняя группа создана ПОСЛЕ внутренней (как Ctrl+G по группе)
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::group("inner", 0.0, 0.0, 200.0, 150.0));
+        canvas
+            .nodes
+            .push(Node::file("n", "C:/n.png", 50.0, 50.0, 40.0, 40.0));
+        let mut outer = Node::group("outer", -20.0, -20.0, 400.0, 300.0);
+        outer.children = Some(vec!["inner".to_owned()]);
+        canvas.nodes.push(outer);
+        canvas.nodes[0].children = Some(vec!["n".to_owned()]);
+
+        // n втягивается во внешнюю: из inner вычеркивается, в outer — да
+        group_add_children(&mut canvas, 2, &["n".to_owned()]);
+        assert_eq!(
+            canvas.nodes[0].children.as_deref(),
+            Some(&Vec::<String>::new()[..]),
+            "inner потерял n"
+        );
+        assert_eq!(
+            canvas.nodes[2].children.as_deref().map(|l| &l[..]),
+            Some(&["inner".to_owned(), "n".to_owned()][..]),
+            "outer получил n"
+        );
+        // Единственный предок n — outer (не [inner, outer])
+        assert_eq!(enclosing_group_indices(&canvas, 1), vec![2]);
+
+        // Втягивание группы целиком: inner переезжает из outer в новую
+        // группу без дублей в списках
+        let mut third = Node::group("third", -40.0, -40.0, 500.0, 400.0);
+        third.children = Some(Vec::new());
+        canvas.nodes.push(third);
+        group_add_children(&mut canvas, 3, &["inner".to_owned()]);
+        assert_eq!(
+            canvas.nodes[2].children.as_deref().map(|l| &l[..]),
+            Some(&["n".to_owned()][..]),
+            "outer потерял inner"
+        );
+        assert_eq!(
+            canvas.nodes[3].children.as_deref().map(|l| &l[..]),
+            Some(&["inner".to_owned()][..])
+        );
     }
 
     /// Вынос ребёнка: список материализуется минус нода; translate_group

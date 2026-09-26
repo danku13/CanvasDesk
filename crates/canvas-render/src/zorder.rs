@@ -18,17 +18,24 @@
 /// Стабильно выносит group-ноды в начало выдачи видимых нод: группа —
 /// контейнер и рисуется под своими детьми, даже если в `Canvas.nodes`
 /// она идёт после них (создание «Сгруппировать» дописывает группу в конец).
-/// Порядок внутри классов (группы между собой, не-group между собой)
-/// сохраняется — сортировка стабильна.
+/// Группы упорядочиваются по ГЛУБИНЕ вложенности (FR-012 v2, кейс 5+
+/// уровней): внешние раньше внутренних — painter's algorithm рисует позже
+/// = выше, поэтому внутренняя рамка обязана остаться поверх заливки и
+/// рамки своих предков независимо от порядка создания групп в массиве.
+/// Порядок внутри одного класса/глубины сохраняется — сортировка стабильна.
+/// Циклы в членстве не вешают сортировку (group_depths — cycle-safe).
 pub fn groups_first(indices: &[usize], canvas: &canvas_core::Canvas) -> Vec<usize> {
-    let is_group = |&index: &usize| {
-        canvas
-            .nodes
-            .get(index)
-            .is_some_and(|node| node.kind() == canvas_core::NodeKind::Group)
+    let depths = canvas_core::group_depths(canvas);
+    let key = |&index: &usize| match canvas.nodes.get(index) {
+        // Группы — класс 0, чем внешнее (меньше глубина), тем раньше;
+        // не-group — класс 1 после всех групп, исходный порядок
+        Some(node) if node.kind() == canvas_core::NodeKind::Group => {
+            (0u8, depths.get(&index).copied().unwrap_or(0))
+        }
+        _ => (1u8, 0usize),
     };
-    let mut sorted: Vec<usize> = indices.iter().copied().filter(is_group).collect();
-    sorted.extend(indices.iter().copied().filter(|index| !is_group(index)));
+    let mut sorted: Vec<usize> = indices.to_vec();
+    sorted.sort_by_key(key);
     sorted
 }
 
@@ -238,6 +245,122 @@ mod tests {
         assert_eq!(no_groups, vec![2, 0]);
         // Пустая выдача — пусто
         assert!(groups_first(&[], &canvas).is_empty());
+    }
+
+    /// Вложенные группы (FR-012 v2): родитель, созданный ПОЗЖЕ ребёнка
+    /// (больший индекс), рисуется РАНЬШЕ — глубина важнее индекса в
+    /// массиве. Внутренняя рамка остаётся поверх заливки предка.
+    #[test]
+    fn groups_first_orders_nested_by_depth_not_index() {
+        use canvas_core::Node;
+        let mut canvas = canvas_core::Canvas::default();
+        // Дочерняя группа создана первой (индекс 0), родитель — позже (3)
+        canvas
+            .nodes
+            .push(Node::group("inner", 20.0, 20.0, 100.0, 80.0));
+        canvas
+            .nodes
+            .push(Node::file("a", "C:/a.png", 30.0, 30.0, 50.0, 40.0));
+        canvas
+            .nodes
+            .push(Node::file("b", "C:/b.png", 400.0, 30.0, 50.0, 40.0));
+        let mut outer = Node::group("outer", 0.0, 0.0, 400.0, 300.0);
+        outer.children = Some(vec!["inner".to_owned()]);
+        canvas.nodes.push(outer);
+
+        // Старая плоская логика дала бы [0, 3, 1, 2] — внутренняя рамка
+        // ПОД заливкой родителя. Теперь родитель (глубина 0) раньше:
+        let sorted = groups_first(&[0, 1, 2, 3], &canvas);
+        assert_eq!(
+            sorted,
+            vec![3, 0, 1, 2],
+            "outer раньше inner независимо от порядка создания"
+        );
+    }
+
+    /// Каскад 5 уровней вложенности: порядок выдачи — строго от внешней
+    /// группы к внутренней (по глубине), не-group после всех.
+    #[test]
+    fn groups_first_five_levels_of_nesting() {
+        use canvas_core::Node;
+        let mut canvas = canvas_core::Canvas::default();
+        // g5 (самая внутренняя) имеет МАКСИМАЛЬНЫЙ индекс в массиве,
+        // g1 (внешняя) — минимальный: глубина обязана развернуть порядок
+        canvas.nodes.push(Node::group("g1", 0.0, 0.0, 900.0, 900.0));
+        canvas
+            .nodes
+            .push(Node::group("g2", 10.0, 10.0, 800.0, 800.0));
+        canvas
+            .nodes
+            .push(Node::group("g3", 20.0, 20.0, 700.0, 700.0));
+        canvas
+            .nodes
+            .push(Node::group("g4", 30.0, 30.0, 600.0, 600.0));
+        canvas
+            .nodes
+            .push(Node::group("g5", 40.0, 40.0, 500.0, 500.0));
+        canvas
+            .nodes
+            .push(Node::file("leaf", "C:/l.png", 50.0, 50.0, 60.0, 40.0));
+        // Явные списки детей (нативный формат FR-012): g5 → leaf тоже
+        // явный, иначе легаси-геометрия g5 «поглощает» центры всех групп
+        for (parent, child) in [
+            ("g4", "g5"),
+            ("g3", "g4"),
+            ("g2", "g3"),
+            ("g1", "g2"),
+            ("g5", "leaf"),
+        ] {
+            let idx = canvas.nodes.iter().position(|n| n.id == parent).unwrap();
+            canvas.nodes[idx].children = Some(vec![child.to_owned()]);
+        }
+        // Смещаем выдачу так, чтобы индексы шли в «плохом» порядке
+        let sorted = groups_first(&[5, 4, 3, 2, 1, 0], &canvas);
+        assert_eq!(
+            sorted,
+            vec![0, 1, 2, 3, 4, 5],
+            "от внешней g1 к внутренней g5, leaf последним"
+        );
+    }
+
+    /// Легаси-группы (без явных children) сохраняют прежнее плоское
+    /// поведение: глубина 0, порядок по индексу — регрессии для старых
+    /// файлов нет. Геометрическое «вложение» rect (центр внешней внутри
+    /// внутренней) не создаёт ложной иерархии.
+    #[test]
+    fn groups_first_legacy_groups_stay_flat_by_index() {
+        use canvas_core::Node;
+        let mut canvas = canvas_core::Canvas::default();
+        // Внутренняя создана первой, внешняя — позже; списков children нет
+        canvas
+            .nodes
+            .push(Node::group("inner", 40.0, 40.0, 200.0, 100.0));
+        canvas
+            .nodes
+            .push(Node::group("outer", 0.0, 0.0, 400.0, 300.0));
+        // Обе группы глубины 0 — стабильная сортировка сохраняет вход:
+        // как выдача spatial index (по возрастанию индекса), так и любой
+        // другой порядок входа проходят без перестановки
+        assert_eq!(groups_first(&[0, 1], &canvas), vec![0, 1]);
+        assert_eq!(groups_first(&[1, 0], &canvas), vec![1, 0]);
+    }
+
+    /// Цикл в членстве (повреждённые данные) не вешает сортировку:
+    /// глубины считаются по частичной цепочке, порядок детерминирован.
+    #[test]
+    fn groups_first_cycle_safe() {
+        use canvas_core::Node;
+        let mut canvas = canvas_core::Canvas::default();
+        canvas.nodes.push(Node::group("a", 0.0, 0.0, 400.0, 300.0));
+        canvas
+            .nodes
+            .push(Node::group("b", 10.0, 10.0, 300.0, 200.0));
+        canvas.nodes[0].children = Some(vec!["b".to_owned()]);
+        canvas.nodes[1].children = Some(vec!["a".to_owned()]);
+        let sorted = groups_first(&[0, 1], &canvas);
+        assert_eq!(sorted.len(), 2, "обход завершился, обе группы на месте");
+        // Детерминизм: тот же вход — тот же выход
+        assert_eq!(groups_first(&[0, 1], &canvas), sorted);
     }
 
     /// B перекрывает A, обе с текстом: текст A — в группе ДО карточки B

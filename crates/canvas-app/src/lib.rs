@@ -667,8 +667,10 @@ pub mod ui {
         } else {
             vec![grabbed]
         };
-        // Дети групп из базы; вложенность — без рекурсии: дитя-группа уже
-        // в базе как группа, её дети добавляются этим же проходом (v1)
+        // Дети групп из базы — РЕКУРСИВНО (FR-012 v2): group_descendants
+        // раскрывает вложенные группы до их собственных детей, иначе drag
+        // внешней группы уносит рамку внутренней, а её дети остаются на
+        // месте (разрыв поддерева, 2+ уровней с явным children).
         let mut indices: Vec<usize> = base.clone();
         for index in &base {
             if canvas
@@ -676,7 +678,7 @@ pub mod ui {
                 .get(*index)
                 .is_some_and(|node| node.kind() == NodeKind::Group)
             {
-                indices.extend(canvas_core::group_children(canvas, *index));
+                indices.extend(canvas_core::group_descendants(canvas, *index));
             }
         }
         // Каждая нода ровно один раз, порядок стабильный
@@ -1400,7 +1402,10 @@ pub mod ui {
     /// Выборочный hit-test среди кандидатов (выдача spatial index под
     /// точкой): сначала не-group ноды — с меньшей площадью в приоритете
     /// (ребёнок группы выбирается раньше самой группы), затем группы —
-    /// верхняя по z (последняя в массиве). None — кандидатов нет.
+    /// самая ВНУТРЕННЯЯ (макс. глубина вложенности; при равной глубине —
+    /// верхняя по z, больший индекс). Раньше группы сравнивались только
+    /// по индексу: внешняя группа, созданная позже вложенной, перехватывала
+    /// клик в свободной области внутренней. None — кандидатов нет.
     pub fn select_node_hit(canvas: &Canvas, candidates: &[usize]) -> Option<usize> {
         let area = |index: usize| {
             canvas
@@ -1424,6 +1429,7 @@ pub mod ui {
             plain.sort_by(|a, b| area(*a).total_cmp(&area(*b)).then(b.cmp(a)));
             return plain.first().copied();
         }
+        let depths = canvas_core::group_depths(canvas);
         candidates
             .iter()
             .copied()
@@ -1433,7 +1439,49 @@ pub mod ui {
                     .get(index)
                     .is_some_and(|node| node.kind() == NodeKind::Group)
             })
-            .max()
+            // Внутренняя группа приоритетнее внешней; при равной глубине —
+            // верхняя по z (тот же порядок, что рисует zorder::groups_first)
+            .max_by_key(|&index| (depths.get(&index).copied().unwrap_or(0), index))
+    }
+
+    /// Выбор цели «втягивания» (FR-012 v2) среди групп-кандидатов под
+    /// центром перетаскиваемой ноды: самая ВНУТРЕННЯЯ группа (макс.
+    /// глубина; при равной — верхняя по z), кроме перетаскиваемых самих
+    /// (`dragged`), предков первичной ноды (`ancestors` — втягивание в
+    /// своего предка давало двойное членство) и групп, чьим ребёнком
+    /// первичная нода уже является (явный список). Чистая функция —
+    /// используется `App::group_drop_target`.
+    pub fn group_drop_target_pick(
+        canvas: &Canvas,
+        candidates: &[usize],
+        dragged: &[usize],
+        ancestors: &[usize],
+        primary: usize,
+        center: [f32; 2],
+    ) -> Option<usize> {
+        let depths = canvas_core::group_depths(canvas);
+        candidates
+            .iter()
+            .copied()
+            .filter(|&index| {
+                canvas.nodes.get(index).is_some_and(|group| {
+                    group.kind() == NodeKind::Group
+                        && !dragged.contains(&index)
+                        && !ancestors.contains(&index)
+                        && center[0] >= group.x
+                        && center[0] <= group.x + group.width
+                        && center[1] >= group.y
+                        && center[1] <= group.y + group.height
+                        // уже ребёнок (явный список) — не «втягиваем» повторно
+                        && !group.children.as_ref().is_some_and(|list| {
+                            canvas
+                                .nodes
+                                .get(primary)
+                                .is_some_and(|n| list.contains(&n.id))
+                        })
+                })
+            })
+            .max_by_key(|&index| (depths.get(&index).copied().unwrap_or(0), index))
     }
 
     #[cfg(test)]
@@ -2726,6 +2774,79 @@ pub mod ui {
             assert_eq!(select_node_hit(&canvas, &candidates), Some(2));
             // Пустые кандидаты
             assert_eq!(select_node_hit(&canvas, &[]), None);
+        }
+
+        /// Вложенные группы (FR-012 v2): клик в свободной области самой
+        /// внутренней группы выбирает ЕЁ, а не внешнюю с большим индексом
+        /// (внешняя создана позже — раньше перехватывала клик).
+        #[test]
+        fn select_node_hit_prefers_innermost_nested_group() {
+            let mut canvas = Canvas::default();
+            canvas
+                .nodes
+                .push(Node::group("inner", 20.0, 20.0, 200.0, 150.0));
+            let mut outer = Node::group("outer", 0.0, 0.0, 400.0, 300.0);
+            outer.children = Some(vec!["inner".to_owned()]);
+            canvas.nodes.push(outer);
+
+            // Точка внутри inner и внутри outer: победа самой внутренней
+            let point = [150.0, 150.0];
+            let spatial = SpatialIndex::build(&canvas);
+            let candidates = spatial.query_rect([point[0], point[1], point[0], point[1]]);
+            assert_eq!(candidates, vec![0, 1]);
+            assert_eq!(select_node_hit(&canvas, &candidates), Some(0));
+
+            // Точка в outer, но вне inner (полоса padding): внешняя
+            let point = [380.0, 290.0];
+            let candidates = spatial.query_rect([point[0], point[1], point[0], point[1]]);
+            assert_eq!(candidates, vec![1]);
+            assert_eq!(select_node_hit(&canvas, &candidates), Some(1));
+        }
+
+        /// Выбор цели втягивания (FR-012 v2): свободная нода втягивается
+        /// в самую внутреннюю группу под центром; нода-ребёнок внутренней
+        /// не перетягивается в её предка (двойное членство); группа не
+        /// втягивается в собственный предок.
+        #[test]
+        fn group_drop_target_pick_innermost_and_no_ancestors() {
+            let mut canvas = Canvas::default();
+            canvas
+                .nodes
+                .push(Node::group("inner", 20.0, 20.0, 200.0, 150.0));
+            let mut outer = Node::group("outer", 0.0, 0.0, 400.0, 300.0);
+            outer.children = Some(vec!["inner".to_owned()]);
+            canvas.nodes.push(outer);
+            canvas
+                .nodes
+                .push(Node::file("member", "C:/m.png", 60.0, 60.0, 40.0, 40.0));
+            canvas
+                .nodes
+                .push(Node::file("free", "C:/f.png", 500.0, 500.0, 40.0, 40.0));
+            // member — ребёнок inner; inner — ребёнок outer
+            canvas.nodes[0].children = Some(vec!["member".to_owned()]);
+
+            let center = [150.0, 150.0];
+            let spatial = SpatialIndex::build(&canvas);
+            let candidates = spatial.query_rect([center[0], center[1], center[0], center[1]]);
+
+            // 1. Свободная нода (primary=3, предков нет): цель — inner
+            //    (глубина 1), а не outer (раньше победил бы max-индекс)
+            assert_eq!(
+                group_drop_target_pick(&canvas, &candidates, &[3], &[], 3, center),
+                Some(0)
+            );
+            // 2. member (primary=2, ребёнок inner; предки [0, 1]):
+            //    втягивание не предлагается вовсе — двойное членство исключено
+            assert_eq!(
+                group_drop_target_pick(&canvas, &candidates, &[2], &[0, 1], 2, center),
+                None
+            );
+            // 3. Тащим саму inner (dragged=[0]): inner исключена как тащимая,
+            //    outer — её предок, тоже исключён → цели нет
+            assert_eq!(
+                group_drop_target_pick(&canvas, &candidates, &[0, 2], &[1], 0, center),
+                None
+            );
         }
 
         /// Зона resize (T7): правый нижний угол ноды, границы включительны.
