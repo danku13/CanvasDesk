@@ -170,11 +170,32 @@ fn tol_world(cfg: &SnapConfig) -> f32 {
 
 /// Основная функция: габарит перемещаемого + желаемая дельта + кандидаты →
 /// скорректированная дельта, оси направляющих, источник (T-038.2, п.6-15/20).
+/// Кандидаты служат и источниками направляющих, и препятствиями collision —
+/// историческая семантика (тесты движка). Интеграция с раздельными наборами
+/// (направляющие ≠ препятствия, FR-012) — [`snap_move_ex`].
 pub fn snap_move(
     moving: SnapRect,
     dx: f32,
     dy: f32,
     candidates: &[SnapRect],
+    cfg: &SnapConfig,
+) -> SnapOutcome {
+    snap_move_ex(moving, dx, dy, candidates, candidates, cfg)
+}
+
+/// Вариант с раздельными наборами (FR-012 v3): `candidates` — источники
+/// направляющих/равных интервалов (группы ВКЛЮЧЕНЫ — выравнивание к краю/
+/// центру группы легально, п.14), `obstacles` — препятствия collision-
+/// avoidance (группы ИСКЛЮЧЕНЫ — рамка группы не сплошная стена: кламп
+/// останавливал ноду на границе группы, центр не доходил до rect, жест
+/// втягивания не срабатывал; на отпускании snap телепортировал ноду
+/// обратно за границу). Семантика осей/арбитража не изменилась.
+pub fn snap_move_ex(
+    moving: SnapRect,
+    dx: f32,
+    dy: f32,
+    candidates: &[SnapRect],
+    obstacles: &[SnapRect],
     cfg: &SnapConfig,
 ) -> SnapOutcome {
     let tol = tol_world(cfg);
@@ -193,6 +214,7 @@ pub fn snap_move(
         .collect();
 
     // Оси независимы (п.1, п.6): каждая решает свои grid/guide/арбитраж.
+    // (candidates — только направляющие; collision ниже идёт по obstacles)
     let (dx_snapped, guide_x) = resolve_axis(
         &AxisData {
             m_axis: m_x,
@@ -230,13 +252,13 @@ pub fn snap_move(
     }
 
     // Collision-avoidance (п.15) — финальный кламп поверх снапа, при
-    // включённом зазоре.
+    // включённом зазоре. Препятствия — obstacles (без групп, FR-012 v3).
     let (out_dx, out_dy) = if cfg.collision_gap > 0.0 {
         clamp_collision(
             moving,
             moving.x + dx_snapped,
             moving.y + dy_snapped,
-            candidates,
+            obstacles,
             cfg.collision_gap,
             dx_snapped,
             dy_snapped,
@@ -1023,6 +1045,43 @@ mod tests {
         let cand = [r(200.0, 0.0, 50.0, 50.0)];
         let out = snap_move(r(0.0, 0.0, 50.0, 50.0), 200.0, 0.0, &cand, &cfg_no_snap());
         assert_eq!(out.dx, 200.0);
+    }
+
+    #[test]
+    fn разделение_кандидатов_и_препятствий_группа_проходима() {
+        // FR-012 v3: snap_move_ex с раздельными наборами — «группа» есть в
+        // кандидатах направляющих, но НЕ в препятствиях collision: нода
+        // свободно проходит сквозь рамку группы (жест втягивания), а
+        // snap_move (слитная семантика) по-прежнему клампит по тем же
+        // кандидатам — регресс-защита обоих поведений.
+        let group_rect = [r(100.0, 0.0, 400.0, 300.0)];
+        let cfg = SnapConfig {
+            collision_gap: 10.0,
+            ..cfg_no_snap()
+        };
+        let out = snap_move_ex(
+            r(0.0, 0.0, 50.0, 50.0),
+            200.0,
+            100.0,
+            &group_rect,
+            &[],
+            &cfg,
+        );
+        assert_eq!(out.dx, 200.0, "группа не препятствие — дельта не клампится");
+        assert_eq!(out.dy, 100.0);
+        // Слитная семантика (кандидаты = препятствия) сохранена для движка:
+        let out = snap_move_ex(
+            r(0.0, 0.0, 50.0, 50.0),
+            200.0,
+            100.0,
+            &group_rect,
+            &group_rect,
+            &cfg,
+        );
+        assert_eq!(
+            out.dx, 40.0,
+            "рамка как препятствие останавливает на зазоре"
+        );
     }
 
     #[test]

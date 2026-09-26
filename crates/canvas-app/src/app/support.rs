@@ -450,10 +450,36 @@ pub(super) fn snap_candidates(
     visible: &[usize],
     moving: &[usize],
 ) -> Vec<SnapRect> {
+    snap_node_rects(canvas, visible, moving, true)
+}
+
+/// Препятствия collision-avoidance (п.15, FR-012 v3): те же bbox видимых
+/// нод вне перемещаемого набора, но БЕЗ групп. Рамка группы — не сплошная
+/// стена: кламп по её расширенному AABB останавливал ноду на границе
+/// группы, центр не доходил до rect, жест втягивания не срабатывал, а
+/// release-snap возвращал ноду за границу. Группа — контейнер; препятствия
+/// — только реальные ноды (внутри группы соседи по-прежнему расталкивают).
+pub(super) fn collision_obstacles(
+    canvas: &Canvas,
+    visible: &[usize],
+    moving: &[usize],
+) -> Vec<SnapRect> {
+    snap_node_rects(canvas, visible, moving, false)
+}
+
+/// Общий срез bbox: `include_groups = false` вычёркивает группы (kind ==
+/// Group) — семантика collision-набора (FR-012 v3). Чистая функция.
+fn snap_node_rects(
+    canvas: &Canvas,
+    visible: &[usize],
+    moving: &[usize],
+    include_groups: bool,
+) -> Vec<SnapRect> {
     visible
         .iter()
         .filter(|index| !moving.contains(index))
         .filter_map(|index| canvas.nodes.get(*index))
+        .filter(|node| include_groups || node.kind() != NodeKind::Group)
         .map(|node| SnapRect {
             x: node.x,
             y: node.y,
@@ -500,19 +526,21 @@ pub(super) fn snap_with_anchor(
     dx: f32,
     dy: f32,
     candidates: &[SnapRect],
+    obstacles: &[SnapRect],
     cfg: &SnapConfig,
     anchor: SnapAnchor,
 ) -> SnapOutcome {
     if matches!(anchor, SnapAnchor::BoundingBox) {
-        return snap_move(moving, dx, dy, candidates, cfg);
+        return snap_move_ex(moving, dx, dy, candidates, obstacles, cfg);
     }
     // Движок без сетки и без collision (клампим сами после anchor-дельты —
     // иначе collision «зафиксирует» дельту до арбитража осей)
-    let mut outcome = snap_move(
+    let mut outcome = snap_move_ex(
         moving,
         dx,
         dy,
         candidates,
+        obstacles,
         &SnapConfig {
             collision_gap: 0.0,
             ..*cfg
@@ -564,13 +592,14 @@ pub(super) fn snap_with_anchor(
     if guide_won_y && out_dy != outcome.dy {
         guides_y.clear();
     }
-    // Collision поверх финальной дельты (п.15) — как в движке
+    // Collision поверх финальной дельты (п.15) — как в движке;
+    // препятствия — obstacles (без групп, FR-012 v3)
     if cfg.collision_gap > 0.0 {
         let (fx, fy) = clamp_collision(
             moving,
             moving.x + out_dx,
             moving.y + out_dy,
-            candidates,
+            obstacles,
             cfg.collision_gap,
             out_dx,
             out_dy,

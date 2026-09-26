@@ -36,8 +36,8 @@ use crate::settings_ui::{
 // раскладки; кламп collision публичен для live-клампа кадра драга (п.15);
 // T-038.5: batch-операции выделения (п.16-17) — те же чистые функции
 use crate::snap::{
-    align_centers, clamp_collision, distribute_evenly, effective_grid_step, snap_move, AlignAxis,
-    SnapConfig, SnapOutcome, SnapRect, SnapSource,
+    align_centers, clamp_collision, distribute_evenly, effective_grid_step, snap_move_ex,
+    AlignAxis, SnapConfig, SnapOutcome, SnapRect, SnapSource,
 };
 use crate::template_ui;
 use crate::template_ui::{
@@ -172,14 +172,14 @@ mod support;
 mod tooltip;
 pub use support::measured_result_reserve_height;
 use support::{
-    bezier_samples, centered_box, dim_color4, dim_text_color, distribute_axis_for, drag_bbox,
-    drag_from_node, explain_chain_focus, expr_error_hit_at, hit_subtitle, hover_fill,
-    infer_param_type, node_display_label, node_subtitle, node_text, node_title, nudge_step_world,
-    paint_items_to_band, paint_items_to_stage, rect_xywh, rects_intersect, screen_dot,
-    screen_rect_quad, slugify, snap_candidates, snap_tolerance_world, snap_with_anchor,
-    spawn_lineage_build, spill_hit_at, spill_hit_target, spill_toast_key, stage_close_button_rect,
-    template_card_row, token_color, truncate_chars, unique_custom_id, BatchOp, PortLabelLine,
-    PortTarget, SnapFrame,
+    bezier_samples, centered_box, collision_obstacles, dim_color4, dim_text_color,
+    distribute_axis_for, drag_bbox, drag_from_node, explain_chain_focus, expr_error_hit_at,
+    hit_subtitle, hover_fill, infer_param_type, node_display_label, node_subtitle, node_text,
+    node_title, nudge_step_world, paint_items_to_band, paint_items_to_stage, rect_xywh,
+    rects_intersect, screen_dot, screen_rect_quad, slugify, snap_candidates, snap_tolerance_world,
+    snap_with_anchor, spawn_lineage_build, spill_hit_at, spill_hit_target, spill_toast_key,
+    stage_close_button_rect, template_card_row, token_color, truncate_chars, unique_custom_id,
+    BatchOp, PortLabelLine, PortTarget, SnapFrame,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
@@ -2754,7 +2754,18 @@ impl App {
         visible[2] += margin;
         visible[3] += margin;
         let moving: Vec<usize> = drag.origins.iter().map(|(index, _)| *index).collect();
+        // Два среза одних и тех же видимых нод (FR-012 v3): направляющие —
+        // с группами (выравнивание к краю/центру группы), препятствия
+        // collision — без групп (рамка группы не сплошная стена: кламп
+        // останавливал ноду на границе группы, центр не доходил до rect,
+        // жест втягивания не срабатывал; на отпускании snap возвращал ноду
+        // за границу)
         let candidates = snap_candidates(
+            &self.scene.canvas,
+            &self.scene.spatial.query_rect(visible),
+            &moving,
+        );
+        let obstacles = collision_obstacles(
             &self.scene.canvas,
             &self.scene.spatial.query_rect(visible),
             &moving,
@@ -2762,13 +2773,14 @@ impl App {
 
         // Live-collision (п.15): grid/guides остаются release-time, поэтому
         // клампим ТОЛЬКО дельту кадра — движение останавливается на границе
-        // зазора, свободный курсор не «уводит» ноду сквозь соседей
+        // зазора, свободный курсор не «уводит» ноду сквозь соседей.
+        // Препятствия — obstacles (группы проходимы, FR-012 v3)
         let eff_delta = if cfg.collision_gap > 0.0 {
             let (fx, fy) = clamp_collision(
                 bbox,
                 bbox.x + delta[0],
                 bbox.y + delta[1],
-                &candidates,
+                &obstacles,
                 cfg.collision_gap,
                 delta[0],
                 delta[1],
@@ -2784,6 +2796,7 @@ impl App {
             eff_delta[0],
             eff_delta[1],
             &candidates,
+            &obstacles,
             &cfg,
             self.settings.snap_anchor,
         );
@@ -7632,6 +7645,10 @@ mod tests {
     use super::*;
     use std::str::FromStr;
 
+    // Тест passthrough: слитная семантика движка (кандидаты = препятствия)
+    // сравнивается с snap_with_anchor — точечный импорт вместо родительского.
+    use crate::snap::snap_move;
+
     // Этап 1 рефакторинга: anchor_grid_delta живёт в support (используется
     // только в тестах — здесь точечный импорт вместо родительского).
     use support::anchor_grid_delta;
@@ -7827,6 +7844,137 @@ mod tests {
         assert_eq!((candidates[1].x, candidates[1].w), (300.0, 260.0));
     }
 
+    /// FR-012 v3: набор препятствий collision — тот же срез видимых нод,
+    /// но группы вычеркнуты (рамка группы — не сплошная стена); набор
+    /// кандидатов направляющих группы сохраняет (п.14).
+    #[test]
+    fn collision_obstacles_exclude_groups() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("moving", "", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::group("g", 100.0, 0.0, 200.0, 100.0));
+        canvas.nodes.push(Node::text("other", "", 300.0, 0.0));
+        let candidates = snap_candidates(&canvas, &[0, 1, 2], &[0]);
+        assert_eq!(
+            candidates.len(),
+            2,
+            "группа остаётся кандидатом направляющих"
+        );
+        let obstacles = collision_obstacles(&canvas, &[0, 1, 2], &[0]);
+        assert_eq!(obstacles.len(), 1, "группа вычеркнута из препятствий");
+        assert_eq!((obstacles[0].x, obstacles[0].w), (300.0, 260.0));
+    }
+
+    /// Регресс пользовательского сценария («тащишь ноду в группу — срабатывает
+    /// коллизия, вместо впрыгивания»): при включённом snap-collision
+    /// live-кламп не останавливает ноду на границе группы, release-snap
+    /// не возвращает её за границу, pick втягивания находит группу.
+    #[test]
+    fn group_entry_survives_live_and_release_collision() {
+        let mut canvas = Canvas::default();
+        let mut group = Node::group("group-1", 100.0, 0.0, 400.0, 300.0);
+        group.children = Some(Vec::new());
+        canvas.nodes.push(group);
+        let mut n = Node::text("n", "", 0.0, 0.0);
+        n.width = 50.0;
+        n.height = 50.0;
+        canvas.nodes.push(n);
+        let candidates = snap_candidates(&canvas, &[0, 1], &[1]);
+        let obstacles = collision_obstacles(&canvas, &[0, 1], &[1]);
+        assert_eq!(candidates.len(), 1);
+        assert!(obstacles.is_empty(), "группа — не препятствие");
+        let bbox = drag_bbox(&canvas, &[(1, [0.0, 0.0])]).expect("bbox");
+        let cfg = SnapConfig {
+            collision_gap: COLLISION_GAP,
+            to_grid: false,
+            to_guides: false,
+            ..SnapConfig::default()
+        };
+        // Live-кламп кадра: дельта (200, 100) заводит ноду ВНУТРЬ группы —
+        // раньше кламп останавливал правый край на 100-8-50 = 42
+        let (fx, fy) = clamp_collision(
+            bbox,
+            bbox.x + 200.0,
+            bbox.y + 100.0,
+            &obstacles,
+            cfg.collision_gap,
+            200.0,
+            100.0,
+        );
+        assert_eq!(
+            (fx, fy),
+            (200.0, 100.0),
+            "рамка группы не останавливает ноду"
+        );
+        // Release-snap: полный outcome не возвращает ноду за границу
+        let outcome = snap_with_anchor(
+            bbox,
+            fx,
+            fy,
+            &candidates,
+            &obstacles,
+            &cfg,
+            SnapAnchor::BoundingBox,
+        );
+        assert_eq!(
+            (outcome.dx, outcome.dy),
+            (200.0, 100.0),
+            "release-snap не телепортирует ноду обратно"
+        );
+        // Жест втягивания: центр (225, 125) в rect группы → цель найдена
+        assert_eq!(
+            crate::ui::group_drop_target_pick(&canvas, &[0], &[1], &[], 1, [225.0, 125.0]),
+            Some(0),
+            "группа — цель втягивания"
+        );
+    }
+
+    /// Регресс вложенности: нода входит во ВНУТРЕННЮЮ группу сквозь рамку
+    /// внешней (раньше внешняя группа-препятствие останавливала ноду ещё
+    /// на своём контуре); pick выбирает самую внутреннюю.
+    #[test]
+    fn group_entry_through_nested_frames() {
+        let mut canvas = Canvas::default();
+        let mut outer = Node::group("outer", 0.0, 0.0, 800.0, 600.0);
+        outer.children = Some(vec!["inner".to_owned()]);
+        let mut inner = Node::group("inner", 100.0, 100.0, 400.0, 300.0);
+        inner.children = Some(Vec::new());
+        canvas.nodes.push(outer);
+        canvas.nodes.push(inner);
+        let mut n = Node::text("n", "", 0.0, 0.0);
+        n.width = 50.0;
+        n.height = 50.0;
+        canvas.nodes.push(n);
+        let obstacles = collision_obstacles(&canvas, &[0, 1, 2], &[2]);
+        assert!(obstacles.is_empty(), "обе группы проходимы");
+        let candidates = snap_candidates(&canvas, &[0, 1, 2], &[2]);
+        assert_eq!(candidates.len(), 2, "обе группы — кандидаты направляющих");
+        let bbox = drag_bbox(&canvas, &[(2, [0.0, 0.0])]).expect("bbox");
+        let cfg = SnapConfig {
+            collision_gap: COLLISION_GAP,
+            to_grid: false,
+            to_guides: false,
+            ..SnapConfig::default()
+        };
+        // Дельта (300, 200): центр (325, 225) — внутри inner, сквозь outer
+        let (fx, fy) = clamp_collision(
+            bbox,
+            bbox.x + 300.0,
+            bbox.y + 200.0,
+            &obstacles,
+            cfg.collision_gap,
+            300.0,
+            200.0,
+        );
+        assert_eq!((fx, fy), (300.0, 200.0), "внешняя рамка не блокирует вход");
+        assert_eq!(
+            crate::ui::group_drop_target_pick(&canvas, &[0, 1], &[2], &[], 2, [325.0, 225.0]),
+            Some(1),
+            "самая внутренняя группа — цель втягивания"
+        );
+    }
+
     /// anchor_grid_delta: в допуске — дельта до ближайшей линии, за допуском
     /// — 0; отрицательные координаты корректны.
     #[test]
@@ -7849,6 +7997,7 @@ mod tests {
             162.0,
             0.0,
             &candidates,
+            &candidates,
             &cfg,
             SnapAnchor::BoundingBox,
         );
@@ -7868,6 +8017,7 @@ mod tests {
             0.0,
             0.0,
             &[],
+            &[],
             &cfg,
             SnapAnchor::Corner,
         );
@@ -7885,6 +8035,7 @@ mod tests {
             0.0,
             0.0,
             &[],
+            &[],
             &no_grid,
             SnapAnchor::Corner,
         );
@@ -7900,6 +8051,7 @@ mod tests {
             sr(0.0, 0.0, 43.0, 30.0),
             0.0,
             0.0,
+            &[],
             &[],
             &cfg,
             SnapAnchor::Center,
@@ -7921,6 +8073,7 @@ mod tests {
             0.0,
             0.0,
             &closer,
+            &closer,
             &cfg,
             SnapAnchor::Corner,
         );
@@ -7933,6 +8086,7 @@ mod tests {
             sr(100.5, 0.0, 40.0, 40.0),
             0.0,
             0.0,
+            &farther,
             &farther,
             &cfg,
             SnapAnchor::Corner,
@@ -7959,6 +8113,7 @@ mod tests {
             95.0,
             0.0,
             &candidate,
+            &candidate,
             &cfg,
             SnapAnchor::Corner,
         );
@@ -7970,6 +8125,7 @@ mod tests {
             sr(0.0, 0.0, 40.0, 40.0),
             95.0,
             0.0,
+            &candidate,
             &candidate,
             &free,
             SnapAnchor::Corner,
