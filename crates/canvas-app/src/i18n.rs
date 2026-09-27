@@ -691,6 +691,8 @@ pub mod keys {
     // FR-076: тосты экспорта HTML-артефакта (Ctrl+Shift+E)
     pub const TOAST_EXPORT_HTML_OK: &str = "toast.export_html_ok";
     pub const TOAST_EXPORT_HTML_FAIL: &str = "toast.export_html_fail";
+    // FR-078: deep-link ?focus= — нода не найдена
+    pub const TOAST_FOCUS_NOT_FOUND: &str = "toast.focus_not_found";
     pub const TOAST_TEMPLATE_UPDATED: &str = "toast.template_updated";
     pub const TOAST_CANVAS_NOT_OPEN: &str = "toast.canvas_not_open";
     pub const TOAST_CANVAS_OPENED: &str = "toast.canvas_opened";
@@ -1396,6 +1398,8 @@ const RU: &[(&str, &str)] = &[
     // FR-076: экспорт HTML-артефакта
     (keys::TOAST_EXPORT_HTML_OK, "HTML-артефакт сохранён: {path}"),
     (keys::TOAST_EXPORT_HTML_FAIL, "Не удалось записать HTML-артефакт: {err}"),
+    // FR-078: deep-link ?focus=
+    (keys::TOAST_FOCUS_NOT_FOUND, "Нода не найдена: {id} (ссылка ?focus=)"),
     (keys::TOAST_TEMPLATE_UPDATED, "Шаблон обновлён: {name} → v{version}"),
     (keys::TOAST_CANVAS_NOT_OPEN, "Канвас не открыт: {err}"),
     (keys::TOAST_CANVAS_OPENED, "Открыт канвас: {name}"),
@@ -2244,6 +2248,8 @@ const EN: &[(&str, &str)] = &[
     // FR-076: экспорт HTML-артефакта
     (keys::TOAST_EXPORT_HTML_OK, "HTML artifact saved: {path}"),
     (keys::TOAST_EXPORT_HTML_FAIL, "Failed to write HTML artifact: {err}"),
+    // FR-078: deep-link ?focus=
+    (keys::TOAST_FOCUS_NOT_FOUND, "Node not found: {id} (?focus= link)"),
     (keys::TOAST_TEMPLATE_UPDATED, "Template updated: {name} → v{version}"),
     (keys::TOAST_CANVAS_NOT_OPEN, "Canvas not open: {err}"),
     (keys::TOAST_CANVAS_OPENED, "Opened canvas: {name}"),

@@ -201,6 +201,11 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     if params.template.is_some() {
         app.set_pending_scheme(params.template.clone());
     }
+    // FR-078: ?focus=<node-id> — отложенный deep-link на ноду (первый кадр:
+    // камера центрируется, нода выделяется; неизвестный id — тост)
+    if params.focus.is_some() {
+        app.set_pending_focus(params.focus.clone());
+    }
     // FR-055 (этап U4, F-10/G6): ?ui=debug — DebugOverlay со старта
     // (рамки слоёв/имя под курсором/пересечения; натив — тогл F9)
     if params.ui_debug {

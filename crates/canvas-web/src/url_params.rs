@@ -34,6 +34,12 @@ pub struct WebParams {
     /// инициализации App. Неизвестный id — мягкий отказ (тост), URL не
     /// валидируется здесь: реестр схем проверяет при применении.
     pub template: Option<String>,
+    /// `?focus=<node-id>` (FR-078): deep-link на ноду — после инициализации
+    /// камера центрируется на ноде, нода выделяется (аналог стабильных
+    /// ссылок #focus из Archify, карта переноса T3). Значение проходит
+    /// санитизацию ([`sanitize_node_id`]); неизвестный id — мягкий отказ
+    /// (тост), страница открывается как обычно.
+    pub focus: Option<String>,
     /// `?ui=debug` (FR-055 U4, F-10): DebugOverlay включён со старта
     /// (рамки слоёв/имя под курсором/пересечения — G6). Другие значения —
     /// None (мягкий игнор, страница открывается при любом URL).
@@ -192,6 +198,25 @@ pub fn sanitize_file_name(raw: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
+/// Санитизация id ноды из URL (FR-078): непустое, ≤ 64 символов, только
+/// буквы/цифры/`_`/`-` (идентификаторы сцены — `n_product`, `mm1`, …).
+/// Прочие символы резались бы URL-парсером либо не встречаются в id —
+/// отклоняем целиком (деградация: старт без фокуса, страница открывается).
+pub fn sanitize_node_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 {
+        return None;
+    }
+    let safe = trimmed
+        .chars()
+        .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-'));
+    if safe {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
 /// Кандидаты имени при коллизии (M8/W10): «имя.ext», «имя-1.ext»,
 /// «имя-2.ext», … (без расширения — суффикс в конец; ведущая точка не
 /// стем: «.gitignore» → «.gitignore-1»). Первый незанятый выбирает
@@ -230,6 +255,7 @@ pub fn parse_query(query: &str) -> Result<WebParams, String> {
     let log_level = string_param(query, "log").and_then(|value| LogLevel::parse(&value));
     let canvas = string_param(query, "canvas").and_then(|value| sanitize_canvas_name(&value));
     let template = string_param(query, "template");
+    let focus = string_param(query, "focus").and_then(|value| sanitize_node_id(&value));
     // FR-055 U4 (F-10): `?ui=debug` — DebugOverlay со старта; прочие
     // значения (в т.ч. пустое) — мягкий игнор (URL с опечаткой не повод
     // отказывать странице в остальных параметрах)
@@ -240,6 +266,7 @@ pub fn parse_query(query: &str) -> Result<WebParams, String> {
         log_level,
         canvas,
         template,
+        focus,
         ui_debug,
     })
 }
@@ -247,6 +274,47 @@ pub fn parse_query(query: &str) -> Result<WebParams, String> {
 #[cfg(test)]
 mod tests {
     use super::{parse_query, LogLevel, WebParams};
+
+    /// FR-078: `?focus=<node-id>` — санитизация id: валидный проходит
+    /// как есть, опасный/битый — None (тихий старт без фокуса).
+    #[test]
+    fn focus_param_parses_and_sanitizes() {
+        let params = parse_query("?focus=n_product").expect("валидный запрос");
+        assert_eq!(params.focus.as_deref(), Some("n_product"));
+        // Процентов-декод + кириллица допустима (is_alphanumeric — Unicode)
+        let params = parse_query("?focus=%D0%BD%D0%BE%D0%B4%D0%B0").expect("валидный запрос");
+        assert_eq!(params.focus.as_deref(), Some("нода"));
+        // Пустое — None (мягкий старт)
+        let params = parse_query("?focus=").expect("валидный запрос");
+        assert_eq!(params.focus, None);
+        // Опасные значения — None: путь, пробел, спецсимволы, > 64 символов
+        assert_eq!(super::sanitize_node_id("a/b"), None);
+        assert_eq!(super::sanitize_node_id("a b"), None);
+        assert_eq!(super::sanitize_node_id("a?b"), None);
+        assert_eq!(super::sanitize_node_id("../x"), None);
+        assert_eq!(super::sanitize_node_id(&"x".repeat(65)), None);
+        // Граница длины проходит (64)
+        let long_id = "x".repeat(64);
+        assert_eq!(
+            super::sanitize_node_id(&long_id).as_deref(),
+            Some(long_id.as_str())
+        );
+        // Битый focus не роняет соседний валидный canvas
+        let params = parse_query("?canvas=демо&focus=a%2Fb").expect("валидный запрос");
+        assert_eq!(params.canvas.as_deref(), Some("демо.canvas"));
+        assert_eq!(params.focus, None);
+    }
+
+    /// FR-078: focus комбинируется с canvas — ссылка на ноду именованного
+    /// канваса (?: canvas=x&focus=n_units).
+    #[test]
+    fn focus_combines_with_canvas() {
+        let params =
+            parse_query("?canvas=проект&focus=n_units&log=debug").expect("валидный запрос");
+        assert_eq!(params.canvas.as_deref(), Some("проект.canvas"));
+        assert_eq!(params.focus.as_deref(), Some("n_units"));
+        assert_eq!(params.log_level, Some(LogLevel::Debug));
+    }
 
     /// Приёмка W5: `?stress=5000` — нагрузочная сцена на 5000 нод.
     #[test]
@@ -260,6 +328,7 @@ mod tests {
                 log_level: None,
                 canvas: None,
                 template: None,
+                focus: None,
                 ui_debug: false
             }
         );
@@ -308,6 +377,7 @@ mod tests {
                 log_level: None,
                 canvas: None,
                 template: None,
+                focus: None,
                 ui_debug: false
             }
         );
@@ -328,6 +398,7 @@ mod tests {
                 log_level: None,
                 canvas: Some("x.canvas".to_string()),
                 template: None,
+                focus: None,
                 ui_debug: false
             }
         );

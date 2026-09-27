@@ -118,17 +118,9 @@ pub(crate) async fn export_html_active() {
         return;
     };
     let comparison = canvas_core::export_html::scenario_comparison_for_export(&canvas, &base);
-    let title = name
-        .strip_suffix(".canvas")
-        .unwrap_or(&name)
-        .to_owned();
+    let title = name.strip_suffix(".canvas").unwrap_or(&name).to_owned();
     let options = canvas_core::export_html::ExportHtmlOptions { title, dark: true };
-    let html = canvas_core::export_html::export_html(
-        &canvas,
-        &base,
-        comparison.as_ref(),
-        &options,
-    );
+    let html = canvas_core::export_html::export_html(&canvas, &base, comparison.as_ref(), &options);
     let file_name = format!("{}.html", name.strip_suffix(".canvas").unwrap_or(&name));
     match download_blob(&file_name, &html, "text/html") {
         Ok(()) => {
