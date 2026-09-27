@@ -952,23 +952,25 @@ pub enum InstantiateError {
     BadParams(String),
 }
 
-/// Q6 FR-061: дефолтная ширина шаблонной ноды — 360–400 «тяжёлым» по числу
-/// строк (анализ §3.4/§9 Q6: tcp-lb на 300 px живёт в режиме иконок
-/// постоянно; решение владельца — ширина по числу строк, ресайз из UI —
-/// отдельный FR). Видимые ряды таблицы шаблонной ноды при инстанциате —
-/// строки параметров (текст ноды — Numi-лист присваиваний).
-/// Порог согласован с блок-порогом T = [`NODE_BODY_BLOCK_THRESHOLD`] (4):
-/// R < T → 300 (как прежде), T ≤ R < T+4 → 360, R ≥ T+4 → 400.
+/// Q6 FR-061 (правка 2): дефолтная ширина шаблонной ноды — 460–500
+/// «тяжёлым» по числу строк. Базовый дефолт поднят с 300 до 400 по
+/// решению владельца 27.09.2026: 300 px слишком узко, регулярно зарезает
+/// текст (анализ §3.4/§9 Q6: tcp-lb на 300 px живёт в режиме иконок
+/// постоянно). Лестница смещена целиком на +100: R < T → 400 (база),
+/// T ≤ R < T+4 → 460, R ≥ T+4 → 500 — монотонность сохранена.
+/// Видимые ряды таблицы шаблонной ноды при инстанциате — строки
+/// параметров (текст ноды — Numi-лист присваиваний).
+/// Порог согласован с блок-порогом T = [`NODE_BODY_BLOCK_THRESHOLD`] (4).
 /// Существующие ноды (уже в `.canvas`) не трогаются — меняется только
 /// дефолт новых инстанциатов.
 pub fn default_template_width(param_rows: usize) -> f32 {
     let t = crate::NODE_BODY_BLOCK_THRESHOLD;
     if param_rows >= t + 4 {
-        400.0
+        500.0
     } else if param_rows >= t {
-        360.0
+        460.0
     } else {
-        300.0
+        400.0
     }
 }
 
@@ -1256,15 +1258,17 @@ mod tests {
         assert!(ext.data.is_none(), "data — FR-045, не занят");
     }
 
-    /// Q6 FR-061: лестница дефолтной ширины по числу строк (порог T = 4).
+    /// Q6 FR-061 (правка 2): лестница дефолтной ширины по числу строк
+    /// (порог T = 4). Все три уровня подняты на +100: базовый 300 → 400
+    /// (решение владельца 27.09.2026: 300 слишком узко, зарезает текст).
     #[test]
     fn default_template_width_ladder() {
-        assert_eq!(default_template_width(0), 300.0);
-        assert_eq!(default_template_width(3), 300.0, "R < T — как прежде");
-        assert_eq!(default_template_width(4), 360.0, "R ≥ T (блок-порог)");
-        assert_eq!(default_template_width(7), 360.0);
-        assert_eq!(default_template_width(8), 400.0, "R ≥ T+4");
-        assert_eq!(default_template_width(12), 400.0);
+        assert_eq!(default_template_width(0), 400.0);
+        assert_eq!(default_template_width(3), 400.0, "R < T — базовый дефолт");
+        assert_eq!(default_template_width(4), 460.0, "R ≥ T (блок-порог)");
+        assert_eq!(default_template_width(7), 460.0);
+        assert_eq!(default_template_width(8), 500.0, "R ≥ T+4");
+        assert_eq!(default_template_width(12), 500.0);
     }
 
     /// Инстанциация: дефолты манифеста → Numi-лист + template-ссылка.
@@ -1274,9 +1278,9 @@ mod tests {
         let manifest = registry.find("mock.lb").expect("mock.lb");
         let node = instantiate(manifest, &BTreeMap::new(), "n1".to_owned(), 100.0, 200.0)
             .expect("инстанциация");
-        // Q6: дефолт ширины — 360–400 «тяжёлым» по числу строк (3 параметра
-        // mock.lb < T=4 — прежние 300).
-        assert_eq!(node.width, 300.0);
+        // Q6 (правка 2): дефолт ширины — 460–500 «тяжёлым» по числу строк
+        // (3 параметра mock.lb < T=4 — базовый дефолт 400).
+        assert_eq!(node.width, 400.0);
         assert_eq!(node.kind(), crate::model::NodeKind::Text);
         assert_eq!(node.x, 100.0);
         assert_eq!(node.y, 200.0);
