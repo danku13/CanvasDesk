@@ -1104,6 +1104,10 @@ pub struct App {
     /// FR-049 (US-5): отложенная схема `?template=<id>` (web) — применяется
     /// на первом кадре, когда вьюпорт известен (zoom-to-fit корректен).
     pub pending_scheme: Option<String>,
+    /// FR-078: отложенный deep-link `?focus=<node-id>` (web) — применяется
+    /// на первом кадре (камера центрируется на ноде, нода выделяется);
+    /// неизвестный id — мягкий отказ (тост).
+    pub pending_focus: Option<String>,
     /// FR-025: drag карточки шаблона из палитры в точку канваса (нажатие
     /// на строку; отпускание решает — клик: в центр viewport, drag: в
     /// точку курсора с ghost-превью).
@@ -1382,6 +1386,7 @@ impl App {
             debug_overlay: false,
             empty_state_dismissed: false,
             pending_scheme: None,
+            pending_focus: None,
             settings,
             config_path,
             settings_open: false,
@@ -4739,6 +4744,14 @@ impl App {
     /// (поле private — сеттер для canvas-web; применяется на первом кадре).
     pub fn set_pending_scheme(&mut self, id: Option<String>) {
         self.pending_scheme = id;
+    }
+
+    /// FR-078: отложенный deep-link `?focus=<node-id>` (web) — применить на
+    /// первом кадре (камера на ноду + выделение). Сеттер зеркалит
+    /// [`set_pending_scheme`]: URL известен до построения App, а
+    /// применение требует готовой камеры/вьюпорта.
+    pub fn set_pending_focus(&mut self, id: Option<String>) {
+        self.pending_focus = id;
     }
 
     /// FR-055 (этап U4, F-10): включить/выключить DebugOverlay извне

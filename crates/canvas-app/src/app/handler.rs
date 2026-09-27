@@ -87,6 +87,38 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                     }
                 }
+                // FR-078: ?focus=<node-id> — применить на первом кадре
+                // (камера готова; паттерн ?template). Найденная нода —
+                // центр камеры + выделение (ссылка ведёт глаз читателя);
+                // неизвестный id — мягкий отказ (тост), канвас как есть
+                if let Some(id) = self.pending_focus.take() {
+                    match self
+                        .scene
+                        .canvas
+                        .nodes
+                        .iter()
+                        .position(|node| node.id == id)
+                    {
+                        Some(index) => {
+                            let node = &self.scene.canvas.nodes[index];
+                            let center = [node.x + node.width / 2.0, node.y + node.height / 2.0];
+                            self.camera.set_center(center);
+                            self.selected = Some(Selection::Node(index));
+                            tracing::info!(
+                                node = %id,
+                                "?focus: камера центрирована, нода выделена"
+                            );
+                        }
+                        None => {
+                            tracing::warn!(node = %id, "?focus: нода не найдена");
+                            self.show_toast(i18n::trf(
+                                self.settings.language,
+                                keys::TOAST_FOCUS_NOT_FOUND,
+                                &[("id", id.as_str())],
+                            ));
+                        }
+                    }
+                }
                 // Замер интервала между кадрами для HUD (T5)
                 let now = Instant::now();
                 if let Some(prev) = self.last_frame {
