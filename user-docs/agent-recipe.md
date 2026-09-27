@@ -123,11 +123,14 @@ graph_apply { operations: [ {op: "node_create_note", ref: "traffic", x, y, text}
 ## Шаг 6. Финал: `graph_validate`
 
 `graph_validate {}` — обязательный финальный шаг. Ответ:
-`{valid: bool, issues: [{severity, code, node_id, edge_id, message}]}`.
+`{valid: bool, issues: [{severity, code, node_id, edge_id, message, fix}]}`.
 **Критерий готовности модели: `valid: true`.**
+Поле `fix` (FR-077) — рецепт починки к каждому коду: конкретные шаги
+поддерживаемыми инструментами. При `valid: false` выполняйте `fix` каждой
+проблемы и повторяйте валидацию, пока не станет `true`.
 Коды — стабильный контракт рецепта:
 
-| Код | Severity | Значение | Что делать |
+| Код | Severity | Значение | Что делать (кратко; полное — в `fix`) |
 |---|---|---|---|
 | `E-CYCLE` | error | цикл value-рёбер | разорвать цикл: value-связи образуют DAG |
 | `E-OVERLOAD` | error | утилизация ρ ≥ 1 — очередь растёт неограниченно | мощность узла ниже нагрузки: менять params шага или нагрузку |
