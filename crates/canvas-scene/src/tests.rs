@@ -2897,14 +2897,15 @@ fn scene_auto_rows_cache_populated() {
 /// 2026-09-22): schemes_list — реестр галереи виден агенту: те же пакеты,
 /// что в галерее (Ctrl+T), с размерами графа; чтение — канвас
 /// и undo не тронуты. Расширение каталога (аудит 2026-09-25): 6 → 10;
-/// A/B тестирование: 10 → 11.
+/// A/B тестирование: 10 → 11; framework-схемы (CJM/JTBD/Service blueprint,
+/// правка 2.1): 11 → 14.
 #[test]
 fn mcp_schemes_list_embedded_registry() {
     let mut scene = mcp_scene();
     let undo_before = scene.undo_stack.len();
     let list = dispatch(&mut scene, "schemes_list", "{}").expect("schemes_list");
     let schemes = list.as_array().expect("массив схем");
-    assert_eq!(schemes.len(), 11, "11 пакетов PRD-0008 §7.2 + A/B: {list}");
+    assert_eq!(schemes.len(), 14, "14 пакетов PRD-0008 §7.2 + A/B + framework (CJM/JTBD/SB): {list}");
     let ids: Vec<&str> = schemes.iter().filter_map(|s| s["id"].as_str()).collect();
     assert!(
         ids.contains(&"com.canvasdesk.scheme.intro-calculations"),

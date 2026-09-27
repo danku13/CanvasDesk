@@ -1,0 +1,157 @@
+{
+ "id": "com.canvasdesk.scheme.jtbd-saas",
+ "name_ru": "JTBD: SaaS B2B",
+ "name_en": "JTBD: SaaS B2B",
+ "description_ru": "Jobs-To-Be-Done для B2B SaaS: основное job statement, четыре силы прогресса (push/pull/anxiety/inertia) и ожидаемые исходы. Карта помогает понять, какие мотиваторы двигают пользователя к переключению. Схема как эталон для eval-сета Laya — задачи choose_job_type, show_suggestion, гейтинг по confidence (FW1, FW4 из autocomplete-ajtbd-cjm-sb-analysis.md).",
+ "description_en": "Jobs-To-Be-Done for B2B SaaS: main job statement, four forces of progress (push/pull/anxiety/inertia) and expected outcomes. The map helps understand what motivators drive user switching. Reference scheme for Laya eval-set — choose_job_type, show_suggestion, confidence-gating tasks (FW1, FW4 from autocomplete-ajtbd-cjm-sb-analysis.md).",
+ "category": "framework",
+ "category_ru": "Фреймворк",
+ "category_en": "Framework",
+ "version": "1.0.0",
+ "content": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 0,
+    "width": 1380,
+    "height": 180,
+    "text": "Jobs-To-Be-Done: B2B SaaS\nОсновная job statement в центре. Над ней — четыре силы прогресса: Push (что болит сейчас), Pull (что манит в новом), Anxiety (что страшит в переключении), Inertia (что держит привычка). Под ней — три ожидаемых исхода: функциональный, эмоциональный, социальный. Меняйте формулировки под свой домен. Скелет для FW1/FW4 (autocomplete-ajtbd-cjm-sb-analysis.md, §2.3).",
+    "color": "4"
+   },
+   {
+    "id": "job_main",
+    "type": "text",
+    "x": 380,
+    "y": 220,
+    "width": 620,
+    "height": 140,
+    "text": "Job statement\nКогда мои пользователи сталкиваются с ростом нагрузки, я хочу заранее понимать узкие места, чтобы защищать решение перед командой и не падать в проде.",
+    "color": "6",
+    "label": "Main job"
+   },
+   {
+    "id": "force_push",
+    "type": "text",
+    "x": 0,
+    "y": 400,
+    "width": 320,
+    "height": 140,
+    "text": "Push: текущая боль\nДашборды Prometheus показывает проблему постфактум — когда уже поздно. Каждое падение — ручной разбор, виноватого нет.",
+    "color": "2"
+   },
+   {
+    "id": "force_pull",
+    "type": "text",
+    "x": 360,
+    "y": 400,
+    "width": 320,
+    "height": 140,
+    "text": "Pull: что манит\nCanvasDesk даёт модель «что если», где я могу проиграть нагрузку до релиза и защитить решение расчётом, а не ощущением.",
+    "color": "5"
+   },
+   {
+    "id": "force_anxiety",
+    "type": "text",
+    "x": 720,
+    "y": 400,
+    "width": 320,
+    "height": 140,
+    "text": "Anxiety: что страшит\nНужно учить новый инструмент — формулы, шаблоны. Боюсь, что команда не примет, и время на внедрение уйдёт впустую.",
+    "color": "3"
+   },
+   {
+    "id": "force_inertia",
+    "type": "text",
+    "x": 1080,
+    "y": 400,
+    "width": 320,
+    "height": 140,
+    "text": "Inertia: что держит\nПривыкли к Grafana + Excel — «работает же». Перестройка процессов потребует согласования с SRE и продакт-командой.",
+    "color": "3"
+   },
+   {
+    "id": "out_func",
+    "type": "text",
+    "x": 180,
+    "y": 580,
+    "width": 360,
+    "height": 120,
+    "text": "Функциональный исход\nМодель сервиса 10k rps собрана за 30 минут, без ошибок валидации, решение защищено цифрами.",
+    "color": "5"
+   },
+   {
+    "id": "out_emo",
+    "type": "text",
+    "x": 580,
+    "y": 580,
+    "width": 360,
+    "height": 120,
+    "text": "Эмоциональный исход\nУверенность при разговоре с C-level: «я знаю узкие места, у меня есть цифры».",
+    "color": "3"
+   },
+   {
+    "id": "out_soc",
+    "type": "text",
+    "x": 980,
+    "y": 580,
+    "width": 360,
+    "height": 120,
+    "text": "Социальный исход\nКоманда признаёт меня как владельца capacity-модели; SRE приходят с вопросами «а как это ляжет на модель?».",
+    "color": "3"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e_push_job",
+    "fromNode": "force_push",
+    "toNode": "job_main",
+    "flowKind": "value",
+    "fromOutput": "force"
+   },
+   {
+    "id": "e_pull_job",
+    "fromNode": "force_pull",
+    "toNode": "job_main",
+    "flowKind": "value",
+    "fromOutput": "force"
+   },
+   {
+    "id": "e_anx_job",
+    "fromNode": "force_anxiety",
+    "toNode": "job_main",
+    "flowKind": "value",
+    "fromOutput": "force"
+   },
+   {
+    "id": "e_int_job",
+    "fromNode": "force_inertia",
+    "toNode": "job_main",
+    "flowKind": "value",
+    "fromOutput": "force"
+   },
+   {
+    "id": "e_job_func",
+    "fromNode": "job_main",
+    "toNode": "out_func",
+    "flowKind": "value",
+    "fromOutput": "outcome"
+   },
+   {
+    "id": "e_job_emo",
+    "fromNode": "job_main",
+    "toNode": "out_emo",
+    "flowKind": "value",
+    "fromOutput": "outcome"
+   },
+   {
+    "id": "e_job_soc",
+    "fromNode": "job_main",
+    "toNode": "out_soc",
+    "flowKind": "value",
+    "fromOutput": "outcome"
+   }
+  ]
+ }
+}

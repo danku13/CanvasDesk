@@ -682,10 +682,15 @@ mod tests {
     }
 
     /// Main stage открывается по пучку из ≥2 рёбер одной упорядоченной пары
-    /// (FR-042): каждая схема обязана содержать хотя бы один такой пучок.
+    /// (FR-042): каждая расчётная схема обязана содержать хотя бы один такой пучок.
+    /// Framework-схемы (CJM/JTBD/Service blueprint) исключены: у них нет
+    /// вееров значений по Numi-формулам, только смысловые связи.
     #[test]
     fn every_scheme_opens_main_stage() {
         for scheme in all_schemes() {
+            if scheme.category == "framework" {
+                continue;
+            }
             let mut pairs: std::collections::HashMap<(String, String), usize> =
                 std::collections::HashMap::new();
             for edge in &scheme.content.edges {
@@ -736,11 +741,16 @@ mod tests {
     }
 
     /// Трассируемость фич: позиционные слоты и именованные выходы — во всех
-    /// схемах; проливание toParam — во всех, кроме вводной (она учит по
-    /// одному механизму за раз); построчные истоки fromLine — в бюджете.
+    /// расчётных схемах; проливание toParam — во всех, кроме вводной (она
+    /// учит по одному механизму за раз); построчные истоки fromLine — в бюджете.
+    /// Framework-схемы (CJM/JTBD/SB) исключены: у них нет params, чтобы
+    /// пролить значения, и нет формул, чтобы задать fromLine.
     #[test]
     fn schemes_cover_addressing_features() {
         for scheme in all_schemes() {
+            if scheme.category == "framework" {
+                continue;
+            }
             let from_output = scheme.content.edges.iter().any(|e| e.from_output.is_some());
             assert!(
                 from_output,
@@ -767,10 +777,15 @@ mod tests {
 
     /// Глубина цепочки значений (готовность к объяснению происхождения
     /// цифр, PRD-0007): самый длинный путь по value-рёбрам от листа.
-    /// Вводные схемы — ≥2 хопа, прочие — ≥3.
+    /// Вводные схемы — ≥2 хопа, прочие расчётные — ≥3. Framework-схемы
+    /// исключены: у них связи смысловые (stage → touchpoint → emotion),
+    /// не транзит значения.
     #[test]
     fn schemes_have_deep_value_chains() {
         for scheme in all_schemes() {
+            if scheme.category == "framework" {
+                continue;
+            }
             let mut best = 0usize;
             let ids: Vec<&str> = scheme.content.nodes.iter().map(|n| n.id.as_str()).collect();
             for start in &ids {
@@ -845,10 +860,15 @@ mod tests {
     }
 
     /// D5 CJM: подсказка-приглашение «поменяйте число — цепочка
-    /// пересчитается» живёт в каждой схеме (нода-проза hint).
+    /// пересчитается» живёт в каждой расчётной схеме (нода-проза hint).
+    /// Framework-схемы исключены: в них нечего пересчитывать (нет формул),
+    /// hint вместо этого описывает структуру фреймворка.
     #[test]
     fn every_scheme_invites_to_edit() {
         for scheme in all_schemes() {
+            if scheme.category == "framework" {
+                continue;
+            }
             let hint = scheme
                 .content
                 .nodes
@@ -900,11 +920,16 @@ mod tests {
 
     /// Цветовая семантика схем (аудит CJM 2026-09-22): красный пресет
     /// «1» в заливках конфликтует с красной рамкой перегрузки FR-016 —
-    /// в схемах он запрещён (тревога — только анализ). Входы — «5» (циан),
+    /// в расчётных схемах он запрещён (тревога — только анализ). Входы — «5» (циан),
     /// расчёты — «2», итоги — «6», подсказки/вердикты — «4», группы — «3».
+    /// Framework-схемы исключены: в них «1» может означать «стадия CJM»
+    /// или «front-stage тахпоинт», а не тревогу — цветовая семантика иная.
     #[test]
     fn schemes_avoid_red_node_fills() {
         for scheme in all_schemes() {
+            if scheme.category == "framework" {
+                continue;
+            }
             for node in &scheme.content.nodes {
                 assert_ne!(
                     node.color.as_deref(),

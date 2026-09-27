@@ -1,0 +1,165 @@
+{
+ "id": "com.canvasdesk.scheme.service-blueprint-saas",
+ "name_ru": "Service blueprint: SaaS B2B",
+ "name_en": "Service blueprint: SaaS B2B",
+ "description_ru": "Service blueprint для B2B SaaS онбординга: три слоя (front-stage / back-stage / support) + physical evidence. Связи показывают, какой back-stage процесс стоит за каким тахпоинтом, и какие support-системы их обслуживают. Эталон для eval-сета Laya — задачи choose_sb_layer, show_suggestion (FW3, FW4 из autocomplete-ajtbd-cjm-sb-analysis.md).",
+ "description_en": "Service blueprint for B2B SaaS onboarding: three layers (front-stage / back-stage / support) + physical evidence. Edges show which back-stage process stands behind which touchpoint, and which support systems serve them. Reference for Laya eval-set — choose_sb_layer, show_suggestion tasks (FW3, FW4 from autocomplete-ajtbd-cjm-sb-analysis.md).",
+ "category": "framework",
+ "category_ru": "Фреймворк",
+ "category_en": "Framework",
+ "version": "1.0.0",
+ "content": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 0,
+    "width": 1380,
+    "height": 180,
+    "text": "Service blueprint: SaaS onboarding\nТри горизонтальных слоя: front-stage (что видит пользователь), back-stage (что делает команда/система за кулисами), support (вспомогательные процессы). Физич. evidence — среда, где идёт контакт (web-app, browser, email). Связи: фронт → бэк (кто обслуживает), бэк → support (какой системой). Скелет для FW3/FW4 (autocomplete-ajtbd-cjm-sb-analysis.md, §2.3).",
+    "color": "4"
+   },
+   {
+    "id": "ev_browser",
+    "type": "text",
+    "x": 0,
+    "y": 220,
+    "width": 1380,
+    "height": 80,
+    "text": "Physical evidence: браузер пользователя (Chrome/Safari) + inbox email-клиента\nСреда, в которой разворачивается любой контакт с продуктом — окно между пользователем и back-stage.",
+    "color": "5",
+    "label": "Physical evidence"
+   },
+   {
+    "id": "front_signup",
+    "type": "text",
+    "x": 0,
+    "y": 340,
+    "width": 320,
+    "height": 120,
+    "text": "Front-stage: форма регистрации\nВидимые поля: email, пароль, компания, роль.",
+    "color": "5",
+    "label": "Front: Sign-up"
+   },
+   {
+    "id": "front_onboard",
+    "type": "text",
+    "x": 360,
+    "y": 340,
+    "width": 320,
+    "height": 120,
+    "text": "Front-stage: онбординг-тур\nЧетыре шага: создать первый проект, добавить метрику, привязать источник, посмотреть dashboard.",
+    "color": "5",
+    "label": "Front: Onboarding"
+   },
+   {
+    "id": "front_verify",
+    "type": "text",
+    "x": 720,
+    "y": 340,
+    "width": 320,
+    "height": 120,
+    "text": "Front-stage: подтверждение email\nПисьмо с кнопкой «Verify your email», expiry 24ч.",
+    "color": "5",
+    "label": "Front: Verify email"
+   },
+   {
+    "id": "front_first_data",
+    "type": "text",
+    "x": 1080,
+    "y": 340,
+    "width": 320,
+    "height": 120,
+    "text": "Front-stage: первый источник данных\nМастер подключения: выбрать тип (Prometheus/CSV/Postgres), ввести URL, протестить, сохранить.",
+    "color": "5",
+    "label": "Front: First data"
+   },
+   {
+    "id": "back_account",
+    "type": "text",
+    "x": 0,
+    "y": 500,
+    "width": 320,
+    "height": 120,
+    "text": "Back-stage: создание аккаунта\nAuth-service заводит запись, генерирует tenant_id, шлёт welcome-письмо.",
+    "color": "3",
+    "label": "Back: Account"
+   },
+   {
+    "id": "back_tour",
+    "type": "text",
+    "x": 360,
+    "y": 500,
+    "width": 320,
+    "height": 120,
+    "text": "Back-stage: прогресс-трекер онбординга\nApp хранит шаги, считает completion rate, триггерит ремаркетинг.",
+    "color": "3",
+    "label": "Back: Tour state"
+   },
+   {
+    "id": "back_email",
+    "type": "text",
+    "x": 720,
+    "y": 500,
+    "width": 320,
+    "height": 120,
+    "text": "Back-stage: email-воркер\nОчередь писем (queue + retry), шаблонизатор, шлёт через ESP (Postmark/SendGrid).",
+    "color": "3",
+    "label": "Back: Email"
+   },
+   {
+    "id": "back_integ",
+    "type": "text",
+    "x": 1080,
+    "y": 500,
+    "width": 320,
+    "height": 120,
+    "text": "Back-stage: integration-service\nСоздаёт подключение, шифрует креды (KMS), запускает первый sync, сохраняет в БД.",
+    "color": "3",
+    "label": "Back: Integration"
+   },
+   {
+    "id": "support_auth",
+    "type": "text",
+    "x": 180,
+    "y": 660,
+    "width": 320,
+    "height": 110,
+    "text": "Support: Auth-service (SSO/IdP)\nKeycloak/Okta, MFA опционально.",
+    "color": "5"
+   },
+   {
+    "id": "support_db",
+    "type": "text",
+    "x": 540,
+    "y": 660,
+    "width": 320,
+    "height": 110,
+    "text": "Support: Postgres + Redis\nPostgres — основное хранилище; Redis — кеш сессий и прогресс-стейта.",
+    "color": "5"
+   },
+   {
+    "id": "support_esp",
+    "type": "text",
+    "x": 900,
+    "y": 660,
+    "width": 320,
+    "height": 110,
+    "text": "Support: ESP (Postmark/SendGrid)\nВнешний сервис доставки email, SLA 99%, fallback на backup-провайдера.",
+    "color": "5"
+   }
+  ],
+  "edges": [
+   {"id": "e_su_acc", "fromNode": "front_signup", "toNode": "back_account", "flowKind": "value", "fromOutput": "triggers"},
+   {"id": "e_ob_tour", "fromNode": "front_onboard", "toNode": "back_tour", "flowKind": "value", "fromOutput": "triggers"},
+   {"id": "e_ve_eml", "fromNode": "front_verify", "toNode": "back_email", "flowKind": "value", "fromOutput": "triggers"},
+   {"id": "e_fd_int", "fromNode": "front_first_data", "toNode": "back_integ", "flowKind": "value", "fromOutput": "triggers"},
+   {"id": "e_acc_auth", "fromNode": "back_account", "toNode": "support_auth", "flowKind": "value", "fromOutput": "depends_on"},
+   {"id": "e_acc_db", "fromNode": "back_account", "toNode": "support_db", "flowKind": "value", "fromOutput": "depends_on"},
+   {"id": "e_tour_db", "fromNode": "back_tour", "toNode": "support_db", "flowKind": "value", "fromOutput": "depends_on"},
+   {"id": "e_eml_esp", "fromNode": "back_email", "toNode": "support_esp", "flowKind": "value", "fromOutput": "depends_on"},
+   {"id": "e_int_db", "fromNode": "back_integ", "toNode": "support_db", "flowKind": "value", "fromOutput": "depends_on"}
+  ]
+ }
+}

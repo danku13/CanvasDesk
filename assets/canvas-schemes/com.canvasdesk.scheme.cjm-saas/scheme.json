@@ -1,0 +1,296 @@
+{
+ "id": "com.canvasdesk.scheme.cjm-saas",
+ "name_ru": "CJM: SaaS B2B",
+ "name_en": "CJM: SaaS B2B",
+ "description_ru": "Карта пути пользователя B2B SaaS от осознания до активного использования: стадии, точки контакта, эмоции, пейны. Каждая стадия связана со своей точкой контакта и эмоцией. Схема предназначена как эталон для eval-сета Laya — вырезание дыр даёт контексты для задач choose_stage, choose_touchpoint_type, show_suggestion (FW1-FW4 из autocomplete-ajtbd-cjm-sb-analysis.md).",
+ "description_en": "B2B SaaS user journey map from awareness to active use: stages, touchpoints, emotions, pain points. Each stage links to its touchpoint and emotion. Reference scheme for Laya eval-set: hole-carving produces contexts for choose_stage, choose_touchpoint_type, show_suggestion tasks (FW1-FW4 from autocomplete-ajtbd-cjm-sb-analysis.md).",
+ "category": "framework",
+ "category_ru": "Фреймворк",
+ "category_en": "Framework",
+ "version": "1.0.0",
+ "content": {
+  "nodes": [
+   {
+    "id": "hint",
+    "type": "text",
+    "x": 0,
+    "y": 0,
+    "width": 1380,
+    "height": 200,
+    "text": "Customer Journey Map: B2B SaaS\nЧетыре стадии пути пользователя: Awareness → Consideration → Sign-up → Active use. Для каждой стадии — типичная точка контакта, эмоция и пейн. Заполняйте конкретиками под свою отрасль. При вырезании любой ноды контекст соседей даёт Laya возможность предсказать восстановление. Скелет под FW1-FW4 (см. autocomplete-ajtbd-cjm-sb-analysis.md, §2.3).",
+    "color": "4"
+   },
+   {
+    "id": "stage_awareness",
+    "type": "text",
+    "x": 0,
+    "y": 240,
+    "width": 340,
+    "height": 90,
+    "text": "Стадия 1: Awareness\nПользователь узнаёт о продукте.",
+    "color": "6",
+    "label": "Awareness"
+   },
+   {
+    "id": "stage_consideration",
+    "type": "text",
+    "x": 460,
+    "y": 240,
+    "width": 340,
+    "height": 90,
+    "text": "Стадия 2: Consideration\nСравнивает с альтернативами.",
+    "color": "6",
+    "label": "Consideration"
+   },
+   {
+    "id": "stage_signup",
+    "type": "text",
+    "x": 920,
+    "y": 240,
+    "width": 340,
+    "height": 90,
+    "text": "Стадия 3: Sign-up\nРегистрируется и платит.",
+    "color": "6",
+    "label": "Sign-up"
+   },
+   {
+    "id": "stage_active",
+    "type": "text",
+    "x": 1380,
+    "y": 240,
+    "width": 340,
+    "height": 90,
+    "text": "Стадия 4: Active use\nРегулярно использует продукт.",
+    "color": "6",
+    "label": "Active use"
+   },
+   {
+    "id": "tp_awareness",
+    "type": "text",
+    "x": 0,
+    "y": 370,
+    "width": 320,
+    "height": 130,
+    "text": "Тачпоинт: Google-поиск + статья в отраслевом блоге\nКанал: органик-трафик, контент-маркетинг.",
+    "color": "5"
+   },
+   {
+    "id": "tp_consideration",
+    "type": "text",
+    "x": 460,
+    "y": 370,
+    "width": 320,
+    "height": 130,
+    "text": "Тачпоинт: страница сравнения + триал\nКанал: сайт продукта, демо-видео.",
+    "color": "5"
+   },
+   {
+    "id": "tp_signup",
+    "type": "text",
+    "x": 920,
+    "y": 370,
+    "width": 320,
+    "height": 130,
+    "text": "Тахпоинт: форма регистрации + онбординг-тур\nКанал: web-app, in-app гайд.",
+    "color": "5"
+   },
+   {
+    "id": "tp_active",
+    "type": "text",
+    "x": 1380,
+    "y": 370,
+    "width": 320,
+    "height": 130,
+    "text": "Тахпоинт: weekly digest + кнопка \"получить помощь\"\nКанал: email, in-app support widget.",
+    "color": "5"
+   },
+   {
+    "id": "emo_awareness",
+    "type": "text",
+    "x": 0,
+    "y": 540,
+    "width": 320,
+    "height": 110,
+    "text": "Эмоция: любопытство, надежда\n\"Может это решит мою проблему?\"",
+    "color": "3"
+   },
+   {
+    "id": "emo_consideration",
+    "type": "text",
+    "x": 460,
+    "y": 540,
+    "width": 320,
+    "height": 110,
+    "text": "Эмоция: скепсис, тревога о цене\n\"Стоит ли переключаться?\"",
+    "color": "3"
+   },
+   {
+    "id": "emo_signup",
+    "type": "text",
+    "x": 920,
+    "y": 540,
+    "width": 320,
+    "height": 110,
+    "text": "Эмоция: решительность вперемешку с раздражением от формы\n\"Давайте быстрее уже\".",
+    "color": "3"
+   },
+   {
+    "id": "emo_active",
+    "type": "text",
+    "x": 1380,
+    "y": 540,
+    "width": 320,
+    "height": 110,
+    "text": "Эмоция: удовлетворение, изредка фрустрация\n\"Работает, но иногда заедает\".",
+    "color": "3"
+   },
+   {
+    "id": "pain_awareness",
+    "type": "text",
+    "x": 0,
+    "y": 690,
+    "width": 320,
+    "height": 130,
+    "text": "Пейн: не до конца ясно, чем отличается от альтернатив\nКонтент SEO-слишком общий, не отвечает на отраслевые вопросы.",
+    "color": "2"
+   },
+   {
+    "id": "pain_consideration",
+    "type": "text",
+    "x": 460,
+    "y": 690,
+    "width": 320,
+    "height": 130,
+    "text": "Пейн: триал без примера из моей отрасли\nНепонятно, как именно решит мою задачу.",
+    "color": "2"
+   },
+   {
+    "id": "pain_signup",
+    "type": "text",
+    "x": 920,
+    "y": 690,
+    "width": 320,
+    "height": 130,
+    "text": "Пейн: слишком длинная форма регистрации\nНеобходимы данные карты до первого запуска.",
+    "color": "2"
+   },
+   {
+    "id": "pain_active",
+    "type": "text",
+    "x": 1380,
+    "y": 690,
+    "width": 320,
+    "height": 130,
+    "text": "Пейн: нет напоминания о простоях\nКоманда забывает продлить подписку.",
+    "color": "2"
+   }
+  ],
+  "edges": [
+   {
+    "id": "e_aw_tp",
+    "fromNode": "stage_awareness",
+    "toNode": "tp_awareness",
+    "flowKind": "value",
+    "fromOutput": "stage"
+   },
+   {
+    "id": "e_co_tp",
+    "fromNode": "stage_consideration",
+    "toNode": "tp_consideration",
+    "flowKind": "value",
+    "fromOutput": "stage"
+   },
+   {
+    "id": "e_su_tp",
+    "fromNode": "stage_signup",
+    "toNode": "tp_signup",
+    "flowKind": "value",
+    "fromOutput": "stage"
+   },
+   {
+    "id": "e_ac_tp",
+    "fromNode": "stage_active",
+    "toNode": "tp_active",
+    "flowKind": "value",
+    "fromOutput": "stage"
+   },
+   {
+    "id": "e_aw_em",
+    "fromNode": "tp_awareness",
+    "toNode": "emo_awareness",
+    "flowKind": "value",
+    "fromOutput": "touchpoint"
+   },
+   {
+    "id": "e_co_em",
+    "fromNode": "tp_consideration",
+    "toNode": "emo_consideration",
+    "flowKind": "value",
+    "fromOutput": "touchpoint"
+   },
+   {
+    "id": "e_su_em",
+    "fromNode": "tp_signup",
+    "toNode": "emo_signup",
+    "flowKind": "value",
+    "fromOutput": "touchpoint"
+   },
+   {
+    "id": "e_ac_em",
+    "fromNode": "tp_active",
+    "toNode": "emo_active",
+    "flowKind": "value",
+    "fromOutput": "touchpoint"
+   },
+   {
+    "id": "e_aw_pn",
+    "fromNode": "emo_awareness",
+    "toNode": "pain_awareness",
+    "flowKind": "value",
+    "fromOutput": "emotion"
+   },
+   {
+    "id": "e_co_pn",
+    "fromNode": "emo_consideration",
+    "toNode": "pain_consideration",
+    "flowKind": "value",
+    "fromOutput": "emotion"
+   },
+   {
+    "id": "e_su_pn",
+    "fromNode": "emo_signup",
+    "toNode": "pain_signup",
+    "flowKind": "value",
+    "fromOutput": "emotion"
+   },
+   {
+    "id": "e_ac_pn",
+    "fromNode": "emo_active",
+    "toNode": "pain_active",
+    "flowKind": "value",
+    "fromOutput": "emotion"
+   },
+   {
+    "id": "e_flow_1",
+    "fromNode": "stage_awareness",
+    "toNode": "stage_consideration",
+    "flowKind": "value",
+    "fromOutput": "next"
+   },
+   {
+    "id": "e_flow_2",
+    "fromNode": "stage_consideration",
+    "toNode": "stage_signup",
+    "flowKind": "value",
+    "fromOutput": "next"
+   },
+   {
+    "id": "e_flow_3",
+    "fromNode": "stage_signup",
+    "toNode": "stage_active",
+    "flowKind": "value",
+    "fromOutput": "next"
+   }
+  ]
+ }
+}
