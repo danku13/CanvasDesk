@@ -24,6 +24,10 @@ pub mod drag_push;
 pub mod dragdrop;
 mod edgegeom;
 mod error;
+/// FR-076: экспорт канваса в самодостаточный HTML — «артефакт защиты»
+/// (закрытие GAP-01). Чистая функция: SVG-снимок + значения + what-if
+/// таблица; офлайн, детерминированно, wasm-совместимо.
+pub mod export_html;
 /// FR-013: Numi-base формулы text-нод (`canvasdesk.expr`).
 pub mod expr;
 /// FR-014: поток значений по рёбрам — DAG-движок и live-ревал.

@@ -688,6 +688,9 @@ pub mod keys {
     pub const TOAST_FLOW_CYCLE: &str = "toast.flow_cycle";
     pub const TOAST_TEMPLATE_SAVED: &str = "toast.template_saved";
     pub const TOAST_TEMPLATE_SAVE_FAILED: &str = "toast.template_save_failed";
+    // FR-076: тосты экспорта HTML-артефакта (Ctrl+Shift+E)
+    pub const TOAST_EXPORT_HTML_OK: &str = "toast.export_html_ok";
+    pub const TOAST_EXPORT_HTML_FAIL: &str = "toast.export_html_fail";
     pub const TOAST_TEMPLATE_UPDATED: &str = "toast.template_updated";
     pub const TOAST_CANVAS_NOT_OPEN: &str = "toast.canvas_not_open";
     pub const TOAST_CANVAS_OPENED: &str = "toast.canvas_opened";
@@ -1390,6 +1393,9 @@ const RU: &[(&str, &str)] = &[
     (keys::TOAST_FLOW_CYCLE, "Цикл потока: {participants} — тогл отклонён"),
     (keys::TOAST_TEMPLATE_SAVED, "Шаблон «{name}» сохранён: {path}"),
     (keys::TOAST_TEMPLATE_SAVE_FAILED, "Не удалось сохранить шаблон: {err}"),
+    // FR-076: экспорт HTML-артефакта
+    (keys::TOAST_EXPORT_HTML_OK, "HTML-артефакт сохранён: {path}"),
+    (keys::TOAST_EXPORT_HTML_FAIL, "Не удалось записать HTML-артефакт: {err}"),
     (keys::TOAST_TEMPLATE_UPDATED, "Шаблон обновлён: {name} → v{version}"),
     (keys::TOAST_CANVAS_NOT_OPEN, "Канвас не открыт: {err}"),
     (keys::TOAST_CANVAS_OPENED, "Открыт канвас: {name}"),
@@ -2235,6 +2241,9 @@ const EN: &[(&str, &str)] = &[
     (keys::TOAST_FLOW_CYCLE, "Flow cycle: {participants} — toggle rejected"),
     (keys::TOAST_TEMPLATE_SAVED, "Template “{name}” saved: {path}"),
     (keys::TOAST_TEMPLATE_SAVE_FAILED, "Failed to save template: {err}"),
+    // FR-076: экспорт HTML-артефакта
+    (keys::TOAST_EXPORT_HTML_OK, "HTML artifact saved: {path}"),
+    (keys::TOAST_EXPORT_HTML_FAIL, "Failed to write HTML artifact: {err}"),
     (keys::TOAST_TEMPLATE_UPDATED, "Template updated: {name} → v{version}"),
     (keys::TOAST_CANVAS_NOT_OPEN, "Canvas not open: {err}"),
     (keys::TOAST_CANVAS_OPENED, "Opened canvas: {name}"),

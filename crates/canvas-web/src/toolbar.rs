@@ -40,6 +40,13 @@ pub(crate) fn install(proxy: EventLoopProxy<AppEvent>) {
             crate::export::export_active().await;
         });
     });
+    // FR-076: «Экспорт HTML» — артефакт защиты (GAP-01): офлайн-файл со
+    // снимком канваса, значениями и what-if таблицей
+    bind(&document, "btn-export-html", || {
+        wasm_bindgen_futures::spawn_local(async move {
+            crate::export::export_html_active().await;
+        });
+    });
     tracing::info!(target: "canvas_web", "DOM-панель хранилища подключена");
 }
 

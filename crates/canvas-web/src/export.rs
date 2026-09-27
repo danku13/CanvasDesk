@@ -53,7 +53,7 @@ pub(crate) async fn export_active() {
             }
         }
     };
-    match download_blob(&name, &text) {
+    match download_blob(&name, &text, "application/json") {
         Ok(()) => {
             tracing::info!(target: "canvas_web", file = %name, bytes = text.len(), "экспорт: download-blob отдан браузеру")
         }
@@ -63,15 +63,98 @@ pub(crate) async fn export_active() {
     }
 }
 
+/// FR-076: «Экспорт HTML» — кнопка DOM-панели. Самодостаточный офлайн-
+/// артефакт защиты (GAP-01): SVG-снимок + значения + what-if таблица.
+/// Источник — та же ПОСЛЕДНЯЯ СОХРАНЁННАЯ версия (архитектурное решение
+/// `export_active`: второго канала к живой сцене сознательно нет);
+/// пересчёт и сценарии считаются чистыми функциями ядра здесь же —
+/// детерминизм канваса ⇒ те же значения, что увидит пользователь после
+/// автосейва (движок побитово воспроизводим, инвариант 2 FR-050).
+pub(crate) async fn export_html_active() {
+    let Some(name) = crate::web_state::active_name() else {
+        tracing::info!(target: "canvas_web", "экспорт HTML: активного канваса нет");
+        return;
+    };
+    let kind = crate::web_state::active_kind();
+    let text = match kind {
+        Some(crate::web_state::ActiveKind::Disk) => {
+            let Some(handle) = crate::web_state::disk_handle() else {
+                tracing::warn!(target: "canvas_web", file = %name, "экспорт HTML: хэндл диска утрачен");
+                return;
+            };
+            match crate::fs_access::read_disk_text_for_export(&handle).await {
+                Ok(text) => text,
+                Err(err) => {
+                    tracing::warn!(target: "canvas_web", file = %name, error = ?err, "экспорт HTML: чтение диска не удалось");
+                    return;
+                }
+            }
+        }
+        _ => {
+            let Ok(root) = crate::opfs::opfs_root().await else {
+                tracing::warn!(target: "canvas_web", "экспорт HTML: OPFS недоступен");
+                return;
+            };
+            match crate::opfs::read_opfs_text(&root, &name).await {
+                Ok(Some(text)) => text,
+                Ok(None) => {
+                    tracing::warn!(target: "canvas_web", file = %name, "экспорт HTML: файла нет в OPFS");
+                    return;
+                }
+                Err(err) => {
+                    tracing::warn!(target: "canvas_web", file = %name, error = ?err, "экспорт HTML: чтение OPFS не удалось");
+                    return;
+                }
+            }
+        }
+    };
+    // Сборка артефакта — чистые функции ядра (canvas-core: без GPU/ОС)
+    let Ok(canvas) = text.parse::<canvas_core::Canvas>() else {
+        tracing::warn!(target: "canvas_web", file = %name, "экспорт HTML: канвас не парсится");
+        return;
+    };
+    let Ok(base) = canvas_core::flow::propagate_with_lines(&canvas, &Default::default()) else {
+        tracing::warn!(target: "canvas_web", file = %name, "экспорт HTML: цикл потока — артефакт без значений не собираем");
+        return;
+    };
+    let comparison = canvas_core::export_html::scenario_comparison_for_export(&canvas, &base);
+    let title = name
+        .strip_suffix(".canvas")
+        .unwrap_or(&name)
+        .to_owned();
+    let options = canvas_core::export_html::ExportHtmlOptions { title, dark: true };
+    let html = canvas_core::export_html::export_html(
+        &canvas,
+        &base,
+        comparison.as_ref(),
+        &options,
+    );
+    let file_name = format!("{}.html", name.strip_suffix(".canvas").unwrap_or(&name));
+    match download_blob(&file_name, &html, "text/html") {
+        Ok(()) => {
+            tracing::info!(
+                target: "canvas_web",
+                file = %file_name,
+                bytes = html.len(),
+                "экспорт HTML: артефакт отдан браузеру"
+            )
+        }
+        Err(err) => {
+            tracing::error!(target: "canvas_web", file = %file_name, error = ?err, "экспорт HTML не удался")
+        }
+    }
+}
+
 /// Скачивание: Blob → objectURL → клик по временному `<a download>`.
-fn download_blob(name: &str, text: &str) -> Result<(), JsValue> {
+/// MIME — параметр (`.canvas` — JSON, FR-076 артефакт — text/html).
+fn download_blob(name: &str, text: &str, mime: &str) -> Result<(), JsValue> {
     let window = web_sys::window().ok_or_else(|| JsValue::from_str("нет window"))?;
     let document = window
         .document()
         .ok_or_else(|| JsValue::from_str("нет document"))?;
     let parts = js_sys::Array::from_iter([JsValue::from_str(text)]);
     let bag = web_sys::BlobPropertyBag::new();
-    bag.set_type("application/json");
+    bag.set_type(mime);
     let blob = web_sys::Blob::new_with_str_sequence_and_options(&parts, &bag)?;
     let url = web_sys::Url::create_object_url_with_blob(&blob)?;
     let anchor: web_sys::HtmlAnchorElement = document
