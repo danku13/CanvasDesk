@@ -843,6 +843,21 @@ impl App {
             self.request_redraw();
             return;
         }
+        // FR-076: Ctrl+Shift+E — экспорт самодостаточного HTML («артефакт
+        // защиты», GAP-01; кириллица — «у»; E = export, не занято:
+        // Ctrl+Shift+E нет, Ctrl+E нет). Артефакт — офлайн-файл рядом с
+        // канвасом: SVG-снимок + значения + what-if таблица (идея «portable
+        // by default» из Archify, карта переноса T1).
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && self.modifiers.control_key()
+            && self.modifiers.shift_key()
+            && matches!(&event.logical_key, Key::Character(c)
+                if c.eq_ignore_ascii_case("e") || c.eq_ignore_ascii_case("у"))
+        {
+            self.export_html_artifact();
+            return;
+        }
         // FR-050 Н9-4 (этап E): Ctrl+Shift+M — тогл панели «Карта
         // проливаний» (кириллица — «ь»/«Ь»; M = map, не занято: Ctrl+M
         // нет, Ctrl+Shift+M нет).
