@@ -518,6 +518,12 @@ fn mcp_graph_validate_clean_and_cycle() {
         message.contains('a') && message.contains('b'),
         "участники: {message}"
     );
+    // FR-077: рецепт починки доезжает до MCP-ответа (аналог supportedFixes)
+    let fix = issues[0]["fix"].as_str().expect("fix — строка (FR-077)");
+    assert!(
+        fix.contains("edge_delete"),
+        "рецепт называет инструмент: {fix}"
+    );
     // Чтение: undo-стек и dirty не затронуты (валидация не мутирует)
     assert!(scene.dirty_since.is_none(), "канвас не помечен грязным");
 }
@@ -553,10 +559,19 @@ fn mcp_graph_validate_overload_and_unused_slot() {
     assert_eq!(issues.len(), 2, "перегрузка + нечитаемый слот: {issues:?}");
     assert_eq!(issues[0]["code"], "E-OVERLOAD");
     assert_eq!(issues[0]["node_id"], "mm1");
+    assert!(
+        issues[0]["fix"].as_str().is_some_and(|fix| !fix.is_empty()),
+        "FR-077: рецепт при E-OVERLOAD"
+    );
     assert_eq!(issues[1]["code"], "W-UNUSED-SLOT");
     assert_eq!(issues[1]["node_id"], "sum");
-    // Формула читает только $1 — предупреждение о ребре второго слота
     assert_eq!(issues[1]["edge_id"], "e-b");
+    assert!(
+        issues[1]["fix"]
+            .as_str()
+            .is_some_and(|fix| fix.contains("$N")),
+        "FR-077: рецепт W-UNUSED-SLOT называет вход $N"
+    );
 }
 
 /// viewport_get/set: центр и зум, кламп зума камерой.
@@ -2905,7 +2920,11 @@ fn mcp_schemes_list_embedded_registry() {
     let undo_before = scene.undo_stack.len();
     let list = dispatch(&mut scene, "schemes_list", "{}").expect("schemes_list");
     let schemes = list.as_array().expect("массив схем");
-    assert_eq!(schemes.len(), 14, "14 пакетов PRD-0008 §7.2 + A/B + framework (CJM/JTBD/SB): {list}");
+    assert_eq!(
+        schemes.len(),
+        14,
+        "14 пакетов PRD-0008 §7.2 + A/B + framework (CJM/JTBD/SB): {list}"
+    );
     let ids: Vec<&str> = schemes.iter().filter_map(|s| s["id"].as_str()).collect();
     assert!(
         ids.contains(&"com.canvasdesk.scheme.intro-calculations"),

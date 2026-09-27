@@ -32,6 +32,14 @@
 //! W-AMBIGUOUS-SRC, W-UNUSED-SLOT), внутри группы — по порядку
 //! `canvas.edges` / `canvas.nodes`. Это позволяет автотестам и рецепту агента
 //! сравнивать отчёты на равенство.
+//!
+//! ## Рецепты починки (FR-077)
+//!
+//! Каждая проблема сериализуется с полем `fix` — конкретным способом чинить
+//! поддерживаемыми MCP-инструментами (аналог Archify `supportedFixes`,
+//! карта переноса T2). Рецепт вычисляется из кода ([`fix_hint`]) — единый
+//! источник, не хранится в структуре; контракт, как и коды, только
+//! расширяется.
 
 use std::collections::{HashMap, HashSet};
 
@@ -85,16 +93,83 @@ impl Serialize for IssueCode {
 }
 
 /// Одна проблема модели: severity + код + точная локация (нода/ребро) +
-/// человекочитаемое сообщение. Сериализация в snake_case для MCP
-/// (`node_id`/`edge_id` — как в документе FR-032).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+/// человекочитаемое сообщение + рецепт починки (FR-077: аналог Archify
+/// `supportedFixes` — к каждому коду прилагается конкретный способ чинить,
+/// только поддерживаемыми инструментами MCP). Сериализация в snake_case
+/// для MCP (`node_id`/`edge_id`/`fix` — как в документе FR-032 + FR-077).
+#[derive(Debug, Clone, PartialEq)]
 pub struct ValidationIssue {
     pub severity: Severity,
     pub code: IssueCode,
     pub node_id: Option<String>,
     pub edge_id: Option<String>,
     pub message: String,
+}
+
+impl Serialize for ValidationIssue {
+    /// Поле `fix` вычисляется из кода (не хранится в структуре — единый
+    /// источник [`fix_hint`], конструкторы проблем не раздуваются).
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("ValidationIssue", 6)?;
+        state.serialize_field("severity", &self.severity)?;
+        state.serialize_field("code", &self.code)?;
+        state.serialize_field("node_id", &self.node_id)?;
+        state.serialize_field("edge_id", &self.edge_id)?;
+        state.serialize_field("message", &self.message)?;
+        state.serialize_field("fix", fix_hint(self.code))?;
+        state.end()
+    }
+}
+
+/// FR-077: рецепт починки по коду — стабильный контракт агента (как коды,
+/// только добавление, не переименование). Формат перенесён из Archify
+/// (практика «repair receipt»: сбой сопровождается поддерживаемыми
+/// контролами — агенту не нужно знать семантику кода заранее). Рецепты
+/// ссылаются ТОЛЬКО на существующие MCP-инструменты.
+pub fn fix_hint(code: IssueCode) -> &'static str {
+    match code {
+        IssueCode::ECycle => {
+            "Разорвите цикл: участники перечислены в message. Удалите одно из \
+             value-рёбер между ними (edge_delete) или переведите его в контрольную \
+             связь (flow_set_kind control). После починки повторите \
+             graph_validate: остальные проверки молчат до разрыва цикла."
+        }
+        IssueCode::EUnit => {
+            "Несовместимые единицы выхода истока и параметра приёмника. Приведите \
+             единицу в формуле истока к нужной размерности (node_update_text / \
+             node_edit) или переподключите ребро к параметру с совместимой \
+             единицей. Единицы выходов и параметров — node_get / template_list."
+        }
+        IssueCode::EPortUnknown => {
+            "Имя порта отсутствует в снапшоте шаблона. Возьмите актуальные имена \
+             из node_get (секция outputs) или template_list, затем пересоздайте \
+             ребро: edge_delete + edge_create с корректным fromOutput/toParam."
+        }
+        IssueCode::EDoubleInput => {
+            "Два value-ребра ведут в один toParam. Оставьте одно (edge_delete) или \
+             направьте второе в другой параметр (edge_delete + edge_create с \
+             другим toParam). Агрегацию нескольких входов делайте отдельной \
+             нодой-сумматором."
+        }
+        IssueCode::EOverload => {
+            "Утилизация rho >= 1 — узел не успевает за потоком. Поднимите ёмкость \
+             (параметр вроде c / threads / replicas в формуле ноды), снизьте \
+             входной поток выше по цепочке или добавьте кэш/шардирование. После \
+             правки повторите graph_validate."
+        }
+        IssueCode::WAmbiguousSrc => {
+            "Ребро несёт итог ноды целиком (последняя формульная строка), а строк у \
+             истока несколько. Адресуйте исток явно: пересоздайте ребро с \
+             fromLine (номер строки листа) или fromOutput (имя выхода) через \
+             edge_delete + edge_create."
+        }
+        IssueCode::WUnusedSlot => {
+            "Позиционный вход $N доставлен, но формула приёмника его не читает. \
+             Сошлитесь на $N в формуле (node_update_text / node_edit) или удалите \
+             лишнее ребро (edge_delete)."
+        }
+    }
 }
 
 /// Есть ли в отчёте ошибки (`severity = error`) — `valid` для MCP-ответа.
@@ -692,8 +767,9 @@ mod tests {
         assert!(!first.is_empty(), "фикстура содержит проблемы");
     }
 
-    /// Сериализация: snake_case-поля и строковые коды — контракт MCP
-    /// (агент парсит отчёт по ключам severity/code/node_id/edge_id/message).
+    /// Сериализация: snake_case-поля, строковые коды и рецепт починки —
+    /// контракт MCP (агент парсит отчёт по ключам
+    /// severity/code/node_id/edge_id/message/fix; fix — FR-077).
     #[test]
     fn issue_serializes_to_mcp_contract() {
         let issue = ValidationIssue {
@@ -709,6 +785,29 @@ mod tests {
         assert_eq!(json["node_id"], "mm1");
         assert_eq!(json["edge_id"], serde_json::Value::Null);
         assert_eq!(json["message"], "перегрузка");
+        // FR-077: fix присутствует и ссылается на инструменты починки
+        let fix = json["fix"].as_str().expect("fix — строка");
+        assert!(fix.contains("graph_validate"), "рецепт: {fix}");
+        assert!(!fix.is_empty());
+    }
+
+    /// FR-077: каждый код несёт непустой рецепт починки — контракт не
+    /// должен обрываться на половине кодов.
+    #[test]
+    fn every_code_has_fix_hint() {
+        for code in [
+            IssueCode::ECycle,
+            IssueCode::EUnit,
+            IssueCode::EPortUnknown,
+            IssueCode::EDoubleInput,
+            IssueCode::EOverload,
+            IssueCode::WAmbiguousSrc,
+            IssueCode::WUnusedSlot,
+        ] {
+            let hint = fix_hint(code);
+            assert!(!hint.is_empty(), "пустой рецепт у {}", code.as_str());
+            assert_eq!(hint.trim(), hint, "без краевых пробелов: {}", code.as_str());
+        }
     }
     // --- FR-032 × FR-029: контракт портов (интеграция CP1) ---
 
