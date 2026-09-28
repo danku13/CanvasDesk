@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-app"
-version = "0.5.0canvas-app
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "canvas-core",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-core"
-version = "0.5.0canvas-core
+version = "0.5.0"
 dependencies = [
  "include_dir",
  "rand",
@@ -321,7 +321,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-mcp"
-version = "0.5.0canvas-mcp
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-mcp-headless"
-version = "0.5.0canvas-mcp-headless
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "canvas-core",
@@ -341,11 +341,11 @@ dependencies = [
 
 [[package]]
 name = "canvas-preview-host"
-version = "0.5.0canvas-preview-host
+version = "0.5.0"
 
 [[package]]
 name = "canvas-render"
-version = "0.5.0canvas-render
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "canvas-core",
@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-scene"
-version = "0.5.0canvas-scene
+version = "0.5.0"
 dependencies = [
  "canvas-core",
  "canvas-render",
@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-shell"
-version = "0.5.0canvas-shell
+version = "0.5.0"
 dependencies = [
  "arboard",
  "canvas-core",
@@ -391,7 +391,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-ui"
-version = "0.5.0canvas-ui
+version = "0.5.0"
 dependencies = [
  "canvas-core",
  "cosmic-text",
@@ -399,7 +399,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-web"
-version = "0.5.0canvas-web
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "canvas-app",
@@ -420,7 +420,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-widgets"
-version = "0.5.0canvas-widgets
+version = "0.5.0"
 dependencies = [
  "canvas-core",
  "image",
