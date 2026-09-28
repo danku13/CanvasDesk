@@ -159,3 +159,45 @@ jobs:
           path: THIRD-PARTY-NOTICES.md
           if-no-files-found: error
           retention-days: 90 # документ реестра — храним дольше бинарей
+
+  # Релизная доставка: бинари трёх ОС + THIRD-PARTY-NOTICES прикрепляются
+  # к GitHub Release тега v*. softprops/action-gh-release находит релиз
+  # по тегу (или создаёт его) и дозагружает файлы — текст release notes
+  # не трогается. Для workflow_dispatch (реф не тег) job пропускается.
+  release:
+    name: Attach artifacts to GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build, notices-sbom]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write # GITHUB_TOKEN должен уметь писать в releases
+    steps:
+      # Каждый артефакт скачивается в свой каталог (dist/<имя артефакта>):
+      # сырой universal-бинарь macOS и Linux-бинарь оба называются
+      # canvasdesk — без разложения по каталогам они перезаписали бы
+      # друг друга.
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      # Канонические имена ассетов релиза: платформа видна сразу,
+      # коллизий имён на релизе нет (GitHub не даёт два ассета с одним
+      # именем).
+      - name: Rename and collect release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          mv dist/build-ubuntu-latest/canvasdesk release/canvasdesk-linux-x86_64
+          mv dist/build-windows-latest/canvasdesk.exe release/canvasdesk-windows-x86_64.exe
+          mv dist/build-macos-universal/canvasdesk release/canvasdesk-macos-universal
+          mv dist/build-macos-universal/CanvasDesk-macos-universal.tar.gz release/
+          mv dist/third-party-notices/THIRD-PARTY-NOTICES.md release/
+          ls -la release/
+
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          fail_on_unmatched_files: true # пропажа файла — падение, а не тихий пропуск
