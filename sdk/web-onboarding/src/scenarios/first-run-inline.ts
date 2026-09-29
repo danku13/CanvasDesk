@@ -69,12 +69,20 @@ export const firstRunInlineScenario: TourScenario = {
       id: "write-formula",
       title: "Попробуйте формулу Numi",
       body:
-        "В заметке напишите: `rps = 1200` и на следующей строке `daily = rps / 86400`. " +
-        "Заметка подсветит результат вычисления. Numi понимает единицы " +
-        "(rps, ms, MB/s) и подсказки при вводе.",
+        "В заметке напишите: `rps = 1200` и на следующей строке " +
+        "`daily = rps / 86400`. Заметка подсветит результат вычисления. " +
+        "Numi понимает единицы (rps, ms, MB/s) и подсказки при вводе. " +
+        "Завершите редактирование (Esc или клик мимо) — «Далее» " +
+        "активируется, когда формула вычислена.",
       side: "top",
       anchor: { kind: "rect", rect: { x: 80, y: 80, width: 320, height: 80 } },
-      primaryLabel: "Понятно",
+      passive: true,
+      primaryLabel: "Жду формулу…",
+      waitFor: {
+        kind: "signal",
+        signals: ["canvas:formula-written"],
+        timeout: 180000,
+      },
     },
     {
       id: "connect-nodes",
