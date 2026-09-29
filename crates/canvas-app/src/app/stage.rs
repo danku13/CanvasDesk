@@ -21,6 +21,26 @@ fn stage_area(t: &StageTransform, x: f32, y: f32, w: f32, h: f32) -> UiRect {
     UiRect::new(p[0], p[1], t.map_size(w), t.map_size(h))
 }
 
+/// Ширина метки «ШАБЛОН» чипа шапки stage (world px; замер тем же
+/// шрифтом, что рендер чипа — TextMeasurer + статический FontSystem
+/// рендера; s — масштаб раскладки stage). Общий источник для чипа и
+/// резерва заголовка под правую зону (ревизия 2026-09-30).
+fn template_chip_label_w(s: f32) -> f32 {
+    let font = |px: f32| (px * s).max(8.0);
+    let label_px = {
+        let mut measure_fs = canvas_render::text::measure_font_system();
+        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+        measurer.width_of_weighted(
+            &mut measure_fs,
+            "ШАБЛОН",
+            canvas_render::text::SANS_FAMILY,
+            font(10.0),
+            cosmic_text::Weight::SEMIBOLD,
+        )
+    };
+    label_px / s
+}
+
 /// FR-068 этап M2 (Table v2, `docs/plans/fr-068-table-v2.md` §8 — первый
 /// кандидат): строки панели «Как считается» — 2×retained-Table
 /// («Переменные»/«Расчёт»). Пересборка [`canvas_ui::kit::TableRow`] из
@@ -1051,18 +1071,8 @@ impl App {
             // FontSystem рендера).
             if node.template().is_some() {
                 let label = "ШАБЛОН".to_string();
-                let label_px = {
-                    let mut measure_fs = canvas_render::text::measure_font_system();
-                    let mut measurer = canvas_ui::measure::TextMeasurer::new();
-                    measurer.width_of_weighted(
-                        &mut measure_fs,
-                        &label,
-                        canvas_render::text::SANS_FAMILY,
-                        font(10.0),
-                        cosmic_text::Weight::SEMIBOLD,
-                    )
-                };
-                let label_w = label_px / s; // world px (замер — логические px stage)
+                let label_w = template_chip_label_w(s);
+                let label_px = label_w * s;
                 let chip = header_chip_instance(
                     node,
                     label_w,
@@ -1090,10 +1100,26 @@ impl App {
         for node in stage.slice.nodes.iter() {
             let title = title_for(node);
             if !title.is_empty() {
+                // Ревизия 2026-09-30: чип шапки прижат вправо — у шаблонной
+                // ноды заголовок не доходит до правой зоны (чип + квад-
+                // иконка: 12+16+6 поля/зазора + метка чипа + 6 до текста)
+                let title_w_world = if node.template().is_some() {
+                    let label_w = template_chip_label_w(s);
+                    (node.width
+                        - 24.0
+                        - canvas_render::cards::TEMPLATE_ICON_MARGIN_H
+                        - canvas_render::cards::TEMPLATE_ICON_SIZE
+                        - canvas_render::cards::CHIP_ICON_GAP
+                        - label_w
+                        - canvas_render::cards::CHIP_TITLE_GAP)
+                        .max(0.0)
+                } else {
+                    node.width - 24.0
+                };
                 texts.push(OwnedScreenText {
                     text: title,
                     origin: transform.map_point([node.x + 12.0, node.y + 8.0]),
-                    width: transform.map_size(node.width) - 24.0,
+                    width: transform.map_size(title_w_world),
                     font_size: font(13.0),
                     color: palette.title,
                     align: TextAlign::Left,

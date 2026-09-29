@@ -110,6 +110,28 @@ const ICON_WIDTH: f32 = 22.0;
 /// (LOD-порог, уточняется в T11 по SPEC §6.2).
 const MIN_TITLE_PX: f32 = 4.0;
 
+/// Левый отступ НАРИСОВАННОГО заголовка от левого края карточки — ЕДИНАЯ
+/// формула рендера и inline-редактора (ревизия 2026-09-30: чип справа,
+/// чип-офсета нет; бамп — только файл-буква, стоящая перед заголовком).
+/// Единственность источника — регресс-тест `title_edit_matches_render_left_edge`.
+fn title_left_inset(has_letter: bool) -> f32 {
+    TITLE_PADDING + if has_letter { ICON_WIDTH } else { 0.0 }
+}
+
+/// Правый резерв клипа заголовка (ревизия владельца 2026-09-30 — чип
+/// прижат вправо): квад-иконка роли шаблона / буква расширения файла
+/// (`reserves_icon`, CR-010) плюс чип категории («метка + 14» из кэша +
+/// зазор `CHIP_TITLE_GAP` до текста). Единый источник правой зоны шапки
+/// для клипа рендера и области правки (`title_edit_area`, chip_w = 0 —
+/// консервативно: точная ширина метки известна только кэшу рендера).
+fn title_right_reserve(reserves_icon: bool, chip_w: f32) -> f32 {
+    let mut reserve = if reserves_icon { ICON_WIDTH } else { 0.0 };
+    if chip_w > 0.0 {
+        reserve += chip_w + crate::cards::CHIP_TITLE_GAP;
+    }
+    reserve
+}
+
 /// FR-075 (вёрстка prototype-unified): кегль метки чипа категории шапки
 /// (`F.chip` — «600 10px»; вес SEMIBOLD 600, family — как у заголовка).
 const CHIP_FONT_SIZE: f32 = 10.0;
@@ -192,28 +214,15 @@ fn shape_chip_buffer(font_system: &mut FontSystem, label: &str, zoom_px: f32) ->
     (buffer, width_px)
 }
 
-/// FR-075: смещение заголовка от левого края карточки: с чипом — конец
-/// чипа + 8 px (прототип: title на `x + chipW + 18` при чипе на `x+10`,
-/// ширина чипа = метка + 14), без чипа — прежнее поле `TITLE_PADDING`.
-fn title_left_offset(chip_w: f32) -> f32 {
-    if chip_w > 0.0 {
-        10.0 + chip_w + 14.0 + 8.0
-    } else {
-        TITLE_PADDING
-    }
-}
-
-/// Ширина клипа заголовка (CR-010): резерв под иконку вычитается и для
-/// файловой ноды (буква расширения слева), и для шаблонной (квад-иконка
-/// справа, `cards::template_icon_rect`) — иначе длинное имя шаблона
-/// рисовалось под иконкой. FR-075: вычитается и чип категории (метка
-/// по вёрстке прототипа). Рендер и шейпинг используют одну формулу.
+/// Ревизия владельца 2026-09-30 («тэг прижми вправо, заголовок слева без
+/// лишних отступов»): заголовок ВСЕГДА на левом поле `TITLE_PADDING` —
+/// чип у правого края больше не сдвигает его (прежде офсет был
+/// «10 + chip_w + 22»), поэтому рендер и inline-редактор
+/// (`title_edit_area`) совпадают бит-в-бит и вход в правку не прыгает.
+/// Файл-буква остаётся слева от заголовка (после неё — `ICON_WIDTH`).
 pub(crate) fn title_clip_width(node_width: f32, reserves_icon: bool, chip_w: f32) -> f32 {
-    (node_width
-        - title_left_offset(chip_w)
-        - TITLE_PADDING
-        - if reserves_icon { ICON_WIDTH } else { 0.0 })
-    .max(0.0)
+    let right = title_right_reserve(reserves_icon, chip_w);
+    (node_width - TITLE_PADDING - TITLE_PADDING - right).max(0.0)
 }
 
 /// Размер тела заметки в world-px (T7) — из design-токенов (FR-046).
@@ -499,15 +508,21 @@ pub fn body_area(node: &Node) -> ([f32; 2], f32, f32) {
     (origin, width, height)
 }
 
-/// FR-072: область правки заголовка — строка внутри шапки карточки:
-/// x — с учётом иконки (как у клипа заголовка), вертикаль — по центру
-/// HEADER_HEIGHT, высота — TITLE_LINE_HEIGHT. Используется session_area
-/// (EditTarget::NodeTitle) и раскладка каретки/выделения рендера.
+/// FR-072: область правки заголовка — строка внутри шапки карточки.
+/// Ревизия 2026-09-30: левый край — ЕДИНАЯ формула с нарисованным
+/// заголовком (`title_left_inset`: поле 12 + файл-буква, если есть) —
+/// чип уехал вправо и больше не участвует; прежде чип-офсет рендера
+/// (~84 px у «ЗАМЕТКА») не учитывался здесь и текст прыгал при входе
+/// в правку. Ширина — консервативный клип (chip_w = 0). Вертикаль — по
+/// центру HEADER_HEIGHT, высота — TITLE_LINE_HEIGHT. Используется
+/// session_area (EditTarget::NodeTitle) и раскладка каретки/выделения.
 pub fn title_edit_area(node: &Node) -> ([f32; 2], f32, f32) {
-    let has_icon = extension_letter(node).is_some() || node.template().is_some();
-    let x = node.x + TITLE_PADDING + if has_icon { ICON_WIDTH } else { 0.0 };
-    let width =
-        (node.width - TITLE_PADDING * 2.0 - if has_icon { ICON_WIDTH } else { 0.0 }).max(0.0);
+    let has_letter = extension_letter(node).is_some();
+    let x = node.x + title_left_inset(has_letter);
+    // Ширина — консервативный клип (chip_w = 0: точная ширина метки
+    // известна только кэшу рендера; левый край — точный, см. выше).
+    let reserves_icon = has_letter || node.template().is_some();
+    let width = title_clip_width(node.width, reserves_icon, 0.0);
     let height = TITLE_LINE_HEIGHT;
     let y = node.y + (HEADER_HEIGHT - height) / 2.0;
     ([x, y], width, height)
@@ -4217,15 +4232,9 @@ impl TextSystem {
                     } else {
                         1.0
                     };
-                    let title_x = node.x
-                        + title_left_offset(
-                            entry
-                                .chip
-                                .as_ref()
-                                .map(|c| c.width_px / entry.zoom_px.max(0.001))
-                                .unwrap_or(0.0),
-                        )
-                        + if has_icon { ICON_WIDTH } else { 0.0 };
+                    // Ревизия 2026-09-30: заголовок — на левом поле без
+                    // чип-офсета; бамп — только файл-буква слева
+                    let title_x = node.x + title_left_inset(has_icon);
                     let pos = to_physical([title_x, node.y]);
                     // FR-072: плейсхолдер пустого явного заголовка — тон иконки
                     // (приглушённо), читательский — тон заголовка.
@@ -4255,16 +4264,9 @@ impl TextSystem {
                         });
                     }
                     if let Some(icon) = &entry.icon {
-                        // FR-075: буква расширения — после чипа (чип слева —
-                        // по вёрстке прототипа; без чипа — прежнее поле)
-                        let letter_x = node.x
-                            + title_left_offset(
-                                entry
-                                    .chip
-                                    .as_ref()
-                                    .map(|c| c.width_px / entry.zoom_px.max(0.001))
-                                    .unwrap_or(0.0),
-                            );
+                        // FR-075: буква расширения — на левом поле, перед
+                        // заголовком (чип теперь справа — ревизия 2026-09-30)
+                        let letter_x = node.x + TITLE_PADDING;
                         let pos = to_physical([letter_x, node.y]);
                         areas.push(TextArea {
                             buffer: icon,
@@ -5343,6 +5345,92 @@ load = connections_per_sec / (servers * server_rate)\n";
         assert!(
             (title_clip_width(plain.width, false, 0.0) - (plain.width - TITLE_PADDING * 2.0)).abs()
                 < 0.01
+        );
+    }
+
+    /// Ревизия владельца 2026-09-30 («тэг прижми вправо, заголовок слева
+    /// без лишних отступов»): левый край inline-редактора заголовка
+    /// совпадает с левым краем НАРИСОВАННОГО заголовка — вход в правку
+    /// не прыгает. Регресс: прежде рендер сдвигал заголовок чипом
+    /// (10 + chip_w + 14 + 8 ≈ 92 px у «ЗАМЕТКА»), а редактор стоял на
+    /// поле 12 — расхождение до ~84 px.
+    #[test]
+    fn title_edit_matches_render_left_edge() {
+        // Заметка (чип «ЗАМЕТКА», без буквы): заголовок и правка — на поле 12
+        let mut note = Node::text("n", "текст", 100.0, 50.0);
+        note.width = 260.0;
+        let (edit_origin, edit_w, _) = title_edit_area(&note);
+        assert!(
+            (edit_origin[0] - (note.x + title_left_inset(false))).abs() < 0.001,
+            "редактор заметки не на левом поле рендера: {}",
+            edit_origin[0]
+        );
+        assert!((edit_origin[0] - (note.x + 12.0)).abs() < 0.001);
+        assert!(edit_w > 0.0);
+        // Шаблонная нода (чип + квад-иконка справа): слева пусто — тоже 12
+        let mut tpl = Node::text("tpl", "rps = 1000 rps", 100.0, 50.0);
+        tpl.width = 260.0;
+        tpl.set_template(Some(canvas_core::templates::TemplateRef {
+            id: "mock.lb".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "mm1($rps)".to_owned(),
+            params: std::collections::BTreeMap::new(),
+            icon: "lb".to_owned(),
+            color: "#4A90E2".to_owned(),
+            name: Some("Балансировщик".to_owned()),
+            outputs: Vec::new(),
+        }));
+        let (tpl_origin, ..) = title_edit_area(&tpl);
+        assert!(
+            (tpl_origin[0] - (tpl.x + title_left_inset(false))).abs() < 0.001,
+            "у шаблона прежний бамп ICON_WIDTH слева (квад теперь справа)"
+        );
+        // Ширина правки — консервативный клип (chip_w = 0), как в доке
+        let (_, tpl_w, _) = title_edit_area(&tpl);
+        assert!(
+            (tpl_w - title_clip_width(tpl.width, true, 0.0)).abs() < 0.001,
+            "ширина правки расходится с клипом"
+        );
+    }
+
+    /// Ревизия 2026-09-30: клип заголовка освобождает ПРАВУЮ зону шапки —
+    /// чип (метка + зазор) и квад-иконку роли; текст заголовка заканчивается
+    /// до чипа у заметки и у шаблона (зазор ≥ CHIP_TITLE_GAP).
+    #[test]
+    fn title_clip_reserves_right_chip_zone() {
+        use crate::cards::{header_chip_rect, CHIP_TITLE_GAP};
+        let chip_w = 74.0; // «ЗАМЕТКА» + 14 — типичная метка
+                           // Заметка: чип у правого края на поле 10, текст — до чипа
+        let mut note = Node::text("n", "текст", 0.0, 0.0);
+        note.width = 260.0;
+        let clip = title_clip_width(note.width, false, chip_w);
+        assert!((clip - (note.width - 24.0 - chip_w - CHIP_TITLE_GAP)).abs() < 0.001);
+        let title_right = note.x + TITLE_PADDING + clip;
+        let chip = header_chip_rect(&note, chip_w - 14.0);
+        assert!(
+            title_right <= chip[0] - 0.01,
+            "клип ({title_right}) залезает под чип (левый край {})",
+            chip[0]
+        );
+        // Шаблон: правая зона = квад-иконка + чип слева от неё
+        let mut tpl = note.clone();
+        tpl.set_template(Some(canvas_core::templates::TemplateRef {
+            id: "mock.lb".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "mm1($rps)".to_owned(),
+            params: std::collections::BTreeMap::new(),
+            icon: "lb".to_owned(),
+            color: "#4A90E2".to_owned(),
+            name: Some("Балансировщик".to_owned()),
+            outputs: Vec::new(),
+        }));
+        let clip_tpl = title_clip_width(tpl.width, true, chip_w);
+        let title_right_tpl = tpl.x + TITLE_PADDING + clip_tpl;
+        let chip_tpl = header_chip_rect(&tpl, chip_w - 14.0);
+        assert!(
+            title_right_tpl <= chip_tpl[0] - 0.01,
+            "клип шаблона ({title_right_tpl}) залезает под чип ({})",
+            chip_tpl[0]
         );
     }
 
