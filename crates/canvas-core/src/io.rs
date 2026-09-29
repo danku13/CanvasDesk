@@ -18,6 +18,11 @@ impl FromStr for Canvas {
 
     /// Распарсить содержимое `.canvas`-файла.
     /// Ошибка содержит позицию (строка/колонка) и причину.
+    ///
+    /// БАЙТ-ЧИСТОТА (SPEC §5.1, round-trip): парс НЕ мутирует данные.
+    /// Миграция легаси-заголовков (волна 1, решение владельца) — на
+    /// воронке ЗАГРУЗКИ приложения (canvas-scene SceneState::new /
+    /// with_storage), не здесь: parse(to_json(x)) обязан совпадать с x.
     fn from_str(source: &str) -> Result<Self, CoreError> {
         serde_json::from_str(source).map_err(CoreError::from_parse_error)
     }

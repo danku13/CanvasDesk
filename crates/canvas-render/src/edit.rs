@@ -871,6 +871,12 @@ impl EditingSession {
         })
     }
 
+    /// Физический зум раскладки буфера (layout.2) — для перевода px буфера
+    /// в world-px (волна 2, п.8: fit_note_size делит высоту буфера на зум).
+    pub fn layout_zoom_px(&self) -> f32 {
+        self.layout.2
+    }
+
     /// Размер контента (ширина самой длинной строки, высота всех строк) в
     /// пикселях буфера (T7). Для автороста заметки под текст.
     ///
@@ -1440,7 +1446,8 @@ mod tests {
 // --- FR-072: правка заголовка (EditTarget::NodeTitle) ---
 
 /// FR-072: session_area для NodeTitle — строка внутри шапки карточки
-/// (вертикаль по центру HEADER_HEIGHT, высота TITLE_LINE_HEIGHT).
+/// (вертикаль — верх шапки, бит-в-бит с нарисованным заголовком;
+/// волна 2 п.6: прежняя центровка давала прыжок ~6 px).
 #[test]
 fn session_area_title_target() {
     use canvas_core::Node;
@@ -1452,9 +1459,9 @@ fn session_area_title_target() {
     let session = EditingSession::new_title(&mut fs, 0, "Смета", 200.0, 22.0, 1.0);
     let (origin, width, height) = session_area(&canvas, &session, false).expect("нода есть");
     assert_eq!(height, TITLE_LINE_HEIGHT, "высота зоны — строка заголовка");
-    assert!(
-        origin[1] > canvas.nodes[0].y,
-        "зона внутри карточки: {origin:?}"
+    assert_eq!(
+        origin[1], canvas.nodes[0].y,
+        "зона от верха шапки — без прыжка при входе/выходе из правки: {origin:?}"
     );
     assert!(
         origin[1] + height < canvas.nodes[0].y + 34.0,

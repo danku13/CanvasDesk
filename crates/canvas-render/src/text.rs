@@ -513,9 +513,13 @@ pub fn body_area(node: &Node) -> ([f32; 2], f32, f32) {
 /// заголовком (`title_left_inset`: поле 12 + файл-буква, если есть) —
 /// чип уехал вправо и больше не участвует; прежде чип-офсет рендера
 /// (~84 px у «ЗАМЕТКА») не учитывался здесь и текст прыгал при входе
-/// в правку. Ширина — консервативный клип (chip_w = 0). Вертикаль — по
-/// центру HEADER_HEIGHT, высота — TITLE_LINE_HEIGHT. Используется
-/// session_area (EditTarget::NodeTitle) и раскладка каретки/выделения.
+/// в правку. Ширина — консервативный клип (chip_w = 0).
+/// Волна 2 (п.6, M2): вертикаль — ВЕРХ ШАПКИ (node.y): нарисованный
+/// заголовок садится от top (TextArea top = node.y, первая строка буфера —
+/// от top); прежняя центровка в HEADER_HEIGHT давала прыжок ~6 px.
+/// Метрики буфера сессии — те же TITLE_* — при совпадении top посадка
+/// бит-в-бит. Высота — TITLE_LINE_HEIGHT. Используется session_area
+/// (EditTarget::NodeTitle) и раскладка каретки/выделения.
 pub fn title_edit_area(node: &Node) -> ([f32; 2], f32, f32) {
     let has_letter = extension_letter(node).is_some();
     let x = node.x + title_left_inset(has_letter);
@@ -524,7 +528,7 @@ pub fn title_edit_area(node: &Node) -> ([f32; 2], f32, f32) {
     let reserves_icon = has_letter || node.template().is_some();
     let width = title_clip_width(node.width, reserves_icon, 0.0);
     let height = TITLE_LINE_HEIGHT;
-    let y = node.y + (HEADER_HEIGHT - height) / 2.0;
+    let y = node.y;
     ([x, y], width, height)
 }
 
@@ -3030,7 +3034,8 @@ impl TextSystem {
                     None => title_base,
                 };
                 // Тело редактируемой ноды рисует EditingSession — не шейпим дубль
-                let body_text = if frame.editing == Some(index) || !body_visible(node, zoom_px) {
+                let body_hidden = frame.editing == Some(index) || !body_visible(node, zoom_px);
+                let body_text = if body_hidden {
                     String::new()
                 } else {
                     let raw = node.text.clone().unwrap_or_default();
@@ -3220,6 +3225,11 @@ impl TextSystem {
                 } else {
                     Some(desc_text.as_str())
                 };
+                // D-8 (I-2 с мерой fit_note_size — app.rs меряет БЕЗ desc):
+                // при правке тела зона описания скрыта — рисует только буфер
+                // редактора. Раньше desc_ref не гейтился — desc светился под
+                // текстом редактора (скрин 04, репро editing_suppress).
+                let desc_ref = if body_hidden { None } else { desc_ref };
                 // FR-061 хвосты (D-7/D-8 runtime v1): состояние тогглов ноды
                 // (дефолты — развёрнут/кламп; в ключе свежести — mode).
                 let block_expanded = !frame.block_collapsed.contains(&node.id);
@@ -3295,7 +3305,6 @@ impl TextSystem {
                     // авто-строк всё равно шейпится (стек из одного префикса).
                     // Редактируемая нода / LOD-скрытие тела — как у тела:
                     // тело рисует EditingSession, авто-строки вернутся после.
-                    let body_hidden = frame.editing == Some(index) || !body_visible(node, zoom_px);
                     // FR-061 приёмка (T9, дублирование текста): сборка строк
                     // ДО первого шейпа — strip-переопределения Param-литералов:
                     // левый блок «servers = 3» замещается «servers =», литерал
@@ -3306,13 +3315,21 @@ impl TextSystem {
                         .get(&node.id)
                         .map(|whatif| whatif.line_deltas.as_slice())
                         .unwrap_or(&[]);
-                    let mut rows_data = row_grid::build_rows(
-                        &body_text,
-                        line_outcomes.map(|lines| lines.as_slice()),
-                        whatif_deltas,
-                        spill_views,
-                        auto_rows,
-                    );
+                    // D-8 (инвариант волны 1, скрин 04): при правке тела
+                    // строки таблицы гаснут ВМЕСТЕ с телом — остаётся только
+                    // текст редактора. Явный гейт (раньше строки держались
+                    // на auto_rows/line_outcomes и падали только по геометрии).
+                    let mut rows_data = if body_hidden {
+                        Vec::new()
+                    } else {
+                        row_grid::build_rows(
+                            &body_text,
+                            line_outcomes.map(|lines| lines.as_slice()),
+                            whatif_deltas,
+                            spill_views,
+                            auto_rows,
+                        )
+                    };
                     let strip_overrides: Vec<(usize, String)> =
                         row_grid::param_strip_overrides(&rows_data);
                     let spill_prefix = if body_hidden {
@@ -4309,14 +4326,14 @@ impl TextSystem {
                     // у редактируемой ноды body нет, его рисует буфер
                     // EditingSession (блок ниже). Клип блока: нижняя граница
                     // не ниже нижней границы области тела — текст нижнего
-                    // блока не вылезает за карточку. FR-013: при наличии
-                    // строки результата тело подрезается до её верхней
-                    // границы — текст не заходит под футер с результатом.
+                    // блока не вылезает за карточку. FR-075: при наличии
+                    // результата тело подрезается до ВЕРХА полосы «ИТОГ»
+                    // (32 px у нижнего края — модель FR-075; прежние
+                    // BODY_PADDING + RESULT_LINE_HEIGHT = 28 — модель до,
+                    // текст заходил в полосу на 4 px).
                     let result_top_phys = if entry.result.is_some() {
-                        to_physical([
-                            0.0,
-                            node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT,
-                        ])[1]
+                        let strip_h = RESULT_STRIP_H.min(node.height);
+                        to_physical([0.0, node.y + node.height - strip_h])[1]
                     } else {
                         f32::MAX
                     };
@@ -4404,15 +4421,29 @@ impl TextSystem {
                     // (Param/Calc — та же result_row_y, I-1/T5: порты и
                     // ячейки не разъезжаются; авто-строки — своя метрика).
                     if let (Some(guides), false) = (&entry.row_guides, entry.rows.is_empty()) {
-                        let (origin, _, _) = body_area(node);
+                        let (origin, _, body_height) = body_area(node);
                         let body_left = node.x + BODY_PADDING;
                         let node_right = node.x + node.width - BODY_PADDING;
+                        // Волна 1 (скрин 03/04): ячейки рядов не рисуются ниже
+                        // полосы «ИТОГ» — при дрейфе подгона значение+юнит не
+                        // сталкиваются с контентом полосы (кламп bounds).
+                        let cells_bottom_phys = to_physical([origin[0], origin[1] + body_height])
+                            [1]
+                            - if entry.result.is_some() {
+                                RESULT_STRIP_H.min(node.height) * zoom_px
+                            } else {
+                                0.0
+                            };
                         for row in &entry.rows {
                             let row_y = origin[1]
                                 + row.row_top
                                 + (row.row_line_h - RESULT_LINE_HEIGHT) / 2.0;
                             let top_phys = to_physical([origin[0], row_y])[1];
-                            let bottom_phys = top_phys + RESULT_LINE_HEIGHT * zoom_px;
+                            let bottom_phys =
+                                (top_phys + RESULT_LINE_HEIGHT * zoom_px).min(cells_bottom_phys);
+                            if top_phys >= cells_bottom_phys {
+                                continue; // ряд ниже зоны ячеек — не рисуем вовсе
+                            }
                             let bounds_left =
                                 (to_physical([body_left, row_y])[0].floor() as i32) - 1;
                             // FR-061 коммит 3: усечённая формула — зона наведения

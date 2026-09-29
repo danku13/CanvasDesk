@@ -53,16 +53,29 @@ impl QualifiedRef {
     }
 }
 
-/// Отображаемое имя ноды (дословно, FR-045 Р-5): `label` → имя снимка
-/// шаблона → первая непустая строка текста → `id`. Детерминировано,
-/// без нормализации.
+/// Отображаемое имя ноды (дословно, FR-045 Р-5): `label` (программное имя —
+/// по нему формулы ссылаются на объект, MUST быть первым) → явный заголовок
+/// (FR-072, волна 1) → имя снимка шаблона → первая непустая строка текста →
+/// `id`. Детерминировано, без нормализации.
 pub fn node_display_name(canvas: &Canvas, node_id: &str) -> String {
     let Some(node) = canvas.node(node_id) else {
         return node_id.to_owned();
     };
+    // Волна 1 (решение владельца): явный заголовок (FR-072) — ВТОРОЙ в
+    // цепочке (после label): qualified-пути тултипов показывают то же имя,
+    // что шапка карточки; label главнее — по нему формулы ссылаются на
+    // объект («Статьи.marketing»): миграция заголовка (title = «Статьи
+    // бюджета») не должна рвать resolution ссылок. Фолбэк «первая непустая
+    // строка» — последний рубеж для не-мигрированных контекстов (MCP);
+    // шапкой он больше не становится (cards::title_for).
     if let Some(label) = node.label.as_deref() {
         if !label.trim().is_empty() {
             return label.to_owned();
+        }
+    }
+    if let Some(title) = node.title() {
+        if !title.trim().is_empty() {
+            return title.to_owned();
         }
     }
     if let Some(name) = node.template().and_then(|t| t.name) {

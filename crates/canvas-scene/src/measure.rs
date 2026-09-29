@@ -423,6 +423,46 @@ pub fn formula_line_indices(line_results: &[Option<ExprOutcome>]) -> Vec<usize> 
         .collect()
 }
 
+/// Волна 1 (скрин 03, сессия 2026-09-30): growth-only догон до измеренного
+/// контента БЕЗ усадки. Входы — как у [`refit_to_measured_content`].
+///
+/// Зачем: политика «первая встреча — доверяем высоте» оставляла
+/// заниженные высоты из старых файлов (модель до FR-069/FR-075: футер
+/// 18 px вместо полосы 32, без Σ-строки) — L1-оценка не видит
+/// межстрочных зазоров, гейт проходит, L2 не запускается, рендер
+/// вылезает за силуэт (обрезанный TOTAL, бары под карточкой). Рост до
+/// измеренного на первой встрече лечит загрузку, не трогая UX-гарантию
+/// «свежая нода/undo не усаживаются» (I-6).
+#[allow(clippy::too_many_arguments)] // 8 согласованных входов резерва (I-2)
+pub fn grow_to_measured_content(
+    node: &mut Node,
+    display_text: &str,
+    formula_lines: &[usize],
+    desc: Option<&str>,
+    desc_expanded: bool,
+    footer_reserve: bool,
+    sigma_name: &str,
+    auto_rows: usize,
+) -> bool {
+    let desc_text = desc.unwrap_or_default();
+    let needed = measured_reserve(
+        display_text,
+        node.width,
+        formula_lines,
+        desc_text,
+        desc_expanded,
+        footer_reserve,
+        sigma_name,
+        auto_rows,
+    );
+    if needed > node.height {
+        node.height = needed;
+        true
+    } else {
+        false
+    }
+}
+
 /// FR-023: авто-высота шаблонной ноды — по списку параметров: шапка,
 /// тело и футер результата. CR-010/CR-012: тело — с переносами,
 /// двухуровневый refit `ensure_result_reserve`: длинное значение параметра

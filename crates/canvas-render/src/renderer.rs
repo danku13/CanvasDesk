@@ -942,6 +942,29 @@ impl Renderer {
         }
     }
 
+    /// Волна 2 (п.7, M3): каретка/выделение с снапом левого верхнего угла к
+    /// целым физическим px — без дрожания на 125/150% DPI при панораме/зуме
+    /// (текст снапится так же — text.rs snap_to_pixel; без снапа квад и
+    /// глифы «расползаются» по субпикселям независимо друг от друга).
+    fn overlay_quad_snapped(
+        origin: [f32; 2],
+        rect: [f32; 4],
+        zoom_px: f32,
+        camera: &Camera,
+        viewport_logical: [f32; 2],
+        scale_factor: f32,
+        fill: [f32; 4],
+    ) -> CardInstance {
+        let mut quad = Self::overlay_quad(origin, rect, zoom_px, fill);
+        let screen = camera.world_to_screen(quad.pos, viewport_logical);
+        let snapped = [
+            (screen[0] * scale_factor).round() / scale_factor,
+            (screen[1] * scale_factor).round() / scale_factor,
+        ];
+        quad.pos = camera.screen_to_world(snapped, viewport_logical);
+        quad
+    }
+
     /// Переконфигурировать surface под новый размер окна.
     /// Нулевой размер (свёрнутое окно) игнорируется — кадр пропускается.
     ///
@@ -1322,18 +1345,24 @@ impl Renderer {
                         let zoom_px = camera.zoom() * self.scale_factor;
                         let (origin, _, _) = body_area(node);
                         for rect in session.selection_rects(self.text.font_system_mut()) {
-                            editing_quads.push(Self::overlay_quad(
+                            editing_quads.push(Self::overlay_quad_snapped(
                                 origin,
                                 rect,
                                 zoom_px,
+                                camera,
+                                viewport_logical,
+                                self.scale_factor,
                                 self.theme.selection_fill,
                             ));
                         }
                         if let Some(rect) = session.caret_rect(self.text.font_system_mut()) {
-                            editing_quads.push(Self::overlay_quad(
+                            editing_quads.push(Self::overlay_quad_snapped(
                                 origin,
                                 rect,
                                 zoom_px,
+                                camera,
+                                viewport_logical,
+                                self.scale_factor,
                                 self.theme.accent,
                             ));
                         }
@@ -1354,18 +1383,24 @@ impl Renderer {
                         });
                         let zoom_px = camera.zoom() * self.scale_factor;
                         for rect in session.selection_rects(self.text.font_system_mut()) {
-                            edge_edit_quads.push(Self::overlay_quad(
+                            edge_edit_quads.push(Self::overlay_quad_snapped(
                                 origin,
                                 rect,
                                 zoom_px,
+                                camera,
+                                viewport_logical,
+                                self.scale_factor,
                                 self.theme.selection_fill,
                             ));
                         }
                         if let Some(rect) = session.caret_rect(self.text.font_system_mut()) {
-                            edge_edit_quads.push(Self::overlay_quad(
+                            edge_edit_quads.push(Self::overlay_quad_snapped(
                                 origin,
                                 rect,
                                 zoom_px,
+                                camera,
+                                viewport_logical,
+                                self.scale_factor,
                                 self.theme.accent,
                             ));
                         }
@@ -1379,18 +1414,24 @@ impl Renderer {
                     {
                         let zoom_px = camera.zoom() * self.scale_factor;
                         for rect in session.selection_rects(self.text.font_system_mut()) {
-                            editing_quads.push(Self::overlay_quad(
+                            editing_quads.push(Self::overlay_quad_snapped(
                                 origin,
                                 rect,
                                 zoom_px,
+                                camera,
+                                viewport_logical,
+                                self.scale_factor,
                                 self.theme.selection_fill,
                             ));
                         }
                         if let Some(rect) = session.caret_rect(self.text.font_system_mut()) {
-                            editing_quads.push(Self::overlay_quad(
+                            editing_quads.push(Self::overlay_quad_snapped(
                                 origin,
                                 rect,
                                 zoom_px,
+                                camera,
+                                viewport_logical,
+                                self.scale_factor,
                                 self.theme.accent,
                             ));
                         }

@@ -70,7 +70,9 @@ fn mcp_nodes_list_and_get() {
         "text скрыт"
     );
     let list = dispatch(&mut scene, "nodes_list", r#"{"text":true}"#).expect("nodes_list с text");
-    assert_eq!(list[0]["text"], "Привет Мир");
+    // Волна 1 (миграция заголовков): однострочная легаси-заметка «Привет Мир»
+    // переехала в явный заголовок — в тексте пусто.
+    assert_eq!(list[0]["text"], "");
 
     let node = dispatch(&mut scene, "node_get", r#"{"id":"f1"}"#).expect("node_get");
     assert_eq!(node["file"], "docs/SPEC.md");
@@ -2495,12 +2497,14 @@ fn recompute_fills_param_spills_with_edge_value() {
     // Текст как на карточке: присваивание заменено подписью источника.
     let display = display_body_text(scene.canvas.node("cdn").expect("cdn"), &scene.param_spills);
     assert_eq!(display, "rps ← Traffic Profile · peak_rps\ncache_hit = 0.6");
-    // Без проливания — исходный текст.
+    // Без проливания — исходный текст. Волна 1 (миграция заголовков):
+    // проза-первая строка «Traffic Profile» переехала в title — текст
+    // начинается с листа параметров.
     let plain = display_body_text(
         scene.canvas.node("traffic").expect("traffic"),
         &scene.param_spills,
     );
-    assert_eq!(plain, "Traffic Profile\npeak_rps = 1388.89 rps");
+    assert_eq!(plain, "peak_rps = 1388.89 rps");
     // MCP flow_recalc: spilled — источник, адресация и значение.
     let result = dispatch(&mut scene, "flow_recalc", "{}").expect("flow_recalc");
     let spilled = &result["cdn"]["spilled"];

@@ -130,6 +130,18 @@ fn whatif_journey_intro_whatif() {
 
     let mut scene = SceneState::new(canvas.clone(), PathBuf::from("audit.canvas"));
     scene.recompute_flow();
+
+    // Индекс строки по содержимому (устойчиво к миграции заголовков волны 1:
+    // первая проза-строка переехала в title, номера строк сдвинулись).
+    fn costs_node_text_line(scene: &SceneState, id: &str, needle: &str) -> usize {
+        scene
+            .canvas
+            .node(id)
+            .and_then(|n| n.text.as_deref())
+            .and_then(|text| text.lines().position(|line| line.trim() == needle))
+            .unwrap_or_else(|| panic!("строка «{needle}» не найдена в тексте {id}"))
+    }
+
     let (total_id, annual_id, costs_id) = (
         node_id(&scene, "total"),
         node_id(&scene, "annual"),
@@ -142,11 +154,15 @@ fn whatif_journey_intro_whatif() {
     scene.whatif_active = true;
     let index = scene.whatif_create_scenario("Рост маркетинга").unwrap();
     scene.whatif_activate(Some(index));
-    // Подмена «поднимите маркетинг до полутора тысяч»: строка 3 текста
-    // costs («marketing = 1200 руб») — как делает begin_whatif_override.
-    scene.scenarios[index]
-        .line_exprs
-        .insert((costs_id.clone(), 3), "marketing = 1500 руб".into());
+    // Подмена «поднимите маркетинг до полутора тысяч»: строка «marketing =
+    // 1200 руб» текста costs. Волна 1 (миграция заголовков): первая
+    // проза-строка переехала в title — индекс строки сдвинулся с 3 на 2
+    // (индексация — по ТЕКУЩЕМУ тексту, как в begin_whatif_override).
+    let marketing_line = costs_node_text_line(&scene, &costs_id, "marketing = 1200 руб");
+    scene.scenarios[index].line_exprs.insert(
+        (costs_id.clone(), marketing_line),
+        "marketing = 1500 руб".into(),
+    );
     scene.recompute_flow();
     assert_eq!(
         value_of(&scene, &total_id),

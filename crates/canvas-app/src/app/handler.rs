@@ -333,6 +333,9 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 // FR-021: popup подсказок Numi-ввода — поверх редактора
                 {
+                    // Волна 1 (п.5, H4): якорь у каретки при любом зуме/панораме —
+                    // пересчёт каждый кадр, пока popup открыт.
+                    self.sync_hints_anchor();
                     let (hint_instances, hint_texts) = self.hints_overlay();
                     screen_bands.push(UiLayer::Popups, hint_instances, hint_texts);
                 }

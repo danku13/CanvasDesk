@@ -196,12 +196,16 @@ fn explain_number_follows_whatif_and_returns() {
 
     // Подмена листа через MCP (тот же WhatIfOverrides, что UI): режим
     // поднимается, текст несёт преамбулу и новое значение корня.
-    dispatch(
-        &mut scene,
-        "whatif_set_override",
-        r#"{"node_id":"traffic","line":1,"expr":"users = 2000"}"#,
-    )
-    .expect("подмена");
+    // Волна 1 (миграция заголовков): первая проза-строка «Трафик» переехала
+    // в title — индекс строки «users = 1000» ищем по содержимому.
+    let users_line = scene
+        .canvas
+        .node("traffic")
+        .and_then(|n| n.text.as_deref())
+        .and_then(|t| t.lines().position(|l| l.trim() == "users = 1000"))
+        .expect("строка users в тексте traffic");
+    let params = format!(r#"{{"node_id":"traffic","line":{users_line},"expr":"users = 2000"}}"#);
+    dispatch(&mut scene, "whatif_set_override", &params).expect("подмена");
     scene.recompute_flow();
     let out = dispatch(&mut scene, "explain_number", r#"{"node_id":"unit"}"#)
         .expect("explain_number what-if");

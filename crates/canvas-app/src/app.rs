@@ -2160,8 +2160,12 @@ impl App {
         let formula_lines = formula_line_indices(&line_results);
         let is_template = node.template().is_some();
         let program_footer = node.expr().is_some() && !has_line_results;
+        // H1 (волна 1): резерв футера — высота полосы «ИТОГ» (32, FR-075),
+        // как в canvas-scene/measure.rs и app/support.rs. Прежние
+        // RESULT_LINE_HEIGHT + 2 = 18 — модель до FR-075: дефицит 14 px —
+        // последняя строка тела живой правки заходила под полосу.
         let expr_footer = if is_template || program_footer {
-            RESULT_LINE_HEIGHT + 2.0
+            canvas_core::tokens::CARD_RESULT_STRIP_H
         } else {
             0.0
         };
@@ -2169,6 +2173,20 @@ impl App {
         // D-8: при правке тело И зона описания скрыты (I-5 деградация) —
         // мера без desc; после commit высоту догонит refit сцены.
         let body_h = measure_body_height(&live_text, body_width, &formula_lines, "", false, "");
+        // Волна 2 (п.8, M1): паритет набора и рендера — высота = MAX из
+        // GFM-меры (после коммита: «---»/«```»/списки схлопываются в блоки)
+        // и фактической раскладки буфера редактора (plain: каждая строка —
+        // отдельная). Иначе при наборе «---»/«```»/списков буфер хотел больше
+        // строк, чем обещала GFM-мера, — низ подрезался до первого коммита.
+        let editor_h = match self.renderer.as_mut() {
+            Some(renderer) => {
+                let zoom_px = session.layout_zoom_px();
+                let (_, editor_h_px) = session.content_size_px(renderer.font_system_mut());
+                editor_h_px / zoom_px.max(1e-6)
+            }
+            None => 0.0,
+        };
+        let body_h = body_h.max(editor_h);
         let needed_h = HEADER_HEIGHT + BODY_TOP_GAP + body_h + BODY_PADDING + expr_footer;
         let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
             return;

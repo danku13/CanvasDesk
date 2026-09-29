@@ -84,10 +84,15 @@ impl Review {
     /// Собрать диалог из предложений детектора: группировка по паре нод,
     /// внутри группы — сортировка по имени переменной (У7).
     pub fn build(canvas: &canvas_core::Canvas, proposals: Vec<AutolinkProposal>) -> Self {
+        // Волна 1 (дедуп заголовка): имя пары — display-name dataref
+        // (title → label → шаблон → первая строка → id), НЕ title_for:
+        // шапка карточки больше не деривит первую строку (плейсхолдер «—»),
+        // а в списке ревью автолинков узлу нужно ЧИТАЕМОЕ имя — для
+        // легаси/MCP-нод без заголовка им остаётся первая строка.
         let title_of = |id: &str| {
             canvas
                 .node(id)
-                .map(canvas_render::cards::title_for)
+                .map(|node| canvas_core::dataref::node_display_name(canvas, &node.id.clone()))
                 .unwrap_or_else(|| id.to_owned())
         };
         // Сортировка предложений: (исток, приёмник, имя переменной) —
