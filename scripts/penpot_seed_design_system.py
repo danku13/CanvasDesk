@@ -60,7 +60,6 @@ COLORS: list[dict[str, Any]] = [
     {"name": "wheel.border",     "rgba": [0.22, 0.24, 0.30, 0.90], "hex": "#383D4DE6", "role": "Wheel: рамка сектора"},
 ]
 
-
 # Типографика: name → (family, weight, size_px, line_height_px, role)
 TYPOGRAPHIES: list[dict[str, Any]] = [
     {"name": "Display Medium",  "family": "Noto Sans Display", "weight": "500", "size": 14, "line": 20, "role": "Базовый UI и канвас-текст (body)"},
@@ -73,7 +72,7 @@ TYPOGRAPHIES: list[dict[str, Any]] = [
 # Типо-шкала CanvasDesk (роль → размер/интерлиньяж)
 TYPE_SCALE: list[dict[str, Any]] = [
     {"role": "title",      "size": 16,   "line": 22, "weight": "500", "sample": "Заголовок карточки-ноды"},
-    {"role": "body",       "size": 14,   "line": 20, "weight": "500", "sample": "Тело ноты, проза"},
+    {"role": "body",       "size": 14,   "line": 20, "weight": "500", "sample": "Тело ноды, проза"},
     {"role": "edge_label", "size": 12,   "line": 16, "weight": "500", "sample": "Подписи рёбер"},
     {"role": "result",     "size": 12,   "line": 16, "weight": "400", "sample": "12 345.6 (моно, результат)"},
     {"role": "zone_label", "size": 10.5, "line": 16, "weight": "500", "sample": "ПАРАМЕТРЫ · 3"},
@@ -109,12 +108,19 @@ CARD_ANATOMY = {
 
 
 # ───────────────── JS-код, исполняемый в Penpot plugin context ─────────────────
-# ВАЖНО: строка должна быть валидным JS, исполняемым через execute_code.
-# execute_code возвращает результат последнего выражения.
+# API (выявлено через penpot_api_info):
+#   penpot.currentFile / penpot.currentPage
+#   penpot.createPage() / penpot.openPage(page) (async!)
+#   penpot.createBoard() / penpot.createRectangle() / penpot.createText(text?)
+#   penpot.library.local.createColor() / createTypography()
+#   shape.resize(w,h) / shape.fills = [{fillColor, fillOpacity}]
+#   shape.strokes = [{strokeColor, strokeOpacity, strokeStyle, strokeWidth, strokeAlignment}]
+#   board.appendChild(child)
+#   text.fontFamily/fontSize(STRING)/fontWeight(STRING)/lineHeight(STRING)/growType
 
 SEED_JS_TEMPLATE = r"""
 // ===== CanvasDesk design-system seeder (Penpot plugin context) =====
-// Все значения — зеркало design/tokens/{colors,dimensions}.json репозитория CanvasDesk.
+// Все значения — зеркало design/tokens/{colors,dimensions}.json.
 
 const __colors = __COLORS_JSON__;
 const __typographies = __TYPOGRAPHIES_JSON__;
@@ -123,191 +129,249 @@ const __spacing = __SPACING_JSON__;
 const __radii = __RADII_JSON__;
 const __card_anatomy = __CARD_ANATOMY_JSON__;
 
-const file = penpot.file;
-if (!file) throw new Error("No active Penpot file — File → MCP Server → Connect required");
+if (!penpot.currentFile) throw new Error("No active Penpot file — File → MCP Server → Connect required");
 
-// ─── Helpers ───
-function rgbaStr(c) { return `rgba(${Math.round(c[0]*255)}, ${Math.round(c[1]*255)}, ${Math.round(c[2]*255)}, ${c[3]})`; }
-function sRGBtoHex(c) {
+function sRGBtoHex(arr) {
   const h = (x) => Math.round(x*255).toString(16).padStart(2, '0');
-  return `#${h(c[0])}${h(c[1])}${h(c[2])}${c[3] < 1 ? h(c[3]) : ''}`;
+  return `#${h(arr[0])}${h(arr[1])}${h(arr[2])}`;
+}
+function solidFill(rgba) {
+  return { fillColor: sRGBtoHex(rgba), fillOpacity: rgba[3] };
 }
 
-// ─── 1. Library colors ───
+// ─── 0. Найти или создать страницу «CanvasDesk Design System» ───
+let page = penpot.currentFile.pages.find(p => p.name === "CanvasDesk Design System");
+if (!page) {
+  page = penpot.createPage();
+  page.name = "CanvasDesk Design System";
+}
+await penpot.openPage(page);
+
+// ─── 0.5. Удалить старые top-level boards с теми же именами (idempotent retry) ───
+const boardNames = ["Color palette", "Typography scale", "Spacing & radius", "Card anatomy"];
+const root = page.root;
+if (root && root.children) {
+  for (const child of [...root.children]) {
+    if (boardNames.includes(child.name)) {
+      try { child.remove(); } catch (e) { /* ignore */ }
+    }
+  }
+}
+
+// ─── 1. Library colors (idempotent: skip existing by name) ───
+const lib = penpot.library.local;
+const existingColorNames = new Set(lib.colors.map(c => c.name));
 const colorRefs = [];
 for (const c of __colors) {
   try {
-    const lib = penpot.library.colors.create(c.name);
-    const hex = sRGBtoHex(c.rgba);
-    // library.colors.create возвращает LibraryColor; add colorStop для opacity<1
-    if (c.rgba[3] < 1) {
-      lib.addColorStop({ color: `#${sRGBtoHex([c.rgba[0],c.rgba[1],c.rgba[2],1]).slice(1)}`, opacity: c.rgba[3], name: c.name });
-    } else {
-      lib.addColorStop({ color: hex, opacity: 1.0, name: c.name });
+    if (existingColorNames.has(c.name)) {
+      colorRefs.push({ name: c.name, status: "exists" });
+      continue;
     }
-    colorRefs.push({ name: c.name, id: lib.id });
+    const lc = lib.createColor();
+    lc.name = c.name;
+    lc.color = sRGBtoHex(c.rgba);
+    lc.opacity = c.rgba[3];
+    colorRefs.push({ name: c.name, status: "created", id: lc.id });
   } catch (e) {
-    // Если уже есть — переиспользуем
-    colorRefs.push({ name: c.name, id: null, error: String(e) });
+    colorRefs.push({ name: c.name, status: "error", error: String(e).slice(0, 120) });
   }
 }
 
-// ─── 2. Library typographies ───
+// ─── 2. Library typographies (idempotent) ───
+const existingTypoNames = new Set(lib.typographies.map(t => t.name));
 const typoRefs = [];
 for (const t of __typographies) {
   try {
-    const lib = penpot.library.typographies.create(t.name);
-    lib.fontFamily = t.family;
-    lib.fontStyle = "normal";
-    lib.fontWeight = parseInt(t.weight, 10);
-    lib.fontSize = t.size;
-    lib.lineHeight = t.line;
-    typoRefs.push({ name: t.name, id: lib.id });
+    if (existingTypoNames.has(t.name)) {
+      typoRefs.push({ name: t.name, status: "exists" });
+      continue;
+    }
+    const lt = lib.createTypography();
+    lt.name = t.name;
+    lt.fontFamily = t.family;
+    lt.fontWeight = String(t.weight);
+    lt.fontSize = String(t.size);
+    lt.lineHeight = String(t.line);
+    lt.fontStyle = "normal";
+    typoRefs.push({ name: t.name, status: "created", id: lt.id });
   } catch (e) {
-    typoRefs.push({ name: t.name, id: null, error: String(e) });
+    typoRefs.push({ name: t.name, status: "error", error: String(e).slice(0, 120) });
   }
 }
 
-// ─── 3. Создать страницу «CanvasDesk Design System» ───
-const page = penpot.pages.create({ name: "CanvasDesk Design System" });
-// Активировать страницу, чтобы можно было рисовать
-penpot.page = page;
+// ─── 3. Board «Color palette» ───
+const colorBoard = penpot.createBoard();
+colorBoard.name = "Color palette";
+colorBoard.x = 0; colorBoard.y = 0;
+colorBoard.resize(900, 100 + __colors.length * 50);
+colorBoard.fills = [{ fillColor: "#ffffff", fillOpacity: 1 }];
 
-// ─── 4. Board «Color palette» ───
-const colorBoard = penpot.boards.create({
-  x: 0, y: 0, width: 900, height: 100 + __colors.length * 50,
-  name: "Color palette", fill: penpot.colors.white(),
-});
-let y = 50;
+let cy = 50;
 for (const c of __colors) {
-  const swatch = penpot.shapes.rect.create({
-    x: 50, y, width: 200, height: 36,
-    fill: penpot.colors.create({ color: sRGBtoHex(c.rgba.slice(0,3).concat([1])), opacity: c.rgba[3] }),
-    radius: 6,
-  });
-  const label = penpot.shapes.text.create({
-    x: 270, y, width: 580, height: 36,
-    text: `${c.name}   ${c.hex}`,
-    font: "Noto Sans Mono",
-    fontSize: 12,
-    fontWeight: "400",
-    lineHeight: 16,
-  });
-  y += 50;
+  const swatch = penpot.createRectangle();
+  swatch.x = 50; swatch.y = cy;
+  swatch.resize(200, 36);
+  swatch.fills = [solidFill(c.rgba)];
+  swatch.borderRadius = 6;
+  colorBoard.appendChild(swatch);
+
+  const label = penpot.createText(`${c.name}   ${c.hex}`);
+  label.x = 270; label.y = cy;
+  label.resize(580, 36);
+  label.fontFamily = "Noto Sans Mono";
+  label.fontSize = "12"; label.fontWeight = "400"; label.lineHeight = "16";
+  label.growType = "auto-height";
+  label.fills = [{ fillColor: "#1f2937", fillOpacity: 1 }];
+  colorBoard.appendChild(label);
+
+  cy += 50;
 }
 
-// ─── 5. Board «Typography scale» ───
-const typoBoard = penpot.boards.create({
-  x: 1000, y: 0, width: 700, height: 100 + __type_scale.length * 80,
-  name: "Typography scale", fill: penpot.colors.white(),
-});
+// ─── 4. Board «Typography scale» ───
+const typoBoard = penpot.createBoard();
+typoBoard.name = "Typography scale";
+typoBoard.x = 1000; typoBoard.y = 0;
+typoBoard.resize(700, 100 + __type_scale.length * 80);
+typoBoard.fills = [{ fillColor: "#ffffff", fillOpacity: 1 }];
+
 let ty = 50;
 for (const t of __type_scale) {
-  const sample = penpot.shapes.text.create({
-    x: 50, y: ty, width: 600, height: t.line + 4,
-    text: `${t.sample}`,
-    font: t.role === "result" ? "Noto Sans Mono" : "Noto Sans Display",
-    fontSize: t.size,
-    fontWeight: t.weight,
-    lineHeight: t.line,
-  });
-  const meta = penpot.shapes.text.create({
-    x: 50, y: ty + t.line + 4, width: 600, height: 16,
-    text: `${t.role} · ${t.size}px / ${t.line}px · ${t.weight}`,
-    font: "Noto Sans Mono", fontSize: 10, fontWeight: "400", lineHeight: 14,
-  });
+  const sample = penpot.createText(t.sample);
+  sample.x = 50; sample.y = ty;
+  sample.resize(600, t.line + 4);
+  sample.fontFamily = t.role === "result" ? "Noto Sans Mono" : "Noto Sans Display";
+  sample.fontSize = String(t.size);
+  sample.fontWeight = String(t.weight);
+  sample.lineHeight = String(t.line);
+  sample.growType = "auto-height";
+  sample.fills = [{ fillColor: "#1f2937", fillOpacity: 1 }];
+  typoBoard.appendChild(sample);
+
+  const meta = penpot.createText(`${t.role} · ${t.size}px / ${t.line}px · ${t.weight}`);
+  meta.x = 50; meta.y = ty + t.line + 6;
+  meta.resize(600, 16);
+  meta.fontFamily = "Noto Sans Mono";
+  meta.fontSize = "10"; meta.fontWeight = "400"; meta.lineHeight = "14";
+  meta.growType = "auto-height";
+  meta.fills = [{ fillColor: "#6b7280", fillOpacity: 1 }];
+  typoBoard.appendChild(meta);
+
   ty += 80;
 }
 
-// ─── 6. Board «Spacing & radius» ───
-const spacBoard = penpot.boards.create({
-  x: 1800, y: 0, width: 600, height: 100 + (__spacing.length + __radii.length) * 70,
-  name: "Spacing & radius", fill: penpot.colors.white(),
-});
+// ─── 5. Board «Spacing & radius» ───
+const spacBoard = penpot.createBoard();
+spacBoard.name = "Spacing & radius";
+spacBoard.x = 1800; spacBoard.y = 0;
+spacBoard.resize(600, 100 + (__spacing.length + __radii.length) * 70);
+spacBoard.fills = [{ fillColor: "#ffffff", fillOpacity: 1 }];
+
 let sy = 50;
 for (const s of __spacing) {
-  const swatch = penpot.shapes.rect.create({
-    x: 50, y: sy, width: s.value, height: 24,
-    fill: penpot.colors.create({ color: "#65A0F7", opacity: 0.5 }),
-  });
-  const label = penpot.shapes.text.create({
-    x: 100, y: sy - 4, width: 400, height: 32,
-    text: `${s.token} = ${s.value}px   ${s.role}`,
-    font: "Noto Sans Mono", fontSize: 12, fontWeight: "400", lineHeight: 16,
-  });
+  const swatch = penpot.createRectangle();
+  swatch.x = 50; swatch.y = sy;
+  swatch.resize(s.value, 24);
+  swatch.fills = [{ fillColor: "#65A0F7", fillOpacity: 0.5 }];
+  spacBoard.appendChild(swatch);
+
+  const label = penpot.createText(`${s.token} = ${s.value}px   ${s.role}`);
+  label.x = 100; label.y = sy - 4;
+  label.resize(450, 32);
+  label.fontFamily = "Noto Sans Mono";
+  label.fontSize = "12"; label.fontWeight = "400"; label.lineHeight = "16";
+  label.growType = "auto-height";
+  label.fills = [{ fillColor: "#1f2937", fillOpacity: 1 }];
+  spacBoard.appendChild(label);
+
   sy += 70;
 }
 for (const r of __radii) {
-  const swatch = penpot.shapes.rect.create({
-    x: 50, y: sy, width: 80, height: 40,
-    fill: penpot.colors.create({ color: "#65A0F7", opacity: 0.15 }),
-    radius: r.value,
-  });
-  const label = penpot.shapes.text.create({
-    x: 150, y: sy + 12, width: 400, height: 16,
-    text: `${r.token} = ${r.value}px   ${r.role}`,
-    font: "Noto Sans Mono", fontSize: 12, fontWeight: "400", lineHeight: 16,
-  });
+  const swatch = penpot.createRectangle();
+  swatch.x = 50; swatch.y = sy;
+  swatch.resize(80, 40);
+  swatch.fills = [{ fillColor: "#65A0F7", fillOpacity: 0.15 }];
+  swatch.borderRadius = r.value;
+  spacBoard.appendChild(swatch);
+
+  const label = penpot.createText(`${r.token} = ${r.value}px   ${r.role}`);
+  label.x = 150; label.y = sy + 12;
+  label.resize(400, 16);
+  label.fontFamily = "Noto Sans Mono";
+  label.fontSize = "12"; label.fontWeight = "400"; label.lineHeight = "16";
+  label.growType = "auto-height";
+  label.fills = [{ fillColor: "#1f2937", fillOpacity: 1 }];
+  spacBoard.appendChild(label);
+
   sy += 70;
 }
 
-// ─── 7. Board «Card anatomy» ───
-const cardBoard = penpot.boards.create({
-  x: 2500, y: 0,
-  width: __card_anatomy.body_width + 100,
-  height: __card_anatomy.header_height + 200 + __card_anatomy.result_strip_h,
-  name: "Card anatomy", fill: penpot.colors.white(),
-});
-// Header (34px, accent fill)
-const header = penpot.shapes.rect.create({
-  x: 50, y: 50,
-  width: __card_anatomy.body_width, height: __card_anatomy.header_height,
-  fill: penpot.colors.create({ color: "#65A0F7", opacity: 0.18 }),
-  radius: __card_anatomy.corner_radius,
-});
-// Body (padding 10px)
+// ─── 6. Board «Card anatomy» ───
+const cardBoard = penpot.createBoard();
+cardBoard.name = "Card anatomy";
+cardBoard.x = 2500; cardBoard.y = 0;
+cardBoard.resize(
+  __card_anatomy.body_width + 100,
+  __card_anatomy.header_height + 200 + __card_anatomy.result_strip_h
+);
+cardBoard.fills = [{ fillColor: "#ffffff", fillOpacity: 1 }];
+
+// Header (34px, accent fill α0.18)
+const header = penpot.createRectangle();
+header.x = 50; header.y = 50;
+header.resize(__card_anatomy.body_width, __card_anatomy.header_height);
+header.fills = [{ fillColor: "#65A0F7", fillOpacity: 0.18 }];
+header.borderRadius = __card_anatomy.corner_radius;
+cardBoard.appendChild(header);
+
+// Body (white with accent stroke)
 const bodyY = 50 + __card_anatomy.header_height;
-const body = penpot.shapes.rect.create({
-  x: 50, y: bodyY,
-  width: __card_anatomy.body_width, height: 120,
-  fill: penpot.colors.white(),
-  stroke: penpot.colors.create({ color: "#65A0F7", opacity: 0.40 }),
-  strokeSize: 1,
-});
+const body = penpot.createRectangle();
+body.x = 50; body.y = bodyY;
+body.resize(__card_anatomy.body_width, 120);
+body.fills = [{ fillColor: "#ffffff", fillOpacity: 1 }];
+body.strokes = [{ strokeColor: "#65A0F7", strokeOpacity: 0.40, strokeStyle: "solid", strokeWidth: 1, strokeAlignment: "center" }];
+cardBoard.appendChild(body);
+
 // Sample Numi-list текст
-const sampleText = penpot.shapes.text.create({
-  x: 60, y: bodyY + __card_anatomy.body_padding,
-  width: __card_anatomy.body_width - 2 * __card_anatomy.body_padding,
-  height: 80,
-  text: "rps = 1000 rps\nservice_rate = 1200 rps\nservers = 2",
-  font: "Noto Sans Mono", fontSize: 14, fontWeight: "400", lineHeight: 20,
-});
+const sampleText = penpot.createText("rps = 1000 rps\nservice_rate = 1200 rps\nservers = 2");
+sampleText.x = 60; sampleText.y = bodyY + __card_anatomy.body_padding;
+sampleText.resize(__card_anatomy.body_width - 2 * __card_anatomy.body_padding, 80);
+sampleText.fontFamily = "Noto Sans Mono";
+sampleText.fontSize = "14"; sampleText.fontWeight = "400"; sampleText.lineHeight = "20";
+sampleText.growType = "auto-height";
+sampleText.fills = [{ fillColor: "#1f2937", fillOpacity: 1 }];
+cardBoard.appendChild(sampleText);
+
 // Result strip
 const resultStripY = bodyY + 120 + 8;
-const resultStrip = penpot.shapes.rect.create({
-  x: 50, y: resultStripY,
-  width: __card_anatomy.body_width, height: __card_anatomy.result_strip_h,
-  fill: penpot.colors.create({ color: "#21A88C", opacity: 0.18 }),
-});
-const resultText = penpot.shapes.text.create({
-  x: 60, y: resultStripY + 3,
-  width: __card_anatomy.body_width - 20, height: __card_anatomy.result_strip_h - 6,
-  text: "mm1(rps, service_rate, servers) = 0.833",
-  font: "Noto Sans Mono", fontSize: 12, fontWeight: "700", lineHeight: 16,
-});
+const resultStrip = penpot.createRectangle();
+resultStrip.x = 50; resultStrip.y = resultStripY;
+resultStrip.resize(__card_anatomy.body_width, __card_anatomy.result_strip_h);
+resultStrip.fills = [{ fillColor: "#21A88C", fillOpacity: 0.18 }];
+cardBoard.appendChild(resultStrip);
+
+const resultText = penpot.createText("mm1(rps, service_rate, servers) = 0.833");
+resultText.x = 60; resultText.y = resultStripY + 3;
+resultText.resize(__card_anatomy.body_width - 20, __card_anatomy.result_strip_h - 6);
+resultText.fontFamily = "Noto Sans Mono";
+resultText.fontSize = "12"; resultText.fontWeight = "700"; resultText.lineHeight = "16";
+resultText.growType = "auto-height";
+resultText.fills = [{ fillColor: "#0d5b4f", fillOpacity: 1 }];
+cardBoard.appendChild(resultText);
 
 return {
   pageId: page.id,
-  colors: colorRefs.length,
-  typographies: typoRefs.length,
-  boards: ["Color palette", "Typography scale", "Spacing & radius", "Card anatomy"],
+  pageName: page.name,
+  colors: colorRefs,
+  typographies: typoRefs,
+  boards: boardNames,
   cardAnatomy: __card_anatomy,
 };
 """
 
 
 def _inject(client_js: str, replacements: dict[str, str]) -> str:
-    """Заменить __PLACEHOLDER__ на JSON-литералы."""
     out = client_js
     for placeholder, json_value in replacements.items():
         out = out.replace(placeholder, json_value)
@@ -315,11 +379,7 @@ def _inject(client_js: str, replacements: dict[str, str]) -> str:
 
 
 def seed_design_system(client: PenpotMCP) -> dict[str, Any]:
-    """Залить дизайн-систему CanvasDesk в активный файл Penpot.
-
-    Возвращает результат выполнения JS (созданные ids и счётчики).
-    Бросает PenpotMCPError при ошибке (нет подключения и т.п.).
-    """
+    """Залить дизайн-систему CanvasDesk в активный файл Penpot."""
     js = _inject(
         SEED_JS_TEMPLATE,
         {
@@ -332,9 +392,7 @@ def seed_design_system(client: PenpotMCP) -> dict[str, Any]:
         },
     )
     raw = client.execute_code(js)
-    # execute_code возвращает текст; пытаемся распарсить JSON
     if isinstance(raw, str):
-        # На случай если вернулся plain text
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
@@ -343,7 +401,6 @@ def seed_design_system(client: PenpotMCP) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    # Quick sanity test: вывести JS без отправки
     js = _inject(
         SEED_JS_TEMPLATE,
         {
