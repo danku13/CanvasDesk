@@ -14,3 +14,16 @@ demo-out/
 # FR-036: wasm-песочница тестов canvas-core (только в wasm-прогонах)
 .wasi-scratch/
 crates/canvas-core/.wasi-scratch/
+
+# Penpot MCP — НИКАКИХ токенов в репозитории (см. docs/penpot-mcp.md).
+# Токен передаётся через env-переменные PENPOT_MCP_URL или PENPOT_MCP_TOKEN
+# в каждом запуске. Любой файл, попадающий в эти паттерны — гарантированно
+# вне репо.
+.env
+.env.*
+*.local
+*.local.*
+scripts/penpot_mcp_local*.py
+scripts/penpot_token*.txt
+**/penpot_token*
+
