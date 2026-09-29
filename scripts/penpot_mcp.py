@@ -312,7 +312,12 @@ class PenpotMCP:
 
         sub.add_parser(
             "seed-design-system",
-            help="Залить CanvasDesk design-system в активный файл Penpot",
+            help="Залить CanvasDesk design-system (primitives) в активный файл Penpot",
+        )
+
+        sub.add_parser(
+            "seed-all",
+            help="Залить все 3 страницы (UI Kit, Canvas Elements, Surfaces) в Penpot",
         )
 
         args = parser.parse_args()
@@ -378,6 +383,18 @@ class PenpotMCP:
                 client.initialize()
                 client._notify_initialized()
                 result = seed_design_system(client)
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 0
+            if args.cmd == "seed-all":
+                try:
+                    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                    from penpot_seed_all import seed_all
+                except ImportError as e:
+                    print(f"all-sider недоступен: {e}", file=sys.stderr)
+                    return 4
+                client.initialize()
+                client._notify_initialized()
+                result = seed_all(client)
                 print(json.dumps(result, ensure_ascii=False, indent=2))
                 return 0
         except PenpotMCPError as e:
