@@ -37,5 +37,11 @@ pub mod lex_v2;
 pub mod tokenizer;
 pub mod types;
 
+/// L1-транспорт к sidecar `laya-serve` (S2, feature `l1-laya`): HTTP-клиент
+/// `/v1/systemone`, lifecycle процесса, sha256-манифест весов, smoke.
+/// Дефолтная сборка крейта сетевых зависимостей не содержит.
+#[cfg(feature = "l1-laya")]
+pub mod laya;
+
 pub use domain::Verdict;
 pub use types::{OptionDesc, ScoreSource, ScoredOption, SuggestContext, SuggestEngine};
