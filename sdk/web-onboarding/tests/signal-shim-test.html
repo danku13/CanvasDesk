@@ -1,0 +1,148 @@
+<!doctype html>
+<!-- Test page for FR-028 v2 JS-side signal detection shim.
+     Mocks the winit canvas (body > canvas) and verifies that:
+       1. dblclick on canvas → emits canvas:note-created
+       2. Ctrl+P keydown → emits canvas:palette-opened (after 120ms)
+     Usage: open in a browser, results print to the log div.
+-->
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <title>FR-028 v2 — JS signal shim test</title>
+    <style>
+      body { font: 13px/1.5 system-ui, sans-serif; background: #14161a; color: #d5d9e0; }
+      .log { background: #0f1115; border: 1px solid #2a3138; border-radius: 6px;
+             padding: 8px 12px; font-family: monospace; font-size: 12px;
+             max-height: 300px; overflow-y: auto; }
+      .log .info { color: #8ab4ff; }
+      .log .pass { color: #4ade80; }
+      .log .fail { color: #ff6b6b; }
+    </style>
+  </head>
+  <body>
+    <h1>JS-side signal shim test</h1>
+    <p>Mocks body &gt; canvas (winit canvas). Verifies dblclick → canvas:note-created
+       and Ctrl+P → canvas:palette-opened signals fire on the tour bus.</p>
+    <div class="log" id="log"></div>
+
+    <!-- Mock winit canvas (real one is inserted by canvas-web's
+         renderer_launch module at runtime, but selector is the same). -->
+    <canvas id="mock-canvas"></canvas>
+
+    <!-- Load the tour bundle (vanilla JS) so we have a signal bus. -->
+    <script src="../canvasdesk-tour.js"></script>
+    <script>
+      // Move the mock canvas to body > canvas position (the shim
+      // queries "body > canvas"). Real winit inserts it there too.
+      var c = document.getElementById("mock-canvas");
+      document.body.appendChild(c);
+
+      var logEl = document.getElementById("log");
+      function log(lvl, msg) {
+        var div = document.createElement("div");
+        div.className = lvl;
+        div.textContent = "[" + lvl + "] " + msg;
+        logEl.appendChild(div);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      // Bootstrap the tour engine.
+      var tour = new CanvasDeskTour.Tour({
+        log: function (lvl, msg) { log(lvl, msg); },
+        // Disable persistence for the test.
+        storageKey: null,
+      });
+      window.__canvasdeskTour = tour;
+
+      // Track received signals.
+      var received = [];
+      tour.onSignal(function (name) {
+        received.push(name);
+        log("info", "signal received: " + name);
+      });
+
+      // ── Test 1: dblclick on canvas → canvas:note-created ────────
+      function test1_dblclick() {
+        return new Promise(function (resolve) {
+          received = [];
+          var canvas = document.querySelector("body > canvas");
+          log("info", "test1: dispatching dblclick on canvas");
+          canvas.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+          // Signal fires after 120ms (setTimeout in the shim).
+          setTimeout(function () {
+            if (received.indexOf("canvas:note-created") >= 0) {
+              log("pass", "test1: canvas:note-created emitted");
+              resolve(true);
+            } else {
+              log("fail", "test1: canvas:note-created NOT emitted; got " + JSON.stringify(received));
+              resolve(false);
+            }
+          }, 300);
+        });
+      }
+
+      // ── Test 2: Ctrl+P keydown → canvas:palette-opened ─────────
+      function test2_ctrlp() {
+        return new Promise(function (resolve) {
+          received = [];
+          log("info", "test2: dispatching Ctrl+P keydown");
+          var ev = new KeyboardEvent("keydown", {
+            key: "p", ctrlKey: true, bubbles: true, cancelable: true,
+          });
+          document.dispatchEvent(ev);
+          // Signal fires after 120ms.
+          setTimeout(function () {
+            if (received.indexOf("canvas:palette-opened") >= 0) {
+              log("pass", "test2: canvas:palette-opened emitted");
+              resolve(true);
+            } else {
+              log("fail", "test2: canvas:palette-opened NOT emitted; got " + JSON.stringify(received));
+              resolve(false);
+            }
+          }, 300);
+        });
+      }
+
+      // ── Run tests sequentially ──────────────────────────────────
+      // NOTE: The shim is defined INSIDE crates/canvas-web/index.html,
+      // NOT in standalone-test.html. This test page inlines the same shim
+      // so we can verify it in isolation.
+      (function () {
+        // Inline the same shim that's in crates/canvas-web/index.html.
+        function emit(name) {
+          if (window.__canvasdeskTour) {
+            setTimeout(function () {
+              window.__canvasdeskTour.signal(name);
+            }, 120);
+          }
+        }
+        document.addEventListener("keydown", function (e) {
+          if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey &&
+              (e.key === "p" || e.key === "P" || e.key === "з" || e.key === "З")) {
+            e.preventDefault();
+            emit("canvas:palette-opened");
+          }
+        }, true);
+        function install() {
+          var canvas = document.querySelector("body > canvas");
+          if (canvas) {
+            canvas.addEventListener("dblclick", function () {
+              emit("canvas:note-created");
+            });
+            log("info", "shim installed on canvas");
+            // Run tests after install.
+            test1_dblclick().then(function (t1) {
+              return test2_ctrlp().then(function (t2) {
+                if (t1 && t2) log("pass", "ALL TESTS PASSED");
+                else log("fail", "TESTS FAILED (t1=" + t1 + ", t2=" + t2 + ")");
+              });
+            });
+          } else {
+            requestAnimationFrame(install);
+          }
+        }
+        install();
+      })();
+    </script>
+  </body>
+</html>

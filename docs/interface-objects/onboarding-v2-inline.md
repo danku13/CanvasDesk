@@ -130,7 +130,95 @@ window.__canvasdeskTour.signal("canvas:note-created", { id: "n_1" });
 | `canvas:note-activated`  | После начала редактирования заметки       | `firstRunInline` / `create-note` (alt)   |
 | `canvas:palette-opened`  | После открытия палитры Ctrl+P             | `paletteTour` / `open`                   |
 | `canvas:palette-closed`  | После закрытия палитры                    | future: `paletteTour` cleanup steps      |
+| `canvas:scheme-gallery-opened` | После открытия галереи схем        | `schemeGalleryTour` / `open`             |
+| `canvas:scheme-preview-shown`  | После открытия превью схемы        | `schemeGalleryTour` / `preview`          |
+| `canvas:scheme-applied`        | После применения схемы в активный канвас | `schemeGalleryTour` / `apply`    |
 | `tour:<id>:complete`     | Эмитит сам движок по завершении сценария  | хост: телеметрия / `onboarding_done`     |
+
+### 5.1 Текущая реализация (production)
+
+Сигналы `canvas:palette-opened` и `canvas:note-created` эмитятся
+**JS-side шимом** в `crates/canvas-web/index.html` (FR-028 v2):
+
+- **Ctrl+P keydown** (существующий W9 шим preventDefault): после
+  preventDefault, через 120ms вызывает
+  `window.__canvasdeskTour.signal("canvas:palette-opened")`. WASM-side
+  успевает открыть палитру (`template_ui.rs`) → tour продвигается.
+- **dblclick на `body > canvas`**: листенер (ставится через
+  `requestAnimationFrame` retry, т.к. winit-web вставляет canvas в DOM
+  асинхронно) → `window.__canvasdeskTour.signal("canvas:note-created")`.
+  False positive: dblclick на существующей ноде = edit mode; в контексте
+  тура «создайте заметку» семантика корректна.
+
+Эти сигналы **не требуют Rust-side wiring** и работают в production
+сегодня (фикс блокера из предыдущей итерации).
+
+См. `sdk/web-onboarding/tests/signal-shim-test.html` (HTML-страница с
+mock canvas + встроенным шимом) и `tests/test_signal_shim.py` (Python
+Playwright-раннер).
+
+### 5.2 Rust-side signal emission (TODO — design, не реализовано)
+
+Сигналы `canvas:scheme-gallery-opened`, `canvas:scheme-preview-shown`,
+`canvas:scheme-applied` **не покрыты JS-side шимом** — нет hotkey для
+scheme-gallery, нет DOM-событий для preview/apply. Требуется Rust-side
+эмиссия.
+
+**Design (контракт для будущего PR с Rust dev env):**
+
+1. **`AppEvent::TourSignal(String)` variant** в
+   `crates/canvas-app/src/app.rs::AppEvent`. Pure addition — не
+   инфицировать существующие match arms; canvas-app просто шлёт
+   событие наружу через `EventLoopProxy::send_event`. Это событие
+   получает **внешний consumer** (canvas-web wrapper), не сам App.
+
+2. **`pending_tour_signals: Vec<String>` field в `App`** +
+   `pub fn push_tour_signal(&mut self, name: &str)` (мутатор) +
+   `pub fn drain_tour_signals(&mut self) -> Vec<String>` (drain).
+   Поле — `#[serde(skip)]` (не часть config.toml); для нативных
+   rlib-тестов остаётся пустым (callback None → drain возвращает
+   пустой Vec).
+
+3. **Эмиссия из `App`** — вызовы `push_tour_signal` в:
+   - `crates/canvas-app/src/app.rs::create_note_at` →
+     `push_tour_signal("canvas:note-created")`
+   - `crates/canvas-app/src/template_ui.rs` (5 мест `panel.open = true`)
+     → `push_tour_signal("canvas:palette-opened")`
+   - `crates/canvas-app/src/app.rs::scheme_gallery.open()` (line ~6183)
+     → `push_tour_signal("canvas:scheme-gallery-opened")`
+   - `crates/canvas-app/src/app.rs::apply_scheme` (line ~4787) →
+     `push_tour_signal("canvas:scheme-applied")`
+   - scheme preview open → `push_tour_signal("canvas:scheme-preview-shown")`
+
+4. **Wrapper ApplicationHandler в `crates/canvas-web/src/tour_aware_app.rs`**
+   (новый модуль) — оборачивает `App`, делегирует все методы
+   `ApplicationHandler<AppEvent>` во внутренний App, после каждого
+   `window_event` / `user_event` / `about_to_wait` вызывает
+   `inner.drain_tour_signals()` и для каждого сигнала —
+   `crate::tour_signal::emit(name)`.
+
+5. **Изменение в `crates/canvas-web/src/app_spawn.rs`** — заменить
+   `event_loop.spawn_app(app)` на `event_loop.spawn_app(TourAwareApp::new(app))`.
+
+6. **Реализация `tour_signal::emit` уже готова**
+   (`crates/canvas-web/src/tour_signal.rs`, commit bed667e): вызывает
+   `window.__canvasdeskTour.signal(name)` через `web_sys::window()` +
+   `js_sys::Reflect::get`. Gated `#[cfg(target_arch = "wasm32")]`.
+
+**Инварианты реализации (для приёмки):**
+
+- Native rlib-тесты остаются зелёными (callback None → drain возвращает
+  пустой Vec, `tour_signal::emit` — no-op stub).
+- wasm32 build не падает ( TourAwareApp реализует ApplicationHandler
+  корректно, делегирование не ломает существующие обработчики).
+- Существующие regression-тесты (11/11) проходят без изменений
+  (сигналы эмитятся, JS-side шим остаётся как fallback для dev-сервера
+  без wrapper'а).
+
+**Альтернатива (отвергнута):** `AppEvent::TourSignal(String)` без
+pending_signals — App RECEIVES события, не эмитит наружу. Не подходит,
+т.к. App::create_note_at — это внутренний метод, не имеет
+EventLoopProxy под рукой.
 
 ---
 
@@ -224,6 +312,26 @@ Puppeteer/Playwright:
 
 ## 10. История изменений
 
+- `2026-09-29` — агент: добивка v2 — фикс блокера + JS-side signal
+  detection + CI + документация:
+  - **Inline bundle**: `canvasdesk-tour.js` (\~48 КБ) теперь inline
+    внутри `crates/canvas-web/index.html` через
+    `<script data-cd-tour-bundle="inline">...</script>` блок. Trunk
+    больше не копирует отдельный JS-файл (хук `[[hooks]]` удалён —
+    был ненадёжным, env var path / timing). Скрипт
+    `scripts/inline_tour_bundle.py` регенерирует inline-блок при
+    пересборке bundle из TS-источника.
+  - **JS-side signal shim** (\S 5.1): Ctrl+P keydown \+ dblclick на
+    `body > canvas` эмитят `canvas:palette-opened` / `canvas:note-created`
+    в tour-bus. Делает `paletteTour` и `firstRunInline` рабочими в
+    проде без Rust-side wiring.
+  - **CI workflow** `.github/workflows/tour-tests.yml`: 11 Playwright
+    regression тестов + signal-shim тест как гейт на PR.
+  - **Документация** (\S 5.2): design doc для Rust-side signal emission
+    (AppEvent::TourSignal + pending_signals + TourAwareApp wrapper) —
+    для будущего PR с Rust dev env.
+  - Tests: `sdk/web-onboarding/tests/test_signal_shim.py` +
+    `signal-shim-test.html` (HTML + Python runner).
 - `2026-09-26` — агент: реализация v2 inline-тура в сессии:
   TS-библиотека `sdk/web-onboarding/` (7 файлов: types, positioning,
   highlight, tooltip, actions, tour, styles + index + 4 сценария),

@@ -12,16 +12,15 @@
 target = "index.html"
 dist = "../../target/dist"
 
-# FR-028 v2: копирование inline-tour bundle (sdk/web-onboarding/) в dist —
-# index.html подключает `<script src="canvasdesk-tour.js">` (относительно
-# dist-корня). Без этой директивы bundle при dev-сервере не находится,
-# движок тура не инициализируется. Источник — vanilla JS (не требует
-# сборки), копия в dist — всегда свежая (mtime обновляется при trunk
-# build/serve). См. sdk/web-onboarding/README.md.
-[[hooks]]
-stage = "build"
-command = "sh"
-command_arguments = ["-c", "cp ../../sdk/web-onboarding/canvasdesk-tour.js ${TRUNK_STAGING_DIR:-../../target/dist}/canvasdesk-tour.js"]
+# FR-028 v2 (inline-tour bundle): ранее использовался `[[hooks]] stage="build"`
+# для копирования `sdk/web-onboarding/canvasdesk-tour.js` в dist — Trunk
+# по умолчанию не копирует plain `<script src>` файлы. Хук оказался
+# ненадёжным (env var path / timing / platform). Решено: bundle теперь
+# inline внутри `index.html` как `<script data-cd-tour-bundle="inline">`
+# блок — Trunk обрабатывает index.html и сам инлайнит содержимое в dist
+# index.html. Копирование не требуется. См. `scripts/inline_tour_bundle.py`
+# (регенерация inline-блока из sdk/web-onboarding/canvasdesk-tour.js при
+# пересборке bundle из TS-источника).
 
 [serve]
 # приёмка прошивки W4: `trunk serve` → http://127.0.0.1:8080
