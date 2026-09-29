@@ -320,6 +320,11 @@ class PenpotMCP:
             help="Залить все 3 страницы (UI Kit, Canvas Elements, Surfaces) в Penpot",
         )
 
+        sub.add_parser(
+            "seed-surfaces-ext",
+            help="Залить 18 недостающих поверхностей (WORLD, SETTINGS, DOCS, EDITOR и др.)",
+        )
+
         args = parser.parse_args()
 
         try:
@@ -395,6 +400,18 @@ class PenpotMCP:
                 client.initialize()
                 client._notify_initialized()
                 result = seed_all(client)
+                print(json.dumps(result, ensure_ascii=False, indent=2))
+                return 0
+            if args.cmd == "seed-surfaces-ext":
+                try:
+                    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                    from penpot_seed_surfaces_ext import seed_extended
+                except ImportError as e:
+                    print(f"surfaces-ext-sider недоступен: {e}", file=sys.stderr)
+                    return 4
+                client.initialize()
+                client._notify_initialized()
+                result = seed_extended(client)
                 print(json.dumps(result, ensure_ascii=False, indent=2))
                 return 0
         except PenpotMCPError as e:
