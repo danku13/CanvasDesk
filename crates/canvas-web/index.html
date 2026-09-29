@@ -9,6 +9,83 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>CanvasDesk — web</title>
+    <!-- FR-028 v2 (language picker): первый экран — выбор языка web-версии.
+         Запускается СИНХРОННО до всех остальных скриптов (включая WASM
+         init Trunk'а в конце body). Если localStorage уже содержит
+         canvasdesk.config (с полем language) — пикер не показывается,
+         приложение грузится на выбранном языке. Если нет — пикер
+         блокирует экран overlay'ем, по клику на кнопку записывает
+         минимальный TOML `language = "ru"` или `language = "en"` в
+         localStorage и перезагружает страницу (так canvas-app::load_settings
+         гарантированно подхватит выбор до WASM init). -->
+    <style>
+      #lang-picker-overlay {
+        position: fixed; inset: 0; z-index: 100000;
+        background: #14161a;
+        display: flex; align-items: center; justify-content: center;
+        flex-direction: column; gap: 24px;
+        color: #d5d9e0;
+        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      #lang-picker-overlay[hidden] { display: none; }
+      #lang-picker-overlay h1 {
+        font-size: 22px; color: #f3f5f8; font-weight: 600; margin: 0;
+      }
+      #lang-picker-overlay p { color: #8b95a3; margin: 0; }
+      #lang-picker-overlay .buttons { display: flex; gap: 12px; flex-wrap: wrap; }
+      #lang-picker-overlay button {
+        background: #1d2128; color: #f3f5f8;
+        border: 1px solid #333a44; border-radius: 8px;
+        font: 600 16px/1.4 system-ui, sans-serif;
+        padding: 12px 24px; cursor: pointer; min-width: 140px;
+        transition: background 150ms ease;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #lang-picker-overlay button:hover { background: #2e353f; }
+      #lang-picker-overlay button:focus-visible {
+        outline: 2px solid #8ab4ff; outline-offset: 2px;
+      }
+    </style>
+    <script>
+      (function () {
+        // Проверяем, есть ли уже canvasdesk.config в localStorage.
+        // Если есть — приложение уже было запущено, язык выбран (или
+        // пользователь явно сбросил — тогда покажем пикер заново).
+        try {
+          var ls = window.localStorage;
+          if (ls && ls.getItem("canvasdesk.config") !== null) {
+            return; // язык уже выбран — пикер не нужен
+          }
+        } catch (e) {
+          // localStorage недоступен (приватный режим) — пикер всё равно
+          // покажем, но выбор не сохранится (canvas-app дефолт = Ru).
+        }
+        // Показываем overlay — он блокирует экран до клика.
+        document.addEventListener("DOMContentLoaded", function () {
+          var overlay = document.getElementById("lang-picker-overlay");
+          if (!overlay) return;
+          overlay.hidden = false;
+          function pick(lang) {
+            // Записываем минимальный TOML в localStorage — canvas-app
+            // через load_settings::toml::from_str подхватит `language = "ru"`
+            // и применит к Settings. Остальные поля — serde(default).
+            try {
+              var ls = window.localStorage;
+              if (ls) ls.setItem("canvasdesk.config", 'language = "' + lang + '"');
+            } catch (e) { /* localStorage недоступен — продолжаем */ }
+            // Перезагружаем страницу — WASM init начнётся заново и
+            // подхватит новый localStorage.
+            window.location.reload();
+          }
+          var btns = overlay.querySelectorAll("button[data-lang]");
+          for (var i = 0; i < btns.length; i++) {
+            btns[i].addEventListener("click", function (e) {
+              pick(e.currentTarget.getAttribute("data-lang"));
+            });
+          }
+        });
+      })();
+    </script>
     <script>
       /* M8/W4 web-compat шим (wasm-port §7, «WebGPU-драйверные баги
          Chromium» — конкретный случай дрейфа спеки). wgpu 22 просит у
@@ -350,11 +427,43 @@
           handlePut: (name, handle) =>
             tx("handles", "readwrite", (s) => s.put(handle, name)),
           handleGet: (name) => tx("handles", "readonly", (s) => s.get(name)),
+          /* FR-028 v2: read current language from localStorage
+             canvasdesk.config (TOML `language = "ru"` or `"en"`).
+             Tour engine (canvasdesk-tour.js) and dropdown picker use
+             this to choose between ru/en scenario variants. Returns
+             "ru" (default) if localStorage is missing/unparseable. */
+          getLanguage: function () {
+            try {
+              var ls = window.localStorage;
+              if (!ls) return "ru";
+              var text = ls.getItem("canvasdesk.config");
+              if (!text) return "ru";
+              // Minimal TOML parser for `language = "..."` line —
+              // avoids pulling a full TOML lib in JS. If the regex
+              // misses, defaults to "ru" (canvas-app default).
+              var m = text.match(/^language\s*=\s*"([^"]+)"/m);
+              return m ? (m[1] === "en" ? "en" : "ru") : "ru";
+            } catch (e) { return "ru"; }
+          },
         };
       })();
     </script>
   </head>
   <body>
+    <!-- FR-028 v2 (language picker overlay): показывается только при
+         первом открытии (если в localStorage нет canvasdesk.config).
+         Скрипт в <head> ставит hidden=false на DOMContentLoaded.
+         Кнопки data-lang="ru"/"en" пишут TOML в localStorage и
+         перезагружают страницу. Стиль — в <head>. -->
+    <div id="lang-picker-overlay" hidden>
+      <h1>CanvasDesk</h1>
+      <p>Choose language / Выберите язык</p>
+      <div class="buttons">
+        <button type="button" data-lang="ru">Русский</button>
+        <button type="button" data-lang="en">English</button>
+      </div>
+    </div>
+
     <!-- M8/W6: панель хранилища — листенеры вешает canvas_web::toolbar;
          подпись «Недавние» обновляется из Rust (set_recent_label).
          FR-028 v2 (inline tour, sdk/web-onboarding/): четвёртая кнопка
@@ -1266,9 +1375,10 @@
       },
       {
         id: "write-formula", title: "Попробуйте формулу Numi",
-        body: "В заметке напишите: rps = 1200 и на следующей строке daily = rps / 86400. Заметка подсветит результат вычисления. Numi понимает единицы (rps, ms, MB/s) и подсказки при вводе.",
+        body: "В заметке напишите: rps = 1200 и на следующей строке daily = rps / 86400. Заметка подсветит результат вычисления. Numi понимает единицы (rps, ms, MB/s) и подсказки при вводе. Завершите редактирование (Esc или клик мимо) — «Далее» активируется, когда формула вычислена.",
         side: "top", anchor: { kind: "rect", rect: { x: 80, y: 80, width: 320, height: 80 } },
-        primaryLabel: "Понятно"
+        passive: true, primaryLabel: "Жду формулу…",
+        waitFor: { kind: "signal", signals: ["canvas:formula-written"], timeout: 180000 }
       },
       {
         id: "connect-nodes", title: "Связи и поток значений",
@@ -1427,12 +1537,233 @@
     ]
   };
 
+  var en = {
+    toolbarTourScenario: {
+      id: "cd-toolbar-tour",
+      name: "Storage Toolbar Tour",
+      primaryLabel: "Next", skipLabel: "Skip",
+      backLabel: "Back", doneLabel: "Done", skippable: true,
+      steps: [
+        {
+          id: "intro", title: "Storage Toolbar",
+          body: "Top-right corner — three buttons for managing .canvas files. We'll walk through each.",
+          side: "bottom", anchor: { kind: "selector", selector: "#w6-toolbar" }
+        },
+        {
+          id: "open", title: "Open from Disk",
+          body: "Opens the system file picker for .canvas files. Once selected, the file becomes the active canvas and auto-saves back to disk.",
+          side: "bottom", anchor: { kind: "selector", selector: "#btn-open" },
+          advanceOnClick: "#btn-open", primaryLabel: "Got it"
+        },
+        {
+          id: "recent", title: "Recent",
+          body: "Button shows the most recently opened canvas. Full name is in the title tooltip; width is bounded so the panel never extends off-screen.",
+          side: "bottom", anchor: { kind: "selector", selector: "#btn-recent" }
+        },
+        {
+          id: "export", title: "Export .canvas",
+          body: "Downloads the last saved version of the canvas. Useful for backup or if file-system access is unavailable (e.g., browser without File System Access API).",
+          side: "bottom", anchor: { kind: "selector", selector: "#btn-export" }
+        },
+        {
+          id: "done", title: "Done",
+          body: "The canvas always saves automatically — these buttons are for manual control.",
+          side: "center"
+        }
+      ]
+    },
+    firstRunInlineScenario: {
+      id: "cd-first-run-inline",
+      name: "First Run: Interactive Tour",
+      primaryLabel: "Next", skipLabel: "Skip",
+      backLabel: "Back", doneLabel: "Done",
+      skippable: true, autoAdvance: false,
+      steps: [
+        {
+          id: "welcome", title: "This is an interactive tour",
+          body: "The carousel cards explained the basics. Now let's try for real — each step has an action, and the Next button activates only after you perform it. Exit via Esc is always available.",
+          side: "center"
+        },
+        {
+          id: "locate-toolbar", title: "Storage Toolbar",
+          body: "Top-right corner — buttons for managing .canvas files. Open, recent, export. Canvas auto-saves to the selected file.",
+          side: "bottom", anchor: { kind: "selector", selector: "#w6-toolbar" }
+        },
+        {
+          id: "create-note", title: "Create your first note",
+          body: "Double-click an empty area on the canvas. A new note appears with the cursor inside — type text, markdown, or a Numi formula. Next activates when the note is created.",
+          side: "center", passive: true, primaryLabel: "Waiting for action…",
+          waitFor: { kind: "signal", signals: ["canvas:note-created", "canvas:note-activated"], timeout: 120000 }
+        },
+        {
+          id: "write-formula", title: "Try a Numi formula",
+          body: "In the note, write: rps = 1200, then on the next line daily = rps / 86400. The note shows the result. Numi understands units (rps, ms, MB/s) and shows hints while typing. Finish editing (Esc or click outside) — Next activates when the formula is computed.",
+          side: "top", anchor: { kind: "rect", rect: { x: 80, y: 80, width: 320, height: 80 } },
+          passive: true, primaryLabel: "Waiting for formula…",
+          waitFor: { kind: "signal", signals: ["canvas:formula-written"], timeout: 180000 }
+        },
+        {
+          id: "connect-nodes", title: "Edges and value flow",
+          body: "Create a second note. Drag from the first note's edge to the second — an edge appears. In the first note write $in = 10, in the second $in * 2. The edge passes the value and the second note shows 20.",
+          side: "top", anchor: { kind: "rect", rect: { x: 80, y: 80, width: 320, height: 80 } },
+          primaryLabel: "Got it"
+        },
+        {
+          id: "palette", title: "Template Palette",
+          body: "Ctrl+P opens the palette of built-in nodes: unit-economics metrics (ARPU, LTV, CAC), infrastructure (DB, API-gateway, LB), flows (funnel-conv, retention-d7). Shift+click on the wheel inserts the selected template.",
+          side: "center"
+        },
+        {
+          id: "help", title: "Help button and F1",
+          body: "? — help menu: docs, repeat onboarding (carousel and this interactive tour), UI console. F1 — hotkeys list. Documentation for all features is in user-docs/.",
+          side: "center"
+        },
+        {
+          id: "done", title: "Done!",
+          body: "You've learned the basics. Everything else is available in the documentation as needed. Canvas saves automatically.",
+          side: "center"
+        }
+      ]
+    },
+    paletteTourScenario: {
+      id: "cd-palette-tour",
+      name: "Template Palette",
+      primaryLabel: "Next", skipLabel: "Skip",
+      backLabel: "Back", doneLabel: "Done", skippable: true,
+      steps: [
+        {
+          id: "intro", title: "Template Palette",
+          body: "CanvasDesk has built-in node templates: metrics, infrastructure, flows. You can drag them onto the canvas as ready-made blocks.",
+          side: "center"
+        },
+        {
+          id: "open", title: "Open the palette",
+          body: "Press Ctrl+P (or ⌘+P on Mac). The category wheel appears on the left.",
+          side: "center", passive: true, primaryLabel: "Waiting for palette to open…",
+          waitFor: { kind: "signal", signals: ["canvas:palette-opened"], timeout: 60000 }
+        },
+        {
+          id: "categories", title: "Categories",
+          body: "The wheel switches categories: Unit Economics, Product Analytics, Infrastructure, Patterns. Shift+click — category selection.",
+          side: "right", anchor: { kind: "rect", rect: { x: 0, y: 0, width: 240, height: 800 } }
+        },
+        {
+          id: "shift-click", title: "Shift+click — insert template",
+          body: "Shift+click on a template inserts it in the canvas center with default parameters. After insertion, parameters are editable via right-click.",
+          side: "right", anchor: { kind: "rect", rect: { x: 0, y: 0, width: 240, height: 800 } }
+        },
+        {
+          id: "done", title: "Done",
+          body: "Templates are building blocks for canvas schemes. Most models can be assembled in 5–10 minutes.",
+          side: "center"
+        }
+      ]
+    },
+    calculationsTourScenario: {
+      id: "cd-calculations-tour",
+      name: "Calculations in CanvasDesk",
+      primaryLabel: "Next", skipLabel: "Skip",
+      backLabel: "Back", doneLabel: "Done", skippable: true,
+      steps: [
+        {
+          id: "intro", title: "Formulas right in notes",
+          body: "Any note is a Numi formula: declare a variable, use units (rps, ms, MB/s), get the result. Edges between notes pass values — that's the flow.",
+          side: "center"
+        },
+        {
+          id: "assignment", title: "Variable Declaration",
+          body: "Format: name = expression. Example: rps = 1200. The note highlights the name and value; cursor is in the right-hand side editor.",
+          side: "top", anchor: { kind: "rect", rect: { x: 80, y: 120, width: 320, height: 60 } }
+        },
+        {
+          id: "units", title: "Units",
+          body: "Numi understands units: rps, ms, MB/s, €, users. They are checked for compatibility — you can't add rps and ms. Hints appear while typing.",
+          side: "top", anchor: { kind: "rect", rect: { x: 80, y: 180, width: 320, height: 60 } }
+        },
+        {
+          id: "value-flow", title: "Value Flow via Edges",
+          body: "An edge between notes passes a value. In the downstream note, $in — incoming value, $N — array of all incoming. Recomputation is instant on any note change.",
+          side: "top", anchor: { kind: "rect", rect: { x: 80, y: 240, width: 320, height: 60 } }
+        },
+        {
+          id: "whatif", title: "What-if Scenarios",
+          body: "Open the What-if panel (FR-017) and set value ranges — CanvasDesk calculates the result's sensitivity. Useful for unit-economics: \"what if conversion drops by 10%\".",
+          side: "center"
+        },
+        {
+          id: "monte-carlo", title: "Monte Carlo (FR-066)",
+          body: "For probabilistic models — set parameter distributions and CanvasDesk runs the simulation. Results display as a histogram in the result panel.",
+          side: "center"
+        },
+        {
+          id: "done", title: "Done",
+          body: "Calculations in CanvasDesk — Numi + value graph + simulations. No Excel needed.",
+          side: "center"
+        }
+      ]
+    },
+    schemeGalleryTourScenario: {
+      id: "cd-scheme-gallery-tour",
+      name: "Scheme Gallery",
+      primaryLabel: "Next", skipLabel: "Skip",
+      backLabel: "Back", doneLabel: "Done", skippable: true,
+      steps: [
+        {
+          id: "intro", title: "Scheme Gallery",
+          body: "Ready-made models: cohort-launch, intro-whatif, investment-case, runway, support-staffing, capacity-service, unit-economics, project-budget, renovation-estimate. Each is a starting point for a specific task — no need to build from scratch.",
+          side: "center"
+        },
+        {
+          id: "open", title: "Open the gallery",
+          body: "Ctrl+P (or ⌘+P on Mac) opens the gallery. Alternatively, click the Try button at the end of the v1 onboarding carousel. The step activates when the gallery is visible.",
+          side: "center", passive: true, primaryLabel: "Waiting for gallery to open…",
+          waitFor: { kind: "signal", signals: ["canvas:scheme-gallery-opened", "canvas:palette-opened"], timeout: 60000 }
+        },
+        {
+          id: "categories", title: "Scheme Categories",
+          body: "Left — list of categories: Unit Economics (ARPU, LTV, CAC, retention, funnel), Product Analytics (NPS, MAU, stickiness), Infrastructure (DB, API-gateway, LB, queue), Patterns (cohort-launch, intro-whatif, investment-case).",
+          side: "right", anchor: { kind: "rect", rect: { x: 0, y: 0, width: 240, height: 800 } },
+          primaryLabel: "Got it"
+        },
+        {
+          id: "preview", title: "Scheme Preview",
+          body: "Click a scheme card to preview: a mini-scheme with notes, formulas, edges. You can read the structure before applying. The step activates when preview opens.",
+          side: "center", passive: true, primaryLabel: "Open a preview…",
+          waitFor: { kind: "signal", signals: ["canvas:scheme-preview-shown"], timeout: 120000 }
+        },
+        {
+          id: "apply", title: "Apply the Scheme",
+          body: "In the preview — Apply button. The scheme becomes the active canvas (replacing the current scene — undo works). All formulas and edges are preserved, you can edit for your task. The step activates when applied.",
+          side: "center", passive: true, primaryLabel: "Waiting for scheme to apply…",
+          waitFor: { kind: "signal", signals: ["canvas:scheme-applied"], timeout: 180000 }
+        },
+        {
+          id: "edit", title: "Edit for your needs",
+          body: "After applying — the same channel as a regular canvas: double-click creates notes, drag from edge creates edges, right-click — color and parameters palette. Change variable values right in formula notes.",
+          side: "top", anchor: { kind: "rect", rect: { x: 80, y: 80, width: 400, height: 120 } },
+          primaryLabel: "Got it"
+        },
+        {
+          id: "save", title: "Saving",
+          body: "Canvas auto-saves to the selected file (W6: Open from disk → File System Access) or to OPFS (default). Export to .canvas — for backup or sharing.",
+          side: "bottom", anchor: { kind: "selector", selector: "#w6-toolbar" }
+        },
+        {
+          id: "done", title: "Done",
+          body: "Scheme gallery — quick start for typical models. Most user scenarios are covered by built-in schemes; custom ones — assemble from palette templates (Ctrl+P).",
+          side: "center"
+        }
+      ]
+    }
+  };
+
   var scenarios = {
     toolbarTourScenario: toolbarTourScenario,
     firstRunInlineScenario: firstRunInlineScenario,
     paletteTourScenario: paletteTourScenario,
     calculationsTourScenario: calculationsTourScenario,
-    schemeGalleryTourScenario: schemeGalleryTourScenario
+    schemeGalleryTourScenario: schemeGalleryTourScenario,
+    en: en
   };
 
   // ── exports ─────────────────────────────────────────────────────
@@ -1488,7 +1819,25 @@
             }
           }
 
-          var items = [  // Карточки сценария для dropdown-меню.
+          // FR-028 v2 i18n: pick scenario variant based on current language.
+          // window.__canvasdesk.getLanguage() reads canvasdesk.config TOML
+          // from localStorage (set by the language picker at first open).
+          // Defaults to "ru" if localStorage is missing/unparseable.
+          var lang = (window.__canvasdesk && window.__canvasdesk.getLanguage) ? window.__canvasdesk.getLanguage() : "ru";
+          var loc = (lang === "en") ? (scenarios.en || {}) : scenarios;
+
+          var items = (lang === "en") ? [
+            { s: loc.toolbarTourScenario, title: "Storage Toolbar",
+              desc: "#w6-toolbar: open / recent / export" },
+            { s: loc.firstRunInlineScenario, title: "First Run (interactive)",
+              desc: "Create a note, write a formula, link" },
+            { s: loc.paletteTourScenario, title: "Template Palette",
+              desc: "Ctrl+P, category wheel, Shift+click" },
+            { s: loc.calculationsTourScenario, title: "Numi Calculations",
+              desc: "Variables, units, value-flow, what-if, Monte-Carlo" },
+            { s: loc.schemeGalleryTourScenario, title: "Scheme Gallery",
+              desc: "Built-in models: cohort, unit-economics, runway, what-if" },
+          ] : [  // Russian (default)
             { s: scenarios.toolbarTourScenario, title: "Панель хранилища",
               desc: "Кнопки #w6-toolbar: открыть / недавние / экспорт" },
             { s: scenarios.firstRunInlineScenario, title: "Первый запуск (интерактив)",

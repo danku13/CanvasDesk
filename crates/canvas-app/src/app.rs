@@ -2302,6 +2302,24 @@ impl App {
                     // FR-014: живой пересчёт downstream (весь граф — дёшево)
                     if node_id.is_some() {
                         self.scene.recompute_flow();
+                        // FR-028 v2: уведомить tour-движок — пользователь
+                        // написал формулу Numi (assignment или expression)
+                        // и завершил редактирование. Шаг "write-formula"
+                        // в firstRunInlineScenario ждёт сигнал
+                        // canvas:formula-written (passive+waitFor).
+                        // Проверяем через line_kind — корректно ловит
+                        // и `= expr` и `name = expr` (Assignment).
+                        let has_formula = session
+                            .text()
+                            .lines()
+                            .any(|line| matches!(
+                                canvas_core::expr::line_kind(line),
+                                canvas_core::expr::NumiLineKind::Assignment { .. }
+                                    | canvas_core::expr::NumiLineKind::Expression
+                            ));
+                        if has_formula {
+                            self.push_tour_signal("canvas:formula-written");
+                        }
                     }
                 }
                 EditTarget::Edge(index) => {
