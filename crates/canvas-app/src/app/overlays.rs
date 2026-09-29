@@ -1842,27 +1842,38 @@ impl App {
         let items = hints_ui::hint_items(prefix, &ctx, self.settings.language);
         let token = hints_ui::token_before_caret(prefix, prefix.len()).0;
         self.hints.sync(token, items);
-        // Якорь — низ каретки (screen logical px): world-область тела ноды
-        // + позиция каретки в буфере (физ. px)
-        if self.hints.open {
-            let caret_rect = if let (Some(session), Some(renderer)) =
-                (self.editing.as_mut(), self.renderer.as_mut())
+        // Якорь — низ каретки (screen logical px) — см. sync_hints_anchor.
+        self.sync_hints_anchor();
+    }
+
+    /// Волна 1 (п.5, H4): якорь popup подсказок — НИЗ КАРЕТКИ в логических
+    /// px окна — пересчитывается КАЖДЫЙ кадр, пока popup открыт. Раньше
+    /// якорь обновлялся только при изменении текста (update_hints): при
+    /// зуме/панораме popup оставался на старом месте экрана и отрывался
+    /// от каретки. Математика: caret rect — px буфера редактора (буфер
+    /// рисуется 1:1 в физических px у origin области тела), /scale —
+    /// перевод в логические px.
+    pub(super) fn sync_hints_anchor(&mut self) {
+        if !self.hints.open {
+            return;
+        }
+        let caret_rect = if let (Some(session), Some(renderer)) =
+            (self.editing.as_mut(), self.renderer.as_mut())
+        {
+            session.caret_rect(renderer.font_system_mut())
+        } else {
+            None
+        };
+        if let (Some(session), Some(rect)) = (self.editing.as_ref(), caret_rect) {
+            if let Some((origin, _, _)) =
+                session_area(&self.scene.canvas, session, self.settings.edges_avoid_nodes)
             {
-                session.caret_rect(renderer.font_system_mut())
-            } else {
-                None
-            };
-            if let (Some(session), Some(rect)) = (self.editing.as_ref(), caret_rect) {
-                if let Some((origin, _, _)) =
-                    session_area(&self.scene.canvas, session, self.settings.edges_avoid_nodes)
-                {
-                    let screen = self.camera.world_to_screen(origin, self.viewport_logical());
-                    let scale = self.scale_factor();
-                    self.hints.anchor = [
-                        screen[0] + rect[0] / scale,
-                        screen[1] + (rect[1] + rect[3]) / scale,
-                    ];
-                }
+                let screen = self.camera.world_to_screen(origin, self.viewport_logical());
+                let scale = self.scale_factor();
+                self.hints.anchor = [
+                    screen[0] + rect[0] / scale,
+                    screen[1] + (rect[1] + rect[3]) / scale,
+                ];
             }
         }
     }

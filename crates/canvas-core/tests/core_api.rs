@@ -188,3 +188,67 @@ fn remove_first_line_variants() {
     none.text = None;
     assert_eq!(none.remove_first_line(), None);
 }
+
+/// Волна 1 (решение владельца, сессия 2026-09-30): migrate_legacy_titles —
+/// легаси-нода (без canvasdesk.title) при загрузке переносит первую
+/// ПРОЗА-строку в явный заголовок; дубли в теле не остаётся. Формульный
+/// лист, явный заголовок, шаблон и файл-нода не трогаются.
+#[test]
+fn migrate_legacy_titles_moves_prose_first_line() {
+    use canvas_core::templates::TemplateRef;
+    use canvas_core::Canvas;
+
+    let mut canvas = Canvas::default();
+    // 1) легаси-заметка с прозой первой строкой — мигрирует
+    canvas.nodes.push(canvas_core::Node::text(
+        "a",
+        "Медиа\nOrigin-трафик уходит в S3",
+        0.0,
+        0.0,
+    ));
+    // 2) Numi-лист первой строкой — НЕ мигрирует
+    canvas.nodes.push(canvas_core::Node::text(
+        "b",
+        "rps = 800 rps\nlatency = 12 ms",
+        0.0,
+        0.0,
+    ));
+    // 3) явный заголовок — не трогается
+    let mut c = canvas_core::Node::text("c", "Смета\nvm = 40 $", 0.0, 0.0);
+    c.set_title(Some("Мой заголовок".to_owned()));
+    canvas.nodes.push(c);
+    // 4) шаблонная — имя из снапшота, текст (лист) не трогается
+    let mut d = canvas_core::Node::text("d", "cache_hit = 0.8", 0.0, 0.0);
+    d.set_template(Some(TemplateRef {
+        id: "t".into(),
+        version: "1".into(),
+        expr: "x".into(),
+        params: Default::default(),
+        icon: String::new(),
+        color: String::new(),
+        name: Some("CDN".into()),
+        outputs: Vec::new(),
+    }));
+    canvas.nodes.push(d);
+
+    let migrated = canvas.migrate_legacy_titles();
+    assert_eq!(migrated, 1, "мигрирует только легаси-проза");
+    let a = canvas.node("a").expect("нода a");
+    assert_eq!(a.title(), Some("Медиа"));
+    assert_eq!(a.text.as_deref(), Some("Origin-трафик уходит в S3"));
+    let b = canvas.node("b").expect("нода b");
+    assert!(b.title().is_none(), "Numi-лист не мигрирует");
+    assert_eq!(b.text.as_deref(), Some("rps = 800 rps\nlatency = 12 ms"));
+    let c = canvas.node("c").expect("нода c");
+    assert_eq!(c.title(), Some("Мой заголовок"));
+    let d = canvas.node("d").expect("нода d");
+    assert!(d.title().is_none(), "шаблон — имя из снапшота");
+    assert_eq!(d.text.as_deref(), Some("cache_hit = 0.8"));
+
+    // Идемпотентность: повторный вызов — no-op
+    assert_eq!(
+        canvas.migrate_legacy_titles(),
+        0,
+        "повторная миграция — no-op"
+    );
+}

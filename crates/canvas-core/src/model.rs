@@ -868,6 +868,98 @@ impl Canvas {
         self.nodes.iter().find(|node| node.id == id)
     }
 
+    /// Волна 1 (решение владельца, сессия 2026-09-30): единый подход к
+    /// заголовку — «заголовок меняется только в заголовке». Первая строка
+    /// тела больше не деривится в шапку (render cards::title_for), поэтому
+    /// легаси-ноды (без `canvasdesk.title`) мигрируют при загрузке:
+    /// первая ПРОЗА-строка переезжает в явный заголовок
+    /// ([`Node::remove_first_line`]) — дубли в теле не остаётся.
+    ///
+    /// Пропускаются: не-заметки (группы/виджеты/файлы — заголовок из
+    /// label/имени файла), ноды с явным заголовком, шаблонные (имя из
+    /// снапшота), ноды без текста/с пустой первой строкой, ноды, чья
+    /// первая строка — Numi-формула (лист параметров остаётся телом).
+    ///
+    /// Возвращает число мигрированных нод (диагностика/тесты).
+    pub fn migrate_legacy_titles(&mut self) -> usize {
+        let mut migrated = 0;
+        let mut migrated_ids: Vec<String> = Vec::new();
+        for node in &mut self.nodes {
+            if node.kind() != NodeKind::Text
+                || node.file.is_some()
+                || node.title().is_some()
+                || node.template().is_some()
+            {
+                continue;
+            }
+            let Some(text) = node.text.clone() else {
+                continue;
+            };
+            let Some(first) = text.lines().next().filter(|line| !line.trim().is_empty()) else {
+                continue;
+            };
+            // Переносим только прозу: формульный лист (присваивания/выражения)
+            // — тело, его место в шапке не имеет смысла (same gate, что у
+            // FR-072 lazy-миграции при переименовании).
+            if !matches!(
+                crate::expr::line_kind(first),
+                crate::expr::NumiLineKind::Prose
+            ) {
+                continue;
+            }
+            let title = first.trim().to_owned();
+            if title.is_empty() {
+                continue;
+            }
+            node.set_title(Some(title));
+            node.remove_first_line();
+            migrated_ids.push(node.id.clone());
+            migrated += 1;
+        }
+        if migrated_ids.is_empty() {
+            return 0;
+        }
+        // Сдвиг адресации строк: тело мигрированной ноды потеряло первую
+        // строку — формульные строки поднялись на 1. Все ссылки «строка N»
+        // в её тексте обязаны сдвинуться, иначе ребро/подмена указывает на
+        // соседнюю строку (найдено схемой project-budget: advance_sum →
+        // «неизвестная переменная»).
+        for edge in &mut self.edges {
+            if let Some(line) = edge.from_line {
+                if migrated_ids.contains(&edge.from_node) {
+                    edge.from_line = Some(line.saturating_sub(1));
+                }
+            }
+        }
+        if let Some(scenarios) = self
+            .extra
+            .get_mut("canvasdesk")
+            .and_then(|ext| ext.get_mut("whatif"))
+            .and_then(|whatif| whatif.get_mut("scenarios"))
+            .and_then(Value::as_array_mut)
+        {
+            for scenario in scenarios {
+                let Some(overrides) = scenario.get_mut("overrides").and_then(Value::as_array_mut)
+                else {
+                    continue;
+                };
+                for item in overrides {
+                    let node = item.get("node").and_then(Value::as_str);
+                    let line = item.get("line").and_then(Value::as_u64);
+                    if let (Some(node), Some(line)) = (node, line) {
+                        if migrated_ids.iter().any(|id| id == node) {
+                            if let Some(entry) = item.as_object_mut() {
+                                entry
+                                    .insert("line".to_owned(), Value::from(line.saturating_sub(1)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        migrated
+    }
+
     /// Индекс верхней ноды под world-точкой (AABB; поздняя нода в массиве — выше по z).
     pub fn hit_test(&self, point: [f32; 2]) -> Option<usize> {
         self.nodes

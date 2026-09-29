@@ -9,7 +9,6 @@ use canvas_core::NodeKind;
 
 use crate::camera::Camera;
 use crate::camera::Vec2;
-use crate::markdown;
 use crate::theme::ThemeColors;
 use crate::Color;
 
@@ -241,13 +240,12 @@ pub fn title_for(node: &Node) -> String {
     {
         return name;
     }
-    if let Some(text) = &node.text {
-        if let Some(line) = text.lines().next().filter(|line| !line.is_empty()) {
-            // Маркеры форматирования (**...**, ==...==) и ATX-заголовок (# ...)
-            // в заголовке карточки не показываем
-            return markdown::strip(crate::gfm::strip_atx(line));
-        }
-    }
+    // Волна 1 (решение владельца, сессия 2026-09-30): фолбэк «первая строка
+    // текста» УБРАН — единый подход: заголовок меняется только в заголовке
+    // (правка тела не двигает шапку, дубли первой строки нет). Легаси-ноды
+    // мигрируют при загрузке (canvas-core Canvas::migrate_legacy_titles);
+    // без явного заголовка/шаблона/файла — label или плейсхолдер «—»
+    // (приглушённый тон, аффорданс «двойной клик — назови ноду»).
     if let Some(label) = &node.label {
         if !label.is_empty() {
             return label.clone();
@@ -1939,12 +1937,13 @@ mod tests {
             outputs: Vec::new(),
         }));
         assert_eq!(title_for(&node), "Балансировщик нагрузки");
-        // Старый снапшот без имени — фолбэк на первую строку текста
+        // Старый снапшот без имени — плейсхолдер: первая строка листа
+        // параметров в шапку не протекает (волна 1)
         let mut legacy = Node::text("tpl2", "rps = 1000 rps", 0.0, 0.0);
         let mut template = node.template().expect("template");
         template.name = None;
         legacy.set_template(Some(template));
-        assert_eq!(title_for(&legacy), "rps = 1000 rps");
+        assert_eq!(title_for(&legacy), "—");
     }
 
     /// FR-011: пустой набор скрытых нод для вызовов build_edge_instances.
@@ -2111,7 +2110,10 @@ mod tests {
         assert!((icon_rect[1] - (tpl.y + (HEADER_HEIGHT - TEMPLATE_ICON_SIZE) / 2.0)).abs() < 1e-3);
     }
 
-    /// Заголовок: имя файла из Windows/Unix-пути, первая строка текста, label группы.
+    /// Заголовок: имя файла из Windows/Unix-пути, label группы. Первая строка
+    /// тела в шапку НЕ протекает (волна 1, решение владельца: единый
+    /// подход — заголовок меняется только в заголовке; легаси-ноды
+    /// мигрируют при загрузке — canvas-core Canvas::migrate_legacy_titles).
     #[test]
     fn title_extraction() {
         let file = Node::file(
@@ -2125,16 +2127,15 @@ mod tests {
         assert_eq!(title_for(&file), "Спецификация.pdf");
         let unix = Node::file("n", "docs/SPEC.md", 0.0, 0.0, 10.0, 10.0);
         assert_eq!(title_for(&unix), "SPEC.md");
+        // Первая строка тела больше не деривится в заголовок — плейсхолдер
         let text = Node::text("n", "Первая строка\nвторая", 0.0, 0.0);
-        assert_eq!(title_for(&text), "Первая строка");
-        // Маркеры форматирования в заголовке стрипятся
+        assert_eq!(title_for(&text), "—");
         let styled = Node::text("n", "**Важно** и ==срочно==", 0.0, 0.0);
-        assert_eq!(title_for(&styled), "Важно и срочно");
-        // ATX-маркер заголовка не показываем буквально
+        assert_eq!(title_for(&styled), "—");
         let heading = Node::text("n", "## Заголовок заметки\nтело", 0.0, 0.0);
-        assert_eq!(title_for(&heading), "Заголовок заметки");
+        assert_eq!(title_for(&heading), "—");
         let no_space = Node::text("n", "#заголовок", 0.0, 0.0);
-        assert_eq!(title_for(&no_space), "#заголовок");
+        assert_eq!(title_for(&no_space), "—");
         let mut group = Node::text("n", "", 0.0, 0.0);
         group.text = None;
         group.label = Some("Группа".into());
@@ -2175,10 +2176,12 @@ mod tests {
         tpl.set_title(Some(String::new()));
         assert_eq!(title_for(&tpl), "—", "пустой явный заголовок без фолбэков");
 
-        // None — legacy-поведение (первая строка) не задето
+        // None — легаси-нода: первая строка в шапку НЕ протекает (волна 1:
+        // единый подход — заголовок меняется только в заголовке; легаси-ноды
+        // мигрируют при загрузке — canvas-core Canvas::migrate_legacy_titles)
         let mut legacy = Node::text("n", "Первая строка\nтело", 0.0, 0.0);
         legacy.set_title(None);
-        assert_eq!(title_for(&legacy), "Первая строка");
+        assert_eq!(title_for(&legacy), "—");
     }
 
     /// Буква иконки по расширению; без расширения/файла — None.

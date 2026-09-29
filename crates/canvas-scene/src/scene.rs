@@ -435,7 +435,23 @@ impl SceneState {
 
     /// Обернуть готовую модель с явным хранилищем (M8/W3): web-бинарь
     /// подставит FS Access/OPFS (W6), тесты — `MemStorage`.
-    pub fn with_storage(canvas: Canvas, path: PathBuf, storage: Arc<dyn CanvasStorage>) -> Self {
+    /// Волна 1 (решение владельца): воронка ЗАГРУЗКИ приложения — здесь
+    /// одноразовая миграция легаси-заголовков (первая проза-строка тела →
+    /// явный заголовок): единый подход «заголовок меняется только в
+    /// заголовке», фолбэка «первая строка» в рендере больше нет. Парс
+    /// (canvas-core FromStr) НЕ мутирует — байт-чистота round-trip SPEC §5.1.
+    pub fn with_storage(
+        mut canvas: Canvas,
+        path: PathBuf,
+        storage: Arc<dyn CanvasStorage>,
+    ) -> Self {
+        let migrated = canvas.migrate_legacy_titles();
+        if migrated > 0 {
+            tracing::debug!(
+                migrated,
+                "мигрированы легаси-заголовки (первая строка → title)"
+            );
+        }
         let spatial = SpatialIndex::build(&canvas);
         // FR-042: первичный индекс пучков (до переезда canvas в структуру)
         let bundles = EdgeBundleIndex::build(&canvas);
@@ -1666,9 +1682,92 @@ impl SceneState {
     /// growth-only), последующий content-change замерит с раскрытым
     /// описанием (усадка возможна, если новый контент короче).
     pub(crate) fn refit_node_to_content(&mut self, index: usize) -> bool {
+        let (
+            display,
+            formula_lines_arg,
+            desc,
+            desc_expanded,
+            footer_reserve,
+            sigma_name,
+            auto_rows_arg,
+        ) = self.refit_inputs(index);
+        let before = self.canvas.nodes[index].height;
+        let changed = crate::measure::refit_to_measured_content(
+            &mut self.canvas.nodes[index],
+            &display,
+            &formula_lines_arg,
+            desc.as_deref(),
+            desc_expanded,
+            footer_reserve,
+            &sigma_name,
+            auto_rows_arg,
+        );
+        if changed && (self.canvas.nodes[index].height - before).abs() >= 1.0 {
+            let node = &self.canvas.nodes[index];
+            self.spatial.update(index, node);
+        }
+        changed
+    }
+
+    /// Волна 1 (скрин 03): growth-only вариант [`Self::refit_node_to_content`]
+    /// — только рост до измеренного контента, усадки нет (первая встреча
+    /// ноды: загрузка файла / undo / свежая нода).
+    fn refit_node_to_content_growth_only(&mut self, index: usize) -> bool {
+        let (
+            display,
+            formula_lines_arg,
+            desc,
+            desc_expanded,
+            footer_reserve,
+            sigma_name,
+            auto_rows_arg,
+        ) = self.refit_inputs(index);
+        let before = self.canvas.nodes[index].height;
+        let grew = crate::measure::grow_to_measured_content(
+            &mut self.canvas.nodes[index],
+            &display,
+            &formula_lines_arg,
+            desc.as_deref(),
+            desc_expanded,
+            footer_reserve,
+            &sigma_name,
+            auto_rows_arg,
+        );
+        if grew && (self.canvas.nodes[index].height - before).abs() >= 1.0 {
+            let node = &self.canvas.nodes[index];
+            self.spatial.update(index, node);
+        }
+        grew
+    }
+
+    /// Общая сборка входов refit (I-2: те же у роста и у роста+усадки):
+    /// display-текст (с префиксом авто-строк), сдвинутые formula_lines,
+    /// desc/desc_expanded, футер-флаг, Σ-имя, число авто-строк.
+    fn refit_inputs(
+        &self,
+        index: usize,
+    ) -> (
+        String,
+        Vec<usize>,
+        Option<String>,
+        bool,
+        bool,
+        String,
+        usize,
+    ) {
         let node_id = match self.canvas.nodes.get(index) {
             Some(n) => n.id.clone(),
-            None => return false,
+            None => {
+                return (
+                    String::new(),
+                    Vec::new(),
+                    None,
+                    false,
+                    false,
+                    String::new(),
+                    0,
+                )
+            }
         };
         let formula_lines: Vec<usize> = self
             .expr_line_results
@@ -1704,7 +1803,7 @@ impl SceneState {
         // Для нод с авто-строками — тот же ввод, что у
         // `ensure_spill_rows_reserve`: spill-prefixed display + сдвинутые
         // formula_lines + auto_rows count. Иначе — как `ensure_reserve_at`.
-        let (display, formula_lines_arg, auto_rows_arg) = if auto_rows > 0 {
+        if auto_rows > 0 {
             let rows = self.auto_rows.get(&node_id).cloned().unwrap_or_default();
             let prefix: Vec<String> = rows.iter().map(|r| r.display_text()).collect();
             let display = if display_body.is_empty() {
@@ -1719,26 +1818,26 @@ impl SceneState {
                 .chain(0..shift)
                 .collect();
             fl.sort_unstable();
-            (display, fl, auto_rows)
+            (
+                display,
+                fl,
+                desc,
+                desc_expanded,
+                footer_reserve,
+                sigma_name,
+                auto_rows,
+            )
         } else {
-            (display_body, formula_lines, 0)
-        };
-        let before = self.canvas.nodes[index].height;
-        let changed = crate::measure::refit_to_measured_content(
-            &mut self.canvas.nodes[index],
-            &display,
-            &formula_lines_arg,
-            desc.as_deref(),
-            desc_expanded,
-            footer_reserve,
-            &sigma_name,
-            auto_rows_arg,
-        );
-        if changed && (self.canvas.nodes[index].height - before).abs() >= 1.0 {
-            let node = &self.canvas.nodes[index];
-            self.spatial.update(index, node);
+            (
+                display_body,
+                formula_lines,
+                desc,
+                desc_expanded,
+                footer_reserve,
+                sigma_name,
+                0,
+            )
         }
-        changed
     }
 
     /// Динамический перерасчёт `MeasuredReserveFn`: сброс состояния хешей
@@ -1790,10 +1889,17 @@ impl SceneState {
         let prev = self.content_height_state.get(&node_id).copied();
         match prev {
             None => {
-                // Первая встреча: доверяем текущей высоте, запоминаем.
+                // Первая встреча: усадке НЕ верим (UX-гарантия I-6 — свежая
+                // нода/undo не усаживаются), но рост до измеренного контента
+                // применяем: высоты из старых файлов (модель до FR-069/075)
+                // обязаны догнать рендер при загрузке, иначе контент вылезает
+                // за силуэт (скрин 03: обрезанный TOTAL, бары под карточкой;
+                // L1-оценка зазоров не видит — гейт проходит, L2 молчит).
+                let grew = self.refit_node_to_content_growth_only(index);
+                let height = self.canvas.nodes[index].height;
                 self.content_height_state
-                    .insert(node_id, (new_hash, current_height));
-                false
+                    .insert(node_id, (new_hash, height));
+                grew
             }
             Some((prev_hash, prev_height))
                 if prev_hash == new_hash && (prev_height - current_height).abs() < 1.0 =>
@@ -2074,6 +2180,63 @@ mod reserve_tests {
         let mut canvas = Canvas::default();
         canvas.nodes.push(node);
         SceneState::new(canvas, PathBuf::from("target/tmp/fr067-reserve.canvas"))
+    }
+
+    /// Волна 1 (скрин 03, сессия 2026-09-30): первая встреча ноды — рост до
+    /// измеренного контента БЕЗ усадки. Заниженная «высота из старого файла»
+    /// догоняет L2 при первом пересчёте; достаточная (избыточная) высота
+    /// не трогается (I-6: свежая нода/undo не усаживаются).
+    #[test]
+    fn first_meeting_grows_stale_height_without_shrink() {
+        let _guard = INSTALL_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // «L2 видит зазоры, которых оценка не видит»: измерение = оценка + 40.
+        install_measured_reserve(
+            |text, width, lines, desc, expanded, footer, sigma, auto_rows| {
+                crate::measure::estimated_result_reserve_height(
+                    text, width, lines, desc, expanded, footer, sigma, auto_rows,
+                ) + 40.0
+            },
+        );
+        let text = "cache_hit = 0.8\nttl = 300 s\nlatency = cache_hit * 20 ms";
+        let mut stale = Node::text("stale", text, 0.0, 0.0);
+        stale.width = 260.0;
+        stale.height = 80.0; // «высота из старого файла» — занижена
+        let mut scene = scene_with(stale);
+        scene.recompute_flow();
+        let grown = scene.canvas.nodes[0].height;
+        // Построчные результаты у НЕшаблонной ноды вытесняют футер
+        // (node_shows_result_footer = false) — входы L2 согласованы.
+        let needed = crate::measure::estimated_result_reserve_height(
+            text,
+            260.0,
+            &[0, 1, 2],
+            "",
+            false,
+            false,
+            "",
+            0,
+        ) + 40.0;
+        assert!(
+            grown >= needed - 1e-3,
+            "первая встреча догоняет измеренный контент: {grown} >= {needed}"
+        );
+        // Повторный пересчёт — идемпотентен (рост зафиксирован в состоянии).
+        scene.recompute_flow();
+        assert_eq!(
+            scene.canvas.nodes[0].height, grown,
+            "повторный пересчёт — no-op"
+        );
+
+        // Избыточная высота НЕ усаживается (I-6).
+        let mut tall = Node::text("tall", text, 0.0, 0.0);
+        tall.width = 260.0;
+        tall.height = 1000.0;
+        let mut scene2 = scene_with(tall);
+        scene2.recompute_flow();
+        assert_eq!(
+            scene2.canvas.nodes[0].height, 1000.0,
+            "усадки на первой встрече нет"
+        );
     }
 
     /// FR-069 (этап F): ранний выход снят — нода БЕЗ футера результата
