@@ -11,6 +11,13 @@ description = "FR-079: suggest-движок — гибрид lex+Laya (чист�
 # Сетевых и ML-зависимостей в дефолтном дереве нет (правило AGENTS.md:
 # «не добавлять сетевые вызовы в хост»). L1-транспорт — feature `l1-laya` (S2).
 [dependencies]
+# только за feature `l1-laya` (off by default): дефолтное дерево остаётся
+# без сетевых/ML-зависимостей (правило AGENTS.md «без сети в хосте»;
+# sidecar — отдельный процесс, клиент говорит только с localhost)
+ureq = { version = "2", default-features = false, features = ["json"], optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 # только для golden-тестов: разбор JSONL-фикстур PoC
@@ -19,6 +26,6 @@ serde_json.workspace = true
 
 [features]
 default = []
-# S2: HTTP-клиент /v1/systemone (ureq, только localhost) + менеджер sidecar.
-# Off by default: дефолтная сборка не тянет сетевых зависимостей.
-l1-laya = []
+# S2: HTTP-клиент /v1/systemone (ureq no-TLS, только localhost) +
+# менеджер sidecar + sha256-манифест весов.
+l1-laya = ["dep:ureq", "dep:serde", "dep:serde_json", "dep:sha2"]
