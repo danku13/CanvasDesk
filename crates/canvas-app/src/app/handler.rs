@@ -1230,6 +1230,13 @@ impl ApplicationHandler<AppEvent> for App {
             // иконок, exit. Мьютекс освободится смертью процесса, новый
             // инстанс продолжит старт (актуально для перезапуска на --desktop).
             AppEvent::InstanceExit => self.shutdown(event_loop),
+            // FR-028 v2: tour-сигнал — складываем в pending (тот же
+            // механизм, что push_tour_signal из мутаторов). canvas-web
+            // wrapper (TourAwareApp) дёргает drain_tour_signals после
+            // каждого event и эмитит в JS. На не-wasm целях эмит no-op,
+            // но путь пользователя для программной эмиссии сигналов
+            // (через EventLoopProxy::send_event) сохранён — debug-only.
+            AppEvent::TourSignal(name) => self.push_tour_signal(&name),
         }
     }
 

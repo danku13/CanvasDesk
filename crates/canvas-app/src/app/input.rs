@@ -813,6 +813,13 @@ impl App {
                 self.template_panel.focus_search();
             } else {
                 self.template_panel.open();
+                // FR-028 v2: уведомить tour-движок — палитра открыта.
+                // Шаг "open" в paletteTourScenario ждёт сигнал
+                // canvas:palette-opened (passive+waitFor). Также
+                // эмитит при нажатии Ctrl+P из основной раскладки —
+                // дубликат с JS-side шимом (index.html) не страшен:
+                // engine deduplicates onSignal listeners.
+                self.push_tour_signal("canvas:palette-opened");
             }
             // W9 (web-приёмка): оракул браузерного дыма — палитра открылась
             // и реестр не пуст (DEBUG — на нативе под дефолтным фильтром
