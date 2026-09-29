@@ -175,14 +175,14 @@ mod support;
 mod tooltip;
 pub use support::measured_result_reserve_height;
 use support::{
-    bezier_samples, centered_box, collision_obstacles, dim_color4, dim_text_color,
-    distribute_axis_for, drag_bbox, drag_from_node, explain_chain_focus, expr_error_hit_at,
-    hit_subtitle, hover_fill, infer_param_type, node_display_label, node_subtitle, node_text,
-    node_title, nudge_step_world, paint_items_to_band, paint_items_to_stage, rect_xywh,
-    rects_intersect, screen_dot, screen_rect_quad, slugify, snap_candidates, snap_tolerance_world,
-    snap_with_anchor, spawn_lineage_build, spill_hit_at, spill_hit_target, spill_toast_key,
-    stage_close_button_rect, template_card_row, token_color, truncate_chars, unique_custom_id,
-    BatchOp, PortLabelLine, PortTarget, SnapFrame,
+    bezier_samples, centered_box, dim_color4, dim_text_color, distribute_axis_for, drag_bbox,
+    drag_collision_obstacles, drag_from_node, explain_chain_focus, expr_error_hit_at, hit_subtitle,
+    hover_fill, infer_param_type, node_display_label, node_subtitle, node_text, node_title,
+    nudge_step_world, paint_items_to_band, paint_items_to_stage, rect_xywh, rects_intersect,
+    screen_dot, screen_rect_quad, slugify, snap_candidates, snap_tolerance_world, snap_with_anchor,
+    spawn_lineage_build, spill_hit_at, spill_hit_target, spill_toast_key, stage_close_button_rect,
+    template_card_row, token_color, truncate_chars, unique_custom_id, BatchOp, PortLabelLine,
+    PortTarget, SnapFrame,
 };
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
@@ -2767,16 +2767,19 @@ impl App {
         // collision — без групп (рамка группы не сплошная стена: кламп
         // останавливал ноду на границе группы, центр не доходил до rect,
         // жест втягивания не срабатывал; на отпускании snap возвращал ноду
-        // за границу)
+        // за границу). FR-073 v2: при включённом расталкивании уступающие
+        // ноды препятствиями не являются — физика ореола гарантирует зазор,
+        // кламп по их «дышащим» позициям телепортировал активную ноду.
         let candidates = snap_candidates(
             &self.scene.canvas,
             &self.scene.spatial.query_rect(visible),
             &moving,
         );
-        let obstacles = collision_obstacles(
+        let obstacles = drag_collision_obstacles(
             &self.scene.canvas,
             &self.scene.spatial.query_rect(visible),
             &moving,
+            self.settings.drag_push_enabled,
         );
 
         // Live-collision (п.15): grid/guides остаются release-time, поэтому
@@ -7718,6 +7721,10 @@ mod tests {
     // только в тестах — здесь точечный импорт вместо родительского).
     use support::anchor_grid_delta;
 
+    // FR-073 v2: collision_obstacles из продакшен-кода драга ушёл (заменён
+    // drag_collision_obstacles) — остался в тестах семантики срезов.
+    use support::collision_obstacles;
+
     // --- PRD-0007 (FR-048 X2): чистые хелперы окна проверки ----------------
 
     /// explain_chain_focus (F-4): узлы дерева → индексы канваса, рёбра
@@ -9409,6 +9416,150 @@ mod tests {
         // сессия закрывается следующим холостым кадром физики
         assert!(!app.tick_drag_push(), "тик вне сессии — no-op");
         assert!(!app.drag_push_live, "сессия закрыта после расселения");
+    }
+
+    /// FR-073 v2 (интеграция): драг ноды СКВОЗЬ зазор между двумя рядом
+    /// стоящими при включённых collision (FR-038 п.15) и расталкивании.
+    /// Уступающие соседи — не препятствия live-клампа: активная следует
+    /// курсору кадр-в-кадр (телепорта 540→172 больше нет), соседи уступают
+    /// дорогу с жёстким зазором ореола, после drop якоря перезакрепляются.
+    #[test]
+    fn drag_between_neighbors_follows_cursor_with_push() {
+        let mut canvas = Canvas::default();
+        // B и C — рядом по вертикали, зазор 40px; A (высота дорастает до
+        // контента > зазора) тянут сквозь коридор по центру
+        for (id, x, y) in [("b", 300.0, 0.0), ("c", 300.0, 120.0)] {
+            let mut n = Node::text(id, id, x, y);
+            n.width = 200.0;
+            n.height = 80.0;
+            canvas.nodes.push(n);
+        }
+        let mut a = Node::text("a", "A", 0.0, 70.0);
+        a.width = 120.0;
+        a.height = 60.0;
+        canvas.nodes.push(a);
+        let mut app = stub_app_with_canvas(canvas);
+        app.settings.snap_collision = true;
+        assert!(
+            app.settings.drag_push_enabled,
+            "расталкивание — по умолчанию"
+        );
+        app.cursor = [60.0, 100.0];
+        app.drag_push_begin();
+        app.dragging = Some(DragState {
+            primary: 2,
+            grab_world: [60.0, 100.0],
+            origins: vec![(2, [0.0, 70.0])],
+        });
+        let params = app.drag_push_params();
+        let mut prev_ax = 0.0_f32;
+        let mut max_passive_hop: f32 = 0.0;
+        let mut prev_b = [300.0_f32, 0.0];
+        let mut prev_c = [300.0_f32, 120.0];
+        for frame in 0..100 {
+            app.cursor[0] = 60.0 + (frame as f32) * 6.0;
+            let drag = app.dragging.clone().unwrap();
+            let delta = [
+                app.cursor[0] - drag.grab_world[0],
+                app.cursor[1] - drag.grab_world[1],
+            ];
+            let snap_frame = app.compute_snap_frame(&drag, delta);
+            let eff = snap_frame.as_ref().map_or(delta, |f| f.eff_delta);
+            assert_eq!(
+                eff, delta,
+                "кадр {frame}: live-кламп не должен трогать дельту при расталкивании"
+            );
+            for (index, origin) in &drag.origins {
+                app.scene
+                    .move_node(*index, origin[0] + eff[0], origin[1] + eff[1]);
+            }
+            app.tick_drag_push();
+            let (b, c) = (&app.scene.canvas.nodes[0], &app.scene.canvas.nodes[1]);
+            // Спокойствие соседей: за кадр пассивная сдвигается не сильнее
+            // скорости курсора (+ запас на коррекцию дожима) — рывков
+            // «пружина против дожима» и выбросов на сотни px нет
+            let hop = ((b.x - prev_b[0]).powi(2) + (b.y - prev_b[1]).powi(2))
+                .sqrt()
+                .max(((c.x - prev_c[0]).powi(2) + (c.y - prev_c[1]).powi(2)).sqrt());
+            max_passive_hop = max_passive_hop.max(hop);
+            prev_b = [b.x, b.y];
+            prev_c = [c.x, c.y];
+            let ax = app.scene.canvas.nodes[2].x;
+            assert!(
+                ax >= prev_ax - 0.01,
+                "кадр {frame}: активная отпрыгнула назад {prev_ax} -> {ax}"
+            );
+            // Сейф-зона физики: зазор активная↔соседи не ниже halo+gap
+            for j in [0usize, 1] {
+                let (a, p) = (&app.scene.canvas.nodes[2], &app.scene.canvas.nodes[j]);
+                let gx = (p.x - (a.x + a.width)).max(a.x - (p.x + p.width));
+                let gy = (p.y - (a.y + a.height)).max(a.y - (p.y + p.height));
+                assert!(
+                    gx.max(gy) >= params.halo + params.gap - 0.5,
+                    "кадр {frame}: зазор a↔{} = {} < {}",
+                    p.id,
+                    gx.max(gy),
+                    params.halo + params.gap
+                );
+            }
+            prev_ax = ax;
+        }
+        // Спокойствие подтверждено: максимальный сдвиг пассивной за кадр
+        // близок к скорости курсора (6px), а не сотни px рывков
+        assert!(
+            max_passive_hop <= 10.0,
+            "пассивные дёргаются: max hop за кадр = {max_passive_hop}"
+        );
+        // Drop: активная закреплена где бросили, накрытые перезакреплены
+        let active = app.drag_push_active();
+        canvas_core::drag_push::commit_drop(
+            &app.scene.canvas,
+            &active,
+            &mut app.drag_push,
+            &params,
+        );
+        assert_eq!(app.drag_push.anchors["a"], [prev_ax, 70.0]);
+    }
+
+    /// FR-073 v2 (интеграция): расталкивание ВЫКЛЮЧЕНО — прежнее поведение
+    /// collision-клампа (п.15) не деградировало: активная останавливается
+    /// на границе зазора перед соседом.
+    #[test]
+    fn drag_without_push_still_clamps_on_neighbors() {
+        let mut canvas = Canvas::default();
+        for (id, x, y) in [("b", 300.0, 0.0), ("c", 300.0, 120.0)] {
+            let mut n = Node::text(id, id, x, y);
+            n.width = 200.0;
+            n.height = 80.0;
+            canvas.nodes.push(n);
+        }
+        let mut a = Node::text("a", "A", 0.0, 70.0);
+        a.width = 120.0;
+        a.height = 60.0;
+        canvas.nodes.push(a);
+        let mut app = stub_app_with_canvas(canvas);
+        app.settings.snap_collision = true;
+        app.settings.drag_push_enabled = false;
+        app.cursor = [0.0, 70.0];
+        app.dragging = Some(DragState {
+            primary: 2,
+            grab_world: [0.0, 70.0],
+            origins: vec![(2, [0.0, 70.0])],
+        });
+        // Горизонтальный подъезд к зоне зазора (y-полоса bbox пересекает
+        // зоны соседей): кламп останавливает движение на границе зазора
+        app.cursor = [400.0, 70.0];
+        let drag = app.dragging.clone().unwrap();
+        let delta = [
+            app.cursor[0] - drag.grab_world[0],
+            app.cursor[1] - drag.grab_world[1],
+        ];
+        let snap_frame = app.compute_snap_frame(&drag, delta);
+        let eff = snap_frame.as_ref().map_or(delta, |f| f.eff_delta);
+        assert!(
+            eff[0] < delta[0],
+            "без расталкивания кламп ограничивает подъезд: {eff:?} vs {delta:?}"
+        );
     }
 
     /// FR-044 Q3 (интеграция): анимация перехода подсветки — включение

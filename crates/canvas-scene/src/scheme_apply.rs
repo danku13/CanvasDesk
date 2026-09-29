@@ -1014,7 +1014,7 @@ mod tests {
             }
             for (i, edge) in scheme.content.edges.iter().enumerate() {
                 seed.edges.push(Edge::new(
-                    &format!("seed-edge-{i}"),
+                    format!("seed-edge-{i}"),
                     edge.from_node.clone(),
                     None,
                     edge.to_node.clone(),

@@ -257,23 +257,9 @@ pub fn step(
         .map(|i| state.anchor_of(canvas, i))
         .collect();
 
-    // 1) мягкий возврат к якорям
-    for (i, node) in canvas.nodes.iter_mut().enumerate() {
-        if is_active(i) || !pushable[i] {
-            continue;
-        }
-        let anchor = anchors[i];
-        let dx = (anchor[0] - node.x) * params.ret;
-        let dy = (anchor[1] - node.y) * params.ret;
-        if dx.abs() > EPS || dy.abs() > EPS {
-            node.x += dx;
-            node.y += dy;
-            touched.push(i);
-        }
-    }
-
     // Ореол активных: суммарный AABB (активных может быть несколько —
-    // мультивыделение тянется жёстко, ореол считаем вокруг всех)
+    // мультивыделение тянется жёстко, ореол считаем вокруг всех). Считается
+    // ДО пружины (FR-073 v2): по нему определяется «под давлением».
     let halo = canvas
         .nodes
         .iter()
@@ -286,6 +272,30 @@ pub fn step(
             w: (acc.x + acc.w).max(r.x + r.w) - acc.x.min(r.x),
             h: (acc.y + acc.h).max(r.y + r.h) - acc.y.min(r.y),
         });
+
+    // 1) мягкий возврат к якорям. Нода ПОД ДАВЛЕНИЕМ ореола (её сейф-зона
+    //    пересекает ореол) к якорю не тянется: якорь недостижим, а бой
+    //    «пружина против дожима» дрожит границей и дёргает соседей
+    //    (репродукция: драг между двумя рядом стоящими нодами). Вернётся,
+    //    когда ореол уйдёт (пружина снова достанет).
+    for (i, node) in canvas.nodes.iter_mut().enumerate() {
+        if is_active(i) || !pushable[i] {
+            continue;
+        }
+        if let Some(h) = halo {
+            if Rect::of(node, params.gap / 2.0).overlaps(&h) {
+                continue;
+            }
+        }
+        let anchor = anchors[i];
+        let dx = (anchor[0] - node.x) * params.ret;
+        let dy = (anchor[1] - node.y) * params.ret;
+        if dx.abs() > EPS || dy.abs() > EPS {
+            node.x += dx;
+            node.y += dy;
+            touched.push(i);
+        }
+    }
 
     // 2) выталкивание ореолом активных (жёсткая сейф-зона)
     if let Some(halo) = &halo {
@@ -542,6 +552,44 @@ mod tests {
                 "b вдавлена в ореол: {c}"
             );
         }
+    }
+
+    /// FR-073 v2: нода под давлением ореола (якорь накрыт) не дрожит —
+    /// пружина её не тянет, дожим держит на границе без осцилляций.
+    #[test]
+    fn pressured_node_parks_at_halo_boundary_without_shimmer() {
+        let mut canvas = canvas_two(240.0);
+        let mut state = DragPushState::new();
+        state.reanchor_all(&canvas);
+        let params = DragPushParams::default();
+        // активная "a" стоит прямо на якоре "b" (240): b вытеснена и под
+        // давлением — бой «пружина ↔ дожим» запрещён
+        canvas.nodes[0].x = 200.0;
+        for _ in 0..30 {
+            step(&mut canvas, &[0], &mut state, &params);
+        }
+        let parked = (canvas.nodes[1].x, canvas.nodes[1].y);
+        for _ in 0..30 {
+            step(&mut canvas, &[0], &mut state, &params);
+            assert_eq!(
+                (canvas.nodes[1].x, canvas.nodes[1].y),
+                parked,
+                "нода под давлением дрожит: {parked:?} -> {:?}",
+                (canvas.nodes[1].x, canvas.nodes[1].y)
+            );
+        }
+        let c = clearance(&canvas, 0, 1);
+        assert!(c >= params.halo + params.gap - 0.5, "зазор нарушен: {c}");
+        // ореол ушёл — пружина снова возвращает к якорю
+        canvas.nodes[0].x = -600.0;
+        for _ in 0..200 {
+            step(&mut canvas, &[0], &mut state, &params);
+        }
+        assert!(
+            (canvas.nodes[1].x - 240.0).abs() < 1.0,
+            "после ухода ореола b вернулась к якорю: {}",
+            canvas.nodes[1].x
+        );
     }
 
     /// commit_drop: накрытый якорь перезакрепляется, ненакрытый — нет.
