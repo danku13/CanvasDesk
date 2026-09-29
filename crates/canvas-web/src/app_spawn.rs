@@ -222,6 +222,14 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     // winit web: цикл не блокирует поток — spawn_app ставит обработчики
     // (rAF/ResizeObserver) и возвращает управление браузеру.
     use winit::platform::web::EventLoopExtWebSys;
+    // FR-028 v2: обернуть App в TourAwareApp — после каждого event'а
+    // дёргает drain_tour_signals и эмитит в `window.__canvasdeskTour.signal`
+    // через `crate::tour_signal::emit`. Без обёртки сигналы
+    // (canvas:note-created, canvas:palette-opened, scheme-gallery-opened,
+    // scheme-preview-shown, scheme-applied) накапливаются в
+    // App::pending_tour_signals, но никуда не уходят — passive+waitFor
+    // шаги tour-сценариев не продвигаются.
+    let app = crate::tour_aware_app::TourAwareApp::new(app);
     event_loop.spawn_app(app);
     Ok(())
 }

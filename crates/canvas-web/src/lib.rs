@@ -43,6 +43,8 @@ pub mod ime;
 pub mod js_glue;
 #[cfg(target_arch = "wasm32")]
 pub mod toolbar;
+#[cfg(target_arch = "wasm32")]
+pub mod tour_aware_app;
 
 use wasm_bindgen::prelude::*;
 

@@ -356,6 +356,20 @@ pub enum AppEvent {
         solutions: Arc<canvas_core::flow::FlowSolutions>,
         kind: canvas_scene::worker::FlowKind,
     },
+    /// FR-028 v2: сигнал для inline-tour движка (`sdk/web-onboarding/`).
+    /// App шлёт наружу через `App::push_tour_signal` (мутатор поля
+    /// `pending_tour_signals`); canvas-web wrapper (`TourAwareApp`)
+    /// дёргает `App::drain_tour_signals` после каждого event и
+    /// прокидывает их в `canvas_web::tour_signal::emit(name)` —
+    /// что вызывает `window.__canvasdeskTour.signal(name)` в JS-bus.
+    /// См. `docs/interface-objects/onboarding-v2-inline.md` §5.2.
+    ///
+    /// На не-wasm целях (нативные rlib-тесты, canvas-shell) событие
+    /// не доходит ни до кого — `tour_signal::emit` no-op. Поле
+    /// `pending_tour_signals` всё равно хранится, drain работает
+    /// (возвращает накопленное), но эмититься наружу не будет —
+    /// debug-only side-effect.
+    TourSignal(String),
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -1248,6 +1262,14 @@ pub struct App {
     /// запросы забираются по AppEvent::McpWake. None — MCP недоступен (деградация).
     #[cfg(windows)]
     mcp_server: Option<canvas_shell::mcp_pipe::McpPipeServer>,
+    /// FR-028 v2: pending tour-сигналы. App::push_tour_signal(name)
+    /// складывает сюда (вызывается из create_note_at, template_ui
+    /// panel.open, scheme_gallery.open, apply_scheme, scheme preview);
+    /// canvas-web wrapper (`TourAwareApp`) дёргает drain_tour_signals
+    /// после каждого event и прокидывает каждый в
+    /// `canvas_web::tour_signal::emit(name)`. На не-wasm целях эмит
+    /// no-op, но drain работает (debug-only side-effect).
+    pending_tour_signals: Vec<String>,
 }
 
 impl App {
@@ -1489,6 +1511,7 @@ impl App {
             explorer_tracker: Default::default(),
             #[cfg(windows)]
             mcp_server: None,
+            pending_tour_signals: Vec::new(),
         };
         // FR-075 (дефект найден верификацией витрины 2026-09-26): загрузочный
         // пересчёт (`SceneState::with_storage`) исполняется ДО построения App —
@@ -3397,6 +3420,12 @@ impl App {
         self.selected = Some(Selection::Node(index));
         self.selected_nodes.clear();
         self.scene.mark_dirty();
+        // FR-028 v2: уведомить tour-движок о создании заметки. Шаг
+        // "create-note" в firstRunInlineScenario ждёт сигнал
+        // canvas:note-created (passive+waitFor). На не-wasm целях
+        // (нативные rlib-тесты) emit no-op, но push остаётся для
+        // симметрии с другими мутаторами и future-proofing.
+        self.push_tour_signal("canvas:note-created");
         index
     }
 
@@ -4834,6 +4863,10 @@ impl App {
             keys::GALLERY_APPLIED,
             &[("name", name)],
         ));
+        // FR-028 v2: уведомить tour-движок — схема применена в активный
+        // канвас. Шаг "apply" в schemeGalleryTourScenario ждёт сигнал
+        // canvas:scheme-applied (passive+waitFor).
+        self.push_tour_signal("canvas:scheme-applied");
         self.request_redraw();
     }
 
@@ -4866,12 +4899,19 @@ impl App {
             Key::Named(NamedKey::ArrowDown) if !event.repeat => {
                 if self.scheme_gallery.selected + 1 < list.len() {
                     self.scheme_gallery.selected += 1;
+                    // FR-028 v2: пользователь начал навигацию по галерее
+                    // стрелками — это и есть "превью" в нашей модели
+                    // (отдельной UI-стейта превью нет, выбор строки =
+                    // просмотр). Шаг "preview" в schemeGalleryTourScenario
+                    // ждёт canvas:scheme-preview-shown.
+                    self.push_tour_signal("canvas:scheme-preview-shown");
                 }
                 scheme_gallery_ui::clamp_scroll(&mut self.scheme_gallery, visible);
                 true
             }
             Key::Named(NamedKey::ArrowUp) if !event.repeat => {
                 self.scheme_gallery.selected = self.scheme_gallery.selected.saturating_sub(1);
+                self.push_tour_signal("canvas:scheme-preview-shown");
                 scheme_gallery_ui::clamp_scroll(&mut self.scheme_gallery, visible);
                 true
             }
@@ -4917,6 +4957,11 @@ impl App {
         }
         if let Some(index) = scheme_gallery_ui::row_at(&lay, self.cursor) {
             self.scheme_gallery.selected = index;
+            // FR-028 v2: клик по строке = просмотр схемы (preview).
+            // apply_scheme ниже эмитит canvas:scheme-applied;
+            // preview-shown здесь — для последовательности шагов в
+            // schemeGalleryTourScenario (preview → apply).
+            self.push_tour_signal("canvas:scheme-preview-shown");
             if let Some(scheme) = list.get(index) {
                 let manifest = (*scheme).clone();
                 self.apply_scheme(&manifest);
@@ -6184,6 +6229,12 @@ impl App {
             let (open_btn, dismiss_btn) = scheme_gallery_ui::empty_buttons(card);
             if scheme_gallery_ui::point_in_rect(open_btn, self.cursor) {
                 self.scheme_gallery.open();
+                // FR-028 v2: уведомить tour-движок — галерея схем открыта.
+                // Шаг "open" в schemeGalleryTourScenario ждёт сигнал
+                // canvas:scheme-gallery-opened (passive+waitFor). Этот
+                // сигнал не покрывается JS-side шимом (нет hotkey для
+                // scheme-gallery — только клик по кнопке empty-state).
+                self.push_tour_signal("canvas:scheme-gallery-opened");
                 self.request_redraw();
                 return;
             }
@@ -6920,6 +6971,24 @@ impl App {
     pub fn init_widgets(&mut self) {
         self.widgets.set_theme(self.settings.theme == Theme::Dark);
         self.widgets.init_registry();
+    }
+
+    /// FR-028 v2: сложить tour-сигнал в pending-очередь. Вызывается из
+    /// мутаторов состояния (create_note_at, template_ui panel.open,
+    /// scheme_gallery.open, apply_scheme, scheme preview open).
+    /// canvas-web wrapper (`TourAwareApp`) дёргает
+    /// [`App::drain_tour_signals`] после каждого event и прокидывает
+    /// каждый в `canvas_web::tour_signal::emit(name)`. На не-wasm
+    /// целях эмит no-op — но сигналы накапливаются (debug-only).
+    pub fn push_tour_signal(&mut self, name: &str) {
+        self.pending_tour_signals.push(name.to_owned());
+    }
+
+    /// FR-028 v2: забрать все pending tour-сигналы (drain). После
+    /// вызова очередь пуста. Возвращает owned Vec<String> — canvas-web
+    /// wrapper итерирует и для каждого зовёт `tour_signal::emit`.
+    pub fn drain_tour_signals(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_tour_signals)
     }
 
     /// M5: события host'а виджетов (из user_event).
