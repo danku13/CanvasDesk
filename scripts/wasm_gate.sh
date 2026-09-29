@@ -25,7 +25,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-CRATES="-p canvas-core -p canvas-render -p canvas-widgets -p canvas-mcp -p canvas-web"
+CRATES="-p canvas-core -p canvas-render -p canvas-widgets -p canvas-mcp -p canvas-web -p canvas-suggest"
 
 echo "[wasm-gate 1/3] cargo check --target wasm32-unknown-unknown $CRATES"
 cargo check --target wasm32-unknown-unknown $CRATES

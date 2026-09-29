@@ -1,0 +1,24 @@
+[package]
+publish = false # внутренний крейт закрытого продукта; не публикуется на crates.io (CP0, ADR-0008)
+name = "canvas-suggest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "FR-079: suggest-движок — гибрид lex+Laya (чистое ядро, std-only, wasm-safe)"
+
+# S1 (FR-079): чистое ядро без зависимостей — BM25/char3/синонимы/гейты.
+# Сетевых и ML-зависимостей в дефолтном дереве нет (правило AGENTS.md:
+# «не добавлять сетевые вызовы в хост»). L1-транспорт — feature `l1-laya` (S2).
+[dependencies]
+
+[dev-dependencies]
+# только для golden-тестов: разбор JSONL-фикстур PoC
+serde.workspace = true
+serde_json.workspace = true
+
+[features]
+default = []
+# S2: HTTP-клиент /v1/systemone (ureq, только localhost) + менеджер sidecar.
+# Off by default: дефолтная сборка не тянет сетевых зависимостей.
+l1-laya = []

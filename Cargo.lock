@@ -390,6 +390,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "canvas-suggest"
+version = "0.5.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "canvas-ui"
 version = "0.5.0"
 dependencies = [
