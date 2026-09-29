@@ -1,0 +1,312 @@
+[
+ {
+  "key": "ab-test",
+  "name_ru": "Значимость A/B теста",
+  "name_en": "A/B Test Significance"
+ },
+ {
+  "key": "api-gateway",
+  "name_ru": "API-шлюз",
+  "name_en": "API Gateway"
+ },
+ {
+  "key": "auth-service",
+  "name_ru": "Сервис аутентификации",
+  "name_en": "Auth Service"
+ },
+ {
+  "key": "cache-redis",
+  "name_ru": "Кэш (Redis)",
+  "name_en": "Cache (Redis)"
+ },
+ {
+  "key": "capacity-planner",
+  "name_ru": "Планировщик мощности",
+  "name_en": "Capacity Planner"
+ },
+ {
+  "key": "cdn",
+  "name_ru": "CDN",
+  "name_en": "CDN"
+ },
+ {
+  "key": "db-nosql",
+  "name_ru": "БД NoSQL (Mongo)",
+  "name_en": "NoSQL DB (Mongo)"
+ },
+ {
+  "key": "db-sql-master",
+  "name_ru": "БД SQL (мастер)",
+  "name_en": "DB SQL (master)"
+ },
+ {
+  "key": "db-sql-replica",
+  "name_ru": "БД SQL (реплика)",
+  "name_en": "DB SQL (replica)"
+ },
+ {
+  "key": "graphql",
+  "name_ru": "GraphQL",
+  "name_en": "GraphQL"
+ },
+ {
+  "key": "grpc-service",
+  "name_ru": "gRPC-сервис",
+  "name_en": "gRPC Service"
+ },
+ {
+  "key": "http-endpoint",
+  "name_ru": "HTTP-эндпоинт",
+  "name_en": "HTTP Endpoint"
+ },
+ {
+  "key": "infra-cost",
+  "name_ru": "Стоимость инфраструктуры в месяц",
+  "name_en": "Infra Monthly Cost"
+ },
+ {
+  "key": "lb",
+  "name_ru": "Балансировщик нагрузки",
+  "name_en": "Load Balancer"
+ },
+ {
+  "key": "pa-activation",
+  "name_ru": "Активация (процент активированных)",
+  "name_en": "Activation Rate"
+ },
+ {
+  "key": "pa-avg-lifetime",
+  "name_ru": "Среднее время жизни клиента",
+  "name_en": "Average User Lifetime"
+ },
+ {
+  "key": "pa-engagement-rate",
+  "name_ru": "Уровень вовлечённости",
+  "name_en": "Engagement Rate"
+ },
+ {
+  "key": "pa-feature-adoption",
+  "name_ru": "Внедрение фичи",
+  "name_en": "Feature Adoption Rate"
+ },
+ {
+  "key": "pa-funnel-conv",
+  "name_ru": "Конверсия воронки",
+  "name_en": "Funnel Conversion Rate"
+ },
+ {
+  "key": "pa-funnel-step",
+  "name_ru": "Пошаговая конверсия воронки",
+  "name_en": "Funnel Step Conversion"
+ },
+ {
+  "key": "pa-k-factor",
+  "name_ru": "K-фактор (виральность)",
+  "name_en": "K-Factor (Virality)"
+ },
+ {
+  "key": "pa-mau-projection",
+  "name_ru": "MAU-прогноз (закон Литтла)",
+  "name_en": "MAU Projection"
+ },
+ {
+  "key": "pa-nps",
+  "name_ru": "NPS (индекс лояльности)",
+  "name_en": "Net Promoter Score"
+ },
+ {
+  "key": "pa-retention-d1",
+  "name_ru": "Удержание D1",
+  "name_en": "Day 1 Retention"
+ },
+ {
+  "key": "pa-retention-d30",
+  "name_ru": "Удержание D30",
+  "name_en": "Day 30 Retention"
+ },
+ {
+  "key": "pa-retention-d7",
+  "name_ru": "Удержание D7",
+  "name_en": "Day 7 Retention"
+ },
+ {
+  "key": "pa-session-duration",
+  "name_ru": "Средняя длительность сессии",
+  "name_en": "Average Session Duration"
+ },
+ {
+  "key": "pa-sessions-per-user",
+  "name_ru": "Сессии на пользователя",
+  "name_en": "Sessions per User"
+ },
+ {
+  "key": "pa-stickiness",
+  "name_ru": "Stickiness (DAU / MAU)",
+  "name_en": "DAU / MAU Stickiness"
+ },
+ {
+  "key": "pa-ttfv",
+  "name_ru": "Время до первой ценности (TTFV)",
+  "name_en": "Time to First Value"
+ },
+ {
+  "key": "pa-user-churn",
+  "name_ru": "Отток пользователей",
+  "name_en": "User Churn Rate"
+ },
+ {
+  "key": "queue-kafka",
+  "name_ru": "Очередь (Kafka)",
+  "name_en": "Queue (Kafka)"
+ },
+ {
+  "key": "rate-limiter",
+  "name_ru": "Ограничитель скорости (rate limiter)",
+  "name_en": "Rate Limiter"
+ },
+ {
+  "key": "storage-s3",
+  "name_ru": "Хранилище (S3)",
+  "name_en": "Storage (S3)"
+ },
+ {
+  "key": "support-staffing",
+  "name_ru": "Штат поддержки (Эрланг C)",
+  "name_en": "Support Staffing (Erlang C)"
+ },
+ {
+  "key": "tcp-lb",
+  "name_ru": "TCP-балансировщик",
+  "name_en": "TCP Load Balancer"
+ },
+ {
+  "key": "ue-aov",
+  "name_ru": "AOV (средний чек)",
+  "name_en": "Average Order Value"
+ },
+ {
+  "key": "ue-arppu",
+  "name_ru": "ARPPU (средняя выручка на платящего)",
+  "name_en": "Average Revenue Per Paying User"
+ },
+ {
+  "key": "ue-arpu",
+  "name_ru": "ARPU (средняя выручка на пользователя)",
+  "name_en": "Average Revenue Per User"
+ },
+ {
+  "key": "ue-arr",
+  "name_ru": "ARR (годовая регулярная выручка)",
+  "name_en": "Annual Recurring Revenue"
+ },
+ {
+  "key": "ue-break-even",
+  "name_ru": "Точка безубыточности",
+  "name_en": "Break-Even Point"
+ },
+ {
+  "key": "ue-burn-multiple",
+  "name_ru": "Burn Multiple (множитель сжигания)",
+  "name_en": "Burn Multiple"
+ },
+ {
+  "key": "ue-burn-rate",
+  "name_ru": "Скорость сжигания денег (месячный burn)",
+  "name_en": "Monthly Burn Rate"
+ },
+ {
+  "key": "ue-cac-payback",
+  "name_ru": "Срок окупаемости CAC (месяцы)",
+  "name_en": "CAC Payback Period"
+ },
+ {
+  "key": "ue-cac",
+  "name_ru": "CAC (стоимость привлечения клиента)",
+  "name_en": "Customer Acquisition Cost"
+ },
+ {
+  "key": "ue-cagr",
+  "name_ru": "CAGR (среднегодовой темп роста)",
+  "name_en": "Compound Annual Growth Rate"
+ },
+ {
+  "key": "ue-contribution-margin",
+  "name_ru": "Контрибуционная маржа",
+  "name_en": "Contribution Margin"
+ },
+ {
+  "key": "ue-gross-margin",
+  "name_ru": "Валовая маржа",
+  "name_en": "Gross Margin"
+ },
+ {
+  "key": "ue-grr",
+  "name_ru": "GRR (валовое удержание выручки)",
+  "name_en": "Gross Revenue Retention"
+ },
+ {
+  "key": "ue-irr",
+  "name_ru": "IRR (внутренняя норма доходности)",
+  "name_en": "IRR (Internal Rate of Return)"
+ },
+ {
+  "key": "ue-ltv-cac",
+  "name_ru": "Отношение LTV / CAC",
+  "name_en": "LTV / CAC Ratio"
+ },
+ {
+  "key": "ue-ltv-cohort",
+  "name_ru": "LTV по когорте (retention-кривая)",
+  "name_en": "Cohort LTV"
+ },
+ {
+  "key": "ue-ltv",
+  "name_ru": "LTV (пожизненная ценность клиента)",
+  "name_en": "Lifetime Value"
+ },
+ {
+  "key": "ue-magic-number",
+  "name_ru": "Magic Number (эффективность продаж SaaS)",
+  "name_en": "Magic Number (SaaS)"
+ },
+ {
+  "key": "ue-mrr",
+  "name_ru": "MRR (месячная регулярная выручка)",
+  "name_en": "Monthly Recurring Revenue"
+ },
+ {
+  "key": "ue-npv",
+  "name_ru": "NPV (чистая приведённая стоимость)",
+  "name_en": "Net Present Value"
+ },
+ {
+  "key": "ue-nrr",
+  "name_ru": "NRR (чистое удержание выручки)",
+  "name_en": "Net Revenue Retention"
+ },
+ {
+  "key": "ue-revenue-churn",
+  "name_ru": "Отток выручки (Revenue Churn)",
+  "name_en": "Revenue Churn Rate"
+ },
+ {
+  "key": "ue-roi",
+  "name_ru": "ROI (возврат на инвестиции)",
+  "name_en": "ROI (Return on Investment)"
+ },
+ {
+  "key": "ue-runway",
+  "name_ru": "Запас денег (runway в месяцах)",
+  "name_en": "Cash Runway"
+ },
+ {
+  "key": "websocket",
+  "name_ru": "WebSocket",
+  "name_en": "WebSocket"
+ },
+ {
+  "key": "worker",
+  "name_ru": "Воркер",
+  "name_en": "Worker"
+ }
+]
