@@ -162,7 +162,13 @@ function textInside(parent, localX, localY, w, text, opts) {
   t.fontFamily = opts.family || "Noto Sans Mono";
   t.fontSize = String(opts.size || 12);
   t.fontWeight = String(opts.weight || "400");
-  t.lineHeight = String(opts.line || 16);
+  // Penpot lineHeight — это МНОЖИТЕЛЬ относительно fontSize (строка-десятичная),
+  // НЕ пиксели. "1.43" для 14px даёт интерлиньяж 20px; "1.33" для 12px даёт 16px.
+  // (До этого бага: lineHeight="20" трактовалось как 20× множитель — текст
+  //  растягивался до 14×20×3=840px для 3 строк 14px.)
+  const size = opts.size || 12;
+  const linePx = opts.line || 16;
+  t.lineHeight = String(Math.round((linePx / size) * 100) / 100);
   t.growType = opts.grow || "auto-height";
   t.fills = [{ fillColor: opts.color || "#1f2937", fillOpacity: 1 }];
   parent.appendChild(t);
@@ -224,7 +230,8 @@ for (const t of __typographies) {
     lt.fontFamily = t.family;
     lt.fontWeight = String(t.weight);
     lt.fontSize = String(t.size);
-    lt.lineHeight = String(t.line);
+    // lineHeight — множитель (как в textInside): linePx / size
+    lt.lineHeight = String(Math.round((t.line / t.size) * 100) / 100);
     lt.fontStyle = "normal";
     typoRefs.push({ name: t.name, status: "created", id: lt.id });
   } catch (e) {
