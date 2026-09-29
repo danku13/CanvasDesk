@@ -2309,14 +2309,13 @@ impl App {
                         // canvas:formula-written (passive+waitFor).
                         // Проверяем через line_kind — корректно ловит
                         // и `= expr` и `name = expr` (Assignment).
-                        let has_formula = session
-                            .text()
-                            .lines()
-                            .any(|line| matches!(
+                        let has_formula = session.text().lines().any(|line| {
+                            matches!(
                                 canvas_core::expr::line_kind(line),
                                 canvas_core::expr::NumiLineKind::Assignment { .. }
                                     | canvas_core::expr::NumiLineKind::Expression
-                            ));
+                            )
+                        });
                         if has_formula {
                             self.push_tour_signal("canvas:formula-written");
                         }
