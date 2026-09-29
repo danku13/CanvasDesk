@@ -31,8 +31,12 @@ use canvas_ui::measure::TextMeasurer;
 /// Семейство измерения = семейство screen-текстов рендера (parity метрик).
 const FAMILY: &str = canvas_render::text::SANS_FAMILY;
 
-/// Ширина панели галереи (логические px).
-pub const PANEL_W: f32 = 560.0;
+/// Ширина панели галереи (логические px). Аудит CI 2026-09-29: каталог
+/// вырос до 5 категорий (framework, коммит f305ec7) — ряд чипов
+/// 56 + 5×(108+6) = 626 не влезал в прежнюю внутреннюю ширину 536;
+/// PANEL_W 660 даёт внутренние 636 с запасом 10 px и помещается в
+/// минимальный G4-вьюпорт 800 (800 − SPACING_XL = 776).
+pub const PANEL_W: f32 = 660.0;
 /// Высота шапки.
 pub const HEADER_H: f32 = 40.0;
 /// Высота поля фильтра.
@@ -47,8 +51,9 @@ pub const ROW_INNER_H: f32 = ROW_H - canvas_core::tokens::SPACING_S;
 pub const FOOTER_H: f32 = 26.0;
 /// Внутренние поля панели (spacing-scale).
 pub const PANEL_PAD: f32 = canvas_core::tokens::SPACING_LG;
-/// Ширина чипа категории (фикс — D2 CJM: полный ряд «Все» + 4 категории
-/// при PANEL_W 560; design-константа, не эвристика).
+/// Ширина чипа категории (фикс — D2 CJM: полный ряд «Все» + N категорий
+/// при PANEL_W 660 (N=5 после аудита каталога 2026-09, ранее — 4 при
+/// PANEL_W 560); design-константа, не эвристика).
 pub const CHIP_W: f32 = 108.0;
 /// Ширина чипа «Все».
 pub const CHIP_ALL_W: f32 = 56.0;
