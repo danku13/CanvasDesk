@@ -121,6 +121,10 @@ CARD_ANATOMY = {
 SEED_JS_TEMPLATE = r"""
 // ===== CanvasDesk design-system seeder (Penpot plugin context) =====
 // Все значения — зеркало design/tokens/{colors,dimensions}.json.
+// API: penpot.createBoard/createRectangle/createText/createPage/openPage,
+//      penpot.library.local.createColor/createTypography
+// ВАЖНО: shape.x/y — это CANVAS-ABSOLUTE координаты (не relative-to-parent).
+// После board.appendChild(child) их нужно выставлять как parent.x + localX.
 
 const __colors = __COLORS_JSON__;
 const __typographies = __TYPOGRAPHIES_JSON__;
@@ -137,6 +141,34 @@ function sRGBtoHex(arr) {
 }
 function solidFill(rgba) {
   return { fillColor: sRGBtoHex(rgba), fillOpacity: rgba[3] };
+}
+
+// Хелперы: создают rect/text ВНУТРИ parent board, позиция — canvas-absolute.
+function rectInside(parent, localX, localY, w, h, fillColor, fillOpacity, radius) {
+  const r = penpot.createRectangle();
+  r.resize(w, h);
+  r.fills = [{ fillColor, fillOpacity: fillOpacity === undefined ? 1 : fillOpacity }];
+  if (radius) r.borderRadius = radius;
+  parent.appendChild(r);
+  // canvas-absolute = parent canvas position + local offset
+  r.x = parent.x + localX;
+  r.y = parent.y + localY;
+  return r;
+}
+function textInside(parent, localX, localY, w, text, opts) {
+  opts = opts || {};
+  const t = penpot.createText(text);
+  t.resize(w, opts.h || 20);
+  t.fontFamily = opts.family || "Noto Sans Mono";
+  t.fontSize = String(opts.size || 12);
+  t.fontWeight = String(opts.weight || "400");
+  t.lineHeight = String(opts.line || 16);
+  t.growType = opts.grow || "auto-height";
+  t.fills = [{ fillColor: opts.color || "#1f2937", fillOpacity: 1 }];
+  parent.appendChild(t);
+  t.x = parent.x + localX;
+  t.y = parent.y + localY;
+  return t;
 }
 
 // ─── 0. Найти или создать страницу «CanvasDesk Design System» ───
@@ -209,22 +241,9 @@ colorBoard.fills = [{ fillColor: "#ffffff", fillOpacity: 1 }];
 
 let cy = 50;
 for (const c of __colors) {
-  const swatch = penpot.createRectangle();
-  swatch.x = 50; swatch.y = cy;
-  swatch.resize(200, 36);
-  swatch.fills = [solidFill(c.rgba)];
-  swatch.borderRadius = 6;
-  colorBoard.appendChild(swatch);
-
-  const label = penpot.createText(`${c.name}   ${c.hex}`);
-  label.x = 270; label.y = cy;
-  label.resize(580, 36);
-  label.fontFamily = "Noto Sans Mono";
-  label.fontSize = "12"; label.fontWeight = "400"; label.lineHeight = "16";
-  label.growType = "auto-height";
-  label.fills = [{ fillColor: "#1f2937", fillOpacity: 1 }];
-  colorBoard.appendChild(label);
-
+  rectInside(colorBoard, 50, cy, 200, 36, sRGBtoHex(c.rgba), c.rgba[3], 6);
+  textInside(colorBoard, 270, cy, 580, `${c.name}   ${c.hex}`,
+    { family: "Noto Sans Mono", size: 12, weight: "400", line: 16, h: 36 });
   cy += 50;
 }
 
@@ -237,26 +256,14 @@ typoBoard.fills = [{ fillColor: "#ffffff", fillOpacity: 1 }];
 
 let ty = 50;
 for (const t of __type_scale) {
-  const sample = penpot.createText(t.sample);
-  sample.x = 50; sample.y = ty;
-  sample.resize(600, t.line + 4);
-  sample.fontFamily = t.role === "result" ? "Noto Sans Mono" : "Noto Sans Display";
-  sample.fontSize = String(t.size);
-  sample.fontWeight = String(t.weight);
-  sample.lineHeight = String(t.line);
-  sample.growType = "auto-height";
-  sample.fills = [{ fillColor: "#1f2937", fillOpacity: 1 }];
-  typoBoard.appendChild(sample);
-
-  const meta = penpot.createText(`${t.role} · ${t.size}px / ${t.line}px · ${t.weight}`);
-  meta.x = 50; meta.y = ty + t.line + 6;
-  meta.resize(600, 16);
-  meta.fontFamily = "Noto Sans Mono";
-  meta.fontSize = "10"; meta.fontWeight = "400"; meta.lineHeight = "14";
-  meta.growType = "auto-height";
-  meta.fills = [{ fillColor: "#6b7280", fillOpacity: 1 }];
-  typoBoard.appendChild(meta);
-
+  textInside(typoBoard, 50, ty, 600, t.sample,
+    {
+      family: t.role === "result" ? "Noto Sans Mono" : "Noto Sans Display",
+      size: t.size, weight: t.weight, line: t.line, h: t.line + 4,
+    });
+  textInside(typoBoard, 50, ty + t.line + 6, 600,
+    `${t.role} · ${t.size}px / ${t.line}px · ${t.weight}`,
+    { family: "Noto Sans Mono", size: 10, weight: "400", line: 14, color: "#6b7280" });
   ty += 80;
 }
 
@@ -269,40 +276,15 @@ spacBoard.fills = [{ fillColor: "#ffffff", fillOpacity: 1 }];
 
 let sy = 50;
 for (const s of __spacing) {
-  const swatch = penpot.createRectangle();
-  swatch.x = 50; swatch.y = sy;
-  swatch.resize(s.value, 24);
-  swatch.fills = [{ fillColor: "#65A0F7", fillOpacity: 0.5 }];
-  spacBoard.appendChild(swatch);
-
-  const label = penpot.createText(`${s.token} = ${s.value}px   ${s.role}`);
-  label.x = 100; label.y = sy - 4;
-  label.resize(450, 32);
-  label.fontFamily = "Noto Sans Mono";
-  label.fontSize = "12"; label.fontWeight = "400"; label.lineHeight = "16";
-  label.growType = "auto-height";
-  label.fills = [{ fillColor: "#1f2937", fillOpacity: 1 }];
-  spacBoard.appendChild(label);
-
+  rectInside(spacBoard, 50, sy, s.value, 24, "#65A0F7", 0.5);
+  textInside(spacBoard, 100, sy - 4, 450, `${s.token} = ${s.value}px   ${s.role}`,
+    { size: 12, weight: "400", line: 16, h: 32 });
   sy += 70;
 }
 for (const r of __radii) {
-  const swatch = penpot.createRectangle();
-  swatch.x = 50; swatch.y = sy;
-  swatch.resize(80, 40);
-  swatch.fills = [{ fillColor: "#65A0F7", fillOpacity: 0.15 }];
-  swatch.borderRadius = r.value;
-  spacBoard.appendChild(swatch);
-
-  const label = penpot.createText(`${r.token} = ${r.value}px   ${r.role}`);
-  label.x = 150; label.y = sy + 12;
-  label.resize(400, 16);
-  label.fontFamily = "Noto Sans Mono";
-  label.fontSize = "12"; label.fontWeight = "400"; label.lineHeight = "16";
-  label.growType = "auto-height";
-  label.fills = [{ fillColor: "#1f2937", fillOpacity: 1 }];
-  spacBoard.appendChild(label);
-
+  rectInside(spacBoard, 50, sy, 80, 40, "#65A0F7", 0.15, r.value);
+  textInside(spacBoard, 150, sy + 12, 400, `${r.token} = ${r.value}px   ${r.role}`,
+    { size: 12, weight: "400", line: 16 });
   sy += 70;
 }
 
@@ -317,48 +299,33 @@ cardBoard.resize(
 cardBoard.fills = [{ fillColor: "#ffffff", fillOpacity: 1 }];
 
 // Header (34px, accent fill α0.18)
-const header = penpot.createRectangle();
-header.x = 50; header.y = 50;
-header.resize(__card_anatomy.body_width, __card_anatomy.header_height);
-header.fills = [{ fillColor: "#65A0F7", fillOpacity: 0.18 }];
-header.borderRadius = __card_anatomy.corner_radius;
-cardBoard.appendChild(header);
+rectInside(cardBoard, 50, 50,
+  __card_anatomy.body_width, __card_anatomy.header_height,
+  "#65A0F7", 0.18, __card_anatomy.corner_radius);
 
 // Body (white with accent stroke)
 const bodyY = 50 + __card_anatomy.header_height;
-const body = penpot.createRectangle();
-body.x = 50; body.y = bodyY;
-body.resize(__card_anatomy.body_width, 120);
-body.fills = [{ fillColor: "#ffffff", fillOpacity: 1 }];
+const body = rectInside(cardBoard, 50, bodyY,
+  __card_anatomy.body_width, 120,
+  "#ffffff", 1);
 body.strokes = [{ strokeColor: "#65A0F7", strokeOpacity: 0.40, strokeStyle: "solid", strokeWidth: 1, strokeAlignment: "center" }];
-cardBoard.appendChild(body);
 
 // Sample Numi-list текст
-const sampleText = penpot.createText("rps = 1000 rps\nservice_rate = 1200 rps\nservers = 2");
-sampleText.x = 60; sampleText.y = bodyY + __card_anatomy.body_padding;
-sampleText.resize(__card_anatomy.body_width - 2 * __card_anatomy.body_padding, 80);
-sampleText.fontFamily = "Noto Sans Mono";
-sampleText.fontSize = "14"; sampleText.fontWeight = "400"; sampleText.lineHeight = "20";
-sampleText.growType = "auto-height";
-sampleText.fills = [{ fillColor: "#1f2937", fillOpacity: 1 }];
-cardBoard.appendChild(sampleText);
+textInside(cardBoard, 60, bodyY + __card_anatomy.body_padding,
+  __card_anatomy.body_width - 2 * __card_anatomy.body_padding,
+  "rps = 1000 rps\nservice_rate = 1200 rps\nservers = 2",
+  { family: "Noto Sans Mono", size: 14, weight: "400", line: 20, h: 80 });
 
 // Result strip
 const resultStripY = bodyY + 120 + 8;
-const resultStrip = penpot.createRectangle();
-resultStrip.x = 50; resultStrip.y = resultStripY;
-resultStrip.resize(__card_anatomy.body_width, __card_anatomy.result_strip_h);
-resultStrip.fills = [{ fillColor: "#21A88C", fillOpacity: 0.18 }];
-cardBoard.appendChild(resultStrip);
+rectInside(cardBoard, 50, resultStripY,
+  __card_anatomy.body_width, __card_anatomy.result_strip_h,
+  "#21A88C", 0.18);
 
-const resultText = penpot.createText("mm1(rps, service_rate, servers) = 0.833");
-resultText.x = 60; resultText.y = resultStripY + 3;
-resultText.resize(__card_anatomy.body_width - 20, __card_anatomy.result_strip_h - 6);
-resultText.fontFamily = "Noto Sans Mono";
-resultText.fontSize = "12"; resultText.fontWeight = "700"; resultText.lineHeight = "16";
-resultText.growType = "auto-height";
-resultText.fills = [{ fillColor: "#0d5b4f", fillOpacity: 1 }];
-cardBoard.appendChild(resultText);
+textInside(cardBoard, 60, resultStripY + 3,
+  __card_anatomy.body_width - 20,
+  "mm1(rps, service_rate, servers) = 0.833",
+  { family: "Noto Sans Mono", size: 12, weight: "700", line: 16, color: "#0d5b4f" });
 
 return {
   pageId: page.id,
