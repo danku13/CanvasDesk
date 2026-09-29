@@ -411,11 +411,33 @@ pub fn template_icon_uv(icon: &str) -> Option<([f32; 2], [f32; 2])> {
 
 // --- Хедер по вёрстке прототипа (FR-075; prototype-unified drawNode) ---
 
-/// Геометрия чипа категории в шапке (prototype-unified: `roundRect(x+10,
-/// y+8, chipW, 16, 8)` — пилюля-капсула, `chipW` = ширина текста + 14).
-/// `label_w` — ширина ЗАШЕЙПЛЕННОГО текста метки в world px (кэш text.rs).
+/// Зазор между чипом категории и квад-иконкой роли шаблонной ноды
+/// (ревизия владельца 2026-09-30: чип прижат вправо, иконка остаётся
+/// крайней справа — чип встаёт влево от неё).
+pub const CHIP_ICON_GAP: f32 = 6.0;
+/// Зазор между текстом заголовка и чипом (правая зона резервируется
+/// в клипе заголовка — `text::title_clip_width`).
+pub const CHIP_TITLE_GAP: f32 = 6.0;
+/// Поле чипа от правого края шапки у нод без квад-иконки (заметка/
+/// расчёт/файл; прежние 10 px левого поля прототипа).
+pub const CHIP_MARGIN_RIGHT: f32 = 10.0;
+
+/// Геометрия чипа категории в шапке. Ревизия владельца 2026-09-30
+/// («тэг прижми вправо, заголовок слева без лишних отступов»): чип —
+/// у ПРАВОГО края шапки, пилюля-капсула «метка + 14» высотой 16
+/// (прототип: `roundRect(…, y+8, chipW, 16, 8)`). У шаблонной ноды чип
+/// встаёт влево от квад-иконки роли (`template_icon_rect`) — правое поле
+/// `TEMPLATE_ICON_MARGIN_H + TEMPLATE_ICON_SIZE + CHIP_ICON_GAP`; у
+/// остальных — `CHIP_MARGIN_RIGHT`. `label_w` — ширина ЗАШЕЙПЛЕННОГО
+/// текста метки в world px (кэш text.rs).
 pub fn header_chip_rect(node: &Node, label_w: f32) -> [f32; 4] {
-    [node.x + 10.0, node.y + 8.0, label_w + 14.0, 16.0]
+    let w = label_w + 14.0;
+    let right = if node.template().is_some() {
+        TEMPLATE_ICON_MARGIN_H + TEMPLATE_ICON_SIZE + CHIP_ICON_GAP
+    } else {
+        CHIP_MARGIN_RIGHT
+    };
+    [node.x + node.width - w - right, node.y + 8.0, w, 16.0]
 }
 
 /// Инстанс чипа категории: сплошная заливка цветом категории, без тени и
@@ -1854,6 +1876,52 @@ mod tests {
     use super::*;
     use canvas_core::{Canvas, Node};
 
+    /// Ревизия владельца 2026-09-30 («тэг прижми вправо»): чип у ПРАВОГО
+    /// края шапки; у шаблонной ноды — вплотную слева от квад-иконки роли
+    /// (зазор CHIP_ICON_GAP), у остальных — поле CHIP_MARGIN_RIGHT.
+    #[test]
+    fn header_chip_rect_right_aligned() {
+        let mut node = Node::text("n", "x", 100.0, 50.0);
+        node.width = 260.0;
+        let label_w = 60.0;
+        let rect = header_chip_rect(&node, label_w);
+        assert_eq!(rect[1], node.y + 8.0, "вертикаль чипа не менялась");
+        assert_eq!(rect[3], 16.0, "высота пилюли не менялась");
+        assert_eq!(rect[2], label_w + 14.0, "ширина = метка + 14");
+        // Заметка (без квад-иконки): правый край — на поле CHIP_MARGIN_RIGHT
+        assert!(
+            (rect[0] + rect[2] - (node.x + node.width - CHIP_MARGIN_RIGHT)).abs() < 0.01,
+            "чип заметки не прижат вправо: {:?}",
+            rect
+        );
+        // Шаблон: чип встаёт влево от квад-иконки, зазор CHIP_ICON_GAP
+        node.set_template(Some(canvas_core::templates::TemplateRef {
+            id: "mock.lb".to_owned(),
+            version: "1.0.0".to_owned(),
+            expr: "mm1($rps)".to_owned(),
+            params: std::collections::BTreeMap::new(),
+            icon: "lb".to_owned(),
+            color: "#4A90E2".to_owned(),
+            name: Some("Балансировщик".to_owned()),
+            outputs: Vec::new(),
+        }));
+        let tpl_rect = header_chip_rect(&node, label_w);
+        let icon = template_icon_rect(&node);
+        assert!(
+            (tpl_rect[0] + tpl_rect[2] + CHIP_ICON_GAP - icon[0]).abs() < 0.01,
+            "чип шаблона не встал слева от иконки: chip {:?} icon {:?}",
+            tpl_rect,
+            icon
+        );
+        assert!(
+            !canvas_ui::geometry::UiRect::new(tpl_rect[0], tpl_rect[1], tpl_rect[2], tpl_rect[3])
+                .intersects(&canvas_ui::geometry::UiRect::new(
+                    icon[0], icon[1], icon[2], icon[3]
+                )),
+            "чип пересекает квад-иконку"
+        );
+    }
+
     /// FR-023: заголовок шаблонной ноды — имя шаблона из снапшота,
     /// не первая строка листа параметров; у ноды без имени в снапшоте
     /// (старые файлы) — прежний фолбэк (первая строка текста).
@@ -2022,10 +2090,17 @@ mod tests {
             "UV ячейки атласа"
         );
         assert!(uv_min[1] >= 0.0 && uv_max[1] <= 1.0, "UV в границах атласа");
-        // Чип — капсула в верхнем левом углу шапки (prototype-unified:
-        // roundRect(x+10, y+8, метка+14, 16, 8)); иконка — в центре шапки.
+        // Чип — капсула у ПРАВОГО края шапки (ревизия 2026-09-30: тэг
+        // прижат вправо; у шаблона — слева от квад-иконки с зазором 6).
         let chip = header_chip_instance(&tpl, 42.0, [0.3, 0.6, 1.0, 1.0]);
-        assert_eq!(chip.pos, [tpl.x + 10.0, tpl.y + 8.0]);
+        let right_reserve = TEMPLATE_ICON_MARGIN_H + TEMPLATE_ICON_SIZE + CHIP_ICON_GAP;
+        assert_eq!(
+            chip.pos,
+            [
+                tpl.x + tpl.width - (42.0 + 14.0) - right_reserve,
+                tpl.y + 8.0
+            ]
+        );
         assert_eq!(chip.size, [42.0 + 14.0, 16.0]);
         assert_eq!(chip.corners, [8.0, 8.0, 8.0, 8.0]);
         let icon_rect = template_icon_rect(&tpl);

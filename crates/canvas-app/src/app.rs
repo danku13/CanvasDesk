@@ -5650,8 +5650,17 @@ impl App {
     ) -> Option<template_ui::FlyoutLayout> {
         let hover = self.template_hover.as_ref()?;
         let category = hover.open?;
-        let (row_rect, name) = strip.rows.get(category)?;
-        let count = self.templates.by_category(name).len();
+        let (row_rect, _) = strip.rows.get(category)?;
+        // Счётчик строк — по RAW-токену категории: имена в strip.rows —
+        // локализованные подписи (FR-040 v2), а `by_category` ожидает токен
+        // реестра. Прежде count брался по подписи — у не-английского языка
+        // он был 0 и flyout схлопывался в пустую пилюлю без строк (найдено
+        // wasm-прогоном 2026-09-30: hover «Бэкенд · 14» → пустой flyout).
+        let count = self
+            .template_category_names()
+            .get(category)
+            .map(|raw| self.templates.by_category(raw).len())
+            .unwrap_or(0);
         Some(template_ui::flyout_layout(
             *row_rect,
             count,
@@ -8792,6 +8801,64 @@ mod tests {
         assert_eq!(slugify("БД SQL (мастер)"), "bd-sql-master");
         assert_eq!(slugify("  --weird name--  "), "weird-name");
         assert_eq!(slugify("!!!"), "custom", "нет символов — фолбэк custom");
+    }
+
+    /// FR-025 (ревизия) × FR-040 v2 — регресс wasm-прогона 2026-09-30:
+    /// геометрия flyout свёрнутой полосы обязана считать строки по RAW-токену
+    /// категории, а не по локализованной подписи. Прежде count брался по
+    /// подписи из strip.rows («Бэкенд» вместо «backend», «Queues» вместо
+    /// «queue»…) — `by_category` возвращал 0 и flyout схлопывался в пустую
+    /// пилюлю без строк (ноды в полосе есть — «Бэкенд · 14» — а раскрытие
+    /// пустое). Оракул: у каждой категории RU/EN число видимых строк flyout
+    /// совпадает с числом шаблонов raw-категории (в пределах окна).
+    #[test]
+    fn flyout_geometry_counts_by_raw_category_token() {
+        let app = stub_app_with_canvas(Canvas::default());
+        let viewport = app.viewport_logical();
+        let raws = app.template_category_names();
+        assert!(!raws.is_empty(), "встроенный реестр не пуст");
+        for lang in [canvas_core::Language::Ru, canvas_core::Language::En] {
+            let mut app = stub_app_with_canvas(Canvas::default());
+            app.settings.language = lang;
+            let categories = app.template_category_display_names();
+            let mut measurer = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let strip =
+                template_ui::dock_strip_layout(&categories, viewport[1], &mut measurer, &mut fs);
+            for (cat, raw) in raws.iter().enumerate() {
+                let expected = app.templates.by_category(raw).len();
+                if expected == 0 {
+                    continue;
+                }
+                // Явное раскрытие (пин по клику — WAI-ARIA) — без ожидания intent
+                let mut hover = template_ui::StripHover::new();
+                hover.toggle_trigger(cat);
+                app.template_hover = Some(hover);
+                let fly = app
+                    .template_flyout_geometry(viewport, &strip)
+                    .unwrap_or_else(|| panic!("геометрия flyout есть у категории {raw}"));
+                // Верно то же окно видимости, что считает flyout_layout:
+                // большие категории клампятся высотой окна (скролл добирает).
+                let max_h = (viewport[1] - template_ui::PANEL_TOP_MARGIN * 2.0)
+                    .max(template_ui::ROW_HEIGHT + template_ui::FLYOUT_PAD_V * 2.0);
+                let window = ((((max_h - template_ui::FLYOUT_PAD_V * 2.0)
+                    / template_ui::ROW_HEIGHT)
+                    .floor()) as usize)
+                    .max(1);
+                assert_eq!(
+                    fly.row_rects.len(),
+                    expected.min(window),
+                    "категория {raw:?} ({lang:?}): подпись {:?} не должна ломать счёт",
+                    categories[cat]
+                );
+                // Высота flyout вмещает строки, а не только паддинг пилюли.
+                assert!(
+                    fly.rect[3] > template_ui::FLYOUT_PAD_V * 2.0,
+                    "flyout {raw:?} схлопнулся в пилюлю ({})",
+                    fly.rect[3]
+                );
+            }
+        }
     }
 
     /// FR-020: тип параметра по токену единицы.
