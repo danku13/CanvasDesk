@@ -9656,11 +9656,19 @@ mod tests {
         let (render_set, dim) = app.stage_calc_render.clone();
         assert!(render_set.is_some(), "множество применено с первого тика");
         assert!((0.0..1.0).contains(&dim), "коэффициент анимируется: {dim}");
-        // Догоняем переход (реальное время focus_fade_ms = 150 мс)
+        // Догоняем переход (реальное время focus_fade_ms = 150 мс).
+        // Тики — в темпе кадров (sleep 10 мс): тик ведёт коэффициент по
+        // Wall-clock (Instant::now), занятой спин без пауз на быстром
+        // раннере истощает гард раньше 150 мс (флейк CI #384:
+        // «фейд-аут не завершается» при 100k итераций быстрее 150 мс).
         let mut guard = 0;
-        while app.tick_stage_calc_fade() {
+        loop {
+            if !app.tick_stage_calc_fade() {
+                break;
+            }
             guard += 1;
-            assert!(guard < 100_000, "переход не завершается");
+            assert!(guard < 1_000, "переход не завершается");
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let (_, dim) = app.stage_calc_render.clone();
         assert!((dim - 1.0).abs() < f32::EPSILON, "устаканилось на 1.0");
@@ -9673,9 +9681,13 @@ mod tests {
         assert!(snapshot.is_some(), "снимок множества живёт в фейд-ауте");
         assert!(dim <= 1.0, "коэффициент уходит от 1.0: {dim}");
         let mut guard = 0;
-        while app.tick_stage_calc_fade() {
+        loop {
+            if !app.tick_stage_calc_fade() {
+                break;
+            }
             guard += 1;
-            assert!(guard < 100_000, "фейд-аут не завершается");
+            assert!(guard < 1_000, "фейд-аут не завершается");
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let (snapshot, dim) = app.stage_calc_render.clone();
         assert!(snapshot.is_none(), "множество очищено после фейд-аута");
