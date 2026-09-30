@@ -302,6 +302,7 @@ dependencies = [
  "canvas-render",
  "canvas-scene",
  "canvas-shell",
+ "canvas-suggest",
  "canvas-ui",
  "canvas-widgets",
  "cosmic-text",
