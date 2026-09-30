@@ -2660,7 +2660,8 @@ impl App {
         let Some(menu) = &self.menu else {
             return (instances, texts);
         };
-        let items = canvas_menu_visible_items(self.align_menu_visible());
+        let items =
+            canvas_menu_visible_items_ext(self.align_menu_visible(), self.autowidth_menu_visible());
         let palette = self.effective_palette();
         let [x, y, w, h] = menu_rect_for(menu.origin, items.len());
         instances.push(CardInstance {
