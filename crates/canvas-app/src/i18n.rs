@@ -252,6 +252,9 @@ pub mod keys {
     pub const MENU_ALIGN_HORIZONTAL: &str = "menu.align_horizontal";
     pub const MENU_ALIGN_VERTICAL: &str = "menu.align_vertical";
     pub const MENU_DISTRIBUTE_EVENLY: &str = "menu.distribute_evenly";
+    /// FR-080: «Автоширина по контенту» — пересчёт ширины выделенных нод
+    /// по их тексту (target=10 слов/строку).
+    pub const MENU_AUTOWIDTH: &str = "menu.autowidth";
 
     // --- Панель хоткеев (FR-004): колонка клавиши («ЛКМ» — раскладочная
     // аббревиатура, тоже переводится) и описания ---
@@ -879,6 +882,7 @@ const RU: &[(&str, &str)] = &[
     (keys::MENU_ALIGN_HORIZONTAL, "Выровнять по горизонтали"),
     (keys::MENU_ALIGN_VERTICAL, "Выровнять по вертикали"),
     (keys::MENU_DISTRIBUTE_EVENLY, "Распределить равномерно"),
+    (keys::MENU_AUTOWIDTH, "Автоширина по контенту"),
     // --- Панель хоткеев ---
     (keys::HOTKEYS_TITLE, "Горячие клавиши"),
     (keys::HKEY_F1, "F1"),
@@ -1735,6 +1739,7 @@ const EN: &[(&str, &str)] = &[
     (keys::MENU_ALIGN_HORIZONTAL, "Align horizontally"),
     (keys::MENU_ALIGN_VERTICAL, "Align vertically"),
     (keys::MENU_DISTRIBUTE_EVENLY, "Distribute evenly"),
+    (keys::MENU_AUTOWIDTH, "Auto-width by content"),
     // --- Hotkeys panel ---
     (keys::HOTKEYS_TITLE, "Hotkeys"),
     (keys::HKEY_F1, "F1"),

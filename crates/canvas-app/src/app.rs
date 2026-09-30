@@ -45,7 +45,7 @@ use crate::template_ui::{
     row_of_ordinal as template_row_of_ordinal, split_two_lines, PanelRow, WheelHit,
 };
 use crate::ui::{
-    button_rect, canvas_menu_label, canvas_menu_visible_items, drag_origins, focus_seed_of,
+    button_rect, canvas_menu_label, canvas_menu_visible_items_ext, drag_origins, focus_seed_of,
     help_button_rect, hotkeys_panel_rect_at, in_resize_corner, language_button_rect,
     menu_item_at_for, menu_item_rect, menu_rect_for, next_free_id, nodes_in_rect, paste_nodes,
     plan_group_around, plan_group_around_nodes, plan_group_at, point_in_rect, reassign_ids,
@@ -2291,6 +2291,20 @@ impl App {
                         } else {
                             let text = session.text();
                             node.text = Some(text.clone());
+                            // FR-080: auto-width по контенту — после коммита
+                            // текста ширина ноды пересчитывается. Текст
+                            // измеряется через TextMeasurer (тот же cosmic-text
+                            // шейпер, что у рендера); target=10 слов/строку.
+                            // Группа не пересчитывается (её размер — габариты
+                            // детей, не текст подписи). Шаблонные ноды тоже —
+                            // у них ширина подгоняется под структуру параметров.
+                            if node.template().is_none() {
+                                node.width = crate::auto_width::auto_width_for_text(Some(&text));
+                                // Spatial index хранит bbox ноды; меняя
+                                // ширину, надо перерегистрировать. Без этого
+                                // hit-test и выделение рамкой отстают.
+                                self.scene.spatial.update(index, node);
+                            }
                             // FR-013: строки «= …» — формула (смешанный
                             // редактор); commit выводит canvasdesk.expr и
                             // пересчитывает строку результата (один undo-шаг
@@ -3027,6 +3041,68 @@ impl App {
         self.selected_nodes.len() >= ALIGN_MIN_SELECTION
     }
 
+    /// FR-080: виден ли пункт «Автоширина по контенту». Виден при N≥1
+    /// выделенной ноде. Не входит в `ALIGN_MIN_SELECTION` гейт (там N≥3
+    /// для распределения — автоширина работает с одной нодой).
+    fn autowidth_menu_visible(&self) -> bool {
+        !self.selected_nodes.is_empty()
+    }
+
+    /// FR-080: применить автоширину к выделенным нодам. Для каждой ноды:
+    ///  - пропустить группу (её ширина = габариты детей, не текст)
+    ///  - пропустить шаблонную ноду (ширина = структура параметров)
+    ///  - иначе: `auto_width_for_text(node.text.as_deref())`,
+    ///    обновить `node.width`, перерегистрировать в spatial index.
+    ///
+    /// Один undo-шаг (паттерн FR-006: `push_undo` перед мутацией).
+    /// После — `mark_dirty` + `recompute_flow` (поток мог измениться,
+    /// т.к. перенос строк влияет на видимые результаты).
+    fn apply_auto_width_to_selection(&mut self) {
+        if self.selected_nodes.is_empty() {
+            return;
+        }
+        self.push_undo();
+        // Один FontSystem + TextMeasurer на batch (а не на ноду —
+        // паттерн auto_width_for_text_with). ~1мс на setup, экономит
+        // N× по сравнению с auto_width_for_text.
+        let mut fs = canvas_render::text::measure_font_system();
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let mut changed = false;
+        for &index in &self.selected_nodes {
+            // get_mut через split_at_mut — обход borrow checker: нельзя
+            // держать &mut node и &mut spatial одновременно через self.scene.
+            // Паттерн: вынести выборку индексов, потом для каждого — get_mut
+            // + spatial.update (как в finish_editing line 2308).
+            let new_width = {
+                let Some(node) = self.scene.canvas.nodes.get(index) else {
+                    continue;
+                };
+                if node.template().is_some() {
+                    continue; // шаблонная нода — пропустить
+                }
+                // Группа — пропустить (kind проверяем через NodeKind,
+                // re-exported в crate canvas_core).
+                if node.kind() == NodeKind::Group {
+                    continue;
+                }
+                crate::auto_width::auto_width_for_text_with(node.text.as_deref(), &mut m, &mut fs)
+            };
+            let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
+                continue;
+            };
+            if (node.width - new_width).abs() > 0.5 {
+                node.width = new_width;
+                self.scene.spatial.update(index, node);
+                changed = true;
+            }
+        }
+        if changed {
+            self.scene.mark_dirty();
+            self.scene.recompute_flow();
+            self.request_redraw();
+        }
+    }
+
     /// Набор batch-операции (п.16): (юниты, ведомые по юнитам).
     ///
     /// Юнит — выделенная нода, НЕ являющаяся ребёнком другой выделенной
@@ -3445,10 +3521,15 @@ impl App {
         // FR-006: создание заметки — undo-шаг
         self.push_undo();
         let id = next_free_id(&self.scene.canvas, "note");
-        self.scene
-            .canvas
-            .nodes
-            .push(Node::text(id, "", world[0], world[1]));
+        // FR-080: auto-width по контенту. Для пустой новой заметки —
+        // auto_width_for_text(None) вернёт TARGET+padding (440px),
+        // нода создаётся «на вырост» — при вводе 10 слов не дёргается.
+        // Раньше хардкод 260px (Node::text default) — короткая заметка
+        // выглядела куцо, длинная не помещалась.
+        let width = crate::auto_width::auto_width_for_text(None);
+        let mut node = Node::text(id, "", world[0], world[1]);
+        node.width = width;
+        self.scene.canvas.nodes.push(node);
         let index = self.scene.canvas.nodes.len() - 1;
         let node = &self.scene.canvas.nodes[index];
         self.scene.spatial.insert(index, node);
@@ -7808,7 +7889,8 @@ impl App {
         let menu = self.menu.as_ref()?;
         Some(menu_rect_for(
             menu.origin,
-            canvas_menu_visible_items(self.align_menu_visible()).len(),
+            canvas_menu_visible_items_ext(self.align_menu_visible(), self.autowidth_menu_visible())
+                .len(),
         ))
     }
 

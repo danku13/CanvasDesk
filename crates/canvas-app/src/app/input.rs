@@ -1994,7 +1994,10 @@ impl App {
             // 3. Пункт или паддинг базового меню (список — тот же,
             // что в отрисовке: batch-пункты видны только при N≥3)
             if let Some(menu) = self.menu.take() {
-                let items = canvas_menu_visible_items(self.align_menu_visible());
+                let items = canvas_menu_visible_items_ext(
+                    self.align_menu_visible(),
+                    self.autowidth_menu_visible(),
+                );
                 if let Some(i) = menu_item_at_for(menu.origin, self.cursor, items.len()) {
                     match items[i] {
                         CanvasMenuItem::NewGroup => {
@@ -2133,6 +2136,11 @@ impl App {
                             // (решение T-038.5: одна кнопка, правило в
                             // distribute_axis_for)
                             self.run_batch_op(BatchOp::Distribute, None);
+                        }
+                        CanvasMenuItem::AutoWidth => {
+                            // FR-080: применить автоширину ко всем
+                            // выделенным нодам. Шаблонные/группы — пропускаются.
+                            self.apply_auto_width_to_selection();
                         }
                     }
                     self.request_redraw();
