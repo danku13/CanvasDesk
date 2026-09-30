@@ -489,6 +489,15 @@ impl App {
                             _ => {}
                         }
                     }
+                    // FR-079 (S3): C3-карточки — Esc закрывает стопку до
+                    // команд редактора (тот же приём, что у popup FR-021)
+                    if self.suggest.cards.is_some()
+                        && event.logical_key == Key::Named(NamedKey::Escape)
+                        && !event.repeat
+                    {
+                        self.close_suggest_cards();
+                        return true;
+                    }
                     let Some(command) =
                         map_key(&event.logical_key, ctrl, shift).and_then(|command| {
                             match self.editing.as_ref() {
@@ -2497,6 +2506,12 @@ impl App {
         }
         match state {
             ElementState::Pressed => {
+                // FR-079 (S3): C3-карточки — клик до диспетчера поверхностей:
+                // стопка транзиентна (паттерн тултипа, не реестр FR-052);
+                // клик по карточке глотается, мимо — закрывает и проходит
+                if self.suggest_card_click() {
+                    return;
+                }
                 // FR-052 (U2 PRD-0009): единый диспетчер поверхностей —
                 // HitStack::pick по кадру реестра решает, кто получает клик
                 // (порядок = слои/визуальный верх, а не порядок веток).

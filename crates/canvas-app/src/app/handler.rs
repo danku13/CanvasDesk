@@ -339,6 +339,12 @@ impl ApplicationHandler<AppEvent> for App {
                     let (hint_instances, hint_texts) = self.hints_overlay();
                     screen_bands.push(UiLayer::Popups, hint_instances, hint_texts);
                 }
+                // FR-079 (S3): C3-карточки «следующие ноды» — тот же слой
+                // попапов (транзиент поверх редактора, не модаль)
+                {
+                    let (card_instances, card_texts) = self.suggest_cards_overlay();
+                    screen_bands.push(UiLayer::Popups, card_instances, card_texts);
+                }
                 // FR-017 (CP6): what-if нижний бар (пилюля/полоса/список/
                 // таблица сравнения) — поверх канваса
                 {
@@ -1204,6 +1210,24 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::Drag(event) => self.on_drag_event(event),
             AppEvent::FileEvents(events) => self.on_file_events(events),
             AppEvent::Search(event) => self.on_search_event(event),
+            // FR-079 (S3): ранжирование готово — прогрессивный мердж ИИ-строк
+            // в попап FR-021 (C1) или показ C3-карточек (устаревшее
+            // поколение отбрасывается внутри)
+            AppEvent::SuggestReady {
+                target,
+                generation,
+                answers,
+            } => {
+                let answers = (*answers).clone();
+                match target {
+                    crate::suggest::SuggestTarget::Popup => {
+                        self.on_suggest_ready(generation, answers)
+                    }
+                    crate::suggest::SuggestTarget::Cards => {
+                        self.on_cards_ready(generation, answers)
+                    }
+                }
+            }
             // Web-мост ввода кириллицы/IME (canvas-web beforeinput): тот же
             // маршрут приёмника, что у Ime::Commit (wasm-аудит 2026-09-25)
             AppEvent::ImeCommit(text) => self.insert_committed_text(&text),
@@ -1245,6 +1269,16 @@ impl ApplicationHandler<AppEvent> for App {
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         self.scene.autosave_if_due();
+        // FR-079 (S3): тик дебаунса suggest (паттерн autolink 700 мс —
+        // здесь 300 мс): покой после триггера C1 → контекст + гейты +
+        // задание воркеру (wasm — sync-lex). Пока идёт правка, цикл держат
+        // awake dirty-окно автосейва и анимации (комментарий поиска ниже);
+        // чистый перенос каретки ничего не маряет — ждём собственными
+        // redraw (лёгкие кадры без визуальной дельты, FR-PERF-C).
+        self.suggest_dispatch();
+        if self.suggest.pending.is_some() {
+            self.request_redraw();
+        }
         // FR-064 P1: тик воркера потока — таймаут зависшего запроса →
         // sync-фолбэк + warn; попутный дренаж готовых снимков (если
         // wake-событие потерялось). Дешёвая проверка (Instant-сравнение).
