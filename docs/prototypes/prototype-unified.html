@@ -18,6 +18,7 @@
   --line:#2a2a33; --txt:#e8e8ec; --dim:#9a9aa5; --accent:#4da3ff; --flow:#31b8a6;
   --control:#8b8b96; --amber:#d9a13c; --sel:#8f7bff; --ok:#3fbf7f; --rej:#e5697a;
   --chip:#2a3f66; --warn:#e0a34f; --radius:12px; --tooltip-bg:#14141a;
+  --ai:#b18cff;
   --mono:ui-monospace,"JetBrains Mono","Cascadia Mono","SF Mono",Consolas,monospace;
 }
 body.light {
@@ -25,6 +26,7 @@ body.light {
   --line:#d4d9e2; --txt:#1a1d24; --dim:#5b6270; --accent:#2f7fe8; --flow:#1f8f80;
   --control:#8a8f9c; --amber:#b57e1f; --sel:#6b46f0; --ok:#2e9e5b; --rej:#c94453;
   --chip:#dce7f7; --warn:#a56f1c; --tooltip-bg:#ffffff;
+  --ai:#7c4de0;
 }
 * { box-sizing:border-box; margin:0; padding:0; }
 html, body { height:100%; }
@@ -232,6 +234,135 @@ body.light .ritem .pct.mid { background:#f5e8cd; color:#7a5a14; }
 .rdlg .rf button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
 .rdlg .rf button.primary:disabled { opacity:.4; cursor:default; }
 
+/* ---------- подсказки FR-079: попап C1 ---------- */
+#sgpop {
+  position:fixed; z-index:55; width:356px; background:var(--panel-solid);
+  border:1px solid var(--line); border-radius:10px; padding:6px;
+  box-shadow:0 10px 36px rgba(0,0,0,.45); font-size:12.5px;
+}
+#sgpop.hidden { display:none; }
+#sgpop .sgp-head {
+  display:flex; align-items:center; gap:8px; padding:5px 8px 7px;
+  font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim);
+}
+#sgpop .sgp-head .eng { margin-left:auto; text-transform:none; letter-spacing:0; font-size:10.5px; }
+#sgpop .sgp-head .eng .ok { color:var(--flow); }
+#sgpop .sgp-head .eng .warn { color:var(--warn); }
+#sgpop .sgp-sec {
+  display:flex; align-items:center; gap:6px; padding:4px 8px 3px; font-size:9.5px;
+  text-transform:uppercase; letter-spacing:.09em; color:var(--dim);
+}
+#sgpop .sgp-sec .bolt { color:var(--ai); font-size:11px; -webkit-text-stroke:0; }
+.sg-row {
+  display:block; padding:5px 8px; border-radius:7px; cursor:pointer; position:relative;
+}
+.sg-row:hover { background:rgba(77,163,255,.08); }
+.sg-row.sel { background:rgba(77,163,255,.13); box-shadow:inset 2px 0 0 var(--accent); }
+.sg-row.l0 { display:flex; align-items:baseline; gap:8px; padding:4.5px 8px; }
+.sg-row.l0 .t { font-family:var(--mono); font-size:12.5px; }
+.sg-row.l0 .k { margin-left:auto; font-size:9.5px; color:var(--dim); }
+.sg-row.l0 .hint-key { color:var(--dim); font-size:10px; }
+.sg-row.ai .top { display:flex; align-items:center; gap:7px; }
+.sg-row.ai .top .t { font-weight:600; font-size:12.5px; }
+.sg-row.ai .top .b {
+  font-size:9px; font-weight:700; padding:1px 6px; border-radius:99px; margin-left:auto;
+  background:rgba(177,140,255,.14); color:var(--ai); border:1px solid rgba(177,140,255,.3); white-space:nowrap;
+}
+.sg-row.ai .top .b.lex { background:var(--chip); color:#9cc3e6; border-color:transparent; }
+body.light .sg-row.ai .top .b.lex { color:#33507a; }
+.sg-row.ai .rsn { display:block; font-size:10.5px; color:var(--dim); margin-top:2px; line-height:1.4; }
+.sg-row.ai .top .kbd {
+  font-size:9.5px; color:var(--dim); border:1px solid var(--line); border-radius:4px;
+  padding:0 4px; display:none; font-family:var(--mono);
+}
+.sg-row.ai.sel .top .kbd { display:inline-block; }
+.sg-row.empty { color:var(--dim); font-size:11.5px; cursor:default; }
+.sg-row.empty:hover { background:none; }
+.sg-skel { padding:5px 8px; }
+.sg-skel .ln {
+  height:11px; border-radius:5px; margin:5px 0;
+  background:linear-gradient(90deg, rgba(177,140,255,.07), rgba(177,140,255,.16), rgba(177,140,255,.07));
+  background-size:220% 100%; animation:sgShimmer 1.15s linear infinite;
+}
+.sg-skel .ln.w1 { width:62%; } .sg-skel .ln.w2 { width:44%; }
+.sg-skel.fade { transition:opacity .3s ease; opacity:0; }
+@keyframes sgShimmer { from { background-position:120% 0; } to { background-position:-120% 0; } }
+#sgpop .sgp-note { padding:4px 8px 5px; font-size:10.5px; color:var(--dim); }
+#sgpop .sgp-foot {
+  display:flex; gap:10px; padding:6px 8px 4px; border-top:1px solid var(--line); margin-top:4px;
+  font-size:10px; color:var(--dim);
+}
+#sgpop .sgp-foot b { color:var(--txt); font-weight:600; }
+
+/* ---------- подсказки FR-079: карточки C3 «следующие ноды» ---------- */
+#sgcards {
+  position:fixed; z-index:45; width:256px; background:var(--panel-solid);
+  border:1px solid var(--line); border-radius:10px; overflow:hidden;
+  box-shadow:0 10px 36px rgba(0,0,0,.4); font-size:12.5px;
+  animation:cardIn .18s ease;
+}
+#sgcards.hidden { display:none; }
+@keyframes cardIn { from { opacity:0; transform:translateY(6px) scale(.985); } to { opacity:1; transform:none; } }
+#sgcards .sgc-head {
+  display:flex; align-items:center; gap:8px; padding:8px 10px 7px; font-size:10px;
+  text-transform:uppercase; letter-spacing:.08em; color:var(--dim);
+  background:var(--panel2);
+}
+#sgcards .sgc-head button {
+  margin-left:auto; border:none; background:none; color:var(--dim); cursor:pointer; font-size:12px;
+  border-radius:5px; padding:1px 5px;
+}
+#sgcards .sgc-head button:hover { color:var(--rej); border-color:var(--rej); }
+.sgc-card { padding:8px 10px 7px; border-top:1px solid var(--line); cursor:pointer; animation:cardIn .18s ease; }
+.sgc-card:hover { background:rgba(77,163,255,.08); }
+.sgc-card .nm { display:flex; align-items:center; gap:7px; font-weight:600; font-size:12.5px; }
+.sgc-card .nm i { width:9px; height:9px; border-radius:50%; flex:none; }
+.sgc-card .rsn { font-size:10.5px; color:var(--dim); margin-top:2px; line-height:1.4; }
+.sgc-card .ins { font-size:9.5px; color:var(--ai); margin-top:4px; opacity:.85; }
+#sgcards .sgc-foot { padding:6px 10px 7px; font-size:9.5px; color:var(--dim); border-top:1px solid var(--line); }
+
+/* ---------- подсказки FR-079: настройки (модаль по паттерну rdlg) ---------- */
+#sgsetov { position:fixed; inset:0; z-index:76; background:rgba(8,10,14,.55); display:flex; align-items:center; justify-content:center; }
+#sgsetov.hidden { display:none; }
+.sgset { width:480px; max-width:94vw; max-height:88vh; overflow-y:auto; background:var(--panel-solid); border:1px solid var(--line); border-radius:14px; display:flex; flex-direction:column; box-shadow:0 24px 80px rgba(0,0,0,.5); animation:winIn .25s ease; }
+.sgset .sh { display:flex; align-items:center; gap:10px; padding:14px 18px 10px; }
+.sgset .sh h2 { font-size:15px; font-weight:600; }
+.sgset .sh .sub { color:var(--dim); font-size:11px; }
+.sgset .sbody { padding:2px 18px 10px; }
+.sgset .sgrp { font-size:10px; text-transform:uppercase; letter-spacing:.09em; color:var(--dim); margin:12px 0 6px; }
+.sgset .srow { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.sgset .note { font-size:11px; color:var(--dim); line-height:1.45; }
+.sgset .engines label { display:flex; gap:5px; align-items:center; margin-right:14px; font-size:12.5px; cursor:pointer; }
+.sgset .engines { display:flex; flex-wrap:wrap; margin-bottom:4px; }
+.sgset .engines input { accent-color:var(--accent); }
+.sgset .l1block { border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+.sgset .l1stat { display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:12px; }
+.sgset .badge { font-size:10px; font-weight:700; padding:2px 8px; border-radius:99px; background:var(--chip); color:#9cc3e6; white-space:nowrap; }
+body.light .sgset .badge { color:#33507a; }
+.sgset .badge.ok { background:rgba(63,191,127,.15); color:var(--ok); }
+.sgset .badge.load { background:rgba(217,161,60,.15); color:var(--warn); }
+.sgset .l1bar { height:5px; border-radius:3px; background:var(--panel2); overflow:hidden; margin:8px 0; }
+.sgset .l1bar i { display:block; height:100%; width:0%; background:var(--flow); transition:width .35s ease; }
+.sgset .l1warn { display:none; margin-top:8px; padding:6px 9px; border-radius:7px; background:rgba(217,161,60,.08); border:1px solid rgba(217,161,60,.35); color:var(--warn); font-size:11.5px; }
+.sgset .l1warn.show { display:block; }
+.sgset .sf { display:flex; gap:8px; align-items:center; padding:10px 18px 14px; border-top:1px solid var(--line); }
+.sgset .sf .hint { flex:1; font-size:11px; color:var(--dim); }
+
+/* ---------- подсказки FR-079: dev-HUD (S0 телеметрия) ---------- */
+#sghud {
+  position:fixed; right:12px; bottom:12px; z-index:30; width:332px;
+  background:var(--panel); border:1px solid var(--line); border-radius:10px;
+  padding:8px 11px; font-size:11px; line-height:1.5; backdrop-filter:blur(6px);
+}
+#sghud.hidden { display:none; }
+#sghud h2 { font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin-bottom:5px; }
+#sghud .hrow { font-family:var(--mono); font-size:10.5px; color:var(--txt); margin-bottom:2px; }
+#sghud .hrow .g-ok { color:var(--ok); } #sghud .hrow .g-no { color:var(--rej); }
+#sghud .hjr { margin-top:6px; padding-top:6px; border-top:1px solid var(--line); font-family:var(--mono); font-size:9.5px; color:var(--dim); max-height:104px; overflow-y:auto; }
+#sghud .hjr div { margin-bottom:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#sghud .hjr .ev-acc { color:var(--ok); } #sghud .hjr .ev-dis { color:var(--dim); }
+#sghud .hjr .ev-tmo { color:var(--warn); } #sghud .hjr .ev-sup { color:var(--amber); }
+
 /* ---------- toast ---------- */
 #toast {
   position:fixed; left:50%; bottom:64px; transform:translateX(-50%) translateY(8px); z-index:90;
@@ -265,6 +396,7 @@ body.light .ritem .pct.mid { background:#f5e8cd; color:#7a5a14; }
     <li><b>Ревью автосвязей</b> — группировка по парам, массовые действия, undo-бат одним шагом (AC-5.3)</li>
     <li><b>Esc-лестница</b> — меню → drag → ревью → защита → цепочка → stage → выделение</li>
     <li><b>Расталкивание при драге</b> — тяните ноду сквозь соседей: они уступают дорогу (якорь + ореол MTV) и съезжаются обратно; сейф-зазор держит дистанцию между любыми нодами; если активная встала «между» — уехавшие получают новые якоря (пульт «Драг · расталкивание»)</li>
+    <li><b>Подсказки FR-079</b> — двойной клик по ноде: попап с локальными строками мгновенно + ИИ-строки догрузкой (таймаут 800 мс — тихий откат), карточки «следующие ноды» у свежего шаблона, настройки opt-in, HUD телеметрии</li>
   </ul>
   <div class="legend">
     <s><span class="dotv"></span>value / проливание</s>
@@ -344,10 +476,31 @@ body.light .ritem .pct.mid { background:#f5e8cd; color:#7a5a14; }
     <input type="range" id="dau" min="100000" max="3000000" step="100000" value="1000000">
   </div>
 
+  <div class="grp-title">Подсказки (FR-079)</div>
+  <div class="row"><label class="toggle"><input type="checkbox" id="sgMasterTgl">движок включён (opt-in)</label></div>
+  <div class="tabs" id="sgEngineTabs">
+    <button class="ctl" data-v="off">off</button>
+    <button class="ctl" data-v="lex">lex</button>
+    <button class="ctl on" data-v="lex+laya">lex+AI</button>
+  </div>
+  <div class="row"><label class="toggle"><input type="checkbox" id="sgDomainTgl">домен: framework (C4-подавление)</label></div>
+  <div class="row">
+    <span class="thr-lb">латентность L1 <b id="sgLatV">650</b> мс (850+ — таймаут)</span>
+    <input type="range" id="sgLat" min="150" max="1000" step="50" value="650">
+  </div>
+  <div class="btns row">
+    <button class="ctl" id="sgC1Btn">Ввод в ноде (C1)</button>
+    <button class="ctl" id="sgC3Btn">Создать шаблон (C3)</button>
+  </div>
+
   <div class="grp-title">Поверхности</div>
   <div class="btns row"><button class="ctl primary" id="chainBtn">Проверить цепочку: Стоимость.Итог</button></div>
   <div class="btns row"><button class="ctl primary" id="reviewBtn">Ревью автосвязи<span id="revCnt">12</span></button></div>
   <div class="btns row"><button class="ctl" id="drawerBtn">Решения и вопросы</button></div>
+  <div class="btns row">
+    <button class="ctl" id="sgSetBtn">Настройки подсказок</button>
+    <button class="ctl" id="sgHudBtn">HUD подсказок</button>
+  </div>
   <div id="readout">зум 100% · LOD 1 · Н-3 · В-C</div>
 </div>
 
@@ -370,11 +523,14 @@ body.light .ritem .pct.mid { background:#f5e8cd; color:#7a5a14; }
   <p><b>Связи</b> — В-C «Кромки-зона» рекомендовано node-edge-redesign-analysis: в покое портов нет; тип задаётся кромкой старта; скольжение вдоль кромки выбирает точку (между рядами — узловой уровень); drop на тело — choice-меню (Н2).</p>
   <p><b>Ревью автосвязей</b> — У8: массовые действия обратимы до закрытия («Вернуть все»); создание — одним undo-батом (AC-5.3).</p>
   <p><b>Проверка цепочки</b> — У9 v4: окно поверх канваса, граф узлов-карточек, авто-раскрытие 3 уровня (FR-039), уровень 4 — по клику; защита ×1.5 (AC-6.2), проза скрыта, пошагово (AC-6.3).</p>
+  <p><b>Подсказки (FR-079)</b> — UX-канон по книгам владельца: попап не ждёт ИИ (Doherty 400 мс — skeleton занимает ожидание, таймаут 800 мс — тихий откат, Zeigarnik закрыт); максимум 3 ИИ-строки, сортировка и знакомые имена каталога (Хик); причина у каждой строки, принятое всегда редактируемо + undo одним шагом (Podmajersky); карточки C3 у свежей ноды, цепочка ≤ 2 подряд (goal gradient без навязчивости); частота ≤ 6/мин, подавление на framework-канвасах, opt-out телеметрия (Schüll/Cababa); уверенность числом не показываем (Duke) — источник и причина вместо процента.</p>
   <h3>Открытые вопросы к владельцу</h3>
   <p class="q">1. Подсветка нод канваса под окном проверки цепочки (сейчас — без изменений, AC-6.4).</p>
   <p class="q">2. Текст пилюль бейджей — sans 9.5px (перенос замера на sans; FR-069, отклонение v1).</p>
   <p class="q">3. Ужимание высоты нод (шаг 4b) — после решения по I-6 и защите ручного ресайза (T7).</p>
   <p class="q">4. Семантика «закрыл ревью с отклонёнными» — вернутся через фоновую перепроверку (AC-5.5).</p>
+  <p class="q">5. Принятие ИИ-строки заменяет редактируемую ноду (прецедент палитры) — подтвердить для текстовых нот с входящими рёбрами.</p>
+  <p class="q">6. Карточки C3: показывать ли после принятия карточки следующую тройку (цепочка) — сейчас ≤ 2 подряд.</p>
 </div>
 
 <div id="menu" style="display:none"></div>
@@ -410,6 +566,63 @@ body.light .ritem .pct.mid { background:#f5e8cd; color:#7a5a14; }
       <button class="primary" id="rcreate" disabled>Создать связи (0)</button>
     </div>
   </div>
+</div>
+
+<!-- ===== подсказки FR-079: попап C1 (позиционируется кодом у ноды) ===== -->
+<div id="sgpop" class="hidden"></div>
+
+<!-- ===== подсказки FR-079: карточки C3 «следующие ноды» ===== -->
+<div id="sgcards" class="hidden"></div>
+
+<!-- ===== подсказки FR-079: настройки (модаль) ===== -->
+<div id="sgsetov" class="hidden">
+  <div class="sgset" role="dialog" aria-label="Подсказки — настройки">
+    <div class="sh">
+      <h2>Подсказки</h2><span class="sub">FR-079 · локальный движок, без сети</span>
+      <span style="flex:1"></span>
+      <button class="dclose" id="sgsetClose" title="Закрыть (Esc)">✕</button>
+    </div>
+    <div class="sbody">
+      <div class="srow">
+        <label class="dtoggle"><span class="lbl">Подсказки нод</span><span class="switch" id="sgsetMaster"></span></label>
+      </div>
+      <div class="note">Выключены по умолчанию до приёмки (S5); включение — осознанный opt-in. Отключаются полностью в один клик.</div>
+
+      <div class="sgrp">Движок</div>
+      <div class="srow engines">
+        <label><input type="radio" name="sgengine" value="off"> Выключен</label>
+        <label><input type="radio" name="sgengine" value="lex"> Локальный поиск (lex)</label>
+        <label><input type="radio" name="sgengine" value="lex+laya"> Гибрид lex + ИИ</label>
+      </div>
+      <div class="note">lex — мгновенный (&lt;1 мс), 62 шаблона каталога. Гибрид догружает ИИ-строки через 300–800 мс; при таймауте — тихий откат на lex.</div>
+
+      <div class="sgrp">ИИ-модель L1 (Laya)</div>
+      <div class="l1block">
+        <div class="l1stat"><span class="badge" id="sgl1Badge">не установлен</span><span class="note" id="sgl1Note">веса ~650 МБ · sidecar на localhost · без интернета</span></div>
+        <div class="l1bar" id="sgl1Bar"><i></i></div>
+        <button class="ctl primary" id="sgl1Btn">Загрузить и включить</button>
+        <div class="note" style="margin-top:8px">Догрузка — по явному согласию: отдельный процесс на localhost:8000, выгружается после 10 мин простоя. Пины версии и sha256, smoke-тест при старте.</div>
+        <div class="l1warn" id="sgl1Warn">L1 недоступен → работает lex (тихая деградация, предупреждение одно)</div>
+      </div>
+
+      <div class="sgrp">Поведение</div>
+      <div class="srow">
+        <label class="dtoggle"><span class="lbl">Локальный журнал подсказок</span><span class="switch on" id="sgsetLog"></span></label>
+      </div>
+      <div class="note">opt-out; события показано/принято/отклонено + латентности, только локально (suggest-log.jsonl), без выгрузки. Данные для улучшения ранжирования.</div>
+      <div class="note" style="margin-top:6px">Не чаще 6 подсказок в минуту · на не-расчётных канвасах (CJM, JTBD, сервис-блюпринты) подсказки подавлены · в web-версии — только lex.</div>
+    </div>
+    <div class="sf"><span class="hint">Изменения применяются сразу · Esc — закрыть</span></div>
+  </div>
+</div>
+
+<!-- ===== подсказки FR-079: dev-HUD (S0: конвейер, гейты, журнал) ===== -->
+<div id="sghud" class="hidden">
+  <h2>Suggest · конвейер (dev)</h2>
+  <div class="hrow" id="sghudPipe">lex — · laya — · fusion — · бюджет 800 мс</div>
+  <div class="hrow" id="sghudGates">гейты: —</div>
+  <div class="hrow" id="sghudCnt">показов 0 · принято 0 · отклонено 0 · правок после 0</div>
+  <div class="hjr" id="sghudLog"></div>
 </div>
 
 <div id="toast"></div>
@@ -2038,7 +2251,12 @@ function updateHover(){
 
 /* ---------- события мыши ---------- */
 cv.addEventListener('contextmenu', e=>e.preventDefault());
-cv.addEventListener('dblclick', e=>e.preventDefault());
+cv.addEventListener('dblclick', e=>{
+  e.preventDefault();
+  if (stage || chain || rdvOpen) return;
+  const n = nodeAt(s2wx(e.clientX), s2wy(e.clientY));
+  if (n) sgBeginEditing(n.id);
+});
 cv.addEventListener('wheel', e=>{
   e.preventDefault();
   if (stage) return;
@@ -2053,6 +2271,8 @@ cv.addEventListener('wheel', e=>{
 cv.addEventListener('mousedown', e=>{
   if (e.button!==0) return;
   hideTooltip();
+  if (SG.editing) sgEndEditing('dismiss'); // клик мимо — закрыть ввод (как в продукте)
+  if (SG.cards) sgDismissCards(true);      // клик мимо — скрыть карточки C3
   if (menuOpen) closeMenu();
   const wx = s2wx(e.clientX), wy = s2wy(e.clientY);
   if (stage){ handleStageMouseDown(e, wx, wy); return; }
@@ -2319,6 +2539,7 @@ function closeMenu(){ menuEl.style.display='none'; menuOpen=false; }
 
 /* ---------- клавиатура: Esc-лестница, Del, Space ---------- */
 window.addEventListener('keydown', e=>{
+  if (sgKeydown(e)) return; // подсказки S: настройки → ввод C1 → карточки C3 → Ctrl+Z
   if (e.key==='Escape'){
     if (menuOpen){ closeMenu(); cancelDrag(); return; }
     if (drag){ cancelDrag(); return; }
@@ -2996,10 +3217,615 @@ document.getElementById('rdvov').addEventListener('mousedown', e=>{ if (e.target
 rvInit();
 
 /* ============================================================
+   ЧАСТЬ S. Подсказки FR-079: C1 (ИИ-строки в попапе), C3 (карточки
+   «следующие ноды»), C4 (домен-подавление), настройки, dev-HUD (S0)
+   ------------------------------------------------------------
+   UX-принципы (библиотека владельца, Drive «Books»):
+   · Doherty 400 мс (Kumar, гл.7) — попап НЕ ждёт ИИ: локальные строки
+     мгновенно, skeleton честно занимает ожидание, таймаут 800 мс —
+     тихий откат без ошибок;
+   · закон Хика (Kumar, гл.2) — максимум 3 ИИ-строки, сортировка по
+     score, знакомые имена каталога (не 62 шаблона в лицо);
+   · Zeigarnik (Kumar, гл.8) — skeleton всегда разрешается (строки или
+     честная нота), висящих состояний нет;
+   · Jakob (Kumar, гл.4) — паттерн привычного автодополнения (Google):
+     строка растёт при вводе, Tab принимает;
+   · Podmajersky (Strategic Writing for UX, гл.4–5) — причина у каждой
+     строки, принятое всегда редактируемо, undo одним шагом;
+   · Dooley (Friction, стр.43–45, 105) — автодополнение = редьюсер
+     трения; парадокс выбора → топ-3 вместо каталога;
+   · Schüll/Cababa (анти-паттерны) — не красть фокус, частотный лимит
+     6/мин, полный opt-out, подавление на не-расчётных канвасах;
+   · Duke (Thinking in Bets) — уверенность числом НЕ показываем
+     (ECE-проблема PoC) — источник и причина вместо процента;
+   · goal gradient (Kumar, гл.11) — карточки C3 сразу после вставки
+     шаблона: пользователь достраивает цепочку у финиша.
+   ============================================================ */
+const SG = {
+  enabled:false, engine:'lex+laya', domain:'calc', lat:650,
+  l1:'missing',            // missing | loading | ready
+  logOn:true, hud:false, set:false,
+  editing:null,            // {id, prefix, sel, gen, ai:'idle'|'debounce'|'wait'|'done'|'timeout'|'blocked', res, lat}
+  cards:null,              // {nodeId, fromKey, items, depth}
+  undo:null, shownTimes:[], replaced:[], // replaced — оригиналы заменённых нод (для полного сброса)
+  stats:{shown:0, accepted:0, dismissed:0, edited:0},
+  log:[], last:null, lastGate:null, editedLoggedFor:null
+};
+let sgUid = 1;
+
+/* ---- мок каталога (в продукте — 62 шаблона templates.rs) ---- */
+const SG_TPL = {
+  'tcp-lb':  {name:'TCP-балансировщик', chip:'сеть',
+    why:'сосед «Профиль нагрузки» про rps; в каталоге — балансировка L4',
+    params:[P('connections_per_sec','800','rps'),P('server_rate','1 000','rps'),P('servers','3','')],
+    calc:[C('utilization',[['fn','mm1'],['op','('],['v','cps'],['op',', '],['v','rate'],['op',', '],['v','srv'],['op',')']],'67','%')],
+    res:{v:'800',u:'rps',note:'загрузка 67%'}},
+  'api-gw':  {name:'API Gateway', chip:'сеть',
+    why:'после пика Трафика обычно считают шлюз; lex-совпадение «gateway»',
+    params:[P('rps','1 388,89','rps'),P('latency',null,'')],
+    calc:[C('throughput',[['v','rps'],['op',' · 20']],'27 777,8','rps')],
+    res:{v:'27 777,8',u:'rps'}},
+  'unit-eco':{name:'Юнит-экономика', chip:'финансы',
+    why:'в канвасе уже есть выручка и CPL — юнит-экономика их связывает',
+    params:[P('ARPU','350','₽'),P('CAC','1 030','₽')],
+    calc:[C('LTV',[['v','ARPU'],['op',' · 3,2']],'1 120','₽'),C('payback',[],'2,9','мес')],
+    res:{v:'1 120',u:'₽'}},
+  'ltv':     {name:'LTV-модель', chip:'финансы',
+    why:'рядом «Отчёт» с дельтой −3,1% — LTV объясняет удержание',
+    params:[P('retention','0,85',''),P('ARPU','350','₽')],
+    calc:[C('LTV',[['v','ARPU'],['op',' · r / (1 − r)']],'1 980','₽')],
+    res:{v:'1 980',u:'₽'}},
+  'cohort':  {name:'Когортный анализ', chip:'данные',
+    why:'есть «Заявки» и leads — когорты покажут возвраты',
+    params:[], calc:[C('retention_m1',[],'42','%'),C('retention_m3',[],'28','%')],
+    res:{v:'28',u:'%'}},
+  'mc':      {name:'Монте-Карло (QMC)', chip:'статистика',
+    why:'профиль с peak ×2,5 — хвосты удобно считать Монте-Карло',
+    params:[P('trials','100 000','')],
+    calc:[C('p95',[['v','MC']],'61','%')],
+    res:{v:'61',u:'%'}}
+};
+const SG_NEXT = {
+  'tcp-lb':  [{k:'api-gw',r:'out_gateway 800 rps → вход шлюза: цепочка L4 дальше'},{k:'mc',r:'загрузка 67% — p95 покажет хвосты очереди'},{k:'unit-eco',r:'когда появится цена сервера — связать с выручкой'}],
+  'api-gw':  [{k:'tcp-lb',r:'шлюз разгружает балансировщик — L7 → L4'},{k:'mc',r:'throughput 27,8k rps — оценить разброс'},{k:'unit-eco',r:'пропускная способность → стоимость запроса'}],
+  'unit-eco':[{k:'ltv',r:'ARPU 350 ₽ → LTV связывает удержание'},{k:'cohort',r:'когорты дадут retention по месяцам'},{k:'mc',r:'доверительный интервал LTV'}],
+  'ltv':     [{k:'cohort',r:'когорты дадут retention по месяцам'},{k:'unit-eco',r:'LTV/CAC — замкнуть юнит-экономику'},{k:'mc',r:'интервалы LTV при шуме retention'}],
+  'cohort':  [{k:'ltv',r:'retention → LTV одним шагом'},{k:'unit-eco',r:'возвраты → юнит-экономика'},{k:'mc',r:'разброс retention между когортами'}],
+  'mc':      [{k:'unit-eco',r:'p95 61% — риск для юнит-экономики'},{k:'cohort',r:'проверить гипотезу по когортам'},{k:'ltv',r:'пессимистичный LTV по хвостам'}]
+};
+/* ---- мок L0-подсказок FR-021 (юниты/функции/переменные сцены) ---- */
+const SG_L0 = [
+  {t:'rps',k:'юнит'},{t:'мс',k:'юнит'},{t:'₽',k:'юнит'},{t:'$',k:'юнит'},{t:'%',k:'юнит'},
+  {t:'дней',k:'юнит'},{t:'ГБ',k:'юнит'},{t:'шт.',k:'юнит'},
+  {t:'mm1(',k:'функция'},{t:'Σ ',k:'функция'},{t:'avg(',k:'функция'},{t:'round(',k:'функция'},{t:'if(',k:'функция'},
+  {t:'Заявки.Количество',k:'переменная'},{t:'Заявки.Средний_чек',k:'переменная'},{t:'Курсы.USD',k:'переменная'},
+  {t:'Трафик.peak_rps',k:'переменная'},{t:'Профиль.rps',k:'переменная'},{t:'Стоимость.выручка',k:'переменная'}
+];
+
+/* ---- гейты: домен C4 + show-гейт + частота ---- */
+function sgGates(node, prefix){
+  if (SG.domain==='framework'){
+    const why = 'домен: Framework (CJM/JTBD) — подсказки подавлены';
+    sgLog('suppressed',{top:'domain'});
+    return {ok:false, why};
+  }
+  const neighbors = edges.filter(e=>e.from===node.id||e.to===node.id).length;
+  const ctxLen = 80 + prefix.length*7 + neighbors*15;
+  if (prefix.length < 3) return {ok:false, why:'show-гейт: контекст короткий ('+ctxLen+' < 120 симв.)'};
+  if (neighbors===0)    return {ok:false, why:'show-гейт: у ноды нет соседей'};
+  const now = Date.now();
+  SG.shownTimes = SG.shownTimes.filter(t=>now-t<60000);
+  if (SG.shownTimes.length>=6) return {ok:false, why:'частота: 6 подсказок за минуту — пауза'};
+  return {ok:true, ctxLen, neighbors};
+}
+function sgHash(s){ let h=7; for (const c of s) h=(h*31+c.charCodeAt(0))>>>0; return h; }
+function sgRank(prefix){
+  const keys = Object.keys(SG_TPL), h = sgHash(prefix||'~');
+  return keys.map((k,i)=>({k, s:0.74-((h>>(i*3))%28)/100}))
+    .sort((a,b)=>b.s-a.s).slice(0,3);
+}
+
+/* ---- журнал S0 + HUD ---- */
+function sgLog(event, data={}){
+  if (!SG.logOn && event!=='accepted') return;
+  const d = new Date();
+  const t = [d.getHours(),d.getMinutes(),d.getSeconds()].map(x=>String(x).padStart(2,'0')).join(':');
+  SG.log.push(Object.assign({t, event}, data));
+  if (SG.log.length>60) SG.log.shift();
+  if (event==='shown') SG.stats.shown++;
+  if (event==='accepted') SG.stats.accepted++;
+  if (event==='dismissed') SG.stats.dismissed++;
+  if (event==='edited') SG.stats.edited++;
+  sgHudUpdate();
+}
+function sgHudUpdate(){
+  if (!SG.hud) return;
+  const L = SG.last||{};
+  document.getElementById('sghudPipe').innerHTML =
+    'lex '+(L.lex!=null?fmtF(L.lex,1):'—')+' мс · laya '+(L.laya!=null?L.laya:'—')+' мс · fusion '+(L.fusion!=null?fmtF(L.fusion,1):'—')+' мс · бюджет 800';
+  const g = SG.lastGate;
+  document.getElementById('sghudGates').innerHTML = !g ? 'гейты: —' : (g.ok
+    ? 'домен <span class="g-ok">Calculation ✓</span> · show-gate '+g.ctxLen+'≥120 <span class="g-ok">✓</span> · соседи '+g.neighbors+' · частота '+SG.shownTimes.length+'/6'
+    : 'гейт: <span class="g-no">'+g.why+'</span>');
+  document.getElementById('sghudCnt').textContent =
+    'показов '+SG.stats.shown+' · принято '+SG.stats.accepted+' · отклонено '+SG.stats.dismissed+' · правок после '+SG.stats.edited;
+  document.getElementById('sghudLog').innerHTML = SG.log.slice(-8).reverse().map(e=>{
+    const cls = e.event==='accepted'?'ev-acc':e.event==='dismissed'?'ev-dis':
+      (e.event==='timeout'||e.event==='rate-limited')?'ev-tmo':e.event==='suppressed'?'ev-sup':'';
+    return '<div class="'+cls+'">'+e.t+' '+e.event+(e.top?' '+e.top:'')+(e.score!=null?' '+fmtF(e.score,2):'')+(e.lat!=null?' '+e.lat+'мс':'')+'</div>';
+  }).join('');
+}
+
+/* ---- C1: жизненный цикл ввода ---- */
+function sgBeginEditing(nodeId){
+  const n = nodeById(nodeId); if (!n) return;
+  if (stage||chain||rdvOpen){ hint('Сначала закройте оверлей (Esc) — редактирование поверх не открывается'); return; }
+  if (!SG.enabled) hint('Подсказки выключены (opt-in до приёмки S5) — ввод работает, ИИ-строк нет; тумблер в пульте/настройках');
+  if (SG.cards) sgDismissCards(true);
+  SG.editing = {id:nodeId, prefix:'', sel:0, gen:0, ai:'idle', res:null, lat:null};
+  // «edited» — правка ноды, созданной принятием подсказки (атрибуция авторства, гипотеза §15)
+  if (n.sgAccepted && SG.editedLoggedFor!==nodeId) SG.editedPending = nodeId;
+  invalidateLayouts();
+  sgRenderPopup(); sgPositionSurfaces();
+  hint('Ввод в ноде: печатайте — локальные подсказки мгновенно, ИИ-строки догружаются (попап не ждёт) · ↑↓ · Tab — принять · Esc — выйти');
+}
+function sgEndEditing(kind){
+  const ed = SG.editing; if (!ed) return;
+  clearTimeout(ed.dbT); clearTimeout(ed.aiT);
+  if (kind==='dismiss' && ed.aiShown) sgLog('dismissed',{top:ed.res&&ed.res[0]?ed.res[0].k:''});
+  SG.editing = null;
+  document.getElementById('sgpop').classList.add('hidden');
+  invalidateLayouts();
+  hintDefault();
+}
+function sgType(ch){
+  const ed = SG.editing; if (!ed) return;
+  if (SG.editedPending===ed.id){ sgLog('edited',{top:nodeById(ed.id).title}); SG.editedLoggedFor=ed.id; SG.editedPending=null; }
+  ed.prefix += ch; ed.gen++; ed.sel = 0;
+  sgScheduleAI(ed); sgRenderPopup();
+}
+function sgBackspace(){
+  const ed = SG.editing; if (!ed) return;
+  ed.prefix = ed.prefix.slice(0,-1); ed.gen++; ed.sel = 0;
+  sgScheduleAI(ed); sgRenderPopup();
+}
+function sgScheduleAI(ed){
+  clearTimeout(ed.dbT);
+  clearTimeout(ed.aiT);
+  // старые строки остаются видимыми до нового ответа (без мигания, паттерн автодополнения)
+  ed.dbT = setTimeout(()=>{ if (SG.editing===ed) sgRunAI(ed); }, 300);
+}
+function sgRunAI(ed){
+  const n = nodeById(ed.id); if (!n){ return; }
+  const gate = sgGates(n, ed.prefix);
+  SG.lastGate = gate; sgHudUpdate();
+  const canAi = SG.enabled && SG.engine!=='off';
+  if (!canAi || !gate.ok){ ed.ai='blocked'; sgRenderPopup(); return; }
+  const gen = ed.gen;
+  const isHybrid = SG.engine==='lex+laya' && SG.l1==='ready';
+  if (!isHybrid){
+    // lex (или тихая деградация L1): мгновенно, без skeleton (Doherty — нет ожидания)
+    ed.ai='done'; ed.res=sgRank(ed.prefix);
+    ed.lat = {lex:0.8, laya:null, fusion:0.1}; SG.last=ed.lat;
+    ed.aiShown = true; SG.shownTimes.push(Date.now());
+    sgLog('shown',{top:ed.res[0].k, score:ed.res[0].s, lat:1, engine:SG.engine});
+    sgRenderPopup(); sgHudUpdate(); emit('sgAiShown');
+    return;
+  }
+  // гибрид: skeleton занимает ожидание, строки вмерживаются позже
+  ed.ai='wait'; ed.aiShown=false; sgRenderPopup();
+  SG.last = {lex:0.8, laya:null, fusion:null}; sgHudUpdate();
+  const lat = SG.lat + Math.round(Math.random()*40);
+  ed.aiT = setTimeout(()=>{
+    if (!SG.editing || SG.editing!==ed || ed.gen!==gen) return; // stale-ответ тонет
+    if (lat>800){
+      ed.ai='timeout'; sgRenderPopup();
+      requestAnimationFrame(()=>{ const s=document.querySelector('#sgpop .sg-skel'); if (s) s.classList.add('fade'); });
+      sgLog('timeout',{lat:lat});
+      return;
+    }
+    ed.ai='done'; ed.res=sgRank(ed.prefix);
+    ed.lat = {lex:0.8, laya:lat, fusion:0.2}; SG.last=ed.lat;
+    ed.aiShown = true; SG.shownTimes.push(Date.now());
+    sgLog('shown',{top:ed.res[0].k, score:ed.res[0].s, lat:lat, engine:'lex+laya'});
+    sgRenderPopup(); sgHudUpdate(); emit('sgAiShown');
+  }, lat);
+}
+
+/* ---- попап C1: L0-строки + ИИ-строки (мердж: L0 сверху) ---- */
+function sgL0(prefix){
+  if (!prefix) return SG_L0.slice(0,5);
+  const p = prefix.toLowerCase();
+  return SG_L0.filter(h=>h.t.toLowerCase().includes(p)).slice(0,5);
+}
+function sgRenderPopup(){
+  const pop = document.getElementById('sgpop');
+  const ed = SG.editing;
+  if (!ed){ pop.classList.add('hidden'); return; }
+  const l0 = sgL0(ed.prefix);
+  const eng = !SG.enabled||SG.engine==='off' ? '<span class="warn">движок выключен</span>'
+    : SG.engine==='lex' ? '<span class="ok">lex</span>'
+    : (SG.l1==='ready' ? '<span class="ok">lex + AI</span>' : '<span class="warn">lex · L1 недоступен</span>');
+  let h = '<div class="sgp-head"><span>Подсказки</span><span class="eng">'+eng+'</span></div>';
+  h += '<div class="sgp-sec">локальные · мгновенно</div>';
+  if (!l0.length) h += '<div class="sg-row empty">нет локальных совпадений — печатайте дальше</div>';
+  l0.forEach((x,i)=>{
+    h += '<div class="sg-row l0'+(ed.sel===i?' sel':'')+'" data-i="'+i+'"><span class="t">'+x.t+'</span><span class="k">'+x.k+'</span></div>';
+  });
+  const canAi = SG.enabled && SG.engine!=='off';
+  if (canAi && ed.ai!=='idle' && ed.ai!=='blocked'){ // idle/blocked — секции НЕТ: молчим
+    h += '<div class="sgp-sec"><span class="bolt">⚡</span>шаблоны каталога</div>';
+    if (ed.ai==='wait'){
+      h += '<div class="sg-skel"><div class="ln w1"></div><div class="ln w2"></div></div>';
+      h += '<div class="sgp-note">'+(SG.engine==='lex+laya'&&SG.l1==='ready'?'Laya ранжирует 20 кандидатов…':'ранжирование каталога…')+'</div>';
+    } else if (ed.ai==='timeout'){
+      h += '<div class="sg-skel fade"><div class="ln w1"></div><div class="ln w2"></div></div>';
+      h += '<div class="sgp-note">ИИ не успел за 800 мс — работает локальный поиск</div>';
+    } else if (ed.ai==='done' && ed.res && ed.res.length){
+      const hybrid = SG.engine==='lex+laya' && SG.l1==='ready';
+      ed.res.forEach((r,j)=>{
+        const i2 = l0.length + j;
+        const tpl = SG_TPL[r.k];
+        const isAi = hybrid && j===0; // топ-1 несёт imprint mm
+        h += '<div class="sg-row ai'+(ed.sel===i2?' sel':'')+'" data-a="'+j+'">'
+          + '<div class="top"><span class="t">'+tpl.name+'</span><span class="kbd">Tab</span>'
+          + '<span class="b'+(isAi?'':' lex')+'">'+(isAi?'AI':'lex')+'</span></div>'
+          + '<span class="rsn">'+tpl.why+'</span></div>';
+      });
+    } else if (ed.ai==='debounce' && ed.res && ed.res.length){
+      // дебаунс: показываем предыдущие строки без перерисовки состояния
+      ed.res.forEach((r,j)=>{
+        const i2 = l0.length + j;
+        const tpl = SG_TPL[r.k];
+        const isAi = (SG.engine==='lex+laya'&&SG.l1==='ready') && j===0;
+        h += '<div class="sg-row ai'+(ed.sel===i2?' sel':'')+'" data-a="'+j+'">'
+          + '<div class="top"><span class="t">'+tpl.name+'</span><span class="kbd">Tab</span>'
+          + '<span class="b'+(isAi?'':' lex')+'">'+(isAi?'AI':'lex')+'</span></div>'
+          + '<span class="rsn">'+tpl.why+'</span></div>';
+      });
+    } else if (ed.ai==='done'){
+      h += '<div class="sg-row empty">нет подходящих шаблонов</div>';
+    }
+    /* ai==='blocked' → секции нет: молчим (продуктовое правило «не показывай, если не уверен») */
+  }
+  h += '<div class="sgp-foot"><span>↑↓ выбор</span><span>Tab принять</span><span>Esc закрыть</span>'
+     + (ed.prefix?'<span style="margin-left:auto">ввод: <b></b></span>'.replace('<b></b>','<b>'+ed.prefix.replace(/</g,'&lt;')+'</b>'):'')+'</div>';
+  pop.innerHTML = h;
+  pop.classList.remove('hidden');
+  pop.querySelectorAll('.sg-row.l0').forEach(el=>{ el.onclick = ()=>{ if (SG.editing){ SG.editing.sel=+el.dataset.i; sgAcceptIdx(+el.dataset.i); } }; });
+  pop.querySelectorAll('.sg-row.ai').forEach(el=>{ el.onclick = ()=>{ sgAcceptIdx(l0.length + +el.dataset.a); }; });
+  sgPositionSurfaces();
+}
+function sgAcceptIdx(i){
+  const ed = SG.editing; if (!ed) return;
+  const l0 = sgL0(ed.prefix);
+  if (i < l0.length){
+    // L0 — существующее поведение FR-021: дополнить ввод
+    ed.prefix += l0[i].t; ed.gen++; ed.sel = 0;
+    sgScheduleAI(ed); sgRenderPopup();
+    return;
+  }
+  const j = i - l0.length;
+  if (ed.ai==='done' && ed.res && ed.res[j]) sgAcceptTpl(ed.res[j].k);
+}
+function sgAcceptTpl(key){
+  const ed = SG.editing; if (!ed) return;
+  const nodeId = ed.id;
+  sgEndEditing('accept');            // закрывает ввод; accepted логируется в sgInstantiate
+  sgInstantiate(key, nodeId, true);  // замена редактируемой ноды (прецедент палитры)
+}
+
+/* ---- вставка шаблона (прецедент палитры) + undo одним шагом ---- */
+function sgInstantiate(key, anchorId, replace, viaCard){
+  const tpl = SG_TPL[key]; if (!tpl) return;
+  const node = {
+    id:'sg'+(sgUid++), title:tpl.name, cat:'template', obj:tpl.name,
+    meta:'шаблон · из подсказки', chipLabel:tpl.chip,
+    desc:tpl.why, params:tpl.params.map(p=>Object.assign({},p)),
+    calc:tpl.calc.map(c=>Object.assign({},c)),
+    res:Object.assign({},tpl.res), sgNew:true
+  };
+  if (replace && anchorId){
+    const old = nodeById(anchorId); if (!old) return;
+    SG.undo = {type:'replace', old, oldEdges:edges.filter(e=>e.from===anchorId||e.to===anchorId), newId:node.id};
+    SG.replaced.push({node:old, edges:SG.undo.oldEdges});
+    edges = edges.filter(e=>e.from!==anchorId && e.to!==anchorId);
+    const i = NODES.indexOf(old); NODES.splice(i,1,node);
+    node.x = old.x; node.y = old.y; node.w = old.w;
+    delete PH.anchors[anchorId]; delete INIT_POS[anchorId];
+    node.sgAccepted = true;
+  } else {
+    let x, y;
+    if (anchorId){
+      const a = nodeById(anchorId);
+      x = a.x + a.w + 60; y = a.y;
+    } else {
+      x = s2wx(innerWidth/2) - 150; y = s2wy(innerHeight/2) - 60;
+    }
+    node.x = x; node.y = y; node.w = 300;
+    node.sgFromCard = !!viaCard; // для глубины цепочки карточек C3
+    NODES.push(node);
+    SG.undo = {type:'insert', ids:[node.id], prevCards: SG.cards?SG.cards.nodeId:null};
+  }
+  PH.anchors[node.id] = {x:node.x, y:node.y};
+  INIT_POS[node.id] = {x:node.x, y:node.y, w:node.w};
+  dataVersion++; invalidateLayouts();
+  showToast('Шаблон «'+tpl.name+'» вставлен · Ctrl+Z — отменить одним шагом');
+  sgLog('accepted',{top:key});
+  sgShowCards(node.id, key);
+}
+function sgUndo(){
+  const u = SG.undo; if (!u){ hint('Отменять нечего'); return; }
+  if (u.type==='replace'){
+    const i = NODES.findIndex(n=>n.id===u.newId); if (i>=0) NODES.splice(i,1,u.old);
+    edges = edges.filter(e=>e.from!==u.newId && e.to!==u.newId).concat(u.oldEdges);
+    PH.anchors[u.old.id] = {x:u.old.x, y:u.old.y};
+    SG.replaced = SG.replaced.filter(r=>r.node.id!==u.old.id); // восстановлено undo — убрать из реестра
+    if (SG.cards && SG.cards.nodeId===u.newId) sgDismissCards(true);
+  } else {
+    u.ids.forEach(id=>{
+      const i = NODES.findIndex(n=>n.id===id); if (i>=0) NODES.splice(i,1);
+      delete PH.anchors[id]; delete INIT_POS[id];
+      if (SG.cards && SG.cards.nodeId===id) sgDismissCards(true);
+    });
+  }
+  SG.undo = null;
+  dataVersion++; invalidateLayouts();
+  showToast('Отменено — undo одним шагом (правка принятого всегда обратима)');
+  hintDefault();
+}
+
+/* ---- C3: карточки «следующие ноды» ---- */
+function sgShowCards(nodeId, fromKey){
+  if (!nodeById(nodeId)) return;
+  if (!SG.enabled || SG.engine==='off') return;
+  if (SG.domain==='framework'){
+    sgLog('suppressed',{top:'cards:domain'});
+    sgHudUpdate();
+    return;
+  }
+  const prevDepth = (nodeById(nodeId) && nodeById(nodeId).sgFromCard) ? (SG.prevCardDepth||0)+1 : 1;
+  SG.prevCardDepth = prevDepth;
+  if (prevDepth>2){
+    sgLog('rate-limited',{top:'cards-chain'});
+    SG.cards = null; sgHideCards();
+    hint('Карточки: цепочка ограничена двумя подряд — анти-навязчивость (частотный лимит)');
+    return;
+  }
+  const items = (SG_NEXT[fromKey]||[{k:'tcp-lb',r:'начать расчётную цепочку'},{k:'api-gw',r:'структура потока'},{k:'unit-eco',r:'связать с деньгами'}]).slice(0,3);
+  SG.cards = {nodeId, items, depth:prevDepth};
+  SG.shownTimes.push(Date.now());
+  sgLog('shown',{top:'cards:'+fromKey});
+  sgRenderCards(); sgHudUpdate();
+  emit('sgCardShown');
+}
+function sgRenderCards(){
+  const el = document.getElementById('sgcards');
+  const c = SG.cards;
+  if (!c){ el.classList.add('hidden'); return; }
+  let h = '<div class="sgc-head"><span>Следующие ноды</span><button id="sgcClose" title="Скрыть (Esc)">✕</button></div>';
+  c.items.forEach(it=>{
+    const tpl = SG_TPL[it.k];
+    h += '<div class="sgc-card" data-k="'+it.k+'">'
+      + '<div class="nm"><i style="background:'+(PAL.chips.template)+'"></i>'+tpl.name+'</div>'
+      + '<div class="rsn">'+it.r+'</div><div class="ins">клик — вставить рядом ↵</div></div>';
+  });
+  h += '<div class="sgc-foot">у свежей ноды · закрываются Esc/кликом мимо · события пишутся в журнал</div>';
+  el.innerHTML = h;
+  el.classList.remove('hidden');
+  el.querySelectorAll('.sgc-card').forEach(card=>{
+    card.onclick = ()=>{ sgCardAccept(card.dataset.k); };
+  });
+  const xb = document.getElementById('sgcClose');
+  if (xb) xb.onclick = (e)=>{ e.stopPropagation(); sgDismissCards(); };
+  sgPositionSurfaces();
+}
+function sgCardAccept(key){
+  const c = SG.cards; if (!c) return;
+  const anchorId = c.nodeId;
+  sgLog('accepted',{top:key});
+  SG.cards = null; sgHideCards();
+  sgInstantiate(key, anchorId, false, true); // вставка рядом (схема-раскладка подберёт место)
+}
+function sgDismissCards(silent){
+  if (SG.cards) sgLog('dismissed',{top:'cards'});
+  SG.cards = null; sgHideCards();
+  if (!silent) hintDefault();
+}
+function sgHideCards(){ document.getElementById('sgcards').classList.add('hidden'); }
+
+/* ---- настройки (модаль) ---- */
+function sgOpenSettings(){
+  SG.set = true;
+  document.getElementById('sgsetov').classList.remove('hidden');
+  sgSyncUI();
+}
+function sgCloseSettings(){ SG.set = false; document.getElementById('sgsetov').classList.add('hidden'); }
+function sgSyncUI(){
+  // пульт
+  document.getElementById('sgMasterTgl').checked = SG.enabled;
+  document.querySelectorAll('#sgEngineTabs button').forEach(b=>b.classList.toggle('on', b.dataset.v===SG.engine));
+  // настройки
+  const m = document.getElementById('sgsetMaster'); m.classList.toggle('on', SG.enabled);
+  const r = document.querySelector('input[name=sgengine][value="'+SG.engine+'"]'); if (r) r.checked = true;
+  const lg = document.getElementById('sgsetLog'); lg.classList.toggle('on', SG.logOn);
+  // L1-статус
+  const badge = document.getElementById('sgl1Badge'), note = document.getElementById('sgl1Note');
+  const bar = document.querySelector('#sgl1Bar i'), btn = document.getElementById('sgl1Btn');
+  const warn = document.getElementById('sgl1Warn');
+  if (SG.l1==='ready'){
+    badge.textContent = 'готово · 0,65 ГБ'; badge.className = 'badge ok';
+    note.textContent = 'sidecar localhost:8000 · выгрузка после 10 мин простоя';
+    bar.style.width = '100%'; btn.style.display = 'none';
+  } else if (SG.l1==='loading'){
+    badge.textContent = 'загружается…'; badge.className = 'badge load';
+    btn.style.display = 'none';
+  } else {
+    badge.textContent = 'не установлен'; badge.className = 'badge';
+    note.textContent = 'веса ~650 МБ · sidecar на localhost · без интернета';
+    bar.style.width = '0%'; btn.style.display = '';
+  }
+  warn.classList.toggle('show', SG.engine==='lex+laya' && SG.l1!=='ready');
+}
+/* согласие на догрузку весов: прогресс + smoke */
+document.getElementById('sgl1Btn').onclick = ()=>{
+  if (SG.l1!=='missing') return;
+  SG.l1 = 'loading'; sgSyncUI();
+  const bar = document.querySelector('#sgl1Bar i'), note = document.getElementById('sgl1Note');
+  const steps = [[18,'загрузка 117/650 МБ'],[46,'загрузка 299/650 МБ'],[74,'загрузка 481/650 МБ'],[88,'распаковка чекпойнта'],[96,'smoke-тест: fixture A-unit-economics…'],[100,'готово']];
+  let i = 0;
+  const t = setInterval(()=>{
+    if (i>=steps.length){ clearInterval(t); SG.l1='ready'; sgSyncUI();
+      showToast('L1 готов: smoke-тест пройден, sha256 совпали'); return; }
+    bar.style.width = steps[i][0]+'%'; note.textContent = steps[i][1]; i++;
+  }, 520);
+};
+document.getElementById('sgsetClose').onclick = sgCloseSettings;
+document.getElementById('sgsetov').addEventListener('mousedown', e=>{ if (e.target.id==='sgsetov') sgCloseSettings(); });
+document.getElementById('sgsetMaster').addEventListener('click', ()=>{
+  SG.enabled = !SG.enabled;
+  if (!SG.enabled){ if (SG.editing) sgEndEditing('dismiss'); if (SG.cards) sgDismissCards(true); }
+  sgSyncUI();
+  hint(SG.enabled?'Подсказки включены (opt-in) — движок: '+SG.engine:'Подсказки выключены — попап L0 остаётся, ИИ-строк нет');
+});
+document.querySelectorAll('input[name=sgengine]').forEach(r=>{
+  r.addEventListener('change', ()=>{ SG.engine = r.value; sgSyncUI(); });
+});
+document.getElementById('sgsetLog').addEventListener('click', ()=>{
+  SG.logOn = !SG.logOn; sgSyncUI();
+});
+
+/* ---- пульт «Подсказки (FR-079)» ---- */
+document.getElementById('sgMasterTgl').addEventListener('change', e=>{
+  SG.enabled = e.target.checked;
+  if (!SG.enabled){ if (SG.editing) sgEndEditing('dismiss'); if (SG.cards) sgDismissCards(true); }
+  sgSyncUI();
+  hint(SG.enabled?'Подсказки включены (opt-in, дефолт OFF до приёмки S5)':'Подсказки выключены — ввод в нодах работает как прежде (FR-021)');
+});
+bindTabs('sgEngineTabs', v=>{
+  SG.engine = v; sgSyncUI();
+  hint('Движок: '+({off:'выключен — попап только с локальными строками',lex:'локальный поиск: мгновенно, <1 мс, без ИИ','lex+laya':'гибрид: lex мгновенно + ИИ-строки догружаются 300–800 мс (таймаут — тихий откат)'})[v]);
+});
+document.getElementById('sgDomainTgl').addEventListener('change', e=>{
+  SG.domain = e.target.checked ? 'framework' : 'calc';
+  if (SG.domain==='framework' && SG.cards) sgDismissCards(true);
+  hint(SG.domain==='framework'
+    ? 'Канвас в «framework»-профиле (CJM/JTBD/сервис-блюпринт): домен-детектор подавляет ИИ-строки и карточки — молча, как в продукте; вердикт — в HUD и настройках'
+    : 'Канвас снова расчётный: домен-детектор пропускает подсказки');
+  sgHudUpdate();
+});
+document.getElementById('sgLat').addEventListener('input', e=>{
+  SG.lat = +e.target.value;
+  document.getElementById('sgLatV').textContent = e.target.value;
+  if (SG.editing && SG.editing.ai==='wait') hint('Латентность L1 = '+SG.lat+' мс'+(SG.lat>=850?' — превысит бюджет 800 мс: будет тихий откат на lex':''));
+});
+function sgFlyTo(n){
+  cam.z = clamp(cam.z, 0.8, 1.2);
+  cam.x = innerWidth/2 - (n.x+n.w/2)*cam.z;
+  cam.y = innerHeight/2 - (n.y+80)*cam.z;
+  layoutDirty = true;
+}
+document.getElementById('sgC1Btn').addEventListener('click', ()=>{
+  const n = nodeById('hp') || NODES[0];
+  sgFlyTo(n); sgBeginEditing(n.id);
+});
+document.getElementById('sgC3Btn').addEventListener('click', ()=>{
+  sgInstantiate('tcp-lb', null, false);
+});
+document.getElementById('sgSetBtn').addEventListener('click', sgOpenSettings);
+document.getElementById('sgHudBtn').addEventListener('click', ()=>{
+  SG.hud = !SG.hud;
+  document.getElementById('sghud').classList.toggle('hidden', !SG.hud);
+  if (SG.hud) sgHudUpdate();
+});
+
+/* ---- клавиатура: перехват в режиме ввода + Esc-лестница ---- */
+function sgKeydown(e){
+  if (SG.set){
+    if (e.key==='Escape'){ sgCloseSettings(); return true; }
+    return false;
+  }
+  const ed = SG.editing;
+  if (ed){
+    if (e.key==='Escape'){ sgEndEditing('dismiss'); return true; }
+    if (e.key==='ArrowDown' || e.key==='ArrowUp'){
+      e.preventDefault();
+      const total = sgL0(ed.prefix).length + ((ed.ai==='done'&&ed.res)?ed.res.length:0);
+      if (total){
+        ed.sel = (ed.sel + (e.key==='ArrowDown'?1:-1) + total) % total;
+        sgRenderPopup();
+      }
+      return true;
+    }
+    if (e.key==='Tab' || e.key==='Enter'){
+      e.preventDefault();
+      const total = sgL0(ed.prefix).length + ((ed.ai==='done'&&ed.res)?ed.res.length:0);
+      if (total) sgAcceptIdx(Math.min(ed.sel, total-1));
+      return true;
+    }
+    if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='z'){ e.preventDefault(); sgUndo(); return true; }
+    if (e.key==='Backspace'){ e.preventDefault(); sgBackspace(); return true; }
+    if (e.key.length===1 && !e.ctrlKey && !e.metaKey && !e.altKey){ e.preventDefault(); sgType(e.key); return true; }
+    return true; // остальное глотаем: ввод не должен дёргать канвас
+  }
+  if (SG.cards && e.key==='Escape'){ sgDismissCards(); return true; }
+  if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='z' && SG.undo){ e.preventDefault(); sgUndo(); return true; }
+  return false;
+}
+
+/* ---- позиционирование поверхностей (каждый кадр, мир→экран) ---- */
+function sgPositionSurfaces(){
+  const pop = document.getElementById('sgpop');
+  if (SG.editing && !pop.classList.contains('hidden')){
+    const n = nodeById(SG.editing.id);
+    if (n){
+      const g = nodeGeom(n, curLod());
+      let x = w2sx(n.x), y = w2sy(n.y + g.h + 48);
+      pop.style.left = clamp(x, 8, innerWidth-366)+'px';
+      pop.style.top  = clamp(y, 8, innerHeight-300)+'px';
+    }
+  }
+  const cel = document.getElementById('sgcards');
+  if (SG.cards && !cel.classList.contains('hidden')){
+    const n = nodeById(SG.cards.nodeId);
+    if (n){
+      let x = w2sx(n.x+n.w)+14, y = w2sy(n.y+16);
+      if (x > innerWidth-268) x = w2sx(n.x)-266;
+      cel.style.left = clamp(x, 8, innerWidth-266)+'px';
+      cel.style.top  = clamp(y, 8, innerHeight-240)+'px';
+    }
+  }
+}
+function sgFrame(){ sgPositionSurfaces(); }
+
+/* ---- канвас-оверлей редактирования: рамка + полоса ввода + каретка ---- */
+function sgDrawEditing(){
+  const ed = SG.editing; if (!ed) return;
+  const n = nodeById(ed.id); if (!n) return;
+  const g = nodeGeom(n, curLod());
+  ctx.save();
+  ctx.strokeStyle = PAL.accent; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.roundRect(n.x-3, n.y-3, n.w+6, g.h+6, 12); ctx.stroke();
+  const y = n.y + g.h + 10;
+  ctx.fillStyle = PAL.card; ctx.strokeStyle = PAL.accent; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(n.x, y, n.w, 30, 8); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = PAL.title; ctx.font = F.mono; ctx.textBaseline = 'alphabetic';
+  const pre = '✎ ' + ed.prefix;
+  ctx.fillText(pre, n.x+10, y+19.5);
+  if ((Date.now()%1000) < 560){
+    const w = ctx.measureText(pre).width;
+    ctx.fillStyle = PAL.accent;
+    ctx.fillRect(n.x+11+w, y+8, 1.6, 15);
+  }
+  ctx.restore();
+}
+
+
+/* ============================================================
    ЧАСТЬ L. Оболочка: пульт, тур, hint, readout, fit, цикл
    ============================================================ */
 const hintEl = document.getElementById('hint');
-const HINT_DEFAULT = 'Колесо — зум к курсору · drag фона — пан · клик по пучку — <b>main stage</b> · клик по цифре итога — <b>проверка цепочки</b> · тяните кромку ноды — <b>новая связь (В-C)</b> · тяните ноду сквозь другие — <b>расталкивание</b>';
+const HINT_DEFAULT = 'Колесо — зум к курсору · drag фона — пан · клик по пучку — <b>main stage</b> · клик по цифре итога — <b>проверка цепочки</b> · тяните кромку ноды — <b>новая связь (В-C)</b> · двойной клик по ноде — <b>ввод с подсказками</b>';
 function hint(html){ hintEl.innerHTML = html; }
 function hintDefault(){ hint(HINT_DEFAULT); }
 
@@ -3087,7 +3913,10 @@ const TOUR = [
   {txt:'Esc×2 — выход. Теперь связи В-C: <b>потяните правую кромку ноды</b> — точки раскроются у рядов; скользите вдоль кромки, чтобы выбрать точку.', ev:'edgeCreated'},
   {txt:'Связь создана (Del — удалить выделенную). Теперь тело: переведите героя на <b>L3 максимум</b> в пульте.', ev:null},
   {txt:'<b>Блок-ведомость Н-3</b>: «▸ расчёт · N строк · Σ …» — клик по заголовку блока на герое разворачивает его.', ev:'blkToggle'},
-  {txt:'Осталось <b>«Ревью автосвязей»</b> в пульте: массовые действия, «Вернуть все», создание одним undo-батом. Далее — «Решения и вопросы».', ev:null}
+  {txt:'Осталось <b>«Ревью автосвязей»</b> в пульте: массовые действия, «Вернуть все», создание одним undo-батом. Далее — «Решения и вопросы».', ev:null},
+  {txt:'<b>Подсказки FR-079</b>: включите тумблер «движок включён» в пульте, затем двойной клик по ноде «Гипотеза» (или кнопка «Ввод в ноде»). Печатайте: локальные строки мгновенны, ИИ-строки догружаются skeleton-ом.', ev:'sgAiShown'},
+  {txt:'<b>Tab</b> — принять ИИ-строку: шаблон заменит ноду (Ctrl+Z — undo одним шагом). У новой ноды — <b>карточки «следующие ноды» (C3)</b>: клик вставляет следующую в цепочку.', ev:'sgCardShown'},
+  {txt:'Проверьте <b>«домен: framework»</b> в пульте — подавление C4 (на не-расчётном канвасе ИИ молчит), <b>HUD</b> — вердикты гейтов и журнал S0, <b>«Настройки»</b> — opt-in и согласие на веса L1 (~650 МБ).', ev:null}
 ];
 let tourIdx = -1;
 function renderTourStep(){
@@ -3149,6 +3978,27 @@ function resetAll(){
   if (stage) closeStage();
   if (rdvOpen) closeReview();
   selection = null; drag = null;
+  // подсказки ЧАСТЬ S: закрыть поверхности, вернуть дефолты, убрать мок-ноды
+  if (SG.editing) sgEndEditing('dismiss');
+  if (SG.cards) sgDismissCards(true);
+  if (SG.set) sgCloseSettings();
+  SG.undo = null; SG.l1 = 'missing'; SG.log = []; SG.shownTimes = [];
+  SG.stats = {shown:0, accepted:0, dismissed:0, edited:0};
+  SG.enabled = false; SG.engine = 'lex+laya'; SG.domain = 'calc'; SG.lat = 650;
+  SG.hud = false;
+  for (let i=NODES.length-1;i>=0;i--) if (NODES[i].sgNew) NODES.splice(i,1);
+  // восстановить оригиналы заменённых нод + их рёбра (полный сброс сцены)
+  SG.replaced.forEach(r=>{
+    if (!nodeById(r.node.id)){ NODES.push(r.node); PH.anchors[r.node.id] = {x:r.node.x, y:r.node.y}; }
+    r.edges.forEach(e=>{ if (!edges.some(x=>x.id===e.id)) edges.push(e); });
+  });
+  SG.replaced = [];
+  sgSyncUI();
+  document.getElementById('sgMasterTgl').checked = false;
+  document.getElementById('sgDomainTgl').checked = false;
+  document.getElementById('sgLat').value = 650;
+  document.getElementById('sgLatV').textContent = '650';
+  document.getElementById('sghud').classList.add('hidden');
   rebuildEdges();
   recalcDAU();
   rvInit(); rvClosed = [];
@@ -3358,12 +4208,14 @@ function render(){
   const bundles = computeBundles();
   drawEdges(bundles, lod);
   drawNodes(lod);
+  sgDrawEditing();
   drawBundleRings(bundles, lod);
   ctx.setTransform(dpr,0,0,dpr,0,0);
   drawBadges(bundles, lod);
   if (drag) drawEdgeDragPreview();
   if (stage) drawStage();
   updateHover();
+  sgFrame();
   updateReadouts();
   } catch(err){ __renderErr = String(err && err.stack || err).slice(0,300); }
 }
