@@ -4363,3 +4363,265 @@ fn worker_path_rebuilds_bundles_synchronously() {
     // Ровно тот вызов, что падал: dominant_edge над канвасом len 19.
     let _ = scene.bundles.dominant_edge(&scene.canvas, bundle);
 }
+
+// --- FR-012 v4 (MCP-паритет): group_create — группа из нод -------------------
+
+/// group_create: bbox+padding, дефолтный label, явные дети, undo-шаг,
+/// spatial обновлён, ответ {id, label, children, parent=null, x…}.
+#[test]
+fn mcp_group_create_wraps_nodes() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(Node::text("n1", "=100+1", 0.0, 0.0));
+    canvas.nodes.push(Node::text("n2", "Блок", 500.0, 200.0));
+    let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/mcp.canvas"));
+    let undo_before = scene.undo_stack.len();
+
+    let group =
+        dispatch(&mut scene, "group_create", r#"{"nodes":["n1","n2"]}"#).expect("group_create");
+    assert_eq!(group["id"], "group-1", "ответ: {group}");
+    assert_eq!(group["label"], "Группа");
+    assert_eq!(group["parent"], serde_json::Value::Null);
+    let children = group["children"].as_array().expect("children");
+    assert_eq!(children.len(), 2);
+    // bbox(n1 0,0 260×120; n2 500,200 260×120) = 0,0..760,320 + padding 40
+    assert_eq!(group["x"], -40.0);
+    assert_eq!(group["y"], -40.0);
+    assert_eq!(group["width"], 840.0);
+    assert_eq!(group["height"], 400.0);
+
+    // модель: группа с явным списком детей
+    let node = scene
+        .canvas
+        .nodes
+        .iter()
+        .find(|n| n.id == "group-1")
+        .expect("группа в модели");
+    assert_eq!(node.kind(), NodeKind::Group);
+    assert_eq!(
+        node.children.as_ref().expect("children"),
+        &["n1".to_owned(), "n2".to_owned()]
+    );
+
+    // spatial: рамка группы в индексе (точка внутри rect её находит)
+    let group_index = scene
+        .canvas
+        .nodes
+        .iter()
+        .position(|n| n.id == "group-1")
+        .expect("индекс группы");
+    let hits = scene.spatial.query_rect([-30.0, -30.0, -20.0, -20.0]);
+    assert!(hits.contains(&group_index), "spatial содержит группу");
+
+    // undo: один шаг возвращает канвас без группы
+    assert_eq!(scene.undo_stack.len(), undo_before + 1);
+    let before = scene.take_undo().expect("undo-снапшот");
+    assert_eq!(before.nodes.len(), 2, "в снапшоте только исходные ноды");
+}
+
+/// group_create: кастомные label/padding; padding вне 0..500 — ошибка
+/// без мутаций.
+#[test]
+fn mcp_group_create_label_and_padding() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(Node::text("n1", "A", 100.0, 100.0));
+    let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/mcp.canvas"));
+    let group = dispatch(
+        &mut scene,
+        "group_create",
+        r#"{"nodes":["n1"],"label":"Подсхема","padding":10}"#,
+    )
+    .expect("group_create");
+    assert_eq!(group["label"], "Подсхема");
+    assert_eq!(group["x"], 90.0);
+    assert_eq!(group["width"], 260.0 + 20.0);
+    let err = dispatch(
+        &mut scene,
+        "group_create",
+        r#"{"nodes":["n1"],"padding":-5}"#,
+    )
+    .expect_err("отрицательный padding");
+    assert!(err.contains("padding"), "ответ: {err}");
+    let err = dispatch(
+        &mut scene,
+        "group_create",
+        r#"{"nodes":["n1"],"padding":501}"#,
+    )
+    .expect_err("padding > 500");
+    assert!(err.contains("padding"));
+    assert_eq!(scene.canvas.nodes.len(), 2, "ошибки не мутируют канвас");
+}
+
+/// group_create: ошибки валидации — без мутаций (undo-стек не тронут):
+/// нет nodes, пусто, дубликат, неизвестная нода.
+#[test]
+fn mcp_group_create_validation_errors() {
+    let mut canvas = Canvas::default();
+    canvas.nodes.push(Node::text("n1", "A", 0.0, 0.0));
+    let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/mcp.canvas"));
+    let undo_before = scene.undo_stack.len();
+
+    let err = dispatch(&mut scene, "group_create", r#"{}"#).expect_err("нет nodes");
+    assert!(err.contains("'nodes'"), "ответ: {err}");
+    let err = dispatch(&mut scene, "group_create", r#"{"nodes":[]}"#).expect_err("пусто");
+    assert!(err.contains("минимум 1"));
+    let err =
+        dispatch(&mut scene, "group_create", r#"{"nodes":["n1","n1"]}"#).expect_err("дубликат");
+    assert!(err.contains("дубликат"));
+    let err = dispatch(&mut scene, "group_create", r#"{"nodes":["ghost"]}"#).expect_err("нет ноды");
+    assert!(err.contains("не найдена"));
+
+    assert_eq!(scene.canvas.nodes.len(), 1, "ошибки не мутируют канвас");
+    assert_eq!(
+        scene.undo_stack.len(),
+        undo_before,
+        "валидация до undo-шага"
+    );
+}
+
+/// group_create внутри существующей группы (FR-012 v4): инварант одного
+/// членства (n1 вычеркнут из g1), re-parent (новая группа — ребёнок g1),
+/// глубокое авторасширение (g1 вмещает новую подгруппу).
+#[test]
+fn mcp_group_create_adopt_into_existing_group() {
+    let mut canvas = Canvas::default();
+    // g1 — легаси-группа (children=None), n1 внутри её рамки, f2 вне
+    canvas.nodes.push(Node::text("n1", "Внутри", 100.0, 100.0));
+    canvas.nodes.push(Node::text("f2", "Вне", 1500.0, 100.0));
+    let mut g1 = Node::group("g1", 0.0, 0.0, 900.0, 600.0);
+    g1.label = Some("Зона".to_owned());
+    canvas.nodes.push(g1);
+    let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/mcp.canvas"));
+    let undo_before = scene.undo_stack.len();
+
+    let group = dispatch(
+        &mut scene,
+        "group_create",
+        r#"{"nodes":["n1","f2"],"label":"Подсхема"}"#,
+    )
+    .expect("group_create");
+    assert_eq!(group["id"], "group-1");
+    assert_eq!(
+        group["parent"], "g1",
+        "re-parent к группе-предку n1: {group}"
+    );
+
+    // Инварант одного членства: n1 вычеркнут из g1, группа — единственный ребёнок
+    let g1 = scene
+        .canvas
+        .nodes
+        .iter()
+        .find(|n| n.id == "g1")
+        .expect("g1 в модели");
+    assert_eq!(
+        g1.children.as_ref().expect("список материализован"),
+        &["group-1".to_owned()]
+    );
+
+    // Глубокое авторасширение: группа — bbox(n1 100..360; f2 1500..1760)+40
+    // = 60,60, 1740, 200; g1 — bbox(группа 60..1800)+40 = 20,20, 1820, 280
+    assert_eq!(group["x"], 60.0);
+    assert_eq!(group["width"], 1740.0);
+    assert_eq!((g1.x, g1.y), (20.0, 20.0));
+    assert_eq!((g1.width, g1.height), (1820.0, 280.0));
+
+    // undo: один шаг откатывает и adopt, и расширения
+    assert_eq!(scene.undo_stack.len(), undo_before + 1);
+    let before = scene.take_undo().expect("undo-снапшот");
+    let g1_before = before.nodes.iter().find(|n| n.id == "g1").expect("g1");
+    assert!(g1_before.children.is_none(), "легаси-группа без списка до");
+    assert_eq!((g1_before.width, g1_before.height), (900.0, 600.0));
+}
+
+/// graph_apply: op group_create — ref-адресация нод, созданных в этом же
+/// батче; группа в created[]/report; один undo-шаг на весь батч.
+#[test]
+fn graph_apply_group_create_with_refs() {
+    let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ga3.canvas"));
+    let undo_before = scene.undo_stack.len();
+    let ops = r#"[
+            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"первая"},
+            {"op":"node_create_note","ref":"b","x":300,"y":200,"text":"вторая"},
+            {"op":"group_create","ref":"pack","nodes":["a","b"],"label":"Пакет"}
+        ]"#;
+    let out = graph_apply(&mut scene, ops).expect("батч собирается");
+    assert_eq!(out["ok"], true, "ответ: {out}");
+    let created = out["created"].as_array().expect("created");
+    assert_eq!(created.len(), 3, "2 ноды + группа");
+    let pack = created
+        .iter()
+        .find(|e| e["ref"] == "pack")
+        .and_then(|e| e["node_id"].as_str())
+        .expect("группа в created");
+    assert_eq!(pack, "group-1");
+
+    // модель: группа с явными детьми (id реальных нод)
+    let group = scene
+        .canvas
+        .nodes
+        .iter()
+        .find(|n| n.id == "group-1")
+        .expect("группа");
+    assert_eq!(group.kind(), NodeKind::Group);
+    assert_eq!(
+        group.children.as_ref().expect("children"),
+        &["note-1".to_owned(), "note-2".to_owned()]
+    );
+    assert_eq!(group.label.as_deref(), Some("Пакет"));
+    // bbox+padding: 0,0..560,320 → -40,-40, 640, 400
+    assert_eq!(
+        (group.x, group.y, group.width, group.height),
+        (-40.0, -40.0, 640.0, 400.0)
+    );
+    assert_eq!(
+        scene.undo_stack.len(),
+        undo_before + 1,
+        "один undo-шаг на батч"
+    );
+
+    let report = out["report"].as_array().expect("report");
+    assert!(
+        report
+            .iter()
+            .any(|e| e["op"] == "group_create" && e["id"] == "group-1"),
+        "report отражает группу: {report:?}"
+    );
+}
+
+/// graph_apply: group_create на неизвестную ноду — E-NOT-FOUND, батч
+/// атомарен (созданные ранее в батче ноды откатываются).
+#[test]
+fn graph_apply_group_create_atomic_rollback() {
+    let mut scene = mcp_scene();
+    let before = serde_json::to_string(&scene.canvas).expect("сериализация до");
+    let undo_before = scene.undo_stack.len();
+    let ops = r#"[
+            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"новая"},
+            {"op":"group_create","nodes":["a","ghost"]}
+        ]"#;
+    let out = graph_apply(&mut scene, ops).expect("инструмент отвечает");
+    assert_eq!(out["ok"], false, "ответ: {out}");
+    assert_eq!(out["op_index"], 1);
+    assert_eq!(out["code"], "E-NOT-FOUND");
+    let after = serde_json::to_string(&scene.canvas).expect("сериализация после");
+    assert_eq!(before, after, "канвас байт-в-байт прежний");
+    assert_eq!(scene.undo_stack.len(), undo_before, "ни одного undo-шага");
+}
+
+/// graph_apply: одна и та же нода дважды в nodes (ref + литеральный id) —
+/// E-BAD-OP (инварант явного списка детей).
+#[test]
+fn graph_apply_group_create_duplicate_nodes() {
+    let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/ga4.canvas"));
+    let ops = r#"[
+            {"op":"node_create_note","ref":"a","x":0,"y":0,"text":"x"},
+            {"op":"group_create","nodes":["a","note-1"]}
+        ]"#;
+    let out = graph_apply(&mut scene, ops).expect("инструмент отвечает");
+    assert_eq!(out["ok"], false, "ответ: {out}");
+    assert_eq!(out["code"], "E-BAD-OP");
+    assert!(out["message"]
+        .as_str()
+        .expect("message")
+        .contains("дубликат"));
+    assert_eq!(scene.canvas.nodes.len(), 0, "батч откатился");
+}
