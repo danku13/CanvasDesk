@@ -279,6 +279,21 @@ fn main() -> anyhow::Result<()> {
         );
         // M5 (T20-F): реестр виджетов (материализация встроенных + скан)
         app.init_widgets();
+        // FR-079 (S3): suggest-воркер — ранжирование подсказок вне UI-треда
+        // (паттерн attach_flow_worker; ответы будят цикл AppEvent::SuggestReady).
+        // Провал спавна не роняет запуск: dispatch деградирует на sync-lex + warn.
+        {
+            let proxy = proxy.clone();
+            app.attach_suggest_worker(canvas_app::suggest_worker::SuggestWorkerHandle::spawn(
+                std::sync::Arc::new(move |target, generation, answers| {
+                    let _ = proxy.send_event(AppEvent::SuggestReady {
+                        target,
+                        generation,
+                        answers,
+                    });
+                }),
+            ));
+        }
         // M5: тик-поток host'а (1 c) — будит цикл для refresh-снапшотов
         // (LOD-расписание считает менеджер по времени, тик — только побудка;
         // паттерн — сервисы T15/T16, sender через EventLoopProxy)

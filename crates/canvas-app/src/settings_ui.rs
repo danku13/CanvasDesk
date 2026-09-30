@@ -139,6 +139,12 @@ pub enum SettingsRow {
     /// N%» в углу канваса — opt-in тумблер в табе «Канвас».
     ExplainCoverage,
 
+    /// FR-079 (S3): мастер-тумблер ИИ-подсказок (попап C1 + карточки C3)
+    /// — таб «Подсказки».
+    SuggestEnabled,
+    /// FR-079 (S3): движок подсказок (off/lex/lex+laya) — dropdown.
+    SuggestEngine,
+
     /// FR-073: мастер-тумблер расталкивания при драге.
     DragPushEnabled,
     /// FR-073: сейф-зазор между нодами — цикл по пресетам.
@@ -157,7 +163,7 @@ pub enum SettingsRow {
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 29] = [
+pub const SETTINGS_ROWS: [SettingsRow; 31] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -187,6 +193,9 @@ pub const SETTINGS_ROWS: [SettingsRow; 29] = [
     SettingsRow::DragPushPredictive,
     SettingsRow::DragPushRebase,
     SettingsRow::IconStyle,
+    // FR-079 (S3): таб «Подсказки»
+    SettingsRow::SuggestEnabled,
+    SettingsRow::SuggestEngine,
 ];
 
 /// Таб модалки (FR-039): иконка + ключ заголовка + строки. Тема —
@@ -207,7 +216,7 @@ pub struct SettingsTab {
 /// «Канвас» — сетка и оверлей узких мест; «Связи и порты» — связи/порты/
 /// фокус + построчные точки выхода FR-025; «Внешний вид» — карточки темы
 /// и язык FR-040. FR-038 дополнит модель пятым табом «Snap».
-pub const SETTINGS_TABS: [SettingsTab; 6] = [
+pub const SETTINGS_TABS: [SettingsTab; 7] = [
     SettingsTab {
         title_key: keys::TAB_GENERAL,
         icon: "◎",
@@ -273,6 +282,13 @@ pub const SETTINGS_TABS: [SettingsTab; 6] = [
         ],
     },
     SettingsTab {
+        // FR-079 (S3): ИИ-подсказки шаблонов (master-тумблер + движок)
+        title_key: keys::TAB_SUGGEST,
+        icon: "✦",
+        theme_cards: false,
+        rows: &[SettingsRow::SuggestEnabled, SettingsRow::SuggestEngine],
+    },
+    SettingsTab {
         title_key: keys::TAB_APPEARANCE,
         icon: "◐",
         theme_cards: true,
@@ -310,6 +326,9 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::SnapCoarseZoom => keys::ROW_SNAP_COARSE_ZOOM,
         SettingsRow::ExplainDepthLimit => keys::ROW_EXPLAIN_DEPTH,
         SettingsRow::AutolinkEnabled => keys::ROW_AUTOLINK,
+        // FR-079 (S3): таб «Подсказки»
+        SettingsRow::SuggestEnabled => keys::ROW_SUGGEST_ENABLED,
+        SettingsRow::SuggestEngine => keys::ROW_SUGGEST_ENGINE,
         SettingsRow::ExplainCoverage => keys::ROW_EXPLAIN_COVERAGE,
         SettingsRow::DragPushEnabled => keys::ROW_DRAG_PUSH_ENABLED,
         SettingsRow::DragPushSafeGap => keys::ROW_DRAG_PUSH_GAP,
@@ -346,6 +365,9 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::SnapCoarseZoom => keys::DESC_SNAP_COARSE_ZOOM,
         SettingsRow::ExplainDepthLimit => keys::DESC_EXPLAIN_DEPTH,
         SettingsRow::AutolinkEnabled => keys::DESC_AUTOLINK,
+        // FR-079 (S3): таб «Подсказки»
+        SettingsRow::SuggestEnabled => keys::DESC_SUGGEST_ENABLED,
+        SettingsRow::SuggestEngine => keys::DESC_SUGGEST_ENGINE,
         SettingsRow::ExplainCoverage => keys::DESC_EXPLAIN_COVERAGE,
         SettingsRow::DragPushEnabled => keys::DESC_DRAG_PUSH_ENABLED,
         SettingsRow::DragPushSafeGap => keys::DESC_DRAG_PUSH_GAP,
@@ -382,7 +404,8 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::SnapCoarseZoom
         | SettingsRow::DragPushSafeGap
         | SettingsRow::DragPushHalo
-        | SettingsRow::IconStyle => RowKind::Dropdown,
+        | SettingsRow::IconStyle
+        | SettingsRow::SuggestEngine => RowKind::Dropdown,
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
@@ -396,6 +419,7 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::HudOnStart
         | SettingsRow::ExplainCoverage
         | SettingsRow::AutolinkEnabled
+        | SettingsRow::SuggestEnabled
         | SettingsRow::DragPushEnabled
         | SettingsRow::DragPushPredictive
         | SettingsRow::DragPushRebase => RowKind::Toggle,
@@ -435,6 +459,18 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         }
         SettingsRow::PortZone => Some(format!("{} px", settings.port_zone_px as i32)),
         SettingsRow::Language => Some(settings.language.native_label().to_owned()),
+        // FR-079 (S3): движок подсказок (лексика/гибрид/выкл)
+        SettingsRow::SuggestEngine => Some(
+            i18n::tr(
+                language,
+                match settings.suggest.engine {
+                    canvas_core::SuggestEngineKind::Off => keys::SUGGEST_ENGINE_OFF,
+                    canvas_core::SuggestEngineKind::Lex => keys::SUGGEST_ENGINE_LEX,
+                    canvas_core::SuggestEngineKind::LexLaya => keys::SUGGEST_ENGINE_LEXLAYA,
+                },
+            )
+            .to_owned(),
+        ),
         SettingsRow::ThemePreset => Some(match settings.active_preset() {
             Some(id) => theme_presets::find(id).unwrap().label.to_owned(),
             None => i18n::tr(language, keys::THEME_PRESET_CLASSIC).to_owned(),
@@ -474,6 +510,8 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         | SettingsRow::AutolinkEnabled
         | SettingsRow::ExplainCoverage
         | SettingsRow::HudOnStart
+        // FR-079 (S3): тумблер — состояние видно по позиции pill-ручки
+        | SettingsRow::SuggestEnabled
         // FR-073: тумблеры — состояние видно по позиции pill-ручки
         | SettingsRow::DragPushEnabled
         | SettingsRow::DragPushPredictive
@@ -550,6 +588,22 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
             .into_iter()
             .map(|lang| (lang.native_label().to_owned(), settings.language == lang))
             .collect(),
+        // FR-079 (S3): порядок = apply_dropdown_value (инвариант, тест)
+        SettingsRow::SuggestEngine => [
+            (
+                i18n::tr(language, keys::SUGGEST_ENGINE_LEX).to_owned(),
+                settings.suggest.engine == canvas_core::SuggestEngineKind::Lex,
+            ),
+            (
+                i18n::tr(language, keys::SUGGEST_ENGINE_LEXLAYA).to_owned(),
+                settings.suggest.engine == canvas_core::SuggestEngineKind::LexLaya,
+            ),
+            (
+                i18n::tr(language, keys::SUGGEST_ENGINE_OFF).to_owned(),
+                settings.suggest.engine == canvas_core::SuggestEngineKind::Off,
+            ),
+        ]
+        .to_vec(),
         // FR-047: первый пункт — «Классическая» (карточки тёмной/светлой),
         // далее — реестр пресетов в порядке регистрации. Порядок опций =
         // порядку apply_dropdown_value (инвариант, тест).
@@ -651,6 +705,8 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         | SettingsRow::AutolinkEnabled
         | SettingsRow::ExplainCoverage
         | SettingsRow::HudOnStart
+        // FR-079 (S3): тумблер — dropdown не открывает (RowKind::Toggle)
+        | SettingsRow::SuggestEnabled
         // FR-073: тумблеры — dropdown не открывает (RowKind::Toggle)
         | SettingsRow::DragPushEnabled
         | SettingsRow::DragPushPredictive
@@ -721,6 +777,17 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
                 settings.language = *language;
             }
         }
+        // FR-079 (S3): движок подсказок — порядок = dropdown_options
+        SettingsRow::SuggestEngine => {
+            let engines = [
+                canvas_core::SuggestEngineKind::Lex,
+                canvas_core::SuggestEngineKind::LexLaya,
+                canvas_core::SuggestEngineKind::Off,
+            ];
+            if let Some(engine) = engines.get(index) {
+                settings.suggest.engine = *engine;
+            }
+        }
         // FR-047: индекс 0 — «Классическая» (сброс пресета, выбор по
         // карточкам тёмной/светлой); далее — реестр PRESETS в порядке
         // регистрации (порядок == dropdown_options, тест).
@@ -778,7 +845,9 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         | SettingsRow::HudOnStart
         | SettingsRow::DragPushEnabled
         | SettingsRow::DragPushPredictive
-        | SettingsRow::DragPushRebase => {}
+        | SettingsRow::DragPushRebase
+        // FR-079 (S3): тумблер применяется apply_toggle_row, не dropdown
+        | SettingsRow::SuggestEnabled => {}
         // FR-ICONS: индекс в `IconStyle::ALL` (порядок = dropdown_options,
         // инвариант теста). Вне диапазона — без изменений (как остальные).
         SettingsRow::IconStyle => {
@@ -1325,8 +1394,13 @@ mod tests {
                 SettingsRow::AutolinkEnabled
             ]
         );
+        // FR-079 (S3): таб 5 — «Подсказки» (мастер-тумблер + движок)
         assert_eq!(
             SETTINGS_TABS[5].rows,
+            &[SettingsRow::SuggestEnabled, SettingsRow::SuggestEngine]
+        );
+        assert_eq!(
+            SETTINGS_TABS[6].rows,
             &[
                 SettingsRow::ThemePreset,
                 SettingsRow::IconStyle,
@@ -1393,6 +1467,11 @@ mod tests {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                     let _ = defaults.explain_coverage;
                 }
+                // FR-079 (S3): мастер-тумблер подсказок — булево
+                SettingsRow::SuggestEnabled => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.suggest.enabled;
+                }
                 SettingsRow::HudOnStart => {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                     let _ = defaults.hud_on_start;
@@ -1439,7 +1518,9 @@ mod tests {
                 | SettingsRow::SnapCoarseZoom
                 | SettingsRow::DragPushSafeGap
                 | SettingsRow::DragPushHalo
-                | SettingsRow::IconStyle => {
+                | SettingsRow::IconStyle
+                // FR-079 (S3): dropdown «Движок подсказок»
+                | SettingsRow::SuggestEngine => {
                     assert_eq!(row_kind(row), RowKind::Dropdown);
                 }
             }
@@ -1801,8 +1882,13 @@ mod tests {
         let layout = modal_layout(4, viewport);
         assert_eq!(layout.rows.len(), 6);
         assert_eq!(layout.rows[0].0, SettingsRow::EdgesAvoid);
-        // Таб 5 (Внешний вид): карточки темы + строки пресета, иконок и языка ниже
+        // Таб 5 (Подсказки, FR-079): тумблер + движок
         let layout = modal_layout(5, viewport);
+        assert_eq!(layout.rows.len(), 2);
+        assert_eq!(layout.rows[0].0, SettingsRow::SuggestEnabled);
+        assert_eq!(layout.rows[1].0, SettingsRow::SuggestEngine);
+        // Таб 6 (Внешний вид): карточки темы + строки пресета, иконок и языка ниже
+        let layout = modal_layout(6, viewport);
         // FR-ICONS: 3 строки — ThemePreset, IconStyle, Language.
         assert_eq!(layout.rows.len(), 3);
         assert_eq!(layout.rows[0].0, SettingsRow::ThemePreset);

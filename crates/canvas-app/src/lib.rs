@@ -115,6 +115,17 @@ pub mod explain_ui;
 /// hit-тесты). Рендер/ввод/создание связей — в app.
 pub mod autolink_ui;
 
+/// FR-079 (S3): интеграция suggest-движка — адаптеры канвас/реестр →
+/// контекст «формат А», конвейер ранжирования (lex → fusion → Platt),
+/// каталог опций. Платформенно-нейтральная часть.
+pub mod suggest;
+
+/// FR-079 (S3): SuggestWorker — фоновый поток ранжирования (натив;
+/// паттерн flow-worker FR-064). На wasm не компилируется — синхронный
+/// путь в `about_to_wait`.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod suggest_worker;
+
 /// FR-055 (этап U4 PRD-0009, F-8): витрина кита `kit_gallery` — модель
 /// раскладки + адаптер «кит → квад/текст кадра». Сборка кадра — в app.rs.
 pub mod kit_ui;
