@@ -199,10 +199,11 @@ const COLOR_PROP: &str = r#"{"type":["string","null"],"enum":["1","2","3","4","5
 const SIDE_PROP: &str =
     r#"{"type":"string","enum":["any","top","right","bottom","left"],"default":"any"}"#;
 
-/// 40 инструментов канваса (FR-005 — node_edit; FR-025 построчные истоки;
+/// 41 инструмент канваса (FR-005 — node_edit; FR-025 построчные истоки;
 /// FR-029 — адресация портов; FR-032 — edges_list/edge_get/graph_validate;
 /// FR-033 — graph_apply; FR-016 — analyze_bottlenecks; FR-017/CP6 — 9 whatif_*;
-/// PRD-0008 Q5 — schemes_*; PRD-0007 — lineage + explain_number F-9)
+/// PRD-0008 Q5 — schemes_*; PRD-0007 — lineage + explain_number F-9;
+/// FR-012 v4 MCP-паритет — group_create)
 /// + 1 native-only FR-066 (monte_carlo_run — см. [`MC_TOOLS`]).
 const TOOLS: &[ToolSpec] = &[
     ToolSpec {
@@ -287,6 +288,22 @@ const TOOLS: &[ToolSpec] = &[
         description: "Установить цвет ноды: пресет \"1\"..\"6\" или null для сброса",
         required: &["id", "color"],
         properties: &[("id", STR), ("color", COLOR_PROP)],
+    },
+    ToolSpec {
+        name: "group_create",
+        description: "FR-012 v4 (MCP-паритет UI «Сгруппировать»): обернуть перечисленные ноды новой группой. Рамка — bbox(ноды)+padding (дефолт 40, допустимо 0..500); дети — ЯВНЫЙ список (FR-012). Если обёрнутые ноды — дети существующих групп, инварант одного членства: они вычёркиваются оттуда, а новая группа становится ребёнком самой внутренней группы-предка; вся цепочка предков авторасширяется, чтобы вместить новую подгруппу (group_expand_to_children_deep). Группировать можно и сами группы (перечислите их id). Один undo-шаг (Ctrl+Z откатывает создание). Ответ: {id, label, children[], parent|null, x, y, width, height}. Ошибки: пустой/дубликат nodes, неизвестная нода, padding вне 0..500. Для сборки моделей батчем — та же операция group_create в graph_apply (ref-адресация)",
+        required: &["nodes"],
+        properties: &[
+            (
+                "nodes",
+                r#"{"type":"array","minItems":1,"items":{"type":"string"}}"#,
+            ),
+            ("label", r#"{"type":"string"}"#),
+            (
+                "padding",
+                r#"{"type":"number","minimum":0,"maximum":500}"#,
+            ),
+        ],
     },
     ToolSpec {
         name: "edge_create",
@@ -416,11 +433,11 @@ const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "graph_apply",
-        description: "FR-033: атомарный батч операций над канвасом — «всё или ничего»: ошибка ЛЮБОЙ операции (в том числе в середине списка) откатывает весь батч, канвас остаётся прежним; успешный батч = один undo-шаг + полный пересчёт потока. Операции (поле op): node_create_note {ref?, x, y, text?, width?, height?}; node_create_file {ref?, x, y, path}; template_instantiate {ref?, template, params?, x, y}; edge_create {fromRef|from, toRef|to, kind? \"value\"|\"control\", fromLine?, fromOutput?, toParam?, fromSide?, toSide?} — адресация портов FR-029, ref-ы адресуют ноды, созданные ранее В ЭТОМ ЖЕ батче; edge_delete {id|ref} — удаление ребра (FR-050 Н4: замена занятого toParam = пара edge_delete + edge_create в одном батче — второе edge_create в занятый параметр падает E-DOUBLE-INPUT); param_set {ref|id, param, value, unit?} — правит одну строку «param = value unit», параметра нет — ошибка; node_move {ref|id, x, y}. Ответ: {ok, created[], report[], flow{node_id: {value, unit, outputs, lines, autoRows?, error?}}} — flow = значения АКТИВНОГО сценария после пересчёта (как flow_recalc; второй вызов не нужен); при ошибке операции — {ok: false, op_index, code, message}. Лимиты: ≤ 256 операций, ≤ 128 новых нод на батч",
+        description: "FR-033: атомарный батч операций над канвасом — «всё или ничего»: ошибка ЛЮБОЙ операции (в том числе в середине списка) откатывает весь батч, канвас остаётся прежним; успешный батч = один undo-шаг + полный пересчёт потока. Операции (поле op): node_create_note {ref?, x, y, text?, width?, height?}; node_create_file {ref?, x, y, path}; template_instantiate {ref?, template, params?, x, y}; edge_create {fromRef|from, toRef|to, kind? \"value\"|\"control\", fromLine?, fromOutput?, toParam?, fromSide?, toSide?} — адресация портов FR-029, ref-ы адресуют ноды, созданные ранее В ЭТОМ ЖЕ батче; edge_delete {id|ref} — удаление ребра (FR-050 Н4: замена занятого toParam = пара edge_delete + edge_create в одном батче — второе edge_create в занятый параметр падает E-DOUBLE-INPUT); param_set {ref|id, param, value, unit?} — правит одну строку «param = value unit», параметра нет — ошибка; node_move {ref|id, x, y}; group_create {ref?, nodes (id/ref нод), label?, padding?} — группа из нод (FR-012 v4 MCP-паритет: bbox+padding, явные дети, adopt в иерархию, авторасширение предков; ref в ответе/created — id группы). Ответ: {ok, created[], report[], flow{node_id: {value, unit, outputs, lines, autoRows?, error?}}} — flow = значения АКТИВНОГО сценария после пересчёта (как flow_recalc; второй вызов не нужен); при ошибке операции — {ok: false, op_index, code, message}. Лимиты: ≤ 256 операций, ≤ 128 новых нод на батч (включая группы group_create)",
         required: &["operations"],
         properties: &[(
             "operations",
-            r#"{"type":"array","minItems":1,"maxItems":256,"items":{"type":"object","required":["op"],"properties":{"op":{"type":"string","enum":["node_create_note","node_create_file","template_instantiate","edge_create","edge_delete","param_set","node_move"]}}}}"#,
+            r#"{"type":"array","minItems":1,"maxItems":256,"items":{"type":"object","required":["op"],"properties":{"op":{"type":"string","enum":["node_create_note","node_create_file","template_instantiate","edge_create","edge_delete","param_set","node_move","group_create"]}}}}"#,
         )],
     },
     // --- FR-017 (CP6): what-if сценарии ---
@@ -530,7 +547,7 @@ const MC_TOOLS: &[ToolSpec] = &[ToolSpec {
 const MC_TOOLS: &[ToolSpec] = &[];
 
 /// tools/list: массив дескрипторов с name/description/inputSchema.
-/// Native: 41 (40 + monte_carlo_run FR-066); wasm: 40 (§5.8 — qmc не
+/// Native: 42 (41 + monte_carlo_run FR-066); wasm: 41 (§5.8 — qmc не
 /// собирается на wasm, реестр без native-only инструментов).
 pub fn tools_list() -> Value {
     let tools: Vec<Value> = TOOLS
@@ -599,8 +616,8 @@ pub fn unwrap_app_payload(payload: &str) -> Result<Value, String> {
 ///   ВСЕГДА успешный (ADR-0009: состояние приложения не влияет на handshake);
 /// - `notifications/initialized`, `notifications/cancelled` → Silent;
 /// - `ping` → `{}`;
-/// - `tools/list` → 41 инструмент с inputSchema (40 + monte_carlo_run
-///   FR-066; на wasm32 — 40, реестр без qmc);
+/// - `tools/list` → 42 инструмента с inputSchema (41 + monte_carlo_run
+///   FR-066; на wasm32 — 41, реестр без qmc);
 /// - `tools/call` → форвард строки на pipe, конверт приложения разворачивается
 ///   в чистый результат (text-контент + structuredContent, FR-034);
 ///   isError-результат приложения проходит насквозь; pipe мёртв → isError
@@ -1215,8 +1232,8 @@ mod tests {
         assert_eq!(none["protocolVersion"], DEFAULT_PROTOCOL);
     }
 
-    /// tools/list: 41 инструмент native (40 + monte_carlo_run FR-066;
-    /// wasm: 40 — реестр без qmc, §5.8), у каждого inputSchema с required.
+    /// tools/list: 42 инструмента native (41 + monte_carlo_run FR-066;
+    /// wasm: 41 — реестр без qmc, §5.8), у каждого inputSchema с required.
     #[test]
     fn tools_list_has_all_with_schemas() {
         let list = tools_list();
@@ -1224,13 +1241,13 @@ mod tests {
         // FR-066 §5.8: monte_carlo_run — native-only (фича qmc не
         // собирается на wasm32 — реестр wasm-сборки без него)
         #[cfg(not(target_arch = "wasm32"))]
-        let expected_count = 41;
+        let expected_count = 42;
         #[cfg(target_arch = "wasm32")]
-        let expected_count = 40;
+        let expected_count = 41;
         assert_eq!(
             tools.len(),
             expected_count,
-            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + 4 новых: schemes_list/schemes_apply (PRD-0008 Q5) + lineage (PRD-0007 X2) + explain_number (PRD-0007 X6/FR-048, F-9) + monte_carlo_run (FR-066, native)"
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + 4 новых: schemes_list/schemes_apply (PRD-0008 Q5) + lineage (PRD-0007 X2) + explain_number (PRD-0007 X6/FR-048, F-9) + group_create (FR-012 v4 MCP-паритет) + monte_carlo_run (FR-066, native)"
         );
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
@@ -1246,6 +1263,7 @@ mod tests {
             "node_resize",
             "node_delete",
             "node_set_color",
+            "group_create",
             "edge_create",
             "edges_list",
             "edge_delete",
@@ -1561,15 +1579,15 @@ mod tests {
             panic!("tools/list должен ответить");
         };
         let parsed: Value = serde_json::from_str(&reply).expect("tools/list ответ");
-        // FR-066 §5.8: monte_carlo_run — native-only (wasm: 40 без qmc)
+        // FR-066 §5.8: monte_carlo_run — native-only (wasm: 41 без qmc)
         #[cfg(not(target_arch = "wasm32"))]
-        let expected_count = 41;
+        let expected_count = 42;
         #[cfg(target_arch = "wasm32")]
-        let expected_count = 40;
+        let expected_count = 41;
         assert_eq!(
             parsed["result"]["tools"].as_array().expect("tools").len(),
             expected_count,
-            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + schemes_list/schemes_apply + lineage + explain_number (PRD-0007 X6, F-9) + monte_carlo_run (FR-066, native)"
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + schemes_list/schemes_apply + lineage + explain_number (PRD-0007 X6, F-9) + group_create (FR-012 v4 MCP-паритет) + monte_carlo_run (FR-066, native)"
         );
 
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canvas_info","arguments":{}}}"#;

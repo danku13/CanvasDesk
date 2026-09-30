@@ -22,6 +22,18 @@ use crate::scene::{
 pub const DEFAULT_FILE_CARD_W: f32 = 320.0;
 pub const DEFAULT_FILE_CARD_H: f32 = 220.0;
 
+/// Дефолт внутреннего отступа группы MCP `group_create` (синхронно с
+/// canvas_app::ui::GROUP_PADDING = 40.0 — рамка UI «Сгруппировать»).
+pub const DEFAULT_GROUP_PADDING: f32 = 40.0;
+/// Дефолт подписи группы MCP `group_create` (синхронно с
+/// canvas_app::ui::GROUP_DEFAULT_LABEL; UI идёт через i18n-таблицу —
+/// для MCP русская каноника напрямую).
+pub const DEFAULT_GROUP_LABEL: &str = "Группа";
+/// Верхняя граница `padding` MCP `group_create`: отступ — защита от
+/// «слипшейся» рамки, а не инструмент макета; 500 логических px —
+/// заведомо выше любого разумного случая, отрицательный запрещён.
+pub const GROUP_PADDING_MAX: f32 = 500.0;
+
 /// Распаковка MCP-конверта, пришедшего по pipe: `tools/call` несёт имя
 /// инструмента и аргументы внутри params (`name`/`arguments`) — посредник
 /// форвардит конверт как есть; прочие методы проходят без изменений.
@@ -573,6 +585,10 @@ pub fn mcp_dispatch(
             scene.mark_dirty();
             Ok(serde_json::json!({ "id": id }))
         }
+        // FR-012 v4 (MCP-паритет UI «Сгруппировать»): создание группы
+        // из перечисленных нод — bbox+padding, явные дети, adopt в
+        // иерархию, авторасширение цепочки предков
+        "group_create" => mcp_group_create(scene, params),
         "edge_create" => {
             let from = mcp_req_str(params, "from")?.to_owned();
             let to = mcp_req_str(params, "to")?.to_owned();
@@ -1552,6 +1568,130 @@ pub fn mcp_dispatch(
     }
 }
 
+// --- FR-012 v4 (MCP-паритет): group_create — группа из нод -------------------
+
+/// FR-012 v4 (MCP-паритет UI «Сгруппировать», `App::group_selection` +
+/// `App::insert_group`): `group_create` — обернуть перечисленные ноды
+/// новой группой. Рамка — bbox(ноды)+`padding` (дефолт
+/// [`DEFAULT_GROUP_PADDING`]), дети — ЯВНЫЙ список id (FR-012). Если
+/// обёрнутые ноды — дети существующих групп, инварант одного членства
+/// ([`canvas_core::group_adopt_into_hierarchy`]: вычёркиваются оттуда,
+/// новая группа становится ребёнком самой внутренней группы-предка) +
+/// глубокое авторасширение цепочки предков
+/// ([`canvas_core::group_expand_to_children_deep`]) — «родитель вмещает
+/// всё внутри». Ноды адресуются id (в батче — id или ref, см.
+/// `batch_apply_op`). Один undo-шаг. Поток не пересчитывается: группа
+/// не участвует в value-графе (рёбра/формулы не трогаются).
+fn mcp_group_create(
+    scene: &mut SceneState,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    // nodes (обязательный): массив id нод, ≥ 1 — явный список детей
+    let items = params
+        .get("nodes")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            format!(
+            "group_create: отсутствует обязательный параметр 'nodes' (массив id нод), получено {}",
+            params.get("nodes").map(|v| v.to_string()).unwrap_or_default()
+        )
+        })?;
+    if items.is_empty() {
+        return Err("group_create: nodes — минимум 1 нода".to_owned());
+    }
+    let mut ids: Vec<String> = Vec::with_capacity(items.len());
+    for item in items {
+        let id = item
+            .as_str()
+            .ok_or_else(|| format!("group_create: nodes — массив строк id, получено {item}"))?;
+        if ids.iter().any(|seen| seen == id) {
+            return Err(format!("group_create: дубликат id '{id}' в nodes"));
+        }
+        ids.push(id.to_owned());
+    }
+    // label: строка, дефолт — каноника UI («Группа»)
+    let label = params
+        .get("label")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(DEFAULT_GROUP_LABEL);
+    // padding: число 0..=500, дефолт — GROUP_PADDING UI
+    let padding = match params.get("padding") {
+        None | Some(serde_json::Value::Null) => DEFAULT_GROUP_PADDING,
+        Some(value) => {
+            let padding = value.as_f64().ok_or_else(|| {
+                format!("group_create: padding — число 0..={GROUP_PADDING_MAX}, получено {value}")
+            })? as f32;
+            if !(0.0..=GROUP_PADDING_MAX).contains(&padding) || !padding.is_finite() {
+                return Err(format!(
+                    "group_create: padding — число 0..={GROUP_PADDING_MAX}, получено {value}"
+                ));
+            }
+            padding
+        }
+    };
+    // Резолюция id → индексы ДО undo-шага: неизвестная нода — ошибка без
+    // мутаций (паттерн валидации node_edit)
+    let mut indices = Vec::with_capacity(ids.len());
+    for id in &ids {
+        let index = scene
+            .canvas
+            .nodes
+            .iter()
+            .position(|node| &node.id == id)
+            .ok_or_else(|| format!("group_create: нода не найдена: {id}"))?;
+        indices.push(index);
+    }
+    // bbox обёртки (та же математика, что nodes_bbox UI)
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    for index in &indices {
+        let node = &scene.canvas.nodes[*index];
+        min_x = min_x.min(node.x);
+        min_y = min_y.min(node.y);
+        max_x = max_x.max(node.x + node.width);
+        max_y = max_y.max(node.y + node.height);
+    }
+    // FR-006: MCP-мутация — undo-шаг (после валидации, до вставки)
+    scene.push_undo(scene.canvas.clone());
+    let mut group = Node::group(
+        next_free_id(&scene.canvas, "group"),
+        min_x - padding,
+        min_y - padding,
+        (max_x - min_x) + padding * 2.0,
+        (max_y - min_y) + padding * 2.0,
+    );
+    group.label = Some(label.to_owned());
+    group.children = Some(ids);
+    let index = scene.canvas.nodes.len();
+    scene.canvas.nodes.push(group);
+    scene.spatial.insert(index, &scene.canvas.nodes[index]);
+    // FR-012 v4: «Сгруппировать» внутри существующей группы — явная
+    // вложенность: инварант одного членства + re-parent к самой внутренней
+    // группе-предку + глубокое расширение цепочки. Геометрия предков
+    // меняется — spatial перестраивается целиком (паттерн node_delete).
+    let parent = canvas_core::group_adopt_into_hierarchy(&mut scene.canvas, index);
+    if parent.is_some() {
+        canvas_core::group_expand_to_children_deep(&mut scene.canvas, index, padding);
+        scene.spatial = SpatialIndex::build(&scene.canvas);
+    }
+    scene.mark_dirty();
+    let group = &scene.canvas.nodes[index];
+    Ok(serde_json::json!({
+        "id": group.id,
+        "label": group.label,
+        "children": group.children,
+        "parent": parent
+            .and_then(|parent_index| scene.canvas.nodes.get(parent_index))
+            .map(|node| node.id.clone()),
+        "x": group.x,
+        "y": group.y,
+        "width": group.width,
+        "height": group.height,
+    }))
+}
+
 // --- FR-066 (M5/S3): monte_carlo_run — MC/QMC-прогон -------------------------
 
 /// Лимит прогонов MCP-инструмента (FR-066): защита live-бюджета агента
@@ -2288,10 +2428,123 @@ fn batch_apply_op(
             e.node_id = Some(node_id);
             Ok(e)
         }
+        // FR-012 v4 (MCP-паритет): группа из нод — та же семантика, что
+        // инструмент group_create (bbox+padding, явные дети, adopt,
+        // авторасширение предков); адресация — id ИЛИ ref нод,
+        // созданных ранее в этом же батче. spatial/undo — на коммите.
+        "group_create" => {
+            let ref_name = batch_opt_str(op, "ref").map(str::to_owned);
+            let items = op
+                .get("nodes")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| {
+                    BatchOpError::new(
+                        "E-BAD-OP",
+                        "отсутствует поле 'nodes' (массив id/ref нод)",
+                    )
+                })?;
+            if items.is_empty() {
+                return Err(BatchOpError::new(
+                    "E-BAD-OP",
+                    "group_create: nodes — минимум 1 нода",
+                ));
+            }
+            // Резолюция ref → id (паттерн batch_node_id) + запрет дубликатов
+            let mut ids: Vec<String> = Vec::with_capacity(items.len());
+            for item in items {
+                let key = item.as_str().ok_or_else(|| {
+                    BatchOpError::new(
+                        "E-BAD-OP",
+                        format!("group_create: nodes — массив строк, получено {item}"),
+                    )
+                })?;
+                let id = refs
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_else(|| key.to_owned());
+                if ids.iter().any(|seen| seen == &id) {
+                    return Err(BatchOpError::new(
+                        "E-BAD-OP",
+                        format!("group_create: дубликат ноды '{id}' в nodes"),
+                    ));
+                }
+                ids.push(id);
+            }
+            let label = batch_opt_str(op, "label").unwrap_or(DEFAULT_GROUP_LABEL);
+            let padding = match op.get("padding") {
+                None | Some(serde_json::Value::Null) => DEFAULT_GROUP_PADDING,
+                Some(value) => {
+                    let padding = value.as_f64().ok_or_else(|| {
+                        BatchOpError::new(
+                            "E-BAD-OP",
+                            format!(
+                                "group_create: padding — число 0..={GROUP_PADDING_MAX}, получено {value}"
+                            ),
+                        )
+                    })? as f32;
+                    if !(0.0..=GROUP_PADDING_MAX).contains(&padding) || !padding.is_finite() {
+                        return Err(BatchOpError::new(
+                            "E-BAD-OP",
+                            format!(
+                                "group_create: padding — число 0..={GROUP_PADDING_MAX}, получено {value}"
+                            ),
+                        ));
+                    }
+                    padding
+                }
+            };
+            // Резолюция id → индексы: неизвестная нода — E-NOT-FOUND,
+            // батч откатывается целиком (инвариант атомарности)
+            let mut indices = Vec::with_capacity(ids.len());
+            for id in &ids {
+                let index = canvas
+                    .nodes
+                    .iter()
+                    .position(|node| &node.id == id)
+                    .ok_or_else(|| {
+                        BatchOpError::new("E-NOT-FOUND", format!("нода не найдена: {id}"))
+                    })?;
+                indices.push(index);
+            }
+            // bbox обёртки (та же математика, что в mcp_group_create)
+            let mut min_x = f32::MAX;
+            let mut min_y = f32::MAX;
+            let mut max_x = f32::MIN;
+            let mut max_y = f32::MIN;
+            for index in &indices {
+                let node = &canvas.nodes[*index];
+                min_x = min_x.min(node.x);
+                min_y = min_y.min(node.y);
+                max_x = max_x.max(node.x + node.width);
+                max_y = max_y.max(node.y + node.height);
+            }
+            let mut group = Node::group(
+                next_free_id(canvas, "group"),
+                min_x - padding,
+                min_y - padding,
+                (max_x - min_x) + padding * 2.0,
+                (max_y - min_y) + padding * 2.0,
+            );
+            group.label = Some(label.to_owned());
+            group.children = Some(ids);
+            let id = group.id.clone();
+            canvas.nodes.push(group);
+            if let Some(name) = &ref_name {
+                register_ref(refs, name, &id)?;
+            }
+            let index = canvas.nodes.len() - 1;
+            let parent = canvas_core::group_adopt_into_hierarchy(canvas, index);
+            if parent.is_some() {
+                canvas_core::group_expand_to_children_deep(canvas, index, padding);
+            }
+            let mut e = entry("group_create", true, ref_name);
+            e.node_id = Some(id);
+            Ok(e)
+        }
         other => Err(BatchOpError::new(
             "E-BAD-OP",
             format!(
-                "неизвестная операция '{other}' (ожидались node_create_note/node_create_file/template_instantiate/edge_create/edge_delete/param_set/node_move)"
+                "неизвестная операция '{other}' (ожидались node_create_note/node_create_file/template_instantiate/edge_create/edge_delete/param_set/node_move/group_create)"
             ),
         )),
     }
@@ -2503,7 +2756,12 @@ fn mcp_graph_apply(
         .filter(|op| {
             matches!(
                 op.get("op").and_then(serde_json::Value::as_str),
-                Some("node_create_note" | "node_create_file" | "template_instantiate")
+                Some(
+                    "node_create_note"
+                        | "node_create_file"
+                        | "template_instantiate"
+                        | "group_create"
+                )
             )
         })
         .count();
