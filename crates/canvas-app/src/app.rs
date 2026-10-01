@@ -53,8 +53,8 @@ use crate::ui::{
     rubber_band_rect, select_node_hit, submenu_item_at, submenu_origin_next_to, submenu_rect,
     theme_button_rect, toggle_selection_with_primary, CanvasMenuItem, ContextMenu, DoubleClick,
     DragState, EdgeDrag, PastePlacement, Submenu, SubmenuEntry, ALIGN_MIN_SELECTION,
-    DUPLICATE_OFFSET, MENU_ITEM_HEIGHT, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT,
-    MIN_NODE_WIDTH, SELECT_DRAG_THRESHOLD,
+    CANVAS_MENU_LABEL_X, DUPLICATE_OFFSET, MENU_ITEM_HEIGHT, MENU_LABEL_X, MENU_PADDING,
+    MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, SELECT_DRAG_THRESHOLD,
 };
 use crate::whatif_ui::{self, BarAction};
 // PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры — модель и
@@ -70,7 +70,7 @@ use canvas_core::expr::{self, ExprOutcome};
 // FR-052 (U2 PRD-0009): каркас canvas-ui — HitStack/pick и полосы слоёв
 // (ScreenBand) для единого диспетчера ввода/отрисовки
 use canvas_core::flow::{self, FlowKind};
-use canvas_core::time::Instant;
+use canvas_core::time::{Instant, SystemTime, UNIX_EPOCH};
 use canvas_core::{
     analyze, apply_file_events, bundle_thickness, edge_at, focus_set, main_stage_rect,
     nearest_side, path_matches, port_at, resolve_node_path, stage_edge_at_lines,
@@ -3153,40 +3153,46 @@ impl App {
             return;
         }
         self.push_undo();
-        // Один FontSystem + TextMeasurer на batch (а не на ноду —
-        // паттерн auto_width_for_text_with). ~1мс на setup, экономит
-        // N× по сравнению с auto_width_for_text.
-        let mut fs = canvas_render::text::measure_font_system();
-        let mut m = canvas_ui::measure::TextMeasurer::new();
+        // Измерения — в отдельном блоке, чтобы MutexGuard на FontSystem
+        // (MEASURE_FS) отпустился ДО recompute_flow / request_redraw.
+        // На WASM (single-threaded) удержание лока через потенциально
+        // дорогие вызовы чревато зависанием: если что-то из нижестоящего
+        // триггерит текстовый замер (через многие слои), Mutex::lock
+        // второго вызова будет ждать первого → бесконечный spin. Лучше
+        // держать лок минимально, сразу дропнуть.
         let mut changed = false;
-        for &index in &self.selected_nodes {
-            // get_mut через split_at_mut — обход borrow checker: нельзя
-            // держать &mut node и &mut spatial одновременно через self.scene.
-            // Паттерн: вынести выборку индексов, потом для каждого — get_mut
-            // + spatial.update (как в finish_editing line 2308).
-            let new_width = {
-                let Some(node) = self.scene.canvas.nodes.get(index) else {
+        {
+            let mut fs = canvas_render::text::measure_font_system();
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            for &index in &self.selected_nodes {
+                // Вынести измерение в отдельный scope, чтобы borrow
+                // node.text (immutable) закончился до get_mut ниже.
+                let new_width = {
+                    let Some(node) = self.scene.canvas.nodes.get(index) else {
+                        continue;
+                    };
+                    if node.template().is_some() {
+                        continue; // шаблонная нода — пропустить
+                    }
+                    if node.kind() == NodeKind::Group {
+                        continue; // группа — пропустить
+                    }
+                    crate::auto_width::auto_width_for_text_with(
+                        node.text.as_deref(),
+                        &mut m,
+                        &mut fs,
+                    )
+                };
+                let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
                     continue;
                 };
-                if node.template().is_some() {
-                    continue; // шаблонная нода — пропустить
+                if (node.width - new_width).abs() > 0.5 {
+                    node.width = new_width;
+                    self.scene.spatial.update(index, node);
+                    changed = true;
                 }
-                // Группа — пропустить (kind проверяем через NodeKind,
-                // re-exported в crate canvas_core).
-                if node.kind() == NodeKind::Group {
-                    continue;
-                }
-                crate::auto_width::auto_width_for_text_with(node.text.as_deref(), &mut m, &mut fs)
-            };
-            let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
-                continue;
-            };
-            if (node.width - new_width).abs() > 0.5 {
-                node.width = new_width;
-                self.scene.spatial.update(index, node);
-                changed = true;
             }
-        }
+        } // fs и m дропнуты здесь — Mutex MEASURE_FS свободен.
         if changed {
             self.scene.mark_dirty();
             self.scene.recompute_flow();
@@ -5377,7 +5383,8 @@ impl App {
             return;
         }
         let generation = self.suggest.generation;
-        self.suggest.request_started = Some(std::time::Instant::now());
+        // W1 (S3-fix): alias — request_started пишется и в wasm-ветке
+        self.suggest.request_started = Some(Instant::now());
         let settings = self.settings.suggest.clone();
         // Натив: воркер (прогрессивный показ — L0 уже на экране); воркер
         // не подключён/умер — sync-lex на этом же тике (деградация, не
@@ -11883,7 +11890,7 @@ mod suggest_flow_tests {
     /// Дебаунс «прошёл»: due на секунду в прошлое.
     fn suggest_force_debounce(app: &mut App) {
         if let Some(pending) = &mut app.suggest.pending {
-            pending.due = std::time::Instant::now() - std::time::Duration::from_secs(1);
+            pending.due = Instant::now() - std::time::Duration::from_secs(1);
         }
     }
 
@@ -11981,7 +11988,7 @@ mod suggest_flow_tests {
         let mut canvas = Canvas::default();
         for i in 0..6 {
             canvas.nodes.push(Node::text(
-                &format!("p{i}"),
+                format!("p{i}"),
                 format!("Шаг {i} пути пользователя\nописание этапа {i}"),
                 (i as f32) * 260.0,
                 0.0,
@@ -11989,10 +11996,10 @@ mod suggest_flow_tests {
         }
         for i in 0..5 {
             canvas.edges.push(Edge::new(
-                &format!("e{i}"),
-                &format!("p{i}"),
+                format!("e{i}"),
+                format!("p{i}"),
                 None,
-                &format!("p{}", i + 1),
+                format!("p{}", i + 1),
                 None,
             ));
         }

@@ -1936,6 +1936,65 @@ impl SceneState {
         }
     }
 
+    // --- FR-081: MCP-мутации геометрии — пол высоты по контенту ----------
+
+    /// FR-081: измеренный минимум высоты ноды при текущей ширине — пол
+    /// для MCP-мутаций геометрии (node_resize / node_edit /
+    /// node_create_note / graph_apply): «агент не сжимает ноду по высоте
+    /// меньше размера контента». Те же входы замера, что у refit-семейства
+    /// ([`Self::refit_inputs`], I-2 measure = render); пол
+    /// [`measure::MIN_CONTENT_HEIGHT`] гарантирует ненулевой рельеф даже
+    /// у пустой карточки.
+    pub fn min_content_height(&self, index: usize) -> f32 {
+        let (
+            display,
+            formula_lines_arg,
+            desc,
+            desc_expanded,
+            footer_reserve,
+            sigma_name,
+            auto_rows_arg,
+        ) = self.refit_inputs(index);
+        let width = self
+            .canvas
+            .nodes
+            .get(index)
+            .map(|n| n.width)
+            .unwrap_or_default();
+        crate::measure::measured_content_height(
+            width,
+            &display,
+            &formula_lines_arg,
+            desc.as_deref().unwrap_or_default(),
+            desc_expanded,
+            footer_reserve,
+            &sigma_name,
+            auto_rows_arg,
+        )
+    }
+
+    /// FR-081: growth-only кламп высоты к контенту — сразу после записи
+    /// геометрии из MCP. Запрошенную агентом высоту ВЫШЕ минимума не
+    /// трогает (свобода «воздуха» остаётся — в отличие от `fit`, который
+    /// подгоняет высоту точно под контент), ниже — поднимает до измеренного
+    /// контента. spatial обновляется точечно (паттерн refit). Возвращает
+    /// применённую высоту (для отчёта `height_clamped` в MCP-ответе).
+    pub fn clamp_height_to_content(&mut self, index: usize) -> f32 {
+        let min_h = self.min_content_height(index);
+        if let Some(node) = self.canvas.nodes.get_mut(index) {
+            if node.height < min_h {
+                node.height = min_h;
+                let node = &self.canvas.nodes[index];
+                self.spatial.update(index, node);
+            }
+        }
+        self.canvas
+            .nodes
+            .get(index)
+            .map(|n| n.height)
+            .unwrap_or_default()
+    }
+
     /// FR-014: тогл типа потока связи (Value ↔ Control) из палитры
     /// (ПКМ по связи) — единая точка с MCP `flow_set_kind` по инвариантам:
     /// undo-шаг «до» (FR-006), mark_dirty, живой пересчёт downstream.

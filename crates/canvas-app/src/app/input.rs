@@ -3532,6 +3532,39 @@ impl App {
                 return;
             }
         }
+        // FR-082: колесо над развёрнутым доком прокручивает список
+        // шаблонов (паритет с flyout свёрнутой полосы — знакомый жест),
+        // а не панорамирует канвас ПОД панелью. max_scroll — «приклейка
+        // хвоста» из panel_layout; шаг — PANEL_WHEEL_LINES строк.
+        if self.template_panel.open {
+            let viewport = self.viewport_logical();
+            let rows = template_panel_rows(
+                &self.templates,
+                &self.template_panel,
+                self.settings.language,
+            );
+            let mut measurer = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let lay = template_panel_layout(
+                viewport[0],
+                viewport[1],
+                &self.templates,
+                &self.template_panel,
+                &rows,
+                &mut measurer,
+                &mut fs,
+            );
+            if point_in_rect(rect_xywh(lay.panel_rect), self.cursor) {
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y.round() as i32,
+                    MouseScrollDelta::PixelDelta(pos) => (pos.y / 40.0).round() as i32,
+                };
+                self.template_panel
+                    .scroll_by(-lines * template_ui::PANEL_WHEEL_LINES, lay.max_scroll);
+                self.request_redraw();
+                return;
+            }
+        }
         // Ревизия FR-025: колесо над flyout свёрнутой палитры прокручивает
         // список шаблонов, а не панорамирует канвас (знак — как у списков:
         // колесо от себя, y<0, увеличивает scroll_top)

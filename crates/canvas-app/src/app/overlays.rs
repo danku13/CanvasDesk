@@ -1810,7 +1810,9 @@ impl App {
                 self.suggest.last_prefix = prefix.to_owned();
             }
             self.suggest.pending = Some(suggest::PendingSuggest {
-                due: std::time::Instant::now(),
+                // W1 (S3-fix): alias canvas_core::time — std::time::Instant
+                // на wasm32 паникует («time not implemented» → фриз web)
+                due: Instant::now(),
             });
         } else {
             self.suggest.pending = None;
@@ -2778,9 +2780,9 @@ impl App {
             }
             d.label(
                 canvas_ui::geometry::UiRect::new(
-                    rect.x + MENU_LABEL_X,
+                    rect.x + CANVAS_MENU_LABEL_X,
                     rect.y + 5.0,
-                    (rect.w - MENU_LABEL_X).max(0.0),
+                    (rect.w - CANVAS_MENU_LABEL_X).max(0.0),
                     MENU_ITEM_HEIGHT,
                 ),
                 &canvas_menu_label(
@@ -2852,9 +2854,9 @@ impl App {
                     }
                     d.label(
                         canvas_ui::geometry::UiRect::new(
-                            rect.x + MENU_LABEL_X,
+                            rect.x + CANVAS_MENU_LABEL_X,
                             rect.y + 5.0,
-                            (rect.w - MENU_LABEL_X).max(0.0),
+                            (rect.w - CANVAS_MENU_LABEL_X).max(0.0),
                             MENU_ITEM_HEIGHT,
                         ),
                         &entry.label,

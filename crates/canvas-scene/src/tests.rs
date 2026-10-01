@@ -4625,3 +4625,398 @@ fn graph_apply_group_create_duplicate_nodes() {
         .contains("дубликат"));
     assert_eq!(scene.canvas.nodes.len(), 0, "батч откатился");
 }
+
+// --- FR-081: кламп высоты по контенту + nodes_layout_apply --------------
+
+/// FR-081: текст для клампа-тестов — многострочный Numi-лист (контент
+/// заведомо выше MIN_CONTENT_HEIGHT = 68).
+const FR081_LONG_TEXT: &str = "заметка про раскладку нод на канвасе с довольно длинными строками текста для переноса\na = 100\nb = 200\nc = a + b\nитог = c * 2";
+
+/// FR-081 (node_resize): высота меньше контента клампится рост-only.
+#[test]
+fn mcp_node_resize_clamps_height_to_content() {
+    let mut scene = mcp_scene();
+    dispatch(
+        &mut scene,
+        "node_update_text",
+        r#"{"id":"n1","text":"заметка про раскладку нод на канвасе с длинными строками\na = 100\nb = 200\nc = a + b"}"#,
+    )
+    .expect("update_text");
+    dispatch(&mut scene, "flow_recalc", r#"{}"#).expect("flow_recalc");
+    let content_height = scene.canvas.nodes[0].height;
+    let min_height = scene.min_content_height(0);
+    assert!(
+        min_height >= crate::measure::MIN_CONTENT_HEIGHT - f32::EPSILON,
+        "минимум не ниже константы: {min_height}"
+    );
+
+    // Сжатие: height=40 (ниже минимума) — клампится вверх
+    let out = dispatch(
+        &mut scene,
+        "node_resize",
+        r#"{"id":"n1","width":300.0,"height":40.0}"#,
+    )
+    .expect("resize вниз");
+    let final_h = scene.canvas.nodes[0].height;
+    // минимум — при НОВОЙ ширине 300 (перенос текста меняет замер)
+    let min_height = scene.min_content_height(0);
+    assert!(
+        final_h >= min_height - f32::EPSILON,
+        "высота {final_h} не ниже минимума {min_height}"
+    );
+    assert_eq!(out["height_clamped"], true, "ответ: {out}");
+    assert!(
+        out["min_height"].as_f64().unwrap_or(0.0) >= min_height as f64 - 0.5,
+        "min_height в ответе: {out}"
+    );
+    // width остаётся как задан
+    assert_eq!(scene.canvas.nodes[0].width, 300.0);
+
+    // «Воздух»: height=800 (выше контента) — НЕ трогается
+    dispatch(
+        &mut scene,
+        "node_resize",
+        r#"{"id":"n1","width":300.0,"height":800.0}"#,
+    )
+    .expect("resize вверх");
+    assert_eq!(scene.canvas.nodes[0].height, 800.0, "воздух не сжимается");
+    let out = dispatch(
+        &mut scene,
+        "node_resize",
+        r#"{"id":"n1","width":300.0,"height":800.0}"#,
+    )
+    .expect("resize вверх повторно");
+    assert_eq!(out["height_clamped"], false, "кламп не срабатывает: {out}");
+
+    // Контент не сжат: _content_height тестовой ноды был не меньше
+    // измеренного минимума (санити против вырожденного замера)
+    assert!(content_height >= min_height - f32::EPSILON);
+}
+
+/// FR-081 (node_edit): height в node_edit клампится; x/y без размеров —
+/// клампа нет.
+#[test]
+fn mcp_node_edit_clamps_height_to_content() {
+    let mut scene = mcp_scene();
+    dispatch(
+        &mut scene,
+        "node_update_text",
+        r#"{"id":"n1","text":"длинный текст для измерения минимума высоты карточки\na = 5\nb = 6\nc = a + b\nитог = c * 10"}"#,
+    )
+    .expect("update_text");
+    dispatch(&mut scene, "flow_recalc", r#"{}"#).expect("flow_recalc");
+
+    // Только x/y — клампа нет (сдвиг не трогает размер)
+    dispatch(&mut scene, "node_edit", r#"{"id":"n1","x":50.0,"y":60.0}"#).expect("node_edit x/y");
+    let h_before = scene.canvas.nodes[0].height;
+
+    // height=30 — клампится (минимум — при новой ширине 400)
+    dispatch(
+        &mut scene,
+        "node_edit",
+        r#"{"id":"n1","x":50.0,"y":60.0,"width":400.0,"height":30.0}"#,
+    )
+    .expect("node_edit сжатие");
+    let h_after = scene.canvas.nodes[0].height;
+    let min_height = scene.min_content_height(0);
+    assert!(
+        h_after >= min_height - f32::EPSILON,
+        "высота {h_after} не ниже минимума {min_height}"
+    );
+    assert_eq!(scene.canvas.nodes[0].width, 400.0, "width как задан");
+    // сдвиг применился
+    assert_eq!(scene.canvas.nodes[0].x, 50.0);
+    assert_eq!(scene.canvas.nodes[0].y, 60.0);
+    // и высота реально выросла против сжатой (иначе тест вырожден)
+    assert!(h_after > 30.0);
+    let _ = h_before;
+}
+
+/// FR-081 (node_create_note): явный height=30 с длинным текстом — кламп.
+#[test]
+fn mcp_node_create_note_clamps_height_to_content() {
+    let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/fr081a.canvas"));
+    let params = serde_json::json!({
+        "x": 0.0,
+        "y": 0.0,
+        "text": FR081_LONG_TEXT,
+        "width": 260.0,
+        "height": 30.0,
+    });
+    dispatch(&mut scene, "node_create_note", &params.to_string()).expect("create");
+    let min_height = scene.min_content_height(0);
+    assert!(
+        scene.canvas.nodes[0].height >= min_height - f32::EPSILON,
+        "высота {} не ниже минимума {min_height}",
+        scene.canvas.nodes[0].height
+    );
+}
+
+/// FR-081 (graph_apply): созданные батчем note-ноды клампятся — паритет
+/// с одиночным node_create_note.
+#[test]
+fn mcp_graph_apply_clamps_created_note_height() {
+    let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/fr081b.canvas"));
+    let params = serde_json::json!({
+        "operations": [
+            {"op": "node_create_note", "ref": "big", "x": 0.0, "y": 0.0,
+             "text": FR081_LONG_TEXT, "width": 260.0, "height": 30.0}
+        ]
+    });
+    let out = dispatch(&mut scene, "graph_apply", &params.to_string()).expect("batch");
+    assert_eq!(out["ok"], true, "ответ: {out}");
+    let min_height = scene.min_content_height(0);
+    assert!(
+        scene.canvas.nodes[0].height >= min_height - f32::EPSILON,
+        "высота {} не ниже минимума {min_height}",
+        scene.canvas.nodes[0].height
+    );
+}
+
+/// FR-081 (nodes_layout_apply grid): колонки/ряды выровнены, зазоры
+/// соблюдены, позиции в ответе; ровно один undo-шаг.
+#[test]
+fn mcp_nodes_layout_apply_grid_positions() {
+    let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/fr081c.canvas"));
+    for (id, w, h, x, y) in [
+        ("a", 260.0, 120.0, 0.0, 0.0),
+        ("b", 300.0, 140.0, 400.0, 0.0),
+        ("c", 260.0, 120.0, 800.0, 300.0),
+        ("d", 200.0, 100.0, 900.0, 600.0),
+    ] {
+        let mut node = Node::text(id, "текст", x, y);
+        node.width = w;
+        node.height = h;
+        scene.canvas.nodes.push(node);
+    }
+    let undo_before = scene.undo_stack.len();
+    let out = dispatch(
+        &mut scene,
+        "nodes_layout_apply",
+        r#"{"mode":"grid","rows":[["a","b"],["c","d"]],"x":0.0,"y":0.0,"fit":false}"#,
+    )
+    .expect("layout grid");
+    assert_eq!(scene.undo_stack.len(), undo_before + 1, "один undo-шаг");
+    assert_eq!(out["mode"], "grid");
+    assert_eq!(out["moved"], 4);
+    // Колонки: col0 ширина = max(260, 260) = 260 → x(c)=x(a)=0;
+    // col1 = max(300, 200) = 300 → x(b)=x(d) = 260 + 80 = 340
+    let positions = |id: &str| -> (f32, f32) {
+        let n = scene.canvas.nodes.iter().find(|n| n.id == id).unwrap();
+        (n.x, n.y)
+    };
+    let (ax, ay) = positions("a");
+    let (bx, by) = positions("b");
+    let (cx, cy) = positions("c");
+    let (dx, dy) = positions("d");
+    assert_eq!(ax, 0.0);
+    assert_eq!(cx, 0.0, "колонка 0 выровнена");
+    assert_eq!(bx, 260.0 + 80.0, "колонка 1 = ширина col0 + colGap");
+    assert_eq!(dx, bx, "колонка 1 выровнена");
+    // Ряды: row0 высота = max(120, 140) = 140 → y(c)=y(d) = 140 + 48
+    assert_eq!(ay, 0.0);
+    assert_eq!(by, 0.0, "ряд 0 выровнен");
+    assert_eq!(cy, 140.0 + 48.0, "ряд 1 = высота row0 + rowGap");
+    assert_eq!(dy, cy, "ряд 1 выровнен");
+    // Зазоры без наложений: вертикальный зазор между рядами ≥ rowGap
+    assert!((cy - (ay + 140.0)) >= 48.0 - f32::EPSILON);
+    // Позиции в ответе
+    assert_eq!(out["positions"]["a"], serde_json::json!([0.0, 0.0]));
+    // bbox — [min_x, min_y, max_x, max_y]
+    assert_eq!(out["bbox"], serde_json::json!([0.0, 0.0, 640.0, 308.0]));
+}
+
+/// FR-081 (nodes_layout_apply grid): рёвущий кламп fit (дефолт true) —
+/// сжатые ноды раскладки не ломают.
+#[test]
+fn mcp_nodes_layout_apply_grid_fit_clamps_heights() {
+    let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/fr081d.canvas"));
+    let mut squashed = Node::text("s", FR081_LONG_TEXT, 0.0, 0.0);
+    squashed.width = 260.0;
+    squashed.height = 30.0;
+    scene.canvas.nodes.push(squashed);
+    dispatch(
+        &mut scene,
+        "nodes_layout_apply",
+        r#"{"mode":"grid","rows":[["s"]],"fit":true}"#,
+    )
+    .expect("layout");
+    let min_height = scene.min_content_height(0);
+    assert!(
+        scene.canvas.nodes[0].height >= min_height - f32::EPSILON,
+        "fit клампнул высоту: {} ≥ {min_height}",
+        scene.canvas.nodes[0].height
+    );
+}
+
+/// FR-081 (nodes_layout_apply grid): рамка группы с переехавшими детьми
+/// авторасширяется.
+#[test]
+fn mcp_nodes_layout_apply_grid_expands_group() {
+    let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/fr081e.canvas"));
+    let mut node = Node::text("n1", "текст", 100.0, 100.0);
+    node.width = 260.0;
+    node.height = 120.0;
+    scene.canvas.nodes.push(node);
+    let mut group = Node::group("g1", 80.0, 80.0, 400.0, 200.0);
+    group.label = Some("Зона".to_owned());
+    group.children = Some(vec!["n1".to_owned()]);
+    scene.canvas.nodes.push(group);
+    let out = dispatch(
+        &mut scene,
+        "nodes_layout_apply",
+        r#"{"mode":"grid","rows":[["n1"]],"x":1000.0,"y":2000.0,"fit":false}"#,
+    )
+    .expect("layout");
+    // Нода переехала
+    assert_eq!(scene.canvas.nodes[0].x, 1000.0);
+    assert_eq!(scene.canvas.nodes[0].y, 2000.0);
+    // Рамка догнала: bbox группы содержит ноду
+    let group = &scene.canvas.nodes[1];
+    assert!(
+        group.x <= 1000.0 && group.y <= 2000.0,
+        "рамка содержит ноду: g=({},{}) n=(1000,2000)",
+        group.x,
+        group.y
+    );
+    assert!(
+        group.x + group.width >= 1260.0 && group.y + group.height >= 2120.0,
+        "рамка накрывает ноду целиком: g=({},{},{},{})",
+        group.x,
+        group.y,
+        group.width,
+        group.height
+    );
+    assert_eq!(
+        out["groups_resized"],
+        serde_json::json!(["g1"]),
+        "ответ: {out}"
+    );
+}
+
+/// FR-081 (nodes_layout_apply): валидация — неизвестный id, дубликат,
+/// группа в rows, пустой ряд, нет rows, плохой mode, x без y.
+#[test]
+fn mcp_nodes_layout_apply_validation_errors() {
+    let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/fr081f.canvas"));
+    scene.canvas.nodes.push(Node::text("n1", "текст", 0.0, 0.0));
+    let mut group = Node::group("g1", 0.0, 0.0, 300.0, 200.0);
+    group.children = Some(vec!["n1".to_owned()]);
+    scene.canvas.nodes.push(group);
+    let before = serde_json::to_string(&scene.canvas).expect("сериализация");
+    let undo_before = scene.undo_stack.len();
+
+    let cases = [
+        r#"{"mode":"grid","rows":[["ghost"]]}"#,
+        r#"{"mode":"grid","rows":[["n1","n1"]]}"#,
+        r#"{"mode":"grid","rows":[["g1"]]}"#,
+        r#"{"mode":"grid","rows":[["n1"],[]]}"#,
+        r#"{"mode":"grid"}"#,
+        r#"{"mode":"spiral","rows":[["n1"]]}"#,
+        r#"{"mode":"grid","rows":[["n1"]],"x":5.0}"#,
+        r#"{"mode":"grid","rows":[["n1"]],"colGap":501}"#,
+    ];
+    for params in cases {
+        let err = dispatch(&mut scene, "nodes_layout_apply", params)
+            .err()
+            .unwrap_or_else(|| panic!("{params}: ожидалась ошибка"));
+        assert!(!err.is_empty(), "{params}: пустая ошибка");
+    }
+    let after = serde_json::to_string(&scene.canvas).expect("сериализация");
+    assert_eq!(before, after, "невалидные вызовы не меняют канвас");
+    assert_eq!(scene.undo_stack.len(), undo_before, "ни одного undo-шага");
+}
+
+/// FR-081 (nodes_layout_apply smart): без наложений, bbox на месте,
+/// детерминизм.
+#[test]
+fn mcp_nodes_layout_apply_smart_deterministic_no_overlap() {
+    let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/fr081g.canvas"));
+    // Цепочка a→b→c + standalone-аннотация
+    for (id, x, y) in [
+        ("a", 500.0, 300.0),
+        ("b", 100.0, 900.0),
+        ("c", 1200.0, 100.0),
+    ] {
+        scene.canvas.nodes.push(Node::text(id, "текст", x, y));
+    }
+    scene
+        .canvas
+        .nodes
+        .push(Node::text("note", "примечание", 2000.0, 2000.0));
+    scene.canvas.add_edge(Edge::new("e1", "a", None, "b", None));
+    scene.canvas.add_edge(Edge::new("e2", "b", None, "c", None));
+    let bbox_before: [f32; 2] = [100.0, 100.0]; // min(b.x)=100, min(c.y)=100
+
+    let out =
+        dispatch(&mut scene, "nodes_layout_apply", r#"{"mode":"smart"}"#).expect("layout smart");
+    assert_eq!(out["mode"], "smart");
+    // Якорь: bbox top-left сохранён
+    let min_x = scene
+        .canvas
+        .nodes
+        .iter()
+        .map(|n| n.x)
+        .fold(f32::MAX, f32::min);
+    let min_y = scene
+        .canvas
+        .nodes
+        .iter()
+        .map(|n| n.y)
+        .fold(f32::MAX, f32::min);
+    assert!(
+        (min_x - bbox_before[0]).abs() < 1.0 && (min_y - bbox_before[1]).abs() < 1.0,
+        "bbox на месте: ({min_x},{min_y}) vs {bbox_before:?}"
+    );
+    // Наложений нет
+    for i in 0..scene.canvas.nodes.len() {
+        for j in (i + 1)..scene.canvas.nodes.len() {
+            let (a, b) = (&scene.canvas.nodes[i], &scene.canvas.nodes[j]);
+            let overlaps = a.x < b.x + b.width
+                && b.x < a.x + a.width
+                && a.y < b.y + b.height
+                && b.y < a.y + a.height;
+            assert!(!overlaps, "наложение {} × {}", a.id, b.id);
+        }
+    }
+    // Детерминизм: тот же канвас с нуля → тот же план
+    let mut scene2 = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/fr081h.canvas"));
+    for (id, x, y) in [
+        ("a", 500.0, 300.0),
+        ("b", 100.0, 900.0),
+        ("c", 1200.0, 100.0),
+    ] {
+        scene2.canvas.nodes.push(Node::text(id, "текст", x, y));
+    }
+    scene2
+        .canvas
+        .nodes
+        .push(Node::text("note", "примечание", 2000.0, 2000.0));
+    scene2
+        .canvas
+        .add_edge(Edge::new("e1", "a", None, "b", None));
+    scene2
+        .canvas
+        .add_edge(Edge::new("e2", "b", None, "c", None));
+    dispatch(&mut scene2, "nodes_layout_apply", r#"{"mode":"smart"}"#).expect("layout smart 2");
+    let pos = |s: &SceneState, id: &str| {
+        s.canvas
+            .nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| (n.x, n.y))
+            .unwrap()
+    };
+    for id in ["a", "b", "c", "note"] {
+        assert_eq!(pos(&scene, id), pos(&scene2, id), "{id}: детерминизм");
+    }
+}
+
+/// FR-081 (nodes_layout_apply smart): канвас пуст — ошибка.
+#[test]
+fn mcp_nodes_layout_apply_smart_empty_canvas() {
+    let mut scene = SceneState::new(Canvas::default(), PathBuf::from("target/tmp/fr081i.canvas"));
+    let err = dispatch(&mut scene, "nodes_layout_apply", r#"{"mode":"smart"}"#)
+        .expect_err("ошибка на пустом канвасе");
+    assert!(err.contains("пуст"), "{err}");
+}
