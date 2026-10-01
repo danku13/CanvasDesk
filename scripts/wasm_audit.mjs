@@ -28,7 +28,13 @@ const WATCHDOG_MS = Number(process.env.WASM_UI_WATCHDOG_S ?? 900) * 1000;
 // Калиброванные координаты (env COORDS_JSON перекрывает: {"SKIP":[x,y],...})
 const C = Object.assign(
   {
-    SKIP: [812, 299], // «Пропустить» онбординга
+    SKIP: [812, 299], // «Пропустить» онбординга (калибровка до FR-028 v2;
+    // после v2 первый экран пустого холста — empty-state FR-049, см. EMPTY_DISMISS)
+    // FR-049 empty-state «Начните с шаблоном»: карточка 380×190 в центре
+    // (scheme_gallery_ui.rs::empty_card), кнопки внизу; правая — «Пустой холст»
+    // (empty_buttons: slot inset 10, btn_w 175, EMPTY_BTN_H 34 → центр ≈ 732×468
+    // на вьюпорте 1280×800)
+    EMPTY_DISMISS: [732, 468],
     HELP: [1163, 66], // кнопка «?» — после WEB_TOOLBAR_INSET y=48..84
     THEME: [1204, 66], // угловая кнопка темы
     GEAR: [1249, 66], // угловая кнопка настроек ⚙
@@ -98,6 +104,33 @@ const STEPS = [
   // ---------- EN: ноды ----------
   { g: 'en_nodes', name: '70_seed_ue', url: '/?template=com.canvasdesk.scheme.unit-economics', actions: [['click', C.SKIP], ['wait', 2000], ['shot']] },
   { g: 'en_nodes', name: '71_editor', url: '/', actions: [['click', C.SKIP], ['dclick', C.CANVAS], ['wait', 900], ['type', 'Revenue = deals × avg check'], ['wait', 600], ['shot']] },
+
+  // ---------- FR-079 (S3-fix regression): подсказки lex на web ----------
+  // Сид localStorage-конфига ДО старта приложения (addInitScript на
+  // выделенной странице — сид не утекает в другие шаги), далее сценарий
+  // владельца 2026-10-01: «включил подсказку lex, создал новую ноду».
+  // До фикса: паника «time not implemented on this platform» → wasm-ловушка
+  // unreachable → фриз (pageerror в логе, приложение мерт­во). После:
+  // ИИ-строки в попапе FR-021, консоль чистая. Текст длиннее show-гейта
+  // (120 симв. контекста) и содержит имена шаблонов (балансировщик/кэш).
+  // Порядок первого экрана: welcome-модалка FR-028 v2 (SKIP) → схема
+  // применена (?template=) → FR-078 ?focus=note-3 центрирует камеру на
+  // ноде «Маржа» (мир 800,0, есть соседи — иначе show-гейт волны 3 честно
+  // молчит на изолированной дырке) → dblclick в центр = правка этой ноды.
+  // Кириллица — только synth (winit Key::Character; keyboard.type теряет
+  // её на web — грабля 2026-09-25). id/координаты нод — scheme.json.
+  { g: 'suggest', name: '80_suggest_lex_ru', url: '/?template=com.canvasdesk.scheme.unit-economics&focus=note-3',
+    ls: { key: 'canvasdesk.config', value: '[suggest]\nenabled = true\nengine = "lex"\n' },
+    actions: [['click', C.SKIP], ['wait', 2500],
+              ['dclick', C.CANVAS], ['wait', 900],
+              ['synth', 'нужен балансировщик нагрузки'], ['wait', 1500],
+              ['shot']] },
+  { g: 'suggest', name: '81_suggest_lex_en', url: '/?template=com.canvasdesk.scheme.unit-economics&focus=note-3',
+    ls: { key: 'canvasdesk.config', value: '[suggest]\nenabled = true\nengine = "lex"\n' },
+    actions: [['click', C.SKIP], ['wait', 2500],
+              ['dclick', C.CANVAS], ['wait', 900],
+              ['type', 'need a load balancer and edge cache', 1200], ['wait', 800],
+              ['shot']] },
 ];
 
 const GROUPS = (process.env.AUDIT_GROUPS ?? 'probe').split(',').map((s) => s.trim());
@@ -157,33 +190,46 @@ try {
   for (const step of steps) {
     step_name = step.name;
     const file = `${OUT}/${step.name}.png`;
+    // FR-079: шаги с ls-сидом — выделенная страница (addInitScript
+    // персистентен для страницы, сид localStorage не должен течь
+    // в другие шаги)
+    const stepPage = step.ls
+      ? await browser.newPage({ viewport: { width: 1280, height: 800 } })
+      : page;
+    if (step.ls) {
+      stepPage.on('console', (m) => logs.push(`[${m.type()}] ${m.text()}`));
+      stepPage.on('pageerror', (e) => logs.push(`[pageerror@${step_name}] ${e.message}`));
+      await stepPage.addInitScript((ls) => {
+        try { window.localStorage.setItem(ls.key, ls.value); } catch { /* приватный режим */ }
+      }, step.ls);
+    }
     try {
-      await page.goto(BASE + step.url, { waitUntil: 'load' });
-      await page.waitForSelector('body > canvas', { timeout: 90000 });
-      await page.waitForTimeout(7000); // dev-wasm: первый кадр
+      await stepPage.goto(BASE + step.url, { waitUntil: 'load' });
+      await stepPage.waitForSelector('body > canvas', { timeout: 90000 });
+      await stepPage.waitForTimeout(7000); // dev-wasm: первый кадр
       for (const a of step.actions) {
         const [kind, ...args] = a;
         if (kind === 'click') {
-          await page.mouse.move(args[0][0], args[0][1]);
-          await page.waitForTimeout(150);
-          await page.mouse.click(args[0][0], args[0][1]);
-          await page.waitForTimeout(args[1] ?? 500);
+          await stepPage.mouse.move(args[0][0], args[0][1]);
+          await stepPage.waitForTimeout(150);
+          await stepPage.mouse.click(args[0][0], args[0][1]);
+          await stepPage.waitForTimeout(args[1] ?? 500);
         } else if (kind === 'shiftclick') {
-          await page.keyboard.down('Shift');
-          await page.mouse.click(args[0][0], args[0][1]);
-          await page.keyboard.up('Shift');
-          await page.waitForTimeout(args[1] ?? 500);
+          await stepPage.keyboard.down('Shift');
+          await stepPage.mouse.click(args[0][0], args[0][1]);
+          await stepPage.keyboard.up('Shift');
+          await stepPage.waitForTimeout(args[1] ?? 500);
         } else if (kind === 'dclick') {
-          await page.mouse.dblclick(args[0][0], args[0][1]);
-          await page.waitForTimeout(args[1] ?? 500);
+          await stepPage.mouse.dblclick(args[0][0], args[0][1]);
+          await stepPage.waitForTimeout(args[1] ?? 500);
         } else if (kind === 'rclick') {
-          await page.mouse.click(args[0][0], args[0][1], { button: 'right' });
-          await page.waitForTimeout(args[1] ?? 500);
+          await stepPage.mouse.click(args[0][0], args[0][1], { button: 'right' });
+          await stepPage.waitForTimeout(args[1] ?? 500);
         } else if (kind === 'synth') {
           // Синтетический keydown с key=символ — путь РЕАЛЬНОЙ раскладки:
           // браузер даёт keydown с key=«в» → winit Key::Character
           for (const ch of args[0]) {
-            await page.evaluate((ch) => {
+            await stepPage.evaluate((ch) => {
               const canvas = document.querySelector('body > canvas');
               canvas.dispatchEvent(new KeyboardEvent('keydown', {
                 key: ch, code: 'KeyD', bubbles: true, cancelable: true,
@@ -192,38 +238,40 @@ try {
                 key: ch, code: 'KeyD', bubbles: true, cancelable: true,
               }));
             }, ch);
-            await page.waitForTimeout(120);
+            await stepPage.waitForTimeout(120);
           }
         } else if (kind === 'key') {
-          await page.keyboard.press(args[0]);
-          await page.waitForTimeout(args[1] ?? 400);
+          await stepPage.keyboard.press(args[0]);
+          await stepPage.waitForTimeout(args[1] ?? 400);
         } else if (kind === 'type') {
-          await page.keyboard.type(args[0], { delay: 35 });
-          await page.waitForTimeout(args[1] ?? 300);
+          await stepPage.keyboard.type(args[0], { delay: 35 });
+          await stepPage.waitForTimeout(args[1] ?? 300);
         } else if (kind === 'wheel') {
-          await page.mouse.wheel(args[0][0], args[0][1]);
-          await page.waitForTimeout(args[1] ?? 500);
+          await stepPage.mouse.wheel(args[0][0], args[0][1]);
+          await stepPage.waitForTimeout(args[1] ?? 500);
         } else if (kind === 'move') {
-          await page.mouse.move(args[0][0], args[0][1]);
-          await page.waitForTimeout(args[1] ?? 200);
+          await stepPage.mouse.move(args[0][0], args[0][1]);
+          await stepPage.waitForTimeout(args[1] ?? 200);
         } else if (kind === 'wait') {
-          await page.waitForTimeout(args[0]);
+          await stepPage.waitForTimeout(args[0]);
         } else if (kind === 'shot') {
-          await page.screenshot({ path: file });
+          await stepPage.screenshot({ path: file });
         } else if (kind === 'shot2') {
-          await page.screenshot({ path: `${OUT}/${args[0]}.png` });
+          await stepPage.screenshot({ path: `${OUT}/${args[0]}.png` });
         }
       }
       if (!step.actions.some((a) => a[0] === 'shot' || a[0] === 'shot2')) {
-        await page.screenshot({ path: file });
+        await stepPage.screenshot({ path: file });
       }
       done.push(`${step.name} ✓`);
       console.log(`[аудит] ${step.name} ✓`);
     } catch (e) {
       done.push(`${step.name} ✗ ${e.message.split('\n')[0]}`);
       console.log(`[аудит] ${step.name} ✗ ${e.message.split('\n')[0]}`);
-      try { await page.screenshot({ path: `${OUT}/${step.name}_FAIL.png` }); } catch {}
+      try { await stepPage.screenshot({ path: `${OUT}/${step.name}_FAIL.png` }); } catch {}
       // восстановление: свежая страница на следующем шаге
+    } finally {
+      if (stepPage !== page) await stepPage.close().catch(() => {});
     }
   }
 

@@ -1002,10 +1002,11 @@ pub(super) fn unique_custom_id(
         }
     }
     // Практически недостижимо — последний рубеж: метка времени
+    // (W1: alias — std::time::SystemTime на wasm32 паникует)
     format!(
         "{base}-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or_default()
     )

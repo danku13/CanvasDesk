@@ -70,7 +70,7 @@ use canvas_core::expr::{self, ExprOutcome};
 // FR-052 (U2 PRD-0009): каркас canvas-ui — HitStack/pick и полосы слоёв
 // (ScreenBand) для единого диспетчера ввода/отрисовки
 use canvas_core::flow::{self, FlowKind};
-use canvas_core::time::Instant;
+use canvas_core::time::{Instant, SystemTime, UNIX_EPOCH};
 use canvas_core::{
     analyze, apply_file_events, bundle_thickness, edge_at, focus_set, main_stage_rect,
     nearest_side, path_matches, port_at, resolve_node_path, stage_edge_at_lines,
@@ -5383,7 +5383,8 @@ impl App {
             return;
         }
         let generation = self.suggest.generation;
-        self.suggest.request_started = Some(std::time::Instant::now());
+        // W1 (S3-fix): alias — request_started пишется и в wasm-ветке
+        self.suggest.request_started = Some(Instant::now());
         let settings = self.settings.suggest.clone();
         // Натив: воркер (прогрессивный показ — L0 уже на экране); воркер
         // не подключён/умер — sync-lex на этом же тике (деградация, не
@@ -11889,7 +11890,7 @@ mod suggest_flow_tests {
     /// Дебаунс «прошёл»: due на секунду в прошлое.
     fn suggest_force_debounce(app: &mut App) {
         if let Some(pending) = &mut app.suggest.pending {
-            pending.due = std::time::Instant::now() - std::time::Duration::from_secs(1);
+            pending.due = Instant::now() - std::time::Duration::from_secs(1);
         }
     }
 
@@ -11987,7 +11988,7 @@ mod suggest_flow_tests {
         let mut canvas = Canvas::default();
         for i in 0..6 {
             canvas.nodes.push(Node::text(
-                &format!("p{i}"),
+                format!("p{i}"),
                 format!("Шаг {i} пути пользователя\nописание этапа {i}"),
                 (i as f32) * 260.0,
                 0.0,
@@ -11995,10 +11996,10 @@ mod suggest_flow_tests {
         }
         for i in 0..5 {
             canvas.edges.push(Edge::new(
-                &format!("e{i}"),
-                &format!("p{i}"),
+                format!("e{i}"),
+                format!("p{i}"),
                 None,
-                &format!("p{}", i + 1),
+                format!("p{}", i + 1),
                 None,
             ));
         }

@@ -1810,7 +1810,9 @@ impl App {
                 self.suggest.last_prefix = prefix.to_owned();
             }
             self.suggest.pending = Some(suggest::PendingSuggest {
-                due: std::time::Instant::now(),
+                // W1 (S3-fix): alias canvas_core::time — std::time::Instant
+                // на wasm32 паникует («time not implemented» → фриз web)
+                due: Instant::now(),
             });
         } else {
             self.suggest.pending = None;

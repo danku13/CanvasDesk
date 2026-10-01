@@ -10,11 +10,17 @@
 //! Деградации (план §3): движок выкл/`off` → только L0; домен вне каталога
 //! → не предлагаем вовсе; show-гейт молчит → L0; пустой каталог → движок
 //! отвечает пусто; транспорт L1 упал → fusion(lex, ∅) = lex.
+//!
+//! Время — только через alias `canvas_core::time` (W1, wasm-порт §2
+//! п. 7): прямой `std::time::Instant`/`SystemTime` под
+//! wasm32-unknown-unknown паникует в рантайме — дебаунс C1 и метки
+//! журнала обязаны работать в web-сборке.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use canvas_core::templates::TemplateRegistry;
+use canvas_core::time::{Instant, SystemTime, UNIX_EPOCH};
 use canvas_core::SuggestSettings;
 use canvas_core::{Canvas, Language};
 use canvas_suggest::catalog::{self, CatalogParam, CatalogTemplate, Lang};
@@ -326,8 +332,8 @@ fn round3(v: f64) -> f64 {
 /// ISO 8601 UTC без внешних зависимостей (алгоритм days-from-civil,
 /// обратный Гауссовой формуле; точность — секунды, как в плане §4.4).
 fn iso_utc_now() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     iso_utc(now.as_secs())
 }
@@ -357,7 +363,9 @@ fn iso_utc(secs: u64) -> String {
 /// живой сессии в момент отправки (about_to_wait).
 #[derive(Debug, Clone, Copy)]
 pub struct PendingSuggest {
-    pub due: std::time::Instant,
+    /// W1: web_time-Instant — взведение дебаунса живёт и в web-сборке
+    /// (S3-fix: прямой std::time здесь вешал приложение на wasm).
+    pub due: Instant,
 }
 
 /// Принятая ИИ-подсказка — контроль «атрибуции авторства» (гипотеза §15):
@@ -395,7 +403,8 @@ pub struct SuggestState {
     /// Журнал S0.
     pub log: SuggestLog,
     /// Отправка последнего запроса (латентность для shown-события).
-    pub request_started: Option<std::time::Instant>,
+    /// W1: web_time-Instant (S3-fix).
+    pub request_started: Option<Instant>,
     /// Принятая подсказка (контроль edited).
     pub accepted: Option<AcceptedSuggest>,
     /// C3-карточки «что дальше» (открытая стопка у ноды).
@@ -634,6 +643,38 @@ mod tests {
         assert_eq!(SuggestEngineKind::LexLaya.as_str(), "lex+laya");
         assert_eq!(SuggestEngineKind::Lex.as_str(), "lex");
         assert_eq!(SuggestEngineKind::Off.as_str(), "off");
+    }
+
+    /// S3-fix: конфиг-формат — нижний регистр (`off | lex | lex+laya`,
+    /// план §3 и [`SuggestEngineKind::as_str`]); PascalCase — alias для
+    /// конфигов, сохранённых до фикса. Ручная правка config.toml по
+    /// документации больше не валит весь конфиг.
+    #[test]
+    fn engine_kind_toml_accepts_documented_lowercase_and_legacy() {
+        #[derive(serde::Deserialize)]
+        struct Cfg {
+            engine: SuggestEngineKind,
+        }
+        for (text, expected) in [
+            ("\"lex\"", SuggestEngineKind::Lex),
+            ("\"off\"", SuggestEngineKind::Off),
+            ("\"lex+laya\"", SuggestEngineKind::LexLaya),
+            // легаси-варианты (serde-имена до фикса)
+            ("\"Lex\"", SuggestEngineKind::Lex),
+            ("\"Off\"", SuggestEngineKind::Off),
+            ("\"LexLaya\"", SuggestEngineKind::LexLaya),
+        ] {
+            let cfg: Cfg = toml::from_str(&format!("engine = {text}"))
+                .unwrap_or_else(|e| panic!("«{text}» не разбирается: {e}"));
+            assert_eq!(cfg.engine, expected);
+        }
+        // сериализация — канонический нижний регистр
+        assert_eq!(
+            toml::to_string(&SuggestSettings::default())
+                .expect("сериализация")
+                .contains("engine = \"lex\""),
+            true
+        );
     }
 
     #[test]

@@ -59,6 +59,12 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+      # FR-079 S3-fix: статический гейт «времени» — std::time::Instant/
+      # SystemTime компилируются под wasm32, но паникуют в рантайме
+      # («time not implemented» → фриз web). cargo check это не ловит,
+      # поэтому аудит идёт первым и не зависит от Rust-тулчейна.
+      - name: wasm time audit (W1 — canvas_core::time only)
+        run: python3 scripts/wasm_time_audit.py
       - name: check ядра, MCP-слоя и web-слоя под wasm (core/render/widgets/mcp/scene/headless/web)
         run: cargo check --target wasm32-unknown-unknown -p canvas-core -p canvas-render -p canvas-widgets -p canvas-mcp -p canvas-scene -p canvas-mcp-headless -p canvas-web
 
