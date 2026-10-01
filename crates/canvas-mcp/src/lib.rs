@@ -232,7 +232,7 @@ const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "node_create_note",
-        description: "Создать ноду-заметку; возвращает id. Размеры по умолчанию 260×120. Многострочный текст передавайте реальными переводами строк (в JSON LF экранируется как \\n); последовательность \\n как два символа тоже принимается как перевод строки; литеральный обратный слеш — \\\\ FR-072: title — явный заголовок карточки (волна 1: заголовок меняется только в заголовке; без него в шапке плейсхолдер «—», первая строка текста в шапку не протекает)",
+        description: "Создать ноду-заметку; возвращает id. Размеры по умолчанию 260×120; высота меньше контента не применяется — клампится до измеренного минимума (FR-081). Многострочный текст передавайте реальными переводами строк (в JSON LF экранируется как \\n); последовательность \\n как два символа тоже принимается как перевод строки; литеральный обратный слеш — \\\\ FR-072: title — явный заголовок карточки (волна 1: заголовок меняется только в заголовке; без него в шапке плейсхолдер «—», первая строка текста в шапку не протекает)",
         required: &["x", "y"],
         properties: &[("x", NUM), ("y", NUM), ("text", STR), ("title", STR), ("width", NUM), ("height", NUM)],
     },
@@ -250,7 +250,7 @@ const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "node_edit",
-        description: "Редактировать ноду одним вызовом: обновляет ТОЛЬКО переданные поля (text, title, label, color, expr, x, y, width, height); label/color/expr = null — сброс; title — явный заголовок (FR-072), title = null — сброс (в шапке плейсхолдер «—»; первая строка текста в шапку не протекает, волна 1); expr — Numi-style формула, результат рендерится под текстом ноды (невалидная формула — ошибка, нода не меняется); возвращает обновлённую ноду. Многострочный text — реальными переводами строк (в JSON LF экранируется как \\n); последовательность \\n как два символа тоже принимается как перевод строки; литеральный обратный слеш — \\\\",
+        description: "Редактировать ноду одним вызовом: обновляет ТОЛЬКО переданные поля (text, title, label, color, expr, x, y, width, height); label/color/expr = null — сброс; title — явный заголовок (FR-072), title = null — сброс (в шапке плейсхолдер «—»; первая строка текста в шапку не протекает, волна 1); expr — Numi-style формула, результат рендерится под текстом ноды (невалидная формула — ошибка, нода не меняется); width/height: высота меньше контента клампится до измеренного минимума (FR-081); возвращает обновлённую ноду. Многострочный text — реальными переводами строк (в JSON LF экранируется как \\n); последовательность \\n как два символа тоже принимается как перевод строки; литеральный обратный слеш — \\\\",
         required: &["id"],
         properties: &[
             ("id", STR),
@@ -273,9 +273,26 @@ const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "node_resize",
-        description: "Изменить размеры ноды (width, height). fit:true — подогнать высоту под контент (фон не сжимается меньше видимого)",
+        description: "Изменить размеры ноды (width, height). Высота меньше контента НЕ применяется — клампится до измеренного минимума (FR-081: фон не сжимается; ответ содержит height_clamped/min_height). fit:true — подогнать высоту точно под контент (и расти, и сжиматься до контента)",
         required: &["id", "width", "height"],
         properties: &[("id", STR), ("width", NUM), ("height", NUM), ("fit", BOOL)],
+    },
+    ToolSpec {
+        name: "nodes_layout_apply",
+        description: "FR-081: расстановка нод ДЛЯ АГЕНТА одним вызовом вместо N node_move. mode=\"grid\" (дефолт): rows — массив рядов, каждый — массив id слева направо, ряды сверху вниз (транскрипция раскладки со скриншота: колонки выравниваются по максимальной ширине, ряды — по высоте; зазоры colGap/rowGap, дефолты 80/48, 0..500); x,y — левый-верх блока (дефолт — текущий bbox перечисленных нод); группы в rows запрещены — рамки групп с переехавшими детьми авторасширяются. mode=\"smart\": смысловая раскладка ВСЕГО канваса — plan_scheme_layout FR-071 (кластеры по группам/рёбрам, слои, barycenter, сетка без прилипания), bbox канваса сохраняется (или к x,y). fit (дефолт true) — перед раскладкой высоты клампятся к контенту. Один undo-шаг. Ответ grid: {mode, moved, positions, bbox, groups_resized}; smart: {mode, bbox}",
+        required: &[],
+        properties: &[
+            ("mode", r#"{"type":"string","enum":["grid","smart"]}"#),
+            (
+                "rows",
+                r#"{"type":"array","minItems":1,"items":{"type":"array","minItems":1,"items":{"type":"string"}}}"#,
+            ),
+            ("x", NUM),
+            ("y", NUM),
+            ("colGap", NUM),
+            ("rowGap", NUM),
+            ("fit", BOOL),
+        ],
     },
     ToolSpec {
         name: "node_delete",
@@ -1241,13 +1258,13 @@ mod tests {
         // FR-066 §5.8: monte_carlo_run — native-only (фича qmc не
         // собирается на wasm32 — реестр wasm-сборки без него)
         #[cfg(not(target_arch = "wasm32"))]
-        let expected_count = 42;
+        let expected_count = 43;
         #[cfg(target_arch = "wasm32")]
-        let expected_count = 41;
+        let expected_count = 42;
         assert_eq!(
             tools.len(),
             expected_count,
-            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + 4 новых: schemes_list/schemes_apply (PRD-0008 Q5) + lineage (PRD-0007 X2) + explain_number (PRD-0007 X6/FR-048, F-9) + group_create (FR-012 v4 MCP-паритет) + monte_carlo_run (FR-066, native)"
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + 4 новых: schemes_list/schemes_apply (PRD-0008 Q5) + lineage (PRD-0007 X2) + explain_number (PRD-0007 X6/FR-048, F-9) + group_create (FR-012 v4 MCP-паритет) + monte_carlo_run (FR-066, native) + nodes_layout_apply (FR-081)"
         );
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
@@ -1579,15 +1596,15 @@ mod tests {
             panic!("tools/list должен ответить");
         };
         let parsed: Value = serde_json::from_str(&reply).expect("tools/list ответ");
-        // FR-066 §5.8: monte_carlo_run — native-only (wasm: 41 без qmc)
+        // FR-066 §5.8: monte_carlo_run — native-only (wasm: 42 без qmc)
         #[cfg(not(target_arch = "wasm32"))]
-        let expected_count = 42;
+        let expected_count = 43;
         #[cfg(target_arch = "wasm32")]
-        let expected_count = 41;
+        let expected_count = 42;
         assert_eq!(
             parsed["result"]["tools"].as_array().expect("tools").len(),
             expected_count,
-            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + schemes_list/schemes_apply + lineage + explain_number (PRD-0007 X6, F-9) + group_create (FR-012 v4 MCP-паритет) + monte_carlo_run (FR-066, native)"
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + schemes_list/schemes_apply + lineage + explain_number (PRD-0007 X6, F-9) + group_create (FR-012 v4 MCP-паритет) + monte_carlo_run (FR-066, native) + nodes_layout_apply (FR-081)"
         );
 
         let call = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"canvas_info","arguments":{}}}"#;

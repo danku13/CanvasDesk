@@ -1,6 +1,6 @@
 //! MCP-инструменты канваса (FR-037/ADR-0012, перенос из
 //! canvas-app/main.rs): `mcp_dispatch` — чистая функция над SceneState
-//! (28 инструментов), хелперы параметров, FR-033 graph_apply (атомарная
+//! (43 инструмента, FR-081), хелперы параметров, FR-033 graph_apply (атомарная
 //! батч-композиция). Протокольный мост (stdio/JSON-RPC) — крейт
 //! canvas-mcp; инструменты не знают о транспорте.
 
@@ -33,6 +33,15 @@ pub const DEFAULT_GROUP_LABEL: &str = "Группа";
 /// «слипшейся» рамки, а не инструмент макета; 500 логических px —
 /// заведомо выше любого разумного случая, отрицательный запрещён.
 pub const GROUP_PADDING_MAX: f32 = 500.0;
+
+/// FR-081: дефолт зазора между колонками `nodes_layout_apply` (world px)
+/// — синхронно с `canvas_core::layout::LEVEL_GAP` (FR-010).
+pub const LAYOUT_COL_GAP: f32 = 80.0;
+/// FR-081: дефолт зазора между рядами `nodes_layout_apply` (world px).
+pub const LAYOUT_ROW_GAP: f32 = 48.0;
+/// FR-081: верхняя граница зазоров `nodes_layout_apply` — образец
+/// `GROUP_PADDING_MAX` (защита от деградации в «инструмент макета»).
+pub const LAYOUT_GAP_MAX: f32 = 500.0;
 
 /// Распаковка MCP-конверта, пришедшего по pipe: `tools/call` несёт имя
 /// инструмента и аргументы внутри params (`name`/`arguments`) — посредник
@@ -349,6 +358,11 @@ pub fn mcp_dispatch(
             scene.mark_dirty();
             // FR-014: живой пересчёт потока после создания expr-ноды
             scene.recompute_flow();
+            // FR-081: пол высоты по контенту — рост-only кламп ПОСЛЕ
+            // recompute_flow (замер по свежим expr_line_results/spills):
+            // явный height=30 в вызове не сжимает ноду ниже контента.
+            // Свободная высота выше минимума не трогается.
+            scene.clamp_height_to_content(index);
             Ok(serde_json::json!({ "id": scene.canvas.nodes[index].id }))
         }
         "node_create_file" => {
@@ -405,6 +419,10 @@ pub fn mcp_dispatch(
                 Some(other) => return Err(format!("expr должен быть строкой или null: {other}")),
             };
             let mut geometry = false;
+            // FR-081: флаг записи РАЗМЕРА (width/height) — при нём после
+            // применения полей высота клампится к контенту (агент не сжимает
+            // ноду ниже контента; сдвиг x/y — не размер, кламп не нужен)
+            let mut size_written = false;
             // FR-006: MCP-мутация — undo-шаг. Пушим до мутаций: валидация
             // отдельных полей переплетена с применением остальных (частичные
             // применения при Err тоже должны быть отменяемы)
@@ -476,6 +494,7 @@ pub fn mcp_dispatch(
                         scene.canvas.nodes[index].height = value;
                     }
                     geometry = true;
+                    size_written = true;
                 }
             }
             if geometry {
@@ -488,6 +507,15 @@ pub fn mcp_dispatch(
                 scene.canvas.nodes[index].set_expr(new_expr);
                 scene.mark_dirty();
                 scene.recompute_flow();
+            }
+            // FR-081: пол высоты по контенту — рост-only кламп при записи
+            // width/height (width тоже важен: перенос текста по новой
+            // ширине меняет измеренный минимум). Кламп ПОСЛЕ ветки expr:
+            // recompute_flow обновил expr_line_results — замер по свежему
+            // контенту, а не по прежним строкам. x/y без размеров —
+            // клампа нет. Сжатие запрещено, «воздух» выше минимума — нет.
+            if size_written {
+                scene.clamp_height_to_content(index);
             }
             scene.mark_dirty();
             let node = &scene.canvas.nodes[index];
@@ -532,6 +560,15 @@ pub fn mcp_dispatch(
             if fit {
                 scene.refit_node_to_content(index);
             }
+            // FR-081: пол высоты по контенту — не только при fit (opt-in,
+            // который агенты не выставляют): рост-only кламп гарантирует
+            // «агент не сжимает ноду ниже контента» при ЛЮБОМ вызове.
+            // Высота выше минимума остаётся как задана (воздух — свобода
+            // агента); высота ниже — поднимается до измеренного контента.
+            let height_before = height;
+            let final_height = scene.clamp_height_to_content(index);
+            let height_clamped = final_height > height_before + f32::EPSILON;
+            let min_height = scene.min_content_height(index);
             scene.mark_dirty();
             let node = &scene.canvas.nodes[index];
             Ok(serde_json::json!({
@@ -539,6 +576,8 @@ pub fn mcp_dispatch(
                 "width": node.width,
                 "height": node.height,
                 "fit_applied": fit,
+                "height_clamped": height_clamped,
+                "min_height": min_height,
             }))
         }
         "node_delete" => {
@@ -1540,6 +1579,11 @@ pub fn mcp_dispatch(
                 "flow": flow,
             }))
         }
+        // FR-081: расстановка нод ДЛЯ АГЕНТА — сеткой по «порядку чтения»
+        // (rows — транскрипция раскладки со скриншота схемы) либо по
+        // смыслу (plan_scheme_layout FR-071: кластеры по группам/рёбрам,
+        // слои, barycenter, сетка без «прилипания»)
+        "nodes_layout_apply" => mcp_nodes_layout_apply(scene, params),
         "viewport_get" => Ok(serde_json::json!({
             "x": scene.viewport.x,
             "y": scene.viewport.y,
@@ -1690,6 +1734,299 @@ fn mcp_group_create(
         "width": group.width,
         "height": group.height,
     }))
+}
+
+// --- FR-081: nodes_layout_apply — расстановка нод для агента --------------
+
+/// Зазор `colGap`/`rowGap` MCP `nodes_layout_apply`: число 0..=500,
+/// дефолты LAYOUT_COL_GAP/LAYOUT_ROW_GAP (образец padding group_create).
+fn mcp_gap_param(params: &serde_json::Value, name: &str, default: f32) -> Result<f32, String> {
+    match params.get(name) {
+        None | Some(serde_json::Value::Null) => Ok(default),
+        Some(value) => {
+            let gap = value
+                .as_f64()
+                .ok_or_else(|| format!("{name}: число 0..={LAYOUT_GAP_MAX}, получено {value}"))?
+                as f32;
+            if !(0.0..=LAYOUT_GAP_MAX).contains(&gap) || !gap.is_finite() {
+                return Err(format!(
+                    "{name}: число 0..={LAYOUT_GAP_MAX}, получено {value}"
+                ));
+            }
+            Ok(gap)
+        }
+    }
+}
+
+/// FR-081: расстановка нод ДЛЯ АГЕНТА (`nodes_layout_apply`) — два режима.
+///
+/// **mode = "grid"** (дефолт): явный «порядок чтения» — `rows`: массив
+/// рядов, каждый ряд — массив id (слева направо), ряды сверху вниз.
+/// Агент транскрибирует раскладку со скриншота схемы (или любую свою)
+/// ОДНИМ вызовом вместо N вызовов node_move: колонки выравниваются по
+/// максимальной ширине нод колонки, ряды — по максимальной высоте;
+/// зазоры `colGap`/`rowGap` (дефолты 80/48, допустимо 0..=500).
+/// Точка `x`,`y` — левый-верх блока; дефолт — текущий bbox
+/// перечисленных нод (раскладка «на месте»). Группы в `rows` отклоняются
+/// (рамка не таскается отдельно от детей): раскладывайте их детей —
+/// рамки групп с переехавшими детьми авторасширяются
+/// (group_expand_to_children_deep, FR-012), чтобы не отставать.
+///
+/// **mode = "smart"**: смысловая раскладка ВСЕГО канваса —
+/// `plan_scheme_layout` (FR-071, Sugiyama-lite): кластеры по группам и
+/// связности рёбер, слои longest-path (поток слева направо),
+/// barycenter-порядок (смысловые соседи рядом), выравнивание сеткой
+/// без «прилипания». План сдвигается так, чтобы bbox канваса остался на
+/// месте (или к `x`,`y`). Детерминирован.
+///
+/// Общий контракт: `fit` (дефолт true) — перед раскладкой высота каждой
+/// ноды клампится к контенту (FR-081: агент не сжимает ноды; для grid —
+/// ДО измерения ячеек, иначе сжатые ряды ломают выравнивание). Ровно
+/// один undo-шаг, spatial перестраивается целиком (паттерн node_delete),
+/// mark_dirty. Пересчёт потока не нужен: топология и значения не
+/// меняются, геометрия рёбер считается рендером.
+fn mcp_nodes_layout_apply(
+    scene: &mut SceneState,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let mode = params
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("grid");
+    if mode != "grid" && mode != "smart" {
+        return Err(format!(
+            "mode должен быть \"grid\" или \"smart\", получено {mode:?}"
+        ));
+    }
+    // fit: кламп высот к контенту перед раскладкой (дефолт true)
+    let fit = mcp_opt_bool(params, "fit").unwrap_or(true);
+    let col_gap = mcp_gap_param(params, "colGap", LAYOUT_COL_GAP)?;
+    let row_gap = mcp_gap_param(params, "rowGap", LAYOUT_ROW_GAP)?;
+    let origin = match (mcp_opt_f32(params, "x"), mcp_opt_f32(params, "y")) {
+        (Some(x), Some(y)) => Some([x, y]),
+        (None, None) => None,
+        _ => return Err("x и y передаются парой (левый-верх блока раскладки)".to_owned()),
+    };
+
+    match mode {
+        "grid" => {
+            let rows = params
+                .get("rows")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| {
+                    "grid: отсутствует обязательный параметр 'rows' (массив рядов, каждый — массив id нод)".to_owned()
+                })?;
+            if rows.is_empty() {
+                return Err("rows: минимум 1 ряд".to_owned());
+            }
+            // Валидация ДО undo-шага: массив индексов по рядам, без
+            // дубликатов, без групп (паттерн mcp_group_create)
+            let mut grid: Vec<Vec<usize>> = Vec::with_capacity(rows.len());
+            let mut listed: Vec<usize> = Vec::new();
+            for (ri, row) in rows.iter().enumerate() {
+                let arr = row
+                    .as_array()
+                    .ok_or_else(|| format!("rows[{ri}]: массив id нод, получено {row}"))?;
+                if arr.is_empty() {
+                    return Err(format!("rows[{ri}]: ряд не может быть пустым"));
+                }
+                let mut indices = Vec::with_capacity(arr.len());
+                for item in arr {
+                    let id = item
+                        .as_str()
+                        .ok_or_else(|| format!("rows[{ri}]: id — строки, получено {item}"))?;
+                    let index = scene
+                        .canvas
+                        .nodes
+                        .iter()
+                        .position(|n| n.id == id)
+                        .ok_or_else(|| format!("rows[{ri}]: нода не найдена: {id}"))?;
+                    if scene.canvas.nodes[index].kind() == canvas_core::NodeKind::Group {
+                        return Err(format!(
+                            "rows[{ri}]: группа {id} в rows не поддерживается — раскладывайте её детей, рамка авторасширится"
+                        ));
+                    }
+                    if listed.contains(&index) {
+                        return Err(format!("дубликат ноды {id} в rows"));
+                    }
+                    listed.push(index);
+                    indices.push(index);
+                }
+                grid.push(indices);
+            }
+            // FR-006: undo-шаг — до мутаций (вся валидация прошла)
+            scene.push_undo(scene.canvas.clone());
+            // fit: кламп высот ДО измерения ячеек — сжатые ноды не ломают
+            // выравнивание рядов
+            if fit {
+                for &index in &listed {
+                    scene.clamp_height_to_content(index);
+                }
+            }
+            // origin: дефолт — bbox перечисленных нод (раскладка «на месте»)
+            let [origin_x, origin_y] = origin.unwrap_or_else(|| {
+                let mut min_x = f32::MAX;
+                let mut min_y = f32::MAX;
+                for &index in &listed {
+                    let node = &scene.canvas.nodes[index];
+                    min_x = min_x.min(node.x);
+                    min_y = min_y.min(node.y);
+                }
+                [min_x, min_y]
+            });
+            // СЕТКА: ширина колонки = max ширины нод колонки, высота ряда =
+            // max высоты нод ряда; x/y — накопительные суммы с зазорами
+            let col_count = grid.iter().map(Vec::len).max().unwrap_or(0);
+            let mut col_w = vec![0.0f32; col_count];
+            let mut row_h = vec![0.0f32; grid.len()];
+            for (ri, row) in grid.iter().enumerate() {
+                for (ci, &index) in row.iter().enumerate() {
+                    let node = &scene.canvas.nodes[index];
+                    col_w[ci] = col_w[ci].max(node.width);
+                    row_h[ri] = row_h[ri].max(node.height);
+                }
+            }
+            let mut col_x = Vec::with_capacity(col_count);
+            let mut acc = origin_x;
+            for w in &col_w {
+                col_x.push(acc);
+                acc += w + col_gap;
+            }
+            let mut row_y = Vec::with_capacity(grid.len());
+            let mut acc = origin_y;
+            for h in &row_h {
+                row_y.push(acc);
+                acc += h + row_gap;
+            }
+            for (ri, row) in grid.iter().enumerate() {
+                for (ci, &index) in row.iter().enumerate() {
+                    let node = &mut scene.canvas.nodes[index];
+                    node.x = col_x[ci];
+                    node.y = row_y[ri];
+                }
+            }
+            scene.spatial = SpatialIndex::build(&scene.canvas);
+            // Рамки групп с переехавшими детьми — авторасширение (grow-only,
+            // FR-012): группа не остаётся позади раскладки. Геометрия
+            // изменилась — spatial перестраивается целиком.
+            let moved: std::collections::BTreeSet<usize> = listed.into_iter().collect();
+            let mut groups_resized: Vec<String> = Vec::new();
+            for gi in 0..scene.canvas.nodes.len() {
+                if scene.canvas.nodes[gi].kind() != canvas_core::NodeKind::Group {
+                    continue;
+                }
+                let contains_moved = canvas_core::group_children(&scene.canvas, gi)
+                    .iter()
+                    .any(|child| moved.contains(child));
+                if contains_moved
+                    && !canvas_core::group_expand_to_children_deep(
+                        &mut scene.canvas,
+                        gi,
+                        DEFAULT_GROUP_PADDING,
+                    )
+                    .is_empty()
+                {
+                    groups_resized.push(scene.canvas.nodes[gi].id.clone());
+                }
+            }
+            if !groups_resized.is_empty() {
+                scene.spatial = SpatialIndex::build(&scene.canvas);
+            }
+            scene.mark_dirty();
+            // Ответ: позиции (id → [x, y]) + bbox + отчёт о рамках
+            let mut positions = serde_json::Map::new();
+            let mut min_x = f32::MAX;
+            let mut min_y = f32::MAX;
+            let mut max_x = f32::MIN;
+            let mut max_y = f32::MIN;
+            for &index in &moved {
+                let node = &scene.canvas.nodes[index];
+                positions.insert(node.id.clone(), serde_json::json!([node.x, node.y]));
+                min_x = min_x.min(node.x);
+                min_y = min_y.min(node.y);
+                max_x = max_x.max(node.x + node.width);
+                max_y = max_y.max(node.y + node.height);
+            }
+            Ok(serde_json::json!({
+                "mode": "grid",
+                "moved": moved.len(),
+                "positions": positions,
+                "bbox": [min_x, min_y, max_x, max_y],
+                "col_gap": col_gap,
+                "row_gap": row_gap,
+                "groups_resized": groups_resized,
+            }))
+        }
+        "smart" => {
+            if scene.canvas.nodes.is_empty() {
+                return Err("smart: канвас пуст — раскладывать нечего".to_owned());
+            }
+            // FR-006: undo-шаг — до мутаций
+            scene.push_undo(scene.canvas.clone());
+            // fit: кламп высот всех нод (кроме групп-рамок) ДО планирования —
+            // сетка строится по фактическим размерам
+            if fit {
+                for index in 0..scene.canvas.nodes.len() {
+                    if scene.canvas.nodes[index].kind() != canvas_core::NodeKind::Group {
+                        scene.clamp_height_to_content(index);
+                    }
+                }
+            }
+            let plan = canvas_core::scheme_layout::plan_scheme_layout(&scene.canvas);
+            if plan.positions.is_empty() {
+                return Err("smart: план раскладки пуст".to_owned());
+            }
+            // Сдвиг плана: якорь — bbox канваса ДО раскладки (раскладка
+            // «на месте») или явная точка (x, y)
+            let (plan_min_x, plan_min_y) = plan
+                .positions
+                .iter()
+                .fold((f32::MAX, f32::MAX), |(ax, ay), (_, [x, y])| {
+                    (ax.min(*x), ay.min(*y))
+                });
+            let [target_x, target_y] = origin.unwrap_or_else(|| {
+                let (tx, ty) = scene
+                    .canvas
+                    .nodes
+                    .iter()
+                    .fold((f32::MAX, f32::MAX), |(ax, ay), node| {
+                        (ax.min(node.x), ay.min(node.y))
+                    });
+                [tx, ty]
+            });
+            let dx = target_x - plan_min_x;
+            let dy = target_y - plan_min_y;
+            for (index, [x, y]) in plan.positions {
+                if let Some(node) = scene.canvas.nodes.get_mut(index) {
+                    node.x = x + dx;
+                    node.y = y + dy;
+                }
+            }
+            for (index, [width, height]) in plan.group_sizes {
+                if let Some(node) = scene.canvas.nodes.get_mut(index) {
+                    node.width = width;
+                    node.height = height;
+                }
+            }
+            scene.spatial = SpatialIndex::build(&scene.canvas);
+            scene.mark_dirty();
+            let mut min_x = f32::MAX;
+            let mut min_y = f32::MAX;
+            let mut max_x = f32::MIN;
+            let mut max_y = f32::MIN;
+            for node in &scene.canvas.nodes {
+                min_x = min_x.min(node.x);
+                min_y = min_y.min(node.y);
+                max_x = max_x.max(node.x + node.width);
+                max_y = max_y.max(node.y + node.height);
+            }
+            Ok(serde_json::json!({
+                "mode": "smart",
+                "bbox": [min_x, min_y, max_x, max_y],
+            }))
+        }
+        _ => unreachable!("mode проверен выше"),
+    }
 }
 
 // --- FR-066 (M5/S3): monte_carlo_run — MC/QMC-прогон -------------------------
@@ -2790,6 +3127,19 @@ fn mcp_graph_apply(
     scene.spatial = SpatialIndex::build(&scene.canvas);
     scene.mark_dirty();
     scene.recompute_flow();
+    // FR-081: пол высоты по контенту для созданных note-нод — рост-only
+    // кламп ПОСЛЕ recompute_flow (замер по свежим строкам): явный
+    // height=30 в операции node_create_note не сжимает ноду ниже
+    // контента — паритет с одиночным node_create_note.
+    for entry in &entries {
+        if entry.created && entry.op == "node_create_note" {
+            if let Some(node_id) = &entry.node_id {
+                if let Some(index) = scene.canvas.nodes.iter().position(|n| n.id == *node_id) {
+                    scene.clamp_height_to_content(index);
+                }
+            }
+        }
+    }
 
     let created: Vec<serde_json::Value> = entries
         .iter()

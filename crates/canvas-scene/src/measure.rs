@@ -28,6 +28,14 @@ pub const RESULT_LINE_HEIGHT: f32 = 16.0;
 /// «РАСЧЁТ · N», canvas-render/text.rs ZONE_LABEL_LINE_HEIGHT).
 pub const ZONE_LABEL_LINE_HEIGHT: f32 = 16.0;
 
+/// FR-081: минимальная высота карточки — шапка + зазор + один ряд тела +
+/// паддинг. Карточка с пустым/однострочным телом всё равно имеет рельеф —
+/// усадка ниже этого порога бессмысленна (контент обрезался бы клипом
+/// шапки). Поднят из локальной константы `refit_to_measured_content`:
+/// тот же пол нужен MCP-мутациям геометрии (`SceneState::
+/// min_content_height` — «агент не сжимает ноду ниже контента»).
+pub const MIN_CONTENT_HEIGHT: f32 = HEADER_HEIGHT + BODY_TOP_GAP + BODY_LINE_HEIGHT + BODY_PADDING;
+
 /// FR-069 (этап F): деривация супрессии первого проза-абзаца — зеркало
 /// `with_body_stack` (canvas-render): зона описания показывает ЕГО ЖЕ
 /// первый проза-абзац текста (фолбэк Q3 «desc→манифест→проза», либо
@@ -388,9 +396,9 @@ pub fn refit_to_measured_content(
     auto_rows: usize,
 ) -> bool {
     let desc_text = desc.unwrap_or_default();
-    let needed = measured_reserve(
-        display_text,
+    let target = measured_content_height(
         node.width,
+        display_text,
         formula_lines,
         desc_text,
         desc_expanded,
@@ -398,17 +406,41 @@ pub fn refit_to_measured_content(
         sigma_name,
         auto_rows,
     );
-    /// Минимальная высота карточки: шапка + зазор + один ряд тела + паддинг.
-    /// Карточка с пустым/однострочным телом всё равно имеет рельеф — усадка
-    /// ниже этого порога бессмысленна (контент бы обрезался клипом шапки).
-    const MIN_CONTENT_HEIGHT: f32 = HEADER_HEIGHT + BODY_TOP_GAP + BODY_LINE_HEIGHT + BODY_PADDING;
-    let target = needed.max(MIN_CONTENT_HEIGHT);
     if (target - node.height).abs() >= 1.0 {
         node.height = target;
         true
     } else {
         false
     }
+}
+
+/// FR-081: измеренный минимум высоты ноды при заданной ширине — БЕЗ
+/// мутации. Тот же расчёт, что [`refit_to_measured_content`] (L1-оценка →
+/// L2-шейпинг через [`measured_reserve`]), но возвращает целевую высоту:
+/// пол для MCP-мутаций геометрии (node_resize/node_edit/node_create_note/
+/// graph_apply) — «агент не сжимает ноду по высоте ниже контента».
+#[allow(clippy::too_many_arguments)] // 8 согласованных входов резерва (I-2)
+pub fn measured_content_height(
+    node_width: f32,
+    display_text: &str,
+    formula_lines: &[usize],
+    desc: &str,
+    desc_expanded: bool,
+    footer_reserve: bool,
+    sigma_name: &str,
+    auto_rows: usize,
+) -> f32 {
+    let needed = measured_reserve(
+        display_text,
+        node_width,
+        formula_lines,
+        desc,
+        desc_expanded,
+        footer_reserve,
+        sigma_name,
+        auto_rows,
+    );
+    needed.max(MIN_CONTENT_HEIGHT)
 }
 
 /// CR-012 (правка 2): индексы строк с результатом из построчных исходов —

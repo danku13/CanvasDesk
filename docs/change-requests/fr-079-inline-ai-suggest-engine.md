@@ -135,6 +135,35 @@ S4 стартует параллельно S2–S3 (подготовка дан�
 
 ## История изменений
 
+- 2026-10-01 (2) — агент (Super Z): S3-fix — два бага web-пути. (1)
+  wasm-паника «time not implemented on this platform» при включённой
+  подсказке (фриз приложения при создании ноды): S3-код в 6 местах
+  использовал прямой `std::time` вместо alias `canvas_core::time`
+  (конвенция W1 wasm-порта) — дебаунс C1 (`overlays.rs`),
+  `request_started` (`app.rs`), типы `PendingSuggest`/`SuggestState` и
+  ISO-метки журнала (`suggest.rs`), last-resort суффикс id (`support.rs`);
+  на wasm32-unknown-unknown `std::time` компилируется, но паникует в
+  рантайме — cargo check и wasip1-тесты класс бага не ловят. Исправлено
+  переводом на `canvas_core::time::{Instant, SystemTime, UNIX_EPOCH}`
+  (web_time; alias'ы SystemTime/UNIX_EPOCH добавлены в
+  `canvas-core/src/time.rs`). (2) Конфиг-формат движка: serde принимал
+  только PascalCase-варианты (`Lex`/`Off`), а документированный формат —
+  `off | lex | lex+laya` (план §3, `as_str()`) — ручная правка
+  config.toml/localStorage по документации валила ВЕСЬ конфиг (unknown
+  variant → дефолты, движок молча OFF); исправлено `rename` + `alias`
+  (нижний регистр каноничен, PascalCase — легаси-совместимость), тест
+  `engine_kind_toml_accepts_documented_lowercase_and_legacy`. Гейт
+  усилен: статический аудит `scripts/wasm_time_audit.py` (ступень 0
+  `wasm_gate.sh` + шаг CI job wasm-check) — прямые
+  `std::time::Instant/SystemTime` в web-крейтах запрещены, исключения —
+  только явный allowlist; красное/зелёное: 6 нарушений до фикса, 0 после.
+  UI-регрессия в wasm-аудите: группа `suggest` (шаги `80_suggest_lex_ru` /
+  `81_suggest_lex_en` — сид localStorage-конфига через addInitScript на
+  выделенной странице, схема unit-economics + `?focus=note-3`, ввод в
+  ноду с соседями): 0 паник страницы, ИИ-попап FR-021 с топ-3 строками
+  lex (Балансировщик в топе при вводе «балансировщик») — скриншот-оракул
+  VLM. Заодно: калибровка EMPTY_DISMISS empty-state FR-049 для аудита,
+  clippy-долг S3-тестов (needless borrows).
 - 2026-10-01 — агент (Super Z): S3 + S0 реализованы — интеграция в
   canvas-app: SuggestWorker (натив-поток, паттерн flow-worker; wasm —
   sync-lex) + AppEvent::SuggestReady (цели Popup/C3-Cards) + триггер C1 в

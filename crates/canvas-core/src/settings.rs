@@ -191,11 +191,18 @@ pub enum IconStyle {
 /// иначе конфиг читается, но поведение = `lex` + warn).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SuggestEngineKind {
+    /// Конфиг-значения — нижний регистр (план FR-079 §3: `off | lex |
+    /// lex+laya`, как и [`Self::as_str`]); alias — PascalCase-варианты,
+    /// которые serde писал до S3-fix (обратная совместимость сохранённых
+    /// конфигов). Иначе ручная правка config.toml по документации валила
+    /// ВЕСЬ конфиг (unknown variant → дефолты).
+    #[serde(rename = "off", alias = "Off")]
     Off,
     #[default]
+    #[serde(rename = "lex", alias = "Lex")]
     Lex,
     /// Конфиг-значение `lex+laya` (с плюсом — читаемость TOML, план §3).
-    #[serde(rename = "lex+laya")]
+    #[serde(rename = "lex+laya", alias = "LexLaya")]
     LexLaya,
 }
 

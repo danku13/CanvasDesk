@@ -10,6 +10,9 @@
 # ступени 1 (компиляция; бандл/деплой — scripts/web_bundle.sh и
 # Pages-workflow, там же размер бандла в логе §8.8).
 #
+#   0/3 audit: статический гейт «времени» — прямые std::time::Instant/
+#          SystemTime в web-крейтах паникуют на wasm32 в рантайме
+#          (компиляция их не ловит — FR-079 S3-fix)
 #   1/3 check: core/render/widgets/mcp/web компилируются под wasm32-unknown-unknown
 #   2/3 build: артефакт — rlib ядра под wasm32-unknown-unknown
 #   3/3 test:  тесты canvas-core и моста canvas-mcp исполняются под wasm32-wasip1 (wasmtime)
@@ -21,11 +24,18 @@
 #
 # Использование:
 #   scripts/wasm_gate.sh           # все три ступени
-#   scripts/wasm_gate.sh --check   # только ступень 1 (wasmtime не нужен)
+#   scripts/wasm_gate.sh --check   # только ступени 0–1 (wasmtime не нужен)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CRATES="-p canvas-core -p canvas-render -p canvas-widgets -p canvas-mcp -p canvas-web -p canvas-suggest"
+
+# Ступень 0 (FR-079 S3-fix): время — только через canvas_core::time.
+# cargo check этот класс бага не ловит (std::time компилируется под
+# wasm32, но паникует в рантайме — «time not implemented on this
+# platform», фриз web-приложения), поэтому статический аудит идёт ПЕРВЫМ.
+echo "[wasm-gate 0/3] python3 scripts/wasm_time_audit.py (статический гейт времени W1)"
+python3 scripts/wasm_time_audit.py
 
 echo "[wasm-gate 1/3] cargo check --target wasm32-unknown-unknown $CRATES"
 cargo check --target wasm32-unknown-unknown $CRATES
