@@ -58,6 +58,12 @@ content text). Реестр — 40 инструментов.
   и проверка» (6).
 - README — счётчик 40, назначение скилла verify дополнено.
 
+- `canvasdesk-mcp` (v4, профиль Hermes) — обновлён каталог (41 инструмент), карта скиллов, подводные камни (`fromLine` для текстовых источников в батче).
+- `canvasdesk-model-build` (создан) — сборка через `graph_apply`.
+- `canvasdesk-model-verify` (создан) — `flow_recalc`/`lineage`/`explain_number`.
+- `canvasdesk-whatif` (создан) — сценарии (`Holiday x3`/`Holiday x5`).
+- Архитектурная модель построена: 20 нод, 18 value-рёбер (`kind: "value"`), агрегаторы БД, раскладка (`node_move`), `node_resize` по содержимому, `viewport_set`.
+
 ## v1 — 2026-09-22
 
 Начальный пакет: 4 скилла, синхронизированы с реестром из 39
