@@ -109,7 +109,8 @@ pub const CATEGORY_ROW_H: f32 = 26.0;
 pub const ROW_HEIGHT: f32 = 52.0;
 /// Высота заголовка секции категории (Miro-стиль группировки).
 pub const SECTION_HEIGHT: f32 = 24.0;
-/// Максимум видимых строк-шаблонов (далее — прокрутка стрелками).
+/// Максимум видимых строк-шаблонов (далее — прокрутка стрелками и колесом
+/// FR-082).
 pub const MAX_VISIBLE_ROWS: usize = 12;
 /// Сторона квад-иконки в строке панели (логические px).
 pub const TEMPLATE_ROW_ICON: f32 = 18.0;
@@ -118,6 +119,10 @@ pub const TEMPLATE_ROW_TILE: f32 = 28.0;
 /// Окно прокрутки в строках (секции+шаблоны вперемешку) — для
 /// следования выделения при клавиатурной навигации.
 pub const SCROLL_WINDOW: usize = 14;
+/// FR-082: строк списка за один щелчок колеса над развёрнутой панелью
+/// (60+ шаблонов реального реестра: построчный шаг медлителен; у flyout
+/// свёрнутой полосы шаг остаётся построчным — там другой контекст).
+pub const PANEL_WHEEL_LINES: i32 = 3;
 /// Высота футера-подсказки панели (CR-011): резервируется в геометрии,
 /// строки списка под неё не заходят.
 pub const PANEL_FOOTER_H: f32 = 24.0;
@@ -304,6 +309,15 @@ impl TemplatePanel {
         }
         true
     }
+
+    /// FR-082: прокрутка списка развёрнутой панели колесом — кламп к
+    /// `[0, max_scroll]` (max_scroll считает `panel_layout` — «приклейка
+    /// хвоста»). Знак — как у списков: колесо от себя (LineDelta y < 0)
+    /// увеличивает scroll_top; шаг строк — `PANEL_WHEEL_LINES`.
+    pub fn scroll_by(&mut self, delta: i32, max_scroll: usize) {
+        let cur = self.scroll_top as i32;
+        self.scroll_top = (cur + delta).clamp(0, max_scroll as i32) as usize;
+    }
 }
 
 /// Default для совместимости (`TemplatePanel::new` — свёрнутая полоса).
@@ -455,6 +469,11 @@ pub struct PanelLayout {
     /// Кнопка сворачивания дока в шапке (FR-025; 22×22 у правого края
     /// шапки) — единый rect для рендера и hit-test.
     pub collapse_rect: [f32; 4],
+    /// FR-082: максимум `scroll_top` (кламп колеса) — «приклейка хвоста»:
+    /// наибольший старт, при котором хвост списка ещё целиком у нижней
+    /// границы окна строк, а число шаблонов хвоста ≤ `MAX_VISIBLE_ROWS`.
+    /// 0 — прокрутка не нужна (всё влезает).
+    pub max_scroll: usize,
 }
 
 /// Ширина полосы категорий свёрнутой палитры (ревизия FR-025, 2026-09-16),
@@ -921,6 +940,67 @@ pub fn panel_layout(
         rows: visible_rows,
         footer_rect,
         collapse_rect: [collapse[1].x, collapse[1].y, collapse[1].w, collapse[1].h],
+        max_scroll: PanelLayout::max_scroll_of(rows, rows_top, bottom_limit),
+    }
+}
+
+impl PanelLayout {
+    /// FR-082: «приклейка хвоста» — наибольшее `scroll_top`, при котором
+    /// панель показывает хвост списка ЦЕЛИКОМ (последняя строка у нижней
+    /// границы окна строк), а число шаблонов хвоста ≤ `MAX_VISIBLE_ROWS`
+    /// (иначе отображение обрывается кэпом раньше конца). Оба условия
+    /// монотонны по старту хвоста (хвост только укорачивается) — ответ
+    /// = max(граница по высоте, граница по кэпу шаблонов); suffix-суммы
+    /// дают O(n) без повторных прогонов раскладки. Условие видимости
+    /// строки i при старте s — то же, что в цикле выше:
+    /// `rows_top + Σ шагов(s..i) + card_h(i) ≤ bottom_limit` ⟹ весь
+    /// хвост s..len виден ⟺ `Σ шагов(s..len−1) + card_h(len−1) ≤
+    /// rows_area`.
+    fn max_scroll_of(rows: &[PanelRow], rows_top: f32, bottom_limit: f32) -> usize {
+        let len = rows.len();
+        if len == 0 {
+            return 0;
+        }
+        let rows_area = (bottom_limit - rows_top).max(0.0);
+        let step = |row: &PanelRow| match row {
+            PanelRow::Section(_) => SECTION_HEIGHT,
+            PanelRow::Template(_) => ROW_HEIGHT,
+        };
+        let card_h = |row: &PanelRow| match row {
+            PanelRow::Section(_) => SECTION_HEIGHT,
+            PanelRow::Template(_) => ROW_HEIGHT - 4.0,
+        };
+        // suffix_steps[i] — сумма шагов строк i..len; suffix_templates[i] —
+        // число шаблонов в i..len
+        let mut suffix_steps = vec![0.0f32; len + 1];
+        let mut suffix_templates = vec![0usize; len + 1];
+        for i in (0..len).rev() {
+            suffix_steps[i] = suffix_steps[i + 1] + step(&rows[i]);
+            suffix_templates[i] = suffix_templates[i + 1]
+                + if matches!(rows[i], PanelRow::Template(_)) {
+                    1
+                } else {
+                    0
+                };
+        }
+        let last_card_h = card_h(rows.last().expect("len > 0"));
+        // Граница по высоте: наименьшее s, при котором высота хвоста
+        // s..len целиком ≤ rows_area; len — даже последняя строка не
+        // влезает (панель теснее одной строки) — прокрутки нет
+        let by_height = (0..len)
+            .find(|&s| suffix_steps[s] - suffix_steps[len - 1] + last_card_h <= rows_area)
+            .unwrap_or(len);
+        if by_height >= len {
+            return 0;
+        }
+        // Граница по кэпу шаблонов: наименьшее s, при котором в хвосте
+        // не больше MAX_VISIBLE_ROWS шаблонов (последняя строка — всегда
+        // шаблон: каждая секция сопровождается своим шаблоном — инвариант
+        // panel_rows, — значит by_cap ≤ len−1 заведомо)
+        let by_cap = (0..len)
+            .find(|&s| suffix_templates[s] <= MAX_VISIBLE_ROWS)
+            .unwrap_or(len - 1);
+        by_height.max(by_cap)
     }
 }
 
@@ -2031,5 +2111,73 @@ mod tests {
             geo2.hit(sector_probe(&geo2, tpl)),
             Some(WheelHit::Template(0))
         );
+    }
+
+    // --- FR-082: колесо над развёрнутой панелью ---
+
+    /// scroll_by: кламп к [0, max_scroll], max=0 — прокрутки нет.
+    #[test]
+    fn panel_scroll_by_clamps() {
+        let mut panel = TemplatePanel::new();
+        panel.open = true;
+        panel.scroll_by(5, 7);
+        assert_eq!(panel.scroll_top, 5);
+        panel.scroll_by(100, 7);
+        assert_eq!(panel.scroll_top, 7, "кламп сверху");
+        panel.scroll_by(-100, 7);
+        assert_eq!(panel.scroll_top, 0, "кламп снизу");
+        panel.scroll_by(3, 0);
+        assert_eq!(panel.scroll_top, 0, "max=0 — прокрутки нет");
+    }
+
+    /// FR-082: «приклейка хвоста» — при scroll_top = max_scroll последняя
+    /// строка списка видна; маленький реестр даёт max_scroll = 0.
+    #[test]
+    fn panel_max_scroll_tail_glued_to_bottom() {
+        let registry = TemplateRegistry::builtin();
+        let mut panel = TemplatePanel::new();
+        panel.open = true;
+        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        let lay = panel_layout(1280.0, 800.0, &registry, &panel, &rows, &mut m, &mut fs);
+        if template_row_count(&rows) <= MAX_VISIBLE_ROWS {
+            // Всё влезает (мелкий реестр) — прокрутка не нужна
+            assert_eq!(lay.max_scroll, 0, "полный список влезает — скролла нет");
+            return;
+        }
+        assert!(
+            lay.max_scroll > 0,
+            "реестр {} шаблонов в 800px — прокрутка нужна",
+            template_row_count(&rows)
+        );
+        // При scroll_top = max_scroll последняя строка видна (хвост
+        // приклеен к нижней границе окна строк)
+        let mut scrolled = TemplatePanel::new();
+        scrolled.open = true;
+        scrolled.scroll_top = lay.max_scroll;
+        let lay2 = panel_layout(1280.0, 800.0, &registry, &scrolled, &rows, &mut m, &mut fs);
+        assert_eq!(lay2.rows.last(), rows.last(), "последняя строка видна");
+        assert!(!lay2.rows.is_empty(), "хвост не пуст");
+        // Кламп колеса: прокрутка дальше max не двигает
+        let mut panel3 = TemplatePanel::new();
+        panel3.open = true;
+        panel3.scroll_by(i32::MAX / 2, lay.max_scroll);
+        assert_eq!(panel3.scroll_top, lay.max_scroll, "кламп к max_scroll");
+    }
+
+    /// FR-082: панель уже одной строки (микроокно) — max_scroll = 0
+    /// (прокрутка бессмысленна, раскладка ничего не показывает).
+    #[test]
+    fn panel_max_scroll_micro_window_is_zero() {
+        let registry = registry();
+        let mut panel = TemplatePanel::new();
+        panel.open = true;
+        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        // Высота окна меньше верхнего отступа — окно строк отрицательное
+        let lay = panel_layout(1280.0, 10.0, &registry, &panel, &rows, &mut m, &mut fs);
+        assert_eq!(lay.max_scroll, 0, "микроокно — прокрутки нет");
     }
 }
