@@ -3153,40 +3153,46 @@ impl App {
             return;
         }
         self.push_undo();
-        // Один FontSystem + TextMeasurer на batch (а не на ноду —
-        // паттерн auto_width_for_text_with). ~1мс на setup, экономит
-        // N× по сравнению с auto_width_for_text.
-        let mut fs = canvas_render::text::measure_font_system();
-        let mut m = canvas_ui::measure::TextMeasurer::new();
+        // Измерения — в отдельном блоке, чтобы MutexGuard на FontSystem
+        // (MEASURE_FS) отпустился ДО recompute_flow / request_redraw.
+        // На WASM (single-threaded) удержание лока через потенциально
+        // дорогие вызовы чревато зависанием: если что-то из нижестоящего
+        // триггерит текстовый замер (через многие слои), Mutex::lock
+        // второго вызова будет ждать первого → бесконечный spin. Лучше
+        // держать лок минимально, сразу дропнуть.
         let mut changed = false;
-        for &index in &self.selected_nodes {
-            // get_mut через split_at_mut — обход borrow checker: нельзя
-            // держать &mut node и &mut spatial одновременно через self.scene.
-            // Паттерн: вынести выборку индексов, потом для каждого — get_mut
-            // + spatial.update (как в finish_editing line 2308).
-            let new_width = {
-                let Some(node) = self.scene.canvas.nodes.get(index) else {
+        {
+            let mut fs = canvas_render::text::measure_font_system();
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            for &index in &self.selected_nodes {
+                // Вынести измерение в отдельный scope, чтобы borrow
+                // node.text (immutable) закончился до get_mut ниже.
+                let new_width = {
+                    let Some(node) = self.scene.canvas.nodes.get(index) else {
+                        continue;
+                    };
+                    if node.template().is_some() {
+                        continue; // шаблонная нода — пропустить
+                    }
+                    if node.kind() == NodeKind::Group {
+                        continue; // группа — пропустить
+                    }
+                    crate::auto_width::auto_width_for_text_with(
+                        node.text.as_deref(),
+                        &mut m,
+                        &mut fs,
+                    )
+                };
+                let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
                     continue;
                 };
-                if node.template().is_some() {
-                    continue; // шаблонная нода — пропустить
+                if (node.width - new_width).abs() > 0.5 {
+                    node.width = new_width;
+                    self.scene.spatial.update(index, node);
+                    changed = true;
                 }
-                // Группа — пропустить (kind проверяем через NodeKind,
-                // re-exported в crate canvas_core).
-                if node.kind() == NodeKind::Group {
-                    continue;
-                }
-                crate::auto_width::auto_width_for_text_with(node.text.as_deref(), &mut m, &mut fs)
-            };
-            let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
-                continue;
-            };
-            if (node.width - new_width).abs() > 0.5 {
-                node.width = new_width;
-                self.scene.spatial.update(index, node);
-                changed = true;
             }
-        }
+        } // fs и m дропнуты здесь — Mutex MEASURE_FS свободен.
         if changed {
             self.scene.mark_dirty();
             self.scene.recompute_flow();
