@@ -3,6 +3,24 @@
 Формат: версия пакета, дата, изменения. Правила ведения —
 [UPDATE-PROTOCOL.md](UPDATE-PROTOCOL.md).
 
+## v7 — 2026-10-01
+
+FR-081 (расстановка нод для агента + защита высоты): новый инструмент
+`nodes_layout_apply` — раскладка одним вызовом: mode "grid" (rows —
+порядок чтения со скриншота схемы: колонки/ряды, зазоры, авторасширение
+рамок групп) и mode "smart" (смысловая раскладка всего канваса,
+plan_scheme_layout FR-071). Защита высоты (FR-081): node_resize /
+node_edit / node_create_note / graph_apply больше НЕ применяют высоту
+меньше измеренного контента — рост-only кламп (node_resize отвечает
+height_clamped/min_height). Реестр — 43 инструмента (native).
+
+- `canvasdesk-model-build` (v4) — шаг 5 «Раскладка и визуальная
+  доводка»: сигнатура nodes_layout_apply (grid/smart/fit), инвариант
+  клампа высоты FR-081.
+- `references/tools.md` — секция «Раскладка (1)», уточнены
+  node_resize/node_edit/node_create_note (кламп), счётчик 43.
+- README — версия пакета v7 (счётчик 42 → 43).
+
 ## v6 — 2026-10-01
 
 FR-012 v4 (MCP-паритет UI «Сгруппировать»): новый инструмент
