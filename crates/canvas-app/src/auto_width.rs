@@ -2,10 +2,17 @@
 //!
 //! Контракт: «10 средних слов в одну строку» — целевая ширина контента
 //! ~420 лог. px (10 слов × ~6 chars × ~7 px/char при TYPE_BODY=14px).
-//! Измерение — через [`canvas_ui::measure::TextMeasurer`] с тем же
-//! шейпером cosmic-text, что у рендера (CR-015 паритет). Для пустого
-//! текста — целевая ширина (нода создаётся «на вырост», чтобы при
-//! вводе 10 слов не дёргалась).
+//! Ширина ВСЕГДА равна `TARGET_CONTENT_WIDTH + HORIZONTAL_PADDING`
+//! (440px), кламп к [MIN, MAX]. Не адаптируется к фактической длине
+//! текста — нода с 1 словом и нода с 100 словами обе будут 440px wide
+//! (длинный текст врапится в N строк). Это产品的ое решение владельца:
+//! «чтобы в одну строку влезало до 10 слов средней длинны» — значит
+//! ширина под 10 слов, не под контент.
+//!
+//! Параметры `text`, `m`, `fs` сохранены в API для будущих расширений
+//! (например, если для 1-словных заметок захотим shrink-to-fit), но
+//! сейчас НЕ используются — measured_width игнорируется. Тесты
+//! проверяют, что вызов возвращает константу независимо от текста.
 //!
 //! Стыковка с моделью: [`App::create_note_at`] создаёт новую заметку
 //! с `width = auto_width_for_text(None)` вместо хардкод-дефолта 260.
@@ -20,6 +27,10 @@
 //! - целевая ширина контента = `TARGET_CONTENT_WIDTH` (см. ниже)
 //! - суммарная ширина = контент + `BODY_PADDING × 2`
 
+// Импорты сохранены для будущей поддержки измерения (сейчас не нужны
+// — функция возвращает константу). Не убираем, чтобы не ломать API
+// callers, которые уже передают TextMeasurer/FontSystem.
+#![allow(unused_imports)]
 use canvas_core::tokens::TYPE_BODY;
 use canvas_render::text::{measure_font_system, SANS_FAMILY};
 use canvas_ui::measure::TextMeasurer;
@@ -45,60 +56,27 @@ pub const HORIZONTAL_PADDING: f32 = 20.0;
 
 /// Рассчитать ширину ноды по её тексту.
 ///
-/// Алгоритм:
-/// 1. Пустой / None текст → `TARGET_CONTENT_WIDTH + HORIZONTAL_PADDING`
-///    (нода создаётся «на вырост» — при вводе до 10 слов не дёргается).
-/// 2. Непустой текст: измеряем однострочную ширину через TextMeasurer.
-///    Если текст влезает в TARGET (≤ 420) → ширина = измеренная +
-///    padding (но не меньше MIN). Если не влезает (> 420) →
-///    `TARGET + padding` (текст врапится в N строк; высота ноды не
-///    трогается — рендер обрежет по высоте).
-/// 3. Кламп к [MIN, MAX].
+/// Всегда возвращает `TARGET_CONTENT_WIDTH + HORIZONTAL_PADDING`
+/// (440px), кламп к [MIN, MAX]. Текст не измеряется — константа
+/// «10 слов в одну строку» одна для всех нод (см. владелец FR-080:
+/// «чтобы в одну строку влезало до 10 слов средней длинны»).
 ///
-/// Замер дорогостоящий (cosmic-text шейпинг) — кэш TextMeasurer
-/// делает повторные вызовы дешёвыми. Создание FontSystem на каждый
-/// вызов — ~1мс (бенчмарки docs_ui); для batch-применения к N нодам
-/// переиспользуем один FontSystem (см. [`auto_width_for_text_with`]).
-pub fn auto_width_for_text(text: Option<&str>) -> f32 {
-    let mut fs = measure_font_system();
-    let mut m = TextMeasurer::new();
-    auto_width_for_text_with(text, &mut m, &mut fs)
+/// Параметр `text` сохранён в API для будущих расширений (например,
+/// shrink для очень коротких заметок), но сейчас не используется.
+pub fn auto_width_for_text(_text: Option<&str>) -> f32 {
+    (TARGET_CONTENT_WIDTH + HORIZONTAL_PADDING).clamp(MIN_NODE_WIDTH, MAX_NODE_WIDTH)
 }
 
 /// Вариант с переиспользуемыми TextMeasurer/FontSystem — для batch
-/// (apply ко всем выделенным нодам). Избегает перевыделения FontSystem
-/// на каждый узел (паттерн `measure_font_system()` возвращает
-/// `MutexGuard<'static, FontSystem>` — переиспользуем).
+/// (apply ко всем выделенным нодам). Параметры НЕ используются —
+/// функция возвращает ту же константу, что и [`auto_width_for_text`].
+/// Сохранены в сигнатуре для будущих расширений и обратной совместимости.
 pub fn auto_width_for_text_with(
-    text: Option<&str>,
-    m: &mut TextMeasurer,
-    fs: &mut cosmic_text::FontSystem,
+    _text: Option<&str>,
+    _m: &mut TextMeasurer,
+    _fs: &mut cosmic_text::FontSystem,
 ) -> f32 {
-    let content = match text {
-        Some(s) if !s.is_empty() => s,
-        _ => {
-            return (TARGET_CONTENT_WIDTH + HORIZONTAL_PADDING)
-                .clamp(MIN_NODE_WIDTH, MAX_NODE_WIDTH)
-        }
-    };
-    // Берём первую строку — она определяет минимальную ширину
-    // (рендер переносит по словам, но не рвёт одно слово). Если
-    // первая строка длиннее TARGET — она определит, в сколько строк
-    // разложится текст; берём min(измерянная, TARGET) и clamp.
-    let first_line = content.lines().next().unwrap_or("");
-    let measured = if first_line.is_empty() {
-        // Пустая первая строка (text = "\nfoo") — измеряем вторую
-        content
-            .lines()
-            .nth(1)
-            .filter(|s| !s.is_empty())
-            .map(|s| m.width_of(fs, s, SANS_FAMILY, TYPE_BODY))
-            .unwrap_or(0.0)
-    } else {
-        m.width_of(fs, first_line, SANS_FAMILY, TYPE_BODY)
-    };
-    let content_width = measured.clamp(0.0, TARGET_CONTENT_WIDTH);
-    (content_width + HORIZONTAL_PADDING).clamp(MIN_NODE_WIDTH, MAX_NODE_WIDTH)
+    auto_width_for_text(_text)
 }
 
 #[cfg(test)]
@@ -111,84 +89,53 @@ mod tests {
         auto_width_for_text_with(Some(text), &mut m, &mut fs)
     }
 
+    const EXPECTED: f32 =
+        (TARGET_CONTENT_WIDTH + HORIZONTAL_PADDING).clamp(MIN_NODE_WIDTH, MAX_NODE_WIDTH);
+
     #[test]
     fn empty_text_returns_target_width() {
         let w = auto_width_for_text(None);
-        assert!((w - (TARGET_CONTENT_WIDTH + HORIZONTAL_PADDING)).abs() < 0.01);
-        assert!(w >= MIN_NODE_WIDTH && w <= MAX_NODE_WIDTH);
+        assert!((w - EXPECTED).abs() < 0.01);
     }
 
     #[test]
     fn empty_string_returns_target_width() {
         let w = auto_width_for_text(Some(""));
-        assert!((w - (TARGET_CONTENT_WIDTH + HORIZONTAL_PADDING)).abs() < 0.01);
+        assert!((w - EXPECTED).abs() < 0.01);
     }
 
     #[test]
-    fn short_text_returns_measured_plus_padding() {
-        // "abc" — короткое слово; измерянная ширина + padding.
+    fn short_text_returns_target_width() {
+        // Раньше "abc" давал measured + padding (мало). Сейчас —
+        // константа TARGET+padding (440px), как просил владелец:
+        // «чтобы в одну строку влезало до 10 слов средней длинны» —
+        // не под фактический контент, а под целевую ширину.
         let w = measure("abc");
-        assert!(
-            w > HORIZONTAL_PADDING,
-            "w={}, padding={}",
-            w,
-            HORIZONTAL_PADDING
-        );
-        assert!(w >= MIN_NODE_WIDTH, "w={} < min={}", w, MIN_NODE_WIDTH);
+        assert!((w - EXPECTED).abs() < 0.01, "w={} expected {}", w, EXPECTED);
     }
 
     #[test]
-    fn long_text_capped_at_target_plus_padding() {
-        // Очень длинная однострочная "палка" — cap к TARGET + padding.
-        // (NOT MAX — MAX is a safety net for super-long single words,
-        // not the standard rule. Standard rule: target wraps to N lines.)
+    fn long_text_returns_target_width() {
+        // Длинный текст тоже 440px (врапится в N строк).
         let w = measure(&"a".repeat(500));
-        // measured of "aaa...500" exceeds TARGET, so content_width=TARGET=420.
-        // width = 420 + 20 = 440. Cap clamps to [200, 600] — 440 is in range.
-        assert!(
-            (w - (TARGET_CONTENT_WIDTH + HORIZONTAL_PADDING)).abs() < 1.0,
-            "w={} expected ~{} (target+padding)",
-            w,
-            TARGET_CONTENT_WIDTH + HORIZONTAL_PADDING
-        );
+        assert!((w - EXPECTED).abs() < 0.01, "w={} expected {}", w, EXPECTED);
     }
 
     #[test]
-    fn medium_text_capped_at_target_when_exceeds() {
-        // 30 слов по 5 букв = 150 chars — измерянная ширина > TARGET.
+    fn medium_text_returns_target_width() {
+        // 30 слов — тоже 440px (врапится в 3 строки).
         let long = "abcde ".repeat(30);
         let w = measure(&long);
-        // Должна быть в районе TARGET + padding (текст врапится).
-        assert!(w <= MAX_NODE_WIDTH, "w={} > max={}", w, MAX_NODE_WIDTH);
-        assert!(
-            (w - (TARGET_CONTENT_WIDTH + HORIZONTAL_PADDING)).abs() < 5.0,
-            "w={} expected ~{} (target+padding)",
-            w,
-            TARGET_CONTENT_WIDTH + HORIZONTAL_PADDING
-        );
+        assert!((w - EXPECTED).abs() < 0.01, "w={} expected {}", w, EXPECTED);
     }
 
     #[test]
-    fn multilinetext_uses_first_line() {
-        // Первая строка длиннее второй — ширина по измерению первой.
-        // 48 'a' chars — measured ширина меньше TARGET (420), потому что
-        // 'a' узкий глиф. Ширина = measured + padding, clamped к min.
+    fn multilinetext_returns_target_width() {
+        // Многострочный текст — тоже 440px. Раньше мерили первую
+        // строку, для расчётных нод с короткими строками это давало
+        // 150-200px (3-4 слова) — баг FR-080 (жалоба владельца).
         let w = measure("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nb");
-        // measured of 48 'a's < TARGET, так что content_width = measured.
-        // width = measured + 20, clamped to [200, 600].
-        assert!(
-            w >= MIN_NODE_WIDTH && w <= MAX_NODE_WIDTH,
-            "w={} out of bounds",
-            w
-        );
-        // Width should NOT exceed TARGET + padding (48 'a' chars is
-        // shorter than 60-char target line).
-        assert!(
-            w <= TARGET_CONTENT_WIDTH + HORIZONTAL_PADDING + 1.0,
-            "w={} > target+padding={}",
-            w,
-            TARGET_CONTENT_WIDTH + HORIZONTAL_PADDING
-        );
+        assert!((w - EXPECTED).abs() < 0.01, "w={} expected {}", w, EXPECTED);
     }
 
     #[test]
@@ -205,5 +152,16 @@ mod tests {
                 MAX_NODE_WIDTH
             );
         }
+    }
+
+    #[test]
+    fn all_text_variants_return_same_constant() {
+        // Инвариант: текст не влияет на результат — константа.
+        let empty = auto_width_for_text(None);
+        let one_word = measure("x");
+        let long = measure(&"word ".repeat(100));
+        assert!((empty - one_word).abs() < 0.01);
+        assert!((empty - long).abs() < 0.01);
+        assert!((empty - EXPECTED).abs() < 0.01);
     }
 }
