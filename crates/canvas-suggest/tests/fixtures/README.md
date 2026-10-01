@@ -14,6 +14,8 @@
 | `catalog_names.json` | имена шаблонов каталога (key, name_ru, name_en) — для lex v2 | архив, `harness/corpus/templates/` (62 манифеста) | 62 |
 | `domain_schemes.jsonl` | схемы канвасов для домен-детектора | репо, `assets/canvas-schemes/` | 14 схем (3 framework), 36 карвингов |
 | `context_pairs.jsonl` | пары вход→контекст для byte-теста сериализатора | сняты с эталонного `serialize.py` на схемах репо | 8 |
+| `catalog_options.json` | описания опций `template_option` (ключ/имена/описания/параметры + эталон ru/en) — golden порта `catalog.rs` (S3) | сняты с эталонного `serialize.py: template_option` по корпусу архива | 62 |
+| `shortlist_picked.json` | picked-наборы L0-префильтра (контекст + категория схемы → отобранные ключи) — golden порта `shortlist.rs` (S3) | сняты с эталонного `shortlist.py: shortlist(golden="")` по evalset (категория — правило synth.py) | 226 |
 
 Контроль целостности (sha256, первые 16 символов):
 

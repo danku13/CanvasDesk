@@ -28,12 +28,14 @@
 //! test 0.4681; show-гейт 37/39. Гейты CI: см. `tests/golden_*.rs`.
 
 pub mod bm25;
+pub mod catalog;
 pub mod context;
 pub mod domain;
 pub mod fusion;
 pub mod gate;
 pub mod lex;
 pub mod lex_v2;
+pub mod shortlist;
 pub mod tokenizer;
 pub mod types;
 

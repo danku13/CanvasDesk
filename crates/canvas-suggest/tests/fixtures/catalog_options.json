@@ -1,0 +1,1641 @@
+[
+ {
+  "key": "ab-test",
+  "name_ru": "Значимость A/B теста",
+  "name_en": "A/B Test Significance",
+  "description": "Статистическая значимость A/B теста: pooled z-тест двух пропорций — двусторонний p-value различия конверсий контроля и варианта. p < 0.05 — различие значимо (стандарт alpha = 5%); p < 0.01 — сильно значимо; p ≥ 0.05 — эффекта нет или выборка мала (проверьте размер выборки ab_sample_size до старта теста). Дефолты: 200/10000 (2%) против 260/10000 (2.6%) → p ≈ 0.0047, значимый рост. Выходы для value-рёбер: lift — относительный прирост (+30% в дефолте), zscore — z-статистика, ci_a/ci_b — полуширины 95% ДИ конверсий. Тест запускают только после фиксации гипотезы и MDE — подглядывание на промежуточных данных завышает ложные срабатывания. Метрика growth/PM для оценки результатов экспериментов.",
+  "description_en": "Statistical significance of an A/B test: pooled two-proportion z-test — two-sided p-value of the conversion difference between control and variant. p < 0.05 — significant (standard alpha = 5%); p < 0.01 — highly significant; p ≥ 0.05 — no effect or the sample is too small (check the sample size with ab_sample_size before starting the test). Defaults: 200/10000 (2%) vs 260/10000 (2.6%) → p ≈ 0.0047, significant lift. Outputs for value edges: lift — relative gain (+30% in defaults), zscore — z-statistic, ci_a/ci_b — half-widths of 95% CIs for both conversions. Run the test only after fixing the hypothesis and MDE — peeking at intermediate data inflates false positives. A growth/PM metric for experiment readouts.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "conversions_a",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "visitors_a",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "conversions_b",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "visitors_b",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Значимость A/B теста: Статистическая значимость A/B теста: pooled z-тест; params: conversions_a(count), visito",
+  "option_en": "A/B Test Significance: Statistical significance of an A/B test:; params: conversions_a(count), visitors_a(coun"
+ },
+ {
+  "key": "api-gateway",
+  "name_ru": "API-шлюз",
+  "name_en": "API Gateway",
+  "description": "API-шлюз: бюджет латентности минус overhead аутентификации.",
+  "description_en": "API gateway: latency budget minus auth overhead.",
+  "category": "backend",
+  "params": [
+   {
+    "name": "rps",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "latency_budget",
+    "unit": "ms",
+    "type": "time"
+   },
+   {
+    "name": "auth_overhead",
+    "unit": "ms",
+    "type": "time"
+   }
+  ],
+  "option_ru": "API-шлюз: API-шлюз: бюджет латентности минус overhead аутентификации; params: rps(rps), latency_budget(ms), au",
+  "option_en": "API Gateway: API gateway: latency budget minus auth; params: rps(rps), latency_budget(ms), auth_overhead(ms)"
+ },
+ {
+  "key": "auth-service",
+  "name_ru": "Сервис аутентификации",
+  "name_en": "Auth Service",
+  "description": "Аутентификация: верификация токенов, cache_ttl — справочный.",
+  "description_en": "Auth service: token verification, cache_ttl informational.",
+  "category": "backend",
+  "params": [
+   {
+    "name": "rps",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "token_verify",
+    "unit": "ms",
+    "type": "time"
+   },
+   {
+    "name": "cache_ttl",
+    "unit": "min",
+    "type": "time"
+   }
+  ],
+  "option_ru": "Сервис аутентификации: Аутентификация: верификация токенов, cache_ttl — справочный; params: rps(rps), token_ve",
+  "option_en": "Auth Service: Auth service: token verification, cache_ttl informational; params: rps(rps), token_verify(ms), c"
+ },
+ {
+  "key": "cache-redis",
+  "name_ru": "Кэш (Redis)",
+  "name_en": "Cache (Redis)",
+  "description": "Кэш: нагрузка с учётом hit rate, латентность вытеснения.",
+  "description_en": "Cache: load with hit rate, eviction latency.",
+  "category": "backend",
+  "params": [
+   {
+    "name": "qps",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "hit_rate",
+    "unit": null,
+    "type": "scalar"
+   },
+   {
+    "name": "eviction_latency",
+    "unit": "ms",
+    "type": "time"
+   }
+  ],
+  "option_ru": "Кэш (Redis): Кэш: нагрузка с учётом hit rate,; params: qps(rps), hit_rate(scalar), eviction_latency(ms)",
+  "option_en": "Cache (Redis): Cache: load with hit rate, eviction; params: qps(rps), hit_rate(scalar), eviction_latency(ms)"
+ },
+ {
+  "key": "capacity-planner",
+  "name_ru": "Планировщик мощности",
+  "name_en": "Capacity Planner",
+  "description": "Сколько экземпляров сервиса нужно: закон Литтла L = λ × W даёт число параллельных запросов в системе, деление на concurrent-ёмкость инстанса — искомый флот. Планирование перед релизом и промо: подставьте ожидаемый RPS и время ответа — получите число машин, а не догадку. Запас: закладывайте target utilization 60–70% от результата.",
+  "description_en": "How many service instances you need: Little's law L = λ × W gives concurrent requests in system; dividing by per-instance concurrency capacity yields the fleet size. Plan before launches and promos: plug in expected RPS and response time — get a number, not a guess. Headroom: target 60–70% utilization of the result.",
+  "category": "backend",
+  "params": [
+   {
+    "name": "rps",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "response_time",
+    "unit": "ms",
+    "type": "time"
+   },
+   {
+    "name": "concurrency_per_instance",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Планировщик мощности: Сколько экземпляров сервиса нужно: закон Литтла; params: rps(rps), response_time(ms), co",
+  "option_en": "Capacity Planner: How many service instances you need:; params: rps(rps), response_time(ms), concurrency_per_i"
+ },
+ {
+  "key": "cdn",
+  "name_ru": "CDN",
+  "name_en": "CDN",
+  "description": "CDN: промахи кэша уходят в origin, латентность фетча.",
+  "description_en": "CDN: cache misses go to origin, fetch latency.",
+  "category": "backend",
+  "params": [
+   {
+    "name": "rps",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "cache_hit",
+    "unit": null,
+    "type": "scalar"
+   },
+   {
+    "name": "origin_latency",
+    "unit": "ms",
+    "type": "time"
+   }
+  ],
+  "option_ru": "CDN: CDN: промахи кэша уходят в origin,; params: rps(rps), cache_hit(scalar), origin_latency(ms)",
+  "option_en": "CDN: CDN: cache misses go to origin,; params: rps(rps), cache_hit(scalar), origin_latency(ms)"
+ },
+ {
+  "key": "db-nosql",
+  "name_ru": "БД NoSQL (Mongo)",
+  "name_en": "NoSQL DB (Mongo)",
+  "description": "Документная БД: шарды как каналы обслуживания, модель M/M/c по операциям. Рабочий набор (working set) — справочный параметр: если он не влезает в RAM, реальная латентность выше модельной. Используется парой с db-sql-master при выборе хранилища под профиль нагрузки.",
+  "description_en": "Document store: shards act as service channels, M/M/c over operations. The working set is advisory — if it doesn't fit in RAM, real latency exceeds the model. Pairs with db-sql-master when choosing a store for your load profile.",
+  "category": "backend",
+  "params": [
+   {
+    "name": "ops_per_sec",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "doc_latency",
+    "unit": "ms",
+    "type": "time"
+   },
+   {
+    "name": "shards",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "working_set_gb",
+    "unit": "GB",
+    "type": "bytes"
+   }
+  ],
+  "option_ru": "БД NoSQL (Mongo): Документная БД: шарды как каналы обслуживания,; params: ops_per_sec(rps), doc_latency(ms), s",
+  "option_en": "NoSQL DB (Mongo): Document store: shards act as service; params: ops_per_sec(rps), doc_latency(ms), shards(cou"
+ },
+ {
+  "key": "db-sql-master",
+  "name_ru": "БД SQL (мастер)",
+  "name_en": "DB SQL (master)",
+  "description": "Мастер БД: μ = 1 / query_time.",
+  "description_en": "SQL master DB: μ = 1 / query_time.",
+  "category": "backend",
+  "params": [
+   {
+    "name": "qps",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "query_time",
+    "unit": "ms",
+    "type": "time"
+   },
+   {
+    "name": "replicas",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "replica_share",
+    "unit": null,
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "БД SQL (мастер): Мастер БД: μ = 1 /; params: qps(rps), query_time(ms), replicas(count)",
+  "option_en": "DB SQL (master): SQL master DB: μ = 1; params: qps(rps), query_time(ms), replicas(count)"
+ },
+ {
+  "key": "db-sql-replica",
+  "name_ru": "БД SQL (реплика)",
+  "name_en": "DB SQL (replica)",
+  "description": "Реплика БД: пул читателей, lag — справочный параметр.",
+  "description_en": "SQL DB replica: reader pool, lag is informational.",
+  "category": "backend",
+  "params": [
+   {
+    "name": "qps",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "query_time",
+    "unit": "ms",
+    "type": "time"
+   },
+   {
+    "name": "replicas",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "lag",
+    "unit": "ms",
+    "type": "time"
+   }
+  ],
+  "option_ru": "БД SQL (реплика): Реплика БД: пул читателей, lag —; params: qps(rps), query_time(ms), replicas(count)",
+  "option_en": "DB SQL (replica): SQL DB replica: reader pool, lag; params: qps(rps), query_time(ms), replicas(count)"
+ },
+ {
+  "key": "graphql",
+  "name_ru": "GraphQL",
+  "name_en": "GraphQL",
+  "description": "GraphQL: сложность запроса умножает нагрузку на резолверы.",
+  "description_en": "GraphQL: query complexity multiplies resolver load.",
+  "category": "network",
+  "params": [
+   {
+    "name": "rps",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "avg_complexity",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "resolver_time",
+    "unit": "ms",
+    "type": "time"
+   },
+   {
+    "name": "db_read_share",
+    "unit": null,
+    "type": "scalar"
+   },
+   {
+    "name": "cache_hit",
+    "unit": null,
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "GraphQL: GraphQL: сложность запроса умножает нагрузку на; params: rps(rps), avg_complexity(count), resolver_ti",
+  "option_en": "GraphQL: GraphQL: query complexity multiplies resolver load; params: rps(rps), avg_complexity(count), resolver"
+ },
+ {
+  "key": "grpc-service",
+  "name_ru": "gRPC-сервис",
+  "name_en": "gRPC Service",
+  "description": "gRPC-сервис: латентность вызова, окно стрима — справочное.",
+  "description_en": "gRPC service: call latency, stream window informational.",
+  "category": "network",
+  "params": [
+   {
+    "name": "rps",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "timeout",
+    "unit": "ms",
+    "type": "time"
+   },
+   {
+    "name": "stream_window",
+    "unit": "KB",
+    "type": "bytes"
+   }
+  ],
+  "option_ru": "gRPC-сервис: gRPC-сервис: латентность вызова, окно стрима —; params: rps(rps), timeout(ms), stream_window(KB)",
+  "option_en": "gRPC Service: gRPC service: call latency, stream window; params: rps(rps), timeout(ms), stream_window(KB)"
+ },
+ {
+  "key": "http-endpoint",
+  "name_ru": "HTTP-эндпоинт",
+  "name_en": "HTTP Endpoint",
+  "description": "HTTP-эндпоинт с пулом соединений, keepalive — справочный.",
+  "description_en": "HTTP endpoint with a connection pool, keepalive informational.",
+  "category": "network",
+  "params": [
+   {
+    "name": "rps",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "timeout",
+    "unit": "sec",
+    "type": "time"
+   },
+   {
+    "name": "keepalive",
+    "unit": "sec",
+    "type": "time"
+   },
+   {
+    "name": "max_connections",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "HTTP-эндпоинт: HTTP-эндпоинт с пулом соединений, keepalive —; params: rps(rps), timeout(sec), keepalive(sec)",
+  "option_en": "HTTP Endpoint: HTTP endpoint with a connection pool,; params: rps(rps), timeout(sec), keepalive(sec)"
+ },
+ {
+  "key": "infra-cost",
+  "name_ru": "Стоимость инфраструктуры в месяц",
+  "name_en": "Infra Monthly Cost",
+  "description": "Месячная стоимость инфраструктуры: compute (инстансы × цена) + хранение (ГБ × цена ГБ) + egress (ТБ × цена ТБ) в одной формуле. Быстрая прикидка бюджета до счёта облака и what-if при смене тарифов или региона. Добавьте слагаемые под свою архитектуру — формула это обычный Numi-список.",
+  "description_en": "Monthly infrastructure cost: compute (instances × price) + storage (GB × GB price) + egress (TB × TB price) in one formula. Quick budget estimate before the cloud bill arrives and a what-if tool when plans or regions change. Extend the summands to your architecture — the formula is a plain Numi sheet.",
+  "category": "backend",
+  "params": [
+   {
+    "name": "servers",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "server_cost",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "storage_gb",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "storage_cost_gb",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "egress_tb",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "egress_cost_tb",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "Стоимость инфраструктуры в месяц: Месячная стоимость инфраструктуры: compute (инстансы ×; params: servers(coun",
+  "option_en": "Infra Monthly Cost: Monthly infrastructure cost: compute (instances ×; params: servers(count), server_cost(руб"
+ },
+ {
+  "key": "lb",
+  "name_ru": "Балансировщик нагрузки",
+  "name_en": "Load Balancer",
+  "description": "L7-балансировщик: модель M/M/c, время ответа кластера.",
+  "description_en": "L7 load balancer: M/M/c cluster response time.",
+  "category": "backend",
+  "params": [
+   {
+    "name": "rps",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "service_rate",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "servers",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Балансировщик нагрузки: L7-балансировщик: модель M/M/c, время ответа кластера; params: rps(rps), service_rate(",
+  "option_en": "Load Balancer: L7 load balancer: M/M/c cluster response; params: rps(rps), service_rate(rps), servers(count)"
+ },
+ {
+  "key": "pa-activation",
+  "name_ru": "Активация (процент активированных)",
+  "name_en": "Activation Rate",
+  "description": "Активация: доля зарегистрировавшихся, кто достиг первого value-момента (a-ha moment). Коррелят с D1 retention и платной конверсией: без активации пользователь не возвращается и не платит. Activation ≥ 60% — здорово; < 30% — onboarding не доводит до value, нужны product changes. Определяется через конкретный product event (отправка первого сообщения, создание первого проекта, запуск первого workflow). Метрика growth-команды для onboarding optimization и north-star metric tracking.",
+  "description_en": "Activation: share of signups who reach the first value moment (a-ha moment). Correlates with D1 retention and paid conversion: without activation, users don't return and don't pay. Activation ≥ 60% is healthy; < 30% means onboarding isn't reaching value and needs product changes. Defined by a specific product event (first message sent, first project created, first workflow run). A growth-team metric for onboarding optimisation and north-star metric tracking.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "signups",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "activated",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Активация (процент активированных): Активация: доля зарегистрировавшихся, кто достиг первого; params: signups(",
+  "option_en": "Activation Rate: Activation: share of signups who reach; params: signups(count), activated(count)"
+ },
+ {
+  "key": "pa-avg-lifetime",
+  "name_ru": "Среднее время жизни клиента",
+  "name_en": "Average User Lifetime",
+  "description": "Средняя продолжительность жизни пользователя: 1 / месячный отток — в месяцах. Прямой вход для LTV (ARPU × margin × lifetime) и MAU-прогноза. Чувствителен к малому оттоку: снижение churn с 5% до 4% удлиняет жизнь с 20 до 25 месяцев (+25%) — поэтому retention-работа часто выгоднее роста притока.",
+  "description_en": "Average user lifetime: 1 / monthly churn — in months. Direct input for LTV (ARPU × margin × lifetime) and MAU projections. Highly sensitive to small churn: cutting churn from 5% to 4% extends life from 20 to 25 months (+25%) — which is why retention work often beats acquisition growth.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "monthly_churn",
+    "unit": null,
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "Среднее время жизни клиента: Средняя продолжительность жизни пользователя: 1 /; params: monthly_churn(scalar)",
+  "option_en": "Average User Lifetime: Average user lifetime: 1 / monthly; params: monthly_churn(scalar)"
+ },
+ {
+  "key": "pa-engagement-rate",
+  "name_ru": "Уровень вовлечённости",
+  "name_en": "Engagement Rate",
+  "description": "Уровень вовлечённости: active_users / total_users — доля активных пользователей в зарегистрированной базе за период. Главный метрик health product: рост базы без роста engagement — growth bubble, которая лопнет при следующей волне churn. Engagement ≥ 50% — здорово; < 20% — много спящих аккаунтов, нужна reactivation campaign. Используется для сегментации базы: активные / спящие / умершие — каждой группе своя стратегия. Метрика growth и CRM для win-back initiatives и email-nurture campaigns.",
+  "description_en": "Engagement rate: active_users / total_users — share of active users in the registered base over the period. Headline product-health metric: base growth without engagement growth is a bubble that pops in the next churn wave. Engagement ≥ 50% is healthy; < 20% means many dormant accounts need a reactivation campaign. Used to segment the base: active / dormant / dead — each group gets its own strategy. A growth and CRM metric for win-back initiatives and email-nurture campaigns.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "active_users",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "total_users",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Уровень вовлечённости: Уровень вовлечённости: active_users / total_users —; params: active_users(count), total",
+  "option_en": "Engagement Rate: Engagement rate: active_users / total_users —; params: active_users(count), total_users(count"
+ },
+ {
+  "key": "pa-feature-adoption",
+  "name_ru": "Внедрение фичи",
+  "name_en": "Feature Adoption Rate",
+  "description": "Внедрение фичи: feature_users / total_users — доля пользователей, попробовавших конкретную функцию. Метрика здоровья фичи и её ценности для пользователей: высокая adoption — фича решает реальную задачу. Feature adoption ≥ 30% — фича востребована и стоит в roadmap; < 10% — проблема в discovery, дизайне или ценности. Используется для приоритизации roadmap и kill-list (фичи с < 5% adoption — кандидаты на удаление или редизайн). Метрика продакт-менеджера для quarterly feature audit и roadmap prioritisation.",
+  "description_en": "Feature adoption: feature_users / total_users — share of users who tried a specific feature. Health and value indicator: high adoption means the feature solves a real problem. Adoption ≥ 30% is in demand and stays on the roadmap; < 10% flags a discovery, design or value problem. Used for roadmap prioritisation and the kill-list (features with < 5% adoption are candidates for removal or redesign). A product-manager metric for the quarterly feature audit and roadmap prioritisation.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "total_users",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "feature_users",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Внедрение фичи: Внедрение фичи: feature_users / total_users —; params: total_users(count), feature_users(count",
+  "option_en": "Feature Adoption Rate: Feature adoption: feature_users / total_users —; params: total_users(count), feature_us"
+ },
+ {
+  "key": "pa-funnel-conv",
+  "name_ru": "Конверсия воронки",
+  "name_en": "Funnel Conversion Rate",
+  "description": "Конверсия воронки: step_final / step1 — итоговая доля пользователей, дошедших от первого до последнего шага воронки. Главная метрика для анализа трения в onboarding и checkout — где больше всего потерь. Conversion ≥ 10% — хорошо для free-to-paid воронки; ≥ 30% — для trial-to-paid; < 5% — проблема в одном из промежуточных шагов. Используется для пошаговой диагностики: шаг с наибольшим drop-off — приоритет для оптимизации. Метрика growth-команды для weekly conversion review и A/B testing.",
+  "description_en": "Funnel conversion: step_final / step1 — share of users who reach the final step from the first. Headline metric for onboarding and checkout friction — where most loss happens. Conversion ≥ 10% is good for a free-to-paid funnel; ≥ 30% for trial-to-paid; < 5% flags a problem in one of the intermediate steps. Used for step-by-step diagnosis: the step with the biggest drop-off is the optimisation priority. A growth-team metric for weekly conversion review and A/B testing.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "step1",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "step_final",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Конверсия воронки: Конверсия воронки: step_final / step1 —; params: step1(count), step_final(count)",
+  "option_en": "Funnel Conversion Rate: Funnel conversion: step_final / step1 —; params: step1(count), step_final(count)"
+ },
+ {
+  "key": "pa-funnel-step",
+  "name_ru": "Пошаговая конверсия воронки",
+  "name_en": "Funnel Step Conversion",
+  "description": "Конверсия между двумя соседними шагами воронки — где именно теряются пользователи. В отличие от сквозной pa-funnel-conv (итог/старт) локализует проблемный шаг: правило приоритезации — чинить самый провальный шаг, а не самый заметный. Дополнительные шаги считайте каскадом нод: конверсия воронки = произведение пошаговых.",
+  "description_en": "Conversion between two adjacent funnel steps — pinpointing where users drop. Unlike the end-to-end pa-funnel-conv (final/first), it localizes the problem step: prioritization rule — fix the leakiest step, not the loudest one. Chain nodes for extra steps: overall funnel conversion = product of step conversions.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "step_prev",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "step_next",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Пошаговая конверсия воронки: Конверсия между двумя соседними шагами воронки; params: step_prev(count), step_ne",
+  "option_en": "Funnel Step Conversion: Conversion between two adjacent funnel steps; params: step_prev(count), step_next(coun"
+ },
+ {
+  "key": "pa-k-factor",
+  "name_ru": "K-фактор (виральность)",
+  "name_en": "K-Factor (Virality)",
+  "description": "Виральный коэффициент: приглашений (рефералов) на пользователя × конверсия приглашения. K > 1 — каждый пользователь приводит больше одного нового, рост самоподдерживается и CAC стремится к нулю; K < 1 — виральность лишь снижает CAC, но не заменяет платный трафик. Измеряется по цепочке: приглашение → регистрация → активация, иначе конверсия завышена.",
+  "description_en": "Viral coefficient: referrals (invites) per user × invite conversion. K > 1 — each user brings more than one new one, growth is self-sustaining and CAC trends to zero; K < 1 — virality merely lowers CAC, it does not replace paid acquisition. Measure across the chain: invite → signup → activation, otherwise conversion is overstated.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "referrals_per_user",
+    "unit": null,
+    "type": "scalar"
+   },
+   {
+    "name": "referral_conversion",
+    "unit": null,
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "K-фактор (виральность): Виральный коэффициент: приглашений (рефералов) на пользователя; params: referrals_per_",
+  "option_en": "K-Factor (Virality): Viral coefficient: referrals (invites) per user; params: referrals_per_user(scalar), refe"
+ },
+ {
+  "key": "pa-mau-projection",
+  "name_ru": "MAU-прогноз (закон Литтла)",
+  "name_en": "MAU Projection",
+  "description": "Прогноз месячной аудитории без симуляций: MAU = установки в день × среднее время жизни пользователя в днях (закон Литтла для пользователей). Время жизни = 1 / месячный отток — подставьте из pa-avg-lifetime. Показывает главный рычаг роста MAU: не только приток, но и удержание — минус один день жизни часто стоит как +N установок.",
+  "description_en": "Monthly audience forecast without simulations: MAU = daily installs × average user lifetime in days (Little's law applied to users). Lifetime = 1 / monthly churn — take it from pa-avg-lifetime. Exposes the main MAU lever: not only inflow but retention — one extra lifetime day often equals +N installs.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "daily_installs",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "avg_lifetime_days",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "MAU-прогноз (закон Литтла): Прогноз месячной аудитории без симуляций: MAU; params: daily_installs(count), avg_",
+  "option_en": "MAU Projection: Monthly audience forecast without simulations: MAU; params: daily_installs(count), avg_lifetim"
+ },
+ {
+  "key": "pa-nps",
+  "name_ru": "NPS (индекс лояльности)",
+  "name_en": "Net Promoter Score",
+  "description": "Индекс лояльности: 100 × (promoters − detractors) / total — от −100 до +100. Главный показатель удовлетворённости и willingness to recommend — proxy для word-of-mouth growth. NPS ≥ 50 — отлично (Apple, Amazon); 0–30 — нормально для зрелого B2B SaaS; < 0 — серьёзная проблема с качеством продукта или сервиса. NPS коррелирует с retention и referral revenue — low NPS предсказывает churn за квартал. Собирается через post-purchase / post-cancel опросы; важен не абсолют, а динамика. Метрика customer experience и CEO для quarterly review.",
+  "description_en": "Net Promoter Score: 100 × (promoters − detractors) / total — from −100 to +100. Headline satisfaction and willingness-to-recommend metric — a proxy for word-of-mouth growth. NPS ≥ 50 is excellent (Apple, Amazon); 0–30 is normal for mature B2B SaaS; < 0 flags a serious product or service quality problem. NPS correlates with retention and referral revenue — low NPS predicts churn a quarter ahead. Collected via post-purchase / post-cancel surveys; the trend matters more than the absolute. A customer experience and CEO metric for quarterly review.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "promoters",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "detractors",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "total_responses",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "NPS (индекс лояльности): Индекс лояльности: 100 × (promoters −; params: promoters(count), detractors(count), t",
+  "option_en": "Net Promoter Score: Net Promoter Score: 100 × (promoters; params: promoters(count), detractors(count), total_r"
+ },
+ {
+  "key": "pa-retention-d1",
+  "name_ru": "Удержание D1",
+  "name_en": "Day 1 Retention",
+  "description": "Удержание первого дня: cohort_d1 / cohort_d0 — доля пользователей, вернувшихся на следующий день после установки/регистрации. Ключевой сигнал о первом впечатлении продукта и качестве onboarding flow. D1 retention ≥ 40% — хорошо для consumer apps; ≥ 60% — для B2B SaaS; < 25% — серьёзная проблема с активацией или value proposition. Используется вместе с D7/D30 для построения полной retention curve и оценки здоровья cohorts. Метрика growth-команды для A/B тестов onboarding и first-run experience.",
+  "description_en": "Day 1 retention: cohort_d1 / cohort_d0 — share of users returning the day after install or signup. Key signal of first impression and onboarding flow quality. D1 retention ≥ 40% is good for consumer apps; ≥ 60% for B2B SaaS; < 25% flags a serious activation or value-proposition problem. Used together with D7/D30 to build the full retention curve and assess cohort health. A growth-team metric for onboarding A/B tests and first-run experience design.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "cohort_d0",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "cohort_d1",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Удержание D1: Удержание первого дня: cohort_d1 / cohort_d0; params: cohort_d0(count), cohort_d1(count)",
+  "option_en": "Day 1 Retention: Day 1 retention: cohort_d1 / cohort_d0; params: cohort_d0(count), cohort_d1(count)"
+ },
+ {
+  "key": "pa-retention-d30",
+  "name_ru": "Удержание D30",
+  "name_en": "Day 30 Retention",
+  "description": "Удержание тридцатого дня: cohort_d30 / cohort_d0 — доля активных пользователей через месяц после установки. Главный показатель health продукта и предиктор платной конверсии: без D30 retention сложно построить устойчивый SaaS. D30 retention ≥ 10% — здорово для consumer apps; ≥ 25% — для B2B SaaS; < 5% — продукт не задерживает пользователей. SaaS benchmark: D30 > 40% означает, что воронка от signup до paid работает и можно масштабировать acquisition. Метрика growth и customer success для cohort analysis и retention initiatives.",
+  "description_en": "Day 30 retention: cohort_d30 / cohort_d0 — share of users still active a month after install. Headline product-health metric and predictor of paid conversion: without D30 retention, sustainable SaaS is hard. D30 retention ≥ 10% is healthy for consumer apps; ≥ 25% for B2B SaaS; < 5% means the product isn't retaining users. SaaS benchmark: D30 > 40% signals the signup-to-paid funnel works and acquisition can be scaled. A growth and customer success metric for cohort analysis and retention initiatives.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "cohort_d0",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "cohort_d30",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Удержание D30: Удержание тридцатого дня: cohort_d30 / cohort_d0; params: cohort_d0(count), cohort_d30(count)",
+  "option_en": "Day 30 Retention: Day 30 retention: cohort_d30 / cohort_d0; params: cohort_d0(count), cohort_d30(count)"
+ },
+ {
+  "key": "pa-retention-d7",
+  "name_ru": "Удержание D7",
+  "name_en": "Day 7 Retention",
+  "description": "Удержание седьмого дня: cohort_d7 / cohort_d0 — доля пользователей, всё ещё активных через неделю после установки. Показывает, сформировалась ли у пользователя привычка к продукту за первую неделю. D7 retention ≥ 25% — хорошо для consumer apps; ≥ 40% — для B2B SaaS; < 15% — проблема с value delivery или onboarding depth. Сравнивается с D1 для оценки «drop-off» между первым днём и неделей — большая дельта = проблема в привычке. Метрика продакт-менеджера для weekly product review и feature engagement analysis.",
+  "description_en": "Day 7 retention: cohort_d7 / cohort_d0 — share of users still active a week after install. Shows whether the user has formed a product habit during the first week. D7 retention ≥ 25% is good for consumer apps; ≥ 40% for B2B SaaS; < 15% flags a value-delivery or onboarding-depth problem. Compared with D1 to gauge the drop-off between day 1 and week 1 — a big delta signals a habit problem. A product-manager metric for weekly product review and feature-engagement analysis.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "cohort_d0",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "cohort_d7",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Удержание D7: Удержание седьмого дня: cohort_d7 / cohort_d0; params: cohort_d0(count), cohort_d7(count)",
+  "option_en": "Day 7 Retention: Day 7 retention: cohort_d7 / cohort_d0; params: cohort_d0(count), cohort_d7(count)"
+ },
+ {
+  "key": "pa-session-duration",
+  "name_ru": "Средняя длительность сессии",
+  "name_en": "Average Session Duration",
+  "description": "Средняя длительность сессии: total_session_time / sessions — сколько минут пользователь проводит в продукте за визит. Метрика engagement depth: длинные сессии — продукт решает важную задачу, короткие — quick utility. Сравнивается по сегментам (mobile vs desktop, free vs paid) для оценки engagement-разрыва и приоритизации платформы. Длинные сессии в free-tier — кандидат на upsell в paid: пользователь уже получает value, можно требовать денег. Короткие сессии в paid — сигнал, что фичи не используются в полной мере. Метрика продакт-менеджера для engagement analysis и pricing tier design.",
+  "description_en": "Average session duration: total_session_time / sessions — minutes a user spends in the product per visit. Engagement-depth metric: long sessions mean the product solves an important problem; short means quick utility. Compared across segments (mobile vs desktop, free vs paid) to gauge the engagement gap and prioritise platforms. Long sessions in the free tier are an upsell candidate — the user already gets value, you can charge. Short sessions in paid suggest features aren't fully used. A product-manager metric for engagement analysis and pricing-tier design.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "total_session_time",
+    "unit": "min",
+    "type": "time"
+   },
+   {
+    "name": "sessions",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Средняя длительность сессии: Средняя длительность сессии: total_session_time / sessions; params: total_session",
+  "option_en": "Average Session Duration: Average session duration: total_session_time / sessions; params: total_session_time("
+ },
+ {
+  "key": "pa-sessions-per-user",
+  "name_ru": "Сессии на пользователя",
+  "name_en": "Sessions per User",
+  "description": "Частота сессий: сессий / пользователей за период. Глубина привычки: вместе с длительностью сессии и stickiness образует триаду вовлечённости. Бенчмарки сильно зависят от жанра: ежедневные утилиты — 15+ сессий в неделю, социальные — 5–10, e-commerce — 1–2. Растёт чаще от триггеров и уведомлений, чем от новых фич.",
+  "description_en": "Session frequency: sessions / users per period. Habit depth: together with session duration and stickiness it forms the engagement triad. Benchmarks vary by genre: daily utilities 15+ sessions/week, social 5–10, e-commerce 1–2. Frequency usually moves by triggers and notifications, not new features.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "sessions",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "users",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Сессии на пользователя: Частота сессий: сессий / пользователей за; params: sessions(count), users(count)",
+  "option_en": "Sessions per User: Session frequency: sessions / users per; params: sessions(count), users(count)"
+ },
+ {
+  "key": "pa-stickiness",
+  "name_ru": "Stickiness (DAU / MAU)",
+  "name_en": "DAU / MAU Stickiness",
+  "description": "Stickiness: DAU / MAU — насколько часто месячные активные пользователи возвращаются в продукт каждый день. Главный индикатор сформированной привычки: > 50% — отлично (WhatsApp, Facebook), 20–50% — хорошо (утилиты, B2B SaaS), < 20% — продукт не сформировал daily habit. Коррелирует с retention: низкий stickiness ведёт к высокому churn в платной базе в следующем периоде. Сравнивается между сегментами (mobile/desktop, free/paid) для оценки engagement-разрыва. Метрика продакт-менеджера для daily engagement review и feature prioritisation.",
+  "description_en": "Stickiness: DAU / MAU — how often monthly active users come back to the product daily. Headline habit indicator: > 50% is excellent (WhatsApp, Facebook); 20–50% is good (utilities, B2B SaaS); < 20% means the product hasn't formed a daily habit. Correlates with retention: low stickiness leads to high churn in the paid base next period. Compared across segments (mobile/desktop, free/paid) to spot engagement gaps. A product-manager metric for daily engagement review and feature prioritisation.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "dau",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "mau",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Stickiness (DAU / MAU): Stickiness: DAU / MAU — насколько; params: dau(count), mau(count)",
+  "option_en": "DAU / MAU Stickiness: Stickiness: DAU / MAU — how; params: dau(count), mau(count)"
+ },
+ {
+  "key": "pa-ttfv",
+  "name_ru": "Время до первой ценности (TTFV)",
+  "name_en": "Time to First Value",
+  "description": "Время до первой ценности: минуты от регистрации до момента, когда пользователь получил первый value. Главный рычаг активации: чем быстрее TTFV, тем выше D1 retention и платная конверсия. SaaS-стандарт: TTFV < 15 минут для self-serve onboarding; < 1 дня для assisted sales. Длинный TTFV — кандидат на friction-аудит signup flow и first-run experience. Используется для A/B тестов: каждая минута сокращения TTFV коррелирует с ростом retention. Метрика growth и UX-команды для onboarding experiments.",
+  "description_en": "Time to first value: minutes from signup to the moment the user receives the first value. Headline activation lever: faster TTFV drives higher D1 retention and paid conversion. SaaS standard: TTFV < 15 minutes for self-serve onboarding; < 1 day for assisted sales. Long TTFV is a candidate for a friction audit of signup flow and first-run experience. Used for A/B testing: each minute shaved off TTFV correlates with higher retention. A growth and UX-team metric for onboarding experiments.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "signup_time_min",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "value_moment_time_min",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Время до первой ценности (TTFV): Время до первой ценности: минуты от; params: signup_time_min(count), value_mo",
+  "option_en": "Time to First Value: Time to first value: minutes from; params: signup_time_min(count), value_moment_time_min("
+ },
+ {
+  "key": "pa-user-churn",
+  "name_ru": "Отток пользователей",
+  "name_en": "User Churn Rate",
+  "description": "Отток пользователей: (active_t0 − active_t1 + new_t1) / active_t0 — доля потерянных пользователей за период с учётом новых. Отличается от revenue churn: user churn считает головы, revenue churn — деньги; расхождение сигнализирует о потере крупных клиентов. User churn > 10% в месяц — критично для SaaS; < 5% — здорово для устойчивого роста. Коррелирует с retention: низкий D30 → высокий user churn в следующем периоде — это lagging indicator. Метрика customer success и growth для retention initiatives и quarterly goal-setting.",
+  "description_en": "User churn: (active_t0 − active_t1 + new_t1) / active_t0 — share of users lost in the period, net of new signups. Differs from revenue churn: user churn counts heads, revenue churn counts money; divergence signals loss of large customers. User churn > 10%/month is critical for SaaS; < 5% is healthy for sustainable growth. Correlates with retention: low D30 → high user churn next period — a lagging indicator. A customer success and growth metric for retention initiatives and quarterly goal-setting.",
+  "category": "product-analytics",
+  "params": [
+   {
+    "name": "active_t0",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "active_t1",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "new_t1",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Отток пользователей: Отток пользователей: (active_t0 − active_t1 +; params: active_t0(count), active_t1(count)",
+  "option_en": "User Churn Rate: User churn: (active_t0 − active_t1 +; params: active_t0(count), active_t1(count), new_t1(coun"
+ },
+ {
+  "key": "queue-kafka",
+  "name_ru": "Очередь (Kafka)",
+  "name_en": "Queue (Kafka)",
+  "description": "Очередь: партиция как канал обслуживания, retention — справочный.",
+  "description_en": "Queue: partition as service channel, retention informational.",
+  "category": "backend",
+  "params": [
+   {
+    "name": "produce_rate",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "partition_consume",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "partitions",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "retention",
+    "unit": "h",
+    "type": "time"
+   }
+  ],
+  "option_ru": "Очередь (Kafka): Очередь: партиция как канал обслуживания, retention; params: produce_rate(rps), partition_con",
+  "option_en": "Queue (Kafka): Queue: partition as service channel, retention; params: produce_rate(rps), partition_consume(rp"
+ },
+ {
+  "key": "rate-limiter",
+  "name_ru": "Ограничитель скорости (rate limiter)",
+  "name_en": "Rate Limiter",
+  "description": "Пропускаемый поток при квоте: min(входящий поток, лимит) — что реально пройдёт, остальное троттлится. Выходы: загрузка квоты и перебор сверх лимита. Ставьте лимит ниже ёмкости нижестоящего сервиса — это автоматический предохранитель каскадных отказов.",
+  "description_en": "Throughput that passes under a quota: min(incoming rate, limit) — the rest gets throttled. Outputs: quota utilization and excess above the limit. Keep the limit below downstream capacity — it is the automatic fuse against cascading failures.",
+  "category": "network",
+  "params": [
+   {
+    "name": "rps",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "limit_rate",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "burst",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Ограничитель скорости (rate limiter): Пропускаемый поток при квоте: min(входящий поток,; params: rps(rps), lim",
+  "option_en": "Rate Limiter: Throughput that passes under a quota:; params: rps(rps), limit_rate(rps), burst(count)"
+ },
+ {
+  "key": "storage-s3",
+  "name_ru": "Хранилище (S3)",
+  "name_en": "Storage (S3)",
+  "description": "Объектное хранилище: латентность запроса, размер объекта — справочный.",
+  "description_en": "Object storage: request latency, object size informational.",
+  "category": "backend",
+  "params": [
+   {
+    "name": "requests_per_sec",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "latency",
+    "unit": "ms",
+    "type": "time"
+   },
+   {
+    "name": "object_size",
+    "unit": "KB",
+    "type": "bytes"
+   }
+  ],
+  "option_ru": "Хранилище (S3): Объектное хранилище: латентность запроса, размер объекта; params: requests_per_sec(rps), laten",
+  "option_en": "Storage (S3): Object storage: request latency, object size; params: requests_per_sec(rps), latency(ms), object"
+ },
+ {
+  "key": "support-staffing",
+  "name_ru": "Штат поддержки (Эрланг C)",
+  "name_en": "Support Staffing (Erlang C)",
+  "description": "Вероятность ожидания ответа оператора (M/M/c, формула Эрланга C): поток обращений, среднее время обработки и число агентов → доля клиентов, которые будут ждать в очереди. Классика контакт-центров и SLA-планирования: при P_wait > 30% клиенты массово бросают очередь. Подбором агентов добейтесь целевого уровня сервиса (например, 80/20).",
+  "description_en": "Probability of waiting for an agent (M/M/c, Erlang C): ticket inflow, average handling time and number of agents → share of customers who will have to wait. Contact-center classic for SLA planning: at P_wait > 30% customers increasingly abandon the queue. Tune the agent count to hit your service-level target (e.g. 80/20).",
+  "category": "backend",
+  "params": [
+   {
+    "name": "calls_per_sec",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "handle_time",
+    "unit": "sec",
+    "type": "time"
+   },
+   {
+    "name": "agents",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Штат поддержки (Эрланг C): Вероятность ожидания ответа оператора (M/M/c, формула; params: calls_per_sec(rps), ",
+  "option_en": "Support Staffing (Erlang C): Probability of waiting for an agent; params: calls_per_sec(rps), handle_time(sec)"
+ },
+ {
+  "key": "tcp-lb",
+  "name_ru": "TCP-балансировщик",
+  "name_en": "TCP Load Balancer",
+  "description": "L4-балансировщик TCP-соединений по серверам.",
+  "description_en": "L4 balancer distributing TCP connections across servers.",
+  "category": "network",
+  "params": [
+   {
+    "name": "connections_per_sec",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "server_rate",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "servers",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "auth_share",
+    "unit": null,
+    "type": "scalar"
+   },
+   {
+    "name": "feed_share",
+    "unit": null,
+    "type": "scalar"
+   },
+   {
+    "name": "media_share",
+    "unit": null,
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "TCP-балансировщик: L4-балансировщик TCP-соединений по серверам; params: connections_per_sec(rps), server_rate(",
+  "option_en": "TCP Load Balancer: L4 balancer distributing TCP connections across; params: connections_per_sec(rps), server_r"
+ },
+ {
+  "key": "ue-aov",
+  "name_ru": "AOV (средний чек)",
+  "name_en": "Average Order Value",
+  "description": "Средний чек: revenue / orders — средняя стоимость одного заказа в e-commerce. AOV растёт при up-sell, кросс-сейле и премиальных продуктах; падает при скидках, распродажах или росте доли дешёвых SKU. Ключевая метрика для ритейла и маркетплейсов — определяет revenue per transaction и качество корзины. Сравнивается с CAC и margin для оценки прибыльности каналов привлечения: высокий AOV при низком CAC — золотая жила. Метрика e-commerce-менеджера и маркетинга при pricing strategy и merchandising decisions.",
+  "description_en": "Average order value: revenue / orders — the average value of a single order in e-commerce. AOV grows with up-sell, cross-sell and premium products; falls with discounts, promos or rising share of cheap SKUs. A core metric for retail and marketplaces — drives revenue per transaction and basket quality. Compared with CAC and margin to gauge channel profitability: high AOV against low CAC is a goldmine. An e-commerce-manager and marketing metric for pricing strategy and merchandising decisions.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "revenue",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "orders",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "AOV (средний чек): Средний чек: revenue / orders —; params: revenue(руб), orders(count)",
+  "option_en": "Average Order Value: Average order value: revenue / orders; params: revenue(руб), orders(count)"
+ },
+ {
+  "key": "ue-arppu",
+  "name_ru": "ARPPU (средняя выручка на платящего)",
+  "name_en": "Average Revenue Per Paying User",
+  "description": "Средняя выручка на платящего пользователя: MRR / paying users. В отличие от ARPU, считает только платящую базу — реальную монетизацию клиентов. ARPPU растёт при up-sell и премиальных тарифах; падает при демпинге или больших скидках. Важна для freemium-моделей, где большая часть базы — бесплатные пользователи, и ARPU не отражает качество монетизации. Метрика финансового отдела при анализе ценовой эластичности и тарифной сетки.",
+  "description_en": "Average revenue per paying user: MRR / paying users. Unlike ARPU, it counts only the paying base — real monetization quality. ARPPU grows with up-sell and premium plans; drops with discounting or heavy promo codes. Critical for freemium models where most of the base is free and ARPU masks monetization quality. A finance metric for price elasticity and pricing-grid analysis.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "mrr",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "paying_users",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "ARPPU (средняя выручка на платящего): Средняя выручка на платящего пользователя: MRR; params: mrr(руб), paying",
+  "option_en": "Average Revenue Per Paying User: Unlike ARPU, it counts only the; params: mrr(руб), paying_users(count)"
+ },
+ {
+  "key": "ue-arpu",
+  "name_ru": "ARPU (средняя выручка на пользователя)",
+  "name_en": "Average Revenue Per User",
+  "description": "Средняя выручка на пользователя в месяц: MRR / total users. Показывает монетизацию всей активной базы, включая бесплатные и платящие аккаунты. Растёт при up-sell, cross-sell или смене тарифа; падает при росте бесплатной базы или демпинге. Используется для сравнения тарифных планов, когорт и каналов привлечения между собой. Метрика продакт-менеджера и маркетинга при анализе ценовой стратегии и pricing experiments.",
+  "description_en": "Average revenue per user per month: MRR / total users. Shows monetization across the entire active base, including free and paid accounts. Grows with up-sell, cross-sell or plan upgrades; falls when free base grows or pricing drops. Used to compare plans, cohorts and acquisition channels against one another. A product-management and marketing metric for pricing strategy and pricing experiments.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "mrr",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "total_users",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "ARPU (средняя выручка на пользователя): Средняя выручка на пользователя в месяц:; params: mrr(руб), total_user",
+  "option_en": "Average Revenue Per User: Average revenue per user per month:; params: mrr(руб), total_users(count)"
+ },
+ {
+  "key": "ue-arr",
+  "name_ru": "ARR (годовая регулярная выручка)",
+  "name_en": "Annual Recurring Revenue",
+  "description": "Годовая регулярная выручка: MRR × 12 — run-rate подписочной выручки на ближайший год. Ключевая метрика оценки SaaS-компаний, используется инвесторами для valuation (мультипликатор revenue × ARR-множитель). ARR растёт за счёт new MRR и expansion; падает на churn — каждый процент churn уменьшает ARR прямо пропорционально. Сравнивается с планом и previous year для оценки темпов роста и scale. Метрика CEO и CFO для board meeting, investment pitches и M&A discussions.",
+  "description_en": "Annual recurring revenue: MRR × 12 — forward-looking run-rate of subscription revenue. Key SaaS valuation metric; investors price companies as revenue × ARR multiple. ARR grows via new MRR and expansion; falls on churn — each percentage point of churn cuts ARR proportionally. Compared against plan and prior year to gauge growth velocity and scale. A CEO and CFO metric for board meetings, investment pitches and M&A discussions.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "mrr",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "ARR (годовая регулярная выручка): Годовая регулярная выручка: MRR × 12; params: mrr(руб)",
+  "option_en": "Annual Recurring Revenue: Annual recurring revenue: MRR × 12; params: mrr(руб)"
+ },
+ {
+  "key": "ue-break-even",
+  "name_ru": "Точка безубыточности",
+  "name_en": "Break-Even Point",
+  "description": "Точка безубыточности: сколько единиц в месяц нужно продавать, чтобы маржинальная прибыль покрыла постоянные затраты: fixed / (price − variable). Цена должна быть выше переменных издержек — иначе бизнес теряет на каждой единице и точка не существует. Пары с contribution margin: чем выше доля маржи, тем ниже точка и устойчивее модель.",
+  "description_en": "Break-even point: how many units per month must be sold for the contribution to cover fixed costs: fixed / (price − variable). Price must exceed variable cost — otherwise the business loses money on every unit and the point does not exist. Pairs with contribution margin: the higher the margin share, the lower the break-even and the sturdier the model.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "fixed_costs",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "price",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "variable_cost",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "Точка безубыточности: Точка безубыточности: сколько единиц в месяц; params: fixed_costs(руб), price(руб), vari",
+  "option_en": "Break-Even Point: Break-even point: how many units per; params: fixed_costs(руб), price(руб), variable_cost(ру"
+ },
+ {
+  "key": "ue-burn-multiple",
+  "name_ru": "Burn Multiple (множитель сжигания)",
+  "name_en": "Burn Multiple",
+  "description": "Сколько рублей кэша сжигается на каждый рубль нового ARR: net burn / net new ARR. Метрика Дэвида Сакса — качество роста: ≤ 1 — отлично, 1–2 — нормально, 2–3 — тревожно, > 3 — рост слишком дорогой. В отличие от magic number учитывает весь burn, а не только S&M — честнее для компаний с тяжёлым R&D.",
+  "description_en": "How many rubles of cash are burned per ruble of new ARR: net burn / net new ARR. David Sacks' metric of growth quality: ≤ 1 — excellent, 1–2 — acceptable, 2–3 — concerning, > 3 — growth is too expensive. Unlike the magic number it accounts for the whole burn, not just S&M — fairer for heavy-R&D companies.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "net_burn",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "net_new_arr",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "Burn Multiple (множитель сжигания): Сколько рублей кэша сжигается на каждый; params: net_burn(руб), net_new_ar",
+  "option_en": "Burn Multiple: How many rubles of cash are; params: net_burn(руб), net_new_arr(руб)"
+ },
+ {
+  "key": "ue-burn-rate",
+  "name_ru": "Скорость сжигания денег (месячный burn)",
+  "name_en": "Monthly Burn Rate",
+  "description": "Скорость сжигания денег: (cash_start − cash_end) / period_months — средний месячный расход кэша. Главный показатель финансовой устойчивости для pre-profit компаний. Burn Rate определяет, сколько времени компания проживёт до следующего раунда или profitability — это.clock, отсчитывающий время до zero cash. Растёт при найме и маркетинговых расходах; падает при cost optimization и revenue growth. Метрика CFO и CEO на weekly cash review — от неё зависит решение о раунде, найме или сокращении расходов.",
+  "description_en": "Burn rate: (cash_start − cash_end) / period_months — average monthly cash consumption. The key financial-sustainability metric for pre-profit companies. Burn rate dictates how long the company survives before its next round or profitability — it's the clock counting down to zero cash. Rises with hiring and marketing spend; falls with cost optimisation and revenue growth. A CFO and CEO metric for weekly cash review; drives round, hiring and cost-cut decisions.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "cash_start",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "cash_end",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "period_months",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Скорость сжигания денег (месячный burn): Скорость сжигания денег: (cash_start − cash_end); params: cash_start(",
+  "option_en": "Monthly Burn Rate: Burn rate: (cash_start − cash_end) /; params: cash_start(руб), cash_end(руб), period_months"
+ },
+ {
+  "key": "ue-cac",
+  "name_ru": "CAC (стоимость привлечения клиента)",
+  "name_en": "Customer Acquisition Cost",
+  "description": "Стоимость привлечения одного нового клиента: маркетинговый бюджет, поделённый на количество новых платящих пользователей за период. Ключевая метрика для оценки эффективности маркетинга и каналов привлечения — без неё нельзя понять, какие каналы работают. Сравнивается с LTV для определения здоровья юнит-экономики: CAC должен окупаться за 12 месяцев. Высокий CAC при низком LTV — сигнал, что бизнес сжигает деньги на привлечение. Используется маркетингом, финансами и CEO на каждом финансовом ревью и при оценке каналов.",
+  "description_en": "Cost to acquire a single new customer: marketing spend divided by number of new paying users in the period. Key metric for evaluating marketing and acquisition channel efficiency. Compared with LTV to gauge unit-economics health: CAC should pay back within 12 months. High CAC against low LTV signals the business is burning money on acquisition. Used by marketing, finance and CEO at every financial review and channel assessment.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "marketing_spend",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "new_customers",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "CAC (стоимость привлечения клиента): Стоимость привлечения одного нового клиента: маркетинговый; params: marke",
+  "option_en": "Customer Acquisition Cost: Cost to acquire a single new; params: marketing_spend(руб), new_customers(count)"
+ },
+ {
+  "key": "ue-cac-payback",
+  "name_ru": "Срок окупаемости CAC (месяцы)",
+  "name_en": "CAC Payback Period",
+  "description": "Срок окупаемости стоимости привлечения: за сколько месяцев маркетинговые инвестиции в нового клиента возвращаются через его выручку. Формула: CAC / (ARPA × gross margin) — месячная маржа от клиента покрывает стоимость привлечения. SaaS-стандарт: payback ≤ 12 месяцев для здорового бизнеса; > 24 — тревожный сигнал для инвесторов и board. Коррелирует с runway: длинный payback требует больше кэша на банковском счёте. Метрика CFO и инвестиционного комитета при оценке темпов найма и роста.",
+  "description_en": "Customer acquisition cost payback period: months until marketing investment in a new customer is recovered through their revenue. Formula: CAC / (ARPA × gross margin) — monthly margin per customer covers acquisition cost. SaaS standard: payback ≤ 12 months for healthy growth; > 24 is a red flag for investors and the board. Correlates with runway: longer payback requires more cash on hand. A CFO and investment committee metric for hiring and growth pacing.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "cac",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "arpa",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "gross_margin",
+    "unit": null,
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "Срок окупаемости CAC (месяцы): Срок окупаемости стоимости привлечения: за сколько; params: cac(руб), arpa(руб)",
+  "option_en": "CAC Payback Period: Customer acquisition cost payback period: months; params: cac(руб), arpa(руб), gross_margi"
+ },
+ {
+  "key": "ue-cagr",
+  "name_ru": "CAGR (среднегодовой темп роста)",
+  "name_en": "Compound Annual Growth Rate",
+  "description": "Среднегодовой темп роста: (end/begin)^(1/years) − 1 — годовая ставка, при которой начальное значение вырастает в конечное за указанное число лет. Сглаживает годовые колебания и показывает устойчивый темп роста — более корректно, чем среднее годовых темпов. Используется для сравнения темпов роста MRR, user base, revenue между периодами и компаниями. CAGR > 50% для SaaS — hypergrowth, привлекающий инвесторов; 20–50% — здоровый рост; < 20% — plateau, требующая new growth levers. Метрика CEO и инвесторов для оценки долгосрочной траектории и benchmarking.",
+  "description_en": "Compound annual growth rate: (end/begin)^(1/years) − 1 — the annual rate at which the starting value grows into the ending value over the given years. Smooths year-on-year fluctuations and shows the steady growth rate — more correct than averaging annual rates. Used to compare MRR, user base and revenue growth across periods and companies. CAGR > 50% for SaaS is hypergrowth attracting investors; 20–50% is healthy; < 20% is a plateau needing new growth levers. A CEO and investor metric for long-term trajectory and benchmarking.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "begin_value",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "end_value",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "years",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "CAGR (среднегодовой темп роста): Среднегодовой темп роста: (end/begin)^(1/years) − 1; params: begin_value(руб)",
+  "option_en": "Compound Annual Growth Rate: Compound annual growth rate: (end/begin)^(1/years) −; params: begin_value(руб), e"
+ },
+ {
+  "key": "ue-contribution-margin",
+  "name_ru": "Контрибуционная маржа",
+  "name_en": "Contribution Margin",
+  "description": "Контрибуционная маржа: доля выручки после переменных затрат (переменные COGS + variable S&M). Формула: (revenue − variable costs) / revenue — отличается от gross margin учётом переменных расходов на привлечение и поддержку. Используется для break-even анализа и оценки финансового рычага перед масштабированием. Помогает ответить на вопрос «если наймём ещё 10 сейлзов, останемся ли в плюсе». Метрика CFO и операционного директора при cost-optimization initiatives и scaling decisions.",
+  "description_en": "Contribution margin: share of revenue after variable costs (variable COGS + variable S&M). Formula: (revenue − variable costs) / revenue — differs from gross margin by including variable acquisition and support costs. Used for break-even analysis and assessing financial leverage before scaling. Answers the question: \"if we hire 10 more sales reps, do we stay profitable?\" A CFO and COO metric for cost-optimization and scaling decisions.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "revenue",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "variable_costs",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "Контрибуционная маржа: Контрибуционная маржа: доля выручки после переменных; params: revenue(руб), variable_co",
+  "option_en": "Contribution Margin: Contribution margin: share of revenue after; params: revenue(руб), variable_costs(руб)"
+ },
+ {
+  "key": "ue-gross-margin",
+  "name_ru": "Валовая маржа",
+  "name_en": "Gross Margin",
+  "description": "Валовая маржа: доля выручки после вычета себестоимости (COGS — инфраструктура, поддержка, лицензии). Формула: (revenue − COGS) / revenue — показывает, сколько выручки остаётся после прямых затрат. SaaS-стандарт: 70–85% gross margin; < 60% — проблема в стоимости инфраструктуры или ручной поддержки. Ключевая метрика для CFO и инвесторов при оценке operational leverage и масштабируемости модели. Используется в P&L на каждом финансовом ревью и как вход в LTV-расчёт.",
+  "description_en": "Gross margin: share of revenue after cost of goods sold (COGS — infrastructure, support, licences). Formula: (revenue − COGS) / revenue — what's left after direct costs. SaaS standard: 70–85% gross margin; < 60% flags infrastructure or manual support cost issues. Key metric for CFO and investors when assessing operational leverage and scalability of the model. Used in P&L at every financial review and as input to LTV calculation.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "revenue",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "cogs",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "Валовая маржа: Валовая маржа: доля выручки после вычета; params: revenue(руб), cogs(руб)",
+  "option_en": "Gross Margin: Gross margin: share of revenue after; params: revenue(руб), cogs(руб)"
+ },
+ {
+  "key": "ue-grr",
+  "name_ru": "GRR (валовое удержание выручки)",
+  "name_en": "Gross Revenue Retention",
+  "description": "Валовое удержание выручки: (start − contraction − churn) / start. В отличие от NRR, не учитывает expansion — показывает только потерю выручки. GRR — верхняя граница NRR: если expansion = 0, то GRR = NRR. GRR < 90% — серьёзная проблема с оттоком клиентов; SaaS-стандарт: GRR ≥ 90% для устойчивого бизнеса; < 80% — критическое положение, требующее(Customer Success и product fixes. Метрика Customer Success и CFO при анализе churn в детализации по сегментам.",
+  "description_en": "Gross revenue retention: (start − contraction − churn) / start. Unlike NRR, it excludes expansion — measures pure revenue loss. GRR is the upper bound on NRR: when expansion = 0, GRR = NRR. GRR < 90% signals a serious churn problem; SaaS standard is GRR ≥ 90% for a sustainable business; < 80% is critical and demands Customer Success and product fixes. A Customer Success and CFO metric for detailed segment-level churn analysis.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "mrr_start",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "contraction",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "churn_lost",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "GRR (валовое удержание выручки): Валовое удержание выручки: (start − contraction; params: mrr_start(руб), cont",
+  "option_en": "Gross Revenue Retention: Gross revenue retention: (start − contraction; params: mrr_start(руб), contraction(ру"
+ },
+ {
+  "key": "ue-irr",
+  "name_ru": "IRR (внутренняя норма доходности)",
+  "name_en": "IRR (Internal Rate of Return)",
+  "description": "Внутренняя норма доходности проекта: ставка, при которой NPV = 0. Первый поток — инвестиция (отрицательный), дальше — поступления. Правило решения: IRR выше стоимости капитала (WACC/hurdle rate) — проект создаёт стоимость; сравнение проектов — по IRR при сопоставимом масштабе и риске. Дополняет NPV-шаблон: NPV отвечает «сколько», IRR — «под какой процент».",
+  "description_en": "Project's internal rate of return: the discount rate at which NPV = 0. The first cash flow is the investment (negative), the rest are inflows. Decision rule: IRR above the cost of capital (WACC/hurdle rate) means the project creates value; compare projects by IRR at comparable scale and risk. Complements the NPV template: NPV answers 'how much', IRR answers 'at what rate'.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "cf0",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "cf1",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "cf2",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "cf3",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "cf4",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "IRR (внутренняя норма доходности): Внутренняя норма доходности проекта: ставка, при; params: cf0(руб), cf1(руб",
+  "option_en": "IRR (Internal Rate of Return): Project's internal rate of return: the; params: cf0(руб), cf1(руб), cf2(руб)"
+ },
+ {
+  "key": "ue-ltv",
+  "name_ru": "LTV (пожизненная ценность клиента)",
+  "name_en": "Lifetime Value",
+  "description": "Пожизненная ценность клиента: сколько выручки приносит один пользователь за весь жизненный цикл в продукте. Базовая модель — ARPU × gross margin / monthly churn: месячная выручка с клиента, умноженная на маржу и делённая на месячный отток. Ключевая метрика устойчивости SaaS-бизнеса и допустимого CAC: LTV определяет, сколько можно тратить на привлечение. LTV ≥ 3 × CAC — здоровый уровень; LTV < CAC — бизнес убыточен на привлечении каждого клиента. Используется финдиректором, продакт-менеджером и инвесторами для оценки quality of revenue.",
+  "description_en": "Lifetime value of a customer: total revenue one user generates over their entire lifecycle in the product. Basic model: ARPU × gross margin / monthly churn. Key metric for SaaS sustainability and the CAC ceiling — LTV sets how much you can spend on acquisition. LTV ≥ 3 × CAC is healthy; LTV < CAC means losing money on every acquired customer. Used by CFO, product manager and investors to assess quality of revenue.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "arpu",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "gross_margin",
+    "unit": null,
+    "type": "scalar"
+   },
+   {
+    "name": "monthly_churn",
+    "unit": null,
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "LTV (пожизненная ценность клиента): Пожизненная ценность клиента: сколько выручки приносит; params: arpu(руб),",
+  "option_en": "Lifetime Value: Lifetime value of a customer: total; params: arpu(руб), gross_margin(scalar), monthly_churn(sc"
+ },
+ {
+  "key": "ue-ltv-cac",
+  "name_ru": "Отношение LTV / CAC",
+  "name_en": "LTV / CAC Ratio",
+  "description": "Отношение пожизненной ценности клиента к стоимости его привлечения: главный индикатор здоровья юнит-экономики. LTV/CAC ≥ 3 — здоровый уровень, бизнес зарабатывает в 3 раза больше, чем тратит на привлечение. 1–3 — допустимо, но маржа тонкая и ниша для ошибок мала; < 1 — бизнес сжигает деньги на каждом новом клиенте. Используется инвесторами и CEO при оценке готовности к масштабированию и решении о раунде финансирования. Метрика для board meeting и due diligence — первый индикатор, на который смотрит инвестор.",
+  "description_en": "Ratio of customer lifetime value to customer acquisition cost: the headline unit-economics health indicator. LTV/CAC ≥ 3 is healthy — the business earns 3× what it spends on acquisition. 1–3 is workable but margin is thin and error budget small; < 1 means burning cash on every new customer. Used by investors and CEO to judge scaling readiness and funding-round decisions. A board-meeting and due-diligence metric — the first indicator an investor checks.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "ltv",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "cac",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "Отношение LTV / CAC: Отношение пожизненной ценности клиента к стоимости; params: ltv(руб), cac(руб)",
+  "option_en": "LTV / CAC Ratio: Ratio of customer lifetime value to; params: ltv(руб), cac(руб)"
+ },
+ {
+  "key": "ue-ltv-cohort",
+  "name_ru": "LTV по когорте (retention-кривая)",
+  "name_en": "Cohort LTV",
+  "description": "LTV через retention-кривую вместо 1/churn: когортная модель интегрирует реальное затухание удержания (D1, D7, D30 с экспоненциальным хвостом) и обычно даёт заметно меньшую — и более честную — оценку, чем ARPU × margin / churn. Мост между продуктовой аналитикой и юнит-экономикой: подставьте retention из pa-шаблонов. Если когортный LTV сильно ниже наивного — продукт теряет пользователей быстрее, чем предполагает churn-модель.",
+  "description_en": "LTV from a retention curve instead of 1/churn: the cohort model integrates real retention decay (D1, D7, D30 with an exponential tail) and usually yields a much lower — and more honest — estimate than ARPU × margin / churn. The bridge between product analytics and unit economics: plug in retention from the pa templates. If cohort LTV is far below the naive one, users churn faster than the churn model assumes.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "arpu_m0",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "margin",
+    "unit": null,
+    "type": "scalar"
+   },
+   {
+    "name": "r_d1",
+    "unit": null,
+    "type": "scalar"
+   },
+   {
+    "name": "r_d7",
+    "unit": null,
+    "type": "scalar"
+   },
+   {
+    "name": "r_d30",
+    "unit": null,
+    "type": "scalar"
+   },
+   {
+    "name": "months",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "LTV по когорте (retention-кривая): LTV через retention-кривую вместо 1/churn: когортная; params: arpu_m0(руб),",
+  "option_en": "Cohort LTV: LTV from a retention curve instead; params: arpu_m0(руб), margin(scalar), r_d1(scalar)"
+ },
+ {
+  "key": "ue-magic-number",
+  "name_ru": "Magic Number (эффективность продаж SaaS)",
+  "name_en": "Magic Number (SaaS)",
+  "description": "Эффективность продаж SaaS: новые ARR за квартал × 4 (аннуализировано) / расходы на продажи и маркетинг за прошлый квартал. Бенчмарки: ≥ 1 — продажи окупаются в течение года, 0.5–1 — нормально для ранней стадии, < 0.5 — рост покупается слишком дорого. Задержка на квартал важна: траты этого квартала дают выручку в следующем.",
+  "description_en": "SaaS sales efficiency: net new ARR this quarter × 4 (annualized) divided by S&M spend of the previous quarter. Benchmarks: ≥ 1 — sales pay back within a year, 0.5–1 — fine for early stage, < 0.5 — growth is bought too expensively. The one-quarter lag matters: this quarter's spend produces next quarter's revenue.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "net_new_arr",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "s_and_m_spend",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "Magic Number (эффективность продаж SaaS): Эффективность продаж SaaS: новые ARR за; params: net_new_arr(руб), s",
+  "option_en": "Magic Number (SaaS): SaaS sales efficiency: net new ARR; params: net_new_arr(руб), s_and_m_spend(руб)"
+ },
+ {
+  "key": "ue-mrr",
+  "name_ru": "MRR (месячная регулярная выручка)",
+  "name_en": "Monthly Recurring Revenue",
+  "description": "Месячная регулярная выручка: subscribers × ARPU. Базовая метрика SaaS — подписочная выручка, исключает разовые платежи и overage. MRR растёт за счёт new (новые клиенты) и expansion (up-sell); падает на churn (отписки) и contraction (downgrade). Отслеживается monthly в board deck; используется для расчёта ARR (MRR × 12) и оценки темпов роста. Метрика CEO, CFO и Customer Success в monthly business review и при планировании найма.",
+  "description_en": "Monthly recurring revenue: subscribers × ARPU. Foundational SaaS metric — subscription revenue, excludes one-off payments and overage. MRR grows via new (new customers) and expansion (up-sell); falls on churn (cancellations) and contraction (downgrades). Tracked monthly in the board deck; used to derive ARR (MRR × 12) and gauge growth velocity. A CEO, CFO and Customer Success metric in the monthly business review and hiring plan.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "subscribers",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "arpu",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "MRR (месячная регулярная выручка): Месячная регулярная выручка: subscribers × ARPU; params: subscribers(count)",
+  "option_en": "Monthly Recurring Revenue: Monthly recurring revenue: subscribers × ARPU; params: subscribers(count), arpu(руб"
+ },
+ {
+  "key": "ue-npv",
+  "name_ru": "NPV (чистая приведённая стоимость)",
+  "name_en": "Net Present Value",
+  "description": "Чистая приведённая стоимость: текущая стоимость серии будущих денежных потоков, дисконтированных по ставке r. NPV > 0 — проект окупается и приносит прибыль с учётом временной стоимости денег; NPV < 0 — проект убыточен при выбранной ставке дисконтирования. Используется для оценки инвестиционных проектов, M&A и capex-решений, где важна временная стоимость денег. Сравнивается с IRR (внутренней нормой доходности) и payback period для полной оценки. Метрика CFO и инвестиционного комитета для project finance и capital allocation.",
+  "description_en": "Net present value: present value of a series of future cash flows discounted at rate r. NPV > 0 means the project pays off and profits after accounting for the time value of money; NPV < 0 means it loses money at the chosen discount rate. Used to evaluate investment projects, M&A and capex decisions where time value matters. Compared with IRR (internal rate of return) and payback period for a full picture. A CFO and investment committee metric for project finance and capital allocation.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "discount_rate",
+    "unit": null,
+    "type": "scalar"
+   },
+   {
+    "name": "cf1",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "cf2",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "cf3",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "cf4",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "NPV (чистая приведённая стоимость): Чистая приведённая стоимость: текущая стоимость серии; params: discount_ra",
+  "option_en": "Net Present Value: Net present value: present value of; params: discount_rate(scalar), cf1(руб), cf2(руб)"
+ },
+ {
+  "key": "ue-nrr",
+  "name_ru": "NRR (чистое удержание выручки)",
+  "name_en": "Net Revenue Retention",
+  "description": "Чистое удержание выручки: (start + expansion − contraction − churn + reactivation) / start. Показывает, как растёт выручка от существующей базы без учёта новых продаж — expansion может перекрыть отток. NRR > 100% — отлично: существующие клиенты приносят больше, чем уходящие; < 90% — отток превышает expansion, и бизнес нуждается в(Customer Success interventions. SaaS top-quartile: NRR ≥ 120%; < 100% — тревожный сигнал для инвесторов и board. Метрика Customer Success и CEO на quarterly review и CS-стратегии.",
+  "description_en": "Net revenue retention: (start + expansion − contraction − churn + reactivation) / start. Shows how revenue from the existing base grows excluding new sales — expansion can offset churn. NRR > 100% is excellent: existing customers contribute more than leaving ones; < 90% means churn exceeds expansion and Customer Success interventions are needed. SaaS top-quartile: NRR ≥ 120%; < 100% is a red flag for investors and the board. A Customer Success and CEO metric for quarterly review and CS strategy.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "mrr_start",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "expansion",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "contraction",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "churn_lost",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "reactivation",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "NRR (чистое удержание выручки): Чистое удержание выручки: (start + expansion; params: mrr_start(руб), expansio",
+  "option_en": "Net Revenue Retention: Net revenue retention: (start + expansion; params: mrr_start(руб), expansion(руб), cont"
+ },
+ {
+  "key": "ue-revenue-churn",
+  "name_ru": "Отток выручки (Revenue Churn)",
+  "name_en": "Revenue Churn Rate",
+  "description": "Отток выручки: MRR_lost / MRR_start — доля выручки, потерянной за период из-за отписок и downgrades. Обратная сторона NRR и GRR: показывает только потерю, без expansion. Revenue Churn > 5% в месяц — критично для SaaS; < 2% — здоровый уровень. Используется вместе с user churn для диагностики: если revenue churn > user churn, компания теряет крупных и дорогих клиентов. Метрика Customer Success и CFO в monthly retention review и при приоритизации win-back.",
+  "description_en": "Revenue churn: MRR_lost / MRR_start — share of revenue lost in the period due to cancellations and downgrades. The inverse of NRR and GRR: shows only loss, no expansion. Revenue churn > 5%/month is critical for SaaS; < 2% is healthy. Used together with user churn for diagnosis: if revenue churn > user churn, the company is losing its large, expensive customers. A Customer Success and CFO metric for monthly retention review and win-back prioritisation.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "mrr_start",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "mrr_lost",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "Отток выручки (Revenue Churn): Отток выручки: MRR_lost / MRR_start —; params: mrr_start(руб), mrr_lost(руб)",
+  "option_en": "Revenue Churn Rate: Revenue churn: MRR_lost / MRR_start —; params: mrr_start(руб), mrr_lost(руб)"
+ },
+ {
+  "key": "ue-roi",
+  "name_ru": "ROI (возврат на инвестиции)",
+  "name_en": "ROI (Return on Investment)",
+  "description": "Возврат на инвестиции: (доход − вложения) / вложения. Универсальный язык отчётности: ROI 0.8 = +80% за период. Учитывайте период и полноту затрат — ROI без горизонта и без скрытых издержек завышает картину; для сравнения разнопериодных проектов используйте IRR/NPV.",
+  "description_en": "Return on investment: (gain − investment) / investment. The universal reporting language: ROI 0.8 = +80% over the period. Watch the horizon and cost completeness — ROI without a time frame or hidden costs overstates the picture; for cross-period comparisons use IRR/NPV.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "gain",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "capital",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "ROI (возврат на инвестиции): Возврат на инвестиции: (доход − вложения); params: gain(руб), capital(руб)",
+  "option_en": "ROI (Return on Investment): The universal reporting language: ROI 0; params: gain(руб), capital(руб)"
+ },
+ {
+  "key": "ue-runway",
+  "name_ru": "Запас денег (runway в месяцах)",
+  "name_en": "Cash Runway",
+  "description": "Запас денег: cash / monthly_burn — сколько месяцев компания проживёт при текущем burn rate. Runway ≥ 18 — комфортно, можно не торопиться с раундом; 12–18 — пора планировать следующий; < 6 — критично, нужен срез костов или bridge round. Минимальный runway для VC-backed компаний — 12 месяцев, иначе инвесторы начинают беспокоиться. Каждое решение о найме или расходах проверяется через impact на runway. Метрика CFO и CEO для board, инвестиционных решений и scenario planning.",
+  "description_en": "Cash runway: cash / monthly_burn — how many months the company survives at current burn. Runway ≥ 18 is comfortable; 12–18 — time to plan the next round; < 6 is critical, needs cost cuts or a bridge round. The minimum runway for VC-backed companies is 12 months — below that, investors get nervous. Every hiring or spend decision is checked against runway impact. A CFO and CEO metric for board, fundraising decisions and scenario planning.",
+  "category": "unit-economics",
+  "params": [
+   {
+    "name": "cash",
+    "unit": "руб",
+    "type": "scalar"
+   },
+   {
+    "name": "monthly_burn",
+    "unit": "руб",
+    "type": "scalar"
+   }
+  ],
+  "option_ru": "Запас денег (runway в месяцах): Запас денег: cash / monthly_burn —; params: cash(руб), monthly_burn(руб)",
+  "option_en": "Cash Runway: Cash runway: cash / monthly_burn —; params: cash(руб), monthly_burn(руб)"
+ },
+ {
+  "key": "websocket",
+  "name_ru": "WebSocket",
+  "name_en": "WebSocket",
+  "description": "WebSocket: агрегированный поток сообщений против производительности обработчика.",
+  "description_en": "WebSocket: aggregated message flow against handler capacity.",
+  "category": "network",
+  "params": [
+   {
+    "name": "connections",
+    "unit": null,
+    "type": "count"
+   },
+   {
+    "name": "messages_per_sec",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "handler_rate",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "heartbeat",
+    "unit": "sec",
+    "type": "time"
+   }
+  ],
+  "option_ru": "WebSocket: WebSocket: агрегированный поток сообщений против производительности; params: connections(count), me",
+  "option_en": "WebSocket: WebSocket: aggregated message flow against handler; params: connections(count), messages_per_sec(rp"
+ },
+ {
+  "key": "worker",
+  "name_ru": "Воркер",
+  "name_en": "Worker",
+  "description": "Фоновый обработчик задач: пул воркеров как M/M/c.",
+  "description_en": "Background task worker: worker pool as M/M/c.",
+  "category": "backend",
+  "params": [
+   {
+    "name": "tasks_per_sec",
+    "unit": "rps",
+    "type": "rate"
+   },
+   {
+    "name": "processing_time",
+    "unit": "ms",
+    "type": "time"
+   },
+   {
+    "name": "workers",
+    "unit": null,
+    "type": "count"
+   }
+  ],
+  "option_ru": "Воркер: Фоновый обработчик задач: пул воркеров как; params: tasks_per_sec(rps), processing_time(ms), workers(c",
+  "option_en": "Worker: Background task worker: worker pool as; params: tasks_per_sec(rps), processing_time(ms), workers(count"
+ }
+]

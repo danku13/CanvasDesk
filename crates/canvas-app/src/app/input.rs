@@ -489,6 +489,15 @@ impl App {
                             _ => {}
                         }
                     }
+                    // FR-079 (S3): C3-карточки — Esc закрывает стопку до
+                    // команд редактора (тот же приём, что у popup FR-021)
+                    if self.suggest.cards.is_some()
+                        && event.logical_key == Key::Named(NamedKey::Escape)
+                        && !event.repeat
+                    {
+                        self.close_suggest_cards();
+                        return true;
+                    }
                     let Some(command) =
                         map_key(&event.logical_key, ctrl, shift).and_then(|command| {
                             match self.editing.as_ref() {
@@ -1994,7 +2003,10 @@ impl App {
             // 3. Пункт или паддинг базового меню (список — тот же,
             // что в отрисовке: batch-пункты видны только при N≥3)
             if let Some(menu) = self.menu.take() {
-                let items = canvas_menu_visible_items(self.align_menu_visible());
+                let items = canvas_menu_visible_items_ext(
+                    self.align_menu_visible(),
+                    self.autowidth_menu_visible(),
+                );
                 if let Some(i) = menu_item_at_for(menu.origin, self.cursor, items.len()) {
                     match items[i] {
                         CanvasMenuItem::NewGroup => {
@@ -2133,6 +2145,11 @@ impl App {
                             // (решение T-038.5: одна кнопка, правило в
                             // distribute_axis_for)
                             self.run_batch_op(BatchOp::Distribute, None);
+                        }
+                        CanvasMenuItem::AutoWidth => {
+                            // FR-080: применить автоширину ко всем
+                            // выделенным нодам. Шаблонные/группы — пропускаются.
+                            self.apply_auto_width_to_selection();
                         }
                     }
                     self.request_redraw();
@@ -2489,6 +2506,12 @@ impl App {
         }
         match state {
             ElementState::Pressed => {
+                // FR-079 (S3): C3-карточки — клик до диспетчера поверхностей:
+                // стопка транзиентна (паттерн тултипа, не реестр FR-052);
+                // клик по карточке глотается, мимо — закрывает и проходит
+                if self.suggest_card_click() {
+                    return;
+                }
                 // FR-052 (U2 PRD-0009): единый диспетчер поверхностей —
                 // HitStack::pick по кадру реестра решает, кто получает клик
                 // (порядок = слои/визуальный верх, а не порядок веток).

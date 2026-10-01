@@ -26,6 +26,8 @@ pub mod keys {
     pub const TAB_CANVAS: &str = "settings.tab.canvas";
     pub const TAB_EDGES: &str = "settings.tab.edges";
     pub const TAB_APPEARANCE: &str = "settings.tab.appearance";
+    /// FR-079 (S3): таб «Подсказки» — ИИ-подсказки шаблонов.
+    pub const TAB_SUGGEST: &str = "settings.tab.suggest";
     pub const TAB_SNAP: &str = "settings.tab.snap";
     pub const TAB_DRAG: &str = "settings.tab.drag";
 
@@ -207,6 +209,14 @@ pub mod keys {
     /// Настройка FR-039 (AC-5.5): тумблер фонового детектора.
     pub const ROW_AUTOLINK: &str = "settings.row.autolink";
     pub const DESC_AUTOLINK: &str = "settings.desc.autolink";
+    /// FR-079 (S3): строки таба «Подсказки».
+    pub const ROW_SUGGEST_ENABLED: &str = "settings.row.suggest_enabled";
+    pub const DESC_SUGGEST_ENABLED: &str = "settings.desc.suggest_enabled";
+    pub const ROW_SUGGEST_ENGINE: &str = "settings.row.suggest_engine";
+    pub const DESC_SUGGEST_ENGINE: &str = "settings.desc.suggest_engine";
+    pub const SUGGEST_ENGINE_LEX: &str = "settings.suggest.engine.lex";
+    pub const SUGGEST_ENGINE_LEXLAYA: &str = "settings.suggest.engine.lexlaya";
+    pub const SUGGEST_ENGINE_OFF: &str = "settings.suggest.engine.off";
     /// Настройка FR-039 (F-12, X6): opt-in тумблер индикатора покрытия.
     pub const ROW_EXPLAIN_COVERAGE: &str = "settings.row.explain_coverage";
     pub const DESC_EXPLAIN_COVERAGE: &str = "settings.desc.explain_coverage";
@@ -252,6 +262,9 @@ pub mod keys {
     pub const MENU_ALIGN_HORIZONTAL: &str = "menu.align_horizontal";
     pub const MENU_ALIGN_VERTICAL: &str = "menu.align_vertical";
     pub const MENU_DISTRIBUTE_EVENLY: &str = "menu.distribute_evenly";
+    /// FR-080: «Автоширина по контенту» — пересчёт ширины выделенных нод
+    /// по их тексту (target=10 слов/строку).
+    pub const MENU_AUTOWIDTH: &str = "menu.autowidth";
 
     // --- Панель хоткеев (FR-004): колонка клавиши («ЛКМ» — раскладочная
     // аббревиатура, тоже переводится) и описания ---
@@ -415,6 +428,10 @@ pub mod keys {
     pub const HINT_UNIT: &str = "hints.unit";
     pub const HINT_PARAM: &str = "hints.param";
     pub const HINT_DOLLAR_IN: &str = "hints.dollar_in";
+    /// FR-079 (S3): деталь ИИ-строки в попапе FR-021 (источник виден —
+    /// доверие, гипотеза §15).
+    pub const HINT_AI_DETAIL: &str = "hints.ai_detail";
+    pub const HINT_AI_DETAIL_FUSION: &str = "hints.ai_detail_fusion";
     pub const HINT_DOLLAR_N: &str = "hints.dollar_n";
 
     // --- Онбординг (FR-028) ---
@@ -740,6 +757,7 @@ const RU: &[(&str, &str)] = &[
     (keys::ROW_DRAG_PUSH_REBASE, "Новые якоря на drop"),
     (keys::TAB_EDGES, "Связи и порты"),
     (keys::TAB_APPEARANCE, "Внешний вид"),
+    (keys::TAB_SUGGEST, "Подсказки"),
     (keys::TAB_SNAP, "Привязка"),
     (keys::ROW_BUTTON_CORNER, "Угол кнопки"),
     (
@@ -879,6 +897,7 @@ const RU: &[(&str, &str)] = &[
     (keys::MENU_ALIGN_HORIZONTAL, "Выровнять по горизонтали"),
     (keys::MENU_ALIGN_VERTICAL, "Выровнять по вертикали"),
     (keys::MENU_DISTRIBUTE_EVENLY, "Распределить равномерно"),
+    (keys::MENU_AUTOWIDTH, "Автоширина по контенту"),
     // --- Панель хоткеев ---
     (keys::HOTKEYS_TITLE, "Горячие клавиши"),
     (keys::HKEY_F1, "F1"),
@@ -1045,6 +1064,8 @@ const RU: &[(&str, &str)] = &[
     (keys::HINT_UNIT, "единица измерения"),
     (keys::HINT_PARAM, "параметр шаблона"),
     (keys::HINT_DOLLAR_IN, "вход value-рёбер (FR-014)"),
+    (keys::HINT_AI_DETAIL, "ИИ · заменит ноду шаблоном"),
+    (keys::HINT_AI_DETAIL_FUSION, "ИИ+ · заменит ноду шаблоном"),
     (keys::HINT_DOLLAR_N, "вход №{i}"),
     // --- Онбординг ---
     // --- Галерея схем (FR-049) ---
@@ -1558,6 +1579,14 @@ const RU: &[(&str, &str)] = &[
         "Совпадений имён не найдено — предложений нет.",
     ),
     (keys::ROW_AUTOLINK, "Автосвязь по именам (фон)"),
+    // FR-079 (S3): таб «Подсказки»
+    (keys::ROW_SUGGEST_ENABLED, "ИИ-подсказки шаблонов"),
+    (keys::DESC_SUGGEST_ENABLED, "Предложения по мере ввода и карточки «что дальше»"),
+    (keys::ROW_SUGGEST_ENGINE, "Движок"),
+    (keys::DESC_SUGGEST_ENGINE, "Локальная лексика или гибрид с Laya (sidecar)"),
+    (keys::SUGGEST_ENGINE_LEX, "Лексика (локально)"),
+    (keys::SUGGEST_ENGINE_LEXLAYA, "Гибрид lex+Laya"),
+    (keys::SUGGEST_ENGINE_OFF, "Выключен"),
     (
         keys::DESC_AUTOLINK,
         "Фоновый детектор предлагает связи по совпадающим именам присваиваний; связь создаётся только после ревью.",
@@ -1602,6 +1631,7 @@ const EN: &[(&str, &str)] = &[
     (keys::ROW_DRAG_PUSH_REBASE, "Re-anchor on drop"),
     (keys::TAB_EDGES, "Edges & ports"),
     (keys::TAB_APPEARANCE, "Appearance"),
+    (keys::TAB_SUGGEST, "Suggestions"),
     (keys::TAB_SNAP, "Snapping"),
     (keys::ROW_BUTTON_CORNER, "Button corner"),
     (
@@ -1735,6 +1765,7 @@ const EN: &[(&str, &str)] = &[
     (keys::MENU_ALIGN_HORIZONTAL, "Align horizontally"),
     (keys::MENU_ALIGN_VERTICAL, "Align vertically"),
     (keys::MENU_DISTRIBUTE_EVENLY, "Distribute evenly"),
+    (keys::MENU_AUTOWIDTH, "Auto-width by content"),
     // --- Hotkeys panel ---
     (keys::HOTKEYS_TITLE, "Hotkeys"),
     (keys::HKEY_F1, "F1"),
@@ -1901,6 +1932,8 @@ const EN: &[(&str, &str)] = &[
     (keys::HINT_UNIT, "unit of measure"),
     (keys::HINT_PARAM, "template parameter"),
     (keys::HINT_DOLLAR_IN, "value-edge input (FR-014)"),
+    (keys::HINT_AI_DETAIL, "AI · replaces node with template"),
+    (keys::HINT_AI_DETAIL_FUSION, "AI+ · replaces node with template"),
     (keys::HINT_DOLLAR_N, "input #{i}"),
     // --- Onboarding ---
     // --- Scheme gallery (FR-049) ---
@@ -2391,6 +2424,14 @@ const EN: &[(&str, &str)] = &[
         "No matching names — nothing to propose.",
     ),
     (keys::ROW_AUTOLINK, "Background autolink by names"),
+    // FR-079 (S3): suggestions tab
+    (keys::ROW_SUGGEST_ENABLED, "AI template suggestions"),
+    (keys::DESC_SUGGEST_ENABLED, "As-you-type proposals and \u{201c}what goes next\u{201d} cards"),
+    (keys::ROW_SUGGEST_ENGINE, "Engine"),
+    (keys::DESC_SUGGEST_ENGINE, "Local lexics or Laya hybrid (sidecar)"),
+    (keys::SUGGEST_ENGINE_LEX, "Lexics (local)"),
+    (keys::SUGGEST_ENGINE_LEXLAYA, "lex+Laya hybrid"),
+    (keys::SUGGEST_ENGINE_OFF, "Off"),
     (
         keys::DESC_AUTOLINK,
         "The background detector proposes links for matching assignment names; a link is created only after review.",
