@@ -33,6 +33,14 @@ pub use winit::keyboard::{Key, ModifiersState, NamedKey};
 /// того же `App`.
 pub mod app;
 
+/// FR-080: auto-width ноды по контенту (10 средних слов в строку).
+/// Pure-функция `auto_width_for_text` + batch-вариант `auto_width_for_text_with`.
+/// Измерение через `canvas_ui::measure::TextMeasurer` (тот же cosmic-text
+/// шейпер, что у рендера — CR-015 паритет). Стыковка с моделью — в
+/// `App::create_note_at` и `App::finish_editing`; batch-применение —
+/// `CanvasMenuItem::AutoWidth`.
+pub mod auto_width;
+
 /// FR-040: локализация интерфейса — ключи-фразы, статические таблицы RU/EN,
 /// [`i18n::tr`]/[`i18n::trf`]. Чистый модуль, ноль внешних крейтов; тексты
 /// читаются по кадру — смена языка применяется на лету.
@@ -106,6 +114,17 @@ pub mod explain_ui;
 /// (состояния предложений AC-5.2, группировка/сортировка У7, геометрия,
 /// hit-тесты). Рендер/ввод/создание связей — в app.
 pub mod autolink_ui;
+
+/// FR-079 (S3): интеграция suggest-движка — адаптеры канвас/реестр →
+/// контекст «формат А», конвейер ранжирования (lex → fusion → Platt),
+/// каталог опций. Платформенно-нейтральная часть.
+pub mod suggest;
+
+/// FR-079 (S3): SuggestWorker — фоновый поток ранжирования (натив;
+/// паттерн flow-worker FR-064). На wasm не компилируется — синхронный
+/// путь в `about_to_wait`.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod suggest_worker;
 
 /// FR-055 (этап U4 PRD-0009, F-8): витрина кита `kit_gallery` — модель
 /// раскладки + адаптер «кит → квад/текст кадра». Сборка кадра — в app.rs.
@@ -1178,6 +1197,12 @@ pub mod ui {
         /// вдоль оси раскладки выделения. Виден ТОЛЬКО при N≥3 выделенных
         /// нодах.
         DistributeEvenly,
+        /// FR-080: «Автоширина по контенту» — пересчёт ширины выделенных
+        /// нод по их тексту (target=10 слов/строку). Виден при N≥1
+        /// выделенной ноде (подходит и для одной, и для batch). Группы и
+        /// шаблонные ноды пропускаются — у них ширина зависит от детей /
+        /// структуры параметров, не от текста.
+        AutoWidth,
     }
 
     /// Меню пустого канваса (базовые пункты — видны всегда).
@@ -1205,15 +1230,37 @@ pub mod ui {
         CanvasMenuItem::DistributeEvenly,
     ];
 
-    /// Видимый список пунктов меню канваса: базовые 8 + batch-выравнивание
-    /// при `align_visible` (N≥3 выделенных, [`ALIGN_MIN_SELECTION`]). Список
-    /// единый источник для отрисовки, хит-теста и airspace — расхождений
+    /// FR-080: пункт «Автоширина по контенту» — виден при N≥1 выделенной
+    /// ноде (используется и для одной, и для batch). Логически — отдельный
+    /// batch-раздел (после ALIGN_MENU_ITEMS), не входит в ALGN_MIN_SELECTION
+    /// гейт (там нужно N≥3 для распределения, для автоширины — достаточно 1).
+    pub const AUTOWIDTH_MENU_ITEMS: [CanvasMenuItem; 1] = [CanvasMenuItem::AutoWidth];
+
+    /// Видимый список пунктов меню канваса: базовые 9 + batch-выравнивание
+    /// при `align_visible` (N≥3 выделенных, [`ALIGN_MIN_SELECTION`]) +
+    /// FR-080 автоширина при `autowidth_visible` (N≥1). Список единый
+    /// источник для отрисовки, хит-теста и airspace — расхождений
     /// высоты меню не бывает. Порядок фиксирован (детерминизм).
     pub fn canvas_menu_visible_items(align_visible: bool) -> Vec<CanvasMenuItem> {
         let mut items = Vec::with_capacity(CANVAS_MENU_ITEMS.len() + ALIGN_MENU_ITEMS.len());
         items.extend_from_slice(&CANVAS_MENU_ITEMS);
         if align_visible {
             items.extend_from_slice(&ALIGN_MENU_ITEMS);
+        }
+        items
+    }
+
+    /// FR-080: расширенная версия с автошириной. Базовые + align (если
+    /// visible) + autowidth (если visible). Порядок: align идёт ДО
+    /// autowidth — визуально «выравнивать» ближе к распределению, а
+    /// автоширина — отдельная операция над контентом.
+    pub fn canvas_menu_visible_items_ext(
+        align_visible: bool,
+        autowidth_visible: bool,
+    ) -> Vec<CanvasMenuItem> {
+        let mut items = canvas_menu_visible_items(align_visible);
+        if autowidth_visible {
+            items.extend_from_slice(&AUTOWIDTH_MENU_ITEMS);
         }
         items
     }
@@ -1293,6 +1340,9 @@ pub mod ui {
             }
             CanvasMenuItem::DistributeEvenly => {
                 i18n::tr(language, crate::i18n::keys::MENU_DISTRIBUTE_EVENLY).to_owned()
+            }
+            CanvasMenuItem::AutoWidth => {
+                i18n::tr(language, crate::i18n::keys::MENU_AUTOWIDTH).to_owned()
             }
         }
     }

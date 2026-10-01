@@ -52,6 +52,10 @@ pub enum HintKind {
     Fn,
     /// Токен единицы (`expr::unit_tokens`).
     Unit,
+    /// FR-079 (S3): ИИ-строка — шаблон каталога из suggest-движка.
+    /// Принятие НЕ вставляет текст: редактируемая нода заменяется
+    /// инстансом шаблона ([`HintItem::template`]).
+    Ai,
 }
 
 /// Элемент подсказки: что вставить и как подписать.
@@ -59,12 +63,29 @@ pub enum HintKind {
 pub struct HintItem {
     pub kind: HintKind,
     /// Текст вставки (замещает токен слева от каретки); функция — с
-    /// открывающей скобкой.
+    /// открывающей скобкой. Для [`HintKind::Ai`] — имя шаблона (не
+    /// вставляется текстом).
     pub insert: String,
     /// Главная подпись.
     pub label: String,
     /// Серая деталь: сигнатура / описание / «переменная».
     pub detail: String,
+    /// FR-079 (S3): ключ шаблона для [`HintKind::Ai`] (принятие = замена
+    /// редактируемой ноды инстансом шаблона); `None` — текстовая вставка.
+    pub template: Option<String>,
+}
+
+impl HintItem {
+    /// Текстовая подсказка (L0 FR-021): вставка замещает токен.
+    pub fn text(kind: HintKind, insert: String, label: String, detail: String) -> Self {
+        Self {
+            kind,
+            insert,
+            label,
+            detail,
+            template: None,
+        }
+    }
 }
 
 /// Контекст ноды для подсказок.
@@ -117,33 +138,33 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> V
     if let Some(name) = token.strip_prefix('$') {
         let lower = name.to_lowercase();
         if ctx.inbound > 0 && "in".starts_with(&lower) {
-            push(HintItem {
-                kind: HintKind::DollarRef,
-                insert: "$in".to_owned(),
-                label: "$in".to_owned(),
-                detail: i18n::tr(language, keys::HINT_DOLLAR_IN).to_owned(),
-            });
+            push(HintItem::text(
+                HintKind::DollarRef,
+                "$in".to_owned(),
+                "$in".to_owned(),
+                i18n::tr(language, keys::HINT_DOLLAR_IN).to_owned(),
+            ));
         }
         for i in 1..=ctx.inbound {
             let label = format!("${i}");
             if label.starts_with(&token) {
-                push(HintItem {
-                    kind: HintKind::DollarRef,
-                    insert: label.clone(),
+                push(HintItem::text(
+                    HintKind::DollarRef,
+                    label.clone(),
                     label,
-                    detail: i18n::trf(language, keys::HINT_DOLLAR_N, &[("{i}", &i.to_string())]),
-                });
+                    i18n::trf(language, keys::HINT_DOLLAR_N, &[("{i}", &i.to_string())]),
+                ));
             }
         }
         for param in &ctx.params {
             let label = format!("${param}");
             if label.to_lowercase().starts_with(&token.to_lowercase()) {
-                push(HintItem {
-                    kind: HintKind::DollarRef,
-                    insert: label.clone(),
-                    label: param.clone(),
-                    detail: i18n::tr(language, keys::HINT_PARAM).to_owned(),
-                });
+                push(HintItem::text(
+                    HintKind::DollarRef,
+                    label.clone(),
+                    param.clone(),
+                    i18n::tr(language, keys::HINT_PARAM).to_owned(),
+                ));
             }
         }
         return items;
@@ -162,12 +183,12 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> V
     if numeric || after_number {
         for unit in expr::unit_tokens() {
             if unit.to_lowercase().starts_with(&token.to_lowercase()) {
-                push(HintItem {
-                    kind: HintKind::Unit,
-                    insert: unit.to_owned(),
-                    label: unit.to_owned(),
-                    detail: i18n::tr(language, keys::HINT_UNIT).to_owned(),
-                });
+                push(HintItem::text(
+                    HintKind::Unit,
+                    unit.to_owned(),
+                    unit.to_owned(),
+                    i18n::tr(language, keys::HINT_UNIT).to_owned(),
+                ));
             }
         }
         return items;
@@ -175,12 +196,12 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> V
     if token.is_empty() {
         // Пустой токен на Numi-строке — переменные ноды
         for var in &ctx.vars {
-            push(HintItem {
-                kind: HintKind::Var,
-                insert: var.clone(),
-                label: var.clone(),
-                detail: i18n::tr(language, keys::HINT_VAR).to_owned(),
-            });
+            push(HintItem::text(
+                HintKind::Var,
+                var.clone(),
+                var.clone(),
+                i18n::tr(language, keys::HINT_VAR).to_owned(),
+            ));
         }
         return items;
     }
@@ -188,32 +209,49 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> V
     let lower = token.to_lowercase();
     for var in &ctx.vars {
         if var.to_lowercase().starts_with(&lower) {
-            push(HintItem {
-                kind: HintKind::Var,
-                insert: var.clone(),
-                label: var.clone(),
-                detail: i18n::tr(language, keys::HINT_VAR).to_owned(),
-            });
+            push(HintItem::text(
+                HintKind::Var,
+                var.clone(),
+                var.clone(),
+                i18n::tr(language, keys::HINT_VAR).to_owned(),
+            ));
         }
     }
     for hint in expr::fn_hints() {
         if hint.name.starts_with(&lower) {
-            push(HintItem {
-                kind: HintKind::Fn,
-                insert: format!("{}(", hint.name),
-                label: hint.name.to_owned(),
-                detail: hint.signature.to_owned(),
-            });
+            push(HintItem::text(
+                HintKind::Fn,
+                format!("{}(", hint.name),
+                hint.name.to_owned(),
+                hint.signature.to_owned(),
+            ));
         }
     }
     for unit in expr::unit_tokens() {
         if unit.to_lowercase().starts_with(&lower) {
-            push(HintItem {
-                kind: HintKind::Unit,
-                insert: unit.to_owned(),
-                label: unit.to_owned(),
-                detail: i18n::tr(language, keys::HINT_UNIT).to_owned(),
-            });
+            push(HintItem::text(
+                HintKind::Unit,
+                unit.to_owned(),
+                unit.to_owned(),
+                i18n::tr(language, keys::HINT_UNIT).to_owned(),
+            ));
+        }
+    }
+    items
+}
+
+/// FR-079 (S3): прогрессивный мердж — L0-строки сверху, ИИ-строки ниже
+/// (источник виден пользователю), общий лимит [`HINT_LIMIT`]. Дедуп по
+/// `insert` (ИИ-шаблон не дублирует совпавшую L0-строку). Пустой итог —
+/// попап закрыт (семантика [`HintPopup::sync`]).
+pub fn merge_ai_items(l0: Vec<HintItem>, ai: Vec<HintItem>) -> Vec<HintItem> {
+    let mut items = l0;
+    for item in ai {
+        if items.len() >= HINT_LIMIT {
+            break;
+        }
+        if !items.iter().any(|i| i.insert == item.insert) {
+            items.push(item);
         }
     }
     items

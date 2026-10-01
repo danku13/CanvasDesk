@@ -228,13 +228,13 @@ mod tests {
         // FR-066 §5.8: monte_carlo_run — native-only (фича qmc не
         // собирается на wasm32)
         #[cfg(not(target_arch = "wasm32"))]
-        let expected_count = 41;
+        let expected_count = 42;
         #[cfg(target_arch = "wasm32")]
-        let expected_count = 40;
+        let expected_count = 41;
         assert_eq!(
             tools.len(),
             expected_count,
-            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + 4 (PRD-0008 Q5 + FR-048 X2 lineage + X6 explain_number) + monte_carlo_run (FR-066, native)"
+            "26 (FR-032/FR-033) + analyze_bottlenecks (FR-016) + 9 whatif_* (FR-017, CP6) + 4 (PRD-0008 Q5 + FR-048 X2 lineage + X6 explain_number) + group_create (FR-012 v4 MCP-паритет) + monte_carlo_run (FR-066, native)"
         );
     }
 

@@ -1,7 +1,7 @@
 ---
 name: canvasdesk-model-build
-description: Сборка исполняемой математической модели на канвасе CanvasDesk через MCP — ноды, value-связи с адресацией портов (fromOutput/fromLine/toParam), атомарный батч graph_apply, вставка схем. Используйте, когда нужно создать или изменить модель, связать ноды, задать параметры. Triggers: build model, create nodes, edges, value flow, graph_apply, param_set, template_instantiate, schemes_apply.
-version: 2
+description: Сборка исполняемой математической модели на канвасе CanvasDesk через MCP — ноды, value-связи с адресацией портов (fromOutput/fromLine/toParam), атомарный батч graph_apply, вставка схем, группировка нод. Используйте, когда нужно создать или изменить модель, связать ноды, задать параметры, сгруппировать ноды. Triggers: build model, create nodes, edges, value flow, graph_apply, param_set, template_instantiate, schemes_apply, group_create.
+version: 3
 ---
 
 # Сборка модели на CanvasDesk
@@ -133,6 +133,23 @@ value-связям. Требуется подключённый MCP-сервер
   остаются).
 - `viewport_set` {x, y, zoom?} — показать пользователю результат
   (координаты — из bbox вставки или created-нод ответа батча).
+
+## Шаг 6. Группировка нод
+
+- `group_create` {nodes, label?, padding?} — обернуть перечисленные
+  ноды новой группой: рамка по общему bbox + padding (дефолт 40,
+  допустимо 0..500), дети — явный список id. Ответ: {id, label,
+  children, parent, x, y, width, height}. Один undo-шаг.
+- Семантика иерархии (FR-012 v4): если обёрнутые ноды — дети
+  существующих групп, они вычёркиваются оттуда (инварант одного
+  членства), новая группа становится ребёнком самой внутренней
+  группы-предка, а вся цепочка предков авторасширяется, чтобы вмещать
+  новую подгруппу. Группировать можно и сами группы — перечислите их
+  id в nodes.
+- В батче `graph_apply` доступна та же операция с ref-адресацией —
+  рамка собирается в одном undo-шаге с нодами:
+  `{"op":"group_create","ref":"pack","nodes":["a","b"],"label":"Пакет"}`.
+  Группа считается новой нодой в лимите 128.
 
 ## Эталонный пример: Instagram MVP (ADR-0005)
 

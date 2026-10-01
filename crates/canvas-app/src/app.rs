@@ -32,6 +32,7 @@ use crate::settings_ui::{
     row_desc_key, row_kind, row_label_key, DropdownState, RowKind, SettingsRow, DROPDOWN_MARGIN,
     DROPDOWN_ROW_H, MODAL_ROW_LABEL_W, SETTINGS_TABS,
 };
+use crate::suggest;
 // FR-038 (T-038.4): snap-движок (T-038.2) — чистая геометрия магнитной
 // раскладки; кламп collision публичен для live-клампа кадра драга (п.15);
 // T-038.5: batch-операции выделения (п.16-17) — те же чистые функции
@@ -45,7 +46,7 @@ use crate::template_ui::{
     row_of_ordinal as template_row_of_ordinal, split_two_lines, PanelRow, WheelHit,
 };
 use crate::ui::{
-    button_rect, canvas_menu_label, canvas_menu_visible_items, drag_origins, focus_seed_of,
+    button_rect, canvas_menu_label, canvas_menu_visible_items_ext, drag_origins, focus_seed_of,
     help_button_rect, hotkeys_panel_rect_at, in_resize_corner, language_button_rect,
     menu_item_at_for, menu_item_rect, menu_rect_for, next_free_id, nodes_in_rect, paste_nodes,
     plan_group_around, plan_group_around_nodes, plan_group_at, point_in_rect, reassign_ids,
@@ -326,6 +327,16 @@ pub enum AppEvent {
     /// теряет; web-слой ловит beforeinput и доставляет текст сюда —
     /// маршрут в активный текстовый приёмник тот же, что у Ime::Commit.
     ImeCommit(String),
+    /// FR-079 (S3): suggest-воркер отдал ранжирование — мердж ИИ-строк в
+    /// попап FR-021 (C1) или показ C3-карточек «что дальше» (цель
+    /// различает конвейер). Ответ с отставшим `generation` отбрасывается
+    /// на стороне App. Полезная нагрузка — `Arc` (wake-up по
+    /// EventLoopProxy, паттерн FlowReady).
+    SuggestReady {
+        target: crate::suggest::SuggestTarget,
+        generation: u64,
+        answers: std::sync::Arc<Vec<crate::suggest::SuggestAnswer>>,
+    },
     /// События шины системных событий (T16): сессия (lock/unlock, R8),
     /// suspend/resume, ExplorerStarted (TaskbarCreated, R7/R11),
     /// shell-hook/clipboard (потребители T18/будущее), SHCNE-мост в
@@ -1135,6 +1146,15 @@ pub struct App {
     wheel_menu: Option<template_ui::WheelMenu>,
     /// FR-021: popup контекстных подсказок Numi-ввода (состояние + якорь).
     hints: hints_ui::HintPopup,
+    /// FR-079 (S3): состояние suggest-интеграции (поколения/дебаунс/кэши/
+    /// журнал S0). Инвариант: всё ИИ — за `canvas-suggest`, App
+    /// знает только `Vec<SuggestAnswer>`.
+    suggest: suggest::SuggestState,
+    /// FR-079 (S3): suggest-воркер (натив; web — sync-путь в about_to_wait).
+    /// `None` — не подключён/умер: деградация на синхронный lex (< 1 мс на
+    /// каталоге 62 опций) + warn (правило «фолбэк + warn»).
+    #[cfg(not(target_arch = "wasm32"))]
+    suggest_worker: Option<crate::suggest_worker::SuggestWorkerHandle>,
     /// FR-017 (CP6): раскрытый список подмен активного сценария
     /// (клик по счётчику нижнего бара).
     whatif_list_open: bool,
@@ -1306,6 +1326,13 @@ impl App {
             Some(dir) => canvas_widgets::registry::WidgetRegistry::new(dir.join("widgets")),
             None => canvas_widgets::registry::WidgetRegistry::in_memory(),
         };
+        // FR-079 (S3): каталог журнала suggest-log.jsonl (рядом с
+        // config.toml; web — None, событий нет) — снимок ДО переноса
+        // владения config_path в поле ниже
+        let suggest_log_dir: Option<PathBuf> = config_path
+            .as_deref()
+            .and_then(|p| p.parent())
+            .map(std::path::Path::to_path_buf);
         let widgets = crate::widgets::WidgetManager::new(
             widgets_registry,
             // FR-047: виджетам флаг темности ЭФФЕКТИВНОЙ темы (пресет из
@@ -1462,6 +1489,15 @@ impl App {
             template_hover: None,
             wheel_menu: None,
             hints: hints_ui::HintPopup::default(),
+            // FR-079 (S3): журнал S0 — рядом с config.toml (натив; web —
+            // событий нет, файл недоступен); воркер подключается отдельным
+            // attach (main.rs, паттерн attach_flow_worker).
+            suggest: suggest::SuggestState {
+                log: suggest::SuggestLog::open(suggest_log_dir.as_deref()),
+                ..suggest::SuggestState::default()
+            },
+            #[cfg(not(target_arch = "wasm32"))]
+            suggest_worker: None,
             whatif_list_open: false,
             whatif_compare_open: false,
             whatif_override_line: None,
@@ -2208,6 +2244,61 @@ impl App {
         };
         // FR-021: сессия закрыта — popup подсказок больше не нужен
         self.hints.reset();
+        // FR-079 (S3): S0-события завершения правки — `edited` (текст
+        // принятой ноды изменился — атрибуция авторства, гипотеза §15) и
+        // `dismissed` (ИИ-строки были показаны и актуальны, но не приняты;
+        // мягкое закрытие попапа без конца правки — не логируем, поток
+        // событий остаётся чистым). Поколение гасится: в полёте ответов нет.
+        {
+            let session_node_id = session
+                .node_index()
+                .and_then(|i| self.scene.canvas.nodes.get(i))
+                .map(|n| n.id.clone());
+            // accepted-контроль: снимаем; изменившийся текст — событие edited
+            let accepted = self.suggest.accepted.take();
+            let edited = accepted.as_ref().is_some_and(|a| {
+                session_node_id.as_deref() == Some(a.node_id.as_str()) && session.text() != a.text
+            });
+            let dismissed = !edited
+                && !self.suggest.answers.is_empty()
+                && self.suggest.answers_gen == self.suggest.generation;
+            if (edited || dismissed) && self.settings.suggest.log_suggest {
+                let rev = self.scene.revision;
+                let engine = self.suggest_engine_label();
+                let domain = self.suggest.verdict.as_str();
+                if edited {
+                    let top = accepted.map(|a| a.template_key).unwrap_or_default();
+                    self.suggest.log.log(&suggest::SuggestEvent {
+                        event: "edited",
+                        rev,
+                        source: "lex",
+                        top: &top,
+                        score: 0.0,
+                        conf: 0.0,
+                        latency_ms: 0,
+                        engine,
+                        domain,
+                    });
+                } else if let Some(top) = self.suggest.answers.first() {
+                    let top = top.template_key.clone();
+                    let score = self.suggest.answers[0].score;
+                    let conf = self.suggest.answers[0].confidence;
+                    self.suggest.log.log(&suggest::SuggestEvent {
+                        event: "dismissed",
+                        rev,
+                        source: "lex",
+                        top: &top,
+                        score,
+                        conf,
+                        latency_ms: 0,
+                        engine,
+                        domain,
+                    });
+                }
+            }
+            self.suggest.pending = None;
+            self.suggest.generation += 1;
+        }
         self.editor_dragging = false;
         // FR-017: override-поле строки — commit идёт в подмены активного
         // сценария, а НЕ в текст ноды (инвариант 2: база не мутируется).
@@ -2291,6 +2382,20 @@ impl App {
                         } else {
                             let text = session.text();
                             node.text = Some(text.clone());
+                            // FR-080: auto-width по контенту — после коммита
+                            // текста ширина ноды пересчитывается. Текст
+                            // измеряется через TextMeasurer (тот же cosmic-text
+                            // шейпер, что у рендера); target=10 слов/строку.
+                            // Группа не пересчитывается (её размер — габариты
+                            // детей, не текст подписи). Шаблонные ноды тоже —
+                            // у них ширина подгоняется под структуру параметров.
+                            if node.template().is_none() {
+                                node.width = crate::auto_width::auto_width_for_text(Some(&text));
+                                // Spatial index хранит bbox ноды; меняя
+                                // ширину, надо перерегистрировать. Без этого
+                                // hit-test и выделение рамкой отстают.
+                                self.scene.spatial.update(index, node);
+                            }
                             // FR-013: строки «= …» — формула (смешанный
                             // редактор); commit выводит canvasdesk.expr и
                             // пересчитывает строку результата (один undo-шаг
@@ -3027,6 +3132,68 @@ impl App {
         self.selected_nodes.len() >= ALIGN_MIN_SELECTION
     }
 
+    /// FR-080: виден ли пункт «Автоширина по контенту». Виден при N≥1
+    /// выделенной ноде. Не входит в `ALIGN_MIN_SELECTION` гейт (там N≥3
+    /// для распределения — автоширина работает с одной нодой).
+    fn autowidth_menu_visible(&self) -> bool {
+        !self.selected_nodes.is_empty()
+    }
+
+    /// FR-080: применить автоширину к выделенным нодам. Для каждой ноды:
+    ///  - пропустить группу (её ширина = габариты детей, не текст)
+    ///  - пропустить шаблонную ноду (ширина = структура параметров)
+    ///  - иначе: `auto_width_for_text(node.text.as_deref())`,
+    ///    обновить `node.width`, перерегистрировать в spatial index.
+    ///
+    /// Один undo-шаг (паттерн FR-006: `push_undo` перед мутацией).
+    /// После — `mark_dirty` + `recompute_flow` (поток мог измениться,
+    /// т.к. перенос строк влияет на видимые результаты).
+    fn apply_auto_width_to_selection(&mut self) {
+        if self.selected_nodes.is_empty() {
+            return;
+        }
+        self.push_undo();
+        // Один FontSystem + TextMeasurer на batch (а не на ноду —
+        // паттерн auto_width_for_text_with). ~1мс на setup, экономит
+        // N× по сравнению с auto_width_for_text.
+        let mut fs = canvas_render::text::measure_font_system();
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let mut changed = false;
+        for &index in &self.selected_nodes {
+            // get_mut через split_at_mut — обход borrow checker: нельзя
+            // держать &mut node и &mut spatial одновременно через self.scene.
+            // Паттерн: вынести выборку индексов, потом для каждого — get_mut
+            // + spatial.update (как в finish_editing line 2308).
+            let new_width = {
+                let Some(node) = self.scene.canvas.nodes.get(index) else {
+                    continue;
+                };
+                if node.template().is_some() {
+                    continue; // шаблонная нода — пропустить
+                }
+                // Группа — пропустить (kind проверяем через NodeKind,
+                // re-exported в crate canvas_core).
+                if node.kind() == NodeKind::Group {
+                    continue;
+                }
+                crate::auto_width::auto_width_for_text_with(node.text.as_deref(), &mut m, &mut fs)
+            };
+            let Some(node) = self.scene.canvas.nodes.get_mut(index) else {
+                continue;
+            };
+            if (node.width - new_width).abs() > 0.5 {
+                node.width = new_width;
+                self.scene.spatial.update(index, node);
+                changed = true;
+            }
+        }
+        if changed {
+            self.scene.mark_dirty();
+            self.scene.recompute_flow();
+            self.request_redraw();
+        }
+    }
+
     /// Набор batch-операции (п.16): (юниты, ведомые по юнитам).
     ///
     /// Юнит — выделенная нода, НЕ являющаяся ребёнком другой выделенной
@@ -3445,10 +3612,15 @@ impl App {
         // FR-006: создание заметки — undo-шаг
         self.push_undo();
         let id = next_free_id(&self.scene.canvas, "note");
-        self.scene
-            .canvas
-            .nodes
-            .push(Node::text(id, "", world[0], world[1]));
+        // FR-080: auto-width по контенту. Для пустой новой заметки —
+        // auto_width_for_text(None) вернёт TARGET+padding (440px),
+        // нода создаётся «на вырост» — при вводе 10 слов не дёргается.
+        // Раньше хардкод 260px (Node::text default) — короткая заметка
+        // выглядела куцо, длинная не помещалась.
+        let width = crate::auto_width::auto_width_for_text(None);
+        let mut node = Node::text(id, "", world[0], world[1]);
+        node.width = width;
+        self.scene.canvas.nodes.push(node);
         let index = self.scene.canvas.nodes.len() - 1;
         let node = &self.scene.canvas.nodes[index];
         self.scene.spatial.insert(index, node);
@@ -4802,6 +4974,10 @@ impl App {
             node = %id,
             "шаблон вставлен"
         );
+        // FR-079 (S3): C3 — карточки «следующие ноды» у свежей ноды
+        // (домен-гейт/show-гейт — внутри запроса; воротил-закрытие старой
+        // стопки тоже там)
+        self.suggest_request_cards(index);
         index
     }
 
@@ -5040,10 +5216,18 @@ impl App {
     /// FR-021: принять выбранную подсказку — заменить токен слева от
     /// каретки текстом вставки. НЕ коммитит заметку; после вставки
     /// пересчитать высоту и список подсказок.
+    /// FR-079 (S3): ИИ-строка — другой контракт: редактируемая нода
+    /// ЗАМЕНЯЕТСЯ инстансом шаблона (id/позиция сохраняются — рёбра
+    /// дырки выживают), undo одним шагом (план §4.3).
     fn accept_hint(&mut self) {
         let Some(item) = self.hints.selected_item().cloned() else {
             return;
         };
+        // ИИ-строка: вставки текста нет — нода становится шаблоном
+        if let Some(template_key) = item.template.clone() {
+            self.accept_suggest_hint(&template_key);
+            return;
+        }
         let token = self.hints.token.clone();
         let applied = if let (Some(session), Some(renderer)) =
             (self.editing.as_mut(), self.renderer.as_mut())
@@ -5058,6 +5242,630 @@ impl App {
             self.update_hints();
             self.request_redraw();
         }
+    }
+
+    // --- FR-079 (S3): suggest-интеграция ------------------------------------
+
+    /// Подключить suggest-воркер (натив; main.rs — паттерн
+    /// `attach_flow_worker`). Web не вызывает: ранжирование синхронное.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn attach_suggest_worker(&mut self, handle: crate::suggest_worker::SuggestWorkerHandle) {
+        self.suggest_worker = Some(handle);
+    }
+
+    /// FR-079: движок активен (мастер-тумблер + движок не off). Сборка без
+    /// feature `l1-laya` читает `lex+laya` как lex — один warn на запуск
+    /// (правило «фолбэк + warn», конфиг не ломается).
+    fn suggest_active(&self) -> bool {
+        if !self.settings.suggest.enabled {
+            return false;
+        }
+        match self.settings.suggest.engine {
+            canvas_core::SuggestEngineKind::Off => false,
+            canvas_core::SuggestEngineKind::Lex => true,
+            canvas_core::SuggestEngineKind::LexLaya => {
+                #[cfg(not(all(feature = "l1-laya", not(target_arch = "wasm32"))))]
+                {
+                    use std::sync::atomic::{AtomicBool, Ordering};
+                    static WARNED: AtomicBool = AtomicBool::new(false);
+                    if !WARNED.swap(true, Ordering::Relaxed) {
+                        tracing::warn!(
+                            "config suggest.engine = lex+laya, но сборка без feature l1-laya — работаем на lex"
+                        );
+                    }
+                }
+                true
+            }
+        }
+    }
+
+    /// FR-079: строковое имя движка для журнала S0.
+    fn suggest_engine_label(&self) -> &'static str {
+        match self.settings.suggest.engine {
+            canvas_core::SuggestEngineKind::Off => "off",
+            canvas_core::SuggestEngineKind::Lex => "lex",
+            canvas_core::SuggestEngineKind::LexLaya => {
+                #[cfg(all(feature = "l1-laya", not(target_arch = "wasm32")))]
+                {
+                    "lex+laya"
+                }
+                #[cfg(not(all(feature = "l1-laya", not(target_arch = "wasm32"))))]
+                {
+                    "lex"
+                }
+            }
+        }
+    }
+
+    /// FR-079: домен-вердикт C4 с кэшем по ревизии канваса.
+    fn suggest_verdict(&mut self) -> canvas_suggest::Verdict {
+        if self.suggest.verdict_rev != self.scene.revision {
+            self.suggest.verdict = suggest::canvas_verdict(&self.scene.canvas);
+            self.suggest.verdict_rev = self.scene.revision;
+        }
+        self.suggest.verdict
+    }
+
+    /// FR-079: снимок дырки для конвейера (id/текст/лейбл ноды + префикс
+    /// строки каретки) — владение, чтобы дальше звать &mut self методы.
+    fn suggest_hole(&self) -> Option<(String, String, Option<String>, String)> {
+        let session = self.editing.as_ref()?;
+        let node_index = session.node_index()?;
+        let node = self.scene.canvas.nodes.get(node_index)?;
+        let (_line_i, line_text, caret) = session.caret_line();
+        let prefix = &line_text[..caret.min(line_text.len())];
+        Some((
+            node.id.clone(),
+            node.text.clone().unwrap_or_default(),
+            node.label.clone(),
+            prefix.to_owned(),
+        ))
+    }
+
+    /// FR-079: делегат debounce-тика (about_to_wait, паттерн autolink):
+    /// 300 мс покоя после триггера C1 → построить контекст «формат А»,
+    /// пройти домен-гейт C4 и show-гейт, отправить задание воркеру (натив)
+    /// или посчитать синхронно (wasm — lex < 1 мс, потоков нет).
+    fn suggest_dispatch(&mut self) {
+        let Some(pending) = self.suggest.pending else {
+            return;
+        };
+        if pending.due.elapsed().as_millis() < u128::from(suggest::SUGGEST_DEBOUNCE_MS) {
+            return;
+        }
+        self.suggest.pending = None;
+        if !self.suggest_active() {
+            return;
+        }
+        // Живая сессия редактирования на ноде (триггер мог устареть);
+        // данные дырки снимаем во владение — дальше идут &mut self вызовы
+        let Some((node_id, node_text, node_label, prefix)) = self.suggest_hole() else {
+            return;
+        };
+        // Домен-гейт C4: канвас вне каталога — не предлагаем вовсе
+        if !self.suggest_verdict().should_suggest() {
+            return;
+        }
+        // Контекст «формат А» вокруг дырки (editing ≤ 120 — порт serialize)
+        let (editing, hole_title) = {
+            let parsed = canvas_suggest::context::parse_node(&node_text, node_label.as_deref());
+            let editing: String = prefix.chars().take(120).collect();
+            (editing, parsed.title)
+        };
+        let catalog = self
+            .suggest
+            .catalog_for(&self.templates, self.settings.language)
+            .clone();
+        let document = suggest::canvas_document(
+            &self.scene.canvas,
+            &node_id,
+            &editing,
+            &hole_title,
+            &suggest::categories_of(&catalog),
+        );
+        // Show-гейт: детерминированное правило (не нейро — волна 3 §7)
+        if !suggest::show_allowed(&document, &self.settings.suggest) {
+            return;
+        }
+        let options = suggest::shortlist_options(
+            &document,
+            &catalog,
+            self.settings.language,
+            self.settings.suggest.max_options,
+        );
+        if options.is_empty() {
+            return;
+        }
+        let generation = self.suggest.generation;
+        self.suggest.request_started = Some(std::time::Instant::now());
+        let settings = self.settings.suggest.clone();
+        // Натив: воркер (прогрессивный показ — L0 уже на экране); воркер
+        // не подключён/умер — sync-lex на этом же тике (деградация, не
+        // пустота: lex < 1 мс на каталоге 62 опций). Wasm: sync-lex всегда.
+        #[cfg(not(target_arch = "wasm32"))]
+        match self.suggest_worker.as_ref() {
+            Some(worker) => {
+                let job = crate::suggest_worker::SuggestJob {
+                    target: suggest::SuggestTarget::Popup,
+                    generation,
+                    document,
+                    options: std::sync::Arc::new(options),
+                    settings,
+                };
+                if !worker.request(job) {
+                    tracing::warn!("suggest-воркер недоступен — sync-lex на UI-треде");
+                }
+            }
+            None => {
+                let answers = suggest::rank(&document, &options, &settings, None);
+                self.on_suggest_ready(generation, answers);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let answers = suggest::rank(&document, &options, &settings, None);
+            self.on_suggest_ready(generation, answers);
+        }
+    }
+
+    /// FR-079: ИИ-строки из актуальных ответов (каталог + реестр дают
+    /// отображаемое имя шаблона; дрейф реестра пропускается мягко).
+    fn suggest_ai_items(&self) -> Vec<hints_ui::HintItem> {
+        let mut ai_items = Vec::new();
+        if self.suggest.answers_gen != self.suggest.generation {
+            return ai_items;
+        }
+        for answer in &self.suggest.answers {
+            let Some(manifest_id) = self
+                .suggest
+                .catalog
+                .as_ref()
+                .and_then(|c| c.key_to_id.get(&answer.template_key))
+                .cloned()
+            else {
+                continue;
+            };
+            let Some(manifest) = self.templates.find(&manifest_id) else {
+                continue;
+            };
+            ai_items.push(suggest::ai_hint_item(
+                answer,
+                manifest.display_name(self.settings.language),
+                self.settings.language,
+            ));
+        }
+        ai_items
+    }
+
+    /// FR-079: вмерджить актуальные ИИ-ответы в текущие L0-строки попапа
+    /// (после пересинхронизации L0 — каретка двигалась без смены текста;
+    /// ответ воркера — тот же путь из [`Self::on_suggest_ready`]).
+    fn suggest_remerge(&mut self) {
+        let ai_items = self.suggest_ai_items();
+        if ai_items.is_empty() {
+            return;
+        }
+        let l0: Vec<hints_ui::HintItem> = self
+            .hints
+            .items
+            .iter()
+            .filter(|i| i.template.is_none())
+            .cloned()
+            .collect();
+        let token = self.hints.token.clone();
+        let merged = hints_ui::merge_ai_items(l0, ai_items);
+        self.hints.sync(token, merged);
+    }
+
+    /// FR-079: ответ воркера — мердж ИИ-строк в попап FR-021 (поколение
+    /// сверяется; попап мог закрыться/текст уйти вперёд). Логирует `shown`.
+    fn on_suggest_ready(&mut self, generation: u64, answers: Vec<suggest::SuggestAnswer>) {
+        if generation != self.suggest.generation {
+            return; // устаревшее поколение — тихий discard (план §4.1)
+        }
+        self.suggest.answers = answers;
+        self.suggest.answers_gen = generation;
+        self.suggest_remerge();
+        // S0: событие shown (латентность конвейера от отправки до мерджа)
+        if let Some(top) = self.suggest.answers.first() {
+            let latency_ms = self
+                .suggest
+                .request_started
+                .map(|t| t.elapsed().as_millis() as u64)
+                .unwrap_or(0);
+            let source = match top.source {
+                canvas_suggest::types::ScoreSource::Lex => "lex",
+                canvas_suggest::types::ScoreSource::Fusion { .. } => "fusion",
+            };
+            let rev = self.scene.revision;
+            let domain = self.suggest.verdict.as_str();
+            let engine = self.suggest_engine_label();
+            if self.settings.suggest.log_suggest {
+                self.suggest.log.log(&suggest::SuggestEvent {
+                    event: "shown",
+                    rev,
+                    source,
+                    top: &top.template_key,
+                    score: top.score,
+                    conf: top.confidence,
+                    latency_ms,
+                    engine,
+                    domain,
+                });
+            }
+        }
+        if self.hints.open {
+            self.request_redraw();
+        }
+    }
+
+    // --- FR-079 (S3): C3-карточки «следующие ноды» ---------------------------
+
+    /// C3: запросить «что дальше» для свежей ноды `index`. Контекст —
+    /// «формат А» вокруг ноды (нода = дырка, editing пуст, hole_title =
+    /// имя шаблона); те же домен/show-гейты, что у C1. Старая стопка
+    /// закрывается (dismissed) — новая инстанциация переписывает её.
+    fn suggest_request_cards(&mut self, index: usize) {
+        self.suggest.cards = None;
+        if !self.suggest_active() {
+            return;
+        }
+        // Снимок дырки во владение — дальше &mut self (вердикт-кэш)
+        let Some((node_id, hole_title)) = self.scene.canvas.nodes.get(index).map(|node| {
+            (
+                node.id.clone(),
+                node.template()
+                    .and_then(|t| t.name)
+                    .or_else(|| node.label.clone())
+                    .unwrap_or_default(),
+            )
+        }) else {
+            return;
+        };
+        if !self.suggest_verdict().should_suggest() {
+            return;
+        }
+        let catalog = self
+            .suggest
+            .catalog_for(&self.templates, self.settings.language)
+            .clone();
+        let document = suggest::canvas_document(
+            &self.scene.canvas,
+            &node_id,
+            "",
+            &hole_title,
+            &suggest::categories_of(&catalog),
+        );
+        if !suggest::show_allowed_for_cards(&document, &self.settings.suggest) {
+            return;
+        }
+        let options = suggest::shortlist_options(
+            &document,
+            &catalog,
+            self.settings.language,
+            self.settings.suggest.max_options,
+        );
+        if options.is_empty() {
+            return;
+        }
+        self.suggest.cards_gen += 1;
+        let generation = self.suggest.cards_gen;
+        let settings = self.settings.suggest.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        match self.suggest_worker.as_ref() {
+            Some(worker) => {
+                let job = crate::suggest_worker::SuggestJob {
+                    target: suggest::SuggestTarget::Cards,
+                    generation,
+                    document,
+                    options: std::sync::Arc::new(options),
+                    settings,
+                };
+                if !worker.request(job) {
+                    tracing::warn!("suggest-воркер недоступен — карточки sync-lex");
+                }
+            }
+            None => {
+                let answers = suggest::rank(&document, &options, &settings, None);
+                self.on_cards_ready(generation, answers);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let answers = suggest::rank(&document, &options, &settings, None);
+            self.on_cards_ready(generation, answers);
+        }
+    }
+
+    /// C3: ответы движка → стопка карточек (поколение сверяется; пустые
+    /// ответы = гейты отработали — стопки нет). Логирует `shown`.
+    fn on_cards_ready(&mut self, generation: u64, answers: Vec<suggest::SuggestAnswer>) {
+        if generation != self.suggest.cards_gen {
+            return;
+        }
+        let mut items = Vec::new();
+        for answer in &answers {
+            let Some(manifest_id) = self
+                .suggest
+                .catalog
+                .as_ref()
+                .and_then(|c| c.key_to_id.get(&answer.template_key))
+                .cloned()
+            else {
+                continue;
+            };
+            let Some(manifest) = self.templates.find(&manifest_id) else {
+                continue;
+            };
+            items.push(suggest::SuggestCard {
+                template_key: answer.template_key.clone(),
+                label: manifest.display_name(self.settings.language).to_owned(),
+            });
+            if items.len() >= suggest::SUGGEST_TOP_N {
+                break;
+            }
+        }
+        if items.is_empty() {
+            self.suggest.cards = None;
+            return;
+        }
+        let anchor_id = self
+            .scene
+            .canvas
+            .nodes
+            .iter()
+            .rev()
+            .find(|n| n.template().is_some())
+            .map(|n| n.id.clone());
+        let Some(node_id) = anchor_id else {
+            return;
+        };
+        self.suggest.cards = Some(suggest::SuggestCards { node_id, items });
+        // S0: shown по карточкам (top — первая карточка)
+        if self.settings.suggest.log_suggest {
+            if let Some(cards) = self.suggest.cards.as_ref() {
+                let top = cards.items[0].template_key.clone();
+                let rev = self.scene.revision;
+                let engine = self.suggest_engine_label();
+                let domain = self.suggest.verdict.as_str();
+                let score = answers.first().map(|a| a.score).unwrap_or(0.0);
+                let conf = answers.first().map(|a| a.confidence).unwrap_or(0.0);
+                self.suggest.log.log(&suggest::SuggestEvent {
+                    event: "shown",
+                    rev,
+                    source: "cards",
+                    top: &top,
+                    score,
+                    conf,
+                    latency_ms: 0,
+                    engine,
+                    domain,
+                });
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// C3: rect'ы открытых карточек (экранные лог. px; чистая функция
+    /// геометрии — общий источник для рендера и hit-теста).
+    fn suggest_card_rects(&self) -> Vec<canvas_ui::geometry::UiRect> {
+        let Some(cards) = self.suggest.cards.as_ref() else {
+            return Vec::new();
+        };
+        let Some(node) = self
+            .scene
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.id == cards.node_id)
+        else {
+            return Vec::new();
+        };
+        let origin = self
+            .camera
+            .world_to_screen([node.x, node.y], self.viewport_logical());
+        let scale = self.camera.zoom() * self.scale_factor();
+        let node_screen = [
+            origin[0],
+            origin[1],
+            node.width * scale,
+            node.height * scale,
+        ];
+        suggest::card_rects(node_screen, self.viewport_logical(), cards.items.len())
+    }
+
+    /// C3: карточка под курсором (hover-подсветка; None — мимо).
+    fn suggest_card_hover(&self) -> Option<usize> {
+        self.suggest.cards.as_ref()?;
+        for (i, rect) in self.suggest_card_rects().iter().enumerate() {
+            if self.cursor[0] >= rect.x
+                && self.cursor[0] <= rect.x + rect.w
+                && self.cursor[1] >= rect.y
+                && self.cursor[1] <= rect.y + rect.h
+            {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// C3: клик по карточке — вставка шаблона справа от ноды-якоря
+    /// (FR-071-раскладка подберёт место расталкиванием); true — глотаем.
+    /// Клик мимо открытой стопки — закрыть её (dismissed) и пропустить
+    /// клик дальше (паттерн тултипа, не модаль).
+    fn suggest_card_click(&mut self) -> bool {
+        let Some(cards) = self.suggest.cards.clone() else {
+            return false;
+        };
+        let rects = self.suggest_card_rects();
+        for (i, rect) in rects.iter().enumerate() {
+            if self.cursor[0] >= rect.x
+                && self.cursor[0] <= rect.x + rect.w
+                && self.cursor[1] >= rect.y
+                && self.cursor[1] <= rect.y + rect.h
+            {
+                let key = cards.items[i].template_key.clone();
+                self.close_suggest_cards();
+                if let Some(manifest_id) = self
+                    .suggest
+                    .catalog
+                    .as_ref()
+                    .and_then(|c| c.key_to_id.get(&key))
+                    .cloned()
+                {
+                    if let Some(manifest) = self.templates.find(&manifest_id).cloned() {
+                        // S0: accepted по карточке
+                        if self.settings.suggest.log_suggest {
+                            let rev = self.scene.revision;
+                            let engine = self.suggest_engine_label();
+                            let domain = self.suggest.verdict.as_str();
+                            self.suggest.log.log(&suggest::SuggestEvent {
+                                event: "accepted",
+                                rev,
+                                source: "cards",
+                                top: &key,
+                                score: 0.0,
+                                conf: 0.0,
+                                latency_ms: 0,
+                                engine,
+                                domain,
+                            });
+                        }
+                        // Вставка справа от якоря (та же колонка, паттерн
+                        // палитры: вставили — предложили дальше)
+                        let world = self
+                            .scene
+                            .canvas
+                            .nodes
+                            .iter()
+                            .find(|n| n.id == cards.node_id)
+                            .map(|n| [n.x + n.width + 60.0, n.y])
+                            .unwrap_or(self.viewport_center_world());
+                        self.instantiate_template_at(&manifest, world);
+                        return true;
+                    }
+                }
+                return true;
+            }
+        }
+        // Мимо карточек — закрыть стопку, клик продолжает путь
+        self.close_suggest_cards();
+        false
+    }
+
+    /// C3: закрыть стопку карточек (dismissed в журнал, если показаны).
+    fn close_suggest_cards(&mut self) {
+        if let Some(cards) = self.suggest.cards.take() {
+            if self.settings.suggest.log_suggest {
+                let top = cards
+                    .items
+                    .first()
+                    .map(|c| c.template_key.clone())
+                    .unwrap_or_default();
+                let rev = self.scene.revision;
+                let engine = self.suggest_engine_label();
+                let domain = self.suggest.verdict.as_str();
+                self.suggest.log.log(&suggest::SuggestEvent {
+                    event: "dismissed",
+                    rev,
+                    source: "cards",
+                    top: &top,
+                    score: 0.0,
+                    conf: 0.0,
+                    latency_ms: 0,
+                    engine,
+                    domain,
+                });
+            }
+            self.request_redraw();
+        }
+    }
+
+    /// FR-079 (S3): принять ИИ-строку — редактируемая нода заменяется
+    /// инстансом шаблона (id/позиция сохраняются, рёбра выживают);
+    /// undo — один шаг (push_undo до мутации). Событие `accepted` в журнал.
+    fn accept_suggest_hint(&mut self, template_key: &str) {
+        let Some(node_index) = self.editing.as_ref().and_then(|s| s.node_index()) else {
+            return;
+        };
+        let Some(node) = self.scene.canvas.nodes.get(node_index) else {
+            return;
+        };
+        let node_id = node.id.clone();
+        let Some(manifest_id) = self
+            .suggest
+            .catalog
+            .as_ref()
+            .and_then(|c| c.key_to_id.get(template_key))
+            .cloned()
+        else {
+            return;
+        };
+        let Some(manifest) = self.templates.find(&manifest_id).cloned() else {
+            return;
+        };
+        // Завершить правку БЕЗ коммита текста (нода заменяется целиком);
+        // ответы/current-поколение гасим ДО — finish_editing не должен
+        // логировать dismissed на принимаемой подсказке
+        self.suggest.answers.clear();
+        self.suggest.generation += 1;
+        self.suggest.pending = None;
+        self.finish_editing(false);
+        self.push_undo();
+        let Some(node) = self.scene.canvas.nodes.get_mut(node_index) else {
+            return;
+        };
+        match canvas_core::templates::instantiate_with_language(
+            &manifest,
+            &std::collections::BTreeMap::new(),
+            node_id,
+            node.x,
+            node.y,
+            self.settings.language,
+        ) {
+            Ok(mut fresh) => {
+                // FR-023: авто-высота по числу строк листа параметров
+                fit_template_node_height(&mut fresh);
+                *node = fresh;
+            }
+            Err(err) => {
+                tracing::warn!(%err, "дефолты шаблона вне границ — подсказка не принята");
+                return;
+            }
+        }
+        let text = self.scene.canvas.nodes[node_index]
+            .text
+            .clone()
+            .unwrap_or_default();
+        self.scene.mark_dirty();
+        self.scene.recompute_flow();
+        self.selected = Some(Selection::Node(node_index));
+        self.hints.reset();
+        self.suggest.pending = None;
+        self.suggest.generation += 1;
+        self.suggest.accepted = Some(suggest::AcceptedSuggest {
+            node_id: self.scene.canvas.nodes[node_index].id.clone(),
+            template_key: template_key.to_owned(),
+            text,
+        });
+        // S0: accepted
+        if self.settings.suggest.log_suggest {
+            let rev = self.scene.revision;
+            let engine = self.suggest_engine_label();
+            let domain = self.suggest.verdict.as_str();
+            self.suggest.log.log(&suggest::SuggestEvent {
+                event: "accepted",
+                rev,
+                source: "lex",
+                top: template_key,
+                score: 0.0,
+                conf: 0.0,
+                latency_ms: 0,
+                engine,
+                domain,
+            });
+        }
+        self.request_redraw();
     }
 
     /// Батч событий файловой системы (T10): применение к модели — в чистой
@@ -7808,7 +8616,8 @@ impl App {
         let menu = self.menu.as_ref()?;
         Some(menu_rect_for(
             menu.origin,
-            canvas_menu_visible_items(self.align_menu_visible()).len(),
+            canvas_menu_visible_items_ext(self.align_menu_visible(), self.autowidth_menu_visible())
+                .len(),
         ))
     }
 
@@ -10977,5 +11786,342 @@ mod fr050_stage_e_tests {
             &mut fs,
         );
         assert!((rect[2] - DIALOG_MIN_W).abs() < 0.01, "пол 280 ≡ прежнему");
+    }
+}
+
+/// FR-079 (S3): интеграционные тесты конвейера C1/C3 — триггер → дебаунс →
+/// гейты → ранжирование → мердж → принятие (внутри `#[cfg(test)]`:
+/// хелперы не светятся в обычной сборке).
+#[cfg(test)]
+mod suggest_flow_tests {
+    use super::*;
+
+    /// Канвас расчётного домена: пресеты → дырка → потребитель (как
+    /// source_a фикстуры PoC: присваивания, рёбра к дырке и от неё).
+    fn suggest_calc_canvas() -> Canvas {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text(
+            "pe",
+            "Продуктовая единица\nprice = 10 руб\ncogs = 4 руб",
+            0.0,
+            0.0,
+        ));
+        canvas.nodes.push(Node::text(
+            "acq",
+            "Привлечение\ncac = 120 руб\nmonth = 1 мес",
+            0.0,
+            160.0,
+        ));
+        canvas.nodes.push(Node::text("hole", "margin", 320.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("ltv", "LTV\nltv = margin * 36", 640.0, 0.0));
+        canvas.edges.push(Edge::new("e1", "pe", None, "hole", None));
+        canvas
+            .edges
+            .push(Edge::new("e2", "acq", None, "hole", None));
+        canvas
+            .edges
+            .push(Edge::new("e3", "hole", None, "ltv", None));
+        canvas
+    }
+
+    /// App на заглушках с включённым suggest (воркер не подключён —
+    /// dispatch идёт sync-lex-путём деградации = продуктовый путь web).
+    fn suggest_stub_app(canvas: Canvas) -> App {
+        let scene = SceneState::new(canvas, PathBuf::from("target/tmp/suggest-flow-test.canvas"));
+        let cache_dir =
+            std::env::temp_dir().join(format!("canvasdesk-suggest-{}", std::process::id()));
+        std::fs::create_dir_all(&cache_dir).expect("tmp cache dir");
+        let (search_responder, _rx) = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let responder: canvas_core::SearchResponder = std::sync::Arc::new(move |event| {
+                let _ = tx.send(event);
+            });
+            (responder, rx)
+        };
+        let mut settings = Settings::default();
+        settings.suggest.enabled = true;
+        let mut app = App::new(
+            scene,
+            Box::new(canvas_core::NoopThumbs),
+            settings,
+            None,
+            Some(cache_dir),
+            std::sync::Arc::new(|_event: canvas_core::DragEvent| {}),
+            std::sync::Arc::new(|_event: canvas_widgets::WidgetEvent| {}),
+            Box::new(canvas_core::NoopWatch),
+            Box::new(canvas_core::MemSearch::new(search_responder)),
+            Box::new(canvas_core::NoopClipboard),
+            Some(Box::new(canvas_core::MemWidgetState::default())),
+            false,
+            Box::new(canvas_render::renderer_init::NoopRendererLaunch),
+        );
+        // Журнал S0 — в отдельный файл песочницы теста
+        let log_dir = std::env::temp_dir().join(format!("suggest-log-{}", std::process::id()));
+        std::fs::create_dir_all(&log_dir).expect("tmp log dir");
+        let _ = std::fs::remove_file(log_dir.join("suggest-log.jsonl"));
+        app.suggest.log = suggest::SuggestLog::open(Some(&log_dir));
+        app
+    }
+
+    /// Открыть правку ноды без рендера: сессия на собственном FontSystem
+    /// (cosmic-text не требует GPU).
+    fn suggest_start_editing(app: &mut App, index: usize, text: &str) {
+        let mut font_system = cosmic_text::FontSystem::new();
+        let session = EditingSession::new(
+            &mut font_system,
+            EditTarget::Node(index),
+            text,
+            400.0,
+            200.0,
+            1.0,
+        );
+        app.editing = Some(session);
+    }
+
+    /// Дебаунс «прошёл»: due на секунду в прошлое.
+    fn suggest_force_debounce(app: &mut App) {
+        if let Some(pending) = &mut app.suggest.pending {
+            pending.due = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        }
+    }
+
+    /// Полный цикл C1: триггер → дебаунс-тик → sync-lex → мердж ИИ-строк;
+    /// принятие заменяет ноду шаблоном (id/позиция живы, undo один шаг).
+    #[test]
+    fn suggest_c1_flow_popup_and_acceptance() {
+        let mut app = suggest_stub_app(suggest_calc_canvas());
+        let hole = 2;
+        suggest_start_editing(&mut app, hole, "margin");
+        app.update_hints();
+        assert!(app.suggest.pending.is_some(), "триггер C1 взведён");
+        suggest_force_debounce(&mut app);
+        app.suggest_dispatch();
+        assert!(app.suggest.pending.is_none(), "дебаунс потреблён");
+        assert!(
+            !app.suggest.answers.is_empty(),
+            "ранжирование дало ответы (домен Calculation, show-гейт пройден)"
+        );
+        assert!(app.hints.open, "попап открыт (мердж L0+ИИ)");
+        assert!(
+            app.hints
+                .items
+                .iter()
+                .any(|i| i.kind == hints_ui::HintKind::Ai),
+            "ИИ-строки в попапе FR-021"
+        );
+        // Устаревшее поколение отбрасывается тихо (план §4.1)
+        let stale_gen = app.suggest.generation.wrapping_sub(1);
+        let before = app.hints.items.clone();
+        app.on_suggest_ready(stale_gen, Vec::new());
+        assert_eq!(app.hints.items, before, "stale-ответ не трогает попап");
+        // Принятие ИИ-строки: нода становится шаблоном, id/позиция живы
+        let ai_index = app
+            .hints
+            .items
+            .iter()
+            .position(|i| i.kind == hints_ui::HintKind::Ai)
+            .expect("есть ИИ-строка");
+        app.hints.selected = ai_index;
+        let hole_id = app.scene.canvas.nodes[hole].id.clone();
+        let hole_pos = (
+            app.scene.canvas.nodes[hole].x,
+            app.scene.canvas.nodes[hole].y,
+        );
+        let template_key = app.hints.items[ai_index]
+            .template
+            .clone()
+            .expect("ключ шаблона у ИИ-строки");
+        app.accept_hint();
+        assert!(
+            app.scene.canvas.nodes[hole].template().is_some(),
+            "нода заменена инстансом шаблона"
+        );
+        assert_eq!(
+            app.scene.canvas.nodes[hole].id, hole_id,
+            "id сохранён — рёбра дырки живы"
+        );
+        assert_eq!(
+            (
+                app.scene.canvas.nodes[hole].x,
+                app.scene.canvas.nodes[hole].y
+            ),
+            hole_pos,
+            "позиция сохранена"
+        );
+        assert_eq!(
+            app.suggest
+                .accepted
+                .as_ref()
+                .map(|a| a.template_key.clone()),
+            Some(template_key),
+            "accepted-контроль записан"
+        );
+        assert!(!app.scene.undo_stack.is_empty(), "undo-шаг pushed");
+    }
+
+    /// Триггер молчит при off/disabled (мастер-тумблер S5).
+    #[test]
+    fn suggest_c1_trigger_gated_by_config() {
+        let mut app = suggest_stub_app(suggest_calc_canvas());
+        app.settings.suggest.engine = canvas_core::SuggestEngineKind::Off;
+        suggest_start_editing(&mut app, 2, "margin");
+        app.update_hints();
+        assert!(app.suggest.pending.is_none(), "off — триггер молчит");
+        app.settings.suggest.engine = canvas_core::SuggestEngineKind::Lex;
+        app.settings.suggest.enabled = false;
+        app.update_hints();
+        assert!(app.suggest.pending.is_none(), "disabled — триггер молчит");
+    }
+
+    /// Домен-гейт C4: прозаический фреймворк-канвас — не предлагаем.
+    #[test]
+    fn suggest_c1_framework_canvas_suppressed() {
+        let mut canvas = Canvas::default();
+        for i in 0..6 {
+            canvas.nodes.push(Node::text(
+                &format!("p{i}"),
+                format!("Шаг {i} пути пользователя\nописание этапа {i}"),
+                (i as f32) * 260.0,
+                0.0,
+            ));
+        }
+        for i in 0..5 {
+            canvas.edges.push(Edge::new(
+                &format!("e{i}"),
+                &format!("p{i}"),
+                None,
+                &format!("p{}", i + 1),
+                None,
+            ));
+        }
+        let mut app = suggest_stub_app(canvas);
+        suggest_start_editing(&mut app, 0, "Шаг 0 пути пользователя");
+        app.update_hints();
+        suggest_force_debounce(&mut app);
+        app.suggest_dispatch();
+        assert!(
+            app.suggest.answers.is_empty(),
+            "framework-домен подавлен (C4)"
+        );
+        assert!(
+            !app.hints
+                .items
+                .iter()
+                .any(|i| i.kind == hints_ui::HintKind::Ai),
+            "ИИ-строк нет"
+        );
+    }
+
+    /// S0-воронка: shown при мердже, dismissed при закрытии правки,
+    /// accepted при принятии (файл-журнал песочницы теста).
+    #[test]
+    fn suggest_s0_events_written() {
+        let mut app = suggest_stub_app(suggest_calc_canvas());
+        let log_dir = std::env::temp_dir().join(format!("suggest-log-{}", std::process::id()));
+        let journal = log_dir.join("suggest-log.jsonl");
+        let _ = std::fs::remove_file(&journal);
+        // 1) показ + закрытие без принятия → shown + dismissed
+        suggest_start_editing(&mut app, 2, "margin");
+        app.update_hints();
+        suggest_force_debounce(&mut app);
+        app.suggest_dispatch();
+        assert!(!app.suggest.answers.is_empty());
+        app.finish_editing(true);
+        let text = std::fs::read_to_string(&journal).unwrap_or_default();
+        assert!(
+            text.contains("\"event\":\"shown\""),
+            "shown записан: {text}"
+        );
+        assert!(
+            text.contains("\"event\":\"dismissed\""),
+            "dismissed записан"
+        );
+        // 2) принятие → accepted
+        suggest_start_editing(&mut app, 2, "margin");
+        app.update_hints();
+        suggest_force_debounce(&mut app);
+        app.suggest_dispatch();
+        let ai_index = app
+            .hints
+            .items
+            .iter()
+            .position(|i| i.kind == hints_ui::HintKind::Ai)
+            .expect("ИИ-строка есть");
+        app.hints.selected = ai_index;
+        app.accept_hint();
+        let text = std::fs::read_to_string(&journal).unwrap_or_default();
+        assert!(
+            text.contains("\"event\":\"accepted\""),
+            "accepted записан: {text}"
+        );
+        assert!(
+            app.suggest.accepted.is_some(),
+            "accepted-контроль живёт до следующего finish_editing (edited-атрибутция)"
+        );
+        let _ = std::fs::remove_dir_all(&log_dir);
+    }
+
+    /// C3: инстанциация шаблона на расчётном канвасе → карточки «что
+    /// дальше» у свежей ноды; клик по карточке вставляет шаблон справа
+    /// (цепочка растёт), Esc закрывает стопку.
+    #[test]
+    fn suggest_c3_cards_after_instantiation() {
+        let mut app = suggest_stub_app(suggest_calc_canvas());
+        // Инстанцируем шаблон через продуктовый путь (палитра/колесо)
+        let manifest = app
+            .templates
+            .find("com.canvasdesk.ue-gross-margin")
+            .cloned()
+            .expect("шаблон каталога есть");
+        let index = app.instantiate_template_at(&manifest, [300.0, 300.0]);
+        assert!(app.scene.canvas.nodes[index].template().is_some());
+        // Карточки: домен Calculation, контекст > порога (соседи есть)
+        let cards = app
+            .suggest
+            .cards
+            .as_ref()
+            .expect("C3-карточки показаны")
+            .clone();
+        assert!(!cards.items.is_empty(), "карточки не пусты");
+        assert!(cards.items.len() <= suggest::SUGGEST_TOP_N);
+        assert_eq!(cards.node_id, app.scene.canvas.nodes[index].id);
+        // Клик по первой карточке: вставка справа от якоря
+        let rects = app.suggest_card_rects();
+        assert_eq!(rects.len(), cards.items.len(), "геометрия = числу карточек");
+        let before = app.scene.canvas.nodes.len();
+        app.cursor = [rects[0].x + 5.0, rects[0].y + 5.0];
+        assert!(app.suggest_card_click(), "клик по карточке глотается");
+        assert_eq!(app.scene.canvas.nodes.len(), before + 1, "шаблон вставлен");
+        assert!(
+            app.scene.canvas.nodes.last().unwrap().template().is_some(),
+            "новая нода — шаблон"
+        );
+        // Вставка переписала стопку (новая инстанциация → новый запрос);
+        // Esc закрывает актуальную стопку
+        if app.suggest.cards.is_some() {
+            app.close_suggest_cards();
+        }
+        assert!(app.suggest.cards.is_none(), "стопка закрыта");
+        // Повторный клик мимо — просто false (стопки нет)
+        assert!(!app.suggest_card_click());
+    }
+
+    /// C3: изолированная вставка на пустом канвасе — show-гейт молчит
+    /// (контекст без соседей), карточек нет.
+    #[test]
+    fn suggest_c3_cards_gated_on_empty_canvas() {
+        let mut app = suggest_stub_app(Canvas::default());
+        let manifest = app
+            .templates
+            .find("com.canvasdesk.lb")
+            .cloned()
+            .expect("шаблон каталога есть");
+        app.instantiate_template_at(&manifest, [0.0, 0.0]);
+        assert!(
+            app.suggest.cards.is_none(),
+            "show-гейт: без соседей карточек нет"
+        );
     }
 }

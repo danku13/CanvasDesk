@@ -90,6 +90,22 @@ impl LayaClient {
         })
     }
 
+    /// Health-проба sidecar (`GET /health`, laya-serve): готов ли чекпойнт.
+    /// Вызывается воркером приложения после spawn (cold start до 60 с —
+    /// план FR-079 §5.1) — до готовности запросы бессмысленны.
+    pub fn health(&self) -> Result<(), LayaError> {
+        let url = format!("{}/health", self.endpoint.trim_end_matches('/'));
+        let agent = ureq::AgentBuilder::new().timeout(self.timeout).build();
+        match agent.get(&url).call() {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::Status(code, resp)) => {
+                let _ = resp.into_string();
+                Err(LayaError::Transport(format!("HTTP {code}")))
+            }
+            Err(ureq::Error::Transport(t)) => Err(LayaError::Transport(t.to_string())),
+        }
+    }
+
     /// Choice-запрос: ранжирование опций против документа.
     pub fn choice(&self, document: &str, options: &[OptionDesc]) -> Result<MmAnswer, LayaError> {
         let payload = self.build_payload(document, options);

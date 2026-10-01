@@ -1773,14 +1773,22 @@ impl App {
     /// Popup открывается только на Numi-строках каретки (вердикт
     /// `expr::line_kind`, вне код-фенсов) при непустом списке вариантов;
     /// якорь — низ каретки в логических px окна.
+    /// FR-079 (S3): здесь же триггер C1 — ДО Numi-гейта L0: «пользователь
+    /// печатает имя шаблона» не является Numi-выражением, ИИ-строки живут
+    /// в том же попапе на своих правах (AI-only-открытие — по SuggestReady).
+    /// Текст изменился (префикс новый) → поколение растёт, устаревшие
+    /// ответы тонут; каретка двигалась без правки — поколение стабильно,
+    /// ИИ-строки переживают пересинхронизацию L0 без мигания.
     pub(super) fn update_hints(&mut self) {
         let Some(session) = self.editing.as_ref() else {
             self.hints.reset();
+            self.suggest.pending = None;
             return;
         };
         // Подсказки — только в тексте ноды (лейблы связей не Numi-редактор)
         if session.node_index().is_none() {
             self.hints.reset();
+            self.suggest.pending = None;
             return;
         }
         let (line_i, line_text, caret) = session.caret_line();
@@ -1793,6 +1801,22 @@ impl App {
             .fold(false, |fence, line| {
                 fence ^ line.trim_start().starts_with("```")
             });
+        // FR-079 (S3): триггер C1 — любой ввод в тексте ноды вне фенсов
+        // (включая прозу — это и есть сценарий «печатаю имя шаблона»);
+        // выключенный движок гасит и накопленные ответы
+        if self.suggest_active() && !in_fence {
+            if prefix != self.suggest.last_prefix {
+                self.suggest.generation += 1;
+                self.suggest.last_prefix = prefix.to_owned();
+            }
+            self.suggest.pending = Some(suggest::PendingSuggest {
+                due: std::time::Instant::now(),
+            });
+        } else {
+            self.suggest.pending = None;
+            self.suggest.answers.clear();
+        }
+        // L0 (FR-021): Numi-строки каретки — прежний гейт попапа
         if in_fence
             || !matches!(
                 expr::line_kind(prefix),
@@ -1800,6 +1824,8 @@ impl App {
             )
         {
             self.hints.reset();
+            // Актуальные ИИ-строки переживают закрытие L0 (AI-only-попап)
+            self.suggest_remerge();
             return;
         }
         // Контекст ноды: переменные выше, value-входы, параметры шаблона
@@ -1842,6 +1868,8 @@ impl App {
         let items = hints_ui::hint_items(prefix, &ctx, self.settings.language);
         let token = hints_ui::token_before_caret(prefix, prefix.len()).0;
         self.hints.sync(token, items);
+        // FR-079 (S3): мердж актуальных ИИ-строк под L0 (триггер — выше)
+        self.suggest_remerge();
         // Якорь — низ каретки (screen logical px) — см. sync_hints_anchor.
         self.sync_hints_anchor();
     }
@@ -1853,8 +1881,10 @@ impl App {
     /// от каретки. Математика: caret rect — px буфера редактора (буфер
     /// рисуется 1:1 в физических px у origin области тела), /scale —
     /// перевод в логические px.
+    /// FR-079 (S3): якорь живёт и при закрытом L0-попапе — AI-only-открытие
+    /// по SuggestReady (пока взведён debounce-триггер C1).
     pub(super) fn sync_hints_anchor(&mut self) {
-        if !self.hints.open {
+        if !self.hints.open && self.suggest.pending.is_none() {
             return;
         }
         let caret_rect = if let (Some(session), Some(renderer)) =
@@ -1940,6 +1970,48 @@ impl App {
             );
         }
         paint_items_to_band(d.take_items(), &mut instances, &mut texts);
+        (instances, texts)
+    }
+
+    /// FR-079 (S3): C3-карточки «следующие ноды» — стопка чипов у правого
+    /// края свежей шаблонной ноды (паттерн whatif-чипа: подложка меню-тона,
+    /// рамка палитры, радиус кита; «✦» — маркер ИИ-источника). Геометрия —
+    /// [`App::suggest_card_rects`] (тот же источник, что у hit-теста).
+    pub(super) fn suggest_cards_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut instances = Vec::new();
+        let mut texts = Vec::new();
+        let Some(cards) = self.suggest.cards.as_ref() else {
+            return (instances, texts);
+        };
+        if cards.items.is_empty() {
+            return (instances, texts);
+        }
+        let palette = self.effective_palette();
+        let rects = self.suggest_card_rects();
+        let hovered = self.suggest_card_hover();
+        for (i, rect) in rects.iter().enumerate() {
+            let is_hover = hovered == Some(i);
+            instances.push(CardInstance {
+                pos: [rect.x, rect.y],
+                size: [rect.w, rect.h],
+                fill: if is_hover {
+                    palette.control_hover_fill
+                } else {
+                    palette.menu_fill
+                },
+                border: palette.palette_border,
+                params: [6.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
+            });
+            texts.push(OwnedScreenText {
+                text: format!("✦ {}", cards.items[i].label),
+                origin: [rect.x + 10.0, rect.y + 8.0],
+                width: rect.w - 16.0,
+                font_size: 12.0,
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+        }
         (instances, texts)
     }
 
@@ -2660,7 +2732,8 @@ impl App {
         let Some(menu) = &self.menu else {
             return (instances, texts);
         };
-        let items = canvas_menu_visible_items(self.align_menu_visible());
+        let items =
+            canvas_menu_visible_items_ext(self.align_menu_visible(), self.autowidth_menu_visible());
         let palette = self.effective_palette();
         let [x, y, w, h] = menu_rect_for(menu.origin, items.len());
         instances.push(CardInstance {
@@ -3726,6 +3799,16 @@ impl App {
                 self.settings.explain_coverage = !self.settings.explain_coverage;
                 self.coverage_cache = None;
             }
+            // FR-079 (S3): мастер-тумблер подсказок — выключение гасит
+            // накопленные ответы/карточки и отменяет дебаунс (мгновенно)
+            SettingsRow::SuggestEnabled => {
+                self.settings.suggest.enabled = !self.settings.suggest.enabled;
+                if !self.settings.suggest.enabled {
+                    self.suggest.pending = None;
+                    self.suggest.answers.clear();
+                    self.close_suggest_cards();
+                }
+            }
             SettingsRow::HudOnStart => {
                 self.settings.hud_on_start = !self.settings.hud_on_start;
                 // Мгновенная обратная связь: HUD переключается сразу
@@ -3746,6 +3829,9 @@ impl App {
             // PRD-0007 (AC-2.3): dropdown «Лимит глубины explain-дерева» —
             // применяется в apply_dropdown_choice, тумблером не является
             | SettingsRow::ExplainDepthLimit
+            // FR-079 (S3): dropdown «Движок подсказок» — применяется в
+            // apply_dropdown_choice, тумблером не является
+            | SettingsRow::SuggestEngine
             // FR-ICONS: dropdown «Набор иконок» — применяется в
             // apply_dropdown_choice, тумблером не является
             | SettingsRow::IconStyle => {
@@ -4253,6 +4339,8 @@ impl App {
                         SettingsRow::AutolinkEnabled => self.settings.autolink_enabled,
                         // PRD-0007 (X6, F-12): индикатор покрытия цепочками
                         SettingsRow::ExplainCoverage => self.settings.explain_coverage,
+                        // FR-079 (S3): мастер-тумблер подсказок
+                        SettingsRow::SuggestEnabled => self.settings.suggest.enabled,
                         SettingsRow::HudOnStart => self.settings.hud_on_start,
                         // FR-073: тумблеры расталкивания
                         SettingsRow::DragPushEnabled => self.settings.drag_push_enabled,
@@ -4273,7 +4361,9 @@ impl App {
                         // попадает (row_kind = Dropdown), arm — для полноты
                         | SettingsRow::ExplainDepthLimit
                         // FR-ICONS: dropdown-строка (row_kind = Dropdown)
-                        | SettingsRow::IconStyle => false,
+                        | SettingsRow::IconStyle
+                        // FR-079 (S3): dropdown-строка (row_kind = Dropdown)
+                        | SettingsRow::SuggestEngine => false,
                     };
                     // Pill-тумблер: трек (включён — акцент) + ручка-квад,
                     // позиция отражает значение (рисуется квадами)

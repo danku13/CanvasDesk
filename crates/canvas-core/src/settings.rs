@@ -184,6 +184,104 @@ pub enum IconStyle {
     Bootstrap,
 }
 
+/// FR-079: движок подсказок шаблонов (секция `[suggest]` config.toml).
+/// `off` — триггеры не ходят в воркер; `lex` — локальная лексика
+/// (L0-совместимо, web/wasm); `lex+laya` — гибрид fusion с локальным
+/// sidecar `laya-serve` (действует только в сборке с feature `l1-laya`,
+/// иначе конфиг читается, но поведение = `lex` + warn).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SuggestEngineKind {
+    Off,
+    #[default]
+    Lex,
+    /// Конфиг-значение `lex+laya` (с плюсом — читаемость TOML, план §3).
+    #[serde(rename = "lex+laya")]
+    LexLaya,
+}
+
+impl SuggestEngineKind {
+    /// Строковое значение конфига (для UI/логов).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Lex => "lex",
+            Self::LexLaya => "lex+laya",
+        }
+    }
+}
+
+/// FR-079: секция `[suggest]` (план §3). Дефолт — OFF до гейта S5
+/// (продуктовое решение 1 FR: opt-in через настройки после S3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SuggestSettings {
+    /// Мастер-тумблер: попап FR-021 догружает ИИ-строки, карточки C3.
+    pub enabled: bool,
+    /// Движок: off | lex | lex+laya (см. [`SuggestEngineKind`]).
+    pub engine: SuggestEngineKind,
+    /// Вес lex в fusion α (dev-fit волны 2–3 = 0.85). Клампится [0, 1].
+    pub alpha: f64,
+    /// Шортлист для L1 (комфорт Laya ~20 опций). Клампится [5, 50].
+    pub max_options: usize,
+    /// Show-гейт: минимальная длина контекста, символов (волна 3 §7).
+    pub show_gate_min_ctx: usize,
+    /// Журнал `suggest-log.jsonl` (S0; opt-out).
+    pub log_suggest: bool,
+    /// Подсекция l1-laya (читается только в сборке с feature).
+    pub laya: LayaSettings,
+}
+
+impl Default for SuggestSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            engine: SuggestEngineKind::Lex,
+            alpha: 0.85,
+            max_options: 20,
+            show_gate_min_ctx: 120,
+            log_suggest: true,
+            laya: LayaSettings::default(),
+        }
+    }
+}
+
+/// FR-079: подсекция `[suggest.laya]` — транспорт к sidecar `laya-serve`
+/// (план §3; читается только с feature `l1-laya`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LayaSettings {
+    /// Именованный чекпойнт ИЛИ путь к fine-tuned весам (явная модель в
+    /// каждом запросе — ловушка авто-роутинга, Э1).
+    pub model: String,
+    /// endpoint sidecar (только localhost — ureq без TLS).
+    pub endpoint: String,
+    /// Бюджет L1, мс (прогрессивный показ терпит). Клампится [100, 5000].
+    pub timeout_ms: u64,
+    /// Команда запуска sidecar (пусто — внешний процесс; иначе ленивый
+    /// spawn при первом L1-запросе, паттерн `canvasdesk mcp`).
+    pub command: String,
+    /// Idle-shutdown sidecar, с. 0 — не выключать.
+    pub idle_shutdown_s: u64,
+    /// Platt-калибровка: `sigmoid(a·conf + b)` (волна 3, ECE 0.099;
+    /// после H8 — re-fit).
+    pub platt_a: f64,
+    pub platt_b: f64,
+}
+
+impl Default for LayaSettings {
+    fn default() -> Self {
+        Self {
+            model: "multilingual".to_owned(),
+            endpoint: "http://127.0.0.1:8000".to_owned(),
+            timeout_ms: 800,
+            command: String::new(),
+            idle_shutdown_s: 600,
+            platt_a: -0.018,
+            platt_b: -0.814,
+        }
+    }
+}
+
 impl IconStyle {
     /// Идентификатор набора (используется рендером для выбора атласа).
     pub fn id(self) -> &'static str {
@@ -408,6 +506,11 @@ pub struct Settings {
     /// обратная совместимость со всеми существующими config.toml.
     #[serde(default)]
     pub icon_style: IconStyle,
+    /// FR-079 (S3): секция `[suggest]` — ИИ-подсказки шаблонов (гибрид
+    /// lex+Laya за feature-флагом). Дефолт OFF до гейта S5; старые конфиги
+    /// без секции грузятся дефолтом (serde default).
+    #[serde(default)]
+    pub suggest: SuggestSettings,
 }
 
 /// FR-028: лимит откладываний онбординга — после третьего «Пропустить» подряд
@@ -503,6 +606,8 @@ impl Default for Settings {
             drag_push_iters: DRAG_PUSH_ITERS_DEFAULT,
             // FR-ICONS: дефолт — Unicode-глифы (прежнее поведение, фолбэк).
             icon_style: IconStyle::Glyph,
+            // FR-079: ИИ-подсказки — OFF до гейта S5 (продуктовое решение 1).
+            suggest: SuggestSettings::default(),
         }
     }
 }
@@ -727,6 +832,14 @@ impl Settings {
         // PRD-0007: лимит глубины explain-дерева (0 — «всё», 1..=12).
         self.explain_depth_limit = clamp_explain_depth(self.explain_depth_limit);
         self.snap_tolerance_px = clamp_snap_tolerance(self.snap_tolerance_px);
+        // FR-079: клампы тюнинга suggest (ручные правки config.toml).
+        self.suggest.alpha = self.suggest.alpha.clamp(0.0, 1.0);
+        self.suggest.max_options = self.suggest.max_options.clamp(5, 50);
+        self.suggest.show_gate_min_ctx = self.suggest.show_gate_min_ctx.min(10_000);
+        self.suggest.laya.timeout_ms = self.suggest.laya.timeout_ms.clamp(100, 5_000);
+        if !self.suggest.alpha.is_finite() {
+            self.suggest.alpha = 0.85;
+        }
         let (sub, coarse) =
             validated_grid_zoom_thresholds(self.snap_grid_sub_zoom, self.snap_grid_coarse_zoom);
         self.snap_grid_sub_zoom = sub;
@@ -815,6 +928,24 @@ mod tests {
             // FR-ICONS: набор иконок проходит round-trip (Lucide — не дефолт,
             // проверяет что значение сохраняется без потерь).
             icon_style: IconStyle::Lucide,
+            // FR-079: секция suggest проходит round-trip (включая lex+laya)
+            suggest: SuggestSettings {
+                enabled: true,
+                engine: SuggestEngineKind::LexLaya,
+                alpha: 0.9,
+                max_options: 20,
+                show_gate_min_ctx: 140,
+                log_suggest: false,
+                laya: LayaSettings {
+                    model: "multilingual-ft".to_owned(),
+                    endpoint: "http://127.0.0.1:8100".to_owned(),
+                    timeout_ms: 900,
+                    command: "laya-serve".to_owned(),
+                    idle_shutdown_s: 300,
+                    platt_a: -0.02,
+                    platt_b: -0.9,
+                },
+            },
         };
         let dir = crate::test_scratch_root().join("canvasdesk-settings-test"); // FR-036: wasm-совместимая песочница
         let path = dir.join("config.toml");
@@ -823,6 +954,52 @@ mod tests {
         assert_eq!(loaded, settings);
         assert!(warn.is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FR-079: секция `[suggest]` — парсинг TOML (включая `lex+laya`),
+    /// дефолт старых конфигов без секции, клампы ручных правок.
+    #[test]
+    fn suggest_section_parse_and_clamp() {
+        // Старый конфиг без секции — дефолт (OFF, lex, волна-2-числа)
+        let (settings, warn) = Settings::load_toml_str("");
+        assert!(warn.is_none());
+        assert_eq!(settings.suggest, SuggestSettings::default());
+        assert!(!settings.suggest.enabled);
+        assert_eq!(settings.suggest.engine, SuggestEngineKind::Lex);
+        // Полный разбор с lex+laya и подсекцией
+        let text = r#"
+[suggest]
+enabled = true
+engine = "lex+laya"
+alpha = 0.7
+max_options = 15
+show_gate_min_ctx = 100
+log_suggest = false
+
+[suggest.laya]
+model = "multilingual"
+endpoint = "http://127.0.0.1:8000"
+timeout_ms = 650
+command = "laya-serve"
+idle_shutdown_s = 120
+platt_a = -0.018
+platt_b = -0.814
+"#;
+        let (settings, warn) = Settings::load_toml_str(text);
+        assert!(warn.is_none(), "{warn:?}");
+        assert!(settings.suggest.enabled);
+        assert_eq!(settings.suggest.engine, SuggestEngineKind::LexLaya);
+        assert_eq!(settings.suggest.engine.as_str(), "lex+laya");
+        assert!((settings.suggest.alpha - 0.7).abs() < 1e-9);
+        assert_eq!(settings.suggest.max_options, 15);
+        assert_eq!(settings.suggest.laya.timeout_ms, 650);
+        assert_eq!(settings.suggest.laya.command, "laya-serve");
+        // Клампы: ручные правки не роняют UX
+        let (mut settings, _) =
+            Settings::load_toml_str("[suggest]\nenabled = true\nalpha = 7.0\nmax_options = 9999\n");
+        settings.normalize();
+        assert_eq!(settings.suggest.alpha, 1.0);
+        assert_eq!(settings.suggest.max_options, 50);
     }
 
     /// CR-003: зона портов — пресеты, цикл замкнут, кламп ручных значений.
