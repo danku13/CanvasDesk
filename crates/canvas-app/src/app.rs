@@ -53,8 +53,8 @@ use crate::ui::{
     rubber_band_rect, select_node_hit, submenu_item_at, submenu_origin_next_to, submenu_rect,
     theme_button_rect, toggle_selection_with_primary, CanvasMenuItem, ContextMenu, DoubleClick,
     DragState, EdgeDrag, PastePlacement, Submenu, SubmenuEntry, ALIGN_MIN_SELECTION,
-    DUPLICATE_OFFSET, MENU_ITEM_HEIGHT, MENU_LABEL_X, MENU_PADDING, MENU_WIDTH, MIN_NODE_HEIGHT,
-    MIN_NODE_WIDTH, SELECT_DRAG_THRESHOLD,
+    CANVAS_MENU_LABEL_X, DUPLICATE_OFFSET, MENU_ITEM_HEIGHT, MENU_LABEL_X, MENU_PADDING,
+    MENU_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH, SELECT_DRAG_THRESHOLD,
 };
 use crate::whatif_ui::{self, BarAction};
 // PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры — модель и

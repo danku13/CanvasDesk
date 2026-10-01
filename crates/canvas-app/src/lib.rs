@@ -151,14 +151,28 @@ pub mod ui {
     use std::time::Duration;
 
     /// Ширина контекстного меню в логических px (T7; screen-space —
-    /// константный размер при любом зуме).
-    pub const MENU_WIDTH: f32 = 170.0;
+    /// константный размер при любом зуме). FR-080 follow-up: 240px
+    /// (раньше 170 — не влезали длинные пункты RU: «What-if режим
+    /// (Ctrl+Shift+I)» ~28 chars × 7px = 196px + padding = ~220px).
+    /// EN longest: «What-if mode (Ctrl+Shift+I)» ~26 chars × 7px = 182px.
+    /// 240 даёт буфер для будущих пунктов + locale-вариантов.
+    pub const MENU_WIDTH: f32 = 240.0;
     /// Высота пункта меню в логических px.
     pub const MENU_ITEM_HEIGHT: f32 = 26.0;
     /// Внутренний отступ меню в логических px.
     pub const MENU_PADDING: f32 = 6.0;
-    /// Сдвиг подписи пункта: слева место под образец цвета.
+    /// Сдвиг подписи пункта: слева место под образец цвета / галочку ✓.
+    /// Для меню с checkmark column (dropdown) — оставляет 26px слева
+    /// (✓ на +8, ширина 18, текст на +26). Для canvas-меню (без
+    /// checkmark) — используйте [`CANVAS_MENU_LABEL_X`] (10px), иначе
+    /// у пунктов без ✓ будет «странный отступ слева» 26px.
     pub const MENU_LABEL_X: f32 = 26.0;
+    /// FR-080 follow-up: сдвиг подписи для canvas-context-menu (ПКМ
+    /// по канвасу). У пунктов canvas-меню нет column'а для ✓/образца
+    /// цвета (toggle-флаги НЕ рисуем галочкой — см. canvas_menu_overlay),
+    /// поэтому 26px gap выглядит как «странный отступ». 10px — нормальный
+    /// left padding для текста (соответствует choice_menu, line 2719).
+    pub const CANVAS_MENU_LABEL_X: f32 = 10.0;
     /// Фон меню — тёмный, почти непрозрачный.
     pub const MENU_FILL: [f32; 4] = [0.11, 0.11, 0.13, 0.97];
 

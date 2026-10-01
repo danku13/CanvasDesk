@@ -2778,9 +2778,9 @@ impl App {
             }
             d.label(
                 canvas_ui::geometry::UiRect::new(
-                    rect.x + MENU_LABEL_X,
+                    rect.x + CANVAS_MENU_LABEL_X,
                     rect.y + 5.0,
-                    (rect.w - MENU_LABEL_X).max(0.0),
+                    (rect.w - CANVAS_MENU_LABEL_X).max(0.0),
                     MENU_ITEM_HEIGHT,
                 ),
                 &canvas_menu_label(
@@ -2852,9 +2852,9 @@ impl App {
                     }
                     d.label(
                         canvas_ui::geometry::UiRect::new(
-                            rect.x + MENU_LABEL_X,
+                            rect.x + CANVAS_MENU_LABEL_X,
                             rect.y + 5.0,
-                            (rect.w - MENU_LABEL_X).max(0.0),
+                            (rect.w - CANVAS_MENU_LABEL_X).max(0.0),
                             MENU_ITEM_HEIGHT,
                         ),
                         &entry.label,
