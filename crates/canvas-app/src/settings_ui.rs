@@ -162,6 +162,13 @@ pub enum SettingsRow {
     /// FR-087: рабочая роль (class) — dropdown реестра
     /// `canvas_core::roles::ROLES` в табе «Профиль».
     Role,
+    /// FR-089: согласие на анонимный счётчик использования (web) —
+    /// тумблер в табе «Профиль», зеркало предвыбранного чекбокса
+    /// первого запуска. На нативе поле персистится, отправки нет.
+    TelemetryCounter,
+    /// FR-089: согласие на продуктовые метрики и отчёты об ошибках
+    /// (PostHog, web) — тумблер в табе «Профиль».
+    TelemetryAnalytics,
     /// FR-087: тумблеры вывода типов шаблонных нод (палитра/wheel).
     TplCatBackend,
     TplCatNetwork,
@@ -178,7 +185,7 @@ pub enum SettingsRow {
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 41] = [
+pub const SETTINGS_ROWS: [SettingsRow; 43] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -213,6 +220,9 @@ pub const SETTINGS_ROWS: [SettingsRow; 41] = [
     SettingsRow::SuggestEngine,
     // FR-087: таб «Профиль» — роль + фильтры категорий подсказок
     SettingsRow::Role,
+    // FR-089: согласия телеметрии (сразу за ролью — видны без прокрутки)
+    SettingsRow::TelemetryCounter,
+    SettingsRow::TelemetryAnalytics,
     SettingsRow::TplCatBackend,
     SettingsRow::TplCatNetwork,
     SettingsRow::TplCatUnitEconomics,
@@ -315,12 +325,15 @@ pub const SETTINGS_TABS: [SettingsTab; 8] = [
         rows: &[SettingsRow::SuggestEnabled, SettingsRow::SuggestEngine],
     },
     SettingsTab {
-        // FR-087: роль + фильтры типов шаблонных нод и схем
+        // FR-087: роль + фильтры типов шаблонных нод и схем; FR-089 —
+        // согласия телеметрии сразу за ролью
         title_key: keys::TAB_PROFILE,
         icon: "◉",
         theme_cards: false,
         rows: &[
             SettingsRow::Role,
+            SettingsRow::TelemetryCounter,
+            SettingsRow::TelemetryAnalytics,
             SettingsRow::TplCatBackend,
             SettingsRow::TplCatNetwork,
             SettingsRow::TplCatUnitEconomics,
@@ -380,8 +393,10 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::DragPushPredictive => keys::ROW_DRAG_PUSH_PREDICTIVE,
         SettingsRow::DragPushRebase => keys::ROW_DRAG_PUSH_REBASE,
         SettingsRow::IconStyle => keys::ROW_ICON_STYLE,
-        // FR-087: таб «Профиль» — роль и фильтры подсказок
+        // FR-087: таб «Профиль» — роль и фильтры подсказок; FR-089 — согласия
         SettingsRow::Role => keys::ROW_ROLE,
+        SettingsRow::TelemetryCounter => keys::ROW_TELEMETRY_COUNTER,
+        SettingsRow::TelemetryAnalytics => keys::ROW_TELEMETRY_ANALYTICS,
         SettingsRow::TplCatBackend => keys::ROW_TPLCAT_BACKEND,
         SettingsRow::TplCatNetwork => keys::ROW_TPLCAT_NETWORK,
         SettingsRow::TplCatUnitEconomics => keys::ROW_TPLCAT_UNIT_ECONOMICS,
@@ -432,6 +447,8 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::IconStyle => keys::DESC_ICON_STYLE,
         // FR-087: описания — общие на группу категорий (лейблы — конкретные)
         SettingsRow::Role => keys::DESC_ROLE,
+        SettingsRow::TelemetryCounter => keys::DESC_TELEMETRY_COUNTER,
+        SettingsRow::TelemetryAnalytics => keys::DESC_TELEMETRY_ANALYTICS,
         SettingsRow::TplCatBackend
         | SettingsRow::TplCatNetwork
         | SettingsRow::TplCatUnitEconomics
@@ -500,6 +517,9 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::SchemeCatFramework
         | SettingsRow::SchemeCatPlanning
         | SettingsRow::SchemeCatOnboarding
+        // FR-089: согласия телеметрии — bool-поля Settings
+        | SettingsRow::TelemetryCounter
+        | SettingsRow::TelemetryAnalytics
         | SettingsRow::DragPushRebase => RowKind::Toggle,
     }
 }
@@ -610,6 +630,9 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         | SettingsRow::SchemeCatFramework
         | SettingsRow::SchemeCatPlanning
         | SettingsRow::SchemeCatOnboarding
+        // FR-089: согласия — состояние видно по pill-ручке
+        | SettingsRow::TelemetryCounter
+        | SettingsRow::TelemetryAnalytics
         | SettingsRow::DragPushRebase => None,
         // FR-ICONS: текущий набор — локализованное имя варианта.
         SettingsRow::IconStyle => Some(i18n::tr(language, icon_style_key(settings.icon_style)).to_owned()),
@@ -827,6 +850,9 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         | SettingsRow::SchemeCatFramework
         | SettingsRow::SchemeCatPlanning
         | SettingsRow::SchemeCatOnboarding
+        // FR-089: согласия — dropdown не открывает (Toggle)
+        | SettingsRow::TelemetryCounter
+        | SettingsRow::TelemetryAnalytics
         | SettingsRow::DragPushRebase => Vec::new(),
         // FR-ICONS: порядок опций = порядок IconStyle::ALL (инвариант, тест) =
         // порядку apply_dropdown_value (тест). Локализованные имена наборов.
@@ -974,7 +1000,10 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         | SettingsRow::SchemeCatBusiness
         | SettingsRow::SchemeCatFramework
         | SettingsRow::SchemeCatPlanning
-        | SettingsRow::SchemeCatOnboarding => {}
+        | SettingsRow::SchemeCatOnboarding
+        // FR-089: согласия — apply_toggle_row (App), не dropdown
+        | SettingsRow::TelemetryCounter
+        | SettingsRow::TelemetryAnalytics => {}
         // FR-ICONS: индекс в `IconStyle::ALL` (порядок = dropdown_options,
         // инвариант теста). Вне диапазона — без изменений (как остальные).
         SettingsRow::IconStyle => {
@@ -1537,11 +1566,13 @@ mod tests {
             SETTINGS_TABS[5].rows,
             &[SettingsRow::SuggestEnabled, SettingsRow::SuggestEngine]
         );
-        // FR-087: таб 6 — «Профиль» (роль + фильтры категорий)
+        // FR-087: таб 6 — «Профиль» (роль + согласия FR-089 + фильтры категорий)
         assert_eq!(
             SETTINGS_TABS[6].rows,
             &[
                 SettingsRow::Role,
+                SettingsRow::TelemetryCounter,
+                SettingsRow::TelemetryAnalytics,
                 SettingsRow::TplCatBackend,
                 SettingsRow::TplCatNetwork,
                 SettingsRow::TplCatUnitEconomics,
@@ -1674,6 +1705,13 @@ mod tests {
                 | SettingsRow::SchemeCatOnboarding => {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                 }
+                // FR-089: согласия телеметрии — прямые bool-поля Settings
+                SettingsRow::TelemetryCounter
+                | SettingsRow::TelemetryAnalytics => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.telemetry_counter;
+                    let _ = defaults.telemetry_analytics;
+                }
                 SettingsRow::ButtonCorner
                 | SettingsRow::GridStyle
                 | SettingsRow::GridDensity
@@ -1743,8 +1781,13 @@ mod tests {
             Some("Developer")
         );
         // Категории таба: лейблы/описания непусты (инвариант локализации
-        // покрывает их в every_row_has_label_and_description)
+        // покрывает их в every_row_has_label_and_description); согласия
+        // FR-089 — тумблеры с прямым bool-полем, дефолт вкл (чекбоксы
+        // первого запуска предвыбраны, см. telemetry_consent_defaults_and_parse
+        // в canvas-core)
         for row in [
+            SettingsRow::TelemetryCounter,
+            SettingsRow::TelemetryAnalytics,
             SettingsRow::TplCatBackend,
             SettingsRow::TplCatNetwork,
             SettingsRow::TplCatUnitEconomics,

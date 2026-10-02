@@ -546,6 +546,21 @@ pub struct Settings {
     /// [`Settings::template_categories`]; `onboarding` виден всегда).
     #[serde(default)]
     pub scheme_categories: Option<Vec<String>>,
+    /// FR-089: согласие на анонимный счётчик использования (web):
+    /// суточная отметка `wasm_used` с анонимным UUID из localStorage —
+    /// «сколько уникальных пользователей взаимодействует с WASM-сервисом».
+    /// Метрика работает независимо от [`Settings::telemetry_analytics`]
+    /// (двухуровневое согласие первого запуска). Дефолт вкл — чекбокс
+    /// первого запуска предвыбран; старые конфиги без поля грузятся
+    /// включёнными (container serde default = `Default`, false не
+    /// подставляется).
+    pub telemetry_counter: bool,
+    /// FR-089: согласие на продуктовые метрики и отчёты об ошибках
+    /// (PostHog, web): SDK грузится только при true, ошибки окна и
+    /// события интерфейса идут в PostHog; при false — SDK не грузится
+    /// вовсе (opt-out), счётчик продолжает работать отдельно. Дефолт
+    /// вкл (предвыбранный чекбокс первого запуска).
+    pub telemetry_analytics: bool,
     /// FR-079 (S3): секция `[suggest]` — ИИ-подсказки шаблонов (гибрид
     /// lex+Laya за feature-флагом). Дефолт OFF до гейта S5; старые конфиги
     /// без секции грузятся дефолтом (serde default).
@@ -654,6 +669,10 @@ impl Default for Settings {
             // FR-087: ручной фильтр не материализован — видимость по роли.
             template_categories: None,
             scheme_categories: None,
+            // FR-089: оба согласия телеметрии предвыбраны (чекбоксы
+            // первого запуска; решение владельца 2026-10-03).
+            telemetry_counter: true,
+            telemetry_analytics: true,
             // FR-079: ИИ-подсказки — OFF до гейта S5 (продуктовое решение 1).
             suggest: SuggestSettings::default(),
         }
@@ -1016,6 +1035,10 @@ mod tests {
             role: "architect".to_string(),
             template_categories: Some(vec!["backend".to_string(), "network".to_string()]),
             scheme_categories: Some(vec!["architecture".to_string()]),
+            // FR-089: согласия телеметрии round-trip (counter=false —
+            // не дефолт: проверяет сохранение отказа пользователя).
+            telemetry_counter: false,
+            telemetry_analytics: true,
             // FR-079: секция suggest проходит round-trip (включая lex+laya)
             suggest: SuggestSettings {
                 enabled: true,
@@ -1097,6 +1120,31 @@ mod tests {
         let (mut settings, _) = Settings::load_toml_str("role = \"  \"\n");
         settings.normalize();
         assert_eq!(settings.role, crate::roles::DEFAULT_ROLE);
+    }
+
+    /// FR-089: согласия телеметрии — предвыбранные чекбоксы первого
+    /// запуска (дефолт вкл), старые конфиги без полей грузятся
+    /// включёнными, TOML пикера отражает чекбоксы дословно.
+    #[test]
+    fn telemetry_consent_defaults_and_parse() {
+        // Пустой конфиг (нативный config.toml до FR-089, отсутствие
+        // canvasdesk.config) — оба согласия включены.
+        let (settings, warn) = Settings::load_toml_str("");
+        assert!(warn.is_none());
+        assert!(settings.telemetry_counter, "счётчик: дефолт вкл");
+        assert!(settings.telemetry_analytics, "метрики: дефолт вкл");
+        // Пикер первого запуска пишет TOML с чекбоксами (index.html):
+        // пользователь снял метрики, счётчик оставил.
+        let (settings, warn) =
+            Settings::load_toml_str("language = \"ru\"\ntelemetry_counter = true\ntelemetry_analytics = false\n");
+        assert!(warn.is_none(), "{warn:?}");
+        assert!(settings.telemetry_counter);
+        assert!(!settings.telemetry_analytics, "выбор пользователя сохранён");
+        // Полный отказ — оба false.
+        let (settings, _) =
+            Settings::load_toml_str("telemetry_counter = false\ntelemetry_analytics = false\n");
+        assert!(!settings.telemetry_counter);
+        assert!(!settings.telemetry_analytics);
     }
 
     /// FR-079: секция `[suggest]` — парсинг TOML (включая `lex+laya`),

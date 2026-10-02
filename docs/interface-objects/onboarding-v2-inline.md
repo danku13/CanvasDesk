@@ -312,6 +312,15 @@ Puppeteer/Playwright:
 
 ## 10. История изменений
 
+- `2026-10-03` — агент (FR-089): пикер первого запуска (та же точка
+  интеграции `crates/canvas-web/index.html`) дополнен блоком согласий
+  телеметрии «Помочь проекту» — два предвыбранных чекбокса (анонимный
+  счётчик `wasm_used` + метрики/ошибки PostHog), RU/EN, акценты
+  FR-087 v2; рядом с пикером появился модуль `window.__cdTelemetry`
+  (согласия `canvasdesk.consent`, счётчик, живой opt-in/out по
+  событию `canvasdesk:consent-changed`). На сам inline-тур влияния
+  нет (DOM-слой пикера отделён). Детали:
+  `docs/change-requests/fr-088-telemetry-consent-posthog.md`.
 - `2026-09-29` — агент: добивка v2 — фикс блокера + JS-side signal
   detection + CI + документация:
   - **Inline bundle**: `canvasdesk-tour.js` (\~48 КБ) теперь inline

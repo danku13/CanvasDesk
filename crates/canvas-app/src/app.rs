@@ -6482,6 +6482,16 @@ impl App {
     /// в `canvas_web::app_spawn::load_settings`). Фолбэк на дефолт при
     /// ошибке — никогда: любой браузер без localStorage (приватный режим)
     /// молча игнорируется, страница не падает.
+    ///
+    /// FR-089: заодно синхронизирует согласия телеметрии — JSON
+    /// `canvasdesk.consent` (рантайм-источник правды JS-модуля из
+    /// index.html: PostHog + анонимный счётчик WASM). Пикер первого
+    /// запуска пишет его при выборе чекбоксов; здесь — при каждом
+    /// персисте настроек (тумблеры таба «Профиль»). Анонимный ID
+    /// (`anonId`) и отметка суток (`lastWasmDay`) сохраняются — меняются
+    /// только флаги. Событие `canvasdesk:consent-changed` эмитится только
+    /// при реальной смене — JS-модуль применяет opt-in/out PostHog без
+    /// перезагрузки (см. crates/canvas-web/index.html, модуль __cdTelemetry).
     #[cfg(target_arch = "wasm32")]
     fn persist_settings_web(&self) {
         let Some(window) = web_sys::window() else {
@@ -6497,9 +6507,52 @@ impl App {
                 if let Err(err) = storage.set_item("canvasdesk.config", &text) {
                     tracing::warn!("set_item localStorage упал: {}", wasm_js_err_display(&err));
                 }
+                self.sync_consent_web(&window, &storage);
             }
             Err(err) => {
                 tracing::warn!(%err, "сериализация настроек в TOML упала");
+            }
+        }
+    }
+
+    /// FR-089 (web): синхронизация `canvasdesk.consent` из настроек —
+    /// см. [`App::persist_settings_web`]. Мерж в существующий JSON: чужие
+    /// поля (anonId, lastWasmDay — принадлежность JS-модуля) сохраняются,
+    /// меняются только counter/analytics; битая запись заменяется чистой
+    /// (дефолты согласий уже продублированы в `Settings`). Ошибки записи
+    /// не критичны — телеметрия опциональна и не должна ломать приложение.
+    #[cfg(target_arch = "wasm32")]
+    fn sync_consent_web(&self, window: &web_sys::Window, storage: &web_sys::Storage) {
+        use serde_json::{json, Value};
+        let mut consent: Value = storage
+            .get_item("canvasdesk.consent")
+            .ok()
+            .flatten()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_else(|| json!({}));
+        let old_counter = consent.get("counter").and_then(Value::as_bool).unwrap_or(true);
+        let old_analytics = consent.get("analytics").and_then(Value::as_bool).unwrap_or(true);
+        let changed = old_counter != self.settings.telemetry_counter
+            || old_analytics != self.settings.telemetry_analytics;
+        if let Some(map) = consent.as_object_mut() {
+            map.insert("counter".into(), json!(self.settings.telemetry_counter));
+            map.insert("analytics".into(), json!(self.settings.telemetry_analytics));
+        }
+        match serde_json::to_string(&consent) {
+            Ok(text) => {
+                if let Err(err) = storage.set_item("canvasdesk.consent", &text) {
+                    tracing::warn!("set_item consent упал: {}", wasm_js_err_display(&err));
+                }
+            }
+            Err(err) => tracing::warn!(%err, "сериализация consent упала"),
+        }
+        if changed {
+            // JS-модуль (index.html) слушает событие на window/document и
+            // применяет смену без перезагрузки: PostHog opt-in/out,
+            // счётчик. Неуспех не критичен — при следующей загрузке
+            // согласия читаются из localStorage напрямую.
+            if let Ok(event) = web_sys::Event::new("canvasdesk:consent-changed") {
+                let _ = window.dispatch_event(&event);
             }
         }
     }

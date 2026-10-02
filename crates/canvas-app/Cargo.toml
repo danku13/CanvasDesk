@@ -64,7 +64,10 @@ l1-laya = ["canvas-suggest/l1-laya"]
 # core (ClipboardBackend/…) — аналогичный паттерн, но конфиг меняется
 # редко и в 4 точках — простая cfg-специализация без инъекции трейта.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { workspace = true, features = ["Window", "Storage"] }
+# FR-089: Event/EventTarget — эмит canvasdesk:consent-changed из
+# persist_settings_web (смена согласий телеметрии → JS-модуль index.html
+# применяет PostHog opt-in/out без перезагрузки).
+web-sys = { workspace = true, features = ["Window", "Storage", "Event", "EventTarget"] }
 wasm-bindgen.workspace = true
 toml.workspace = true
 
