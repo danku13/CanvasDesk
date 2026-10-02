@@ -1,9 +1,10 @@
 //! FR-ICONS: screen-space wgpu-пайплайн SVG-иконок.
 //!
 //! Атлас собирается один раз при init из растеризованных байт (`icon_data.rs`):
-//! 5 наборов × 36 имён × 32×32 px (bootstrap 24×24 дополнен до 32×32;
+//! 5 наборов × 37 имён × 32×32 px (bootstrap 24×24 дополнен до 32×32;
 //! набор `roles` — sparse: только свои 20 имён, чужие ячейки прозрачны)
-//! = 36×5 ячеек = 1152×160 px атлас. Все наборы в одном атласе — переключение
+//! = 37×5 ячеек = 1184×160 px атлас (37-е имя `custom` — FR-085). Все
+//! наборы в одном атласе — переключение
 //! набора не требует ребинда bind-группы (выбор набора = выбор UV в атласе).
 //!
 //! Инстанс = pos/size в экранных px + UV в атласе + tint (RGBA). Shader —
@@ -30,7 +31,7 @@ pub const ICON_CELL_PX: u32 = 32;
 /// Иконок в строке атласа (= число имён).
 pub const ICONS_PER_ROW: u32 = ICON_NAMES.len() as u32;
 /// Сторона атласа: ICONS_PER_ROW × ICON_SETS.len() ячеек ICON_CELL_PX².
-pub const ATLAS_W: u32 = ICONS_PER_ROW * ICON_CELL_PX; // 36 * 32 = 1152
+pub const ATLAS_W: u32 = ICONS_PER_ROW * ICON_CELL_PX; // 37 * 32 = 1184
 pub const ATLAS_H: u32 = ICON_SETS.len() as u32 * ICON_CELL_PX; // 5 * 32 = 160
 
 /// Инстанс иконки для GPU (layout — attributes в icons.wgsl).
@@ -754,13 +755,33 @@ mod tests {
         assert_eq!(bytes, screen_bytes, "раскладка идентична экранной");
     }
 
-    /// Атлас вмещает все 5 наборов × 36 имён (16 UI + 20 ролей) = 180 ячеек.
+    /// Атлас вмещает все наборы × имена. Геометрия — производные константы
+    /// (`ICONS_PER_ROW`/`ATLAS_W`/`ATLAS_H` считаются от реестров), тест
+    /// закрепляет согласованность и фактический размер: 5 наборов × 37 имён
+    /// (16 UI + 20 ролей + `custom`, FR-085) = 185 ячеек. Прежний захардкоженный
+    /// «36/180/1152» отстал от реестра — CI #412–#414 красные.
     #[test]
     fn atlas_size_matches_repositories() {
         let total_cells = ICONS_PER_ROW * ICON_SETS.len() as u32;
-        assert_eq!(total_cells, 180, "5 наборов × 36 имён (FR-075 W2)");
-        assert_eq!(ATLAS_W, 36 * 32);
-        assert_eq!(ATLAS_H, 5 * 32);
+        assert_eq!(
+            total_cells,
+            (ICON_NAMES.len() * ICON_SETS.len()) as u32,
+            "ICONS_PER_ROW производна от реестра имён"
+        );
+        assert_eq!(
+            total_cells, 185,
+            "5 наборов × 37 имён (16 UI + 20 ролей + custom, FR-085)"
+        );
+        assert_eq!(ATLAS_W, ICON_NAMES.len() as u32 * ICON_CELL_PX);
+        assert_eq!(ATLAS_H, ICON_SETS.len() as u32 * ICON_CELL_PX);
+        // Правый-нижний угол последней ячейки не выходит за пределы атласа
+        let last_set = ICON_SETS[ICON_SETS.len() - 1];
+        let last_name = ICON_NAMES[ICON_NAMES.len() - 1];
+        let (_, uv_max) = icon_uv(last_set, last_name).expect("последняя пара имеет UV");
+        assert!(
+            uv_max[0] <= 1.0 + f32::EPSILON && uv_max[1] <= 1.0 + f32::EPSILON,
+            "UV последней ячейки в пределах атласа"
+        );
     }
 
     /// Регрессия wasm-чёрного экрана: упаковка юниформа — vec2 на смещении 0
