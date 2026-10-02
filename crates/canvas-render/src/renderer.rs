@@ -316,6 +316,21 @@ pub struct FrameOverlay<'a> {
     /// FR-042/FR-044: тексты main stage (screen-space, отдельная группа —
     /// рисуются после `stage_instances`, поверх своих пилюль/карточек).
     pub stage_texts: &'a [ScreenText<'a>],
+    /// Ревизия владельца 2026-10-02: клип модального прохода в ЛОГИЧЕСКИХ
+    /// экранных px (окно проверки цепочки). `Some` — квад-диапазоны
+    /// `stage_instances`/`stage_overlay_instances` рисуются под
+    /// scissor-бакетом клипа (та же конверсия, что у полос —
+    /// [`band_scissor_rect`]), тексты клипятся TextBounds — контент окна
+    /// не может выйти за его границы ни при каком зуме/пане. `None` —
+    /// клипа нет (прежнее поведение прочих модалок).
+    pub stage_clip: Option<UiRect>,
+    /// Ревизия владельца 2026-10-02 (дефект «поле подмены пересекается с
+    /// нижележащим текстом»): ВТОРОЙ квад-диапазон модального прохода —
+    /// рисуется после текст-группы `stage_texts` (квады поля подмены),
+    /// затем группа `stage_overlay_texts` поверх них. Поле всегда поверх
+    /// контента дерева, каким бы плотным он ни был.
+    pub stage_overlay_instances: &'a [CardInstance],
+    pub stage_overlay_texts: &'a [ScreenText<'a>],
     /// FR-022 (рестайл 2026-09-16): donut-сектора wheel-меню шаблонов
     /// (логические px от угла окна — конвертируются в world рендерером,
     /// см. `screen_sector_to_world`). Рисуются ПЕРЕД screen-полосами:
@@ -338,6 +353,9 @@ impl FrameOverlay<'_> {
         screen_bands: &[],
         stage_instances: &[],
         stage_texts: &[],
+        stage_clip: None,
+        stage_overlay_instances: &[],
+        stage_overlay_texts: &[],
         screen_sectors: &[],
         widget_quads: &[],
         icons: &[],
@@ -1830,6 +1848,12 @@ impl Renderer {
         let stage_start = instances.len() as u32;
         instances.extend_from_slice(overlay.stage_instances);
         let stage_end = instances.len() as u32;
+        // Ревизия владельца 2026-10-02: второй квад-диапазон модального
+        // прохода (поле подмены) — после текст-группы stage (рисование
+        // ниже, после `stage_texts`)
+        let stage_overlay_start = instances.len() as u32;
+        instances.extend_from_slice(overlay.stage_overlay_instances);
+        let stage_overlay_end = instances.len() as u32;
         let instance_count = self.cards.update(
             &self.gpu.device,
             &self.gpu.queue,
@@ -1922,6 +1946,8 @@ impl Renderer {
                 desc_expanded: scene.desc_expanded,
                 analysis_badges: &analysis_badges,
                 stage_texts: overlay.stage_texts,
+                stage_overlay_texts: overlay.stage_overlay_texts,
+                stage_clip: overlay.stage_clip,
             },
         ) {
             tracing::warn!(?err, "подготовка текста пропущена");
@@ -2088,14 +2114,56 @@ impl Renderer {
             // поверх своих квадов. Живой контент канваса остаётся ПОД
             // затемнением: ни тела нод, ни подписи связей, ни бейджи анализа
             // не «просвечивают» сквозь stage (дефект скриншота)
+            // Ревизия владельца 2026-10-02: при заданном `stage_clip` (окно
+            // проверки цепочки) квад-диапазон — под scissor-бакетом клипа
+            // (конверсия та же, что у полос — band_scissor_rect): контент
+            // окна не выходит за его границы. Пустой клип — диапазон не
+            // рисуется вовсе (инвариант «клип не расширяет видимое»);
+            // `None` — прежнее поведение без клипа (прочие модалки).
             if stage_end > stage_start {
-                self.cards.draw_range(&mut pass, stage_start..stage_end);
+                match overlay.stage_clip.map(|clip| {
+                    band_scissor_rect(&clip, self.scale_factor, self.size.width, self.size.height)
+                }) {
+                    Some(Some([sx, sy, sw, sh])) => {
+                        pass.set_scissor_rect(sx, sy, sw, sh);
+                        self.cards.draw_range(&mut pass, stage_start..stage_end);
+                        pass.set_scissor_rect(0, 0, self.size.width, self.size.height);
+                    }
+                    Some(None) => {}
+                    None => self.cards.draw_range(&mut pass, stage_start..stage_end),
+                }
             }
             if let Err(err) = self.text.draw_group(
                 &mut pass,
                 TextSystem::stage_group(&zplan, band_ranges.len()),
             ) {
                 tracing::warn!(?err, "отрисовка текстов stage пропущена");
+            }
+            // Ревизия владельца 2026-10-02: второй подпроход модали —
+            // квад-диапазон ПОЛЯ подмены после текстов stage, затем его
+            // текст-группа (поле всегда поверх контента дерева — дефект
+            // «текст нижележащих строк поверх заливки поля»)
+            if stage_overlay_end > stage_overlay_start {
+                match overlay.stage_clip.map(|clip| {
+                    band_scissor_rect(&clip, self.scale_factor, self.size.width, self.size.height)
+                }) {
+                    Some(Some([sx, sy, sw, sh])) => {
+                        pass.set_scissor_rect(sx, sy, sw, sh);
+                        self.cards
+                            .draw_range(&mut pass, stage_overlay_start..stage_overlay_end);
+                        pass.set_scissor_rect(0, 0, self.size.width, self.size.height);
+                    }
+                    Some(None) => {}
+                    None => self
+                        .cards
+                        .draw_range(&mut pass, stage_overlay_start..stage_overlay_end),
+                }
+            }
+            if let Err(err) = self.text.draw_group(
+                &mut pass,
+                TextSystem::stage_overlay_group(&zplan, band_ranges.len()),
+            ) {
+                tracing::warn!(?err, "отрисовка текстов поля подмены пропущена");
             }
             // FR-ICONS: SVG-иконки UI — финальный слой кадра, поверх всех
             // полос/текстов/main-stage (кнопки закрытия, шестерёнки, иконки

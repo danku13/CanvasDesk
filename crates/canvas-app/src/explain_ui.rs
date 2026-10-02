@@ -827,10 +827,33 @@ pub fn edit_rect(card: [f32; 4], scale: f32) -> [f32; 4] {
 /// ширина [`EDIT_ICON_ZONE`], вертикаль — строка целиком. Одна геометрия
 /// для рендера и hit-теста (детерминизм). Страж `max(card.x)` — иконка
 /// не вылезает за карточку на вырожденной ширине.
-pub fn row_edit_rect(card_screen: [f32; 4], row_y: f32, row_h: f32, scale: f32) -> [f32; 4] {
+///
+/// Ревизия владельца 2026-10-02 (дефект «полоса рода наезжает на
+/// карандаш»): `strip_inset` — ширина полосы-акцента рода узла у ПРАВОГО
+/// края карточки (см. [`edit_icon_right_inset`]) — зона иконки отступает
+/// от полосы, обе геометрии (рендер и hit) смещаются согласованно.
+pub fn row_edit_rect(
+    card_screen: [f32; 4],
+    row_y: f32,
+    row_h: f32,
+    scale: f32,
+    strip_inset: f32,
+) -> [f32; 4] {
     let w = EDIT_ICON_ZONE * scale;
-    let x = (card_screen[0] + card_screen[2] - w).max(card_screen[0]);
+    let x = (card_screen[0] + card_screen[2] - w - strip_inset).max(card_screen[0]);
     [x, card_screen[1] + row_y * scale, w, row_h * scale]
+}
+
+/// Ревизия владельца 2026-10-02: ширина полосы-акцента рода узла
+/// (рендер карточек — `(4.0 * scale).max(2.0)`), от которой отступает
+/// зона иконки строки, когда полоса на стороне иконки (Ltr — правый
+/// край). Единый источник для рендера и hit-теста (детерминизм).
+pub fn edit_icon_right_inset(scale: f32, strip_on_right: bool) -> f32 {
+    if strip_on_right {
+        (4.0 * scale).max(2.0)
+    } else {
+        0.0
+    }
 }
 
 /// FR-084: ширина текста строки таблицы — карточка минус паддинги (16) и
@@ -914,6 +937,7 @@ pub fn edit_at(
     scale: f32,
     body: [f32; 4],
     point: [f32; 2],
+    strip_inset: f32,
 ) -> Option<usize> {
     // Подмена адресует строку Numi-листа: у итога-программы/шаблона её
     // нет (line: None) — иконка не показывается (X3-скоуп).
@@ -939,7 +963,7 @@ pub fn edit_at(
             if !editable(row.leaf_idx) {
                 continue;
             }
-            let rect = row_edit_rect(card, row.y, row.h, scale);
+            let rect = row_edit_rect(card, row.y, row.h, scale, strip_inset);
             if point[0] >= rect[0]
                 && point[0] <= rect[0] + rect[2]
                 && point[1] >= rect[1]
@@ -994,8 +1018,11 @@ pub fn defense_fit_scale(bounds: [f32; 2], body: [f32; 4]) -> f32 {
 }
 
 /// Размер кнопки-тумблера «Режим защиты» (AC-6.1 — одним действием).
-pub const DEFENSE_TOGGLE_W: f32 = 132.0;
-pub const DEFENSE_TOGGLE_H: f32 = 28.0;
+/// Ревизия владельца 2026-10-02 (дефект «мелкие контролы»): кегль
+/// подписи — 13 (BUTTON_FONT_SIZE кита), высота — 32 (INPUT_HEIGHT
+/// панели шаблонов — нижняя граница комфортного нажатия).
+pub const DEFENSE_TOGGLE_W: f32 = 152.0;
+pub const DEFENSE_TOGGLE_H: f32 = 32.0;
 
 /// Тумблер режима защиты — шапка окна, левее чипа «Данные изменены»;
 /// виден в Ready (вход) и Defense (выход в обычный вид, AC-6.4).
@@ -1009,9 +1036,10 @@ pub fn defense_toggle_rect(win: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// Ширина кнопки-тумблера направления схемы (FR-083) — узкий квад под
-/// иконку-стрелку; высота — как у defense-тумблера.
-pub const DIRECTION_TOGGLE_W: f32 = 34.0;
+/// Ширина кнопки-тумблера направления схемы (FR-083) — квад под
+/// иконку-стрелку (кегль 13 — паритет соседям по шапке); высота — как у
+/// defense-тумблера.
+pub const DIRECTION_TOGGLE_W: f32 = 40.0;
 /// Высота тумблера направления — как у defense-тумблера (FR-083).
 pub const DIRECTION_TOGGLE_H: f32 = DEFENSE_TOGGLE_H;
 
@@ -1037,13 +1065,14 @@ pub fn direction_toggle_visible(win: [f32; 4]) -> bool {
 }
 
 /// Кнопка «Раскрыть уровень» (AC-6.3, шаг) — правый край футера; Defense.
+/// Высота — паритет тумблерам шапки (ревизия «мелкие контролы»).
 pub fn defense_step_rect(win: [f32; 4]) -> [f32; 4] {
-    const W: f32 = 158.0;
+    const W: f32 = 170.0;
     [
         win[0] + win[2] - W - BODY_PAD,
-        win[1] + win[3] - FOOTER_H + (FOOTER_H - 28.0) / 2.0,
+        win[1] + win[3] - FOOTER_H + (FOOTER_H - DEFENSE_TOGGLE_H) / 2.0,
         W,
-        28.0,
+        DEFENSE_TOGGLE_H,
     ]
 }
 
@@ -2140,9 +2169,9 @@ mod tests {
             laid.rect[2],
             laid.rect[3],
         ];
-        let rect = row_edit_rect(card_screen, row.y, row.h, 1.0);
+        let rect = row_edit_rect(card_screen, row.y, row.h, 1.0, 0.0);
         let point = [rect[0] + rect[2] - 4.0, rect[1] + rect[3] / 2.0];
-        assert_eq!(edit_at(&tree, &layout, 1.0, body, point), Some(2));
+        assert_eq!(edit_at(&tree, &layout, 1.0, body, point, 0.0), Some(2));
         // Точка иконки строки листа d (не редактируемый) — None.
         let laid_d = layout
             .nodes
@@ -2156,9 +2185,9 @@ mod tests {
             laid_d.rect[2],
             laid_d.rect[3],
         ];
-        let rect_d = row_edit_rect(card_d, row_d.y, row_d.h, 1.0);
+        let rect_d = row_edit_rect(card_d, row_d.y, row_d.h, 1.0, 0.0);
         let point_d = [rect_d[0] + rect_d[2] - 4.0, rect_d[1] + rect_d[3] / 2.0];
-        assert_eq!(edit_at(&tree, &layout, 1.0, body, point_d), None);
+        assert_eq!(edit_at(&tree, &layout, 1.0, body, point_d, 0.0), None);
     }
 
     /// X3 (AC-4.1): inline-поле — start_edit задаёт preset (подмена или
@@ -2247,11 +2276,11 @@ mod tests {
                 card.rect[3] * scale,
             ];
             for row in &card.rows {
-                let rect = row_edit_rect(card_screen, row.y, row.h, scale);
+                let rect = row_edit_rect(card_screen, row.y, row.h, scale, 0.0);
                 // Точка внутри зоны: правый край минус 4, центр по вертикали.
                 let point = [rect[0] + rect[2] - 4.0, rect[1] + rect[3] / 2.0];
                 assert_eq!(
-                    edit_at(&tree, &layout, scale, body, point),
+                    edit_at(&tree, &layout, scale, body, point, 0.0),
                     Some(row.leaf_idx),
                     "иконка строки → лист {} (scale {scale})",
                     row.leaf_idx
@@ -2282,22 +2311,67 @@ mod tests {
             card.rect[3],
         ];
         let row = &card.rows[0];
-        let rect = row_edit_rect(card_screen, row.y, row.h, 1.0);
+        let rect = row_edit_rect(card_screen, row.y, row.h, 1.0, 0.0);
         let cy = rect[1] + rect[3] / 2.0;
         // Текст строки: левый край + паддинг и точка сразу слева зоны —
         // обе мимо иконки.
         for px in [card_screen[0] + 10.0, rect[0] - 2.0] {
             assert_eq!(
-                edit_at(&tree, &layout, 1.0, body, [px, cy]),
+                edit_at(&tree, &layout, 1.0, body, [px, cy], 0.0),
                 None,
                 "клик по тексту строки (x = {px}) — не иконка"
             );
         }
         // А в 1 px правее (внутри зоны) — хит по листу строки.
         assert_eq!(
-            edit_at(&tree, &layout, 1.0, body, [rect[0] + 1.0, cy]),
+            edit_at(&tree, &layout, 1.0, body, [rect[0] + 1.0, cy], 0.0),
             Some(row.leaf_idx)
         );
+    }
+
+    /// Ревизия владельца 2026-10-02 (дефект «полоса рода наезжает на
+    /// карандаш»): зона иконки строки отступает от полосы-акцента на её
+    /// ширину, hit-тест (edit_at) смещается с ней согласованно; при полосе
+    /// на ЛЕВОМ краю (Rtl) зона не сдвигается.
+    #[test]
+    fn edit_icon_avoids_kind_strip() {
+        let mut tree = group_tree();
+        for (i, node) in tree.nodes.iter_mut().enumerate().skip(1) {
+            node.line = Some(i - 1);
+            node.value = Some(Ok(canvas_core::expr::Value::scalar(i as f64)));
+        }
+        let empty = BTreeSet::new();
+        let vis = visibility(&tree, 0, 3, &empty);
+        let layout = layout_tree(&tree, &vis, 0, LayoutDirection::Rtl);
+        let card = layout.nodes.iter().find(|n| n.idx == 1).expect("таблица");
+        let body = [0.0, 0.0, 1200.0, 800.0];
+        let scale = 1.0f32;
+        let row = &card.rows[0];
+        let card_screen = [
+            body[0] + BODY_PAD + card.rect[0] * scale,
+            body[1] + BODY_PAD + card.rect[1] * scale,
+            card.rect[2] * scale,
+            card.rect[3] * scale,
+        ];
+        for strip_inset in [0.0f32, 4.0, 6.0] {
+            let rect = row_edit_rect(card_screen, row.y, row.h, scale, strip_inset);
+            assert!(
+                (rect[0] + rect[2] - (card_screen[0] + card_screen[2] - strip_inset)).abs() < 1e-3,
+                "правый край зоны = правый край карточки минус полоса (inset {strip_inset})"
+            );
+            // Хит по центру сдвинутой зоны — по-прежнему лист строки.
+            let point = [rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0];
+            assert_eq!(
+                edit_at(&tree, &layout, scale, body, point, strip_inset),
+                Some(row.leaf_idx),
+                "hit-тест смещается вместе с зоной (inset {strip_inset})"
+            );
+        }
+        // Хелпер инсет-а: полоса справа (Ltr) — ширина полосы, слева (Rtl) — 0.
+        assert_eq!(edit_icon_right_inset(1.0, true), 4.0);
+        assert_eq!(edit_icon_right_inset(0.7, true), 2.8);
+        assert_eq!(edit_icon_right_inset(0.4, true), 2.0, "пол 2 px");
+        assert_eq!(edit_icon_right_inset(1.5, false), 0.0);
     }
 
     /// X5 (AC-6.1/6.4): вход в защиту одним действием сбрасывает вид на
@@ -2980,7 +3054,7 @@ mod tests {
                 card_l[2] * scale,
                 card_l[3] * scale,
             ];
-            let r = row_edit_rect(card_screen, ry, rh, scale);
+            let r = row_edit_rect(card_screen, ry, rh, scale, 0.0);
             // Правый край иконки = правый край карточки, левый — внутри.
             assert!((r[0] + r[2] - (card_screen[0] + card_screen[2])).abs() < 1e-3);
             assert!(r[0] >= card_screen[0] - 1e-3);
@@ -2993,7 +3067,7 @@ mod tests {
         }
         // Вырожденная карточка (экранные px, scale 1.0): x прижат к левому
         // краю (страж max).
-        let tiny = row_edit_rect([40.0, 0.0, 5.0, 52.0], ry, rh, 1.0);
+        let tiny = row_edit_rect([40.0, 0.0, 5.0, 52.0], ry, rh, 1.0, 0.0);
         assert!((tiny[0] - 40.0).abs() < 1e-3, "x не левее карточки");
         assert!((tiny[2] - EDIT_ICON_ZONE).abs() < 1e-3);
         // Ширина текста: формула и неразрывность суммы с зоной иконки.

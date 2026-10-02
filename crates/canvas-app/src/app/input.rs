@@ -2435,7 +2435,12 @@ impl App {
                 // лейаута — точка минус origin (та же трансформация, что у
                 // рендера)
                 let point = [self.cursor[0] - origin[0], self.cursor[1] - origin[1]];
-                explain_ui::edit_at(tree, &layout, scale, body, point)
+                // Ревизия владельца 2026-10-02: зона иконки отступает от
+                // полосы рода узла — hit смещается с рендером (одна
+                // геометрия edit_icon_right_inset)
+                let strip_inset =
+                    explain_ui::edit_icon_right_inset(scale, state.direction.sources_left());
+                explain_ui::edit_at(tree, &layout, scale, body, point, strip_inset)
             });
             if let Some(idx) = edit_hit {
                 // Preset — текущая подмена активного сценария (правка

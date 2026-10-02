@@ -136,6 +136,8 @@ fn template_card_content_fits_idle_height() {
                 desc_expanded: &Default::default(),
                 analysis_badges: &[],
                 stage_texts: &[],
+                stage_overlay_texts: &[],
+                stage_clip: None,
             },
         )
         .expect("prepare текста");
@@ -349,6 +351,8 @@ fn template_card_with_auto_row_fits_idle_height() {
                 desc_expanded: &Default::default(),
                 analysis_badges: &[],
                 stage_texts: &[],
+                stage_overlay_texts: &[],
+                stage_clip: None,
             },
         )
         .expect("prepare текста");

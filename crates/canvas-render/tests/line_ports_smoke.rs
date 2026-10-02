@@ -117,6 +117,8 @@ fn line_ports_template_and_note() {
             desc_expanded: &Default::default(),
             analysis_badges: &[],
             stage_texts: &[],
+            stage_overlay_texts: &[],
+            stage_clip: None,
         },
     )
     .expect("prepare текста");

@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use canvas_core::{Canvas, Language, Node, NodeKind};
+use canvas_ui::geometry::UiRect;
 use glyphon::{
     Attrs, Buffer, Cache, Color, Cursor, Family, FontSystem, Metrics, Resolution, Shaping, Style,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight, Wrap,
@@ -2497,6 +2498,16 @@ pub struct TitleFrame<'a> {
     /// ПОСЛЕ модального прохода квадов stage (рендерер рисует её самой
     /// последней, поверх пилюль/карточек stage — см. `TextSystem::stage_group`).
     pub stage_texts: &'a [ScreenText<'a>],
+    /// Ревизия владельца 2026-10-02: тексты ВТОРОГО модального подпрохода
+    /// (поле подмены окна проверки) — группа после `stage_texts` (см.
+    /// `TextSystem::stage_overlay_group`).
+    pub stage_overlay_texts: &'a [ScreenText<'a>],
+    /// Ревизия владельца 2026-10-02: клип модального прохода (логические
+    /// экранные px, окно проверки) — TextBounds каждого текста stage и
+    /// подпрохода поля пересекаются с его scissor-бакетом (клип текстов =
+    /// клипу квадов — та же конверсия [`crate::renderer::
+    /// band_scissor_rect`]). `None` — клипа нет (прочие модалки).
+    pub stage_clip: Option<UiRect>,
 }
 
 /// text_groups z-плана хранят ПОЗИЦИИ в `frame.indices`, а не индексы нод
@@ -4034,7 +4045,11 @@ impl TextSystem {
         // выше (полосное исполнение устраняет класс дефекта, §7.3).
         let band_count = frame.screen_bands.len();
         let stage_group = group_count + band_count;
-        while self.renderers.len() <= stage_group {
+        // +1 — группа второго модального подпрохода (поле подмены, ревизия
+        // владельца 2026-10-02); резервируем заранее — подготовка/рисование
+        // ниже адресуют обе группы.
+        let stage_overlay_group = stage_group + 1;
+        while self.renderers.len() <= stage_overlay_group {
             let renderer = TextRenderer::new(
                 &mut self.atlas,
                 device,
@@ -4116,6 +4131,31 @@ impl TextSystem {
             );
             buffer.shape_until_scroll(&mut self.font_system, false);
             stage_buffers.push(buffer);
+        }
+
+        // Ревизия владельца 2026-10-02: тексты второго модального подпрохода
+        // (поле подмены окна проверки) — тот же screen-space конвейер; своя
+        // группа после stage (см. хвост функции)
+        let mut stage_overlay_buffers: Vec<Buffer> =
+            Vec::with_capacity(frame.stage_overlay_texts.len());
+        for st in frame.stage_overlay_texts {
+            let font = st.font_size * scale_factor;
+            let line_height = font * 1.3;
+            let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font, line_height));
+            buffer.set_wrap(&mut self.font_system, Wrap::None);
+            buffer.set_size(
+                &mut self.font_system,
+                Some(st.width * scale_factor),
+                Some(line_height),
+            );
+            buffer.set_text(
+                &mut self.font_system,
+                st.text,
+                sans_attrs(),
+                Shaping::Advanced,
+            );
+            buffer.shape_until_scroll(&mut self.font_system, false);
+            stage_overlay_buffers.push(buffer);
         }
 
         // FR-013: бейдж «=» calc-нод при дальнем зуме (титулы скрыты) —
@@ -4936,9 +4976,30 @@ impl TextSystem {
         }
         // FR-042/FR-044: тексты main stage — последняя группа кадра (после
         // модального прохода квадов stage в рендерере)
+        // Ревизия владельца 2026-10-02: клип stage — TextBounds каждого
+        // текста пересекается со scissor-бакетом клипа (клип текстов =
+        // клипу квадов); тексты за клипом не готовятся вовсе.
+        let stage_scissor: Option<(i32, i32, i32, i32)> = frame
+            .stage_clip
+            .and_then(|clip| {
+                crate::renderer::band_scissor_rect(
+                    &clip,
+                    scale_factor,
+                    viewport_physical[0],
+                    viewport_physical[1],
+                )
+            })
+            .map(|[x, y, w, h]| (x as i32, y as i32, (x + w) as i32, (y + h) as i32));
         let mut stage_areas: Vec<TextArea> = Vec::with_capacity(stage_buffers.len());
         for (buffer, st) in stage_buffers.iter().zip(frame.stage_texts) {
-            stage_areas.push(screen_text_area(buffer, st, scale_factor));
+            let mut area = screen_text_area(buffer, st, scale_factor);
+            if let Some(clip) = stage_scissor {
+                let Some(clipped) = clip_text_bounds(area.bounds, clip) else {
+                    continue;
+                };
+                area.bounds = clipped;
+            }
+            stage_areas.push(area);
         }
         if let Some(renderer) = self.renderers.get_mut(stage_group) {
             prepare_group(
@@ -4949,6 +5010,32 @@ impl TextSystem {
                 &mut self.atlas,
                 &self.viewport,
                 &stage_areas,
+                &mut self.swash_cache,
+            )?;
+        }
+        // Ревизия владельца 2026-10-02: тексты поля подмены — группа после
+        // stage, тот же клип stage
+        let mut stage_overlay_areas: Vec<TextArea> =
+            Vec::with_capacity(stage_overlay_buffers.len());
+        for (buffer, st) in stage_overlay_buffers.iter().zip(frame.stage_overlay_texts) {
+            let mut area = screen_text_area(buffer, st, scale_factor);
+            if let Some(clip) = stage_scissor {
+                let Some(clipped) = clip_text_bounds(area.bounds, clip) else {
+                    continue;
+                };
+                area.bounds = clipped;
+            }
+            stage_overlay_areas.push(area);
+        }
+        if let Some(renderer) = self.renderers.get_mut(stage_overlay_group) {
+            prepare_group(
+                renderer,
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.atlas,
+                &self.viewport,
+                &stage_overlay_areas,
                 &mut self.swash_cache,
             )?;
         }
@@ -4988,6 +5075,14 @@ impl TextSystem {
     /// канваса поверх stage нет.
     pub fn stage_group(zplan: &crate::zorder::ZPlan, band_count: usize) -> usize {
         zplan.group_count() + band_count
+    }
+
+    /// Индекс группы текстов ВТОРОГО модального подпрохода (ревизия
+    /// владельца 2026-10-02: поле подмены окна проверки) — сразу после
+    /// группы stage; рендерер рисует её после квад-диапазона поля, поверх
+    /// всего контента модали.
+    pub fn stage_overlay_group(zplan: &crate::zorder::ZPlan, band_count: usize) -> usize {
+        Self::stage_group(zplan, band_count) + 1
     }
 
     /// Доступ к FontSystem для операций EditingSession (T7): ввод, каретка,
