@@ -3128,7 +3128,7 @@ impl App {
             instances.push(CardInstance {
                 pos: [0.0, 0.0],
                 size: [viewport[0], viewport[1]],
-                fill: [0.02, 0.02, 0.04, 0.45],
+                fill: [0.02, 0.02, 0.04, 0.85],
                 border: [0.0; 4],
                 params: [0.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
@@ -3302,7 +3302,7 @@ impl App {
         instances.push(CardInstance {
             pos: [0.0, 0.0],
             size: [viewport[0], viewport[1]],
-            fill: [0.02, 0.02, 0.04, 0.55],
+            fill: [0.02, 0.02, 0.04, 0.85],
             border: [0.0; 4],
             params: [0.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
@@ -4282,7 +4282,7 @@ impl App {
         instances.push(CardInstance {
             pos: [0.0, 0.0],
             size: [viewport[0], viewport[1]],
-            fill: [0.02, 0.02, 0.04, 0.45],
+            fill: [0.02, 0.02, 0.04, 0.85],
             border: [0.0; 4],
             params: [0.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
