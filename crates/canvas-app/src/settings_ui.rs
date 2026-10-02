@@ -2164,11 +2164,14 @@ mod tests {
         assert_eq!(layout.rows.len(), 2);
         assert_eq!(layout.rows[0].0, SettingsRow::SuggestEnabled);
         assert_eq!(layout.rows[1].0, SettingsRow::SuggestEngine);
-        // Таб 6 (Профиль, FR-087): роль + 9 тумблеров категорий, без карточек
+        // Таб 6 (Профиль, FR-087/FR-089): роль + 2 согласия телеметрии +
+        // 9 тумблеров категорий, без карточек
         let layout = modal_layout(6, viewport);
-        assert_eq!(layout.rows.len(), 10);
+        assert_eq!(layout.rows.len(), 12);
         assert_eq!(layout.rows[0].0, SettingsRow::Role);
-        assert_eq!(layout.rows[9].0, SettingsRow::SchemeCatOnboarding);
+        assert_eq!(layout.rows[1].0, SettingsRow::TelemetryCounter);
+        assert_eq!(layout.rows[2].0, SettingsRow::TelemetryAnalytics);
+        assert_eq!(layout.rows[11].0, SettingsRow::SchemeCatOnboarding);
         assert!(layout.theme_cards[0][2] <= 0.0, "карточек темы нет");
         // Таб 7 (Внешний вид): карточки темы + строки пресета, иконок и языка ниже
         let layout = modal_layout(7, viewport);
