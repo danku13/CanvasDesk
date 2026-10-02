@@ -3970,6 +3970,18 @@ impl App {
                 // Мгновенная обратная связь: HUD переключается сразу
                 self.hud_visible = self.settings.hud_on_start;
             }
+            // FR-089: согласия телеметрии — флаг меняется, персист общим
+            // хвостом (save_settings → persist_settings_web синхронизирует
+            // canvasdesk.consent и эмитит canvasdesk:consent-changed для
+            // JS-модуля index.html: PostHog opt-in/out без перезагрузки;
+            // счётчик просто перестаёт отправляться). На нативе поле
+            // персистится в config.toml, отправки нет.
+            SettingsRow::TelemetryCounter => {
+                self.settings.telemetry_counter = !self.settings.telemetry_counter;
+            }
+            SettingsRow::TelemetryAnalytics => {
+                self.settings.telemetry_analytics = !self.settings.telemetry_analytics;
+            }
             // FR-087: тумблеры категорий шаблонных нод — материализация
             // дефолта роли в явный allow-list + инверсия видимости.
             // Палитра/wheel/поиск читают флаг на кадре (единый хелпер
@@ -4532,6 +4544,9 @@ impl App {
                         SettingsRow::DragPushEnabled => self.settings.drag_push_enabled,
                         SettingsRow::DragPushPredictive => self.settings.drag_push_predictive,
                         SettingsRow::DragPushRebase => self.settings.drag_push_rebase,
+                        // FR-089: согласия телеметрии — прямые bool-поля
+                        SettingsRow::TelemetryCounter => self.settings.telemetry_counter,
+                        SettingsRow::TelemetryAnalytics => self.settings.telemetry_analytics,
                         // FR-087: видимость категорий подсказок по роли/фильтру
                         SettingsRow::TplCatBackend => {
                             self.settings.template_category_visible("backend")

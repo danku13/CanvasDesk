@@ -45,6 +45,11 @@ pub mod keys {
     pub const ROW_SCHEMECAT_PLANNING: &str = "settings.row.schemecat.planning";
     pub const ROW_SCHEMECAT_ONBOARDING: &str = "settings.row.schemecat.onboarding";
     pub const DESC_SCHEMECAT: &str = "settings.desc.schemecat";
+    /// FR-089: согласия телеметрии (чекбоксы первого запуска + таб «Профиль»).
+    pub const ROW_TELEMETRY_COUNTER: &str = "settings.row.telemetry_counter";
+    pub const DESC_TELEMETRY_COUNTER: &str = "settings.desc.telemetry_counter";
+    pub const ROW_TELEMETRY_ANALYTICS: &str = "settings.row.telemetry_analytics";
+    pub const DESC_TELEMETRY_ANALYTICS: &str = "settings.desc.telemetry_analytics";
     pub const TAB_SNAP: &str = "settings.tab.snap";
     pub const TAB_DRAG: &str = "settings.tab.drag";
 
@@ -807,6 +812,16 @@ const RU: &[(&str, &str)] = &[
     (keys::ROW_SCHEMECAT_PLANNING, "Схемы: Планирование"),
     (keys::ROW_SCHEMECAT_ONBOARDING, "Схемы: Онбординг"),
     (keys::DESC_SCHEMECAT, "Показывать шаблонные схемы этой категории в галерее (Ctrl+T)."),
+    (keys::ROW_TELEMETRY_COUNTER, "Анонимный счётчик использования"),
+    (
+        keys::DESC_TELEMETRY_COUNTER,
+        "Раз в сутки одна отметка без личных данных — сколько людей пользуется приложением. Работает даже при выключенных метриках.",
+    ),
+    (keys::ROW_TELEMETRY_ANALYTICS, "Метрики и отчёты об ошибках"),
+    (
+        keys::DESC_TELEMETRY_ANALYTICS,
+        "Помогает находить баги и улучшать CanvasDesk: события интерфейса и отчёты об ошибках (PostHog), без персональных данных.",
+    ),
     (keys::TAB_SNAP, "Привязка"),
     (keys::ROW_BUTTON_CORNER, "Угол кнопки"),
     (
@@ -1707,6 +1722,16 @@ const EN: &[(&str, &str)] = &[
     (keys::ROW_SCHEMECAT_PLANNING, "Schemes: Planning"),
     (keys::ROW_SCHEMECAT_ONBOARDING, "Schemes: Onboarding"),
     (keys::DESC_SCHEMECAT, "Show template schemes of this category in the gallery (Ctrl+T)."),
+    (keys::ROW_TELEMETRY_COUNTER, "Anonymous usage counter"),
+    (
+        keys::DESC_TELEMETRY_COUNTER,
+        "One note per day, no personal data — how many people use the app. Works even with metrics off.",
+    ),
+    (keys::ROW_TELEMETRY_ANALYTICS, "Metrics & error reports"),
+    (
+        keys::DESC_TELEMETRY_ANALYTICS,
+        "Helps find bugs and improve CanvasDesk: UI events and error reports (PostHog), no personal data.",
+    ),
     (keys::TAB_SNAP, "Snapping"),
     (keys::ROW_BUTTON_CORNER, "Button corner"),
     (

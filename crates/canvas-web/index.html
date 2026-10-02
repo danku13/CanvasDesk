@@ -27,10 +27,10 @@
         position: fixed; inset: 0; z-index: 100000;
         background: #14161a;
         display: flex; align-items: center; justify-content: center;
-        flex-direction: column; gap: 24px;
+        flex-direction: column; gap: 16px;
         color: #d5d9e0;
         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-        padding: 24px 16px; overflow-y: auto;
+        padding: 16px; overflow-y: auto;
         /* Акценты владельца (FR-087 v2): основной — активная кнопка языка,
            вторичный — hover карточек ролей и вторичная кнопка. */
         --accent: #d68a32;
@@ -44,7 +44,7 @@
       #lang-picker-overlay .buttons { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
       /* Единая страница (FR-087 v2): язык + роль на одном экране —
          скрытых шагов нет. */
-      #lang-picker-overlay .step { display: flex; flex-direction: column; gap: 16px; align-items: center; max-width: min(640px, 92vw); }
+      #lang-picker-overlay .step { display: flex; flex-direction: column; gap: 12px; align-items: center; max-width: min(640px, 92vw); }
       /* ГВАРД РЕГРЕССА: авторский display на .step перебивает атрибут
          hidden (UA-правило [hidden] слабее любого авторского display) —
          баг FR-087 v1: оба шага рисовались одновременно, пользователь
@@ -98,6 +98,41 @@
       }
       #lang-picker-overlay .secondary:hover {
         background: rgba(91, 174, 196, 0.10); border-color: var(--accent-2); color: #d5d9e0;
+      }
+      /* FR-089: согласия телеметрии — два предвыбранных чекбокса внизу
+         страницы первого запуска. Нативные чекбоксы с accent-color =
+         основной акцент (отметка #D68A32); лейблы кликабельны, hover —
+         вторичный акцент (как у карточек ролей), focus-within —
+         outline вторичного акцента (клавиатурная доступность). */
+      #lang-picker-overlay .consent {
+        display: flex; flex-direction: column; gap: 6px; align-items: stretch;
+        margin-top: 6px; padding: 12px 14px; max-width: 560px;
+        border: 1px solid #2a313b; border-radius: 10px;
+        background: rgba(29, 33, 40, 0.55);
+      }
+      #lang-picker-overlay .consent-title {
+        color: #8b95a3; font-size: 12px; font-weight: 600; margin: 0;
+        text-transform: uppercase; letter-spacing: 0.4px;
+      }
+      #lang-picker-overlay .consent label {
+        display: flex; align-items: flex-start; gap: 10px;
+        cursor: pointer; color: #d5d9e0; font-size: 13px; line-height: 1.45;
+        border-radius: 6px; padding: 4px 6px; margin: 0 -6px;
+        transition: background 150ms ease, color 150ms ease;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #lang-picker-overlay .consent label:hover {
+        background: rgba(91, 174, 196, 0.10); color: #fff;
+      }
+      #lang-picker-overlay .consent label:focus-within {
+        outline: 2px solid var(--accent-2); outline-offset: 2px;
+      }
+      #lang-picker-overlay .consent input[type="checkbox"] {
+        accent-color: var(--accent); width: 16px; height: 16px;
+        margin: 2px 0 0 0; flex: none; cursor: pointer;
+      }
+      #lang-picker-overlay .consent .hint {
+        color: #6f7887; font-size: 11px; line-height: 1.45; margin: 0;
       }
     </style>
     <script>
@@ -162,29 +197,69 @@
           var roleInfo = document.getElementById("role-info");
           var roleTitle = document.getElementById("role-title");
           var roleSkip = document.getElementById("role-skip");
+          var consentTitle = document.getElementById("consent-title");
+          var consentCounterLabel = document.getElementById("consent-counter-label");
+          var consentAnalyticsLabel = document.getElementById("consent-analytics-label");
+          var consentHint = document.getElementById("consent-hint");
+          var consentCounter = document.getElementById("consent-counter");
+          var consentAnalytics = document.getElementById("consent-analytics");
           var langBtns = overlay.querySelectorAll("button[data-lang]");
           var chosen = "ru"; // дефолт — как у <html lang="ru"> и canvas-app
           var t = {
             ru: {
               title: "Рабочая роль (необязательно)",
               hint: "Роль включает подсказки соответствующих типов шаблонов и схем — наведите на карточку, чтобы увидеть какие. Сменить роль можно позже в настройках, таб «Профиль».",
-              skip: "Продолжить без роли (все подсказки)"
+              skip: "Продолжить без роли (все подсказки)",
+              // FR-089: согласия телеметрии (оба чекбокса предвыбраны)
+              consentTitle: "Помочь проекту (необязательно)",
+              consentCounter: "Анонимный счётчик использования",
+              consentAnalytics: "Метрики и отчёты об ошибках",
+              consentHint: "Одна отметка в сутки, без личных данных. Метрики помогают находить баги. Отключаются в настройках, таб «Профиль»."
             },
             en: {
               title: "Work role (optional)",
               hint: "A role enables matching template and scheme hints — hover a card to see which. You can change the role later in Settings, the Profile tab.",
-              skip: "Continue without a role (all hints)"
+              skip: "Continue without a role (all hints)",
+              consentTitle: "Help improve CanvasDesk (optional)",
+              consentCounter: "Anonymous usage counter",
+              consentAnalytics: "Metrics & error reports",
+              consentHint: "One note per day, no personal data. Metrics help find bugs. Turn off anytime in Settings, the Profile tab."
             }
           };
           function pick(role) {
             // Записываем минимальный TOML в localStorage — canvas-app
             // через load_settings::toml::from_str подхватит `language = "ru"`
             // и `role = "..."`; остальные поля — serde(default).
+            // FR-089: согласия чекбоксов — теми же bool-полями в TOML
+            // (тумблеры таба «Профиль» подхватят их после загрузки).
             var toml = 'language = "' + chosen + '"';
             if (role) toml += '\nrole = "' + role + '"';
+            var cCounter = consentCounter ? consentCounter.checked : true;
+            var cAnalytics = consentAnalytics ? consentAnalytics.checked : true;
+            toml += "\ntelemetry_counter = " + (cCounter ? "true" : "false");
+            toml += "\ntelemetry_analytics = " + (cAnalytics ? "true" : "false");
+            // FR-089: JSON-согласие — рантайм-источник правды JS-модуля
+            // телеметрии (скрипт ниже в <head>): флаги + анонимный UUID
+            // (генерируем здесь один раз; без crypto — деградация к
+            // случайной строке) + отметка суток счётчика.
+            var anonId = "";
+            try {
+              anonId = window.crypto && window.crypto.randomUUID
+                ? window.crypto.randomUUID()
+                : "cd-" + Date.now().toString(36) + "-" +
+                  Math.random().toString(36).slice(2, 10);
+            } catch (e) { /* без UUID — счётчик всё равно работает */ }
             try {
               var ls = window.localStorage;
-              if (ls) ls.setItem("canvasdesk.config", toml);
+              if (ls) {
+                ls.setItem("canvasdesk.config", toml);
+                ls.setItem("canvasdesk.consent", JSON.stringify({
+                  counter: cCounter,
+                  analytics: cAnalytics,
+                  anonId: anonId,
+                  lastWasmDay: null
+                }));
+              }
             } catch (e) { /* localStorage недоступен — продолжаем */ }
             // Перезагружаем страницу — WASM init начнётся заново и
             // подхватит новый localStorage.
@@ -198,6 +273,11 @@
           function render() {
             roleTitle.textContent = t[chosen].title;
             roleSkip.textContent = t[chosen].skip;
+            // FR-089: тексты согласий — тем же живым переключателем языка
+            consentTitle.textContent = t[chosen].consentTitle;
+            consentCounterLabel.textContent = t[chosen].consentCounter;
+            consentAnalyticsLabel.textContent = t[chosen].consentAnalytics;
+            consentHint.textContent = t[chosen].consentHint;
             infoDefault();
             for (var i = 0; i < langBtns.length; i++) {
               var active = langBtns[i].getAttribute("data-lang") === chosen;
@@ -235,6 +315,227 @@
           roleSkip.addEventListener("click", function () { pick(null); });
           render();
         });
+      })();
+    </script>
+    <script>
+      /* FR-089: телеметрия web-версии — двухуровневое согласие, PostHog
+       * (продуктовые метрики + отчёты об ошибках) и анонимный счётчик
+       * уникальных пользователей WASM-сервиса.
+       *
+       * ═════════ КОНФИГ ВЛАДЕЛЬЦА (вставить ключ PostHog) ═════════
+       *  1) зарегистрируйтесь на posthog.com (бесплатный тариф, без карты);
+       *  2) Settings → Project → скопируйте Project API key (phc_...);
+       *  3) впишите его в POSTHOG_KEY ниже и проверьте POSTHOG_HOST:
+       *       US: https://us.i.posthog.com
+       *       EU: https://eu.i.posthog.com
+       *  4) (публичный репозиторий) PostHog → Settings → General →
+       *     Allowed domains: домен хостинга CanvasDesk — защита лимитов.
+       * Пустой POSTHOG_KEY = полный no-op: SDK не грузится, счётчик не
+       * отправляется, локально читаются только согласия.
+       *
+       * Согласия (чекбоксы первого запуска, оба предвыбраны; источник
+       * правды рантайма — JSON localStorage `canvasdesk.consent`, пикер
+       * пишет при первом входе, Rust-персист настроек синхронизирует
+       * дальше и эмитит canvasdesk:consent-changed):
+       *   counter   — «сколько уникальных пользователей взаимодействует
+       *               с WASM-сервисом»: суточная отметка wasm_used,
+       *               distinct_id = анонимный UUID; отправка прямой в
+       *               PostHog /batch/ БЕЗ SDK — работает даже при
+       *               выключенных метриках (двухуровневое согласие).
+       *   analytics — PostHog SDK (jsDelivr +esm, динамический import
+       *               только при согласии): ошибки окна (window error +
+       *               unhandledrejection → $exception; SDK-перехват
+       *               capture_exceptions), продуктовые события/autocapture.
+       *               Выключение тумблером → opt_out_capturing() на лету.
+       * Приватность: в wasm_used нет ни браузера, ни URL, ни действий —
+       * только флаг «пользователь с UUID N пользовался сегодня».
+       * Отказ (снят чекбокс) = данные не собираются вовсе.
+       * Скрипт не ломает приложение ни на одном шаге (все ошибки — catch).
+       */
+      (function () {
+        var POSTHOG_KEY = ""; // ← вставьте phc_... (Project API key)
+        var POSTHOG_HOST = "https://us.i.posthog.com"; // US; EU: https://eu.i.posthog.com
+        var POSTHOG_CDN = "https://cdn.jsdelivr.net/npm/posthog-js@1/+esm";
+        var CONSENT_KEY = "canvasdesk.consent";
+        var state = { counter: true, analytics: true, anonId: "", lastWasmDay: null };
+        var ph = null;        // PostHog SDK (после успешного импорта)
+        var phPending = false; // импорт в полёте (не ретраим без нужды)
+
+        function readConsent() {
+          try {
+            var raw = window.localStorage.getItem(CONSENT_KEY);
+            if (raw) {
+              var parsed = JSON.parse(raw);
+              if (typeof parsed.counter === "boolean") state.counter = parsed.counter;
+              if (typeof parsed.analytics === "boolean") state.analytics = parsed.analytics;
+              if (typeof parsed.anonId === "string" && parsed.anonId) state.anonId = parsed.anonId;
+              if (typeof parsed.lastWasmDay === "string" || parsed.lastWasmDay === null) {
+                state.lastWasmDay = parsed.lastWasmDay;
+              }
+            }
+          } catch (e) { /* приватный режим/битая запись — дефолты true */ }
+        }
+        function writeConsent() {
+          try {
+            window.localStorage.setItem(CONSENT_KEY, JSON.stringify(state));
+          } catch (e) { /* нет localStorage — телеметрия молча нет */ }
+        }
+
+        /* Счётчик: метрика «уникальные пользователи WASM-сервиса».
+         * Дедуп — одна отметка в UTC-сутки (lastWasmDay): активные
+         * пользователи считаются один раз в день, полный отказ
+         * (counter=false) не отправляет ничего. Прямая отправка в
+         * /batch/ без SDK — согласие counter не тянет за собой
+         * продуктовую аналитику. */
+        function todayUTC() { return new Date().toISOString().slice(0, 10); }
+        function ensureAnonId() {
+          if (!state.anonId) {
+            try {
+              state.anonId = window.crypto && window.crypto.randomUUID
+                ? window.crypto.randomUUID()
+                : "cd-" + Date.now().toString(36) + "-" +
+                  Math.random().toString(36).slice(2, 10);
+            } catch (e) {
+              state.anonId = "cd-" + Date.now().toString(36);
+            }
+          }
+          return state.anonId;
+        }
+        function trackWasmUsed() {
+          if (!POSTHOG_KEY || !state.counter) return; // no-op без ключа/согласия
+          var today = todayUTC();
+          if (state.lastWasmDay === today) return;
+          state.lastWasmDay = today;
+          writeConsent();
+          try {
+            fetch(POSTHOG_HOST + "/batch/", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                api_key: POSTHOG_KEY,
+                batch: [{
+                  event: "wasm_used",
+                  distinct_id: ensureAnonId(),
+                  properties: { app: "canvadesk-web" }
+                }]
+              }),
+              keepalive: true
+            }).catch(function () { /* офлайн/блокировщик — завтра */ });
+          } catch (e) { /* блокировщик расширений — молча */ }
+        }
+
+        /* «Взаимодействовал с WASM-сервисом» — первый жест пользователя
+         * (клик/клавиша/колесо) на странице. once-слушатели дёшевы;
+         * дальше дозирует суточный дедуп. Жест, а не загрузка: счётчик
+         * меряет использование, не открытия вкладки. */
+        function armInteractionTracking() {
+          var events = ["pointerdown", "keydown", "wheel"];
+          for (var i = 0; i < events.length; i++) {
+            window.addEventListener(events[i], trackWasmUsed, { capture: true, once: true });
+          }
+        }
+
+        /* PostHog SDK — динамический import ТОЛЬКО при analytics=true
+         * (согласие до загрузки SDK: не грузим скрипт отказавшим).
+         * +esm — ESM-сборка jsDelivr, default export = posthog. */
+        function loadPostHog() {
+          if (!POSTHOG_KEY || phPending || ph) return;
+          phPending = true;
+          import(POSTHOG_CDN)
+            .then(function (mod) {
+              var posthog = mod.default;
+              posthog.init(POSTHOG_KEY, {
+                api_host: POSTHOG_HOST,
+                capture_exceptions: true
+              });
+              ph = posthog;
+              phPending = false;
+              installErrorHandlers();
+            })
+            .catch(function () {
+              phPending = false; /* CDN недоступен/офлайн — тихо */
+            });
+        }
+
+        /* Отчёты об ошибках: $exception по window.error и
+         * unhandledrejection. capture_exceptions в init ловит
+         * исключения внутри SDK-обёрток — эти листенеры закрывают
+         * остальное окно (до/вне SDK событий не собираем: телеметрия
+         * строго после согласия). */
+        function reportException(type, message, extra) {
+          if (!ph || !state.analytics) return;
+          try {
+            var props = {
+              $exception_type: type,
+              $exception_message: String(message).slice(0, 500)
+            };
+            if (extra) {
+              if (extra.file) props.$exception_source = String(extra.file).slice(0, 200);
+              if (extra.line) props.$exception_lineno = extra.line;
+            }
+            ph.capture("$exception", props);
+          } catch (e) { /* телеметрия не должна ронять приложение */ }
+        }
+        function installErrorHandlers() {
+          window.addEventListener("error", function (e) {
+            if (e.message || e.error) {
+              reportException("window.error", e.message || String(e.error), {
+                file: e.filename, line: e.lineno
+              });
+            }
+          });
+          window.addEventListener("unhandledrejection", function (e) {
+            var r = e.reason;
+            reportException("unhandledrejection", r && r.message ? r.message : String(r));
+          });
+        }
+
+        /* Смена согласий на лету: Rust (persist_settings_web) пишет
+         * canvasdesk.consent и эмитит canvasdesk:consent-changed;
+         * storage — кросс-вкладочная синхронизация. Перечитываем JSON,
+         * приводим PostHog в соответствие (opt-in/opt-out) без
+         * перезагрузки; счётчик просто перестаёт/начинает отправляться. */
+        function applyConsentChange() {
+          readConsent();
+          if (!POSTHOG_KEY) return;
+          if (state.analytics && !ph && !phPending) {
+            loadPostHog();
+          } else if (state.analytics && ph) {
+            try { ph.opt_in_capturing(); } catch (e) { /* тихо */ }
+          } else if (!state.analytics && ph) {
+            try { ph.opt_out_capturing(); } catch (e) { /* тихо */ }
+          }
+        }
+        document.addEventListener("canvasdesk:consent-changed", applyConsentChange);
+        window.addEventListener("canvasdesk:consent-changed", applyConsentChange);
+        window.addEventListener("storage", function (e) {
+          if (e && e.key === CONSENT_KEY) applyConsentChange();
+        });
+
+        /* Публичный API (window.__cdTelemetry): диагностика/ручной вызов
+         * (getConsent — флаги; setConsent — мерж + перечитать PostHog;
+         * trackWasmUsed — счётчик). WASM-стороне пригодится для будущих
+         * событий из Rust через js_glue. */
+        window.__cdTelemetry = {
+          getConsent: function () {
+            return { counter: state.counter, analytics: state.analytics };
+          },
+          setConsent: function (patch) {
+            if (patch && typeof patch.counter === "boolean") state.counter = patch.counter;
+            if (patch && typeof patch.analytics === "boolean") state.analytics = patch.analytics;
+            writeConsent();
+            applyConsentChange();
+          },
+          trackWasmUsed: trackWasmUsed
+        };
+
+        /* Boot: согласия читаются синхронно до любых загрузок; пикер
+         * (первый вход) уже записал canvasdesk.consent до reload —
+         * здесь он существует. Старые конфиги до FR-089 без записи —
+         * дефолты true (согласия считаются включёнными, как чекбоксы). */
+        readConsent();
+        if (POSTHOG_KEY && state.analytics) loadPostHog();
+        armInteractionTracking();
       })();
     </script>
     <script>
@@ -786,6 +1087,24 @@
         <p id="role-info"></p>
         <div class="buttons">
           <button type="button" id="role-skip" class="secondary"></button>
+        </div>
+        <!-- FR-089: согласия телеметрии — предвыбраны (checked), меняются
+             до применения выбора (роль/пропуск). Тексты ставит render()
+             по выбранному языку (RU по умолчанию, живая смена на EN).
+             pick() пишет TOML telemetry_* в canvasdesk.config (настройки,
+             тумблеры таба «Профиль») и JSON canvasdesk.consent (рантайм
+             JS-модуля телеметрии ниже). -->
+        <div class="consent" id="consent-box">
+          <p class="consent-title" id="consent-title"></p>
+          <label>
+            <input type="checkbox" id="consent-counter" checked />
+            <span id="consent-counter-label"></span>
+          </label>
+          <label>
+            <input type="checkbox" id="consent-analytics" checked />
+            <span id="consent-analytics-label"></span>
+          </label>
+          <p class="hint" id="consent-hint"></p>
         </div>
       </div>
     </div>
