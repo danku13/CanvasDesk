@@ -20,12 +20,49 @@ pub const PANEL_SIDE_MARGIN: f32 = 12.0;
 pub const PANEL_TOP_MARGIN: f32 = 12.0;
 /// Высота поля ввода, логические px.
 pub const INPUT_HEIGHT: f32 = 36.0;
-/// Высота строки результата, логические px.
-pub const ROW_HEIGHT: f32 = 28.0;
 /// Максимум видимых строк результата (далее — прокрутка).
 pub const MAX_VISIBLE_ROWS: usize = 8;
 /// Внутренний отступ содержимого панели, логические px.
 pub const PANEL_PADDING: f32 = 8.0;
+
+// FR-088: адаптивная вёрстка строк результата. Высота строки — НЕ константа,
+// а замер контента тем же TextMeasurer, что и раскладка (ui-kit §5:
+// «эвристики запрещены»): заголовок — одна строка с ellipsis, подзаголовок —
+// перенос по словам. Линейные величины — дизайн-константы (каталог W3.3:
+// «h — явная высота дизайн-константой», чип 26 ≠ измеренной 13·1.3).
+/// Кегль заголовка строки результата (ui-kit: кегль контента 13).
+pub const TITLE_FONT_SIZE: f32 = 13.0;
+/// Кегль подзаголовка строки (вторичный текст).
+pub const SUB_FONT_SIZE: f32 = 11.0;
+/// Высота строки заголовка (кегль 13 · межстрочный 1.3 ≈ 17).
+pub const TITLE_LINE_H: f32 = 17.0;
+/// Высота строки подзаголовка (кегль 11 · 1.3 ≈ 15).
+pub const SUB_LINE_H: f32 = 15.0;
+/// Вертикальный пад строки результата (сверху и снизу).
+pub const ROW_PAD_V: f32 = 6.0;
+/// Зазор между блоком заголовка и подзаголовком.
+pub const TITLE_SUB_GAP: f32 = 2.0;
+/// Отступ текста строки слева (строки нод).
+pub const ROW_TEXT_X: f32 = 10.0;
+/// Отступ текста слева у строк-доков (зона бейджа «?»).
+pub const ROW_TEXT_X_DOCS: f32 = 30.0;
+/// Правый пад текста строки.
+const ROW_TEXT_RIGHT_PAD: f32 = 10.0;
+/// Нижний запас панели от края окна (кламп суммарной высоты, FR-088).
+const PANEL_BOTTOM_MARGIN: f32 = 8.0;
+
+/// Высота строки результата по контенту: пад + заголовок (+ пад + зазор +
+/// строки подзаголовка). Единый источник для раскладки и тестов.
+pub fn row_height(subtitle_lines: usize) -> f32 {
+    ROW_PAD_V
+        + TITLE_LINE_H
+        + if subtitle_lines == 0 {
+            0.0
+        } else {
+            TITLE_SUB_GAP + subtitle_lines as f32 * SUB_LINE_H
+        }
+        + ROW_PAD_V
+}
 
 /// Разделитель слова для Ctrl+Backspace — простая эвристика: пробельный символ
 /// или ASCII-знак препинания. Буквы (включая кириллицу), цифры и прочие
@@ -322,6 +359,26 @@ pub struct PanelLayout {
     /// Прямоугольники видимых строк (индекс = позиция в rows, начиная со
     /// scroll_top; длина ≤ MAX_VISIBLE_ROWS).
     pub row_rects: Vec<[f32; 4]>,
+    /// Готовый текст видимых строк (параллельно row_rects, FR-088):
+    /// заголовок с ellipsis и перенесённый подзаголовок с абсолютными
+    /// позициями — рендер НЕ замеряет повторно и НЕ дублирует смещения
+    /// (единый источник геометрии: раскладка, отрисовка, hit-тест).
+    pub row_texts: Vec<RowText>,
+}
+
+/// Текст строки результата в экранных координатах (FR-088).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowText {
+    /// Заголовок после ellipsis (одна строка).
+    pub title: String,
+    /// Позиция левого верхнего угла заголовка (лог. px).
+    pub title_pos: [f32; 2],
+    /// Ширина текстовой зоны строки (bounds клипа ScreenText).
+    pub text_width: f32,
+    /// Строки подзаголовка после переноса (пусто — подзаголовка нет).
+    pub subtitle_lines: Vec<String>,
+    /// Позиции строк подзаголовка (параллельно subtitle_lines).
+    pub subtitle_pos: Vec<[f32; 2]>,
 }
 
 /// Геометрия панели: топ-центр, ширина PANEL_WIDTH (кламп к окну), высота =
@@ -331,11 +388,16 @@ pub struct PanelLayout {
 /// `constrain` (min 0, max окно−2×боковая маржа), панель — `stack`
 /// (Center/Start), содержимое — `Column` [поле, распорка-паддинг, строки…]
 /// с gap 0 (зазоры — дети-распорки, т.к. между строками зазора нет).
-/// Числа — дословно прежние (тесты структуры фиксируют точные координаты).
+///
+/// FR-088: высоты строк — адаптивные (замер контента, [`row_height`]):
+/// заголовок — ellipsis до одной строки, подзаголовок — перенос по словам;
+/// тексты строк готовятся здесь же (`PanelLayout::row_texts`) — рендер
+/// берёт готовые строки и позиции. Число видимых строк дополнительно
+/// клампится высотой окна (панель не выходит за нижний край —
+/// PANEL_BOTTOM_MARGIN; минимум одна строка, далее — скролл).
 ///
 /// Вырожденное окно (ширина/высота ≤ 0 — свёрнутое окно, ширина меньше двух
-/// боковых отступов) схлопывает панель в точку — без паники. Высота окна
-/// панель не ограничивает (геометрия топ-центра).
+/// боковых отступов) схлопывает панель в точку — без паники.
 pub fn layout(window_w: f32, window_h: f32, panel: &SearchPanel) -> PanelLayout {
     // W3.2 (каталог docs/plans/fr-068-w3-consumer-migration.md): замерщик —
     // канонические shared-точки на вызов (Text-детей нет — замерщик
@@ -367,6 +429,7 @@ pub fn layout_with(
             panel_rect: point,
             input_rect: point,
             row_rects: Vec::new(),
+            row_texts: Vec::new(),
         };
     }
 
@@ -388,7 +451,7 @@ pub fn layout_with(
     .x;
     // Окно прокрутки клампится к длине списка (scroll_top задаётся извне).
     let scroll_top = panel.scroll_top.min(panel.rows.len());
-    let visible = (panel.rows.len() - scroll_top).min(MAX_VISIBLE_ROWS);
+    let visible_cap = (panel.rows.len() - scroll_top).min(MAX_VISIBLE_ROWS);
 
     // Панель — top-center вьюпорта (высота наследуется от контента ниже).
     let panel_x = stack(
@@ -408,8 +471,55 @@ pub fn layout_with(
         canvas_ui::geometry::EdgeInsets::uniform(PANEL_PADDING),
     );
     let inner_w = inner.w.max(0.0);
+
+    // FR-088: адаптивные высоты строк — замер контента (заголовок: ellipsis
+    // до одной строки; подзаголовок: перенос по словам) тем же замерщиком,
+    // что и раскладка (ui-kit §5: ширины — только TextMeasurer). Тексты
+    // готовятся ЗДЕСЬ и попадают в PanelLayout::row_texts — рендер не
+    // дублирует ни замер, ни смещения строк.
+    let content_top = PANEL_TOP_MARGIN + PANEL_PADDING + INPUT_HEIGHT + PANEL_PADDING;
+    // Кламп по высоте окна: панель не выходит за нижний край; минимум одна
+    // строка (дальше — скролл рядами, как и раньше).
+    let max_bottom = (window_h - PANEL_BOTTOM_MARGIN)
+        .max(content_top + row_height(0) + PANEL_PADDING + PANEL_BOTTOM_MARGIN);
+    let mut rows_meta: Vec<(f32, String, Vec<String>, f32, f32)> = Vec::new();
+    let mut acc = 0.0f32;
+    for i in scroll_top..scroll_top + visible_cap {
+        let row = &panel.rows[i];
+        let text_x = if row.kind == SearchRowKind::Docs {
+            ROW_TEXT_X_DOCS
+        } else {
+            ROW_TEXT_X
+        };
+        let text_w = (inner_w - text_x - ROW_TEXT_RIGHT_PAD).max(10.0);
+        let title = m.ellipsis(
+            fs,
+            &row.title,
+            crate::text::SANS_FAMILY,
+            TITLE_FONT_SIZE,
+            text_w,
+        );
+        let sub_lines = if row.subtitle.is_empty() {
+            Vec::new()
+        } else {
+            m.wrap(
+                fs,
+                &row.subtitle,
+                crate::text::SANS_FAMILY,
+                SUB_FONT_SIZE,
+                text_w,
+            )
+        };
+        let h = row_height(sub_lines.len());
+        if !rows_meta.is_empty() && content_top + acc + h > max_bottom {
+            break; // строка не влезает — окно прокрутки короче списка
+        }
+        acc += h;
+        rows_meta.push((h, title, sub_lines, text_x, text_w));
+    }
+
     // Колонка gap 0: зазор после поля — вертикальный зазор. W3.2: дети —
-    // MeasuredItem; высоты — дизайн-константы (каталог W3.2). ВАЖНО:
+    // MeasuredItem; высоты строк — замер контента выше (FR-088). ВАЖНО:
     // вертикальный зазор — именно Fixed{w: 0, h} — Spacer в колонке места
     // НЕ занимает (main-ось колонки — высота; см. оракул
     // measured_column_matches_manual_fixed_oracle в canvas-ui).
@@ -417,16 +527,13 @@ pub fn layout_with(
         w: inner_w,
         h: INPUT_HEIGHT,
     }];
-    if visible > 0 {
+    if !rows_meta.is_empty() {
         items.push(MeasuredItem::Fixed {
             w: 0.0,
             h: PANEL_PADDING,
         });
-        for _ in 0..visible {
-            items.push(MeasuredItem::Fixed {
-                w: inner_w,
-                h: ROW_HEIGHT,
-            });
+        for (h, _, _, _, _) in &rows_meta {
+            items.push(MeasuredItem::Fixed { w: inner_w, h: *h });
         }
     }
     let rects = Column {
@@ -444,6 +551,24 @@ pub fn layout_with(
         .iter()
         .map(|r| [r.x, r.y, r.right(), r.bottom()])
         .collect();
+    let row_texts: Vec<RowText> = row_rects
+        .iter()
+        .zip(&rows_meta)
+        .map(|(r, (_, title, sub_lines, text_x, text_w))| {
+            let title_pos = [r[0] + text_x, r[1] + ROW_PAD_V];
+            let sub_top = r[1] + ROW_PAD_V + TITLE_LINE_H + TITLE_SUB_GAP;
+            let subtitle_pos = (0..sub_lines.len())
+                .map(|i| [r[0] + text_x, sub_top + i as f32 * SUB_LINE_H])
+                .collect();
+            RowText {
+                title: title.clone(),
+                title_pos,
+                text_width: *text_w,
+                subtitle_lines: sub_lines.clone(),
+                subtitle_pos,
+            }
+        })
+        .collect();
     // Панель заканчивается отступом ниже последнего контента (строки/поле).
     let content_bottom = rects[rects.len() - 1].bottom();
     let y1 = content_bottom + PANEL_PADDING;
@@ -452,6 +577,7 @@ pub fn layout_with(
         panel_rect: [panel_x, panel_top, panel_x + width, y1],
         input_rect,
         row_rects,
+        row_texts,
     }
 }
 
@@ -878,9 +1004,12 @@ mod tests {
     // ---------- layout ----------
 
     /// Окно 1280×720, 3 строки: панель топ-центр (ширина 460, x-центр = 640),
-    /// поле ввода внутри с отступом, строки ниже поля высотой 28.
+    /// поле ввода внутри с отступом, строки ниже поля (высота — замер
+    /// контента: строки-заглушки без подзаголовка — только заголовок).
     #[test]
     fn layout_centered_with_three_rows() {
+        // строки-заглушки — без подзаголовка: пад + заголовок + пад
+        let row_h = row_height(0);
         let panel = panel_with_rows(3);
         let lay = layout(1280.0, 720.0, &panel);
         let pr = lay.panel_rect;
@@ -889,7 +1018,7 @@ mod tests {
         assert!(((pr[0] + pr[2]) / 2.0 - 640.0).abs() < EPS);
         assert!((pr[1] - PANEL_TOP_MARGIN).abs() < EPS);
         // точные координаты (все значения представимы в f32 точно)
-        assert_eq!(pr, [410.0, 12.0, 870.0, 156.0]);
+        assert_eq!(pr, [410.0, 12.0, 870.0, 159.0]);
 
         // поле ввода внутри панели с отступом
         let ir = lay.input_rect;
@@ -902,28 +1031,112 @@ mod tests {
         assert_eq!(lay.row_rects.len(), 3);
         let first = lay.row_rects[0];
         assert!((first[1] - (ir[3] + PANEL_PADDING)).abs() < EPS); // ниже поля
-        assert!((first[3] - first[1] - ROW_HEIGHT).abs() < EPS);
+        assert!((first[3] - first[1] - row_h).abs() < EPS);
         assert!((first[0] - ir[0]).abs() < EPS);
         assert!((first[2] - ir[2]).abs() < EPS);
         // строки идут подряд
         assert!((lay.row_rects[1][1] - first[3]).abs() < EPS);
-        assert_eq!(lay.row_rects[0], [418.0, 64.0, 862.0, 92.0]);
-        assert_eq!(lay.row_rects[2], [418.0, 120.0, 862.0, 148.0]);
+        assert_eq!(lay.row_rects[0], [418.0, 64.0, 862.0, 93.0]);
+        assert_eq!(lay.row_rects[2], [418.0, 122.0, 862.0, 151.0]);
         // панель заканчивается отступом ниже последней строки
         let last = lay.row_rects[2];
         assert!((pr[3] - (last[3] + PANEL_PADDING)).abs() < EPS);
+        // FR-088: тексты строк параллельны rect'ам, позиции — внутри строки
+        assert_eq!(lay.row_texts.len(), 3);
+        for (r, rt) in lay.row_rects.iter().zip(&lay.row_texts) {
+            assert!((rt.title_pos[0] - (r[0] + ROW_TEXT_X)).abs() < EPS);
+            assert!((rt.title_pos[1] - (r[1] + ROW_PAD_V)).abs() < EPS);
+            assert!(rt.subtitle_lines.is_empty());
+        }
     }
 
-    /// 12 строк — максимум 8 видимых прямоугольников, каждый высотой
-    /// ROW_HEIGHT.
+    /// 12 строк — максимум 8 видимых прямоугольников (окно 720 — по высоте
+    /// всё влезает), каждый — высоты заголовочной строки.
     #[test]
     fn layout_caps_rows_at_eight() {
         let panel = panel_with_rows(12);
         let lay = layout(1280.0, 720.0, &panel);
         assert_eq!(lay.row_rects.len(), MAX_VISIBLE_ROWS);
         for r in &lay.row_rects {
-            assert!((r[3] - r[1] - ROW_HEIGHT).abs() < EPS);
+            assert!((r[3] - r[1] - row_height(0)).abs() < EPS);
         }
+    }
+
+    /// FR-088: длинный подзаголовок переносится — строка ВЫШЕ однострочной,
+    /// высота = row_height(число строк), позиции строк подзаголовка идут
+    /// подряд ниже заголовка.
+    #[test]
+    fn adaptive_row_wraps_subtitle() {
+        let mut panel = SearchPanel::default();
+        panel.open();
+        panel.set_results(vec![SearchRow::node(
+            "нода".to_owned(),
+            "длинный подзаголовок с результатом поиска, который заведомо не "
+                .repeat(6)
+                .to_string(),
+        )]);
+        let lay = layout(1280.0, 720.0, &panel);
+        assert_eq!(lay.row_rects.len(), 1);
+        let rt = &lay.row_texts[0];
+        assert!(rt.subtitle_lines.len() >= 2, "перенос состоялся");
+        let rect = lay.row_rects[0];
+        assert!((rect[3] - rect[1] - row_height(rt.subtitle_lines.len())).abs() < EPS);
+        // заголовок сверху, строки подзаголовка ниже с шагом SUB_LINE_H
+        assert!((rt.title_pos[1] - (rect[1] + ROW_PAD_V)).abs() < EPS);
+        for (i, pos) in rt.subtitle_pos.iter().enumerate() {
+            let expected =
+                rect[1] + ROW_PAD_V + TITLE_LINE_H + TITLE_SUB_GAP + i as f32 * SUB_LINE_H;
+            assert!((pos[1] - expected).abs() < EPS, "строка {i}");
+            assert!((pos[0] - (rect[0] + ROW_TEXT_X)).abs() < EPS);
+        }
+    }
+
+    /// FR-088: длинный заголовок обрезается ellipsis до одной строки —
+    /// высота строки не растёт, текст короче источника.
+    #[test]
+    fn adaptive_row_title_ellipsis() {
+        let long_title = "очень длинное имя ноды без пробелов ".repeat(12);
+        let mut panel = SearchPanel::default();
+        panel.open();
+        panel.set_results(vec![SearchRow::node(long_title.clone(), String::new())]);
+        let lay = layout(1280.0, 720.0, &panel);
+        let rt = &lay.row_texts[0];
+        assert!(rt.title.chars().count() < long_title.chars().count());
+        assert!(rt.title.ends_with('…'), "хвост — многоточие");
+        assert!((lay.row_rects[0][3] - lay.row_rects[0][1] - row_height(0)).abs() < EPS);
+    }
+
+    /// FR-088: строка-документация — текст правее (зона бейджа «?»),
+    /// ширина текстовой зоны соответствует отступу.
+    #[test]
+    fn adaptive_docs_row_text_offset() {
+        let mut panel = SearchPanel::default();
+        panel.open();
+        panel.set_results(vec![
+            SearchRow::node("нода".to_owned(), String::new()),
+            SearchRow::docs("FAQ".to_owned(), "Документация · ответ".to_owned()),
+        ]);
+        let lay = layout(1280.0, 720.0, &panel);
+        assert_eq!(lay.row_texts.len(), 2);
+        assert!((lay.row_texts[0].title_pos[0] - (lay.row_rects[0][0] + ROW_TEXT_X)).abs() < EPS);
+        assert!(
+            (lay.row_texts[1].title_pos[0] - (lay.row_rects[1][0] + ROW_TEXT_X_DOCS)).abs() < EPS
+        );
+    }
+
+    /// FR-088: кламп панели по высоте окна — на низком окне видимых строк
+    /// меньше списка (панель не выходит за нижний край), минимум одна строка.
+    #[test]
+    fn panel_height_clamped_to_window() {
+        let panel = panel_with_rows(20);
+        // 300 px: строки по 29 — влезает 7 (64 + 7·29 = 267 ≤ 292, 8-я — нет)
+        let lay = layout(1280.0, 300.0, &panel);
+        assert_eq!(lay.row_rects.len(), 7);
+        assert!(lay.panel_rect[3] <= 300.0 + EPS, "панель внутри окна");
+
+        // совсем низкое окно — минимум одна строка
+        let lay = layout(1280.0, 80.0, &panel);
+        assert_eq!(lay.row_rects.len(), 1);
     }
 
     /// Узкое окно 300×600: ширина клампится к 300 − 2×12 = 276; широкое окно —
@@ -953,8 +1166,8 @@ mod tests {
         assert_eq!(lay.row_rects.len(), 5);
         let rows_top = PANEL_TOP_MARGIN + PANEL_PADDING + INPUT_HEIGHT + PANEL_PADDING;
         for (i, r) in lay.row_rects.iter().enumerate() {
-            assert!((r[1] - (rows_top + i as f32 * ROW_HEIGHT)).abs() < EPS);
-            assert!((r[3] - r[1] - ROW_HEIGHT).abs() < EPS);
+            assert!((r[1] - (rows_top + i as f32 * row_height(0))).abs() < EPS);
+            assert!((r[3] - r[1] - row_height(0)).abs() < EPS);
         }
 
         // scroll_top больше длины списка — кламп, видимых строк нет

@@ -1456,16 +1456,18 @@ impl App {
         (quads, texts)
     }
 
-    /// Hover-«?» у цифры результата (§6.4 Closed → Hover, hover-only —
-    /// решение владельца): pill под курсором у полосы D; клик по цифре —
-    /// фолбэк-триггер (AC-1.1, единственный путь на таче).
+    /// Тултип «Проверка цепочки расчёта» у кнопки в полосе результата
+    /// (§6.4 Closed → Hover): якорь — правый конец полосы (кнопка-иконка
+    /// FR-088, рисуется рендером), клик по полосе — триггер (AC-1.1,
+    /// единственный путь на таче). Раньше — безликий «?» у курсора: место
+    /// триггера было неочевидно (ревизия владельца FR-088).
     pub(super) fn explain_hover_pill(
         &mut self,
         viewport: [f32; 2],
         quads: &mut Vec<CardInstance>,
         texts: &mut Vec<OwnedScreenText>,
     ) {
-        // Pill — только когда окно/stage/редактор не перехватывают курсор
+        // Тултип — только когда окно/stage/редактор не перехватывают курсор
         if self.explain.is_some()
             || self.main_stage.is_some()
             || self.scheme_gallery.open
@@ -1492,24 +1494,37 @@ impl App {
             return;
         }
         let palette = ThemeColors::from_theme(self.settings.theme);
-        let zoom = self.camera.zoom();
-        let origin = self
+        // Якорь — правый край кнопки (world → screen): тултип над полосой,
+        // выровнен по правому краю кнопки; клампы к вьюпорту.
+        let btn = canvas_render::cards::explain_button_rect(node);
+        let anchor = self
             .camera
-            .screen_to_world([self.cursor[0] + 14.0, self.cursor[1] - 30.0], viewport);
+            .world_to_screen([btn[0] + btn[2], btn[1]], viewport);
+        let label = self.tr(keys::EXPLAIN_TITLE).to_owned();
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        let text_w = m.width_of(&mut fs, &label, canvas_render::text::SANS_FAMILY, 12.0);
+        drop(fs);
+        let w = (text_w + 16.0).max(40.0);
+        let h = 22.0;
+        let x = (anchor[0] - w)
+            .max(4.0)
+            .min((viewport[0] - w - 4.0).max(4.0));
+        let y = (anchor[1] - h - 6.0).max(4.0);
         quads.push(CardInstance {
-            pos: origin,
-            size: [22.0 / zoom, 18.0 / zoom],
-            fill: palette.accent,
-            border: [0.0; 4],
-            params: [5.0 / zoom, 0.0, 0.0, 1.0],
+            pos: [x, y],
+            size: [w, h],
+            fill: palette.menu_fill,
+            border: [0.22, 0.24, 0.30, 0.9],
+            params: [6.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
-            text: "?".to_owned(),
-            origin: [self.cursor[0] + 14.0, self.cursor[1] - 28.0],
-            width: 22.0,
-            font_size: 13.0,
-            color: Color::rgb(255, 255, 255),
+            text: label,
+            origin: [x, y + (h - 12.0 * 1.3) / 2.0],
+            width: w,
+            font_size: 12.0,
+            color: palette.title,
             align: TextAlign::Center,
         });
     }
