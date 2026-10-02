@@ -676,12 +676,9 @@ mod tests {
             assert_eq!(cfg.engine, expected);
         }
         // сериализация — канонический нижний регистр
-        assert_eq!(
-            toml::to_string(&SuggestSettings::default())
-                .expect("сериализация")
-                .contains("engine = \"lex\""),
-            true
-        );
+        assert!(toml::to_string(&SuggestSettings::default())
+            .expect("сериализация")
+            .contains("engine = \"lex\""));
     }
 
     #[test]

@@ -750,9 +750,9 @@ impl App {
                         ("n", layout.nodes.len().to_string().as_str()),
                     ],
                 ),
-                origin: [win[0] + 16.0, win[1] + win[3] - 27.0],
+                origin: [win[0] + 16.0, win[1] + win[3] - 28.0],
                 width: 280.0,
-                font_size: 11.0,
+                font_size: 13.0,
                 color: palette.quote,
                 align: TextAlign::Left,
             });
@@ -787,9 +787,9 @@ impl App {
                             keys::EXPLAIN_DIR_RTL
                         })
                         .to_owned(),
-                    origin: [toggle[0], toggle[1] + 5.0],
+                    origin: [toggle[0], toggle[1] + 7.5],
                     width: toggle[2],
-                    font_size: 12.0,
+                    font_size: 13.0,
                     color: if hovered {
                         Color::rgb(255, 255, 255)
                     } else {
@@ -823,9 +823,9 @@ impl App {
                             keys::EXPLAIN_DEFENSE
                         })
                         .to_owned(),
-                    origin: [toggle[0], toggle[1] + 5.0],
+                    origin: [toggle[0], toggle[1] + 7.5],
                     width: toggle[2],
-                    font_size: 11.5,
+                    font_size: 13.0,
                     color: if on || hovered {
                         Color::rgb(255, 255, 255)
                     } else {
@@ -864,9 +864,9 @@ impl App {
                     ));
                     texts.push(OwnedScreenText {
                         text: self.tr(key).to_owned(),
-                        origin: [rect[0], rect[1] + 5.5],
+                        origin: [rect[0], rect[1] + 6.5],
                         width: rect[2],
-                        font_size: 11.0,
+                        font_size: 13.0,
                         color: if hovered && active {
                             Color::rgb(255, 255, 255)
                         } else if active {
@@ -881,7 +881,7 @@ impl App {
                     text: self.tr(keys::EXPLAIN_DEFENSE_HINT).to_owned(),
                     origin: [win[0] + 320.0, win[1] + win[3] - 27.0],
                     width: (win[2] - 480.0).max(120.0),
-                    font_size: 10.5,
+                    font_size: 12.0,
                     color: palette.quote,
                     align: TextAlign::Center,
                 });
@@ -946,10 +946,14 @@ impl App {
                 quads.push(screen_rect_quad(
                     camera, viewport, strip_rect, strip, [0.0; 4], 0.0,
                 ));
-                // Шрифт карточки сжимается fit-масштабом вместе с геометрией
+                // Ревизия владельца 2026-10-02 (дефект «текст неадекватно
+                // меняется при зуме»): паддинги карточки масштабируются
+                // вместе с геометрией (прежде 10/16 px были захардкожены
+                // в экранных px — на fit-масштабе 0.7 адресная строка
+                // висела НИЖЕ карточки, при зуме 2.5 — слипалась вверху).
                 let font = |px: f32| (px * scale).max(8.0);
-                let tx = rect[0] + 10.0;
-                let text_w = rect[2] - 16.0;
+                let tx = rect[0] + 10.0 * scale;
+                let text_w = (rect[2] - 16.0 * scale).max(0.0);
                 // FR-084: карточка-таблица — сестринские листья одного
                 // узла-источника (одинаковый node_id под одним родителем):
                 // шапка с заголовком узла + по строке на лист; кривые уже
@@ -958,7 +962,7 @@ impl App {
                     // Шапка: заголовок узла в верхней зоне TABLE_HEADER_H
                     texts.push(OwnedScreenText {
                         text: node.title.clone(),
-                        origin: [tx, rect[1] + 6.0],
+                        origin: [tx, rect[1] + 6.0 * scale],
                         width: text_w,
                         font_size: font(12.0),
                         color: palette.title,
@@ -1078,7 +1082,14 @@ impl App {
                             && leaf.line.is_some()
                             && matches!(&leaf.value, Some(Ok(_)));
                         if editable {
-                            let icon = explain_ui::row_edit_rect(rect, row.y, row.h, scale);
+                            // Ревизия владельца 2026-10-02: зона иконки
+                            // отступает от полосы рода узла на её ширину
+                            // (полоса на стороне иконки — правый край в Ltr,
+                            // левый в Rtl — зона не трогается); рендер и
+                            // hit-тест (edit_at) — одна геометрия.
+                            let strip_inset = explain_ui::edit_icon_right_inset(scale, ltr);
+                            let icon =
+                                explain_ui::row_edit_rect(rect, row.y, row.h, scale, strip_inset);
                             let icon_hovered = point_in_rect(icon, self.cursor);
                             quads.push(screen_rect_quad(
                                 camera,
@@ -1149,7 +1160,7 @@ impl App {
                 // 1) Заголовок ноды-таблицы
                 texts.push(OwnedScreenText {
                     text: node.title.clone(),
-                    origin: [tx, rect[1] + 7.0],
+                    origin: [tx, rect[1] + 7.0 * scale],
                     width: text_w,
                     font_size: font(12.0),
                     color: palette.title,
@@ -1190,7 +1201,7 @@ impl App {
                 };
                 texts.push(OwnedScreenText {
                     text: value_str,
-                    origin: [tx, rect[1] + 25.0],
+                    origin: [tx, rect[1] + 25.0 * scale],
                     width: text_w,
                     font_size: font(13.5),
                     color: value_color,
@@ -1200,7 +1211,7 @@ impl App {
                 if let Some(formula) = &node.formula {
                     texts.push(OwnedScreenText {
                         text: formula.clone(),
-                        origin: [tx, rect[1] + 44.0],
+                        origin: [tx, rect[1] + 44.0 * scale],
                         width: text_w,
                         font_size: font(10.5),
                         color: palette.body,
@@ -1210,7 +1221,7 @@ impl App {
                     // Лист-константа: пометка «исходное значение» (AC-1.4)
                     texts.push(OwnedScreenText {
                         text: self.tr(keys::EXPLAIN_LEAF_TAG).to_owned(),
-                        origin: [tx, rect[1] + 44.0],
+                        origin: [tx, rect[1] + 44.0 * scale],
                         width: text_w,
                         font_size: font(10.5),
                         color: palette.quote,
@@ -1238,7 +1249,7 @@ impl App {
                     if !addr.is_empty() {
                         texts.push(OwnedScreenText {
                             text: addr,
-                            origin: [tx, rect[1] + 58.0],
+                            origin: [tx, rect[1] + 58.0 * scale],
                             width: text_w,
                             font_size: font(9.5),
                             color: palette.quote,
@@ -1347,60 +1358,12 @@ impl App {
                 };
                 texts.push(OwnedScreenText {
                     text: self.tr(keys::EXPLAIN_OVERFLOW_HINT).to_owned(),
-                    origin: [hint_right - HINT_W, win[1] + win[3] - 27.0],
+                    origin: [hint_right - HINT_W, win[1] + win[3] - 28.0],
                     width: HINT_W,
-                    font_size: 10.5,
+                    font_size: 12.0,
                     color: palette.quote,
                     align: TextAlign::Left,
                 });
-            }
-            // X3 (AC-4.1): inline-поле подмены — тултип у редактируемой
-            // строки/карточки (FR-085: под якорем, над — если снизу не
-            // влезает); клик мимо/Enter — коммит, Esc — отмена
-            if let Some(edit) = state.edit.as_ref() {
-                let anchor = explain_ui::edit_anchor_rect(&layout, edit.idx, scale, body, origin)
-                    .unwrap_or([body[0], body[1], 0.0, 0.0]);
-                let field = explain_ui::field_rect(body, anchor);
-                quads.push(screen_rect_quad(
-                    camera,
-                    viewport,
-                    field,
-                    palette.menu_fill,
-                    palette.accent,
-                    6.0,
-                ));
-                let empty = edit.text.is_empty();
-                texts.push(OwnedScreenText {
-                    text: if empty {
-                        self.tr(keys::EXPLAIN_EDIT_HINT).to_owned()
-                    } else {
-                        edit.text.clone()
-                    },
-                    origin: [field[0] + 8.0, field[1] + 5.5],
-                    width: field[2] - 16.0,
-                    font_size: 12.0,
-                    color: if empty { palette.quote } else { palette.body },
-                    align: TextAlign::Left,
-                });
-                // Каретка (мигающая полоса) — оценка ширины текста (0.62
-                // кегля — синк whatif_ui::text_width)
-                let caret_x = field[0] + 8.0 + edit.text.chars().count() as f32 * 12.0 * 0.62;
-                if (state.opened_at.elapsed().as_millis() / 530) % 2 == 0 {
-                    let caret = [
-                        caret_x.min(field[0] + field[2] - 8.0),
-                        field[1] + 5.0,
-                        1.5,
-                        16.0,
-                    ];
-                    quads.push(screen_rect_quad(
-                        camera,
-                        viewport,
-                        caret,
-                        palette.accent,
-                        [0.0; 4],
-                        0.0,
-                    ));
-                }
             }
             // Hover узла дерева (кадр) — рамка акцентом. FR-084: база
             // контента (origin) не входит в геометрию node_at — точка
@@ -1415,6 +1378,81 @@ impl App {
         if let Some(s) = self.explain.as_mut() {
             s.cursor = cursor_idx;
         }
+        (quads, texts)
+    }
+
+    /// Ревизия владельца 2026-10-02 (дефект «поле подмены пересекается с
+    /// нижележащим текстом»): inline-поле подмены (X3/AC-4.1) — ВТОРОЙ
+    /// модальный подпроход кадра. Прежде поле рисовалось в общем проходе
+    /// окна: квад поля — среди квадов, тексты — в общей текст-группе ПОСЛЕ
+    /// всех квадов, поэтому текст нижележащих строк ложился ПОВЕРХ заливки
+    /// поля (меню-тон α 0.97 сквозь него просвечивал). Рендерер выводит
+    /// этот подпроход после текстов окна (квады поля → каретка → текст),
+    /// поле всегда поверх контента дерева.
+    ///
+    /// Геометрия — та же чистая функция `field_rect` у якоря строки
+    /// (edit_anchor_rect + explain_view — единый вид с рендером и хитом);
+    /// клик мимо/Enter — коммит, Esc — отмена (ввод — в input.rs).
+    pub(super) fn explain_edit_overlay(
+        &self,
+        viewport: [f32; 2],
+    ) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut quads: Vec<CardInstance> = Vec::new();
+        let mut texts: Vec<OwnedScreenText> = Vec::new();
+        let Some(state) = self.explain.as_ref() else {
+            return (quads, texts);
+        };
+        let Some(edit) = state.edit.as_ref() else {
+            return (quads, texts);
+        };
+        let palette = ThemeColors::from_theme(self.settings.theme);
+        let win = explain_ui::window_rect(viewport);
+        let body = explain_ui::body_rect(win);
+        let (_, layout, scale, origin) = self.explain_view(state, body);
+        let anchor = explain_ui::edit_anchor_rect(&layout, edit.idx, scale, body, origin)
+            .unwrap_or([body[0], body[1], 0.0, 0.0]);
+        let field = explain_ui::field_rect(body, anchor);
+        quads.push(screen_rect_quad(
+            &self.camera,
+            viewport,
+            field,
+            palette.menu_fill,
+            palette.accent,
+            6.0,
+        ));
+        // Каретка (мигающая полоса) — оценка ширины текста (0.62 кегля —
+        // синк whatif_ui::text_width); квад каретки — до текста (под ним,
+        // перекрытие с последним глифом — 1.5 px, не мешает чтению).
+        let caret_x = field[0] + 8.0 + edit.text.chars().count() as f32 * 12.0 * 0.62;
+        if (state.opened_at.elapsed().as_millis() / 530) % 2 == 0 {
+            let caret = [
+                caret_x.min(field[0] + field[2] - 8.0),
+                field[1] + 5.0,
+                1.5,
+                16.0,
+            ];
+            quads.push(screen_rect_quad(
+                &self.camera,
+                viewport,
+                caret,
+                palette.accent,
+                [0.0; 4],
+                0.0,
+            ));
+        }
+        let empty = edit.text.is_empty();
+        texts.push(OwnedScreenText {
+            text: if empty {
+                self.tr(keys::EXPLAIN_EDIT_HINT).to_owned()
+            } else {
+                edit.text.clone()
+            },
+            origin: [field[0] + 8.0, field[1] + 5.5],
+            width: field[2] - 16.0,
+            font_size: 12.0,
+            color: if empty { palette.quote } else { palette.body },
+            align: TextAlign::Left,
+        });
         (quads, texts)
     }
 

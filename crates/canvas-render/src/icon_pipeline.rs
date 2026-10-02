@@ -124,12 +124,19 @@ impl WorldIconInstance {
 }
 
 /// UV-координаты иконки `(set, name)` в атласе: левый верх + правый низ.
-/// Возвращает `None` для неизвестной пары — фолбэк на глиф (в app.rs).
+/// Возвращает `None` для неизвестной пары И для sparse-пары (набор не
+/// объявляет имя — ячейка атласа прозрачна): в обоих случаях потребителю
+/// нужен глиф-фолбэк, а не пустой квад. Чинит дефект «иконки не видно»:
+/// прежде `icon_uv("material", "edit")` возвращал UV прозрачной ячейки
+/// (SVG edit.svg в наборе нет) — рисовался пустой квад вместо фолбэка.
 ///
 /// Чистая функция (без GPU) — тестируется без устройства.
 pub fn icon_uv(set: &str, name: &str) -> Option<([f32; 2], [f32; 2])> {
     let set_idx = ICON_SETS.iter().position(|s| *s == set)?;
     let name_idx = ICON_NAMES.iter().position(|n| *n == name)?;
+    // Sparse-пара: растра нет → квад был бы прозрачным. Единый источник
+    // истины — реестр байт (icon_rgba), тот же, что заливает атлас.
+    icon_rgba(set, name)?;
     let cell_w = ICON_CELL_PX as f32 / ATLAS_W as f32;
     let cell_h = ICON_CELL_PX as f32 / ATLAS_H as f32;
     let min = [(name_idx as f32) * cell_w, (set_idx as f32) * cell_h];
@@ -704,12 +711,41 @@ mod tests {
         assert!(icon_uv("unknown", "unknown").is_none());
     }
 
-    /// Все пары (set, name) из реестров имеют UV.
+    /// Ревизия владельца 2026-10-02 (дефект «иконки не видно»): sparse-пара
+    /// (набор не объявляет имя — ячейка атласа прозрачна) тоже None —
+    /// потребителю нужен глиф-фолбэк, а не пустой квад. Прежде
+    /// `icon_uv("material", "edit")` возвращал UV прозрачной ячейки.
+    #[test]
+    fn sparse_pairs_return_none() {
+        // roles — sparse-набор: UI-имён в нём нет.
+        assert!(icon_uv("roles", "close").is_none());
+        assert!(icon_rgba("roles", "close").is_none());
+        // …а свои имена roles объявляет.
+        assert!(icon_uv("roles", "custom").is_some());
+        // edit растеризован не во всех наборах (см.
+        // edit_icon_rasterized_in_all_ui_sets): пары без растра — None.
+        for set in ICON_SETS {
+            if icon_rgba(set, "edit").is_none() {
+                assert!(
+                    icon_uv(set, "edit").is_none(),
+                    "{set}/edit — sparse, UV не нужен"
+                );
+            }
+        }
+    }
+
+    /// UV и растра согласованы: пара имеет UV ⇔ пара имеет растр
+    /// (sparse-ячейки — прозрачны, UV не нужен). Прежний вариант теста
+    /// («все пары реестров имеют UV») закреплял дефект пустых квадов.
     #[test]
     fn all_registered_icons_have_uv() {
         for set in ICON_SETS {
             for name in ICON_NAMES {
-                assert!(icon_uv(set, name).is_some(), "{set}/{name} нет UV");
+                assert_eq!(
+                    icon_uv(set, name).is_some(),
+                    icon_rgba(set, name).is_some(),
+                    "{set}/{name}: UV и растр расходятся"
+                );
             }
         }
     }
@@ -777,10 +813,16 @@ mod tests {
         );
         assert_eq!(ATLAS_W, ICON_NAMES.len() as u32 * ICON_CELL_PX);
         assert_eq!(ATLAS_H, ICON_SETS.len() as u32 * ICON_CELL_PX);
-        // Правый-нижний угол последней ячейки не выходит за пределы атласа
-        let last_set = ICON_SETS[ICON_SETS.len() - 1];
-        let last_name = ICON_NAMES[ICON_NAMES.len() - 1];
-        let (_, uv_max) = icon_uv(last_set, last_name).expect("последняя пара имеет UV");
+        // Правый-нижний угол последней РАСТЕРИЗОВАННОЙ ячейки не выходит
+        // за пределы атласа (последняя пара реестра может быть sparse —
+        // тогда UV у неё None по определению).
+        let last_rasterized = ICON_SETS
+            .iter()
+            .rev()
+            .flat_map(|s| ICON_NAMES.iter().rev().map(move |n| (*s, *n)))
+            .find(|(s, n)| icon_rgba(s, n).is_some());
+        let (last_set, last_name) = last_rasterized.expect("есть хотя бы одна растровая пара");
+        let (_, uv_max) = icon_uv(last_set, last_name).expect("последняя растровая пара имеет UV");
         assert!(
             uv_max[0] <= 1.0 + f32::EPSILON && uv_max[1] <= 1.0 + f32::EPSILON,
             "UV последней ячейки в пределах атласа"

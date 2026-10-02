@@ -143,7 +143,7 @@ mod tests {
         for text in &["x", "hello", &"word ".repeat(20), &"a".repeat(1000)] {
             let w = measure(text);
             assert!(
-                w >= MIN_NODE_WIDTH && w <= MAX_NODE_WIDTH,
+                (MIN_NODE_WIDTH..=MAX_NODE_WIDTH).contains(&w),
                 "text={} (len={}) → w={}, out of [{}, {}]",
                 &text[..text.len().min(20)],
                 text.len(),

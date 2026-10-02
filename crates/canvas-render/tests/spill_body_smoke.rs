@@ -90,6 +90,8 @@ fn headless_spilled_param_row_draws() {
             desc_expanded: &Default::default(),
             analysis_badges: &[],
             stage_texts: &[],
+            stage_overlay_texts: &[],
+            stage_clip: None,
         },
     )
     .expect("prepare текста");

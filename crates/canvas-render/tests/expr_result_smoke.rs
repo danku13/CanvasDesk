@@ -67,6 +67,8 @@ fn expr_result_line_draws_in_footer() {
             desc_expanded: &Default::default(),
             analysis_badges: &[],
             stage_texts: &[],
+            stage_overlay_texts: &[],
+            stage_clip: None,
         },
     )
     .expect("prepare текста");
@@ -253,6 +255,8 @@ fn expr_line_results_draw_on_own_rows() {
             desc_expanded: &Default::default(),
             analysis_badges: &[],
             stage_texts: &[],
+            stage_overlay_texts: &[],
+            stage_clip: None,
         },
     )
     .expect("prepare текста");
@@ -446,6 +450,8 @@ fn expr_line_error_badge_and_hit_zone() {
             desc_expanded: &Default::default(),
             analysis_badges: &[],
             stage_texts: &[],
+            stage_overlay_texts: &[],
+            stage_clip: None,
         },
     )
     .expect("prepare текста");
@@ -633,6 +639,8 @@ fn expr_editing_live_line_results() {
             desc_expanded: &Default::default(),
             analysis_badges: &[],
             stage_texts: &[],
+            stage_overlay_texts: &[],
+            stage_clip: None,
         },
     )
     .expect("prepare текста");

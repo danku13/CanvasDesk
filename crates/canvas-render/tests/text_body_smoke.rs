@@ -66,6 +66,8 @@ fn headless_note_body_draws() {
             desc_expanded: &Default::default(),
             analysis_badges: &[],
             stage_texts: &[],
+            stage_overlay_texts: &[],
+            stage_clip: None,
         },
     )
     .expect("prepare текста");

@@ -102,6 +102,8 @@ fn headless_text_under_covering_card() {
             desc_expanded: &Default::default(),
             analysis_badges: &[],
             stage_texts: &[],
+            stage_overlay_texts: &[],
+            stage_clip: None,
         },
     )
     .expect("prepare текста");

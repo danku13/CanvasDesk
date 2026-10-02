@@ -687,6 +687,14 @@ impl ApplicationHandler<AppEvent> for App {
                 let stage_viewport = self.viewport_logical();
                 let mut stage_instances: Vec<CardInstance> = Vec::new();
                 let mut stage_owned_texts: Vec<OwnedScreenText> = Vec::new();
+                // Ревизия владельца 2026-10-02: второй модальный подпроход
+                // (поле подмены окна проверки — рисуется ПОСЛЕ текстов
+                // stage, дефект «текст нижележащих строк поверх заливки
+                // поля») + scissor-клип модали (контент окна не выходит за
+                // его границы — «отсутствует клиппинг»)
+                let mut stage_edit_instances: Vec<CardInstance> = Vec::new();
+                let mut stage_edit_owned_texts: Vec<OwnedScreenText> = Vec::new();
+                let mut stage_clip: Option<canvas_ui::geometry::UiRect> = None;
                 let relaid = self
                     .main_stage
                     .as_mut()
@@ -704,6 +712,13 @@ impl ApplicationHandler<AppEvent> for App {
                     let (insts, texts) = self.explain_frame(stage_viewport);
                     stage_instances = insts;
                     stage_owned_texts = texts;
+                    let (edit_insts, edit_texts) = self.explain_edit_overlay(stage_viewport);
+                    stage_edit_instances = edit_insts;
+                    stage_edit_owned_texts = edit_texts;
+                    let win = explain_ui::window_rect(stage_viewport);
+                    stage_clip = Some(canvas_ui::geometry::UiRect::new(
+                        win[0], win[1], win[2], win[3],
+                    ));
                 } else if self.main_stage.is_none() && self.autolink_review.is_none() {
                     self.explain_hover_pill(
                         stage_viewport,
@@ -776,6 +791,19 @@ impl ApplicationHandler<AppEvent> for App {
                 // screen_texts панелей): рисуются группой ПОСЛЕ модального
                 // прохода квадов stage
                 let stage_screen_texts: Vec<ScreenText> = stage_owned_texts
+                    .iter()
+                    .map(|t| ScreenText {
+                        text: &t.text,
+                        origin: t.origin,
+                        width: t.width,
+                        font_size: t.font_size,
+                        color: t.color,
+                        align: t.align,
+                    })
+                    .collect();
+                // Ревизия владельца 2026-10-02: Owned-тексты поля подмены →
+                // заимствованные ScreenText для второго подпрохода модали
+                let stage_edit_screen_texts: Vec<ScreenText> = stage_edit_owned_texts
                     .iter()
                     .map(|t| ScreenText {
                         text: &t.text,
@@ -1008,6 +1036,12 @@ impl ApplicationHandler<AppEvent> for App {
                     screen_bands: &screen_band_refs,
                     stage_instances: &stage_instances,
                     stage_texts: &stage_screen_texts,
+                    // Ревизия владельца 2026-10-02: клип окна проверки +
+                    // второй подпроход поля подмены (прочие модалки —
+                    // None/пусто: прежнее поведение)
+                    stage_clip,
+                    stage_overlay_instances: &stage_edit_instances,
+                    stage_overlay_texts: &stage_edit_screen_texts,
                     screen_sectors: &overlay_sectors,
                     widget_quads: &widget_quad_refs,
                     // FR-ICONS: SVG-иконки UI (screen-space, поверх всех полос).
