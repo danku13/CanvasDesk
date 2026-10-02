@@ -424,6 +424,10 @@ pub fn build_frame(app: &App) -> UiFrame {
 /// Явный вьюпорт — headless-тесты (G4: 1280×800 / 1024×640 / 800×560).
 pub fn build_frame_at(app: &App, viewport_logical: [f32; 2]) -> UiFrame {
     let registry = build_registry(app);
+    // FR-090: surface_opened — диф активных поверхностей (web; натив —
+    // no-op). Здесь, а не в App::ui_frame: пересборка кадра происходит
+    // ровно тогда, когда меняется сигнатура поверхностей (build_frame_sig).
+    super::telemetry::surface_diff(app, &registry);
     let [vw, vh] = viewport_logical;
     let viewport = UiRect::new(0.0, 0.0, vw.max(0.0), vh.max(0.0));
     let mut frame = UiFrame::from_registry(&registry, viewport);

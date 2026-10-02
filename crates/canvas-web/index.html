@@ -498,6 +498,20 @@
         function captureAppLaunched() {
           try {
             var p = readProfile();
+            /* FR-090: identify со стабильным anonId (тот же UUID, что у
+             * счётчика wasm_used). До этого события висят на анонимном
+             * device-id, а PostHog по умолчанию создаёт person-профили
+             * только для identified (person_profiles: identified_only) —
+             * вкладка People пуста. identify мёржит анонимную историю в
+             * person с ролью/языком ($set ниже дополняет при каждом
+             * запуске) — «люди с ролями» в People; счётчик wasm_used
+             * (distinct_id = тот же anonId) ложится на того же person. */
+            try {
+              ph.identify(ensureAnonId(), {
+                language: p.language || "unset",
+                role: p.role || "default"
+              });
+            } catch (e2) { /* identify не должен ронять app_launched */ }
             ph.capture("app_launched", {
               app: "canvadesk-web",
               language: p.language || "unset",

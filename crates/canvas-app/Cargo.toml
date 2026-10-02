@@ -67,8 +67,19 @@ l1-laya = ["canvas-suggest/l1-laya"]
 # FR-089: Event/EventTarget — эмит canvasdesk:consent-changed из
 # persist_settings_web (смена согласий телеметрии → JS-модуль index.html
 # применяет PostHog opt-in/out без перезагрузки).
-web-sys = { workspace = true, features = ["Window", "Storage", "Event", "EventTarget"] }
+# FR-090: + Document/CustomEvent/CustomEventInit и js-sys — отправка
+# продуктовых событий из Rust мостом canvasdesk:track (app/telemetry.rs).
+web-sys = { workspace = true, features = [
+    "Window",
+    "Storage",
+    "Event",
+    "EventTarget",
+    "Document",
+    "CustomEvent",
+    "CustomEventInit",
+] }
 wasm-bindgen.workspace = true
+js-sys.workspace = true
 toml.workspace = true
 
 [dev-dependencies]

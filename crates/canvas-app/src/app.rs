@@ -150,6 +150,10 @@ use canvas_scene::{
 /// сборка `UiFrame` (hit-rect'ы из тех же layout-функций, что у ввода и
 /// отрисовки), владелец клавиатуры из `esc_stack`, draw-полосы.
 pub mod ui_registry;
+/// FR-090: продуктовые события PostHog из Rust — мост `canvasdesk:track`
+/// (index.html, `__cdTelemetry.track`) + `surface_opened` по дифу реестра
+/// поверхностей. `pub` — вызовы из canvas-web (события экспорта).
+pub mod telemetry;
 // FR-054 (U5 PRD-0009, F-11): сквозной layout-линт полного кадра — CI-гейт G4.
 #[cfg(test)]
 mod ui_layout_lint;
@@ -5083,6 +5087,13 @@ impl App {
                 return;
             }
         };
+        // FR-090: продуктовое событие — схема применена из галереи
+        // (id + число нод; только при успехе инстанциации)
+        let node_count = instance.nodes.len().to_string();
+        telemetry::track(
+            "scheme_applied",
+            &[("scheme", manifest.id.as_str()), ("nodes", node_count.as_str())],
+        );
         self.push_undo();
         for node in instance.nodes {
             self.scene.canvas.nodes.push(node);
@@ -6575,6 +6586,14 @@ impl App {
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.set_theme(palette);
         }
+        // FR-090: продуктовое событие смены темы (классика тумблером;
+        // смена пресета — apply_dropdown_choice/ThemePreset, без события)
+        let theme = if self.settings.theme == Theme::Dark {
+            "dark"
+        } else {
+            "light"
+        };
+        telemetry::track("theme_switched", &[("theme", theme)]);
         self.persist_settings();
     }
 
@@ -6594,6 +6613,14 @@ impl App {
             keys::TOAST_LANGUAGE_TOGGLED,
             &[("{lang}", self.settings.language.native_label())],
         ));
+        // FR-090: продуктовое событие смены языка (угловая кнопка; смена
+        // через настройки — в apply_dropdown_choice)
+        let language = if self.settings.language == canvas_core::Language::En {
+            "en"
+        } else {
+            "ru"
+        };
+        telemetry::track("language_switched", &[("language", language)]);
         self.persist_settings();
     }
 
@@ -7106,6 +7133,9 @@ impl App {
         // FR-087: смена роли — тост с именем, сброс протухших выборов
         // категорий палитры/галереи (набор видимых изменился).
         if row == SettingsRow::Role {
+            // FR-090: продуктовое событие смены роли (id реестра ролей) —
+            // живая правка person-свойства в PostHog (identify + $set)
+            telemetry::track("role_changed", &[("role", self.settings.role.as_str())]);
             let role_name =
                 canvas_core::roles::display_name(&self.settings.role, self.settings.language);
             self.show_toast(i18n::trf(
@@ -7120,6 +7150,16 @@ impl App {
             self.scheme_gallery.selected = 0;
             self.scheme_gallery.scroll_top = 0;
             self.request_redraw();
+        }
+        // FR-090: смена языка через настройки (dropdown «Внешний вид») —
+        // событие; угловая кнопка — toggle_language
+        if row == SettingsRow::Language {
+            let language = if self.settings.language == canvas_core::Language::En {
+                "en"
+            } else {
+                "ru"
+            };
+            telemetry::track("language_switched", &[("language", language)]);
         }
         self.sync_settings_row(row);
         self.save_settings();
