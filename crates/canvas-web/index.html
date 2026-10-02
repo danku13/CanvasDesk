@@ -322,14 +322,14 @@
        * (продуктовые метрики + отчёты об ошибках) и анонимный счётчик
        * уникальных пользователей WASM-сервиса.
        *
-       * ═════════ КОНФИГ ВЛАДЕЛЬЦА (вставить ключ PostHog) ═════════
-       *  1) зарегистрируйтесь на posthog.com (бесплатный тариф, без карты);
-       *  2) Settings → Project → скопируйте Project API key (phc_...);
-       *  3) впишите его в POSTHOG_KEY ниже и проверьте POSTHOG_HOST:
-       *       US: https://us.i.posthog.com
-       *       EU: https://eu.i.posthog.com
-       *  4) (публичный репозиторий) PostHog → Settings → General →
-       *     Allowed domains: домен хостинга CanvasDesk — защита лимитов.
+       * ═════════ КОНФИГ ВЛАДЕЛЬЦА ═════════
+       * Ключ и регион вписаны (EU cloud): POSTHOG_KEY/HOST ниже, проверен
+       * запросом /batch/ из сессии сборки (200 Ok). Остался один шаг в
+       * самом PostHog: Settings → General → Allowed domains → домен
+       * хостинга CanvasDesk (защита публичного ключа от чужих лимитов).
+       * Ключ phc_... клиентский — публиковать в открытом репозитории
+       * безопасно (как Firebase config); при мусорных событиях —
+       * перегенерировать в настройках проекта и заменить здесь.
        * Пустой POSTHOG_KEY = полный no-op: SDK не грузится, счётчик не
        * отправляется, локально читаются только согласия.
        *
@@ -353,8 +353,8 @@
        * Скрипт не ломает приложение ни на одном шаге (все ошибки — catch).
        */
       (function () {
-        var POSTHOG_KEY = ""; // ← вставьте phc_... (Project API key)
-        var POSTHOG_HOST = "https://us.i.posthog.com"; // US; EU: https://eu.i.posthog.com
+        var POSTHOG_KEY = "phc_kTAanM7umvZmxTT5fCSbKf6swaYkRaypo5WMD7Y54TBw"; // Project API key (EU cloud, владелец)
+        var POSTHOG_HOST = "https://eu.i.posthog.com"; // регион EU; US: https://us.i.posthog.com
         var POSTHOG_CDN = "https://cdn.jsdelivr.net/npm/posthog-js@1/+esm";
         var CONSENT_KEY = "canvasdesk.consent";
         var state = { counter: true, analytics: true, anonId: "", lastWasmDay: null };
@@ -403,6 +403,7 @@
         }
         function trackWasmUsed() {
           if (!POSTHOG_KEY || !state.counter) return; // no-op без ключа/согласия
+          if (!pickerDone()) return; // свежий визит: пикер не подтверждён
           var today = todayUTC();
           if (state.lastWasmDay === today) return;
           state.lastWasmDay = today;
@@ -435,6 +436,77 @@
           }
         }
 
+        /* Свежий визит (пикер ещё не завершён): нет ни согласия, ни
+         * конфига в localStorage — телеметрию не грузим и счётчик не
+         * отправляем, первое событие уйдёт после выбора (reload).
+         * Старые конфиги до FR-089 (конфиг есть, записи согласий нет)
+         * считаются согласившимися — дефолты true, как чекбоксы. */
+        function pickerDone() {
+          try {
+            var ls = window.localStorage;
+            if (!ls) return true; // приватный режим — дефолты
+            return ls.getItem(CONSENT_KEY) !== null ||
+              ls.getItem("canvasdesk.config") !== null;
+          } catch (e) { return true; }
+        }
+
+        /* ─── Продуктовые события (ключ вписан — слой активен) ───
+         * Автоматически идут: $pageview + autocapture (клики по DOM:
+         * кнопки, меню, пикер — PostHog сам пишет элемент/текст),
+         * $exception (installErrorHandlers ниже), wasm_used (суточно,
+         * без SDK), app_launched (старт сессии с ролью/языком ниже).
+         * Явные события — два способа из кода:
+         *  1) JS: window.__cdTelemetry.track("template_used", {tpl: id});
+         *  2) DOM-мост для Rust: dispatchEvent CustomEvent
+         *     "canvasdesk:track", detail {event, properties}:
+         *       web_sys::CustomEvent::new_with_event_init_dict(
+         *         "canvasdesk:track",
+         *         &CustomEventInit::new().detail(&JsValue::from_serde(
+         *           &serde_json::json!({"event": "...", "properties": {...}}))))
+         * track() — no-op без ключа/SDK/согласия analytics: отказавшим
+         * не отправляется ничего; вызовы из любого кода безопасны. */
+        function track(event, properties) {
+          if (!ph || !state.analytics) return;
+          if (typeof event !== "string" || !event) return;
+          try {
+            ph.capture(event, properties || {});
+          } catch (e) { /* телеметрия не роняет приложение */ }
+        }
+        document.addEventListener("canvasdesk:track", function (e) {
+          var d = e && e.detail;
+          if (d && typeof d.event === "string") track(d.event, d.properties || {});
+        });
+
+        /* app_launched — старт сессии с контекстом роли/языка: база
+         * DAU и распределения ролей; $set обновляет person-свойства
+         * (role, language), чтобы ЛЮБЫЕ события делились по ролям в
+         * PostHog. Читается из TOML canvasdesk.config (пикер /
+         * Rust-персист persist_settings_web). */
+        function readProfile() {
+          var out = { language: null, role: null };
+          try {
+            var raw = window.localStorage.getItem("canvasdesk.config");
+            if (raw) {
+              var m = /(^|\n)[ \t]*language[ \t]*=[ \t]*"([^"\n]*)"/.exec(raw);
+              if (m) out.language = m[2];
+              var r = /(^|\n)[ \t]*role[ \t]*=[ \t]*"([^"\n]*)"/.exec(raw);
+              if (r) out.role = r[2];
+            }
+          } catch (e) { /* контекст события не критичен */ }
+          return out;
+        }
+        function captureAppLaunched() {
+          try {
+            var p = readProfile();
+            ph.capture("app_launched", {
+              app: "canvadesk-web",
+              language: p.language || "unset",
+              role: p.role || "default",
+              $set: { language: p.language || "unset", role: p.role || "default" }
+            });
+          } catch (e) { /* нет события — не поломка */ }
+        }
+
         /* PostHog SDK — динамический import ТОЛЬКО при analytics=true
          * (согласие до загрузки SDK: не грузим скрипт отказавшим).
          * +esm — ESM-сборка jsDelivr, default export = posthog. */
@@ -451,6 +523,7 @@
               ph = posthog;
               phPending = false;
               installErrorHandlers();
+              captureAppLaunched();
             })
             .catch(function () {
               phPending = false; /* CDN недоступен/офлайн — тихо */
@@ -512,10 +585,10 @@
           if (e && e.key === CONSENT_KEY) applyConsentChange();
         });
 
-        /* Публичный API (window.__cdTelemetry): диагностика/ручной вызов
-         * (getConsent — флаги; setConsent — мерж + перечитать PostHog;
-         * trackWasmUsed — счётчик). WASM-стороне пригодится для будущих
-         * событий из Rust через js_glue. */
+        /* Публичный API (window.__cdTelemetry): getConsent — флаги;
+         * setConsent — мерж + перечитать PostHog; trackWasmUsed —
+         * счётчик; track(event, props) — продуктовые события из JS
+         * (из Rust — CustomEvent canvasdesk:track, см. выше). */
         window.__cdTelemetry = {
           getConsent: function () {
             return { counter: state.counter, analytics: state.analytics };
@@ -526,15 +599,17 @@
             writeConsent();
             applyConsentChange();
           },
-          trackWasmUsed: trackWasmUsed
+          trackWasmUsed: trackWasmUsed,
+          track: track
         };
 
         /* Boot: согласия читаются синхронно до любых загрузок; пикер
-         * (первый вход) уже записал canvasdesk.consent до reload —
-         * здесь он существует. Старые конфиги до FR-089 без записи —
-         * дефолты true (согласия считаются включёнными, как чекбоксы). */
+         * (первый вход) уже записал canvasdesk.consent до reload — здесь
+         * он существует. Свежий визит (пикер не завершён) — телеметрию
+         * не грузим до подтверждения выбора. Старые конфиги до FR-089
+         * без записи согласий — дефолты true (как чекбоксы). */
         readConsent();
-        if (POSTHOG_KEY && state.analytics) loadPostHog();
+        if (POSTHOG_KEY && state.analytics && pickerDone()) loadPostHog();
         armInteractionTracking();
       })();
     </script>
