@@ -2301,9 +2301,21 @@ impl App {
             // --- X3 (AC-4.1): inline-поле подмены листа -----------------
             if self.explain.as_ref().is_some_and(|s| s.edit.is_some()) {
                 let body = explain_ui::body_rect(win);
-                // Геометрия поля (та же, что в рендере): правый нижний
-                // угол тела — чистая функция explain_ui (детерминизм)
-                let field = explain_ui::field_rect(body);
+                // Геометрия поля (та же, что в рендере): тултип у якоря —
+                // строки/карточки (FR-085); чистая функция explain_ui
+                // (детерминизм рендер/ввод). Якорь не найден (битый idx) —
+                // угол тела (прежнее поведение).
+                let field = self
+                    .explain
+                    .as_ref()
+                    .and_then(|state| {
+                        let edit = state.edit.as_ref()?;
+                        let (_, layout, scale, origin) = self.explain_view(state, body);
+                        let anchor =
+                            explain_ui::edit_anchor_rect(&layout, edit.idx, scale, body, origin)?;
+                        Some(explain_ui::field_rect(body, anchor))
+                    })
+                    .unwrap_or_else(|| explain_ui::field_rect(body, [body[0], body[1], 0.0, 0.0]));
                 if point_in_rect(field, self.cursor) {
                     // Клик по самому полю — глотаем (текст уже сфокусирован)
                     self.request_redraw();
@@ -3556,14 +3568,16 @@ impl App {
     }
 
     pub(super) fn on_mouse_wheel(&mut self, delta: MouseScrollDelta) {
-        // FR-083: колесо над телом окна проверки панорамирует дерево
-        // (вертикаль — колесо, горизонталь — наклон колеса/Shift-канал);
-        // знак — как у списков: от себя (y<0) — контент уходит вверх
+        // FR-085: колесо над телом окна проверки — ЗУМ к точке под курсором
+        // (эффективный масштаб ∈ [SCALE_MIN, base·ZOOM_MAX]); Shift+колесо
+        // (наклон колеса) — горизонтальный пан. Вертикальный пан — драг
+        // фона тела (FR-083).
         if self.explain.as_ref().is_some_and(|s| s.is_ready()) {
             let viewport = self.viewport_logical();
             let win = explain_ui::window_rect(viewport);
             let body = explain_ui::body_rect(win);
             if point_in_rect(body, self.cursor) {
+                // Горизонтальная составляющая: наклон колеса / Shift+колесо
                 let (dx, dy) = match delta {
                     MouseScrollDelta::LineDelta(x, y) => {
                         (-x * PAN_PX_PER_LINE, y * PAN_PX_PER_LINE)
@@ -3579,14 +3593,37 @@ impl App {
                     .map(|state| self.explain_view(state, body));
                 if let Some((_, layout, scale, _)) = view {
                     if let Some(state) = self.explain.as_mut() {
-                        // FR-084: 4-е значение explain_view — origin (база
-                        // контента: поле + центрирование + пан), приращение
-                        // панует сырой state.pan — базой служит пан после
-                        // pan_clamp, как раньше (центрирование считает
-                        // explain_view/origin)
-                        let clamped = explain_ui::pan_clamp(state.pan, layout.bounds, scale, body);
-                        let raw = [clamped[0] + dx, clamped[1] + dy];
-                        state.pan = explain_ui::pan_clamp(raw, layout.bounds, scale, body);
+                        if dx != 0.0 {
+                            // Горизонтальный пан (наклон колеса): прежняя
+                            // механика приращения к клампнутому пану
+                            let clamped =
+                                explain_ui::pan_clamp(state.pan, layout.bounds, scale, body);
+                            let raw = [clamped[0] + dx, clamped[1]];
+                            state.pan = explain_ui::pan_clamp(raw, layout.bounds, scale, body);
+                        } else {
+                            // Зум: база кадра без зума — из layout/body
+                            // (defense-ветка внутри base_scale);
+                            // контентная точка под курсором сохраняется
+                            let base =
+                                explain_ui::base_scale(layout.bounds, body, state.is_defense());
+                            let zoom_min = explain_ui::SCALE_MIN / base.max(f32::EPSILON);
+                            let zoom_max = explain_ui::ZOOM_MAX / base.max(f32::EPSILON);
+                            let factor = (-dy * 0.18).exp();
+                            let zoom_new = (state.zoom * factor).clamp(zoom_min, zoom_max);
+                            let scale_new = base * zoom_new;
+                            let clamped =
+                                explain_ui::pan_clamp(state.pan, layout.bounds, scale, body);
+                            let raw = explain_ui::zoom_adjust_pan(
+                                clamped,
+                                self.cursor,
+                                body,
+                                layout.bounds,
+                                scale,
+                                scale_new,
+                            );
+                            state.zoom = zoom_new;
+                            state.pan = explain_ui::pan_clamp(raw, layout.bounds, scale_new, body);
+                        }
                     }
                     self.request_redraw();
                     return;

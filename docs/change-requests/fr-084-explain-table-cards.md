@@ -264,6 +264,10 @@
   (покрыт `row_edit_rect_and_text_width_geometry`). Гейты: cargo test
   canvas-app+canvas-core 1114 passed / 0 failed, clippy `-D warnings`,
   fmt `--check`, wasm-check canvas-core. Статус → `выполнено`.
+- `2026-10-02` — агент: третий раунд фидбэка владельца (пустой глиф ✎,
+  отсутствие зума, поле подмены в углу окна) зафиксирован отдельным
+  документом **FR-085** (`fr-085-explain-zoom-icon-field.md`); статус
+  FR-084 и AC-1…AC-3 не меняются.
 
 ## Источники истины
 

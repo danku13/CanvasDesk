@@ -7474,11 +7474,9 @@ impl App {
         };
         let vis = explain_ui::visibility(tree, state.view_root(), auto, &state.expanded);
         let layout = explain_ui::layout_tree(tree, &vis, state.view_root(), state.direction);
-        let scale = if state.is_defense() {
-            explain_ui::defense_fit_scale(layout.bounds, body)
-        } else {
-            explain_ui::fit_scale(layout.bounds, body)
-        };
+        // FR-085: эффективный масштаб = base (fit / защита ×1.5) · zoom —
+        // единый для рендера, hit-тестов, пана и лимитов колеса.
+        let scale = explain_ui::base_scale(layout.bounds, body, state.is_defense()) * state.zoom;
         let pan = explain_ui::pan_clamp(state.pan, layout.bounds, scale, body);
         let origin = explain_ui::content_origin(pan, layout.bounds, scale, body);
         (vis, layout, scale, origin)

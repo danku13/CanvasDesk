@@ -38,6 +38,7 @@ OUT_RS = ROOT / "crates" / "canvas-render" / "src" / "icon_data.rs"
 ICON_NAMES = [
     "close", "gear", "question", "search", "plus",
     "arrow_left", "arrow_right", "refresh",
+    "edit",
     "tab_general", "tab_canvas", "tab_snap", "tab_edges", "tab_appearance",
     "more", "chevron_down", "chevron_right",
 ]
