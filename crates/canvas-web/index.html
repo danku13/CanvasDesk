@@ -1057,8 +1057,16 @@
       window.__canvasdesk_openAbout = function () { var ov = document.getElementById("about-overlay"); if (ov) ov.dataset.open = "true"; };
       window.__canvasdesk_closeAbout = function () { var ov = document.getElementById("about-overlay"); if (ov) ov.dataset.open = "false"; };
       (function () {
+        /* Esc — закрыть */
         document.addEventListener("keydown", function (e) {
           if (e.key === "Escape") { var ov = document.getElementById("about-overlay"); if (ov && ov.dataset.open === "true") { e.preventDefault(); window.__canvasdesk_closeAbout(); } }
+        }, true);
+        /* Click вне панели — закрыть (click на overlay, но не на .panel) */
+        document.addEventListener("click", function (e) {
+          var ov = document.getElementById("about-overlay");
+          if (ov && ov.dataset.open === "true" && e.target === ov) {
+            window.__canvasdesk_closeAbout();
+          }
         }, true);
       })();
     </script>
