@@ -1479,23 +1479,26 @@ impl App {
         // Любой клик глотается — dismiss не создаёт заметку.
         if let Some(menu) = self.wheel_menu.clone() {
             let [vw, vh] = self.viewport_logical();
-            let categories = self.templates.categories();
+            // FR-087: категории и шаблоны wheel-меню — видимые по роли/
+            // ручному фильтру (тот же хелпер, что у рендера wheel_overlay —
+            // индексы секторов совпадают).
+            let categories = self.template_category_names();
             let template_count = menu
                 .category
                 .as_deref()
-                .map(|c| self.templates.by_category(c).len())
+                .map(|c| self.visible_templates_by_category(c).len())
                 .unwrap_or(0);
             let geo =
                 template_ui::wheel_geometry(menu.screen, vw, vh, categories.len(), template_count);
             match geo.hit(self.cursor) {
                 Some(WheelHit::Category(i)) => {
                     if let Some(menu_mut) = self.wheel_menu.as_mut() {
-                        menu_mut.category = Some(categories[i].to_owned());
+                        menu_mut.category = categories.get(i).cloned();
                     }
                 }
                 Some(WheelHit::Template(i)) => {
                     let category = menu.category.expect("категория выбрана");
-                    let manifest = self.templates.by_category(&category)[i].clone();
+                    let manifest = self.visible_templates_by_category(&category)[i].clone();
                     let world = menu.world;
                     self.wheel_menu = None;
                     self.instantiate_template_at(&manifest, world);
@@ -1532,6 +1535,7 @@ impl App {
             &self.templates,
             &self.template_panel,
             self.settings.language,
+            &self.template_category_names(),
         );
         // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
         let mut measurer = canvas_ui::measure::TextMeasurer::new();
@@ -1544,6 +1548,7 @@ impl App {
             &rows,
             &mut measurer,
             &mut fs,
+            &self.template_category_names(),
         );
         let mut handled = false;
         // Кнопка сворачивания дока («‹» в шапке)
@@ -1628,7 +1633,7 @@ impl App {
                 self.template_hover.as_ref().and_then(|hover| {
                     hover.open.and_then(|cat| {
                         raw_categories.get(cat).and_then(|raw| {
-                            let items = self.templates.by_category(raw);
+                            let items = self.visible_templates_by_category(raw);
                             fly.row_rects
                                 .iter()
                                 .enumerate()
@@ -3714,6 +3719,7 @@ impl App {
                 &self.templates,
                 &self.template_panel,
                 self.settings.language,
+                &self.template_category_names(),
             );
             let mut measurer = canvas_ui::measure::TextMeasurer::new();
             let mut fs = canvas_render::text::measure_font_system();
@@ -3725,6 +3731,7 @@ impl App {
                 &rows,
                 &mut measurer,
                 &mut fs,
+                &self.template_category_names(),
             );
             if point_in_rect(rect_xywh(lay.panel_rect), self.cursor) {
                 let lines = match delta {

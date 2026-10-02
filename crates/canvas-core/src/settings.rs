@@ -527,6 +527,25 @@ pub struct Settings {
     /// обратная совместимость со всеми существующими config.toml.
     #[serde(default)]
     pub icon_style: IconStyle,
+    /// FR-087: рабочая роль пользователя (class) — id из [`crate::roles::ROLES"]
+    /// («architect», «product-manager», ...). `default` (serde default —
+    /// включая все старые конфиги) = роль не выбрана → подсказки шаблонов
+    /// и схем без фильтра. Неизвестный id мягко деградирует до поведения
+    /// default (инвариант 2 [`crate::roles`]).
+    #[serde(default)]
+    pub role: String,
+    /// FR-087: ручной фильтр категорий шаблонных нод (материализованное
+    /// переопределение поверх роли). `None` (serde default) — видимость
+    /// выводится из [`Settings::role`] ([`crate::roles`]); `Some(list)` —
+    /// видима только категория из списка (категория `custom` — свои
+    /// шаблоны FR-020 — обрабатывается фильтром реестра отдельно и видна
+    /// всегда). Материализуется табом «Профиль» при первом тумблере.
+    #[serde(default)]
+    pub template_categories: Option<Vec<String>>,
+    /// FR-087: ручной фильтр категорий шаблонных схем (симметрично
+    /// [`Settings::template_categories`]; `onboarding` виден всегда).
+    #[serde(default)]
+    pub scheme_categories: Option<Vec<String>>,
     /// FR-079 (S3): секция `[suggest]` — ИИ-подсказки шаблонов (гибрид
     /// lex+Laya за feature-флагом). Дефолт OFF до гейта S5; старые конфиги
     /// без секции грузятся дефолтом (serde default).
@@ -630,6 +649,11 @@ impl Default for Settings {
             drag_push_iters: DRAG_PUSH_ITERS_DEFAULT,
             // FR-ICONS: дефолт — Unicode-глифы (прежнее поведение, фолбэк).
             icon_style: IconStyle::Glyph,
+            // FR-087: роль не выбрана — все подсказки без фильтра.
+            role: crate::roles::DEFAULT_ROLE.to_owned(),
+            // FR-087: ручной фильтр не материализован — видимость по роли.
+            template_categories: None,
+            scheme_categories: None,
             // FR-079: ИИ-подсказки — OFF до гейта S5 (продуктовое решение 1).
             suggest: SuggestSettings::default(),
         }
@@ -887,6 +911,34 @@ impl Settings {
         self.drag_push_iters = self
             .drag_push_iters
             .clamp(DRAG_PUSH_ITERS_MIN, DRAG_PUSH_ITERS_MAX);
+        // FR-087: роль — трим + пустая строка/пробелы → default (ручная
+        // правка config.toml не выключает фильтр молчаливым «неизвестным id»
+        // — поведение идентично неизвестному id: все подсказки).
+        self.role = self.role.trim().to_owned();
+        if self.role.is_empty() {
+            self.role = crate::roles::DEFAULT_ROLE.to_owned();
+        }
+    }
+
+    /// FR-087: видимость категории шаблонных нод — приоритет ручного
+    /// фильтра ([`Settings::template_categories`]) над ролью
+    /// ([`crate::roles`], None = по роли). Категория `custom` видима
+    /// всегда (инвариант 3 [`crate::roles`]) — фильтруется вызывающим
+    /// до/поверх этого метода только каталог built-in.
+    pub fn template_category_visible(&self, category: &str) -> bool {
+        match &self.template_categories {
+            Some(list) => list.iter().any(|visible| visible == category),
+            None => crate::roles::template_category_visible(&self.role, category),
+        }
+    }
+
+    /// FR-087: видимость категории шаблонных схем (симметрично
+    /// [`Settings::template_category_visible`]).
+    pub fn scheme_category_visible(&self, category: &str) -> bool {
+        match &self.scheme_categories {
+            Some(list) => list.iter().any(|visible| visible == category),
+            None => crate::roles::scheme_category_visible(&self.role, category),
+        }
     }
 
     /// Разбор из строки (тесты; логика общая с load, включая клампы
@@ -959,6 +1011,11 @@ mod tests {
             // FR-ICONS: набор иконок проходит round-trip (Lucide — не дефолт,
             // проверяет что значение сохраняется без потерь).
             icon_style: IconStyle::Lucide,
+            // FR-087: роль + материализованный фильтр категорий round-trip
+            // (architect — не дефолт; списки — не None).
+            role: "architect".to_string(),
+            template_categories: Some(vec!["backend".to_string(), "network".to_string()]),
+            scheme_categories: Some(vec!["architecture".to_string()]),
             // FR-079: секция suggest проходит round-trip (включая lex+laya)
             suggest: SuggestSettings {
                 enabled: true,
@@ -1001,6 +1058,45 @@ mod tests {
             !settings.explain_sources_left,
             "выбор пользователя сохранён"
         );
+    }
+
+    /// FR-087: роль и фильтры категорий — парсинг TOML, дефолты старых
+    /// конфигов, видимость (роль → ручной override → всегда-видимые).
+    #[test]
+    fn role_and_category_filters_parse_and_visibility() {
+        // Старый конфиг без полей — default: роль не выбрана, всё видно.
+        let (settings, warn) = Settings::load_toml_str("");
+        assert!(warn.is_none());
+        assert_eq!(settings.role, crate::roles::DEFAULT_ROLE);
+        assert!(settings.template_categories.is_none());
+        assert!(settings.scheme_categories.is_none());
+        assert!(settings.template_category_visible("backend"));
+        assert!(settings.scheme_category_visible("business"));
+        // Пикер первого запуска пишет минимальный TOML (index.html).
+        let (settings, warn) =
+            Settings::load_toml_str("language = \"ru\"\nrole = \"product-manager\"\n");
+        assert!(warn.is_none(), "{warn:?}");
+        assert_eq!(settings.role, "product-manager");
+        assert!(settings.template_category_visible("unit-economics"));
+        assert!(!settings.template_category_visible("backend"));
+        assert!(settings.scheme_category_visible("framework"));
+        assert!(!settings.scheme_category_visible("architecture"));
+        // Ручной override перекрывает роль (даже неизвестную).
+        let (settings, _) = Settings::load_toml_str(
+            "role = \"no-such-role\"\ntemplate_categories = [\"backend\"]\nscheme_categories = []\n",
+        );
+        assert!(settings.template_category_visible("backend"));
+        assert!(!settings.template_category_visible("network"));
+        assert!(!settings.scheme_category_visible("business"));
+        // Пустой список scheme_categories — «ничего не видно» (явный выбор
+        // пользователя), но onboarding-схемы видит только фильтр реестра.
+        // Неизвестная роль без override — всё видно (мягкая деградация).
+        let (settings, _) = Settings::load_toml_str("role = \"typo-role\"\n");
+        assert!(settings.template_category_visible("backend"));
+        // normalize: пробелы/пустая роль → default.
+        let (mut settings, _) = Settings::load_toml_str("role = \"  \"\n");
+        settings.normalize();
+        assert_eq!(settings.role, crate::roles::DEFAULT_ROLE);
     }
 
     /// FR-079: секция `[suggest]` — парсинг TOML (включая `lex+laya`),

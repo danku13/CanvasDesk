@@ -98,14 +98,21 @@ impl SchemeGalleryState {
 
 /// Отфильтрованные строки: категория-чип + подстрока фильтра
 /// (название RU/EN, описание RU/EN, категория).
+///
+/// FR-087 (роль/класс): `visible` — allow-list raw-токенов категорий
+/// схем (`App::visible_scheme_categories`: ручной фильтр настроек >
+/// дефолт роли > все; `onboarding` виден всегда — добавляется
+/// вызывающим). Поиск ведётся только по видимым категориям.
 pub fn rows<'a>(
     registry: &'a SchemeRegistry,
     state: &SchemeGalleryState,
+    visible: &[String],
 ) -> Vec<&'a SchemeManifest> {
     let filter = state.filter.to_lowercase();
     registry
         .list()
         .iter()
+        .filter(|s| visible.iter().any(|v| v == &s.category))
         .filter(|s| match &state.category {
             Some(cat) => s.category == *cat,
             None => true,
@@ -122,9 +129,14 @@ pub fn rows<'a>(
 }
 
 /// Уникальные категории реестра в стабильном порядке (чипы «Все» + N).
-pub fn categories(registry: &SchemeRegistry) -> Vec<(String, String, String)> {
+/// FR-087: только видимые категории (роль/ручной фильтр) — чип скрытой
+/// категории не рисуется и не кликается.
+pub fn categories(registry: &SchemeRegistry, visible: &[String]) -> Vec<(String, String, String)> {
     let mut out: Vec<(String, String, String)> = Vec::new();
     for scheme in registry.list() {
+        if !visible.iter().any(|v| v == &scheme.category) {
+            continue;
+        }
         if !out.iter().any(|(key, _, _)| *key == scheme.category) {
             out.push((
                 scheme.category.clone(),
@@ -178,22 +190,26 @@ pub fn layout(
     viewport: [f32; 2],
     list: &[&SchemeManifest],
     state: &SchemeGalleryState,
+    visible_cats: &[String],
 ) -> GalleryLayout {
     // W3.2: замерщик — канонические shared-точки на вызов (Text-детей
     // нет — замерщик геометрию не читает).
     let mut m = TextMeasurer::new();
     let mut fs = canvas_render::text::measure_font_system();
-    layout_with(viewport, list, state, &mut m, &mut fs)
+    layout_with(viewport, list, state, &mut m, &mut fs, visible_cats)
 }
 
 /// То же с ЯВНЫМ замерщиком (для потребителей, уже держащих
 /// `measure_font_system` — двойной лок глобального FontSystem невозможен).
+/// FR-087: `visible` — allow-list категорий схем (роль/ручной фильтр) —
+/// чипы категорий строятся только из видимых.
 pub fn layout_with(
     viewport: [f32; 2],
     list: &[&SchemeManifest],
     state: &SchemeGalleryState,
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
+    visible_cats: &[String],
 ) -> GalleryLayout {
     let max_w = (viewport[0] - canvas_core::tokens::SPACING_XL).max(280.0);
     let panel_w = PANEL_W.min(max_w);
@@ -283,7 +299,7 @@ pub fn layout_with(
         h: CHIP_H,
     }];
     let mut chip_keys: Vec<Option<String>> = vec![None];
-    for (key, _, _) in categories(SchemeRegistry::embedded()) {
+    for (key, _, _) in categories(SchemeRegistry::embedded(), visible_cats) {
         chip_children.push(MeasuredItem::Fixed {
             w: CHIP_W,
             h: CHIP_H,
@@ -358,6 +374,9 @@ pub struct RowLabel {
 /// дедлоком кадра RedrawRequested (галерея схем открыта → кадр стоит
 /// навсегда). `layout_with` даёт бит-в-бит ту же геометрию (то же тело
 /// функции), замерщик переиспользуется.
+/// FR-087: `visible` — проброс allow-list категорий в [`layout_with`]
+/// (чипы не влияют на геометрию строк — колонка держит один слот CHIP_H,
+/// но передаем тот же список для консистентности с рендером).
 pub fn row_labels(
     viewport: [f32; 2],
     list: &[&SchemeManifest],
@@ -365,8 +384,9 @@ pub fn row_labels(
     ru: bool,
     measurer: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
+    visible_cats: &[String],
 ) -> Vec<RowLabel> {
-    let lay = layout_with(viewport, list, state, measurer, fs);
+    let lay = layout_with(viewport, list, state, measurer, fs, visible_cats);
     let max_w = (lay.row_rects.first().map(|r| r[2]).unwrap_or(0.0) - ROW_TEXT_PAD * 2.0).max(0.0);
     lay.visible_rows
         .iter()
@@ -505,6 +525,23 @@ mod tests {
         }
     }
 
+    /// FR-087: allow-list «все категории реестра» (в тестах = без фильтра),
+    /// порядок — реестра (как `categories` без фильтра).
+    fn all_visible(registry: &SchemeRegistry) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for scheme in registry.list() {
+            if !out.contains(&scheme.category) {
+                out.push(scheme.category.clone());
+            }
+        }
+        out
+    }
+
+    /// FR-087: allow-list заданных категорий (тест фильтра роли).
+    fn only(categories: &[&str]) -> Vec<String> {
+        categories.iter().map(|c| (*c).to_owned()).collect()
+    }
+
     /// Детерминированный FontSystem тестов: вшитый рендером шрифт.
     fn font_system() -> cosmic_text::FontSystem {
         let mut fs = cosmic_text::FontSystem::new();
@@ -517,21 +554,28 @@ mod tests {
     fn rows_list_all_and_filter() {
         let registry = SchemeRegistry::embedded();
         let st = state();
-        assert_eq!(rows(registry, &st).len(), registry.list().len());
+        assert_eq!(
+            rows(registry, &st, &all_visible(registry)).len(),
+            registry.list().len()
+        );
         let mut filtered = st.clone();
         filtered.filter = "смета".into();
-        let r = rows(registry, &filtered);
+        let r = rows(registry, &filtered, &all_visible(registry));
         assert!(!r.is_empty(), "фильтр по русскому названию находит");
         assert!(r.iter().all(|s| s.category == "planning"));
         let mut cat = st.clone();
         cat.category = Some("onboarding".into());
-        assert_eq!(rows(registry, &cat).len(), 2, "две онбординг-схемы");
+        assert_eq!(
+            rows(registry, &cat, &all_visible(registry)).len(),
+            2,
+            "две онбординг-схемы"
+        );
     }
 
     #[test]
     fn categories_unique() {
         let registry = SchemeRegistry::embedded();
-        let cats = categories(registry);
+        let cats = categories(registry, &all_visible(registry));
         assert!(cats.len() >= 3, "G2: ≥ 3 категории");
         let mut keys: Vec<&String> = cats.iter().map(|(k, _, _)| k).collect();
         keys.sort();
@@ -543,9 +587,9 @@ mod tests {
     fn layout_clamps_to_small_viewport() {
         let registry = SchemeRegistry::embedded();
         let st = state();
-        let list = rows(registry, &st);
+        let list = rows(registry, &st, &all_visible(registry));
         // Инвариант 320×240: панель помещается, хотя бы одна строка видна.
-        let lay = layout([320.0, 240.0], &list, &st);
+        let lay = layout([320.0, 240.0], &list, &st, &all_visible(registry));
         assert!(lay.panel_rect[2] <= 320.0);
         assert!(lay.panel_rect[3] <= 240.0);
         assert_eq!(lay.visible_rows.len(), 1, "одна строка в окне");
@@ -553,7 +597,7 @@ mod tests {
         // схем (аудит 2026-09: 6 → 10) выше окна — окно видимости
         // показывает вместившиеся строки, остальное добирает скролл
         // (clamp_scroll приводит последнюю схему в видимость).
-        let lay = layout([1280.0, 800.0], &list, &st);
+        let lay = layout([1280.0, 800.0], &list, &st, &all_visible(registry));
         assert!(
             !lay.visible_rows.is_empty() && lay.visible_rows.len() <= list.len(),
             "окно видимости непустое и не больше списка"
@@ -566,7 +610,7 @@ mod tests {
         let mut scrolled = st.clone();
         scrolled.selected = list.len() - 1;
         clamp_scroll(&mut scrolled, lay.visible_rows.len());
-        let lay2 = layout([1280.0, 800.0], &list, &scrolled);
+        let lay2 = layout([1280.0, 800.0], &list, &scrolled, &all_visible(registry));
         assert!(
             lay2.visible_rows.contains(&(list.len() - 1)),
             "последняя схема доступна прокруткой"
@@ -581,19 +625,20 @@ mod tests {
     fn chips_all_categories_fit() {
         let registry = SchemeRegistry::embedded();
         let st = state();
-        let list = rows(registry, &st);
+        let list = rows(registry, &st, &all_visible(registry));
         for viewport in [[1280.0, 800.0], [1024.0, 768.0], [800.0, 600.0]] {
-            let lay = layout(viewport, &list, &st);
+            let lay = layout(viewport, &list, &st, &all_visible(registry));
             assert_eq!(
                 lay.chip_rects.len(),
-                1 + categories(registry).len(),
+                1 + categories(registry, &all_visible(registry)).len(),
                 "все категории в ряду при {:?}",
                 viewport
             );
             // Полный ряд реально помещается в слот чипов (без переполнения).
             let chips_w = CHIP_ALL_W
                 + canvas_core::tokens::SPACING_S
-                + categories(registry).len() as f32 * (CHIP_W + canvas_core::tokens::SPACING_S)
+                + categories(registry, &all_visible(registry)).len() as f32
+                    * (CHIP_W + canvas_core::tokens::SPACING_S)
                 - canvas_core::tokens::SPACING_S;
             let inner_w = lay.panel_rect[2] - PANEL_PAD * 2.0;
             assert!(
@@ -619,8 +664,8 @@ mod tests {
     fn hit_tests_rows_chips_and_empty_buttons() {
         let registry = SchemeRegistry::embedded();
         let st = state();
-        let list = rows(registry, &st);
-        let lay = layout([1280.0, 800.0], &list, &st);
+        let list = rows(registry, &st, &all_visible(registry));
+        let lay = layout([1280.0, 800.0], &list, &st, &all_visible(registry));
         let rect = lay.row_rects[0];
         assert_eq!(
             row_at(&lay, [rect[0] + 4.0, rect[1] + 4.0]),
@@ -657,11 +702,11 @@ mod tests {
     fn g4_lint_viewports_and_languages() {
         let registry = SchemeRegistry::embedded();
         let st = state();
-        let list = rows(registry, &st);
+        let list = rows(registry, &st, &all_visible(registry));
         let viewports = [[1280.0, 800.0], [1024.0, 640.0], [800.0, 560.0]];
         for ru in [true, false] {
             for vp in viewports {
-                let lay = layout(vp, &list, &st);
+                let lay = layout(vp, &list, &st, &all_visible(registry));
                 // Панель внутри вьюпорта (маржа xl).
                 assert!(
                     lay.panel_rect[0] >= canvas_core::tokens::SPACING_XL - 0.01,
@@ -708,7 +753,8 @@ mod tests {
                 // Измеренные подписи строк укладываются в ширину строки.
                 let mut fs = font_system();
                 let mut m = TextMeasurer::new();
-                let labels = row_labels(vp, &list, &st, ru, &mut m, &mut fs);
+                let labels =
+                    row_labels(vp, &list, &st, ru, &mut m, &mut fs, &all_visible(registry));
                 assert_eq!(labels.len(), lay.row_rects.len());
                 for (label, rect) in labels.iter().zip(lay.row_rects.iter()) {
                     let inner = rect[2] - ROW_TEXT_PAD * 2.0;
@@ -723,5 +769,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// FR-087 (роль/класс): фильтр галереи по allow-list категорий —
+    /// строки и чипы только видимых; onboarding не теряется при фильтре
+    /// (его всегда добавляет App-хелпер; здесь — поведение чистых функций).
+    #[test]
+    fn role_filter_hides_categories_in_rows_and_chips() {
+        let registry = SchemeRegistry::embedded();
+        let st = state();
+        // «Роль продакт-менеджера»: business + framework (+ onboarding).
+        let visible = only(&["business", "framework", "onboarding"]);
+        let list = rows(registry, &st, &visible);
+        assert!(!list.is_empty());
+        assert!(
+            list.iter().all(|s| visible.contains(&s.category)),
+            "скрытые категории не всплывают в списке"
+        );
+        // Поиск по скрытой категории ничего не находит (шум роли убран).
+        let mut filtered = st.clone();
+        filtered.filter = "смета".into(); // планирование (planning) — скрыто
+        assert!(rows(registry, &filtered, &visible).is_empty());
+        // Чипы — только видимые категории (business + framework +
+        // onboarding, который App-хелпер добавляет поверх фильтра роли).
+        let cats = categories(registry, &visible);
+        assert_eq!(cats.len(), 3, "business + framework + onboarding");
+        let lay = layout([1280.0, 800.0], &list, &st, &visible);
+        assert_eq!(lay.chip_rects.len(), 4, "«Все» + 3 видимых чипа");
+        // Без onboarding в списке — он не появляется сам (чистая функция
+        // добавляет только App-хелпер `visible_scheme_categories`).
+        let no_onboarding = only(&["business", "framework"]);
+        assert_eq!(categories(registry, &no_onboarding).len(), 2);
+        // Пустой allow-list — вырожденный случай: ничего не видно.
+        assert!(rows(registry, &st, &[]).is_empty());
+        assert!(categories(registry, &[]).is_empty());
     }
 }

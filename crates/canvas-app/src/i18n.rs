@@ -28,6 +28,23 @@ pub mod keys {
     pub const TAB_APPEARANCE: &str = "settings.tab.appearance";
     /// FR-079 (S3): таб «Подсказки» — ИИ-подсказки шаблонов.
     pub const TAB_SUGGEST: &str = "settings.tab.suggest";
+    /// FR-087: таб «Профиль» — роль и фильтры подсказок.
+    pub const TAB_PROFILE: &str = "settings.tab.profile";
+    pub const ROW_ROLE: &str = "settings.row.role";
+    pub const DESC_ROLE: &str = "settings.desc.role";
+    /// FR-087: тумблеры категорий шаблонных нод (лейблы — «Шаблоны: <имя>»).
+    pub const ROW_TPLCAT_BACKEND: &str = "settings.row.tplcat.backend";
+    pub const ROW_TPLCAT_NETWORK: &str = "settings.row.tplcat.network";
+    pub const ROW_TPLCAT_UNIT_ECONOMICS: &str = "settings.row.tplcat.unit_economics";
+    pub const ROW_TPLCAT_PRODUCT_ANALYTICS: &str = "settings.row.tplcat.product_analytics";
+    pub const DESC_TPLCAT: &str = "settings.desc.tplcat";
+    /// FR-087: тумблеры категорий шаблонных схем («Схемы: <имя>»).
+    pub const ROW_SCHEMECAT_ARCHITECTURE: &str = "settings.row.schemecat.architecture";
+    pub const ROW_SCHEMECAT_BUSINESS: &str = "settings.row.schemecat.business";
+    pub const ROW_SCHEMECAT_FRAMEWORK: &str = "settings.row.schemecat.framework";
+    pub const ROW_SCHEMECAT_PLANNING: &str = "settings.row.schemecat.planning";
+    pub const ROW_SCHEMECAT_ONBOARDING: &str = "settings.row.schemecat.onboarding";
+    pub const DESC_SCHEMECAT: &str = "settings.desc.schemecat";
     pub const TAB_SNAP: &str = "settings.tab.snap";
     pub const TAB_DRAG: &str = "settings.tab.drag";
 
@@ -752,6 +769,8 @@ pub mod keys {
     /// FR-040 v2: тост переключения языка кнопкой-иконкой. Подстановка
     /// `{lang}` — название языка в его собственной локали (`русский`/`English`).
     pub const TOAST_LANGUAGE_TOGGLED: &str = "toast.language_toggled";
+    /// FR-087: тост смены роли (подстановка {role}).
+    pub const TOAST_ROLE_CHANGED: &str = "toast.role_changed";
     pub const GROUP_DEFAULT_LABEL: &str = "group.default_label";
     pub const FILE_NEW_NOTE: &str = "file.new_note";
 }
@@ -772,6 +791,20 @@ const RU: &[(&str, &str)] = &[
     (keys::TAB_EDGES, "Связи и порты"),
     (keys::TAB_APPEARANCE, "Внешний вид"),
     (keys::TAB_SUGGEST, "Подсказки"),
+    (keys::TAB_PROFILE, "Профиль"),
+    (keys::ROW_ROLE, "Роль"),
+    (keys::DESC_ROLE, "Рабочая роль фильтрует подсказки шаблонов и схем: «Не выбрана» — все подсказки, роль — только соответствующие типы. Тумблеры ниже перекрывают выбор роли."),
+    (keys::ROW_TPLCAT_BACKEND, "Шаблоны: Бэкенд"),
+    (keys::ROW_TPLCAT_NETWORK, "Шаблоны: Сеть"),
+    (keys::ROW_TPLCAT_UNIT_ECONOMICS, "Шаблоны: Юнит-экономика"),
+    (keys::ROW_TPLCAT_PRODUCT_ANALYTICS, "Шаблоны: Продуктовая аналитика"),
+    (keys::DESC_TPLCAT, "Показывать шаблонные ноды этой категории в палитре (Ctrl+P) и wheel-меню."),
+    (keys::ROW_SCHEMECAT_ARCHITECTURE, "Схемы: Архитектура"),
+    (keys::ROW_SCHEMECAT_BUSINESS, "Схемы: Бизнес"),
+    (keys::ROW_SCHEMECAT_FRAMEWORK, "Схемы: Фреймворки"),
+    (keys::ROW_SCHEMECAT_PLANNING, "Схемы: Планирование"),
+    (keys::ROW_SCHEMECAT_ONBOARDING, "Схемы: Онбординг"),
+    (keys::DESC_SCHEMECAT, "Показывать шаблонные схемы этой категории в галерее (Ctrl+T)."),
     (keys::TAB_SNAP, "Привязка"),
     (keys::ROW_BUTTON_CORNER, "Угол кнопки"),
     (
@@ -1470,6 +1503,7 @@ const RU: &[(&str, &str)] = &[
     (keys::TOAST_FILE_UNAVAILABLE, "Файл недоступен: {file}"),
     (keys::TOAST_WIDGET_OPEN_FAILED, "Виджет: не удалось открыть {path}"),
     (keys::TOAST_LANGUAGE_TOGGLED, "Язык интерфейса: {lang}"),
+    (keys::TOAST_ROLE_CHANGED, "Роль: {role}"),
     (keys::GROUP_DEFAULT_LABEL, "Группа"),
     (keys::FILE_NEW_NOTE, "Новая заметка"),
     (keys::ROW_EDGE_AGGREGATION, "Агрегация связей"),
@@ -1656,6 +1690,20 @@ const EN: &[(&str, &str)] = &[
     (keys::TAB_EDGES, "Edges & ports"),
     (keys::TAB_APPEARANCE, "Appearance"),
     (keys::TAB_SUGGEST, "Suggestions"),
+    (keys::TAB_PROFILE, "Profile"),
+    (keys::ROW_ROLE, "Role"),
+    (keys::DESC_ROLE, "Your work role filters template and scheme hints: \"Not selected\" shows everything, a role shows only matching types. The toggles below override the role."),
+    (keys::ROW_TPLCAT_BACKEND, "Templates: Backend"),
+    (keys::ROW_TPLCAT_NETWORK, "Templates: Network"),
+    (keys::ROW_TPLCAT_UNIT_ECONOMICS, "Templates: Unit Economics"),
+    (keys::ROW_TPLCAT_PRODUCT_ANALYTICS, "Templates: Product Analytics"),
+    (keys::DESC_TPLCAT, "Show template nodes of this category in the palette (Ctrl+P) and the wheel menu."),
+    (keys::ROW_SCHEMECAT_ARCHITECTURE, "Schemes: Architecture"),
+    (keys::ROW_SCHEMECAT_BUSINESS, "Schemes: Business"),
+    (keys::ROW_SCHEMECAT_FRAMEWORK, "Schemes: Frameworks"),
+    (keys::ROW_SCHEMECAT_PLANNING, "Schemes: Planning"),
+    (keys::ROW_SCHEMECAT_ONBOARDING, "Schemes: Onboarding"),
+    (keys::DESC_SCHEMECAT, "Show template schemes of this category in the gallery (Ctrl+T)."),
     (keys::TAB_SNAP, "Snapping"),
     (keys::ROW_BUTTON_CORNER, "Button corner"),
     (
@@ -2336,6 +2384,7 @@ const EN: &[(&str, &str)] = &[
     (keys::TOAST_FILE_UNAVAILABLE, "File unavailable: {file}"),
     (keys::TOAST_WIDGET_OPEN_FAILED, "Widget: failed to open {path}"),
     (keys::TOAST_LANGUAGE_TOGGLED, "Interface language: {lang}"),
+    (keys::TOAST_ROLE_CHANGED, "Role: {role}"),
     (keys::GROUP_DEFAULT_LABEL, "Group"),
     (keys::FILE_NEW_NOTE, "New note"),
     (keys::ROW_EDGE_AGGREGATION, "Edge aggregation"),

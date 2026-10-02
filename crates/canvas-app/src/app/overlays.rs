@@ -1511,8 +1511,18 @@ impl App {
         }
         let palette = self.effective_palette();
         let registry = canvas_core::schemes::SchemeRegistry::embedded();
-        let list = scheme_gallery_ui::rows(registry, &self.scheme_gallery);
-        let lay = scheme_gallery_ui::layout(viewport, &list, &self.scheme_gallery);
+        // FR-087: строки и чипы галереи — видимые категории (роль/фильтр).
+        let list = scheme_gallery_ui::rows(
+            registry,
+            &self.scheme_gallery,
+            &self.visible_scheme_categories(),
+        );
+        let lay = scheme_gallery_ui::layout(
+            viewport,
+            &list,
+            &self.scheme_gallery,
+            &self.visible_scheme_categories(),
+        );
         // FR-053 (U3): измеренные подписи строк (Ellipsis по фактической
         // ширине строки) — раскладка и отрисовка используют одни строки.
         let ru = self.settings.language == canvas_core::Language::Ru;
@@ -1525,6 +1535,7 @@ impl App {
             ru,
             &mut measurer,
             &mut fs,
+            &self.visible_scheme_categories(),
         );
         // Подложка панели
         instances.push(CardInstance {
@@ -2114,6 +2125,7 @@ impl App {
                 &self.templates,
                 &self.template_panel,
                 self.settings.language,
+                &self.template_category_names(),
             );
             // FR-024: выделение — ординал среди строк-шаблонов (секции —
             // заголовки, не цели)
@@ -2134,6 +2146,7 @@ impl App {
                 &self.templates,
                 &self.template_panel,
                 self.settings.language,
+                &self.template_category_names(),
             );
             self.template_panel.move_selection(1, &rows);
             self.request_redraw();
@@ -2144,6 +2157,7 @@ impl App {
                 &self.templates,
                 &self.template_panel,
                 self.settings.language,
+                &self.template_category_names(),
             );
             self.template_panel.move_selection(-1, &rows);
             self.request_redraw();
@@ -2207,6 +2221,7 @@ impl App {
                 &self.templates,
                 &self.template_panel,
                 self.settings.language,
+                &self.template_category_names(),
             );
             // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
             let mut measurer = canvas_ui::measure::TextMeasurer::new();
@@ -2219,6 +2234,7 @@ impl App {
                 &rows,
                 &mut measurer,
                 &mut fs,
+                &self.template_category_names(),
             );
             let panel = rect_xywh(lay.panel_rect);
             // Подложка дока: плотная, с рамкой (отделяет панель от канваса).
@@ -2474,7 +2490,8 @@ impl App {
                 params: [6.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
-            let count = self.templates.by_category(raw).len();
+            // FR-087: счётчик — по видимым шаблонам (роль/ручной фильтр).
+            let count = self.visible_templates_by_category(raw).len();
             texts.push(OwnedScreenText {
                 text: format!("{name} · {count}"),
                 origin: [rect[0] + 8.0, rect[1] + 6.0],
@@ -2510,7 +2527,8 @@ impl App {
             let Some(raw) = raw_categories.get(cat) else {
                 return (instances, texts);
             };
-            let items = self.templates.by_category(raw);
+            // FR-087: строки flyout — видимые шаблоны (роль/ручной фильтр).
+            let items = self.visible_templates_by_category(raw);
             instances.push(CardInstance {
                 pos: [fly.rect[0], fly.rect[1]],
                 size: [fly.rect[2], fly.rect[3]],
@@ -2612,11 +2630,13 @@ impl App {
         let palette = self.effective_palette();
         let icon_tint = color_to_rgba(palette.icon);
         let [vw, vh] = self.viewport_logical();
-        let categories = self.templates.categories();
+        // FR-087: категории и шаблоны wheel-меню — видимые по роли/ручному
+        // фильтру (тот же хелпер, что у click_wheel_menu — индексы совпадают).
+        let categories = self.template_category_names();
         let templates: Vec<_> = menu
             .category
             .as_deref()
-            .map(|c| self.templates.by_category(c))
+            .map(|c| self.visible_templates_by_category(c))
             .unwrap_or_default();
         let geo =
             template_ui::wheel_geometry(menu.screen, vw, vh, categories.len(), templates.len());
@@ -3885,7 +3905,25 @@ impl App {
                 // Мгновенная обратная связь: HUD переключается сразу
                 self.hud_visible = self.settings.hud_on_start;
             }
-            SettingsRow::ButtonCorner
+            // FR-087: тумблеры категорий шаблонных нод — материализация
+            // дефолта роли в явный allow-list + инверсия видимости.
+            // Палитра/wheel/поиск читают флаг на кадре (единый хелпер
+            // template_category_names), синхронизация рендера не нужна.
+            SettingsRow::TplCatBackend => self.toggle_template_category("backend"),
+            SettingsRow::TplCatNetwork => self.toggle_template_category("network"),
+            SettingsRow::TplCatUnitEconomics => self.toggle_template_category("unit-economics"),
+            SettingsRow::TplCatProductAnalytics => {
+                self.toggle_template_category("product-analytics")
+            }
+            // FR-087: тумблеры категорий схем (галерея) — паттерн шаблонов.
+            SettingsRow::SchemeCatArchitecture => self.toggle_scheme_category("architecture"),
+            SettingsRow::SchemeCatBusiness => self.toggle_scheme_category("business"),
+            SettingsRow::SchemeCatFramework => self.toggle_scheme_category("framework"),
+            SettingsRow::SchemeCatPlanning => self.toggle_scheme_category("planning"),
+            SettingsRow::SchemeCatOnboarding => self.toggle_scheme_category("onboarding"),
+            // FR-087: Role — dropdown, применяется apply_dropdown_choice
+            SettingsRow::Role
+            | SettingsRow::ButtonCorner
             | SettingsRow::GridStyle
             | SettingsRow::GridDensity
             | SettingsRow::PortZone
@@ -4422,6 +4460,34 @@ impl App {
                         SettingsRow::DragPushEnabled => self.settings.drag_push_enabled,
                         SettingsRow::DragPushPredictive => self.settings.drag_push_predictive,
                         SettingsRow::DragPushRebase => self.settings.drag_push_rebase,
+                        // FR-087: видимость категорий подсказок по роли/фильтру
+                        SettingsRow::TplCatBackend => {
+                            self.settings.template_category_visible("backend")
+                        }
+                        SettingsRow::TplCatNetwork => {
+                            self.settings.template_category_visible("network")
+                        }
+                        SettingsRow::TplCatUnitEconomics => {
+                            self.settings.template_category_visible("unit-economics")
+                        }
+                        SettingsRow::TplCatProductAnalytics => {
+                            self.settings.template_category_visible("product-analytics")
+                        }
+                        SettingsRow::SchemeCatArchitecture => {
+                            self.settings.scheme_category_visible("architecture")
+                        }
+                        SettingsRow::SchemeCatBusiness => {
+                            self.settings.scheme_category_visible("business")
+                        }
+                        SettingsRow::SchemeCatFramework => {
+                            self.settings.scheme_category_visible("framework")
+                        }
+                        SettingsRow::SchemeCatPlanning => {
+                            self.settings.scheme_category_visible("planning")
+                        }
+                        SettingsRow::SchemeCatOnboarding => {
+                            self.settings.scheme_category_visible("onboarding")
+                        }
                         SettingsRow::ButtonCorner
                         | SettingsRow::GridStyle
                         | SettingsRow::GridDensity
@@ -4439,7 +4505,9 @@ impl App {
                         // FR-ICONS: dropdown-строка (row_kind = Dropdown)
                         | SettingsRow::IconStyle
                         // FR-079 (S3): dropdown-строка (row_kind = Dropdown)
-                        | SettingsRow::SuggestEngine => false,
+                        // FR-087: Role — тоже dropdown (в ветку не попадает)
+                        | SettingsRow::SuggestEngine
+                        | SettingsRow::Role => false,
                     };
                     // Pill-тумблер: трек (включён — акцент) + ручка-квад,
                     // позиция отражает значение (рисуется квадами)

@@ -392,13 +392,27 @@ pub fn row_of_ordinal(rows: &[PanelRow], ordinal: usize) -> Option<usize> {
 /// `name_ru`/`description`. Снапшот имени на момент вставки берётся
 /// по активному языку (`TemplateManifest::display_name(language)` в
 /// рендере карточки и `instantiate_with_language`).
+///
+/// FR-087 (роль/класс): `visible` — allow-list raw-токенов категорий
+/// ([`crate::App::visible_template_categories`]: ручной фильтр настроек >
+/// дефолт роли > все). Поиск ведётся ТОЛЬКО по видимым категориям —
+/// скрытые роли не «всплывают» через строку поиска. Индексы строк —
+/// как и прежде, позиция в `registry.list()` (полный реестр: вставка
+/// и `find` не зависят от фильтра).
 pub fn panel_rows(
     registry: &TemplateRegistry,
     panel: &TemplatePanel,
     language: canvas_core::Language,
+    visible: &[String],
 ) -> Vec<PanelRow> {
     let query = panel.filter.to_lowercase();
     let matches = |manifest: &TemplateManifest| -> bool {
+        if !visible
+            .iter()
+            .any(|category| category == &manifest.category)
+        {
+            return false;
+        }
         if let Some(category) = &panel.category {
             if &manifest.category != category {
                 return false;
@@ -432,6 +446,10 @@ pub fn panel_rows(
     }
     let mut rows = Vec::new();
     for category in registry.categories() {
+        // FR-087: секции скрытых категорий не показываются вовсе
+        if !visible.iter().any(|visible| visible == category) {
+            continue;
+        }
         let indexes: Vec<usize> = registry
             .list()
             .iter()
@@ -771,6 +789,7 @@ impl StripHover {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // FR-087: +visible (allow-list роли)
 pub fn panel_layout(
     window_w: f32,
     window_h: f32,
@@ -779,6 +798,7 @@ pub fn panel_layout(
     rows: &[PanelRow],
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
+    visible: &[String],
 ) -> PanelLayout {
     use canvas_ui::geometry::{UiRect, UiVec2};
     use canvas_ui::layout::{pad, stack, Column, HAlign, MeasuredItem, Row, RowPolicy, VAlign};
@@ -841,7 +861,14 @@ pub fn panel_layout(
     // [`category_chip_width`]) вместо проводки «width_of → Fixed»;
     // `Text` резолвится в `Fixed { w: width_of + pad_x }` — rect'ы
     // бит-в-бит прежние (оракулы canvas-ui `measured_text_pad_x_*`).
-    let categories = registry.categories();
+    // FR-087: чипы категорий — только видимые (роль/ручной фильтр);
+    // чип скрытой категории в panel.category (протух после смены роли)
+    // не рисуется — строки фильтруются тем же allow-list в panel_rows.
+    let categories: Vec<&str> = registry
+        .categories()
+        .into_iter()
+        .filter(|category| visible.iter().any(|v| v == category))
+        .collect();
     let chip_rects = Row {
         gap,
         policy: RowPolicy::Wrap,
@@ -1309,6 +1336,15 @@ mod tests {
         TemplateRegistry::mock()
     }
 
+    /// FR-087: allow-list «все категории реестра» (в тестах = без фильтра).
+    fn all_visible(registry: &TemplateRegistry) -> Vec<String> {
+        registry
+            .categories()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
     // --- FR-040 v2: локализация категорий палитры ---
 
     /// Известные токены — двуязычные подписи (RU/EN по языку).
@@ -1352,7 +1388,12 @@ mod tests {
         let mut panel = TemplatePanel::new();
         panel.open = true;
         // Пустой фильтр — секции по категориям + все 5 шаблонов
-        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
+        let rows = panel_rows(
+            &registry,
+            &panel,
+            canvas_core::Language::Ru,
+            &all_visible(&registry),
+        );
         assert_eq!(template_indexes(&rows).len(), 5);
         assert_eq!(
             rows.iter()
@@ -1362,7 +1403,12 @@ mod tests {
         );
         // По имени (регистр не важен) — плоский список без секций
         panel.insert_str("load");
-        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
+        let rows = panel_rows(
+            &registry,
+            &panel,
+            canvas_core::Language::Ru,
+            &all_visible(&registry),
+        );
         assert_eq!(template_indexes(&rows), vec![0]);
         assert!(rows.iter().all(|r| matches!(r, PanelRow::Template(_))));
         // По id
@@ -1370,7 +1416,12 @@ mod tests {
         panel.cursor = 0;
         panel.insert_str("mock.db");
         assert_eq!(
-            template_indexes(&panel_rows(&registry, &panel, canvas_core::Language::Ru)),
+            template_indexes(&panel_rows(
+                &registry,
+                &panel,
+                canvas_core::Language::Ru,
+                &all_visible(&registry)
+            )),
             vec![1]
         );
         // По описанию
@@ -1378,12 +1429,23 @@ mod tests {
         panel.cursor = 0;
         panel.insert_str("партиции");
         assert_eq!(
-            template_indexes(&panel_rows(&registry, &panel, canvas_core::Language::Ru)),
+            template_indexes(&panel_rows(
+                &registry,
+                &panel,
+                canvas_core::Language::Ru,
+                &all_visible(&registry)
+            )),
             vec![4]
         );
         // Мимо — пусто
         panel.filter = "ghost".to_owned();
-        assert!(panel_rows(&registry, &panel, canvas_core::Language::Ru).is_empty());
+        assert!(panel_rows(
+            &registry,
+            &panel,
+            canvas_core::Language::Ru,
+            &all_visible(&registry)
+        )
+        .is_empty());
     }
 
     #[test]
@@ -1392,11 +1454,60 @@ mod tests {
         let mut panel = TemplatePanel::new();
         panel.open = true;
         panel.category = Some("backend".to_owned());
-        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
+        let rows = panel_rows(
+            &registry,
+            &panel,
+            canvas_core::Language::Ru,
+            &all_visible(&registry),
+        );
         let indexes = template_indexes(&rows);
         assert_eq!(indexes.len(), 2);
         assert_eq!(registry.list()[indexes[0]].category, "backend");
         assert_eq!(registry.list()[indexes[1]].category, "backend");
+    }
+
+    /// FR-087 (роль/класс): allow-list категорий режет секции и поиск —
+    /// скрытые категории не показываются вовсе и не «всплывают» через
+    /// строку поиска; индексы строк остаются позициями полного реестра.
+    #[test]
+    fn panel_role_filter_sections_and_search() {
+        let registry = registry();
+        let mut panel = TemplatePanel::new();
+        panel.open = true;
+        // «Роль разработчика»: только backend из мок-реестра
+        // (моки: backend×2, cache, network, queue — FR-018).
+        let visible: Vec<String> = registry
+            .categories()
+            .into_iter()
+            .filter(|c| *c == "backend")
+            .map(str::to_owned)
+            .collect();
+        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru, &visible);
+        let indexes = template_indexes(&rows);
+        assert!(!indexes.is_empty());
+        for index in &indexes {
+            assert!(
+                visible.contains(&registry.list()[*index].category),
+                "скрытая категория попала в строки"
+            );
+        }
+        // Секция скрытой категории не показывается
+        for row in &rows {
+            if let PanelRow::Section(name) = row {
+                assert!(visible.contains(name), "секция скрытой категории: {name}");
+            }
+        }
+        // Поиск по скрытой категории (кэш) — пусто (шум роли убран)
+        panel.insert_str("cache");
+        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru, &visible);
+        assert!(
+            rows.is_empty(),
+            "поиск не должен всплывать в скрытые категории"
+        );
+        // Тот же поиск без фильтра — находит
+        let all = all_visible(&registry);
+        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru, &all);
+        assert!(!rows.is_empty(), "без фильтра поиск находит всё");
     }
 
     #[test]
@@ -1404,7 +1515,12 @@ mod tests {
         // Секции — в порядке реестра; шаблоны внутри — свои индексы
         let registry = registry();
         let panel = TemplatePanel::new();
-        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
+        let rows = panel_rows(
+            &registry,
+            &panel,
+            canvas_core::Language::Ru,
+            &all_visible(&registry),
+        );
         let categories: Vec<&str> = rows
             .iter()
             .filter_map(|row| match row {
@@ -1498,10 +1614,24 @@ mod tests {
         let registry = registry();
         let mut panel = TemplatePanel::new();
         panel.open = true;
-        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
+        let rows = panel_rows(
+            &registry,
+            &panel,
+            canvas_core::Language::Ru,
+            &all_visible(&registry),
+        );
         let mut fs = font_system();
         let mut m = TextMeasurer::new();
-        let lay = panel_layout(1280.0, 800.0, &registry, &panel, &rows, &mut m, &mut fs);
+        let lay = panel_layout(
+            1280.0,
+            800.0,
+            &registry,
+            &panel,
+            &rows,
+            &mut m,
+            &mut fs,
+            &all_visible(&registry),
+        );
         // Кнопка сворачивания — в правой части шапки, внутри панели
         let c = lay.collapse_rect;
         assert!(c[0] >= lay.header_rect[0]);
@@ -1728,7 +1858,12 @@ mod tests {
         let registry = registry();
         let mut panel = TemplatePanel::new();
         panel.open = true;
-        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
+        let rows = panel_rows(
+            &registry,
+            &panel,
+            canvas_core::Language::Ru,
+            &all_visible(&registry),
+        );
         let total = template_row_count(&rows);
         assert!(panel.move_selection(1, &rows));
         assert_eq!(panel.selected, 1);
@@ -1752,10 +1887,24 @@ mod tests {
         let registry = registry();
         let mut panel = TemplatePanel::new();
         panel.open = true;
-        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
+        let rows = panel_rows(
+            &registry,
+            &panel,
+            canvas_core::Language::Ru,
+            &all_visible(&registry),
+        );
         let mut fs = font_system();
         let mut m = TextMeasurer::new();
-        let lay = panel_layout(1280.0, 800.0, &registry, &panel, &rows, &mut m, &mut fs);
+        let lay = panel_layout(
+            1280.0,
+            800.0,
+            &registry,
+            &panel,
+            &rows,
+            &mut m,
+            &mut fs,
+            &all_visible(&registry),
+        );
         // FR-024: док у ЛЕВОГО края, во всю высоту окна
         assert!((lay.panel_rect[0] - PANEL_MARGIN).abs() < 0.01);
         assert!((lay.panel_rect[1] - PANEL_TOP_MARGIN).abs() < 0.01);
@@ -1784,7 +1933,16 @@ mod tests {
             assert!(!overlap, "строка палитры налезла на футер");
         }
         // Малое окно: строки обрезаются по высоте панели, без паники
-        let small = panel_layout(400.0, 300.0, &registry, &panel, &rows, &mut m, &mut fs);
+        let small = panel_layout(
+            400.0,
+            300.0,
+            &registry,
+            &panel,
+            &rows,
+            &mut m,
+            &mut fs,
+            &all_visible(&registry),
+        );
         for rect in &small.row_rects {
             assert!(rect[1] + rect[3] <= small.panel_rect[1] + small.panel_rect[3] + 0.01);
         }
@@ -2137,10 +2295,24 @@ mod tests {
         let registry = TemplateRegistry::builtin();
         let mut panel = TemplatePanel::new();
         panel.open = true;
-        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
+        let rows = panel_rows(
+            &registry,
+            &panel,
+            canvas_core::Language::Ru,
+            &all_visible(&registry),
+        );
         let mut fs = font_system();
         let mut m = TextMeasurer::new();
-        let lay = panel_layout(1280.0, 800.0, &registry, &panel, &rows, &mut m, &mut fs);
+        let lay = panel_layout(
+            1280.0,
+            800.0,
+            &registry,
+            &panel,
+            &rows,
+            &mut m,
+            &mut fs,
+            &all_visible(&registry),
+        );
         if template_row_count(&rows) <= MAX_VISIBLE_ROWS {
             // Всё влезает (мелкий реестр) — прокрутка не нужна
             assert_eq!(lay.max_scroll, 0, "полный список влезает — скролла нет");
@@ -2156,7 +2328,16 @@ mod tests {
         let mut scrolled = TemplatePanel::new();
         scrolled.open = true;
         scrolled.scroll_top = lay.max_scroll;
-        let lay2 = panel_layout(1280.0, 800.0, &registry, &scrolled, &rows, &mut m, &mut fs);
+        let lay2 = panel_layout(
+            1280.0,
+            800.0,
+            &registry,
+            &scrolled,
+            &rows,
+            &mut m,
+            &mut fs,
+            &all_visible(&registry),
+        );
         assert_eq!(lay2.rows.last(), rows.last(), "последняя строка видна");
         assert!(!lay2.rows.is_empty(), "хвост не пуст");
         // Кламп колеса: прокрутка дальше max не двигает
@@ -2173,11 +2354,25 @@ mod tests {
         let registry = registry();
         let mut panel = TemplatePanel::new();
         panel.open = true;
-        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru);
+        let rows = panel_rows(
+            &registry,
+            &panel,
+            canvas_core::Language::Ru,
+            &all_visible(&registry),
+        );
         let mut fs = font_system();
         let mut m = TextMeasurer::new();
         // Высота окна меньше верхнего отступа — окно строк отрицательное
-        let lay = panel_layout(1280.0, 10.0, &registry, &panel, &rows, &mut m, &mut fs);
+        let lay = panel_layout(
+            1280.0,
+            10.0,
+            &registry,
+            &panel,
+            &rows,
+            &mut m,
+            &mut fs,
+            &all_visible(&registry),
+        );
         assert_eq!(lay.max_scroll, 0, "микроокно — прокрутки нет");
     }
 }

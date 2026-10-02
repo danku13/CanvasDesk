@@ -769,11 +769,12 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
     let palette_hover_open = app.palette_hover.open.map_or(-1, |i| i as i32);
     let flow_map_scroll_offset = app.flow_map_scroll.offset;
     let onboarding_step = app.onboarding.as_ref().map(|s| s.step as u32).unwrap_or(0);
+    // FR-087: счётчик секторов шаблонов — по видимым категориям (роль).
     let wheel_template_count = app
         .wheel_menu
         .as_ref()
         .and_then(|m| m.category.as_deref())
-        .map(|c| app.templates.by_category(c).len() as u32)
+        .map(|c| app.visible_templates_by_category(c).len() as u32)
         .unwrap_or(0);
     UiFrameSig {
         viewport,
@@ -815,12 +816,14 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
         id::WHEEL => {
             // donut-меню: bbox extent (polar-геометрия проверяется в
             // обработчике — rect только для pick «клик у wheel, не в мир»).
-            let categories = app.templates.categories();
+            // FR-087: геометрия wheel — по видимым категориям (роль),
+            // паритет с рендером wheel_overlay и кликами click_wheel_menu.
+            let categories = app.template_category_names();
             let template_count = app
                 .wheel_menu
                 .as_ref()
                 .and_then(|m| m.category.as_deref())
-                .map(|c| app.templates.by_category(c).len())
+                .map(|c| app.visible_templates_by_category(c).len())
                 .unwrap_or(0);
             let center = app
                 .wheel_menu
@@ -938,8 +941,13 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             }
         }
         id::TEMPLATE_PANEL => {
-            let rows =
-                template_panel_rows(&app.templates, &app.template_panel, app.settings.language);
+            // FR-087: строки/чипы — видимые категории (роль/ручной фильтр).
+            let rows = template_panel_rows(
+                &app.templates,
+                &app.template_panel,
+                app.settings.language,
+                &app.template_category_names(),
+            );
             // FR-054: ширины чипов — измеренные (measurer на вызов).
             let mut measurer = canvas_ui::measure::TextMeasurer::new();
             let mut fs = canvas_render::text::measure_font_system();
@@ -951,6 +959,7 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 &rows,
                 &mut measurer,
                 &mut fs,
+                &app.template_category_names(),
             );
             surface
                 .hit_rects
@@ -1075,8 +1084,18 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
         }
         id::GALLERY => {
             let registry = canvas_core::schemes::SchemeRegistry::embedded();
-            let list = scheme_gallery_ui::rows(registry, &app.scheme_gallery);
-            let lay = scheme_gallery_ui::layout(viewport, &list, &app.scheme_gallery);
+            // FR-087: строки и чипы галереи — видимые категории (роль/фильтр).
+            let list = scheme_gallery_ui::rows(
+                registry,
+                &app.scheme_gallery,
+                &app.visible_scheme_categories(),
+            );
+            let lay = scheme_gallery_ui::layout(
+                viewport,
+                &list,
+                &app.scheme_gallery,
+                &app.visible_scheme_categories(),
+            );
             surface
                 .hit_rects
                 .push(HitRect::interactive(rect(lay.panel_rect), "gallery-panel"));
