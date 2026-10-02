@@ -714,7 +714,6 @@ impl App {
             // (SVG из атласа, в Glyph-наборе — текстовый фолбэк) — не поиск
             // по нодам; текст строк сдвинут вправо на зону бейджа.
             let is_docs = entry.kind == canvas_render::search_ui::SearchRowKind::Docs;
-            let text_x = if is_docs { 30.0 } else { 10.0 };
             if is_docs {
                 let badge_rect = [row_rect[0] + 8.0, row_rect[1] + 6.0, 16.0, 16.0];
                 let badge_tint = crate::palette::color_to_rgba(palette.icon);
@@ -740,22 +739,31 @@ impl App {
                     });
                 }
             }
+            // FR-088: текст строки — готовый из раскладки (row_texts):
+            // заголовок с ellipsis + перенесённый подзаголовок с позициями.
+            // Рендер не дублирует замер/смещения — единый источник геометрии
+            // (та же раскладка, что hit-rect'ы реестра).
+            let Some(rt) = lay.row_texts.get(visible) else {
+                continue;
+            };
             texts.push(OwnedScreenText {
-                text: entry.title.clone(),
-                origin: [row_rect[0] + text_x, row_rect[1] + 4.0],
-                width: (row_rect[2] - text_x - 10.0).max(10.0),
-                font_size: 13.0,
+                text: rt.title.clone(),
+                origin: rt.title_pos,
+                width: rt.text_width,
+                font_size: canvas_render::search_ui::TITLE_FONT_SIZE,
                 color: palette.title,
                 align: TextAlign::Left,
             });
-            texts.push(OwnedScreenText {
-                text: entry.subtitle.clone(),
-                origin: [row_rect[0] + text_x, row_rect[1] + 18.0],
-                width: (row_rect[2] - text_x - 10.0).max(10.0),
-                font_size: 11.0,
-                color: palette.body,
-                align: TextAlign::Left,
-            });
+            for (line, pos) in rt.subtitle_lines.iter().zip(&rt.subtitle_pos) {
+                texts.push(OwnedScreenText {
+                    text: line.clone(),
+                    origin: *pos,
+                    width: rt.text_width,
+                    font_size: canvas_render::search_ui::SUB_FONT_SIZE,
+                    color: palette.body,
+                    align: TextAlign::Left,
+                });
+            }
         }
         (instances, texts, icons)
     }

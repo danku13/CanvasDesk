@@ -1660,6 +1660,42 @@ impl Renderer {
                         dim_instance(&mut strip_line, dim_factor);
                     }
                     instances.push(strip_line);
+                    // FR-088: кнопка «Проверка цепочки» — постоянная иконка-лупа
+                    // в правом конце полосы результата (клик по полосе — триггер
+                    // окна проверки, F-1/AC-1.1; тултип — explain_hover_pill
+                    // приложения). Только у нод с вычисленным итогом — та же
+                    // зона, что hit-тест триггера. Набор — lucide (world-хром
+                    // самодостаточен: роли шаблонов тоже не следуют icon_style).
+                    if let Some(ExprOutcome::Ok(_)) = scene.expr_results.get(&node.id) {
+                        if let Some((uv_min, uv_max)) = crate::icon_uv("lucide", "search") {
+                            let rect = crate::cards::explain_button_rect(node);
+                            // hover ноды — акцент (аффорданс нажатия), покой —
+                            // приглушённый тон иконок темы; dim — альфа × фактор
+                            let mut tint_rgba = if scene.hovered == Some(index) {
+                                self.theme.accent
+                            } else {
+                                let icon = self.theme.icon;
+                                let mut t = [
+                                    icon.r() as f32 / 255.0,
+                                    icon.g() as f32 / 255.0,
+                                    icon.b() as f32 / 255.0,
+                                    icon.a() as f32 / 255.0,
+                                ];
+                                t[3] *= 0.62;
+                                t
+                            };
+                            if dim_it {
+                                tint_rgba[3] *= dim_factor;
+                            }
+                            world_icon_instances.push(WorldIconInstance {
+                                pos: [rect[0], rect[1]],
+                                size: [rect[2], rect[3]],
+                                uv_min,
+                                uv_max,
+                                tint: tint_rgba,
+                            });
+                        }
+                    }
                 }
                 // FR-075 W2: иконка роли шаблонной ноды — SVG-атлас (sparse
                 // набор "roles") в world-координатах, справа в шапке (снимки

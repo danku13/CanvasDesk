@@ -4689,6 +4689,14 @@ impl TextSystem {
                             .as_ref()
                             .map(|g| node.x + BODY_PADDING + g.value_right())
                             .unwrap_or(node.x + node.width - BODY_PADDING);
+                        // FR-088: значение не заезжает в зону кнопки «Проверка
+                        // цепочки» (иконка в правом конце полосы — рисуется
+                        // при том же условии: итог без ошибки).
+                        let right_world = if entry.result_error {
+                            right_world
+                        } else {
+                            right_world - crate::cards::EXPLAIN_BTN_ZONE
+                        };
                         let right_phys = to_physical([right_world, top_world])[0];
                         let pos = to_physical([left_world, top_world]);
                         let left_phys = (right_phys - entry.result_width_px).round();

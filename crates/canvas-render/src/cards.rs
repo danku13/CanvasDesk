@@ -507,6 +507,33 @@ pub fn header_separator_instance(
 /// вёрстка prototype-unified `M.STRIP = 32` (DOM `.strip-d`).
 pub use canvas_core::tokens::CARD_RESULT_STRIP_H as RESULT_STRIP_H;
 
+// FR-088: кнопка «Проверка цепочки» — постоянная иконка в правом конце
+// полосы результата ноды. Триггер окна проверки (клик по полосе, PRD-0007
+// F-1/AC-1.1) раньше не имел видимого аффорданса (только hover-«?» у
+// курсора — решение владельца пересмотрено FR-088): кнопка делает триггер
+// обнаруживаемым. Размер — ряд иконок шапки (TEMPLATE_ICON_SIZE 16 —
+// концепция ui-kit: пиктограммы контента одного кегля).
+/// Сторона иконки кнопки (world px).
+pub const EXPLAIN_BTN_SIZE: f32 = 16.0;
+/// Отступ кнопки от правого края карточки.
+pub const EXPLAIN_BTN_MARGIN_H: f32 = 8.0;
+/// Зона кнопки в футере: значение «ИТОГ» не заезжает под иконку
+/// (правый край значения сдвигается на эту величину, text.rs).
+pub const EXPLAIN_BTN_ZONE: f32 = EXPLAIN_BTN_SIZE + EXPLAIN_BTN_MARGIN_H + 6.0;
+
+/// Rect кнопки «Проверка цепочки»: правый конец полосы результата,
+/// вертикально центрирована в полосе (M.STRIP). Совпадает с зоной клика —
+/// вся полоса и так триггер (result_band_root_at приложения).
+pub fn explain_button_rect(node: &Node) -> [f32; 4] {
+    let strip_h = RESULT_STRIP_H.min(node.height);
+    [
+        node.x + node.width - EXPLAIN_BTN_SIZE - EXPLAIN_BTN_MARGIN_H,
+        node.y + node.height - strip_h + (strip_h - EXPLAIN_BTN_SIZE) / 2.0,
+        EXPLAIN_BTN_SIZE,
+        EXPLAIN_BTN_SIZE,
+    ]
+}
+
 /// Фон полосы результата «ИТОГ»: тинт потока (`theme.strip_tint`),
 /// нижние углы повторяют дугу карточки (`[0,0,R,R]` — прототип
 /// `roundRect(x, y+h−STRIP, w, STRIP, [0,0,10,10])`), без тени/рамки.
