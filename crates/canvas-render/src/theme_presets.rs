@@ -90,6 +90,10 @@ fn map_to_theme_colors(parsed: &ParsedPreset) -> ThemeColors {
         chip_calc: rgba("accent"),
         chip_note: rgba("hud"),
         chip_file: rgba("whatif_badge"),
+        // W-b (слоты цветов): chipTxt — тёмные чернила на цветном чипе
+        // в обеих темах (FR-075) — тематически-независимый слот, как в
+        // dark()/light() theme.rs.
+        chip_text: Color::rgb(0x14, 0x16, 0x1c),
         zebra_fill: if is_light_bg {
             [0.078, 0.094, 0.157, 0.03]
         } else {
@@ -104,6 +108,12 @@ fn map_to_theme_colors(parsed: &ParsedPreset) -> ThemeColors {
         palette_chip_fill: rgba("palette_chip_fill"),
         palette_tile_fill: rgba("palette_tile_fill"),
         palette_selected_fill: rgba("palette_selected_fill"),
+        // W-b: приглушённая отметка текущей строки — тон selected пресета
+        // с прежней альфой 0.45.
+        palette_selected_dim_fill: {
+            let s = rgba("palette_selected_fill");
+            [s[0], s[1], s[2], 0.45]
+        },
         palette_hover_fill: rgba("palette_hover_fill"),
         palette_border: rgba("palette_border"),
         title: color("title"),
@@ -126,11 +136,41 @@ fn map_to_theme_colors(parsed: &ParsedPreset) -> ThemeColors {
         guide_align: rgba("guide_align"),
         guide_grid: rgba("guide_grid"),
         accent: rgba("accent"),
+        // W-b: белые чернила на акценте — в обеих темах, как в dark()/light().
+        text_on_accent: Color::rgb(255, 255, 255),
         selection_fill: rgba("selection_fill"),
         highlight: rgba("highlight"),
         whatif_fill: rgba("whatif_fill"),
         whatif_badge: color("whatif_badge"),
+        // W-b: акцент what-if — по знаку фона (те же значения, что в
+        // dark()/light() theme.rs; в JSON-пресетах слот не хранится).
+        whatif_accent: if is_light_bg {
+            Color::rgb(0x2f, 0x7f, 0xe8)
+        } else {
+            Color::rgb(0x4c, 0xa6, 0xff)
+        },
         error: color("error"),
+        // W-b: тултипные акценты — по знаку фона (warn — severity-примитивы;
+        // info — прежний вид тёмной темы / затемнённый тон светлой),
+        // как dark()/light() theme.rs.
+        tooltip_warn: if is_light_bg {
+            Color::rgb(
+                canvas_core::tokens::SEVERITY_TEXT_LIGHT[0][0],
+                canvas_core::tokens::SEVERITY_TEXT_LIGHT[0][1],
+                canvas_core::tokens::SEVERITY_TEXT_LIGHT[0][2],
+            )
+        } else {
+            Color::rgb(
+                canvas_core::tokens::SEVERITY_TEXT_DARK[0][0],
+                canvas_core::tokens::SEVERITY_TEXT_DARK[0][1],
+                canvas_core::tokens::SEVERITY_TEXT_DARK[0][2],
+            )
+        },
+        tooltip_info: if is_light_bg {
+            Color::rgb(0x24, 0x5d, 0x8f)
+        } else {
+            Color::rgb(0x9c, 0xc3, 0xe6)
+        },
         hud: color("hud"),
         stage_dim: rgba("stage_dim"),
         explain_leaf,

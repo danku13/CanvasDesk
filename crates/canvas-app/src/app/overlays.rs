@@ -243,7 +243,6 @@ impl App {
         let mut texts = Vec::new();
         let viewport = self.viewport_logical();
         let palette = self.effective_palette();
-        let accent = Color::rgb(0x4c, 0xa6, 0xff);
         // FR-053 (U3 F-9): disabled-текст — слот темы (бывший локальный hex).
         let dim = palette.control_disabled_text;
         if !self.scene.whatif_active {
@@ -309,7 +308,7 @@ impl App {
             origin: [layout.indicator[0], layout.indicator[1] + 6.0],
             width: layout.indicator[2],
             font_size: 12.0,
-            color: accent,
+            color: palette.whatif_accent,
             align: TextAlign::Center,
         });
         // Чипы: «База» + сценарии + «+». Активный — акцентной рамкой.
@@ -415,7 +414,7 @@ impl App {
                 pos: [list[0], list[1]],
                 size: [list[2], list[3]],
                 fill: palette.menu_fill,
-                border: [0.35, 0.40, 0.50, 1.0],
+                border: canvas_core::tokens::DIALOG_BUTTON_BORDER,
                 params: [6.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
@@ -447,7 +446,11 @@ impl App {
                 );
                 let color = if row.stale.is_some() {
                     text = format!("{text}  ⚠ {}", row.stale.as_deref().unwrap_or_default());
-                    Color::rgb(0xe5, 0x5c, 0x5c)
+                    Color::rgb(
+                        canvas_core::tokens::ERROR[0],
+                        canvas_core::tokens::ERROR[1],
+                        canvas_core::tokens::ERROR[2],
+                    )
                 } else {
                     palette.title
                 };
@@ -496,7 +499,7 @@ impl App {
                 pos: [table.rect[0], table.rect[1]],
                 size: [table.rect[2], table.rect[3]],
                 fill: palette.menu_fill,
-                border: [0.35, 0.40, 0.50, 1.0],
+                border: canvas_core::tokens::DIALOG_BUTTON_BORDER,
                 params: [6.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
@@ -506,7 +509,7 @@ impl App {
                     origin: [rect[0] + 6.0, rect[1] + 6.0],
                     width: rect[2] - 12.0,
                     font_size: 12.0,
-                    color: if c == 0 { dim } else { accent },
+                    color: if c == 0 { dim } else { palette.whatif_accent },
                     align: TextAlign::Left,
                 });
             }
@@ -594,7 +597,7 @@ impl App {
         let kit_palette = palette.kit_palette();
         let mut d = Painter::new();
         // Панель — прежние слоты дословно
-        d.rect(lay.panel, palette.menu_fill, [0.22, 0.24, 0.30, 0.9], 8.0);
+        d.rect(lay.panel, palette.menu_fill, palette.palette_border, 8.0);
         // Заголовок + «✕» (кнопка — тем же стилем, что панель поиска)
         d.label(
             canvas_ui::geometry::UiRect::new(
@@ -647,7 +650,7 @@ impl App {
             let mut state = WidgetState::default();
             state.set_pointer(hovered == Some(*index), false);
             if state.kit_state() == canvas_ui::kit::KitState::Hovered {
-                d.rect(*rect, [0.24, 0.30, 0.42, 0.9], [0.0; 4], 4.0);
+                d.rect(*rect, palette.control_hover_fill, [0.0; 4], 4.0);
             }
             d.label(
                 canvas_ui::geometry::UiRect::new(
@@ -698,7 +701,7 @@ impl App {
             pos: [panel[0], panel[1]],
             size: [panel[2], panel[3]],
             fill: palette.menu_fill,
-            border: [0.22, 0.24, 0.30, 0.9],
+            border: palette.palette_border,
             params: [8.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
@@ -735,9 +738,9 @@ impl App {
                 pos: [row_rect[0], row_rect[1]],
                 size: [row_rect[2], row_rect[3]],
                 fill: if selected {
-                    [0.18, 0.29, 0.48, 0.95]
+                    palette.control_selected_fill
                 } else if row_hover {
-                    [0.24, 0.30, 0.42, 0.6]
+                    palette.control_hover_fill
                 } else {
                     palette.search_row_fill
                 },
@@ -2043,7 +2046,7 @@ impl App {
         let mut d = Painter::new();
         let kit_palette = palette.kit_palette();
         // Подложка popup — прежние слоты дословно (заливка/рамка/радиус 6)
-        d.rect(popup, palette.menu_fill, [0.22, 0.24, 0.30, 0.95], 6.0);
+        d.rect(popup, palette.menu_fill, palette.palette_border, 6.0);
         for (index, row) in hints_ui::hint_rows(popup, self.hints.items.len()) {
             let Some(item) = self.hints.items.get(index) else {
                 continue;
@@ -2053,7 +2056,7 @@ impl App {
             let mut state = WidgetState::default();
             state.set_selected(index == self.hints.selected);
             if state.kit_state() == canvas_ui::kit::KitState::Selected {
-                d.rect(row, [0.18, 0.29, 0.48, 0.95], [0.0; 4], 4.0);
+                d.rect(row, palette.control_selected_fill, [0.0; 4], 4.0);
             }
             // Подписи — прежние смещения/кегли/цвета дословно (слоты кита:
             // title → text_title, body → text)
@@ -2899,7 +2902,7 @@ impl App {
                 instances.push(CardInstance {
                     pos: [rect[0], rect[1]],
                     size: [rect[2], rect[3]],
-                    fill: [0.24, 0.30, 0.42, 0.9],
+                    fill: palette.control_hover_fill,
                     border: [0.0; 4],
                     params: [4.0, 0.0, 0.0, 1.0],
                     corners: [0.0; 4],
@@ -2965,7 +2968,7 @@ impl App {
             let mut state = WidgetState::default();
             state.set_pointer(hovered_item == Some(i), false);
             if state.kit_state() == kit::KitState::Hovered {
-                d.rect(rect, [0.24, 0.30, 0.42, 0.9], [0.0; 4], 4.0);
+                d.rect(rect, palette.control_hover_fill, [0.0; 4], 4.0);
             }
             d.label(
                 canvas_ui::geometry::UiRect::new(
@@ -3039,7 +3042,7 @@ impl App {
                     let mut state = WidgetState::default();
                     state.set_pointer(hovered_sub == Some(i), false);
                     if state.kit_state() == kit::KitState::Hovered {
-                        d.rect(rect, [0.24, 0.30, 0.42, 0.9], [0.0; 4], 4.0);
+                        d.rect(rect, palette.control_hover_fill, [0.0; 4], 4.0);
                     }
                     d.label(
                         canvas_ui::geometry::UiRect::new(
@@ -3086,7 +3089,7 @@ impl App {
                 instances.push(CardInstance {
                     pos: [rect[0], rect[1]],
                     size: [rect[2], rect[3]],
-                    fill: [0.24, 0.30, 0.42, 0.9],
+                    fill: palette.control_hover_fill,
                     border: [0.0; 4],
                     params: [4.0, 0.0, 0.0, 1.0],
                     corners: [0.0; 4],
@@ -3119,7 +3122,7 @@ impl App {
                     instances.push(CardInstance {
                         pos: [rect[0], rect[1]],
                         size: [rect[2], rect[3]],
-                        fill: [0.24, 0.30, 0.42, 0.9],
+                        fill: palette.control_hover_fill,
                         border: [0.0; 4],
                         params: [4.0, 0.0, 0.0, 1.0],
                         corners: [0.0; 4],
@@ -3478,7 +3481,6 @@ impl App {
         let palette = self.effective_palette();
         let tint = color_to_rgba(palette.icon);
         let title = palette.title;
-        let accent = [0.18, 0.29, 0.48, 0.95];
         // FR-060 (волна 2 кита): заливки/подписи — Painter, состояния —
         // WidgetState (приоритет Hovered > Selected — матрица кита даёт
         // прежнюю раскраску строк дословно). Векторные иконки-квады
@@ -3491,7 +3493,7 @@ impl App {
         d.rect(
             canvas_ui::geometry::UiRect::new(lay.bar[0], lay.bar[1], lay.bar[2], lay.bar[3]),
             palette.menu_fill,
-            [0.22, 0.24, 0.30, 0.9],
+            palette.palette_border,
             8.0,
         );
         for (i, group) in groups.iter().enumerate() {
@@ -3505,9 +3507,9 @@ impl App {
             d.rect(
                 canvas_ui::geometry::UiRect::new(button[0], button[1], button[2], button[3]),
                 if btn_hovered {
-                    [0.24, 0.30, 0.42, 1.0]
+                    palette.palette_hover_fill
                 } else {
-                    [0.17, 0.18, 0.22, 1.0]
+                    palette.palette_chip_fill
                 },
                 [0.0; 4],
                 6.0,
@@ -3553,7 +3555,7 @@ impl App {
                 d.rect(
                     canvas_ui::geometry::UiRect::new(drop[0], drop[1], drop[2], drop[3]),
                     palette.menu_fill,
-                    [0.22, 0.24, 0.30, 0.9],
+                    palette.palette_border,
                     6.0,
                 );
                 for (k, entry) in group.entries.iter().enumerate() {
@@ -3566,8 +3568,10 @@ impl App {
                     row_state.set_pointer(row_hovered, false);
                     row_state.set_selected(entry.current);
                     let fill = match row_state.kit_state() {
-                        kit::KitState::Hovered | kit::KitState::Pressed => accent,
-                        kit::KitState::Selected => [0.18, 0.29, 0.48, 0.45],
+                        kit::KitState::Hovered | kit::KitState::Pressed => {
+                            palette.palette_selected_fill
+                        }
+                        kit::KitState::Selected => palette.palette_selected_dim_fill,
                         _ => [0.0; 4],
                     };
                     if fill[3] > 0.0 {

@@ -39,6 +39,12 @@ pub struct ThemeColors {
     /// FR-075: заливка чипа «ФАЙЛ» (file-нода) — прототип `chips.file`
     /// #d9a13c / #c98a1e.
     pub chip_file: [f32; 4],
+    /// W-b (слоты цветов): текст метки на цветном чипе категории
+    /// (шаблонные ноды stage). Прототип `chipTxt` #14161c — тёмные чернила
+    /// на цветной заливке в ОБОИХ темах (FR-075, осознанно; значение =
+    /// приватной `chip_text_color` в canvas-render/text.rs). Слот нужен
+    /// будущим темам.
+    pub chip_text: Color,
     /// FR-075: зебра строк таблицы — прототип `zebra` rgba(255,255,255,.04)
     /// (светлые прогонки; DOM rgba(20,24,40,.03)); прежняя
     /// `search_row_fill` остаётся поиску.
@@ -61,6 +67,10 @@ pub struct ThemeColors {
     pub palette_tile_fill: [f32; 4],
     /// Выбранная строка/чип палитры шаблонов (CR-011).
     pub palette_selected_fill: [f32; 4],
+    /// W-b: приглушённая отметка текущей строки выпадашки палитры
+    /// выделения — бывший литерал [0.18,0.29,0.48,0.45] (там hover сильнее
+    /// selected — прежняя раскраска accent/dim-accent дословно).
+    pub palette_selected_dim_fill: [f32; 4],
     /// Hover строки палитры шаблонов (CR-011).
     pub palette_hover_fill: [f32; 4],
     /// Рамка дока палитры шаблонов (CR-011).
@@ -106,6 +116,11 @@ pub struct ThemeColors {
     /// примитива `canvas_core::tokens::ACCENT`; обе темы совпадают (сегодняшняя
     /// единая константа), расхождение — решение владельца (v2).
     pub accent: [f32; 4],
+    /// W-b: текст на акцентной заливке и цветных бейджах (explain-draw:
+    /// крошки-чипы, тогглы, бейджи «+N», стрелки скролла, чип устаревания).
+    /// Обе темы — белые чернила (прежний вид); слот нужен будущим темам,
+    /// где белое на акценте не гарантировано.
+    pub text_on_accent: Color,
     /// Заливка выделения текста в редакторе (T7) — акцент α0.35.
     /// Источник: `TEXT_SELECTION_FILL` renderer.rs:41.
     pub selection_fill: [f32; 4],
@@ -115,8 +130,18 @@ pub struct ThemeColors {
     pub whatif_fill: [f32; 4],
     /// Дельта-бейдж what-if (FR-017). Источник: `WHATIF_BADGE_COLOR` renderer.rs:49.
     pub whatif_badge: Color,
+    /// W-b: акцент what-if режима — индикатор «WHAT-IF» и колонка «База»
+    /// таблицы сравнения (бывший литерал #4ca6ff). Светлая — тот же тон из
+    /// светлого ряда (значение chip_calc light #2f7fe8).
+    pub whatif_accent: Color,
     /// Красный строки результата с ошибкой (FR-013). Источник: `RESULT_ERROR_COLOR` text.rs:108.
     pub error: Color,
+    /// W-b: янтарный «акцент анализа» тултипов (unmapped-порт/ребро) —
+    /// значение severity-warning примитива (`SEVERITY_TEXT_*`).
+    pub tooltip_warn: Color,
+    /// W-b: сине-серый акцент потока значений в тултипах (истоки/«пролито»).
+    /// Светлая — тот же тон (H≈208°), затемнён под светлый фон (≈6.6:1).
+    pub tooltip_info: Color,
     /// Цвет HUD F3. Источник: `HUD_COLOR` text.rs:140.
     pub hud: Color,
     /// Затемнение фона main stage (FR-042 §7.5, альфа-аппроксимация):
@@ -171,6 +196,8 @@ impl ThemeColors {
             chip_calc: [0.302, 0.639, 1.0, 1.0],
             chip_note: [0.655, 0.545, 0.980, 1.0],
             chip_file: [0.851, 0.627, 0.235, 1.0],
+            // W-b: chipTxt — тёмные чернила на цветном чипе (обе темы, FR-075).
+            chip_text: Color::rgb(0x14, 0x16, 0x1c),
             zebra_fill: [1.0, 1.0, 1.0, 0.04],
             edge_edit_fill: [0.13, 0.13, 0.16, 0.95],
             edge_label_fill: [0.11, 0.11, 0.13, 0.85],
@@ -181,6 +208,7 @@ impl ThemeColors {
             palette_chip_fill: [0.17, 0.18, 0.22, 0.8],
             palette_tile_fill: [0.20, 0.22, 0.28, 0.9],
             palette_selected_fill: [0.18, 0.29, 0.48, 0.95],
+            palette_selected_dim_fill: [0.18, 0.29, 0.48, 0.45],
             palette_hover_fill: [0.24, 0.30, 0.42, 0.6],
             palette_border: [0.22, 0.24, 0.30, 0.9],
             title: Color::rgb(0xe6, 0xe6, 0xe6),
@@ -204,6 +232,8 @@ impl ThemeColors {
             guide_grid: [0.86, 0.16, 0.72, 1.0],
             // FR-046: слоты v2 — из примитивов design/tokens (ноль скачка)
             accent: canvas_core::tokens::ACCENT,
+            // W-b: белые чернила на акценте — в обеих темах (прежний вид).
+            text_on_accent: Color::rgb(255, 255, 255),
             selection_fill: [
                 canvas_core::tokens::ACCENT[0],
                 canvas_core::tokens::ACCENT[1],
@@ -217,11 +247,21 @@ impl ThemeColors {
                 canvas_core::tokens::WHATIF_BADGE[1],
                 canvas_core::tokens::WHATIF_BADGE[2],
             ),
+            // W-b: акцент what-if — бывший литерал #4ca6ff (ноль скачка).
+            whatif_accent: Color::rgb(0x4c, 0xa6, 0xff),
             error: Color::rgb(
                 canvas_core::tokens::ERROR[0],
                 canvas_core::tokens::ERROR[1],
                 canvas_core::tokens::ERROR[2],
             ),
+            // W-b: янтарный «акцент анализа» = severity-warning примитив.
+            tooltip_warn: Color::rgb(
+                canvas_core::tokens::SEVERITY_TEXT_DARK[0][0],
+                canvas_core::tokens::SEVERITY_TEXT_DARK[0][1],
+                canvas_core::tokens::SEVERITY_TEXT_DARK[0][2],
+            ),
+            // W-b: сине-серый акцент потока — прежний вид тёмной темы.
+            tooltip_info: Color::rgb(0x9c, 0xc3, 0xe6),
             hud: Color::rgb(
                 canvas_core::tokens::HUD[0],
                 canvas_core::tokens::HUD[1],
@@ -269,6 +309,8 @@ impl ThemeColors {
             chip_calc: [0.184, 0.498, 0.910, 1.0],
             chip_note: [0.545, 0.361, 0.965, 1.0],
             chip_file: [0.788, 0.541, 0.118, 1.0],
+            // W-b: chipTxt — тёмные чернила на цветном чипе (обе темы, FR-075).
+            chip_text: Color::rgb(0x14, 0x16, 0x1c),
             zebra_fill: [0.078, 0.094, 0.157, 0.03],
             edge_edit_fill: [0.97, 0.97, 0.98, 0.95],
             edge_label_fill: [0.95, 0.95, 0.97, 0.85],
@@ -279,6 +321,7 @@ impl ThemeColors {
             palette_chip_fill: [0.90, 0.90, 0.93, 0.9],
             palette_tile_fill: [0.84, 0.86, 0.90, 1.0],
             palette_selected_fill: [0.18, 0.29, 0.48, 0.95],
+            palette_selected_dim_fill: [0.18, 0.29, 0.48, 0.45],
             palette_hover_fill: [0.75, 0.80, 0.90, 0.6],
             palette_border: [0.75, 0.77, 0.82, 0.9],
             title: Color::rgb(0x20, 0x20, 0x24),
@@ -303,6 +346,8 @@ impl ThemeColors {
             // FR-046: слоты v2 — из примитивов (значения обеих тем совпадают
             // с прежними едиными константами — ноль скачка)
             accent: canvas_core::tokens::ACCENT,
+            // W-b: белые чернила на акценте — в обеих темах (прежний вид).
+            text_on_accent: Color::rgb(255, 255, 255),
             selection_fill: [
                 canvas_core::tokens::ACCENT[0],
                 canvas_core::tokens::ACCENT[1],
@@ -316,11 +361,21 @@ impl ThemeColors {
                 canvas_core::tokens::WHATIF_BADGE[1],
                 canvas_core::tokens::WHATIF_BADGE[2],
             ),
+            // W-b: светлый акцент what-if — тон светлого ряда (chip_calc light).
+            whatif_accent: Color::rgb(0x2f, 0x7f, 0xe8),
             error: Color::rgb(
                 canvas_core::tokens::ERROR[0],
                 canvas_core::tokens::ERROR[1],
                 canvas_core::tokens::ERROR[2],
             ),
+            // W-b: янтарный «акцент анализа» = severity-warning примитив.
+            tooltip_warn: Color::rgb(
+                canvas_core::tokens::SEVERITY_TEXT_LIGHT[0][0],
+                canvas_core::tokens::SEVERITY_TEXT_LIGHT[0][1],
+                canvas_core::tokens::SEVERITY_TEXT_LIGHT[0][2],
+            ),
+            // W-b: тот же сине-серый тон (H≈208°), затемнён под светлый фон.
+            tooltip_info: Color::rgb(0x24, 0x5d, 0x8f),
             hud: Color::rgb(
                 canvas_core::tokens::HUD[0],
                 canvas_core::tokens::HUD[1],
@@ -615,6 +670,34 @@ mod tests {
                 tokens::CONTROL_DISABLED_TEXT
             );
         }
+    }
+
+    /// W-b (слоты цветов): новые слоты зафиксированы в ОБОИХ темах —
+    /// регрессия значения = красный тест. warn — из severity-примитивов,
+    /// остальные — прежний вид draw-кода (тёмная) + светлая адаптация.
+    #[test]
+    fn w_b_color_slots_match_documented_values() {
+        use canvas_core::tokens;
+        let dark = ThemeColors::dark();
+        let light = ThemeColors::light();
+        let rgb = |c: Color| [c.r(), c.g(), c.b()];
+        // Белые чернила на акценте и chipTxt — одинаковые в обеих темах
+        for theme in [&dark, &light] {
+            assert_eq!(rgb(theme.text_on_accent), [255, 255, 255]);
+            assert_eq!(rgb(theme.chip_text), [0x14, 0x16, 0x1c]);
+            assert_eq!(theme.palette_selected_dim_fill, [0.18, 0.29, 0.48, 0.45]);
+        }
+        // Янтарный «акцент анализа» тултипов — severity-warning примитив
+        assert_eq!(rgb(dark.tooltip_warn), tokens::SEVERITY_TEXT_DARK[0]);
+        assert_eq!(rgb(light.tooltip_warn), tokens::SEVERITY_TEXT_LIGHT[0]);
+        // Сине-серый акцент потока: тёмная — прежний вид, светлая — тот же
+        // тон, затемнённый под светлый фон
+        assert_eq!(rgb(dark.tooltip_info), [0x9c, 0xc3, 0xe6]);
+        assert_eq!(rgb(light.tooltip_info), [0x24, 0x5d, 0x8f]);
+        // Акцент what-if: тёмная — бывший литерал #4ca6ff, светлая — тон
+        // светлого ряда (chip_calc light #2f7fe8)
+        assert_eq!(rgb(dark.whatif_accent), [0x4c, 0xa6, 0xff]);
+        assert_eq!(rgb(light.whatif_accent), [0x2f, 0x7f, 0xe8]);
     }
 
     /// FR-046 (PRD-0006 F-5, протокол исключений): контраст новых слотов.
