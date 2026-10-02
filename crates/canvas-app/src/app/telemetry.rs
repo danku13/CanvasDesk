@@ -58,7 +58,9 @@ fn track_web(event: &str, properties: &[(&str, &str)]) {
     let Some(window) = web_sys::window() else {
         return;
     };
-    let Ok(document) = window.document() else {
+    // window.document() возвращает Option<Document> (web-sys 0.3) —
+    // паттерн let-else как у window() выше (E0308: был Ok-паттерн).
+    let Some(document) = window.document() else {
         return;
     };
     // detail {event, properties} — контракт слушателя index.html
