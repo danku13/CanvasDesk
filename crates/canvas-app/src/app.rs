@@ -5583,6 +5583,10 @@ impl App {
         }) else {
             return;
         };
+        // FR-079 follow-up: сохраняем якорь — node_id ВЫБРАННОЙ ноды
+        // (не последней шаблонной). on_cards_ready использует для
+        // позиционирования стопки призраков справа от ВЫБРАННОЙ ноды.
+        self.suggest.cards_anchor = Some(node_id.clone());
         if !self.suggest_verdict().should_suggest() {
             return;
         }
@@ -5685,14 +5689,9 @@ impl App {
             // мы запускали suggest. Показываем тултип «AI дополнений
             // нет» вместо тихого исчезновения. Якорь — последняя
             // шаблонная нода (как в не-empty ветке ниже).
-            let anchor_id = self
-                .scene
-                .canvas
-                .nodes
-                .iter()
-                .rev()
-                .find(|n| n.template().is_some())
-                .map(|n| n.id.clone());
+            // FR-079 follow-up: якорь = node_id из suggest_request_cards
+            // (ВЫБРАННАЯ нода), сохранённый в cards_anchor.
+            let anchor_id = self.suggest.cards_anchor.clone();
             if let Some(node_id) = anchor_id {
                 self.suggest.cards = Some(suggest::SuggestCards {
                     node_id,
@@ -5704,15 +5703,9 @@ impl App {
             }
             return;
         }
-        let anchor_id = self
-            .scene
-            .canvas
-            .nodes
-            .iter()
-            .rev()
-            .find(|n| n.template().is_some())
-            .map(|n| n.id.clone());
-        let Some(node_id) = anchor_id else {
+        // FR-079 follow-up: якорь = node_id из suggest_request_cards
+        // (ВЫБРАННАЯ нода), сохранённый в cards_anchor.
+        let Some(node_id) = self.suggest.cards_anchor.clone() else {
             return;
         };
         self.suggest.cards = Some(suggest::SuggestCards {
