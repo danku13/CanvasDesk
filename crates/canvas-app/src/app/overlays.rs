@@ -2035,15 +2035,13 @@ impl App {
         };
         let palette = self.effective_palette();
         // FR-079 follow-up: empty-state — предложений нет, рисуем
-        // тултип «AI дополнений нет» рядом с якорем (как одну карточку).
+        // тултип «AI дополнений нет» (маленький чип, не призрак ноды).
         if cards.empty {
-            // Геометрия: одна карточка справа от якоря, как SUGGEST_CARD_W×SUGGEST_CARD_H.
             let Some(node_screen) = self.suggest_anchor_screen_rect() else {
                 return (instances, texts);
             };
             let viewport = self.viewport_logical();
-            let rects = suggest::card_rects(node_screen, viewport, 1);
-            if let Some(rect) = rects.first() {
+            if let Some(rect) = suggest::empty_tooltip_rect(node_screen, viewport) {
                 instances.push(CardInstance {
                     pos: [rect.x, rect.y],
                     size: [rect.w, rect.h],
@@ -2069,30 +2067,69 @@ impl App {
         if cards.items.is_empty() {
             return (instances, texts);
         }
+        // FR-079 redesign: призрачные ноды (не чипы). card_fill + card_edge
+        // с alpha × SUGGEST_GHOST_ALPHA — пользователь видит «ноду, которую
+        // предлагают», а не абстрактный чип. Шапка (имя шаблона) + тело
+        // (категория). Hover — alpha повышается (+0.2).
         let rects = self.suggest_card_rects();
         let hovered = self.suggest_card_hover();
+        let alpha = suggest::SUGGEST_GHOST_ALPHA;
         for (i, rect) in rects.iter().enumerate() {
             let is_hover = hovered == Some(i);
+            let fa = if is_hover {
+                (alpha + 0.2).min(1.0)
+            } else {
+                alpha
+            };
             instances.push(CardInstance {
                 pos: [rect.x, rect.y],
                 size: [rect.w, rect.h],
-                fill: if is_hover {
-                    palette.control_hover_fill
-                } else {
-                    palette.menu_fill
-                },
-                border: palette.palette_border,
+                fill: [
+                    palette.card_fill[0],
+                    palette.card_fill[1],
+                    palette.card_fill[2],
+                    palette.card_fill[3] * fa,
+                ],
+                border: [
+                    palette.card_edge[0],
+                    palette.card_edge[1],
+                    palette.card_edge[2],
+                    palette.card_edge[3] * fa,
+                ],
                 params: [6.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
+            // Шапка: «✦ ИмяШаблона»
             texts.push(OwnedScreenText {
                 text: format!("✦ {}", cards.items[i].label),
-                origin: [rect.x + 10.0, rect.y + 8.0],
-                width: rect.w - 16.0,
-                font_size: 12.0,
+                origin: [rect.x + 12.0, rect.y + 8.0],
+                width: rect.w - 20.0,
+                font_size: 14.0,
                 color: palette.title,
                 align: TextAlign::Left,
             });
+            // Тело: категория шаблона (приглушённым тоном)
+            let body = self
+                .suggest
+                .catalog
+                .as_ref()
+                .and_then(|c| {
+                    c.templates
+                        .iter()
+                        .find(|t| t.key == cards.items[i].template_key)
+                })
+                .map(|t| t.category.clone())
+                .unwrap_or_default();
+            if !body.is_empty() {
+                texts.push(OwnedScreenText {
+                    text: body,
+                    origin: [rect.x + 12.0, rect.y + 40.0],
+                    width: rect.w - 20.0,
+                    font_size: 12.0,
+                    color: palette.body,
+                    align: TextAlign::Left,
+                });
+            }
         }
         (instances, texts)
     }
