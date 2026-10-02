@@ -145,16 +145,16 @@ use canvas_scene::{
     fit_template_node_height, formula_line_indices, split_formula_lines, SceneState,
 };
 
+/// FR-090: продуктовые события PostHog из Rust — мост `canvasdesk:track`
+/// (index.html, `__cdTelemetry.track`) + `surface_opened` по дифу реестра
+/// поверхностей. `pub` — вызовы из canvas-web (события экспорта).
+pub mod telemetry;
 /// FR-052 (этап U2 PRD-0009): реестр поверхностей экрана — единый диспетчер.
 /// Дочерний модуль `app`: доступ к приватным полям `App` (снимок состояния
 /// на кадр). Декларации поверхностей (слой/capture/scope/деградация),
 /// сборка `UiFrame` (hit-rect'ы из тех же layout-функций, что у ввода и
 /// отрисовки), владелец клавиатуры из `esc_stack`, draw-полосы.
 pub mod ui_registry;
-/// FR-090: продуктовые события PostHog из Rust — мост `canvasdesk:track`
-/// (index.html, `__cdTelemetry.track`) + `surface_opened` по дифу реестра
-/// поверхностей. `pub` — вызовы из canvas-web (события экспорта).
-pub mod telemetry;
 // FR-054 (U5 PRD-0009, F-11): сквозной layout-линт полного кадра — CI-гейт G4.
 #[cfg(test)]
 mod ui_layout_lint;
@@ -5100,7 +5100,10 @@ impl App {
         let node_count = instance.nodes.len().to_string();
         telemetry::track(
             "scheme_applied",
-            &[("scheme", manifest.id.as_str()), ("nodes", node_count.as_str())],
+            &[
+                ("scheme", manifest.id.as_str()),
+                ("nodes", node_count.as_str()),
+            ],
         );
         self.push_undo();
         for node in instance.nodes {

@@ -15,13 +15,19 @@
 //! считается; what-if — только реальная активация сессии
 //! (`scene.whatif_active`; пилюля входа видна на больших вьюпортах).
 
+#[cfg(any(target_arch = "wasm32", test))]
 use super::ui_registry;
 use super::App;
 use canvas_ui::registry::SurfaceRegistry;
+#[cfg(any(target_arch = "wasm32", test))]
 use std::collections::HashSet;
 
 /// Ambient-хром сцены: активен без действия пользователя — «открытием»
 /// не считается, событие `surface_opened` по нему не шлётся.
+/// Продакшн-потребитель — только wasm-срез `surface_diff_web`; на нативе
+/// без `cfg(test)` было бы dead_code (нативный clippy -D warnings,
+/// красит CI) — потому гейт как у потребителя.
+#[cfg(any(target_arch = "wasm32", test))]
 const AMBIENT_SURFACES: &[&str] = &[
     ui_registry::id::WORLD,
     ui_registry::id::CORNER_BUTTONS,
@@ -102,6 +108,8 @@ pub fn surface_diff(app: &App, registry: &SurfaceRegistry) {
 /// ambient-хрома; what-if — только активная сессия (в реестре поверхность
 /// живёт, пока видна пилюля входа на вьюпортах ≥900×600 — почти всегда
 /// на десктопе). Чистая функция — инварианты покрыты тестами на нативе.
+/// Гейт `wasm32 | test` — см. комментарий к `AMBIENT_SURFACES`.
+#[cfg(any(target_arch = "wasm32", test))]
 fn tracked_present(app: &App, registry: &SurfaceRegistry) -> HashSet<String> {
     let mut present: HashSet<String> = registry
         .declarations()

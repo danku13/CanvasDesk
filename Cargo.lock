@@ -306,6 +306,7 @@ dependencies = [
  "canvas-ui",
  "canvas-widgets",
  "cosmic-text",
+ "js-sys",
  "serde",
  "serde_json",
  "toml",
