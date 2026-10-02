@@ -487,10 +487,22 @@ pub enum SuggestTarget {
     Cards,
 }
 
-/// Геометрия карточки: ширина/высота/зазор (лог. px, паттерн whatif-чипа).
-pub const SUGGEST_CARD_W: f32 = 200.0;
-pub const SUGGEST_CARD_H: f32 = 30.0;
-pub const SUGGEST_CARD_GAP: f32 = 6.0;
+/// Геометрия карточки-призрака ноды: совпадает с размерами реальной ноды
+/// (240×80 = шапка 34 + gap 4 + 2 строки тела 40 + padding 2).
+/// FR-079 redesign: владелец хочет видеть suggest как НОДЫ, а не чипы —
+/// «пользователь должен следующим видеть именно ноду, чтобы было понятно,
+/// что мне предлагается следующая нода».
+pub const SUGGEST_CARD_W: f32 = 240.0;
+pub const SUGGEST_CARD_H: f32 = 80.0;
+pub const SUGGEST_CARD_GAP: f32 = 12.0;
+/// Прозрачность призрака: fill alpha × 0.5, border alpha × 0.5 —
+/// нода выглядит «призрачно», визуально отличается от реальной ноды,
+/// но структура та же (шапка + тело + скруглённые углы).
+pub const SUGGEST_GHOST_ALPHA: f32 = 0.5;
+/// Размеры empty-state тултипа «AI-дополнений нет» (маленький чип,
+/// не призрак ноды — т.к. предложений нет, рисовать превью ноды не из чего).
+pub const SUGGEST_EMPTY_W: f32 = 200.0;
+pub const SUGGEST_EMPTY_H: f32 = 30.0;
 /// Отступ стопки карточек от правого края ноды-якоря (world px → screen
 /// лог. px при зуме 1; при другом зуме — пропорционально).
 pub const SUGGEST_CARD_OFFSET_X: f32 = 12.0;
@@ -548,6 +560,23 @@ pub fn card_rects(
         out.push(UiRect::new(x, row_y, SUGGEST_CARD_W, SUGGEST_CARD_H));
     }
     out
+}
+
+/// FR-079 follow-up: rect для empty-state тултипа «AI-дополнений нет».
+/// Маленький чип (SUGGEST_EMPTY_W × SUGGEST_EMPTY_H) справа от якоря —
+/// не призрак ноды, т.к. предложений нет и рисовать превью не из чего.
+/// Кламп по правому краю viewport (как card_rects).
+pub fn empty_tooltip_rect(
+    node_screen: [f32; 4],
+    viewport: [f32; 2],
+) -> Option<canvas_ui::geometry::UiRect> {
+    use canvas_ui::geometry::UiRect;
+    let mut x = node_screen[0] + node_screen[2] + SUGGEST_CARD_OFFSET_X;
+    let y = node_screen[1];
+    if x + SUGGEST_EMPTY_W > viewport[0] - 4.0 {
+        x = (node_screen[0] - SUGGEST_CARD_OFFSET_X - SUGGEST_EMPTY_W).max(4.0);
+    }
+    Some(UiRect::new(x, y, SUGGEST_EMPTY_W, SUGGEST_EMPTY_H))
 }
 
 #[cfg(test)]
