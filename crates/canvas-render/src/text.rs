@@ -4682,7 +4682,16 @@ impl TextSystem {
                                 left: (pos[0].floor() as i32) - 1,
                                 top: pos[1].floor() as i32,
                                 right: (pos[0] + BADGE_FONT_SIZE * 6.0 * zoom_px) as i32,
-                                bottom: (pos[1] + RESULT_LINE_HEIGHT * zoom_px) as i32,
+                                // Границы = вся полоса (паттерн блока значения
+                                // ниже): v_center сдвигает текст на
+                                // (32−12)/2 = 10·zoom, строка занимает
+                                // [10..22]·zoom, базлайн прописных ≈ 19.9·zoom.
+                                // Прежнее «верх полосы + RESULT_LINE_HEIGHT
+                                // (16)» осталось со времён до-FR-075 (метка у
+                                // нижнего края) и срезала glyphon'ом нижнюю
+                                // половину прописных «ИТОГ» (отчёт владельца
+                                // 2026-10-03; CPU-замер: baseline 19.9 > 16).
+                                bottom: (pos[1] + strip_h * zoom_px) as i32,
                             },
                             default_color: dim_color(on_card(self.theme.quote), text_factor),
                             custom_glyphs: &[],
