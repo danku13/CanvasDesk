@@ -1096,19 +1096,50 @@ impl App {
                                 },
                                 4.0,
                             ));
-                            let icon_font = (11.0 * scale).max(8.0);
-                            texts.push(OwnedScreenText {
-                                text: explain_ui::EDIT_ICON_GLYPH.to_owned(),
-                                origin: [icon[0], icon[1] + (icon[3] - icon_font) / 2.0],
-                                width: icon[2],
-                                font_size: icon_font,
-                                color: if icon_hovered {
-                                    Color::rgb(255, 255, 255)
-                                } else {
-                                    palette.body
-                                },
-                                align: TextAlign::Center,
-                            });
+                            // FR-085: SVG-иконка карандаша (FR-ICONS,
+                            // screen-space физ. px) вместо текстового глифа
+                            // (U+270E нет в вшитом шрифте — рисовался пустой
+                            // квадрат). Фолбэк на глиф — если пара (набор,
+                            // edit) в атласе нет (пользовательский набор без
+                            // иконки) — мягкая деградация, паттерн KitDraw.
+                            let tint = if icon_hovered {
+                                [1.0, 1.0, 1.0, 1.0]
+                            } else {
+                                color_to_rgba(palette.body)
+                            };
+                            let icon_set = self.icon_set_active();
+                            let uv = icon_set.and_then(|set| canvas_render::icon_uv(set, "edit"));
+                            if let Some((uv_min, uv_max)) = uv {
+                                // Квадратная вписка по центру зоны (паттерн
+                                // KitDraw::icon); логические px → физические.
+                                let sf = self.scale_factor();
+                                let size = (icon[2].min(icon[3]) * 0.62) * sf;
+                                let pos = [
+                                    (icon[0] + (icon[2] - size / sf) * 0.5) * sf,
+                                    (icon[1] + (icon[3] - size / sf) * 0.5) * sf,
+                                ];
+                                self.icon_instances.push(canvas_render::IconInstance {
+                                    pos,
+                                    size: [size, size],
+                                    uv_min,
+                                    uv_max,
+                                    tint,
+                                });
+                            } else {
+                                let icon_font = (11.0 * scale).max(8.0);
+                                texts.push(OwnedScreenText {
+                                    text: explain_ui::EDIT_ICON_GLYPH.to_owned(),
+                                    origin: [icon[0], icon[1] + (icon[3] - icon_font) / 2.0],
+                                    width: icon[2],
+                                    font_size: icon_font,
+                                    color: if icon_hovered {
+                                        Color::rgb(255, 255, 255)
+                                    } else {
+                                        palette.body
+                                    },
+                                    align: TextAlign::Center,
+                                });
+                            }
                         }
                     }
                     // Бейдж фронтира таблице не нужен (листья без детей),
@@ -1323,10 +1354,13 @@ impl App {
                     align: TextAlign::Left,
                 });
             }
-            // X3 (AC-4.1): inline-поле подмены — поверх дерева (правый
-            // нижний угол тела); клик мимо/Enter — коммит, Esc — отмена
+            // X3 (AC-4.1): inline-поле подмены — тултип у редактируемой
+            // строки/карточки (FR-085: под якорем, над — если снизу не
+            // влезает); клик мимо/Enter — коммит, Esc — отмена
             if let Some(edit) = state.edit.as_ref() {
-                let field = explain_ui::field_rect(body);
+                let anchor = explain_ui::edit_anchor_rect(&layout, edit.idx, scale, body, origin)
+                    .unwrap_or([body[0], body[1], 0.0, 0.0]);
+                let field = explain_ui::field_rect(body, anchor);
                 quads.push(screen_rect_quad(
                     camera,
                     viewport,

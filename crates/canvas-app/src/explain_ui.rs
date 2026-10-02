@@ -647,6 +647,57 @@ pub fn fit_scale(bounds: [f32; 2], body: [f32; 4]) -> f32 {
         .max(SCALE_MIN)
 }
 
+/// Потолок пользовательского зума (FR-085): эффективный масштаб кадра =
+/// [`base_scale`] · zoom ∈ [`SCALE_MIN`, `ZOOM_MAX`].
+pub const ZOOM_MAX: f32 = 2.5;
+
+/// Базовый масштаб кадра без пользовательского зума (FR-085): обычный
+/// режим — [`fit_scale`], режим защиты — [`defense_fit_scale`] (укрупнение
+/// ×1.5). Единая точка для рендера и ввода (зум-лимиты колеса).
+pub fn base_scale(bounds: [f32; 2], body: [f32; 4], defense: bool) -> f32 {
+    if defense {
+        defense_fit_scale(bounds, body)
+    } else {
+        fit_scale(bounds, body)
+    }
+}
+
+/// Пан при зуме к курсору (FR-085, чистая функция): контентная точка под
+/// курсором сохраняется. До зума: `cursor = body + BODY_PAD + center(s_old)
+/// + pan + c·s_old`; после — то же с `s_new` и пересчитанным центрированием
+/// ([`content_origin`]). Возвращает НЕСКЛампленный пан — вызывающий
+/// прогоняет через [`pan_clamp`] с новым масштабом.
+pub fn zoom_adjust_pan(
+    pan: [f32; 2],
+    cursor: [f32; 2],
+    body: [f32; 4],
+    bounds: [f32; 2],
+    scale_old: f32,
+    scale_new: f32,
+) -> [f32; 2] {
+    let avail_w = (body[2] - BODY_PAD * 2.0).max(0.0);
+    let avail_h = (body[3] - BODY_PAD * 2.0).max(0.0);
+    let center = |_s: f32, avail: f32, content: f32| ((avail - content) / 2.0).max(0.0);
+    let mut out = [0.0; 2];
+    for axis in 0..2 {
+        let avail = if axis == 0 { avail_w } else { avail_h };
+        let content_old = bounds[axis] * scale_old;
+        let content_new = bounds[axis] * scale_new;
+        let c = (cursor[axis]
+            - body[axis]
+            - BODY_PAD
+            - center(scale_old, avail, content_old)
+            - pan[axis])
+            / scale_old.max(f32::EPSILON);
+        out[axis] = cursor[axis]
+            - body[axis]
+            - BODY_PAD
+            - center(scale_new, avail, content_new)
+            - c * scale_new;
+    }
+    out
+}
+
 /// Узел под точкой `point` (логические px окна): обратный обход — верхние
 /// карточки позже в списке (рисуются поверх). FR-083: пан тела не входит
 /// в геометрию — вызывающий передаёт `point − pan` (та же трансформация,
@@ -761,17 +812,60 @@ pub fn table_row_text_width(card_w: f32, scale: f32) -> f32 {
     ((card_w - 16.0 - EDIT_ICON_ZONE) * scale).max(0.0)
 }
 
-/// Inline-поле подмены (X3): закреплено в правом нижнем углу тела окна
-/// (одна геометрия для рендера и hit-теста — детерминизм).
-pub fn field_rect(body: [f32; 4]) -> [f32; 4] {
+/// Inline-поле подмены (X3) — тултип у якоря (FR-085): под строкой
+/// карточки (+6 px); если снизу не влезает — над якорем; X клампится в
+/// тело. Одна геометрия для рендера и hit-теста (детерминизм). Якорь —
+/// экранный rect строки/карточки ([`edit_anchor_rect`]).
+pub fn field_rect(body: [f32; 4], anchor: [f32; 4]) -> [f32; 4] {
     const W: f32 = 260.0;
     const H: f32 = 26.0;
-    [
-        body[0] + body[2] - W - BODY_PAD,
-        body[1] + body[3] - H - BODY_PAD,
-        W,
-        H,
-    ]
+    const GAP: f32 = 6.0;
+    let x = anchor[0].clamp(
+        body[0] + BODY_PAD,
+        (body[0] + body[2] - W - BODY_PAD).max(body[0] + BODY_PAD),
+    );
+    let y_below = anchor[1] + anchor[3] + GAP;
+    let y_above = anchor[1] - H - GAP;
+    let body_bottom = body[1] + body[3] - BODY_PAD;
+    let y = if y_below + H <= body_bottom {
+        y_below
+    } else if y_above >= body[1] + BODY_PAD {
+        y_above
+    } else {
+        // Оба варианта не влезают (якорь выше тела — теоретический случай):
+        // кламп к телу.
+        y_below.clamp(body[1] + BODY_PAD, body_bottom - H)
+    };
+    [x, y, W, H]
+}
+
+/// Экранный rect якоря поля подмены (FR-085): строка таблицы
+/// ([`LaidNode::rows`]) с листом `leaf_idx` — полоса строки; карточка без
+/// строк — вся карточка. Координаты — экранные (body + BODY_PAD +
+/// rect·scale + origin), как у рендера.
+pub fn edit_anchor_rect(
+    layout: &TreeLayout,
+    leaf_idx: usize,
+    scale: f32,
+    body: [f32; 4],
+    origin: [f32; 2],
+) -> Option<[f32; 4]> {
+    for laid in &layout.nodes {
+        let x = body[0] + BODY_PAD + laid.rect[0] * scale + origin[0];
+        let y = body[1] + BODY_PAD + laid.rect[1] * scale + origin[1];
+        if laid.rows.is_empty() {
+            if laid.idx == leaf_idx {
+                return Some([x, y, laid.rect[2] * scale, laid.rect[3] * scale]);
+            }
+        } else {
+            for row in &laid.rows {
+                if row.leaf_idx == leaf_idx {
+                    return Some([x, y + row.y * scale, laid.rect[2] * scale, row.h * scale]);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Иконка редактирования под точкой: обходит карточки (обратный порядок —
@@ -1058,6 +1152,11 @@ pub struct ExplainState {
     /// [`pan_clamp`] (контент прижат к левому-верхнему углу). Сбрасывается
     /// при смене вида/защиты/направления/открытии.
     pub pan: [f32; 2],
+    /// FR-085: пользовательский зум (колесо к курсору); эффективный
+    /// масштаб кадра = [`base_scale`] · zoom. Диапазон effective —
+    /// [`SCALE_MIN`]…`base_scale`·[`ZOOM_MAX`]. Сбрасывается вместе с
+    /// паном ([`Self::reset_pan`]).
+    pub zoom: f32,
     /// Драг-панорамирование фона тела (FR-083): Some — драг идёт.
     /// Runtime-состояние — не сериализуется.
     pub pan_drag: Option<PanDrag>,
@@ -1087,6 +1186,7 @@ impl ExplainState {
             pick_at: None,
             direction: LayoutDirection::default(),
             pan: [0.0; 2],
+            zoom: 1.0,
             pan_drag: None,
         }
     }
@@ -1121,6 +1221,7 @@ impl ExplainState {
             pick_at: None,
             direction: LayoutDirection::default(),
             pan: [0.0; 2],
+            zoom: 1.0,
             pan_drag: None,
         }
     }
@@ -1234,9 +1335,11 @@ impl ExplainState {
     }
 
     /// Сброс пана (FR-083): смена вида/защиты/направления возвращает окно
-    /// к левому-верхнему углу контента.
+    /// к левому-верхнему углу контента. FR-085: вместе с паном сбрасывается
+    /// и пользовательский зум (вид схемы полностью меняется).
     pub fn reset_pan(&mut self) {
         self.pan = [0.0; 2];
+        self.zoom = 1.0;
         self.pan_drag = None;
     }
 
@@ -2911,5 +3014,139 @@ mod tests {
         let o = content_origin([0.0, -100.0], [100.0, 800.0], 1.0, body);
         assert!((o[0] - (BODY_PAD + (avail_w - 100.0) / 2.0)).abs() < 1e-3);
         assert!((o[1] - (BODY_PAD - 100.0)).abs() < 1e-3);
+    }
+
+    // --- FR-085: зум, base_scale, поле-тултип у якоря -------------------
+
+    /// FR-085: zoom_adjust_pan — при равных масштабах пан не меняется.
+    #[test]
+    fn zoom_adjust_pan_identity_at_same_scale() {
+        let body = [0.0, 0.0, 800.0, 600.0];
+        let pan = [-40.0, -20.0];
+        let out = zoom_adjust_pan(pan, [300.0, 200.0], body, [1600.0, 1200.0], 1.0, 1.0);
+        assert!((out[0] - pan[0]).abs() < 1e-3 && (out[1] - pan[1]).abs() < 1e-3);
+    }
+
+    /// FR-085: зум к курсору — контентная точка под курсором сохраняется
+    /// (после зума и клампа точка остаётся под курсором).
+    #[test]
+    fn zoom_adjust_pan_keeps_cursor_point() {
+        let body = [0.0, 0.0, 800.0, 600.0];
+        let bounds = [1600.0, 1200.0];
+        let cursor = [500.0, 300.0];
+        let (s_old, s_new) = (1.0, 1.5);
+        let pan_old = pan_clamp([-100.0, -50.0], bounds, s_old, body);
+        // Контентная точка под курсором ДО зума
+        let origin_old = content_origin(pan_old, bounds, s_old, body);
+        let c = [
+            (cursor[0] - body[0] - origin_old[0]) / s_old,
+            (cursor[1] - body[1] - origin_old[1]) / s_old,
+        ];
+        let raw = zoom_adjust_pan(pan_old, cursor, body, bounds, s_old, s_new);
+        let pan_new = pan_clamp(raw, bounds, s_new, body);
+        let origin_new = content_origin(pan_new, bounds, s_new, body);
+        let screen = [
+            body[0] + origin_new[0] + c[0] * s_new,
+            body[1] + origin_new[1] + c[1] * s_new,
+        ];
+        assert!(
+            (screen[0] - cursor[0]).abs() < 1e-2,
+            "x: {} vs {}",
+            screen[0],
+            cursor[0]
+        );
+        assert!(
+            (screen[1] - cursor[1]).abs() < 1e-2,
+            "y: {} vs {}",
+            screen[1],
+            cursor[1]
+        );
+    }
+
+    /// FR-085: base_scale — обычный режим fit, защита defense_fit.
+    #[test]
+    fn base_scale_picks_fit_or_defense() {
+        let body = [0.0, 0.0, 800.0, 600.0];
+        let bounds = [1600.0, 1200.0];
+        assert!((base_scale(bounds, body, false) - fit_scale(bounds, body)).abs() < 1e-4);
+        assert!((base_scale(bounds, body, true) - defense_fit_scale(bounds, body)).abs() < 1e-4);
+    }
+
+    /// FR-085: поле подмены — тултип у якоря: по умолчанию под якорем;
+    /// у нижнего края — над якорем; X клампится в тело.
+    #[test]
+    fn field_rect_tooltip_near_anchor() {
+        let body = [0.0, 0.0, 800.0, 600.0];
+        // Под якорем (влезает)
+        let anchor = [100.0, 100.0, 120.0, 60.0];
+        let f = field_rect(body, anchor);
+        assert!((f[1] - (anchor[1] + anchor[3] + 6.0)).abs() < 1e-3, "below");
+        assert!((f[0] - anchor[0]).abs() < 1e-3, "x без клампа");
+        // У нижнего края — флип над якорем
+        let anchor_low = [100.0, 500.0, 120.0, 60.0];
+        let f = field_rect(body, anchor_low);
+        assert!((f[1] - (anchor_low[1] - 26.0 - 6.0)).abs() < 1e-3, "above");
+        // Якорь у правого края — X клампится в тело
+        let anchor_right = [700.0, 100.0, 120.0, 60.0];
+        let f = field_rect(body, anchor_right);
+        assert!(
+            f[0] + f[2] <= body[0] + body[2] - BODY_PAD + 1e-3,
+            "x clamp"
+        );
+    }
+
+    /// FR-085: edit_anchor_rect — полоса строки таблицы; вся карточка
+    /// для не-табличного узла.
+    #[test]
+    fn edit_anchor_rect_row_and_card() {
+        let tree = group_tree();
+        let empty = BTreeSet::new();
+        let vis = visibility(&tree, 0, 3, &empty);
+        let layout = layout_tree(&tree, &vis, 0, LayoutDirection::Ltr);
+        let body = [0.0, 0.0, 900.0, 700.0];
+        // Карточка-таблица листьев "src" — ищем её row-якорь
+        let table = layout
+            .nodes
+            .iter()
+            .find(|l| !l.rows.is_empty())
+            .expect("group_tree даёт таблицу");
+        let first_row_leaf = table.rows[0].leaf_idx;
+        let origin = content_origin([0.0; 2], layout.bounds, 1.0, body);
+        let anchor = edit_anchor_rect(&layout, first_row_leaf, 1.0, body, origin)
+            .expect("строка таблицы найдена");
+        assert!(
+            (anchor[3] - TABLE_ROW_STEP).abs() < 1e-3,
+            "высота якоря = строка"
+        );
+        assert!(anchor[1] > body[1], "якорь внутри тела");
+        // Не-табличная карточка (корень) — якорь = карточка целиком
+        // (порядок layout.nodes — пост-обход: ищем карточку по idx)
+        let root_anchor = edit_anchor_rect(&layout, 0, 1.0, body, origin).expect("корень");
+        let root_card = layout
+            .nodes
+            .iter()
+            .find(|l| l.idx == 0)
+            .expect("корень в лейауте");
+        assert!(
+            (root_anchor[3] - root_card.rect[3]).abs() < 1e-3,
+            "высота карточки"
+        );
+        // Битый idx — None
+        assert!(edit_anchor_rect(&layout, 9999, 1.0, body, origin).is_none());
+    }
+
+    /// FR-085: reset_pan сбрасывает и зум (вид сменился — масштаб к базе).
+    #[test]
+    fn reset_pan_resets_zoom() {
+        let mut state = ExplainState::loading(
+            canvas_core::LineageNodeId::total("r"),
+            0,
+            ExplainBuild::Native(std::sync::mpsc::channel().1),
+        );
+        state.zoom = 2.2;
+        state.pan = [-100.0, -50.0];
+        state.reset_pan();
+        assert!((state.zoom - 1.0).abs() < 1e-6);
+        assert_eq!(state.pan, [0.0; 2]);
     }
 }
