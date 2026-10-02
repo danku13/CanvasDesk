@@ -45,8 +45,40 @@
       #lang-picker-overlay button:focus-visible {
         outline: 2px solid #8ab4ff; outline-offset: 2px;
       }
+      /* FR-087 (шаг 2 — выбор роли): сетка карточек ролей + строка
+         краткой информации «какие подсказки будут включены». */
+      #lang-picker-overlay .step { display: flex; flex-direction: column; gap: 16px; align-items: center; max-width: min(640px, 92vw); }
+      #lang-picker-overlay #role-grid {
+        display: flex; flex-wrap: wrap; justify-content: center;
+        gap: 10px; max-width: 560px;
+      }
+      #lang-picker-overlay #role-grid button {
+        min-width: 150px; padding: 10px 16px; font-size: 14px;
+      }
+      #lang-picker-overlay #role-info {
+        min-height: 40px; max-width: 520px; text-align: center;
+        color: #8b95a3; font-size: 13px; line-height: 1.5;
+        margin: 0;
+      }
+      #lang-picker-overlay .secondary {
+        background: transparent; color: #8b95a3; border: 1px solid transparent;
+        font-weight: 400; font-size: 13px !important; min-width: 0 !important;
+        padding: 8px 14px !important;
+      }
+      #lang-picker-overlay .secondary:hover { background: #1d2128; color: #d5d9e0; }
     </style>
     <script>
+      /* FR-028 v2 + FR-087 (language picker → role picker): первый экран
+       * web-версии теперь двухшаговый. Шаг 1 — язык (как раньше). Шаг 2 —
+       * опциональная рабочая роль (class): сетка карточек + краткая
+       * информация «какие типы подсказок будут включены» (по hover/focus
+       * карточки). «Продолжить без роли» — class=default (все подсказки,
+       * прежнее поведение). Выбор пишет минимальный TOML
+       * `language = "ru"` (+ `role = "architect"`) в localStorage и
+       * перезагружает страницу — canvas-app::load_settings подхватит оба
+       * поля до WASM init. Роль можно сменить позже в настройках
+       * (таб «Профиль», dropdown «Роль»). Данные ролей синхронны реестру
+       * canvas-core::roles (id/имена/описания RU+EN). */
       (function () {
         // Проверяем, есть ли уже canvasdesk.config в localStorage.
         // Если есть — приложение уже было запущено, язык выбран (или
@@ -60,29 +92,110 @@
           // localStorage недоступен (приватный режим) — пикер всё равно
           // покажем, но выбор не сохранится (canvas-app дефолт = Ru).
         }
-        // Показываем overlay — он блокирует экран до клика.
+        // FR-087: реестр ролей (зеркало canvas_core::roles::ROLES;
+        // default здесь нет — его выбирает «Продолжить без роли»).
+        var ROLES = [
+          { id: "architect", name_ru: "Архитектор", name_en: "Architect",
+            d_ru: "Подсказки шаблонов: бэкенд и сеть. Схемы: архитектура и планирование мощностей.",
+            d_en: "Template hints: backend and network. Schemes: architecture and capacity planning." },
+          { id: "developer", name_ru: "Разработчик", name_en: "Developer",
+            d_ru: "Подсказки шаблонов: бэкенд и сеть. Схемы: архитектура сервисов.",
+            d_en: "Template hints: backend and network. Schemes: service architecture." },
+          { id: "product-manager", name_ru: "Продакт-менеджер", name_en: "Product Manager",
+            d_ru: "Подсказки шаблонов: продуктовая аналитика и юнит-экономика. Схемы: бизнес-модели и фреймворки.",
+            d_en: "Template hints: product analytics and unit economics. Schemes: business models and frameworks." },
+          { id: "analyst", name_ru: "Аналитик", name_en: "Analyst",
+            d_ru: "Подсказки шаблонов: продуктовая аналитика и юнит-экономика. Схемы: бизнес, фреймворки и планирование.",
+            d_en: "Template hints: product analytics and unit economics. Schemes: business, frameworks and planning." },
+          { id: "cio", name_ru: "CIO", name_en: "CIO",
+            d_ru: "Подсказки шаблонов: бэкенд-инфраструктура и юнит-экономика. Схемы: бизнес, архитектура и планирование.",
+            d_en: "Template hints: backend infrastructure and unit economics. Schemes: business, architecture and planning." },
+          { id: "cto", name_ru: "CTO", name_en: "CTO",
+            d_ru: "Подсказки шаблонов: бэкенд, сеть и юнит-экономика. Схемы: архитектура, бизнес и планирование.",
+            d_en: "Template hints: backend, network and unit economics. Schemes: architecture, business and planning." },
+          { id: "founder", name_ru: "Основатель / CEO", name_en: "Founder / CEO",
+            d_ru: "Подсказки шаблонов: юнит-экономика. Схемы: бизнес-модели, планирование и фреймворки.",
+            d_en: "Template hints: unit economics. Schemes: business models, planning and frameworks." }
+        ];
         document.addEventListener("DOMContentLoaded", function () {
           var overlay = document.getElementById("lang-picker-overlay");
           if (!overlay) return;
           overlay.hidden = false;
-          function pick(lang) {
+          var langStep = document.getElementById("lang-step");
+          var roleStep = document.getElementById("role-step");
+          var roleGrid = document.getElementById("role-grid");
+          var roleInfo = document.getElementById("role-info");
+          var roleTitle = document.getElementById("role-title");
+          var roleBack = document.getElementById("role-back");
+          var roleSkip = document.getElementById("role-skip");
+          var chosen = "ru";
+          var t = {
+            ru: {
+              title: "Выберите рабочую роль",
+              hint: "Роль включает подсказки соответствующих типов шаблонов и схем.",
+              skip: "Продолжить без роли (все подсказки)",
+              back: "← Назад к языку",
+              any: "Необязательно: роль можно сменить в настройках — таб «Профиль»."
+            },
+            en: {
+              title: "Choose your work role",
+              hint: "A role enables matching template and scheme hints.",
+              skip: "Continue without a role (all hints)",
+              back: "← Back to language",
+              any: "Optional: you can change the role later in Settings — the Profile tab."
+            }
+          };
+          function pick(role) {
             // Записываем минимальный TOML в localStorage — canvas-app
             // через load_settings::toml::from_str подхватит `language = "ru"`
-            // и применит к Settings. Остальные поля — serde(default).
+            // и `role = "..."`; остальные поля — serde(default).
+            var toml = 'language = "' + chosen + '"';
+            if (role) toml += '\nrole = "' + role + '"';
             try {
               var ls = window.localStorage;
-              if (ls) ls.setItem("canvasdesk.config", 'language = "' + lang + '"');
+              if (ls) ls.setItem("canvasdesk.config", toml);
             } catch (e) { /* localStorage недоступен — продолжаем */ }
             // Перезагружаем страницу — WASM init начнётся заново и
             // подхватит новый localStorage.
             window.location.reload();
           }
+          function showRoleStep() {
+            var l = t[chosen];
+            roleTitle.textContent = l.title + " — " + l.hint;
+            roleBack.textContent = l.back;
+            roleSkip.textContent = l.skip;
+            roleInfo.textContent = l.any;
+            langStep.hidden = true;
+            roleStep.hidden = false;
+            roleGrid.innerHTML = "";
+            for (var i = 0; i < ROLES.length; i++) {
+              var role = ROLES[i];
+              var btn = document.createElement("button");
+              btn.type = "button";
+              btn.textContent = chosen === "en" ? role.name_en : role.name_ru;
+              (function (r) {
+                function describe() {
+                  roleInfo.textContent = chosen === "en" ? r.d_en : r.d_ru;
+                }
+                btn.addEventListener("mouseenter", describe);
+                btn.addEventListener("focus", describe);
+                btn.addEventListener("click", function () { pick(r.id); });
+              })(role);
+              roleGrid.appendChild(btn);
+            }
+          }
           var btns = overlay.querySelectorAll("button[data-lang]");
           for (var i = 0; i < btns.length; i++) {
             btns[i].addEventListener("click", function (e) {
-              pick(e.currentTarget.getAttribute("data-lang"));
+              chosen = e.currentTarget.getAttribute("data-lang");
+              showRoleStep();
             });
           }
+          roleBack.addEventListener("click", function () {
+            roleStep.hidden = true;
+            langStep.hidden = false;
+          });
+          roleSkip.addEventListener("click", function () { pick(null); });
         });
       })();
     </script>
@@ -457,10 +570,24 @@
          перезагружают страницу. Стиль — в <head>. -->
     <div id="lang-picker-overlay" hidden>
       <h1>CanvasDesk</h1>
-      <p>Choose language / Выберите язык</p>
-      <div class="buttons">
-        <button type="button" data-lang="ru">Русский</button>
-        <button type="button" data-lang="en">English</button>
+      <!-- Шаг 1: язык (FR-028 v2, прежнее поведение) -->
+      <div class="step" id="lang-step">
+        <p>Choose language / Выберите язык</p>
+        <div class="buttons">
+          <button type="button" data-lang="ru">Русский</button>
+          <button type="button" data-lang="en">English</button>
+        </div>
+      </div>
+      <!-- Шаг 2: рабочая роль (FR-087, опционально; hover/focus карточки
+           показывает краткую информацию о включаемых подсказках) -->
+      <div class="step" id="role-step" hidden>
+        <p id="role-title"></p>
+        <div id="role-grid"></div>
+        <p id="role-info"></p>
+        <div class="buttons">
+          <button type="button" id="role-back" class="secondary"></button>
+          <button type="button" id="role-skip"></button>
+        </div>
       </div>
     </div>
 

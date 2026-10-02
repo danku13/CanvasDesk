@@ -158,12 +158,27 @@ pub enum SettingsRow {
     /// FR-ICONS: набор иконок UI (Glyph/Lucide/Material/Feather/Bootstrap) —
     /// dropdown в табе «Внешний вид».
     IconStyle,
+
+    /// FR-087: рабочая роль (class) — dropdown реестра
+    /// `canvas_core::roles::ROLES` в табе «Профиль».
+    Role,
+    /// FR-087: тумблеры вывода типов шаблонных нод (палитра/wheel).
+    TplCatBackend,
+    TplCatNetwork,
+    TplCatUnitEconomics,
+    TplCatProductAnalytics,
+    /// FR-087: тумблеры вывода типов шаблонных схем (галерея Ctrl+T).
+    SchemeCatArchitecture,
+    SchemeCatBusiness,
+    SchemeCatFramework,
+    SchemeCatPlanning,
+    SchemeCatOnboarding,
 }
 
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 31] = [
+pub const SETTINGS_ROWS: [SettingsRow; 41] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -196,6 +211,17 @@ pub const SETTINGS_ROWS: [SettingsRow; 31] = [
     // FR-079 (S3): таб «Подсказки»
     SettingsRow::SuggestEnabled,
     SettingsRow::SuggestEngine,
+    // FR-087: таб «Профиль» — роль + фильтры категорий подсказок
+    SettingsRow::Role,
+    SettingsRow::TplCatBackend,
+    SettingsRow::TplCatNetwork,
+    SettingsRow::TplCatUnitEconomics,
+    SettingsRow::TplCatProductAnalytics,
+    SettingsRow::SchemeCatArchitecture,
+    SettingsRow::SchemeCatBusiness,
+    SettingsRow::SchemeCatFramework,
+    SettingsRow::SchemeCatPlanning,
+    SettingsRow::SchemeCatOnboarding,
 ];
 
 /// Таб модалки (FR-039): иконка + ключ заголовка + строки. Тема —
@@ -216,7 +242,7 @@ pub struct SettingsTab {
 /// «Канвас» — сетка и оверлей узких мест; «Связи и порты» — связи/порты/
 /// фокус + построчные точки выхода FR-025; «Внешний вид» — карточки темы
 /// и язык FR-040. FR-038 дополнит модель пятым табом «Snap».
-pub const SETTINGS_TABS: [SettingsTab; 7] = [
+pub const SETTINGS_TABS: [SettingsTab; 8] = [
     SettingsTab {
         title_key: keys::TAB_GENERAL,
         icon: "◎",
@@ -289,6 +315,24 @@ pub const SETTINGS_TABS: [SettingsTab; 7] = [
         rows: &[SettingsRow::SuggestEnabled, SettingsRow::SuggestEngine],
     },
     SettingsTab {
+        // FR-087: роль + фильтры типов шаблонных нод и схем
+        title_key: keys::TAB_PROFILE,
+        icon: "◉",
+        theme_cards: false,
+        rows: &[
+            SettingsRow::Role,
+            SettingsRow::TplCatBackend,
+            SettingsRow::TplCatNetwork,
+            SettingsRow::TplCatUnitEconomics,
+            SettingsRow::TplCatProductAnalytics,
+            SettingsRow::SchemeCatArchitecture,
+            SettingsRow::SchemeCatBusiness,
+            SettingsRow::SchemeCatFramework,
+            SettingsRow::SchemeCatPlanning,
+            SettingsRow::SchemeCatOnboarding,
+        ],
+    },
+    SettingsTab {
         title_key: keys::TAB_APPEARANCE,
         icon: "◐",
         theme_cards: true,
@@ -336,6 +380,17 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::DragPushPredictive => keys::ROW_DRAG_PUSH_PREDICTIVE,
         SettingsRow::DragPushRebase => keys::ROW_DRAG_PUSH_REBASE,
         SettingsRow::IconStyle => keys::ROW_ICON_STYLE,
+        // FR-087: таб «Профиль» — роль и фильтры подсказок
+        SettingsRow::Role => keys::ROW_ROLE,
+        SettingsRow::TplCatBackend => keys::ROW_TPLCAT_BACKEND,
+        SettingsRow::TplCatNetwork => keys::ROW_TPLCAT_NETWORK,
+        SettingsRow::TplCatUnitEconomics => keys::ROW_TPLCAT_UNIT_ECONOMICS,
+        SettingsRow::TplCatProductAnalytics => keys::ROW_TPLCAT_PRODUCT_ANALYTICS,
+        SettingsRow::SchemeCatArchitecture => keys::ROW_SCHEMECAT_ARCHITECTURE,
+        SettingsRow::SchemeCatBusiness => keys::ROW_SCHEMECAT_BUSINESS,
+        SettingsRow::SchemeCatFramework => keys::ROW_SCHEMECAT_FRAMEWORK,
+        SettingsRow::SchemeCatPlanning => keys::ROW_SCHEMECAT_PLANNING,
+        SettingsRow::SchemeCatOnboarding => keys::ROW_SCHEMECAT_ONBOARDING,
     }
 }
 
@@ -375,6 +430,17 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::DragPushPredictive => keys::DESC_DRAG_PUSH_PREDICTIVE,
         SettingsRow::DragPushRebase => keys::DESC_DRAG_PUSH_REBASE,
         SettingsRow::IconStyle => keys::DESC_ICON_STYLE,
+        // FR-087: описания — общие на группу категорий (лейблы — конкретные)
+        SettingsRow::Role => keys::DESC_ROLE,
+        SettingsRow::TplCatBackend
+        | SettingsRow::TplCatNetwork
+        | SettingsRow::TplCatUnitEconomics
+        | SettingsRow::TplCatProductAnalytics => keys::DESC_TPLCAT,
+        SettingsRow::SchemeCatArchitecture
+        | SettingsRow::SchemeCatBusiness
+        | SettingsRow::SchemeCatFramework
+        | SettingsRow::SchemeCatPlanning
+        | SettingsRow::SchemeCatOnboarding => keys::DESC_SCHEMECAT,
     }
 }
 
@@ -405,6 +471,8 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::DragPushSafeGap
         | SettingsRow::DragPushHalo
         | SettingsRow::IconStyle
+        // FR-087: роль — dropdown реестра ролей
+        | SettingsRow::Role
         | SettingsRow::SuggestEngine => RowKind::Dropdown,
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
@@ -422,6 +490,16 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::SuggestEnabled
         | SettingsRow::DragPushEnabled
         | SettingsRow::DragPushPredictive
+        // FR-087: тумблеры категорий шаблонов/схем (bool-видимость)
+        | SettingsRow::TplCatBackend
+        | SettingsRow::TplCatNetwork
+        | SettingsRow::TplCatUnitEconomics
+        | SettingsRow::TplCatProductAnalytics
+        | SettingsRow::SchemeCatArchitecture
+        | SettingsRow::SchemeCatBusiness
+        | SettingsRow::SchemeCatFramework
+        | SettingsRow::SchemeCatPlanning
+        | SettingsRow::SchemeCatOnboarding
         | SettingsRow::DragPushRebase => RowKind::Toggle,
     }
 }
@@ -459,6 +537,13 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         }
         SettingsRow::PortZone => Some(format!("{} px", settings.port_zone_px as i32)),
         SettingsRow::Language => Some(settings.language.native_label().to_owned()),
+        // FR-087: текущая роль — имя в языке интерфейса (неизвестный id —
+        // подписка default, мягкая деградация реестра).
+        SettingsRow::Role => Some(canvas_core::roles::display_name(
+            &settings.role,
+            language,
+        )
+        .to_owned()),
         // FR-079 (S3): движок подсказок (лексика/гибрид/выкл)
         SettingsRow::SuggestEngine => Some(
             i18n::tr(
@@ -515,6 +600,16 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         // FR-073: тумблеры — состояние видно по позиции pill-ручки
         | SettingsRow::DragPushEnabled
         | SettingsRow::DragPushPredictive
+        // FR-087: тумблеры категорий — состояние видно по pill-ручке
+        | SettingsRow::TplCatBackend
+        | SettingsRow::TplCatNetwork
+        | SettingsRow::TplCatUnitEconomics
+        | SettingsRow::TplCatProductAnalytics
+        | SettingsRow::SchemeCatArchitecture
+        | SettingsRow::SchemeCatBusiness
+        | SettingsRow::SchemeCatFramework
+        | SettingsRow::SchemeCatPlanning
+        | SettingsRow::SchemeCatOnboarding
         | SettingsRow::DragPushRebase => None,
         // FR-ICONS: текущий набор — локализованное имя варианта.
         SettingsRow::IconStyle => Some(i18n::tr(language, icon_style_key(settings.icon_style)).to_owned()),
@@ -587,6 +682,18 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         SettingsRow::Language => [Language::Ru, Language::En]
             .into_iter()
             .map(|lang| (lang.native_label().to_owned(), settings.language == lang))
+            .collect(),
+        // FR-087: реестр ролей (порядок = порядок показа; «текущий» — по id,
+        // неизвестный id не отмечается ни в одном пункте). Порядок опций =
+        // порядку apply_dropdown_value (инвариант, тест).
+        SettingsRow::Role => canvas_core::roles::ROLES
+            .iter()
+            .map(|role| {
+                (
+                    role.display_name(language).to_owned(),
+                    role.id == settings.role,
+                )
+            })
             .collect(),
         // FR-079 (S3): порядок = apply_dropdown_value (инвариант, тест)
         SettingsRow::SuggestEngine => [
@@ -710,6 +817,16 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         // FR-073: тумблеры — dropdown не открывает (RowKind::Toggle)
         | SettingsRow::DragPushEnabled
         | SettingsRow::DragPushPredictive
+        // FR-087: тумблеры категорий — dropdown не открывает (Toggle)
+        | SettingsRow::TplCatBackend
+        | SettingsRow::TplCatNetwork
+        | SettingsRow::TplCatUnitEconomics
+        | SettingsRow::TplCatProductAnalytics
+        | SettingsRow::SchemeCatArchitecture
+        | SettingsRow::SchemeCatBusiness
+        | SettingsRow::SchemeCatFramework
+        | SettingsRow::SchemeCatPlanning
+        | SettingsRow::SchemeCatOnboarding
         | SettingsRow::DragPushRebase => Vec::new(),
         // FR-ICONS: порядок опций = порядок IconStyle::ALL (инвариант, тест) =
         // порядку apply_dropdown_value (тест). Локализованные имена наборов.
@@ -847,12 +964,33 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         | SettingsRow::DragPushPredictive
         | SettingsRow::DragPushRebase
         // FR-079 (S3): тумблер применяется apply_toggle_row, не dropdown
-        | SettingsRow::SuggestEnabled => {}
+        | SettingsRow::SuggestEnabled
+        // FR-087: тумблеры категорий — apply_toggle_row, не dropdown
+        | SettingsRow::TplCatBackend
+        | SettingsRow::TplCatNetwork
+        | SettingsRow::TplCatUnitEconomics
+        | SettingsRow::TplCatProductAnalytics
+        | SettingsRow::SchemeCatArchitecture
+        | SettingsRow::SchemeCatBusiness
+        | SettingsRow::SchemeCatFramework
+        | SettingsRow::SchemeCatPlanning
+        | SettingsRow::SchemeCatOnboarding => {}
         // FR-ICONS: индекс в `IconStyle::ALL` (порядок = dropdown_options,
         // инвариант теста). Вне диапазона — без изменений (как остальные).
         SettingsRow::IconStyle => {
             if let Some(&style) = IconStyle::ALL.get(index) {
                 settings.icon_style = style;
+            }
+        }
+        // FR-087: выбор роли — прямой id из реестра (порядок =
+        // dropdown_options). Смена роли СБРАСЫВАЕТ материализованные
+        // фильтры категорий (None = наследовать дефолт новой роли) —
+        // ручные тумблеры не переживают смену профиля (как Obsidian).
+        SettingsRow::Role => {
+            if let Some(role) = canvas_core::roles::ROLES.get(index) {
+                settings.role = role.id.to_string();
+                settings.template_categories = None;
+                settings.scheme_categories = None;
             }
         }
     }
@@ -1399,8 +1537,24 @@ mod tests {
             SETTINGS_TABS[5].rows,
             &[SettingsRow::SuggestEnabled, SettingsRow::SuggestEngine]
         );
+        // FR-087: таб 6 — «Профиль» (роль + фильтры категорий)
         assert_eq!(
             SETTINGS_TABS[6].rows,
+            &[
+                SettingsRow::Role,
+                SettingsRow::TplCatBackend,
+                SettingsRow::TplCatNetwork,
+                SettingsRow::TplCatUnitEconomics,
+                SettingsRow::TplCatProductAnalytics,
+                SettingsRow::SchemeCatArchitecture,
+                SettingsRow::SchemeCatBusiness,
+                SettingsRow::SchemeCatFramework,
+                SettingsRow::SchemeCatPlanning,
+                SettingsRow::SchemeCatOnboarding
+            ]
+        );
+        assert_eq!(
+            SETTINGS_TABS[7].rows,
             &[
                 SettingsRow::ThemePreset,
                 SettingsRow::IconStyle,
@@ -1506,6 +1660,20 @@ mod tests {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                     let _ = defaults.drag_push_rebase;
                 }
+                // FR-087: тумблеры категорий — булева видимость
+                // (`Settings::template/scheme_category_visible`), не
+                // прямое bool-поле; рендер читает предикат на кадре
+                SettingsRow::TplCatBackend
+                | SettingsRow::TplCatNetwork
+                | SettingsRow::TplCatUnitEconomics
+                | SettingsRow::TplCatProductAnalytics
+                | SettingsRow::SchemeCatArchitecture
+                | SettingsRow::SchemeCatBusiness
+                | SettingsRow::SchemeCatFramework
+                | SettingsRow::SchemeCatPlanning
+                | SettingsRow::SchemeCatOnboarding => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                }
                 SettingsRow::ButtonCorner
                 | SettingsRow::GridStyle
                 | SettingsRow::GridDensity
@@ -1520,10 +1688,76 @@ mod tests {
                 | SettingsRow::DragPushHalo
                 | SettingsRow::IconStyle
                 // FR-079 (S3): dropdown «Движок подсказок»
-                | SettingsRow::SuggestEngine => {
+                | SettingsRow::SuggestEngine
+                // FR-087: dropdown «Роль» (реестр canvas_core::roles)
+                | SettingsRow::Role => {
                     assert_eq!(row_kind(row), RowKind::Dropdown);
                 }
             }
+        }
+    }
+
+    /// FR-087: инварианты таба «Профиль» — dropdown роли синхронен с
+    /// реестром (порядок/отметка/применение), смена роли сбрасывает
+    /// материализованные фильтры категорий, тумблеры категорий читают
+    /// эффективную видимость (роль > ручной override).
+    #[test]
+    fn role_dropdown_and_category_filters() {
+        // Реестр ролей: dropdown = ROLES по порядку, отметка — по id
+        let mut settings = Settings::default();
+        assert_eq!(settings.role, canvas_core::roles::DEFAULT_ROLE);
+        let options = dropdown_options(SettingsRow::Role, &settings);
+        assert_eq!(options.len(), canvas_core::roles::ROLES.len());
+        assert!(options[0].1, "отмечен default");
+        assert_eq!(options[0].0, "Не выбрана");
+        // Применение по индексу (порядок = dropdown_options)
+        let architect = canvas_core::roles::ROLES
+            .iter()
+            .position(|r| r.id == "architect")
+            .expect("architect в реестре");
+        apply_dropdown_value(&mut settings, SettingsRow::Role, architect);
+        assert_eq!(settings.role, "architect");
+        assert!(settings.template_category_visible("backend"));
+        assert!(!settings.template_category_visible("unit-economics"));
+        // Смена роли с материализованным фильтром — фильтр сбрасывается
+        settings.template_categories = Some(vec!["network".to_owned()]);
+        let developer = canvas_core::roles::ROLES
+            .iter()
+            .position(|r| r.id == "developer")
+            .expect("developer в реестре");
+        apply_dropdown_value(&mut settings, SettingsRow::Role, developer);
+        assert!(settings.template_categories.is_none(), "override сброшен");
+        assert!(settings.template_category_visible("network"));
+        // Индекс вне диапазона — без изменений
+        apply_dropdown_value(&mut settings, SettingsRow::Role, 99);
+        assert_eq!(settings.role, "developer");
+        // dropdown_value — имя роли в языке интерфейса
+        assert_eq!(
+            dropdown_value(SettingsRow::Role, &settings).as_deref(),
+            Some("Разработчик")
+        );
+        let mut en = settings.clone();
+        en.language = Language::En;
+        assert_eq!(
+            dropdown_value(SettingsRow::Role, &en).as_deref(),
+            Some("Developer")
+        );
+        // Категории таба: лейблы/описания непусты (инвариант локализации
+        // покрывает их в every_row_has_label_and_description)
+        for row in [
+            SettingsRow::TplCatBackend,
+            SettingsRow::TplCatNetwork,
+            SettingsRow::TplCatUnitEconomics,
+            SettingsRow::TplCatProductAnalytics,
+            SettingsRow::SchemeCatArchitecture,
+            SettingsRow::SchemeCatBusiness,
+            SettingsRow::SchemeCatFramework,
+            SettingsRow::SchemeCatPlanning,
+            SettingsRow::SchemeCatOnboarding,
+        ] {
+            assert_eq!(row_kind(row), RowKind::Toggle);
+            assert_eq!(dropdown_options(row, &settings), Vec::new());
+            assert_eq!(dropdown_value(row, &settings), None);
         }
     }
 
@@ -1887,8 +2121,14 @@ mod tests {
         assert_eq!(layout.rows.len(), 2);
         assert_eq!(layout.rows[0].0, SettingsRow::SuggestEnabled);
         assert_eq!(layout.rows[1].0, SettingsRow::SuggestEngine);
-        // Таб 6 (Внешний вид): карточки темы + строки пресета, иконок и языка ниже
+        // Таб 6 (Профиль, FR-087): роль + 9 тумблеров категорий, без карточек
         let layout = modal_layout(6, viewport);
+        assert_eq!(layout.rows.len(), 10);
+        assert_eq!(layout.rows[0].0, SettingsRow::Role);
+        assert_eq!(layout.rows[9].0, SettingsRow::SchemeCatOnboarding);
+        assert!(layout.theme_cards[0][2] <= 0.0, "карточек темы нет");
+        // Таб 7 (Внешний вид): карточки темы + строки пресета, иконок и языка ниже
+        let layout = modal_layout(7, viewport);
         // FR-ICONS: 3 строки — ThemePreset, IconStyle, Language.
         assert_eq!(layout.rows.len(), 3);
         assert_eq!(layout.rows[0].0, SettingsRow::ThemePreset);

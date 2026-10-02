@@ -5134,8 +5134,17 @@ impl App {
             return true;
         }
         let registry = canvas_core::schemes::SchemeRegistry::embedded();
-        let list = scheme_gallery_ui::rows(registry, &self.scheme_gallery);
-        let lay = scheme_gallery_ui::layout(self.viewport_logical(), &list, &self.scheme_gallery);
+        let list = scheme_gallery_ui::rows(
+            registry,
+            &self.scheme_gallery,
+            &self.visible_scheme_categories(),
+        );
+        let lay = scheme_gallery_ui::layout(
+            self.viewport_logical(),
+            &list,
+            &self.scheme_gallery,
+            &self.visible_scheme_categories(),
+        );
         let visible = lay.visible_rows.len().max(1);
         match &event.logical_key {
             Key::Named(NamedKey::Escape) if !event.repeat => {
@@ -5188,8 +5197,17 @@ impl App {
     /// Клик по открытой галерее: элементы панели, мимо — закрыть.
     fn on_gallery_click(&mut self) {
         let registry = canvas_core::schemes::SchemeRegistry::embedded();
-        let list = scheme_gallery_ui::rows(registry, &self.scheme_gallery);
-        let lay = scheme_gallery_ui::layout(self.viewport_logical(), &list, &self.scheme_gallery);
+        let list = scheme_gallery_ui::rows(
+            registry,
+            &self.scheme_gallery,
+            &self.visible_scheme_categories(),
+        );
+        let lay = scheme_gallery_ui::layout(
+            self.viewport_logical(),
+            &list,
+            &self.scheme_gallery,
+            &self.visible_scheme_categories(),
+        );
         if scheme_gallery_ui::point_in_rect(lay.close_rect, self.cursor) {
             self.scheme_gallery.close();
             return;
@@ -6536,12 +6554,106 @@ impl App {
 
     /// Ревизия FR-025: имена категорий реестра шаблонов (порядок реестра) —
     /// вход свёрнутой полосы палитры.
+    ///
+    /// FR-087 (роль/класс): список фильтруется ручным фильтром/ролью
+    /// (`Settings::template_category_visible`: ручной override > дефолт
+    /// роли > все). Единый источник видимости для полосы, flyout, чипов
+    /// дока и wheel-меню — все поверхности показывают одно и то же.
     fn template_category_names(&self) -> Vec<String> {
         self.templates
             .categories()
             .into_iter()
+            .filter(|category| self.settings.template_category_visible(category))
             .map(|category| category.to_owned())
             .collect()
+    }
+
+    /// FR-087: манифесты категории, видимые по роли/ручному фильтру
+    /// (порядок реестра; скрытая категория — пустой список). Потребители:
+    /// wheel-меню и flyout полосы. Рендер и hit-test зовут один хелпер —
+    /// расхождений индексов быть не может.
+    fn visible_templates_by_category(
+        &self,
+        category: &str,
+    ) -> Vec<&canvas_core::templates::TemplateManifest> {
+        if !self.settings.template_category_visible(category) {
+            return Vec::new();
+        }
+        self.templates.by_category(category)
+    }
+
+    /// FR-087: видимые категории шаблонных схем — raw-токены реестра схем
+    /// (`SchemeRegistry::embedded()`), отфильтрованные ручным фильтром/
+    /// ролью; `onboarding` (вводные туториалы) добавляется всегда —
+    /// инвариант 3 [`canvas_core::roles`] поверх любого фильтра.
+    /// Единый источник для галереи: строки ([`scheme_gallery_ui::rows`])
+    /// и чипы категорий ([`scheme_gallery_ui::categories`]).
+    fn visible_scheme_categories(&self) -> Vec<String> {
+        let mut visible: Vec<String> = canvas_core::schemes::SchemeRegistry::embedded()
+            .list()
+            .iter()
+            .map(|scheme| scheme.category.clone())
+            .filter(|category| self.settings.scheme_category_visible(category))
+            .collect();
+        visible.dedup();
+        let onboarding = canvas_core::roles::ALWAYS_VISIBLE_SCHEME_CATEGORY;
+        if !visible.iter().any(|category| category == onboarding) {
+            visible.push(onboarding.to_owned());
+        }
+        visible
+    }
+
+    /// FR-087: тумблер категории шаблонных нод (таб «Профиль»): None
+    /// (дефолт по роли) МАТЕРИАЛИЗУЕТСЯ в явный allow-list текущих видимых
+    /// категорий (+ всегда-видимый `custom`), затем категория
+    /// добавляется/убирается. Выбор чипа категории в палитре, если он
+    /// стал скрытым, сбрасывается (инвариант непустого списка строк).
+    fn toggle_template_category(&mut self, category: &str) {
+        let mut list: Vec<String> = self
+            .templates
+            .categories()
+            .into_iter()
+            .filter(|candidate| self.settings.template_category_visible(candidate))
+            .map(str::to_owned)
+            .collect();
+        let always = canvas_core::roles::ALWAYS_VISIBLE_TEMPLATE_CATEGORY;
+        if !list.iter().any(|candidate| candidate == always) {
+            list.push(always.to_owned());
+        }
+        match list.iter().position(|candidate| candidate == category) {
+            Some(index) => {
+                list.remove(index);
+            }
+            None => list.push(category.to_owned()),
+        }
+        self.settings.template_categories = Some(list);
+        if !self.settings.template_category_visible(category)
+            && self.template_panel.category.as_deref() == Some(category)
+        {
+            self.template_panel.category = None;
+            self.template_panel.selected = 0;
+            self.template_panel.scroll_top = 0;
+        }
+    }
+
+    /// FR-087: тумблер категории схем (паттерн
+    /// [`Self::toggle_template_category`]; always-visible `onboarding`).
+    fn toggle_scheme_category(&mut self, category: &str) {
+        let mut list = self.visible_scheme_categories();
+        match list.iter().position(|candidate| candidate == category) {
+            Some(index) => {
+                list.remove(index);
+            }
+            None => list.push(category.to_owned()),
+        }
+        self.settings.scheme_categories = Some(list);
+        if !self.settings.scheme_category_visible(category)
+            && self.scheme_gallery.category.as_deref() == Some(category)
+        {
+            self.scheme_gallery.category = None;
+            self.scheme_gallery.selected = 0;
+            self.scheme_gallery.scroll_top = 0;
+        }
     }
 
     /// FR-040 v2: локализованные подписи категорий дока (порядок реестра).
@@ -6574,7 +6686,7 @@ impl App {
         let count = self
             .template_category_names()
             .get(category)
-            .map(|raw| self.templates.by_category(raw).len())
+            .map(|raw| self.visible_templates_by_category(raw).len())
             .unwrap_or(0);
         Some(template_ui::flyout_layout(
             *row_rect,
@@ -6938,6 +7050,24 @@ impl App {
         // FR-047: смена пресета темы — рендер + виджеты сразу
         if row == SettingsRow::ThemePreset {
             self.apply_effective_theme();
+        }
+        // FR-087: смена роли — тост с именем, сброс протухших выборов
+        // категорий палитры/галереи (набор видимых изменился).
+        if row == SettingsRow::Role {
+            let role_name =
+                canvas_core::roles::display_name(&self.settings.role, self.settings.language);
+            self.show_toast(i18n::trf(
+                self.settings.language,
+                keys::TOAST_ROLE_CHANGED,
+                &[("{role}", role_name)],
+            ));
+            self.template_panel.category = None;
+            self.template_panel.selected = 0;
+            self.template_panel.scroll_top = 0;
+            self.scheme_gallery.category = None;
+            self.scheme_gallery.selected = 0;
+            self.scheme_gallery.scroll_top = 0;
+            self.request_redraw();
         }
         self.sync_settings_row(row);
         self.save_settings();
