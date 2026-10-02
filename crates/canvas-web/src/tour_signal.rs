@@ -71,6 +71,29 @@ pub fn emit(_name: &str) {}
 #[cfg(not(target_arch = "wasm32"))]
 pub fn emit_with_payload(_name: &str, _payload: &Option<String>) {}
 
+/// FR-087: открыть «Об авторе» overlay. Вызывает
+/// `window.__canvasdesk_openAbout()` (index.html, DOM overlay с
+/// ссылками на GitHub/Telegram/LinkedIn/Donate). No-op вне wasm32.
+#[cfg(target_arch = "wasm32")]
+pub fn open_about() {
+    use wasm_bindgen::JsCast;
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let f = js_sys::Reflect::get(&window, &"__canvasdesk_openAbout".into()).ok();
+    let Some(f) = f else { return };
+    if f.is_undefined() || f.is_null() {
+        return;
+    }
+    let Ok(f) = f.dyn_into::<js_sys::Function>() else {
+        return;
+    };
+    let _ = f.call0(&wasm_bindgen::JsValue::NULL);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open_about() {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,5 +105,6 @@ mod tests {
         emit("canvas:test");
         emit_with_payload("canvas:test", &Some("payload".to_string()));
         emit_with_payload("canvas:test", &None);
+        open_about();
     }
 }

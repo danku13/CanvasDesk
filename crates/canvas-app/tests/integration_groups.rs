@@ -136,7 +136,7 @@ fn test_create_group_at_viewport_center() {
     // (FR-017 CP6, переключатель) + «Карта проливаний»
     // (FR-050 Н9-4 этап E, действие-тогл) + «Найти связи по именам»
     // (PRD-0007 FR-048 X4 AC-5.1, действие)
-    assert_eq!(CANVAS_MENU_ITEMS.len(), 9);
+    assert_eq!(CANVAS_MENU_ITEMS.len(), 10);
     assert_eq!(CANVAS_MENU_ITEMS[0], CanvasMenuItem::NewGroup);
     assert_eq!(CANVAS_MENU_ITEMS[1], CanvasMenuItem::FocusMode);
     assert_eq!(CANVAS_MENU_ITEMS[2], CanvasMenuItem::Hotkeys);

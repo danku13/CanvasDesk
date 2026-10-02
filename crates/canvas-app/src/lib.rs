@@ -1217,10 +1217,15 @@ pub mod ui {
         /// шаблонные ноды пропускаются — у них ширина зависит от детей /
         /// структуры параметров, не от текста.
         AutoWidth,
+        /// FR-087: «Об авторе» — открывает DOM overlay с ссылками на
+        /// GitHub / Telegram / LinkedIn / DonationAlerts. Виден всегда.
+        /// Клик → window.__canvasdesk_openAbout() через JS-bridge
+        /// (canvas-web src/tour_signal.rs или __canvasdesk glue).
+        About,
     }
 
     /// Меню пустого канваса (базовые пункты — видны всегда).
-    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 9] = [
+    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 10] = [
         CanvasMenuItem::NewGroup,
         CanvasMenuItem::FocusMode,
         CanvasMenuItem::Hotkeys,
@@ -1230,6 +1235,7 @@ pub mod ui {
         CanvasMenuItem::WhatIf,
         CanvasMenuItem::FlowMap,
         CanvasMenuItem::AutolinkFind,
+        CanvasMenuItem::About,
     ];
 
     /// Минимальное число выделенных нод для batch-операций выравнивания
@@ -1358,6 +1364,7 @@ pub mod ui {
             CanvasMenuItem::AutoWidth => {
                 i18n::tr(language, crate::i18n::keys::MENU_AUTOWIDTH).to_owned()
             }
+            CanvasMenuItem::About => i18n::tr(language, crate::i18n::keys::MENU_ABOUT).to_owned(),
         }
     }
 
@@ -2428,9 +2435,11 @@ pub mod ui {
         fn canvas_menu_single_item() {
             let origin = [100.0, 50.0];
             let n = CANVAS_MENU_ITEMS.len();
-            // PRD-0007 (X4): пункт автосвязи — последний (действие);
+            // PRD-0007 (X4): пункт автосвязи — предпоследний (действие);
             // FR-050 Н9-4: перед ним — карта проливаний (действие)
-            assert_eq!(n, 9);
+            // FR-087: последний — «Об авторе» (всегда виден, opens DOM overlay)
+            assert_eq!(n, 10);
+            assert_eq!(CANVAS_MENU_ITEMS[9], CanvasMenuItem::About);
             assert_eq!(CANVAS_MENU_ITEMS[8], CanvasMenuItem::AutolinkFind);
             assert_eq!(CANVAS_MENU_ITEMS[7], CanvasMenuItem::FlowMap);
             // M5 (T20-F): четвёртый пункт — вход в подменю виджетов

@@ -290,6 +290,8 @@ pub mod keys {
     /// FR-080: «Автоширина по контенту» — пересчёт ширины выделенных нод
     /// по их тексту (target=10 слов/строку).
     pub const MENU_AUTOWIDTH: &str = "menu.autowidth";
+    /// FR-087: «Об авторе» — открывает overlay с ссылками.
+    pub const MENU_ABOUT: &str = "menu.about";
 
     // --- Панель хоткеев (FR-004): колонка клавиши («ЛКМ» — раскладочная
     // аббревиатура, тоже переводится) и описания ---
@@ -945,6 +947,7 @@ const RU: &[(&str, &str)] = &[
     (keys::MENU_ALIGN_VERTICAL, "Выровнять по вертикали"),
     (keys::MENU_DISTRIBUTE_EVENLY, "Распределить равномерно"),
     (keys::MENU_AUTOWIDTH, "Автоширина по контенту"),
+    (keys::MENU_ABOUT, "Об авторе"),
     // --- Панель хоткеев ---
     (keys::HOTKEYS_TITLE, "Горячие клавиши"),
     (keys::HKEY_F1, "F1"),
@@ -1838,6 +1841,7 @@ const EN: &[(&str, &str)] = &[
     (keys::MENU_ALIGN_VERTICAL, "Align vertically"),
     (keys::MENU_DISTRIBUTE_EVENLY, "Distribute evenly"),
     (keys::MENU_AUTOWIDTH, "Auto-width by content"),
+    (keys::MENU_ABOUT, "About the author"),
     // --- Hotkeys panel ---
     (keys::HOTKEYS_TITLE, "Hotkeys"),
     (keys::HKEY_F1, "F1"),
