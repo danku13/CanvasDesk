@@ -432,7 +432,11 @@ impl App {
                     align: TextAlign::Left,
                 });
             }
-            for (i, row) in rows.iter().enumerate() {
+            // W-a: высота списка клампится к вьюпорту — рисуем только
+            // вмещающиеся ряды (вместимость — из раскладки, расхождений
+            // с hit-тестом/реестром нет).
+            let visible = whatif_ui::list_visible_rows(rows.len(), list);
+            for (i, row) in rows.iter().take(visible).enumerate() {
                 let rect = whatif_ui::override_row_rect(list, i);
                 let mut text = format!(
                     "{} → стр. {}: {} → {}",
@@ -463,6 +467,24 @@ impl App {
                     font_size: 13.0,
                     color: dim,
                     align: TextAlign::Center,
+                });
+            }
+            // W-a: усечённый хвост — честный индикатор (никаких молчаливых
+            // take, CR-015) в зарезервированном раскладкой слоте.
+            if rows.len() > visible {
+                texts.push(OwnedScreenText {
+                    text: format!("… ещё {}", rows.len() - visible),
+                    origin: [
+                        list[0] + whatif_ui::LIST_MARGIN,
+                        list[1]
+                            + whatif_ui::LIST_MARGIN
+                            + visible as f32 * whatif_ui::LIST_ROW_H
+                            + 4.0,
+                    ],
+                    width: list[2] - whatif_ui::LIST_MARGIN * 2.0,
+                    font_size: 13.0,
+                    color: dim,
+                    align: TextAlign::Left,
                 });
             }
         }
@@ -502,6 +524,19 @@ impl App {
                         align: TextAlign::Left,
                     });
                 }
+            }
+            // W-a: кламп высоты таблицы — усечённый хвост строк показываем
+            // индикатором в слоте из раскладки (cells содержит только
+            // вмещающиеся строки — за клампом ничего не рисуется).
+            if let Some(tail) = table.tail {
+                texts.push(OwnedScreenText {
+                    text: format!("… ещё {}", rows.len() - table.cells.len()),
+                    origin: [tail[0] + 6.0, tail[1] + 4.0],
+                    width: tail[2] - 12.0,
+                    font_size: 13.0,
+                    color: dim,
+                    align: TextAlign::Left,
+                });
             }
         }
         (instances, texts)

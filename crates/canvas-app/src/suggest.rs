@@ -541,6 +541,10 @@ pub struct SuggestCards {
 /// Rect'ы карточек в лог. px экрана: стопка от правого края ноды-якоря,
 /// кламп во вьюпорт (узкие окна). Чистая функция — ввод и рендер считают
 /// одинаково (детерминизм pick'а, FR-052 §).
+///
+/// W-a (дефект аудита §8 п.5): кламп стопки по нижнему краю — БЕЗ наложений
+/// и детерминированно. Раньше каждая карточка клампилась индивидуально, все
+/// уехавшие получали один `y = vh−4−H` и налагались в полную стопку.
 pub fn card_rects(
     node_screen: [f32; 4],
     viewport: [f32; 2],
@@ -552,18 +556,32 @@ pub fn card_rects(
         return out;
     }
     let mut x = node_screen[0] + node_screen[2] + SUGGEST_CARD_OFFSET_X;
-    let y = node_screen[1];
     // Кламп по правому краю: не влезает — стопка слева от ноды
     if x + SUGGEST_CARD_W > viewport[0] - 4.0 {
         x = (node_screen[0] - SUGGEST_CARD_OFFSET_X - SUGGEST_CARD_W).max(4.0);
     }
+    // Кламп по нижнему краю: шаг лесенки и порядок сохранены. Естественная
+    // стопка — y0 + i*(H+GAP); если хвост упирается в нижний предел
+    // (vh−4), вся стопка сдвигается вверх на МИНИМАЛЬНЫЙ перепуск — это
+    // в точности лесенка y_i = (vh−4−H) − (count−1−i)*(H+GAP): шаг GAP
+    // между карточками сохранён, хвост прижат к нижнему пределу, голова
+    // остаётся на месте, пока это геометрически возможно (иначе хвост
+    // наложился бы на голову — наложения недопустимы). Если стопка не
+    // влезает во вьюпорт даже так — прижимается к верхнему краю (низ
+    // может уходить за вьюпорт, но карточки не налагаются).
+    let step = SUGGEST_CARD_H + SUGGEST_CARD_GAP;
+    let total = (count as f32 - 1.0) * step + SUGGEST_CARD_H;
+    let bottom = viewport[1] - 4.0;
+    let top = 4.0;
+    let y0 = if node_screen[1] + total <= bottom {
+        node_screen[1]
+    } else if total <= bottom - top {
+        bottom - total
+    } else {
+        top
+    };
     for i in 0..count {
-        let mut row_y = y + i as f32 * (SUGGEST_CARD_H + SUGGEST_CARD_GAP);
-        // Кламп по нижнему краю: стопка уходит вверх
-        if row_y + SUGGEST_CARD_H > viewport[1] - 4.0 {
-            let overflow = row_y + SUGGEST_CARD_H - (viewport[1] - 4.0);
-            row_y -= overflow;
-        }
+        let row_y = y0 + i as f32 * step;
         out.push(UiRect::new(x, row_y, SUGGEST_CARD_W, SUGGEST_CARD_H));
     }
     out
@@ -790,5 +808,106 @@ mod tests {
         };
         let item = ai_hint_item(&answer, "Load Balancer", Language::En);
         assert!(item.detail.contains("AI"));
+    }
+
+    /// W-a (дефект аудита §8 п.5): кламп стопки у нижнего края (800×560) —
+    /// попарные пересечения карточек запрещены для count=1..12, шаг лесенки
+    /// сохранён (GAP между соседями), x единый для всей стопки.
+    #[test]
+    fn card_rects_no_overlap_at_bottom_edge() {
+        let viewport = [800.0, 560.0];
+        // Якорь у нижнего края: естественная стопка уходит за низ.
+        let node = [300.0, 520.0, 120.0, 60.0];
+        let step = SUGGEST_CARD_H + SUGGEST_CARD_GAP;
+        for count in 1..=12usize {
+            let rects = card_rects(node, viewport, count);
+            assert_eq!(rects.len(), count, "геометрия = числу карточек");
+            for i in 0..count {
+                for j in i + 1..count {
+                    assert!(
+                        !rects[i].intersects(&rects[j]),
+                        "карточки {i} и {j} налагаются (count={count})"
+                    );
+                }
+            }
+            // Единый x и ровный шаг лесенки между соседями.
+            for pair in rects.windows(2) {
+                assert_eq!(pair[0].x, pair[1].x, "стопка вертикальная");
+                assert!(
+                    (pair[1].y - pair[0].y - step).abs() < 0.01,
+                    "шаг лесенки сохранён (count={count})"
+                );
+            }
+        }
+    }
+
+    /// W-a: если стопка влезает во вьюпорт — она целиком в пределах (низ
+    /// может упираться в край vh−4, не выходя за него; хвост прижат к
+    /// нижнему пределу по формуле лесенки); если не влезает даже так —
+    /// прижата к верхнему краю (y0 = 4), наложений по-прежнему нет.
+    #[test]
+    fn card_rects_bottom_edge_within_viewport_or_pressed_to_top() {
+        let viewport = [800.0, 560.0];
+        let node = [300.0, 520.0, 120.0, 60.0];
+        let step = SUGGEST_CARD_H + SUGGEST_CARD_GAP;
+        let bottom = viewport[1] - 4.0;
+        // count ≤ 6: габарит (count−1)*step + H ≤ 552 — лесенка помещается.
+        for count in 1..=6usize {
+            let rects = card_rects(node, viewport, count);
+            for (i, r) in rects.iter().enumerate() {
+                assert!(r.y >= 0.0, "выше вьюпорта: count={count}");
+                assert!(
+                    r.y + r.h <= bottom + 0.01,
+                    "за нижним краем: count={count}, карточка {i}"
+                );
+                assert!(r.x >= 0.0 && r.x + r.w <= viewport[0] + 0.01);
+                // Формула лесенки из фикса: y_i = (vh−4−H) − (count−1−i)*step.
+                let ladder_y = (bottom - SUGGEST_CARD_H) - (count - 1 - i) as f32 * step;
+                assert!((r.y - ladder_y).abs() < 0.01, "count={count}, карточка {i}");
+            }
+            // Хвост прижат к нижнему пределу.
+            let last = rects.last().unwrap();
+            assert!((last.y + last.h - bottom).abs() < 0.01, "count={count}");
+        }
+        // count=8: стопка принципиально не влезает (7*step + H > vh−8) —
+        // прижата к верхнему краю, наложений нет.
+        let pressed = card_rects(node, viewport, 8);
+        assert!((pressed[0].y - 4.0).abs() < 0.01, "прижата к верхнему краю");
+        for i in 0..8 {
+            for j in i + 1..8 {
+                assert!(!pressed[i].intersects(&pressed[j]));
+            }
+        }
+    }
+
+    /// W-a: пока стопка влезает под якорь — естественная геометрия без
+    /// изменений; одиночная карточка у нижнего края — прежний кламп
+    /// y = vh−4−H; пустая стопка — пустой вектор; чистая функция
+    /// детерминирована.
+    #[test]
+    fn card_rects_natural_when_fits_and_deterministic() {
+        let viewport = [800.0, 560.0];
+        let step = SUGGEST_CARD_H + SUGGEST_CARD_GAP;
+        // Влезает под якорь — голова и шаг не изменились.
+        let node = [300.0, 100.0, 120.0, 60.0];
+        let rects = card_rects(node, viewport, 3);
+        for (i, r) in rects.iter().enumerate() {
+            let natural_y = 100.0 + i as f32 * step;
+            assert!((r.y - natural_y).abs() < 0.01, "карточка {i}");
+        }
+        // Одиночная карточка у нижнего края — прежний кламп.
+        let low_node = [300.0, 520.0, 120.0, 60.0];
+        let single = card_rects(low_node, viewport, 1);
+        assert!(
+            (single[0].y - (viewport[1] - 4.0 - SUGGEST_CARD_H)).abs() < 0.01,
+            "одиночный кламп как раньше"
+        );
+        // Пустая стопка.
+        assert!(card_rects(node, viewport, 0).is_empty());
+        // Детерминизм: те же входы — та же геометрия.
+        assert_eq!(
+            card_rects(low_node, viewport, 3),
+            card_rects(low_node, viewport, 3)
+        );
     }
 }
