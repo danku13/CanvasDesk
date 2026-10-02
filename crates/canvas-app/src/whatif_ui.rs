@@ -384,12 +384,44 @@ pub fn bar_action_at(layout: &BarLayout, point: [f32; 2]) -> Option<BarAction> {
     None
 }
 
+/// Вместимость рядов по внутренней высоте (без полей): если всё вмещается —
+/// `count`; иначе — сколько рядов влезает с резервом слота под индикатор
+/// усечения (хвост не пропадает молча — урок CR-015 про молчаливый take).
+fn row_capacity(inner_h: f32, count: usize, row_h: f32) -> usize {
+    if inner_h >= count as f32 * row_h {
+        return count;
+    }
+    (((inner_h - row_h) / row_h).floor().max(0.0)) as usize
+}
+
+/// Сколько строк подмен фактически видно в rect списка (кламп высоты W-a).
+/// Раскладка и отрисовка считают вместимость этой функцией — расхождений
+/// нет (тот же источник геометрии у hit-теста, реестра и draw).
+pub fn list_visible_rows(count: usize, list: [f32; 4]) -> usize {
+    row_capacity((list[3] - LIST_MARGIN * 2.0).max(0.0), count, LIST_ROW_H)
+}
+
 /// Rect раскрытого списка подмен: над полосой, по её центру, кламп к окну.
+/// W-a (дефект аудита §8 п.7): высота клампится к доступному месту от бара
+/// до верха вьюпорта (`bar.y - 2*BAR_MARGIN`) — раньше десятки подмен
+/// уезжали за верх. Не вмещается — видны вмещающиеся ряды + слот индикатора
+/// усечения ([`list_visible_rows`] — сколько рядов рисовать).
 pub fn overrides_list_layout(bar_rect: [f32; 4], count: usize, viewport: [f32; 2]) -> [f32; 4] {
     if count == 0 {
         return [0.0; 4];
     }
-    let height = count as f32 * LIST_ROW_H + LIST_MARGIN * 2.0;
+    // Доступная высота: от верха вьюпорта до бара с маржой с обеих сторон.
+    let available = (bar_rect[1] - 2.0 * BAR_MARGIN).max(0.0);
+    let visible = row_capacity((available - LIST_MARGIN * 2.0).max(0.0), count, LIST_ROW_H);
+    // Высота: все ряды — как раньше; при усечении — видимые ряды + один
+    // слот под индикатор «… ещё N» (кэп `available` — на всякий случай).
+    let height = if visible >= count {
+        count as f32 * LIST_ROW_H + LIST_MARGIN * 2.0
+    } else {
+        (LIST_MARGIN * 2.0 + (visible + 1) as f32 * LIST_ROW_H)
+            .min(available)
+            .max(0.0)
+    };
     let width = LIST_WIDTH.min((viewport[0] - BAR_MARGIN * 2.0).max(0.0));
     let x = (bar_rect[0] + bar_rect[2] / 2.0 - width / 2.0).clamp(
         BAR_MARGIN,
@@ -431,7 +463,10 @@ pub fn override_row_at(list: [f32; 4], count: usize, point: [f32; 2]) -> Option<
         return None;
     }
     let row = (rel / LIST_ROW_H) as usize;
-    (row < count).then_some(row)
+    // W-a: граница — вместимость клампнутого списка (не `count`): слот
+    // индикатора усечения и усечённый хвост не пикаются как ряды.
+    let visible = list_visible_rows(count, list);
+    (row < visible).then_some(row)
 }
 
 /// Геометрия таблицы сравнения: rect + rect'ы шапки и ячеек.
@@ -441,8 +476,12 @@ pub struct TableLayout {
     pub rect: [f32; 4],
     /// Rect'ы колонок шапки (подписи «переменная | База | С1 | С2»).
     pub header: Vec<[f32; 4]>,
-    /// Ячейки `[row][col]`.
+    /// Ячейки `[row][col]` — только вмещающиеся по высоте строки
+    /// (кламп W-a; хвост строк рисуется индикатором усечения).
     pub cells: Vec<Vec<[f32; 4]>>,
+    /// W-a: слот полосы индикатора «… ещё N» при усечении (`None` —
+    /// таблица вместила все строки).
+    pub tail: Option<[f32; 4]>,
 }
 
 /// Геометрия таблицы сравнения: над баром по центру, кламп к окну.
@@ -457,12 +496,34 @@ pub fn table_layout(
     let cols = columns.len().max(1);
     let width = (TABLE_COL_W * cols as f32 + TABLE_MARGIN * 2.0)
         .min((viewport[0] - BAR_MARGIN * 2.0).max(0.0));
-    let height = TABLE_HEAD_H + rows as f32 * TABLE_ROW_H + TABLE_MARGIN * 2.0;
+    // W-a (дефект аудита §8 п.7): высота клампится к доступному месту от
+    // бара до верха вьюпорта (`bar.y - 2*BAR_MARGIN`) — раньше десятки строк
+    // сравнения уезжали за верх.
+    let available = (bar_rect[1] - 2.0 * BAR_MARGIN).max(0.0);
+    let desired = TABLE_HEAD_H + rows as f32 * TABLE_ROW_H + TABLE_MARGIN * 2.0;
+    let height = desired.min(available).max(0.0);
     let x = (bar_rect[0] + bar_rect[2] / 2.0 - width / 2.0).clamp(
         BAR_MARGIN,
         (viewport[0] - width - BAR_MARGIN).max(BAR_MARGIN),
     );
     let y = (bar_rect[1] - height - 4.0).max(BAR_MARGIN);
+    // Видны только вмещающиеся строки; усечённый хвост — честный индикатор
+    // «… ещё N» в зарезервированном слоте (никаких молчаливых take, CR-015).
+    let visible = row_capacity(
+        (height - TABLE_MARGIN * 2.0 - TABLE_HEAD_H).max(0.0),
+        rows,
+        TABLE_ROW_H,
+    );
+    let tail = if visible < rows {
+        Some([
+            x + TABLE_MARGIN,
+            y + TABLE_MARGIN + TABLE_HEAD_H + visible as f32 * TABLE_ROW_H,
+            width - TABLE_MARGIN * 2.0,
+            TABLE_ROW_H,
+        ])
+    } else {
+        None
+    };
     let header: Vec<[f32; 4]> = (0..cols)
         .map(|c| {
             [
@@ -473,7 +534,7 @@ pub fn table_layout(
             ]
         })
         .collect();
-    let cells = (0..rows)
+    let cells = (0..visible)
         .map(|r| {
             (0..cols)
                 .map(|c| {
@@ -491,6 +552,7 @@ pub fn table_layout(
         rect: [x, y, width, height],
         header,
         cells,
+        tail,
     }
 }
 
@@ -887,5 +949,111 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// W-a (дефект аудита §8 п.7): кламп высоты списка подмен — при
+    /// count=50 на 900×600 и 800×560 rect целиком в вьюпорте и над баром;
+    /// видны только вмещающиеся ряды + слот индикатора усечения; хвост
+    /// не пикается (hit-тест согласован с раскладкой).
+    #[test]
+    fn overrides_list_layout_clamps_height() {
+        let count = 50usize;
+        for viewport in [[900.0, 600.0], [800.0, 560.0]] {
+            let bar = [
+                viewport[0] / 2.0 - 300.0,
+                viewport[1] - BAR_MARGIN - BAR_HEIGHT,
+                600.0,
+                BAR_HEIGHT,
+            ];
+            let list = overrides_list_layout(bar, count, viewport);
+            // Целиком в вьюпорте: не выше маржи верха и не наезжает на бар.
+            assert!(list[1] >= BAR_MARGIN - 0.01, "{viewport:?}");
+            assert!(
+                list[1] + list[3] <= bar[1] - 4.0 + 0.01,
+                "список наехал на бар: {viewport:?}"
+            );
+            // Кэп высоты = доступное место от бара до верха.
+            assert!(list[3] <= bar[1] - 2.0 * BAR_MARGIN + 0.01, "{viewport:?}");
+            // Усечение честное: видимых рядов меньше count, но добрый десяток.
+            let visible = list_visible_rows(count, list);
+            assert!(visible < count, "хвост усечён: {viewport:?}");
+            assert!(visible >= 10, "влезает добрый десяток: {viewport:?}");
+            // Последний видимый ряд целиком внутри списка (поле снизу).
+            let last = override_row_rect(list, visible - 1);
+            assert!(last[1] + last[3] <= list[1] + list[3] - LIST_MARGIN + 0.01);
+            // Слот индикатора — сразу под последним рядом, внутри списка.
+            let slot_y = list[1] + LIST_MARGIN + visible as f32 * LIST_ROW_H;
+            assert!(slot_y + LIST_ROW_H <= list[1] + list[3] - LIST_MARGIN + 0.01);
+            // Hit-тест: последний видимый ряд находится, хвост/слот — нет.
+            assert_eq!(
+                override_row_at(list, count, [list[0] + 10.0, last[1] + 3.0]),
+                Some(visible - 1)
+            );
+            assert_eq!(
+                override_row_at(list, count, [list[0] + 10.0, slot_y + 5.0]),
+                None,
+                "слот индикатора не пикается как ряд"
+            );
+            // Соседние видимые ряды не налагаются (шаг LIST_ROW_H).
+            for r in 1..visible {
+                let prev = override_row_rect(list, r - 1);
+                let cur = override_row_rect(list, r);
+                assert!(prev[1] + prev[3] <= cur[1] + 0.01);
+            }
+        }
+    }
+
+    /// W-a: кламп высоты таблицы сравнения — при 50 строках на 900×600 и
+    /// 800×560 rect целиком в вьюпорте; ячеек — только вмещающие, слот
+    /// индикатора хвоста внутри таблицы; вмещающаяся таблица — прежняя
+    /// геометрия (tail = None).
+    #[test]
+    fn table_layout_clamps_height() {
+        let columns: Vec<String> = ["переменная", "База", "С1"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let rows = 50usize;
+        for viewport in [[900.0, 600.0], [800.0, 560.0]] {
+            let bar = [
+                viewport[0] / 2.0 - 300.0,
+                viewport[1] - BAR_MARGIN - BAR_HEIGHT,
+                600.0,
+                BAR_HEIGHT,
+            ];
+            let table = table_layout(&columns, rows, bar, viewport);
+            // Целиком в вьюпорте и над баром; кэп = доступное место.
+            assert!(table.rect[1] >= BAR_MARGIN - 0.01, "{viewport:?}");
+            assert!(
+                table.rect[1] + table.rect[3] <= bar[1] - 4.0 + 0.01,
+                "{viewport:?}"
+            );
+            assert!(
+                table.rect[3] <= bar[1] - 2.0 * BAR_MARGIN + 0.01,
+                "{viewport:?}"
+            );
+            // Шапка внутри таблицы.
+            let head = table.header[0];
+            assert!(head[1] + head[3] <= table.rect[1] + table.rect[3] + 0.01);
+            // Усечение честное: ячеек меньше строк, но добрый десяток.
+            assert!(table.cells.len() < rows, "{viewport:?}");
+            assert!(table.cells.len() >= 10, "{viewport:?}");
+            // Последняя видимая ячейка целиком внутри таблицы (поле снизу).
+            let last = table.cells[table.cells.len() - 1][0];
+            assert!(last[1] + last[3] <= table.rect[1] + table.rect[3] - TABLE_MARGIN + 0.01);
+            // Слот индикатора — под последней ячейкой, внутри таблицы.
+            let tail = table.tail.expect("усечение даёт слот индикатора");
+            assert!(tail[1] >= last[1] + last[3] - 0.01);
+            assert!(tail[1] + tail[3] <= table.rect[1] + table.rect[3] - TABLE_MARGIN + 0.01);
+            // Соседние видимые ячейки не налагаются (шаг TABLE_ROW_H).
+            for pair in table.cells.windows(2) {
+                assert!(pair[0][0][1] + pair[0][0][3] <= pair[1][0][1] + 0.01);
+            }
+        }
+        // Всё вмещается — прежняя геометрия без изменений, слота нет.
+        let bar = [500.0, 800.0, 600.0, BAR_HEIGHT];
+        let roomy = table_layout(&columns, 4, bar, [1600.0, 900.0]);
+        assert_eq!(roomy.cells.len(), 4);
+        assert!(roomy.tail.is_none());
     }
 }
