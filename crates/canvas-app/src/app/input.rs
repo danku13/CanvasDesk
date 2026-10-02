@@ -2902,6 +2902,14 @@ impl App {
                         if !in_set {
                             self.selected_nodes.clear();
                         }
+                        // FR-079 follow-up: при выборе ноды — запросить
+                        // C3-карточки (или empty-state тултип). suggest
+                        // запустится только если включён (enabled + engine),
+                        // домен-гейт и show-гейт пройдут. Для шаблонных
+                        // нод это основной триггер; для текстовых — тоже
+                        // сработает, но вернёт пустой тултип «нет»
+                        // (домен-гейт Skip для текстовых без template).
+                        self.suggest_request_cards(index);
                         // Drag (T7/CR-001): исходные позиции — одна нода или
                         // весь набор (+ дети групп); на движении delta к всем
                         let origins = drag_origins(&self.scene.canvas, index, &self.selected_nodes);

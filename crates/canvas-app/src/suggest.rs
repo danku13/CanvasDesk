@@ -504,12 +504,19 @@ pub struct SuggestCard {
 }
 
 /// Стопка карточек у ноды (C3): до [`SUGGEST_TOP_N`] штук, закрываются по
-/// Esc/клику мимо/новой инстанциации (план §4.3).
+/// Esc/клику мимо/новой инстанциации (план §4.3). FR-079 follow-up:
+/// `empty` — флаг empty-state: рисуем тултип «AI дополнений нет»
+/// вместо карточек. items пуст, node_id сохранён (для геометрии
+/// тултипа — позиция справа от якоря).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SuggestCards {
     /// id ноды-якоря (правый край — геометрия стопки).
     pub node_id: String,
     pub items: Vec<SuggestCard>,
+    /// FR-079 follow-up: empty-state — предложений нет, но якорь есть.
+    /// `true` → overlay рисует тултип «AI дополнений нет» вместо
+    /// карточек. Логика: `on_cards_ready` ставит флаг при items.is_empty().
+    pub empty: bool,
 }
 
 /// Rect'ы карточек в лог. px экрана: стопка от правого края ноды-якоря,

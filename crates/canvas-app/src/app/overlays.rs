@@ -1985,10 +1985,42 @@ impl App {
         let Some(cards) = self.suggest.cards.as_ref() else {
             return (instances, texts);
         };
+        let palette = self.effective_palette();
+        // FR-079 follow-up: empty-state — предложений нет, рисуем
+        // тултип «AI дополнений нет» рядом с якорем (как одну карточку).
+        if cards.empty {
+            // Геометрия: одна карточка справа от якоря, как SUGGEST_CARD_W×SUGGEST_CARD_H.
+            let Some(node_screen) = self.suggest_anchor_screen_rect() else {
+                return (instances, texts);
+            };
+            let viewport = self.viewport_logical();
+            let rects = suggest::card_rects(node_screen, viewport, 1);
+            if let Some(rect) = rects.first() {
+                instances.push(CardInstance {
+                    pos: [rect.x, rect.y],
+                    size: [rect.w, rect.h],
+                    fill: palette.menu_fill,
+                    border: palette.palette_border,
+                    params: [6.0, 0.0, 0.0, 1.0],
+                    corners: [0.0; 4],
+                });
+                let label =
+                    crate::i18n::tr(self.settings.language, crate::i18n::keys::SUGGEST_EMPTY)
+                        .to_owned();
+                texts.push(OwnedScreenText {
+                    text: label,
+                    origin: [rect.x + 10.0, rect.y + 8.0],
+                    width: rect.w - 16.0,
+                    font_size: 12.0,
+                    color: palette.body,
+                    align: TextAlign::Left,
+                });
+            }
+            return (instances, texts);
+        }
         if cards.items.is_empty() {
             return (instances, texts);
         }
-        let palette = self.effective_palette();
         let rects = self.suggest_card_rects();
         let hovered = self.suggest_card_hover();
         for (i, rect) in rects.iter().enumerate() {
