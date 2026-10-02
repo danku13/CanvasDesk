@@ -288,8 +288,10 @@ fn lint_whatif_active() {
 #[test]
 fn lint_context_menu_open() {
     lint_state("menu", |app, _vp| {
+        // FR-087: +1 пункт «Об авторе» → 10 базовых. Высота меню
+        // 12 + 10×26 = 272px; origin (400, 140) → bottom 412 < 560.
         app.menu = Some(crate::ui::ContextMenu {
-            origin: [400.0, 300.0],
+            origin: [400.0, 140.0],
             submenu: None,
         });
     });

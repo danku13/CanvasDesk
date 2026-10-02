@@ -469,6 +469,102 @@
           max-width: max(120px, calc(100vw - 264px));
         }
       }
+      /* FR-080 follow-up: авторская панель — top-left viewport, иконки
+       * с ссылками на GitHub/Telegram/LinkedIn/Donate. Мини-тулбар из
+       * SVG-иконок (inline — не требует внешних файлов, Trunk не
+       * копирует). z-index: 10 — ниже tour overlay (10000), но выше
+       * канваса. */
+      #author-bar {
+        position: fixed;
+        top: 8px;
+        left: 8px;
+        display: flex;
+        gap: 4px;
+        z-index: 10;
+      }
+      #author-bar a {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        background: #1d2128;
+        border: 1px solid #333a44;
+        border-radius: 6px;
+        cursor: pointer;
+        text-decoration: none;
+        transition: background 150ms ease, transform 150ms ease;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #author-bar a:hover {
+        background: #2e353f;
+        transform: translateY(-1px);
+      }
+      #author-bar a:focus-visible {
+        outline: 2px solid #8ab4ff;
+        outline-offset: 1px;
+      }
+      #author-bar svg {
+        width: 16px;
+        height: 16px;
+        fill: #8b95a3;
+        transition: fill 150ms ease;
+      }
+      #author-bar a:hover svg { fill: #d5d9e0; }
+      /* "Об авторе" overlay — модальный экран с подробными ссылками.
+       * Открывается кликом по ℹ-иконке в #author-bar или через
+       * CanvasMenuItem::About (window.__canvasdesk_openAbout()). */
+      #about-overlay {
+        position: fixed; inset: 0; z-index: 100001;
+        background: rgba(20, 22, 26, 0.92);
+        display: none;
+        align-items: center; justify-content: center;
+        font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: #d5d9e0;
+      }
+      #about-overlay[data-open="true"] { display: flex; }
+      #about-overlay .panel {
+        background: #1d2128;
+        border: 1px solid #333a44;
+        border-radius: 12px;
+        padding: 28px 32px;
+        max-width: 480px;
+        width: calc(100vw - 32px);
+        box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+      }
+      #about-overlay h2 {
+        font-size: 18px; color: #f3f5f8; font-weight: 600;
+        margin: 0 0 4px;
+      }
+      #about-overlay .author-name { color: #6b7480; font-size: 13px; margin: 0 0 20px; }
+      #about-overlay .links { display: flex; flex-direction: column; gap: 8px; }
+      #about-overlay .link-row {
+        display: flex; align-items: center; gap: 12px;
+        padding: 10px 12px;
+        background: #262c35;
+        border: 1px solid #333a44;
+        border-radius: 8px;
+        text-decoration: none;
+        color: #d5d9e0;
+        transition: background 150ms ease;
+      }
+      #about-overlay .link-row:hover { background: #2e353f; }
+      #about-overlay .link-row svg { width: 18px; height: 18px; fill: #8b95a3; flex-shrink: 0; }
+      #about-overlay .link-text { display: flex; flex-direction: column; gap: 1px; }
+      #about-overlay .link-label { color: #f3f5f8; font-weight: 500; font-size: 13px; }
+      #about-overlay .link-desc { color: #6b7480; font-size: 11px; }
+      #about-overlay .close-btn {
+        position: absolute; top: 16px; right: 16px;
+        background: transparent; border: none; cursor: pointer;
+        font-size: 20px; color: #6b7480; padding: 4px 8px;
+        border-radius: 6px; line-height: 1;
+      }
+      #about-overlay .close-btn:hover { color: #d5d9e0; background: #262c35; }
+      @media (pointer: coarse) {
+        #author-bar a { width: 36px; height: 36px; }
+      }
       /* Тач-экраны: минимальная высота цели ~44px (Apple HIG/Material);
        * у 12px-кнопки с padding 4px было ~27px — мимо пальца. */
       @media (pointer: coarse) {
@@ -601,6 +697,72 @@
     </script>
   </head>
   <body>
+    <!-- Авторская панель (top-left): иконки с ссылками на GitHub,
+         Telegram, LinkedIn, Donate. Inline SVG — не требует внешних
+         файлов. ℹ-иконка открывает "Об авторе" overlay. -->
+    <nav id="author-bar" aria-label="Author links">
+      <a href="https://github.com/danku13/CanvasDesk" target="_blank" rel="noopener" title="GitHub — CanvasDesk project">
+        <svg viewBox="0 0 24 24"><path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.9 1.3 1.9 1.3 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.3-3.2 0-.4-.6-1.6.1-3.3 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.7.1 2.9.1 3.3.8.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>
+      </a>
+      <a href="https://t.me/dkuzmichev" target="_blank" rel="noopener" title="Telegram channel">
+        <svg viewBox="0 0 24 24"><path d="M22 2L2 10l5 2 2 6 3-4 5 4 5-16zM9 13l-3-1 11-6-8 7z"/></svg>
+      </a>
+      <a href="https://www.linkedin.com/in/daniil-kuzmichev/" target="_blank" rel="noopener" title="LinkedIn">
+        <svg viewBox="0 0 24 24"><path d="M20 3H4a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zM8 17H5.5v-7H8v7zM6.7 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zM18.5 17H16v-3.8c0-1-.4-1.7-1.3-1.7-.7 0-1 .5-1.2 1-.1.2-.1.5-.1.7V17H11s.1-6.3 0-7h2.5v1c.3-.5 1-1.2 2.3-1.2 1.7 0 2.7 1.1 2.7 3.5V17z"/></svg>
+      </a>
+      <a href="https://donationalerts.com/r/danku13" target="_blank" rel="noopener" title="Support the project">
+        <svg viewBox="0 0 24 24"><path d="M12 21s-7-4.4-9.3-8.5C1 9 2.5 5 6 5c2 0 3.2 1.3 4 2.5C10.8 6.3 12 5 14 5c3.5 0 5 4 3.3 7.5C19 16.6 12 21 12 21z"/></svg>
+      </a>
+      <a href="#" onclick="window.__canvasdesk_openAbout();return false" title="Об авторе / About" aria-label="About author">
+        <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zM14 17h-4v-1h1v-4h-1v-1h3v5h1v1z"/></svg>
+      </a>
+    </nav>
+
+    <!-- "Об авторе" overlay -->
+    <div id="about-overlay">
+      <div class="panel">
+        <button class="close-btn" onclick="window.__canvasdesk_closeAbout()" aria-label="Close">&times;</button>
+        <h2>CanvasDesk</h2>
+        <p class="author-name">Даниил Кузьмичев &middot; Daniil Kuzmichev</p>
+        <div class="links">
+          <a class="link-row" href="https://github.com/danku13/CanvasDesk" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24"><path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.9 1.3 1.9 1.3 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.3-3.2 0-.4-.6-1.6.1-3.3 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.7.1 2.9.1 3.3.8.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>
+            <div class="link-text"><span class="link-label">GitHub</span><span class="link-desc">CanvasDesk project &mdash; source code, issues, releases</span></div>
+          </a>
+          <a class="link-row" href="https://github.com/danku13/CanvasDesk" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 16.8 5.8 21.3l2.4-7.4L2 9.4h7.6z"/></svg>
+            <div class="link-text"><span class="link-label">&starf; Star on GitHub</span><span class="link-desc">Если проект полезен &mdash; поставьте звёзду</span></div>
+          </a>
+          <a class="link-row" href="https://t.me/dkuzmichev" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24"><path d="M22 2L2 10l5 2 2 6 3-4 5 4 5-16zM9 13l-3-1 11-6-8 7z"/></svg>
+            <div class="link-text"><span class="link-label">Telegram channel</span><span class="link-desc">Обновления, новости, анонсы</span></div>
+          </a>
+          <a class="link-row" href="https://t.me/danku13" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24"><path d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 4l-8 5-8-5"/></svg>
+            <div class="link-text"><span class="link-label">Telegram &mdash; связаться</span><span class="link-desc">Вопросы, идеи, сотрудничество</span></div>
+          </a>
+          <a class="link-row" href="https://www.linkedin.com/in/daniil-kuzmichev/" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24"><path d="M20 3H4a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zM8 17H5.5v-7H8v7zM6.7 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zM18.5 17H16v-3.8c0-1-.4-1.7-1.3-1.7-.7 0-1 .5-1.2 1-.1.2-.1.5-.1.7V17H11s.1-6.3 0-7h2.5v1c.3-.5 1-1.2 2.3-1.2 1.7 0 2.7 1.1 2.7 3.5V17z"/></svg>
+            <div class="link-text"><span class="link-label">LinkedIn</span><span class="link-desc">Daniil Kuzmichev &mdash; professional profile</span></div>
+          </a>
+          <a class="link-row" href="https://donationalerts.com/r/danku13" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24"><path d="M12 21s-7-4.4-9.3-8.5C1 9 2.5 5 6 5c2 0 3.2 1.3 4 2.5C10.8 6.3 12 5 14 5c3.5 0 5 4 3.3 7.5C19 16.6 12 21 12 21z"/></svg>
+            <div class="link-text"><span class="link-label">Поддержать проект</span><span class="link-desc">DonationAlerts &mdash; донат на развитие</span></div>
+          </a>
+        </div>
+      </div>
+    </div>
+    <script>
+      window.__canvasdesk_openAbout = function () { var ov = document.getElementById("about-overlay"); if (ov) ov.dataset.open = "true"; };
+      window.__canvasdesk_closeAbout = function () { var ov = document.getElementById("about-overlay"); if (ov) ov.dataset.open = "false"; };
+      (function () {
+        document.addEventListener("keydown", function (e) {
+          if (e.key === "Escape") { var ov = document.getElementById("about-overlay"); if (ov && ov.dataset.open === "true") { e.preventDefault(); window.__canvasdesk_closeAbout(); } }
+        }, true);
+      })();
+    </script>
+
+
     <!-- FR-028 v2 + FR-087 v2 (пикер первого запуска — единая страница):
          показывается только при первом открытии (если в localStorage нет
          canvasdesk.config). Скрипт в <head> ставит hidden=false на
@@ -1971,6 +2133,11 @@
           }
           var tour = new CanvasDeskTour.Tour();
           window.__canvasdeskTour = tour;  // host hook: signal("canvas:note-created")
+          // FR-087: «Об авторе» — canvas-app шлёт signal "ui:open-about"
+          // через push_tour_signal → TourAwareApp drain → JS bus → здесь.
+          tour.onSignal(function (name) {
+            if (name === "ui:open-about") window.__canvasdesk_openAbout();
+          });
           var scenarios = CanvasDeskTour.scenarios;
 
           // Авто-запуск по URL hash: #tour=cd-toolbar-tour

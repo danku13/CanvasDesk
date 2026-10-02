@@ -2152,9 +2152,15 @@ impl App {
                             self.run_batch_op(BatchOp::Distribute, None);
                         }
                         CanvasMenuItem::AutoWidth => {
-                            // FR-080: применить автоширину ко всем
-                            // выделенным нодам. Шаблонные/группы — пропускаются.
                             self.apply_auto_width_to_selection();
+                        }
+                        CanvasMenuItem::About => {
+                            // FR-087: открыть «Об авторе» overlay.
+                            // Через tour-signal bus: push_tour_signal →
+                            // TourAwareApp drain → tour_signal::emit →
+                            // window.__canvasdeskTour.signal("ui:open-about")
+                            // → JS listener → __canvasdesk_openAbout().
+                            self.push_tour_signal("ui:open-about");
                         }
                     }
                     self.request_redraw();
