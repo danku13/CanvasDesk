@@ -651,6 +651,34 @@ pub fn fit_scale(bounds: [f32; 2], body: [f32; 4]) -> f32 {
 /// [`base_scale`] · zoom ∈ [`SCALE_MIN`, `ZOOM_MAX`].
 pub const ZOOM_MAX: f32 = 2.5;
 
+/// Шаг зума колеса окна проверки за щелчок (CR-017: ±5 %, паритет с
+/// `ZOOM_STEP_PER_LINE` основного канваса).
+pub const ZOOM_STEP_PER_NOTCH: f32 = 1.05;
+
+/// Вертикальная составляющая колеса для зума окна проверки — нормализованный
+/// ввод без winit-типов (модуль чистый): [`WheelInput::Line`] — щелчки колеса
+/// (LineDelta y, ±1 за щелчок), [`WheelInput::Pixel`] — физические пиксели
+/// тачпада (PixelDelta y).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WheelInput {
+    Line(f32),
+    Pixel(f32),
+}
+
+/// Фактор зума колеса окна проверки (ревизия владельца 2026-10-02): знак и
+/// шаг — паритет с основным канвасом (фактор Ctrl+колеса). Колесо ВВЕРХ
+/// (Line(1.0)) — зум IN на +5 % за щелчок (CR-017); тачпад (Pixel) — плавный
+/// экспоненциальный фактор, как на канвасе. Прежняя версия `1.05^(−y·40)`
+/// была инвертирована (колесо вверх зумило OUT) и умножала щелчок на 40
+/// строк-единиц — фактор 1.05^±40 бился в клампы [`SCALE_MIN`]/[`ZOOM_MAX`]
+/// за один щелчок.
+pub fn wheel_zoom_factor(input: WheelInput) -> f32 {
+    match input {
+        WheelInput::Line(y) => ZOOM_STEP_PER_NOTCH.powf(y),
+        WheelInput::Pixel(y) => (y * 0.00125).exp(),
+    }
+}
+
 /// Базовый масштаб кадра без пользовательского зума (FR-085): обычный
 /// режим — [`fit_scale`], режим защиты — [`defense_fit_scale`] (укрупнение
 /// ×1.5). Единая точка для рендера и ввода (зум-лимиты колеса).
@@ -3148,5 +3176,39 @@ mod tests {
         state.reset_pan();
         assert!((state.zoom - 1.0).abs() < 1e-6);
         assert_eq!(state.pan, [0.0; 2]);
+    }
+
+    /// Ревизия владельца 2026-10-02 (инверсия зума): колесо ВВЕРХ (Line +1)
+    /// — зум IN, ровно +5 % за щелчок (CR-017); колесо вниз — −5 %. Прежний
+    /// фактор `1.05^(−y·40)` давал 1.05^−40 ≈ 0.135 на колесо вверх
+    /// (инверсия + щелчок бился в кламп SCALE_MIN/ZOOM_MAX).
+    #[test]
+    fn wheel_zoom_factor_line_notch_direction_and_step() {
+        let up = wheel_zoom_factor(WheelInput::Line(1.0));
+        let down = wheel_zoom_factor(WheelInput::Line(-1.0));
+        assert!(
+            up > 1.0,
+            "колесо вверх должно зумить IN, получено {up} (инверсия)"
+        );
+        assert!(down < 1.0, "колесо вниз должно зумить OUT, получено {down}");
+        assert!((up - 1.05).abs() < 1e-6, "шаг ровно +5 %, получено {up}");
+        assert!(((1.0 / down) - 1.05).abs() < 1e-4, "шаг ровно −5 %");
+        // Тилт колеса (x-составляющая) не участвует в вертикали: y = 0 —
+        // фактор 1 (пан, не зум).
+        assert!((wheel_zoom_factor(WheelInput::Line(0.0)) - 1.0).abs() < 1e-9);
+    }
+
+    /// Тачпад-канал (PixelDelta): знак совпадает с колесом (пиксели вверх —
+    /// зум IN), фактор плавный (близко к 1 за 40 px, как у канваса).
+    #[test]
+    fn wheel_zoom_factor_pixel_smooth_and_signed() {
+        let up = wheel_zoom_factor(WheelInput::Pixel(120.0));
+        let down = wheel_zoom_factor(WheelInput::Pixel(-120.0));
+        assert!(up > 1.0, "пиксели вверх — зум IN, получено {up}");
+        assert!(down < 1.0, "пиксели вниз — зум OUT, получено {down}");
+        assert!(
+            (up - 1.0) < 0.5,
+            "тачпад-фактор плавный (без прыжков клампа): {up}"
+        );
     }
 }

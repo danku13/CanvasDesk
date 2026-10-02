@@ -86,6 +86,56 @@ pub const DOCS_PAGES: [DocsPage; 9] = [
     },
 ];
 
+/// Сниппет совпадения в поиске по документации (владелец 2026-10-02):
+/// обрезается до [`SEARCH_SNIPPET_MAX`] символов по границе char_indices.
+const SEARCH_SNIPPET_MAX: usize = 44;
+
+/// Поиск по встроенной документации (владелец 2026-10-02, Ctrl+F): подстрока
+/// без учёта регистра по (1) локализованной метке страницы, (2) id страницы,
+/// (3) markdown-телу (после среза front matter). Порядок — по страницам
+/// [`DOCS_PAGES`] (стабилен, как подменю «Документация ▸»); одна страница —
+/// максимум одна строка. Пустой запрос — пустой результат.
+///
+/// Возвращает `(индекс страницы, сниппет)`: сниппет — первая строка тела
+/// с совпадением (обрезка по границе символов); `None` — совпадение только
+/// в метке/id (тела без запроса не показываем).
+pub fn search_pages(query: &str, language: Language) -> Vec<(usize, Option<String>)> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    let mut hits = Vec::new();
+    for (page, def) in DOCS_PAGES.iter().enumerate() {
+        let label = crate::i18n::tr(language, def.label_key).to_lowercase();
+        let by_label = label.contains(&needle) || def.id.contains(&needle);
+        let mut snippet = None;
+        if !by_label {
+            let body = strip_front_matter(def.md);
+            for line in body.lines() {
+                if line.to_lowercase().contains(&needle) {
+                    let trimmed = line.trim();
+                    let end = trimmed
+                        .char_indices()
+                        .nth(SEARCH_SNIPPET_MAX)
+                        .map(|(i, _)| i)
+                        .unwrap_or(trimmed.len());
+                    snippet = Some(if end < trimmed.len() {
+                        format!("{}…", &trimmed[..end])
+                    } else {
+                        trimmed.to_owned()
+                    });
+                    break;
+                }
+            }
+            if snippet.is_none() {
+                continue; // страница не матчится — строки нет
+            }
+        }
+        hits.push((page, snippet));
+    }
+    hits
+}
+
 /// Срезать Jekyll front matter (`---\n…\n---\n` в начале): просмотрщику
 /// не нужны title/description — заголовок даёт первый ATX. Нет закрывающего
 /// `---` — файл как есть (не front matter). Разрезы идут по границам строк
@@ -1195,5 +1245,55 @@ mod tests {
         assert_eq!(strip_inline_markers("без маркеров"), "без маркеров");
         assert_eq!(strip_inline_markers("**незакрытый"), "**незакрытый");
         assert_eq!(strip_inline_markers("смесь **a** и `b`"), "смесь a и b");
+    }
+
+    /// Владелец 2026-10-02 (поиск по докам в Ctrl+F): метка/id страницы
+    /// матчится без сниппета; пустой запрос и промах — пустой результат.
+    #[test]
+    fn search_pages_matches_label_and_id() {
+        // «faq» — метка «FAQ» и id «faq» (строка FAQ: сниппета нет, даже
+        // когда тело тоже матчится — метка приоритетна)
+        let hits = search_pages("faq", Language::Ru);
+        let faq = hits
+            .iter()
+            .find(|(p, _)| DOCS_PAGES[*p].id == "faq")
+            .expect("страница FAQ в результатах");
+        assert!(faq.1.is_none(), "совпадение по метке — без сниппета");
+        // Пустой/пробельный запрос — пусто
+        assert!(search_pages("", Language::Ru).is_empty());
+        assert!(search_pages("   ", Language::Ru).is_empty());
+        // Промах
+        assert!(search_pages("несуществующий-термин-xyz", Language::Ru).is_empty());
+    }
+
+    /// Совпадение в теле страницы даёт сниппет (первая строка с запросом,
+    /// обрезка по границе символов с «…»); регистр не важен.
+    #[test]
+    fn search_pages_body_match_yields_snippet() {
+        let hits = search_pages("ГОТОВАЯ РАСЧЁТНАЯ РОЛЬ", Language::Ru);
+        assert_eq!(hits.len(), 1, "страница шаблонов матчится по телу");
+        let (page, snippet) = &hits[0];
+        assert_eq!(DOCS_PAGES[*page].id, "templates");
+        let text = snippet.as_ref().expect("совпадение в теле — со сниппетом");
+        assert!(
+            text.starts_with("Шаблон"),
+            "сниппет от начала строки: {text}"
+        );
+        assert!(text.ends_with('…'), "сниппет длиннее лимита — с «…»");
+        assert!(text.chars().count() <= 45, "сниппет обрезан: {text}");
+    }
+
+    /// Порядок результатов — по DOCS_PAGES (стабилен); одна страница —
+    /// одна строка даже при нескольких совпадениях в теле.
+    #[test]
+    fn search_pages_order_stable_one_row_per_page() {
+        let hits = search_pages("canvasdesk", Language::Ru);
+        let pages: Vec<usize> = hits.iter().map(|(p, _)| *p).collect();
+        let mut sorted = pages.clone();
+        sorted.sort_unstable();
+        assert_eq!(pages, sorted, "порядок = порядок DOCS_PAGES");
+        let mut unique = pages.clone();
+        unique.dedup();
+        assert_eq!(unique, pages, "одна страница — максимум одна строка");
     }
 }

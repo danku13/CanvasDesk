@@ -1089,6 +1089,10 @@ pub struct App {
     search_service: Box<dyn SearchBackend>,
     /// Ноды результатов поиска — параллельно search.rows (T14).
     search_nodes: Vec<usize>,
+    /// Страницы документации в результатах (владелец 2026-10-02): индексы
+    /// в [`docs_ui::DOCS_PAGES`], параллельно хвосту search.rows после нод
+    /// (строки-доки всегда appended после нод, помечены SearchRowKind::Docs).
+    search_doc_pages: Vec<usize>,
     /// Debounce запроса (T14): (текст, момент последней правки) — отправка
     /// через 200 мс покоя в about_to_wait.
     search_pending: Option<(String, Instant)>,
@@ -1478,6 +1482,7 @@ impl App {
             search: SearchPanel::default(),
             search_service,
             search_nodes: Vec::new(),
+            search_doc_pages: Vec::new(),
             search_pending: None,
             flight: None,
             pulse: None,
@@ -4645,10 +4650,10 @@ impl App {
                 continue;
             }
             nodes.push(index);
-            rows.push(SearchRow {
-                title: hit.display_name.clone(),
-                subtitle: hit_subtitle(&hit.path),
-            });
+            rows.push(SearchRow::node(
+                hit.display_name.clone(),
+                hit_subtitle(&hit.path),
+            ));
         }
         // In-memory: заметки и имена нод вне FTS-индекса (T14 §3)
         let query = self.search.input.query().to_owned();
@@ -4675,11 +4680,30 @@ impl App {
                     continue;
                 };
                 nodes.push(hit);
-                rows.push(SearchRow {
-                    title: node_title(node).to_owned(),
-                    subtitle: node_subtitle(node).to_owned(),
-                });
+                rows.push(SearchRow::node(
+                    node_title(node).to_owned(),
+                    node_subtitle(node).to_owned(),
+                ));
             }
+        }
+        // Строки встроенной документации (владелец 2026-10-02): appended
+        // ПОСЛЕ нод и помечены SearchRowKind::Docs (бейдж «?» в списке —
+        // не поиск по нодам); выбор открывает страницу (jump_to_search_row).
+        self.search_doc_pages.clear();
+        for (page, snippet) in docs_ui::search_pages(&query, self.settings.language) {
+            let Some(def) = docs_ui::DOCS_PAGES.get(page) else {
+                continue;
+            };
+            let section = i18n::tr(self.settings.language, i18n::keys::SEARCH_DOCS_SECTION);
+            let subtitle = match snippet {
+                Some(text) => format!("{section} · {text}"),
+                None => section.to_owned(),
+            };
+            rows.push(SearchRow::docs(
+                i18n::tr(self.settings.language, def.label_key).to_owned(),
+                subtitle,
+            ));
+            self.search_doc_pages.push(page);
         }
         // W7 (web-приёмка): итог склейки FTS+scan_scene в лог (DEBUG — на
         // нативе под дефолтным фильтром не виден; на web виден с ?log=debug
@@ -4835,6 +4859,17 @@ impl App {
     /// Прыжок к строке результата (T14): полёт камеры 300 мс ease-out,
     /// целевой зум не ниже 0.8 (нода читаема), пульс подсветки.
     fn jump_to_search_row(&mut self, row: usize) {
+        // Строки документации — хвост после нод (владелец 2026-10-02):
+        // выбор открывает страницу в просмотрщике доков и закрывает панель
+        // (доки — модальная поверхность, поиск поверх неё не нужен).
+        let docs_index = row.checked_sub(self.search_nodes.len());
+        if let Some(docs_index) = docs_index {
+            if let Some(&page) = self.search_doc_pages.get(docs_index) {
+                self.search.close();
+                self.open_docs_page(page);
+            }
+            return;
+        }
         let Some(&node) = self.search_nodes.get(row) else {
             return;
         };
@@ -6079,6 +6114,7 @@ impl App {
         self.node_clipboard.clear();
         self.search = SearchPanel::default();
         self.search_nodes.clear();
+        self.search_doc_pages.clear();
         self.search_pending = None;
         self.flight = None;
         self.pulse = None;

@@ -622,12 +622,19 @@ impl App {
 
     /// Оверлей панели поиска (T14): квады + тексты в screen-space
     /// (FrameOverlay), геометрия — search_ui::layout.
-    pub(super) fn search_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+    pub(super) fn search_overlay(
+        &self,
+    ) -> (
+        Vec<CardInstance>,
+        Vec<OwnedScreenText>,
+        Vec<canvas_render::IconInstance>,
+    ) {
         let mut instances = Vec::new();
         let mut texts = Vec::new();
+        let mut icons = Vec::new();
         let viewport = self.viewport_logical();
         if !self.search.is_open() || viewport[0] <= 0.0 || viewport[1] <= 0.0 {
-            return (instances, texts);
+            return (instances, texts, icons);
         }
         let lay = search_layout(viewport[0], viewport[1], &self.search);
         let palette = self.effective_palette();
@@ -683,24 +690,54 @@ impl App {
                 params: [4.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
+            // Владелец 2026-10-02: строки документации помечены бейджем «?»
+            // (SVG из атласа, в Glyph-наборе — текстовый фолбэк) — не поиск
+            // по нодам; текст строк сдвинут вправо на зону бейджа.
+            let is_docs = entry.kind == canvas_render::search_ui::SearchRowKind::Docs;
+            let text_x = if is_docs { 30.0 } else { 10.0 };
+            if is_docs {
+                let badge_rect = [row_rect[0] + 8.0, row_rect[1] + 6.0, 16.0, 16.0];
+                let badge_tint = crate::palette::color_to_rgba(palette.icon);
+                let drawn = self.icon_set_active().and_then(|set| {
+                    canvas_render::icon_uv(set, "question").map(|(uv_min, uv_max)| {
+                        icons.push(canvas_render::IconInstance {
+                            pos: [badge_rect[0], badge_rect[1]],
+                            size: [badge_rect[2], badge_rect[3]],
+                            uv_min,
+                            uv_max,
+                            tint: badge_tint,
+                        });
+                    })
+                });
+                if drawn.is_none() {
+                    texts.push(OwnedScreenText {
+                        text: "?".to_owned(),
+                        origin: [badge_rect[0] + 2.0, badge_rect[1] + 1.0],
+                        width: 12.0,
+                        font_size: 13.0,
+                        color: palette.icon,
+                        align: TextAlign::Left,
+                    });
+                }
+            }
             texts.push(OwnedScreenText {
                 text: entry.title.clone(),
-                origin: [row_rect[0] + 10.0, row_rect[1] + 4.0],
-                width: (row_rect[2] - 20.0).max(10.0),
+                origin: [row_rect[0] + text_x, row_rect[1] + 4.0],
+                width: (row_rect[2] - text_x - 10.0).max(10.0),
                 font_size: 13.0,
                 color: palette.title,
                 align: TextAlign::Left,
             });
             texts.push(OwnedScreenText {
                 text: entry.subtitle.clone(),
-                origin: [row_rect[0] + 10.0, row_rect[1] + 18.0],
-                width: (row_rect[2] - 20.0).max(10.0),
+                origin: [row_rect[0] + text_x, row_rect[1] + 18.0],
+                width: (row_rect[2] - text_x - 10.0).max(10.0),
                 font_size: 11.0,
                 color: palette.body,
                 align: TextAlign::Left,
             });
         }
-        (instances, texts)
+        (instances, texts, icons)
     }
 
     /// FR-070 (этап 1): оверлей админпанели — затемнение, панель, шапка
@@ -4169,11 +4206,16 @@ impl App {
                 });
             }
             // FR-ICONS: иконка таба — SVG если активен набор, иначе глиф.
+            // Ревизия владельца 2026-10-02: «Драг» и «Подсказки» не были
+            // смаплены (_ => "") — рисовал Glyph-фолбэк ✥/✦, отсутствующий
+            // во встроенных шрифтах (тофу в wasm).
             let icon_name = match tab.title_key {
                 keys::TAB_GENERAL => "tab_general",
                 keys::TAB_CANVAS => "tab_canvas",
                 keys::TAB_SNAP => "tab_snap",
+                keys::TAB_DRAG => "tab_drag",
                 keys::TAB_EDGES => "tab_edges",
+                keys::TAB_SUGGEST => "tab_suggest",
                 keys::TAB_APPEARANCE => "tab_appearance",
                 _ => "",
             };

@@ -1741,11 +1741,15 @@ pub fn icon_name_to_glyph(name: &str) -> &'static str {
         }
     }
     // Иконки табов настроек (прежние Unicode-глифы) — fallback для Glyph-набора.
+    // Ревизия 2026-10-02: таб_drag/tab_suggest добавлены в атлас (FR-073/079
+    // не смаплили их) — фолбэк дополнен теми же глифами, что в SETTINGS_TABS.
     match name {
         "tab_general" => "◎",
         "tab_canvas" => "▦",
         "tab_snap" => "≡",
+        "tab_drag" => "✥",
         "tab_edges" => "⇄",
+        "tab_suggest" => "✦",
         "tab_appearance" => "◐",
         "more" => "•••",
         "chevron_down" => "▾",

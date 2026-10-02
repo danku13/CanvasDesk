@@ -138,10 +138,12 @@ fn lint_search_open() {
             canvas_render::search_ui::SearchRow {
                 title: "Заметка о расчёте".into(),
                 subtitle: "заметка".into(),
+                kind: canvas_render::search_ui::SearchRowKind::Node,
             },
             canvas_render::search_ui::SearchRow {
                 title: "capacity-model.canvas".into(),
                 subtitle: "models/capacity".into(),
+                kind: canvas_render::search_ui::SearchRowKind::Node,
             },
         ]);
     });

@@ -165,13 +165,46 @@ impl SearchInput {
     }
 }
 
-/// Строка результата поиска (уже сматчена в ноду приложения).
+/// Класс результата поиска (владелец 2026-10-02: результаты по встроенной
+/// документации должны быть явно помечены — это не поиск по нодам).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchRowKind {
+    /// Нода канваса (FTS по файлам / substring по заметкам и именам).
+    #[default]
+    Node,
+    /// Страница встроенной документации (открывается просмотрщиком доков).
+    Docs,
+}
+
+/// Строка результата поиска (уже сматчена в ноду приложения / страницу доков).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchRow {
-    /// Заголовок: имя файла / первые символы текста заметки.
+    /// Заголовок: имя файла / первые символы текста заметки / метка страницы.
     pub title: String,
-    /// Подзаголовок: хвост пути или «заметка».
+    /// Подзаголовок: хвост пути, «заметка» или «Документация · сниппет».
     pub subtitle: String,
+    /// Класс результата: нода (дефолт) или страница документации (бейдж).
+    pub kind: SearchRowKind,
+}
+
+impl SearchRow {
+    /// Строка-нода (прежние два поля — все существующие вызовы дословно).
+    pub fn node(title: String, subtitle: String) -> Self {
+        Self {
+            title,
+            subtitle,
+            kind: SearchRowKind::Node,
+        }
+    }
+
+    /// Строка-страница документации (помечена классом Docs).
+    pub fn docs(title: String, subtitle: String) -> Self {
+        Self {
+            title,
+            subtitle,
+            kind: SearchRowKind::Docs,
+        }
+    }
 }
 
 /// Действие панели, возвращаемое при обработке клавиш (Enter/Esc).
@@ -471,6 +504,7 @@ mod tests {
             .map(|i| SearchRow {
                 title: format!("строка {i}"),
                 subtitle: String::new(),
+                kind: SearchRowKind::Node,
             })
             .collect()
     }

@@ -256,10 +256,13 @@ impl ApplicationHandler<AppEvent> for App {
                     let (pal_instances, pal_texts) = self.palette_overlay(lay, groups, *open);
                     screen_bands.push(UiLayer::Widgets, pal_instances, pal_texts);
                 }
-                // Панель поиска (T14): квады/тексты поверх всего канваса
+                // Панель поиска (T14): квады/тексты поверх всего канваса;
+                // владелец 2026-10-02: строки документации несут бейдж «?»
+                // (SVG-атлас; пусто для Glyph — там текстовый фолбэк в оверлее)
                 {
-                    let (search_instances, search_texts) = self.search_overlay();
+                    let (search_instances, search_texts, search_icons) = self.search_overlay();
                     screen_bands.push(UiLayer::Panels, search_instances, search_texts);
+                    self.icon_instances.extend(search_icons);
                 }
                 // FR-050 Н9-4 (этап E): панель «Карта проливаний» — справа
                 // сверху (Block: клик мимо — закрыть; строки — переход)
