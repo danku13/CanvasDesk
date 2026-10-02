@@ -1095,6 +1095,14 @@ pub struct ModalLayout {
     pub theme_cards: [[f32; 4]; 2],
     /// Rect подсказки внизу левой колонки.
     pub hint_rect: [f32; 4],
+    /// Применённая прокрутка контента правой панели (после клампа; 0 —
+    /// верх списка). Потребители (рисование/ввод) читают одно и то же
+    /// значение из одной функции раскладки — согласованность рендера и
+    /// ввода, паттерн `RowsLayout` autolink_ui.
+    pub scroll: f32,
+    /// Предел прокрутки контента правой панели (0 — всё влезает);
+    /// см. [`modal_scroll_max`].
+    pub scroll_max: f32,
 }
 
 impl ModalLayout {
@@ -1305,7 +1313,7 @@ pub fn modal_layout_with(
         VAlign::Start,
     );
     let title_rect = [title.x, title.y, title.w, title.h];
-    let content_h = panel.h - MODAL_PADDING * 2.0 - MODAL_TITLE_HEIGHT - 4.0;
+    let content_h = modal_content_h(panel.h);
     let content_flow = Column {
         gap: 0.0,
         ..Column::default()
@@ -1407,7 +1415,128 @@ pub fn modal_layout_with(
         rows,
         theme_cards: card_strip,
         hint_rect,
+        // W-a: предел честный и для legacy-входа (сам вход скролл не
+        // применяет — offset 0, клипа нет; см. modal_layout_scrolled_with)
+        scroll: 0.0,
+        scroll_max: modal_scroll_max(tab, viewport),
     }
+}
+
+/// Высота зоны контента правой панели (content_rect) по высоте модалки:
+/// модалка минус паддинги, заголовок раздела и зазор под ним. Единый
+/// источник формулы для потока зоны в [`modal_layout_with`] и для предела
+/// прокрутки — расхождение двух копий формулы сломало бы кламп скролла.
+fn modal_content_h(modal_h: f32) -> f32 {
+    (modal_h - MODAL_PADDING * 2.0 - MODAL_TITLE_HEIGHT - 4.0).max(0.0)
+}
+
+/// Полная высота потока контента таба (карточки темы + зазор? + ряды).
+/// Те же константы скелета, из которых [`modal_layout_with`] строит
+/// `flow` (все дети — [`MeasuredItem::Fixed`], замерщик в геометрии не
+/// участвует), поэтому сумма сходится с раскладкой дословно.
+fn modal_content_flow_h(tab_def: &SettingsTab) -> f32 {
+    let prefix = if tab_def.theme_cards {
+        MODAL_THEME_CARD_H + MODAL_THEME_GAP
+    } else {
+        0.0
+    };
+    prefix + tab_def.rows.len() as f32 * MODAL_ROW_HEIGHT
+}
+
+/// Предел вертикальной прокрутки контента правой панели (W-a, дефект
+/// адаптива №2: на 800×560 таб «Профиль» переливается за низ модалки):
+/// полная высота потока минус высота зоны рядов (content_rect минус
+/// внутренний паддинг — прокрученные ряды не наезжают на поля); 0 — всё
+/// влезает. Чистая функция без замерщика — для колеса ввода: `scroll_top`
+/// потребителя клампится именно в этот предел.
+pub fn modal_scroll_max(tab: usize, viewport: [f32; 2]) -> f32 {
+    let tab_def = SETTINGS_TABS.get(tab).unwrap_or(&SETTINGS_TABS[0]);
+    let zone_h = (modal_content_h(modal_size(viewport)[1]) - MODAL_PADDING * 2.0).max(0.0);
+    (modal_content_flow_h(tab_def) - zone_h).max(0.0)
+}
+
+/// [`modal_layout_with`] с вертикальной прокруткой контента правой панели
+/// (W-a). `scroll_top` клампится через kit [`canvas_ui::kit::ScrollState`]
+/// в `[0, modal_scroll_max]`; ряды и карточки сдвигаются на применённый
+/// offset и клипаются пересечением с зоной рядов (семантика Table v2 —
+/// «list_rows + пересечение»: частичный ряд на краю остаётся видимой
+/// частью, элемент целиком вне зоны выпадает из выборки — не рисуется и
+/// не пикуется, как в `autolink_ui::rows_layout`).
+///
+/// Рисование и hit-тест обязаны брать ОДНУ эту функцию — «ввод = тому,
+/// что видно» (ui_registry): rect'ы строк/контролов у потребителя
+/// согласованы с видимой прокруткой автоматически.
+///
+/// [`modal_layout_with`] оставлен без сдвига и клипа как вход действующих
+/// потребителей: пока ввод/рисование не переведены на прокрутку, клип при
+/// offset = 0 «съел» бы переливающий хвост таба без возможности
+/// доскроллить. После проводки потребители переходят сюда, и legacy-вход
+/// с клипом не нужен.
+pub fn modal_layout_scrolled_with(
+    tab: usize,
+    viewport: [f32; 2],
+    scroll_top: f32,
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> ModalLayout {
+    use canvas_ui::geometry::{EdgeInsets, UiRect};
+    use canvas_ui::kit::ScrollState;
+
+    // База — та же раскладка скелета (навигация/заголовок/зона) без
+    // прокрутки: сдвигается и клипается только поток контента правой
+    // панели, навигация и заголовок остаются на месте.
+    let base = modal_layout_with(tab, viewport, m, fs);
+    // Зона рядов: контент-зона минус внутренний паддинг (те же поля, что
+    // у потока строк в modal_layout_with).
+    let rows_viewport = UiRect::new(
+        base.content_rect[0],
+        base.content_rect[1],
+        base.content_rect[2],
+        base.content_rect[3],
+    )
+    .inset(&EdgeInsets::uniform(MODAL_PADDING));
+    let mut scroll = ScrollState {
+        offset: scroll_top,
+        content_h: modal_content_flow_h(SETTINGS_TABS.get(tab).unwrap_or(&SETTINGS_TABS[0])),
+        viewport_h: rows_viewport.h,
+    };
+    scroll.clamp();
+    // Сдвиг вверх + клип пересечением; пустое пересечение — элемент не
+    // виден и из выборки выпадает.
+    let clip = |rect: [f32; 4]| -> Option<[f32; 4]> {
+        let shifted = UiRect::new(rect[0], rect[1] - scroll.offset, rect[2], rect[3]);
+        let visible = shifted.intersection(&rows_viewport)?;
+        Some([visible.x, visible.y, visible.w, visible.h])
+    };
+    let rows = base
+        .rows
+        .iter()
+        .filter_map(|(row, rect)| clip(*rect).map(|clipped| (*row, clipped)))
+        .collect();
+    // Вынесенная за зону карточка — пустой rect: та же конвенция «карточек
+    // нет», что у табов без карточек (hit-тест молчит).
+    let no_card = [0.0; 4];
+    let theme_cards = [
+        clip(base.theme_cards[0]).unwrap_or(no_card),
+        clip(base.theme_cards[1]).unwrap_or(no_card),
+    ];
+    ModalLayout {
+        // Применённый (после клампа) offset и предел — потребители ведут
+        // состояние по применённому значению, а не по запросу.
+        scroll: scroll.offset,
+        scroll_max: scroll.max_offset(),
+        rows,
+        theme_cards,
+        ..base
+    }
+}
+
+/// [`modal_layout_scrolled_with`] с собственным замерщиком (канонические
+/// shared-точки на вызов — см. [`modal_layout`]).
+pub fn modal_layout_scrolled(tab: usize, viewport: [f32; 2], scroll_top: f32) -> ModalLayout {
+    let mut m = canvas_ui::measure::TextMeasurer::new();
+    let mut fs = canvas_render::text::measure_font_system();
+    modal_layout_scrolled_with(tab, viewport, scroll_top, &mut m, &mut fs)
 }
 
 /// Hit-test пункта левой навигации: индекс таба под точкой или `None`
