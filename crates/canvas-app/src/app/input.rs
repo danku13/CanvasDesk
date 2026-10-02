@@ -340,6 +340,7 @@ impl App {
                     self.settings_dropdown.reset();
                 } else {
                     self.settings_open = false;
+                    self.settings_scroll_top = 0.0;
                 }
                 true
             }
@@ -981,6 +982,7 @@ impl App {
         {
             self.settings_open = !self.settings_open;
             self.settings_dropdown.reset();
+            self.settings_scroll_top = 0.0;
             self.request_redraw();
             return;
         }
@@ -1269,6 +1271,7 @@ impl App {
                     self.settings_dropdown.reset();
                 } else {
                     self.settings_open = false;
+                    self.settings_scroll_top = 0.0;
                 }
                 self.request_redraw();
                 true
@@ -1847,13 +1850,17 @@ impl App {
             self.close_main_stage();
             self.settings_open = !self.settings_open;
             self.settings_dropdown.reset();
+            self.settings_scroll_top = 0.0;
             self.request_redraw();
             return;
         }
         if self.settings_open {
             // FR-039: layout модалки — hit-тесты по навигации,
-            // строкам и карточкам темы
-            let layout = modal_layout(self.settings_tab, viewport);
+            // строкам и карточкам темы. W-a: scrolled-раскладка — тот же
+            // offset, что у рисования (overlays.rs) и hit-rect'ов
+            // (ui_registry.rs) — «ввод = тому, что видно».
+            let layout =
+                modal_layout_scrolled(self.settings_tab, viewport, self.settings_scroll_top);
             // Открытое выпадающее меню — первый приоритет: клик по
             // пункту применяет значение; клик мимо меню закрывает
             // ТОЛЬКО меню (модалка остаётся открытой — двухэтапный
@@ -1889,6 +1896,7 @@ impl App {
             if let Some(tab) = modal_nav_at(&layout, self.cursor) {
                 self.settings_tab = tab;
                 self.settings_dropdown.reset();
+                self.settings_scroll_top = 0.0;
                 self.request_redraw();
                 return;
             }
@@ -1928,6 +1936,7 @@ impl App {
                 // клик мимо создал бы заметку)
                 self.settings_open = false;
                 self.settings_dropdown.reset();
+                self.settings_scroll_top = 0.0;
             }
             self.request_redraw();
         }
@@ -3762,6 +3771,27 @@ impl App {
                     list.len(),
                     lay.visible_rows.len(),
                 );
+                self.request_redraw();
+                return;
+            }
+        }
+        // W-a (аудит §8 п.2): колесо над контент-зоной правой панели
+        // настроек скроллит её содержимое — таб «Профиль» (12 рядов после
+        // FR-089) на 800×560 не влезает без прокрутки. Образец — ветки
+        // автосвязи/галереи выше: hit по rect зоны из той же функции
+        // раскладки, что рисование/ввод («ввод = тому, что видно») →
+        // скролл → redraw → return. Знак — как у списков: колесо от себя
+        // (y < 0) увеличивает offset.
+        if self.settings_open {
+            let viewport = self.viewport_logical();
+            let content = modal_layout(self.settings_tab, viewport).content_rect;
+            if point_in_rect(content, self.cursor) {
+                let max = modal_scroll_max(self.settings_tab, viewport);
+                let dy = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
+                    MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),
+                };
+                self.settings_scroll_top = (self.settings_scroll_top + dy).clamp(0.0, max);
                 self.request_redraw();
                 return;
             }

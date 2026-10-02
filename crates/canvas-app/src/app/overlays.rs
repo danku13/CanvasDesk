@@ -4329,8 +4329,11 @@ impl App {
             corners: [0.0; 4],
         });
         // FR-039: модалка по центру — layout несёт rect'ы навигации,
-        // заголовка раздела, строк активного таба и карточек темы
-        let layout = modal_layout(self.settings_tab, viewport);
+        // заголовка раздела, строк активного таба и карточек темы.
+        // W-a: контент правой панели — со скроллом (тот же offset, что
+        // у hit-тестов ui_registry и pick input.rs — «ввод = тому, что
+        // видно»); навигация/заголовок/карточки тем неподвижны.
+        let layout = modal_layout_scrolled(self.settings_tab, viewport, self.settings_scroll_top);
         let modal = layout.rect;
         instances.push(CardInstance {
             pos: [modal[0], modal[1]],

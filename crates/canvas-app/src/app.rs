@@ -28,9 +28,10 @@ use crate::palette::{
 use crate::scheme_gallery_ui;
 use crate::settings_ui::{
     apply_dropdown_value, control_rect, dropdown_item_at, dropdown_layout, dropdown_options,
-    dropdown_value, modal_layout, modal_nav_at, modal_row_at, modal_theme_card_at, pill_knob_rect,
-    row_desc_key, row_kind, row_label_key, DropdownState, RowKind, SettingsRow, DROPDOWN_MARGIN,
-    DROPDOWN_ROW_H, MODAL_ROW_LABEL_W, SETTINGS_TABS,
+    dropdown_value, modal_layout, modal_layout_scrolled, modal_nav_at, modal_row_at,
+    modal_scroll_max, modal_theme_card_at, pill_knob_rect, row_desc_key, row_kind, row_label_key,
+    DropdownState, RowKind, SettingsRow, DROPDOWN_MARGIN, DROPDOWN_ROW_H, MODAL_ROW_LABEL_W,
+    SETTINGS_TABS,
 };
 use crate::suggest;
 // FR-038 (T-038.4): snap-движок (T-038.2) — чистая геометрия магнитной
@@ -1003,10 +1004,7 @@ pub struct App {
     /// 0 — верх списка. Кламп в `[0, modal_scroll_max]` — на потребителе
     /// (settings_ui::modal_layout_scrolled); сброс — при смене таба и
     /// закрытии/переоткрытии модалки (тот же контракт, что у
-    /// `settings_dropdown.reset`). Проводка колеса и offset в
-    /// рисование/ввод (overlays.rs/input.rs/ui_registry.rs) — следующий
-    /// шаг W-a: файлы вне диффа этой задачи, поле временно не читается.
-    #[allow(dead_code)]
+    /// `settings_dropdown.reset`).
     settings_scroll_top: f32,
     /// FR-027: меню помощи кнопки «?» (открыто — поверх канваса, клики
     /// глотаются до закрытия; подменю — двухэтапный Esc).
