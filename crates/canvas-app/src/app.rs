@@ -999,6 +999,15 @@ pub struct App {
     /// Выпадающее меню строки настроек (FR-026): какая строка открыта;
     /// пункты вычисляются на кадр, состояние не устаревает.
     settings_dropdown: DropdownState,
+    /// W-a: прокрутка контента правой панели настроек — сдвиг вверх (px),
+    /// 0 — верх списка. Кламп в `[0, modal_scroll_max]` — на потребителе
+    /// (settings_ui::modal_layout_scrolled); сброс — при смене таба и
+    /// закрытии/переоткрытии модалки (тот же контракт, что у
+    /// `settings_dropdown.reset`). Проводка колеса и offset в
+    /// рисование/ввод (overlays.rs/input.rs/ui_registry.rs) — следующий
+    /// шаг W-a: файлы вне диффа этой задачи, поле временно не читается.
+    #[allow(dead_code)]
+    settings_scroll_top: f32,
     /// FR-027: меню помощи кнопки «?» (открыто — поверх канваса, клики
     /// глотаются до закрытия; подменю — двухэтапный Esc).
     help_menu: Option<HelpMenuState>,
@@ -1450,6 +1459,7 @@ impl App {
             settings_open: false,
             settings_tab: 0,
             settings_dropdown: DropdownState::default(),
+            settings_scroll_top: 0.0,
             // FR-027/FR-028: помощь/документация закрыты; тур при первом
             // запуске открывает should_show_onboarding (прецедент
             // hud_on_start, FR-028)
@@ -7524,6 +7534,9 @@ impl App {
                     self.close_main_stage();
                     self.settings_open = !self.settings_open;
                     self.settings_dropdown.reset();
+                    // W-a: прокрутка контента — в начало при открытии/
+                    // закрытии (тот же контракт сброса, что у dropdown)
+                    self.settings_scroll_top = 0.0;
                     self.request_redraw();
                     return true;
                 }
