@@ -1135,8 +1135,9 @@ mod tests {
         assert!(settings.telemetry_analytics, "метрики: дефолт вкл");
         // Пикер первого запуска пишет TOML с чекбоксами (index.html):
         // пользователь снял метрики, счётчик оставил.
-        let (settings, warn) =
-            Settings::load_toml_str("language = \"ru\"\ntelemetry_counter = true\ntelemetry_analytics = false\n");
+        let (settings, warn) = Settings::load_toml_str(
+            "language = \"ru\"\ntelemetry_counter = true\ntelemetry_analytics = false\n",
+        );
         assert!(warn.is_none(), "{warn:?}");
         assert!(settings.telemetry_counter);
         assert!(!settings.telemetry_analytics, "выбор пользователя сохранён");
