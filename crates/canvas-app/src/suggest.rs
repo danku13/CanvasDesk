@@ -411,6 +411,12 @@ pub struct SuggestState {
     pub cards: Option<SuggestCards>,
     /// Поколение C3-запросов (стопка отвечает последнему).
     pub cards_gen: u64,
+    /// FR-079 follow-up: id ноды-якоря для текущего C3-запроса. Ставится
+    /// в suggest_request_cards (из index параметра — ВЫБРАННАЯ нода, а
+    /// не «последняя шаблонная»). on_cards_ready использует этот id как
+    /// anchor для позиционирования стопки. Раньше on_cards_ready искал
+    /// последнюю шаблонную ноду — стопка появлялась не у выбранной ноды.
+    pub cards_anchor: Option<String>,
 }
 
 impl Default for SuggestState {
@@ -431,6 +437,7 @@ impl Default for SuggestState {
             accepted: None,
             cards: None,
             cards_gen: 0,
+            cards_anchor: None,
         }
     }
 }
