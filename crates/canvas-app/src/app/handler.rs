@@ -408,6 +408,8 @@ impl ApplicationHandler<AppEvent> for App {
                 // скриншота — stage должен быть единственным источником
                 // контента поверх затемнения)
                 if self.main_stage.is_none() {
+                    // Слоты темы для цветов тултипов (W-b: бывшие литералы)
+                    let palette = self.effective_palette();
                     let mut tooltip_cards: Vec<tooltip::TooltipCard> = Vec::new();
                     if let Some(file) = self.hovered.and_then(|index| {
                         self.scene.canvas.nodes.get(index).and_then(|node| {
@@ -418,7 +420,7 @@ impl ApplicationHandler<AppEvent> for App {
                     }) {
                         tooltip_cards.push(tooltip::TooltipCard::single(
                             self.trf(keys::TOAST_FILE_UNAVAILABLE, &[("{file}", &file)]),
-                            Color::rgb(0xd4, 0xd4, 0xd4),
+                            palette.body,
                         ));
                     }
                     // Тултип ошибки формульной строки (FR-013, правка 4): курсор
@@ -427,7 +429,11 @@ impl ApplicationHandler<AppEvent> for App {
                     if let Some(hit) = self.expr_error_hit_at(self.cursor) {
                         tooltip_cards.push(tooltip::TooltipCard::single(
                             hit.message.clone(),
-                            Color::rgb(0xe5, 0x5c, 0x5c),
+                            Color::rgb(
+                                canvas_core::tokens::ERROR[0],
+                                canvas_core::tokens::ERROR[1],
+                                canvas_core::tokens::ERROR[2],
+                            ),
                         ));
                     }
                     // FR-045 F-5 v1/v2: лейблы порта канваса (qualified-адрес
@@ -451,7 +457,7 @@ impl ApplicationHandler<AppEvent> for App {
                     if let Some(hit) = self.formula_ellipsis_hit_at(self.cursor) {
                         tooltip_cards.push(tooltip::TooltipCard::single(
                             hit.message.clone(),
-                            Color::rgb(0xd4, 0xd4, 0xd4),
+                            palette.body,
                         ));
                     }
                     if let Some(lines) = port_label.clone() {
@@ -464,9 +470,9 @@ impl ApplicationHandler<AppEvent> for App {
                                 .into_iter()
                                 .map(|line| {
                                     let color = if line.unmapped {
-                                        Color::rgb(0xf5, 0xa6, 0x23)
+                                        palette.tooltip_warn
                                     } else {
-                                        Color::rgb(0x9c, 0xc3, 0xe6)
+                                        palette.tooltip_info
                                     };
                                     (line.text, color)
                                 })
@@ -510,10 +516,8 @@ impl ApplicationHandler<AppEvent> for App {
                                     self.tr(keys::TOOLTIP_UNMAPPED_SLOT).to_owned()
                                 };
                                 // Янтарный акцент анализа (severity warning)
-                                tooltip_cards.push(tooltip::TooltipCard::single(
-                                    text,
-                                    Color::rgb(0xf5, 0xa6, 0x23),
-                                ));
+                                tooltip_cards
+                                    .push(tooltip::TooltipCard::single(text, palette.tooltip_warn));
                             }
                         }
                     }
@@ -581,16 +585,13 @@ impl ApplicationHandler<AppEvent> for App {
                             };
                             // Спокойный сине-серый акцент потока значений
                             // (тултип источника, не диагностика)
-                            tooltip_cards.push(tooltip::TooltipCard::single(
-                                text,
-                                Color::rgb(0x9c, 0xc3, 0xe6),
-                            ));
+                            tooltip_cards
+                                .push(tooltip::TooltipCard::single(text, palette.tooltip_info));
                         }
                     }
                     // Сборка тултипов: измеренные подложки + перенесённые
                     // строки (app::tooltip; замер под глобальным guard в
                     // коротком скоупе — locking-функций внутри нет)
-                    let palette = self.effective_palette();
                     let (tooltip_quads, tooltip_texts) = tooltip::layout_tooltips(
                         tooltip_cards,
                         self.cursor,

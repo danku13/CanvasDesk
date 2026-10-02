@@ -1080,7 +1080,8 @@ impl App {
                 );
                 quads.push(transform.instance_to_world(&chip, camera, viewport));
                 // Текст метки — screen-space, тёмный на цветной заливке
-                // (прототип chipTxt #14161c)
+                // (прототип chipTxt #14161c; W-b: слот chip_text — значение
+                // одинаково в обеих темах, FR-075)
                 let rect = header_chip_rect(node, label_w);
                 let origin = transform.map_point([rect[0] + 7.0, rect[1] + 2.0]);
                 texts.push(OwnedScreenText {
@@ -1088,7 +1089,7 @@ impl App {
                     origin,
                     width: label_px + 2.0,
                     font_size: font(10.0),
-                    color: canvas_render::Color::rgb(0x14, 0x16, 0x1c),
+                    color: palette.chip_text,
                     align: TextAlign::Left,
                 });
             }

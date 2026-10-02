@@ -372,7 +372,7 @@ impl App {
                 ),
                 self.tr(keys::AUTOLINK_ACCEPT),
                 color_to_rgba(if accept_on_kit {
-                    Color::rgb(255, 255, 255)
+                    palette.text_on_accent
                 } else {
                     palette.body
                 }),
@@ -410,7 +410,7 @@ impl App {
                 ),
                 self.tr(keys::AUTOLINK_REJECT),
                 color_to_rgba(if reject_on_kit {
-                    Color::rgb(255, 255, 255)
+                    palette.text_on_accent
                 } else {
                     palette.body
                 }),
@@ -473,7 +473,7 @@ impl App {
                 &[("{n}", accepted.to_string().as_str())],
             ),
             color_to_rgba(if create_on {
-                Color::rgb(255, 255, 255)
+                palette.text_on_accent
             } else {
                 palette.quote
             }),
@@ -603,7 +603,7 @@ impl App {
                         width: (rect[2] - 10.0).max(8.0),
                         font_size: 10.5,
                         color: if current {
-                            Color::rgb(255, 255, 255)
+                            palette.text_on_accent
                         } else {
                             palette.body
                         },
@@ -654,7 +654,7 @@ impl App {
                     origin: [chip[0], chip[1] + 5.0],
                     width: chip[2],
                     font_size: 11.5,
-                    color: Color::rgb(255, 255, 255),
+                    color: palette.text_on_accent,
                     align: TextAlign::Center,
                 });
             }
@@ -791,7 +791,7 @@ impl App {
                     width: toggle[2],
                     font_size: 13.0,
                     color: if hovered {
-                        Color::rgb(255, 255, 255)
+                        palette.text_on_accent
                     } else {
                         palette.body
                     },
@@ -827,7 +827,7 @@ impl App {
                     width: toggle[2],
                     font_size: 13.0,
                     color: if on || hovered {
-                        Color::rgb(255, 255, 255)
+                        palette.text_on_accent
                     } else {
                         palette.body
                     },
@@ -868,7 +868,7 @@ impl App {
                         width: rect[2],
                         font_size: 13.0,
                         color: if hovered && active {
-                            Color::rgb(255, 255, 255)
+                            palette.text_on_accent
                         } else if active {
                             palette.body
                         } else {
@@ -1144,7 +1144,7 @@ impl App {
                                     width: icon[2],
                                     font_size: icon_font,
                                     color: if icon_hovered {
-                                        Color::rgb(255, 255, 255)
+                                        palette.text_on_accent
                                     } else {
                                         palette.body
                                     },
@@ -1289,7 +1289,7 @@ impl App {
                         origin: [badge[0], badge[1] + 1.5],
                         width: bw,
                         font_size: 9.5,
-                        color: Color::rgb(255, 255, 255),
+                        color: palette.text_on_accent,
                         align: TextAlign::Center,
                     });
                 }
@@ -1343,7 +1343,7 @@ impl App {
                         origin: [rect[0], rect[1] + 3.0],
                         width: rect[2],
                         font_size: 12.0,
-                        color: Color::rgb(255, 255, 255),
+                        color: palette.text_on_accent,
                         align: TextAlign::Center,
                     });
                 }
@@ -1515,7 +1515,7 @@ impl App {
             pos: [x, y],
             size: [w, h],
             fill: palette.menu_fill,
-            border: [0.22, 0.24, 0.30, 0.9],
+            border: palette.palette_border,
             params: [6.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
