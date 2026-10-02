@@ -1,9 +1,10 @@
 //! FR-ICONS: screen-space wgpu-пайплайн SVG-иконок.
 //!
 //! Атлас собирается один раз при init из растеризованных байт (`icon_data.rs`):
-//! 5 наборов × 37 имён × 32×32 px (bootstrap 24×24 дополнен до 32×32;
+//! 5 наборов × 39 имён × 32×32 px (bootstrap 24×24 дополнен до 32×32;
 //! набор `roles` — sparse: только свои 20 имён, чужие ячейки прозрачны)
-//! = 37×5 ячеек = 1184×160 px атлас (37-е имя `custom` — FR-085). Все
+//! = 39×5 ячеек = 1248×160 px атлас (37-е имя `custom` — FR-085; 38–39-е
+//! `tab_drag`/`tab_suggest` — ревизия 2026-10-02). Все
 //! наборы в одном атласе — переключение
 //! набора не требует ребинда bind-группы (выбор набора = выбор UV в атласе).
 //!
@@ -31,7 +32,7 @@ pub const ICON_CELL_PX: u32 = 32;
 /// Иконок в строке атласа (= число имён).
 pub const ICONS_PER_ROW: u32 = ICON_NAMES.len() as u32;
 /// Сторона атласа: ICONS_PER_ROW × ICON_SETS.len() ячеек ICON_CELL_PX².
-pub const ATLAS_W: u32 = ICONS_PER_ROW * ICON_CELL_PX; // 37 * 32 = 1184
+pub const ATLAS_W: u32 = ICONS_PER_ROW * ICON_CELL_PX; // 39 * 32 = 1248
 pub const ATLAS_H: u32 = ICON_SETS.len() as u32 * ICON_CELL_PX; // 5 * 32 = 160
 
 /// Инстанс иконки для GPU (layout — attributes в icons.wgsl).
@@ -757,9 +758,11 @@ mod tests {
 
     /// Атлас вмещает все наборы × имена. Геометрия — производные константы
     /// (`ICONS_PER_ROW`/`ATLAS_W`/`ATLAS_H` считаются от реестров), тест
-    /// закрепляет согласованность и фактический размер: 5 наборов × 37 имён
-    /// (16 UI + 20 ролей + `custom`, FR-085) = 185 ячеек. Прежний захардкоженный
-    /// «36/180/1152» отстал от реестра — CI #412–#414 красные.
+    /// закрепляет согласованность и фактический размер: 5 наборов × 39 имён
+    /// (17 UI + `edit` + `tab_drag`/`tab_suggest` + 20 ролей) = 195 ячеек.
+    /// Прежний захардкоженный размер (36/180/1152, затем 37/185) отставал
+    /// от реестра — CI #412–#414 красные; теперь тест берёт факт из реестра
+    /// и ловит расхождение атласа с ним.
     #[test]
     fn atlas_size_matches_repositories() {
         let total_cells = ICONS_PER_ROW * ICON_SETS.len() as u32;
@@ -769,8 +772,8 @@ mod tests {
             "ICONS_PER_ROW производна от реестра имён"
         );
         assert_eq!(
-            total_cells, 185,
-            "5 наборов × 37 имён (16 UI + 20 ролей + custom, FR-085)"
+            total_cells, 195,
+            "5 наборов × 39 имён (FR-085 + табы Драг/Подсказки 2026-10-02)"
         );
         assert_eq!(ATLAS_W, ICON_NAMES.len() as u32 * ICON_CELL_PX);
         assert_eq!(ATLAS_H, ICON_SETS.len() as u32 * ICON_CELL_PX);
@@ -782,6 +785,21 @@ mod tests {
             uv_max[0] <= 1.0 + f32::EPSILON && uv_max[1] <= 1.0 + f32::EPSILON,
             "UV последней ячейки в пределах атласа"
         );
+    }
+
+    /// Ревизия владельца 2026-10-02: табы «Драг»/«Подсказки» имеют растр
+    /// во всех четырёх UI-наборах (прежде не имели ячеек вовсе — Glyph-
+    /// фолбэк ✥/✦ отсутствует во встроенных шрифтах).
+    #[test]
+    fn new_tab_icons_rasterized_in_all_ui_sets() {
+        for set in ["lucide", "material", "feather", "bootstrap"] {
+            for name in ["tab_drag", "tab_suggest"] {
+                assert!(
+                    icon_rgba(set, name).is_some(),
+                    "{set}/{name} нет растра — таб рисует тофу-глиф"
+                );
+            }
+        }
     }
 
     /// Регрессия wasm-чёрного экрана: упаковка юниформа — vec2 на смещении 0

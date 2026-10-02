@@ -40,6 +40,10 @@ ICON_NAMES = [
     "arrow_left", "arrow_right", "refresh",
     "edit",
     "tab_general", "tab_canvas", "tab_snap", "tab_edges", "tab_appearance",
+    # Ревизия владельца 2026-10-02: табы «Драг» (FR-073) и «Подсказки»
+    # (FR-079) не были смаплены на SVG — в атласе нет ячеек, Glyph-фолбэк
+    # рисовал глифы ✥/✦, отсутствующие во встроенных шрифтах (тофу).
+    "tab_drag", "tab_suggest",
     "more", "chevron_down", "chevron_right",
 ]
 # FR-075 W2: роли шаблонных нод — отдельный SPARSE-набор: имена существуют
@@ -113,17 +117,30 @@ def rust_byte_array_literal(data: bytes, name: str, set_name: str, icon_name: st
 
 def main() -> None:
     # Растеризация всех иконок (sparse: набор определяет свои имена).
+    # Отсутствующий файл = sparse-пара (прозрачная ячейка атласа, icon_rgba
+    # -> None) с предупреждением — НЕ ошибка: наборы могут не объявлять
+    # отдельные имена (материал/edit.svg после ffcf533). Полная потеря
+    # имени (нет растра ни в одном наборе) — ошибка генерации (ниже).
     rasterized: dict[tuple[str, str], bytes] = {}
+    skipped: set[tuple[str, str]] = set()
     for set_name in SETS:
         px = SET_PX[set_name]
         for icon_name in SET_NAMES[set_name]:
             svg_path = ICON_DIR / set_name / f"{icon_name}.svg"
             if not svg_path.exists():
-                print(f"MISSING: {svg_path}", file=sys.stderr)
-                sys.exit(1)
+                print(f"WARNING (sparse): {svg_path} отсутствует — ячейка прозрачна", file=sys.stderr)
+                skipped.add((set_name, icon_name))
+                continue
             data = rasterize_svg(svg_path, px)
             rasterized[(set_name, icon_name)] = data
             print(f"  rasterized {set_name}/{icon_name} → {len(data)} bytes ({px}×{px})")
+
+    # Валидация: каждое имя растеризовано хотя бы в одном наборе.
+    covered = {name for (_, name) in rasterized}
+    lost = [n for n in ICON_NAMES_ALL if n not in covered]
+    if lost:
+        print(f"ОШИБКА: имена без растра ни в одном наборе: {lost}", file=sys.stderr)
+        sys.exit(1)
 
     # Генерация Rust-файла.
     parts: list[str] = []
@@ -183,10 +200,14 @@ def main() -> None:
     parts.append("}")
     parts.append("")
 
-    # Pub const байты для каждой иконки × набор (sparse: только объявленные).
+    # Pub const байты для каждой растеризованной иконки × набор
+    # (sparse: необъявленные/отсутствующие пары пропускаются — ячейка
+    # прозрачна, icon_rgba возвращает None).
     for set_name in SETS:
         px = SET_PX[set_name]
         for icon_name in SET_NAMES[set_name]:
+            if (set_name, icon_name) in skipped:
+                continue
             data = rasterized[(set_name, icon_name)]
             cname = const_name(set_name, icon_name)
             parts.append(rust_byte_array_literal(data, cname, set_name, icon_name, px))
@@ -199,6 +220,8 @@ def main() -> None:
     parts.append("    match (set, name) {")
     for set_name in SETS:
         for icon_name in SET_NAMES[set_name]:
+            if (set_name, icon_name) in skipped:
+                continue
             cname = const_name(set_name, icon_name)
             parts.append(f"        (\"{set_name}\", \"{icon_name}\") => Some({cname}),")
     parts.append("        _ => None,")
@@ -213,6 +236,8 @@ def main() -> None:
         parts.append(f"pub fn {set_name}_icons() -> Vec<(&'static str, &'static [u8])> {{")
         parts.append("    vec![")
         for icon_name in SET_NAMES[set_name]:
+            if (set_name, icon_name) in skipped:
+                continue
             cname = const_name(set_name, icon_name)
             parts.append(f"        (\"{icon_name}\", {cname}),")
         parts.append("    ]")

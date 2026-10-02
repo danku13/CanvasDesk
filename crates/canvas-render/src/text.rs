@@ -47,6 +47,16 @@ const FONT_DATA: &[&[u8]] = &[
     // italic-начертания, наклонный синтез — единственный путь получить курсив
     // моно с теми же метриками (раскладка не разъезжается).
     include_bytes!("../../../assets/fonts/CanvasDeskMonoOblique.ttf"),
+    // Ревизия владельца 2026-10-02 (глифы UI без тофу): сабсет-производная
+    // «CanvasDesk Symbols» — 21 символ из Noto Sans Symbols/Symbols 2/Math
+    // (✓ ✥ ✦ ⚙ ⚠ ✎ ✕ ✗ ❄ ▦ ▴ ▸ ▾ ▲ ▼ ◎ ◐ ⌕ ↻ ⇄ ⋯), покрывающий те,
+    // которых НЕТ в Noto Sans Display/Mono (✓ ✥ ✦ ⚙ ⚠ ✎ ✕ ✗ ❄ ↻ ⇄ ⋯).
+    // Без него эти глифы рисуются .notdef-тофу в wasm (встроенных лиц нет,
+    // системный фолбэк недоступен) — например «✓ Узкие места (Ctrl+B)»
+    // в контекстном меню и глифы табов настроек. Лицензия OFL, имя без
+    // RFN «Noto» (прецедент CanvasDeskMonoOblique); сборка — subset-скрипт
+    // (см. OFL-CanvasDeskSymbols.txt).
+    include_bytes!("../../../assets/fonts/CanvasDeskSymbols-Regular.ttf"),
 ];
 
 /// Семейство базового текста канваса (CR-009): Noto Sans Display.
@@ -5897,6 +5907,53 @@ load = connections_per_sec / (servers * server_rate)\n";
                     face.families.iter().any(|(name, _)| name == family) && face.weight.0 == weight
                 }),
                 "нет вшитого лица {family} w{weight}"
+            );
+        }
+    }
+
+    /// Ревизия владельца 2026-10-02 (глифы UI без тофу): инвентарь символов
+    /// UI-строк (аудит строковых литералов canvas-app/canvas-ui/canvas-render)
+    /// шейпится на FontSystem БЕЗ системных лиц (все лица сняты — wasm-
+    /// достоверная среда: там FontSystem::new() не видит системных шрифтов).
+    /// Каждый символ обязан получить глиф ≠ 0 из вшитых шрифтов: символы,
+    /// которых нет в Noto Sans Display/Mono, покрывает сабсет
+    /// «CanvasDesk Symbols» (см. assets/fonts/OFL-CanvasDeskSymbols.txt).
+    /// Регрессия: «✓ Узкие места (Ctrl+B)» ПКМ-меню и глифы табов настроек
+    /// «Драг»/«Подсказки» рисовали .notdef-тофу.
+    #[test]
+    fn ui_symbol_glyphs_covered_by_embedded_fonts() {
+        let mut fs = FontSystem::new();
+        // Счистить ВСЕ лица (системные подмешивает FontSystem::new) —
+        // остаётся пустая база; вшитые грузим явно (как при старте рендера).
+        for id in fs.db().faces().map(|face| face.id).collect::<Vec<_>>() {
+            fs.db_mut().remove_face(id);
+        }
+        assert!(fs.db().is_empty(), "системные лица не сняты");
+        for data in FONT_DATA {
+            fs.db_mut().load_font_data((*data).to_vec());
+        }
+        // Символы, отсутствующие в Noto Sans Display/Mono (проверено
+        // fontTools-аудитом 2026-10-02) — покрытие обязан давать сабсет.
+        let symbols = [
+            '↻', '⇄', '⋯', '⚙', '⌕', '⚠', '✎', '✓', '✕', '✗', '✥', '✦', '❄',
+        ];
+        for ch in symbols {
+            let mut buffer = Buffer::new(&mut fs, Metrics::new(14.0, 20.0));
+            buffer.set_text(
+                &mut fs,
+                &ch.to_string(),
+                Attrs::new().family(Family::Name(SANS_FAMILY)),
+                Shaping::Advanced,
+            );
+            buffer.shape_until_scroll(&mut fs, false);
+            let glyph_ids: Vec<u16> = buffer
+                .layout_runs()
+                .flat_map(|run| run.glyphs.iter().map(|g| g.glyph_id))
+                .collect();
+            assert!(!glyph_ids.is_empty(), "символ {ch} не зашейпился");
+            assert!(
+                glyph_ids.iter().all(|&g| g != 0),
+                "символ {ch} — .notdef-тофу во вшитых шрифтах"
             );
         }
     }

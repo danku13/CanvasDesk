@@ -3585,15 +3585,13 @@ impl App {
             let win = explain_ui::window_rect(viewport);
             let body = explain_ui::body_rect(win);
             if point_in_rect(body, self.cursor) {
-                // Горизонтальная составляющая: наклон колеса / Shift+колесо
-                let (dx, dy) = match delta {
-                    MouseScrollDelta::LineDelta(x, y) => {
-                        (-x * PAN_PX_PER_LINE, y * PAN_PX_PER_LINE)
-                    }
-                    MouseScrollDelta::PixelDelta(pos) => (
-                        -pos.x as f32 / self.scale_factor(),
-                        pos.y as f32 / self.scale_factor(),
-                    ),
+                // Горизонтальная составляющая: наклон колеса / Shift+колесо.
+                // Вертикаль дельты зумом НЕ используется напрямую (ревизия
+                // 2026-10-02: фактор считается из дельты — ниже), пан по
+                // вертикали — драг фона тела (FR-083).
+                let dx = match delta {
+                    MouseScrollDelta::LineDelta(x, _) => -x * PAN_PX_PER_LINE,
+                    MouseScrollDelta::PixelDelta(pos) => -pos.x as f32 / self.scale_factor(),
                 };
                 let view = self
                     .explain
@@ -3616,9 +3614,23 @@ impl App {
                                 explain_ui::base_scale(layout.bounds, body, state.is_defense());
                             let zoom_min = explain_ui::SCALE_MIN / base.max(f32::EPSILON);
                             let zoom_max = explain_ui::ZOOM_MAX / base.max(f32::EPSILON);
-                            // CR-017 (уточнение владельца): шаг зума ±5 %
-                            // за щелчок — 1.05^(−dy), LineDelta y = ±1/щелчок
-                            let factor = 1.05_f32.powf(-dy);
+                            // CR-017 (шаг ±5 % за щелчок) + ревизия владельца
+                            // 2026-10-02: прежний фактор 1.05^(−dy) был
+                            // ИНВЕРТИРОВАН (колесо вверх зумило OUT) и шагал
+                            // по dy = y·PAN_PX_PER_LINE (40 строк-единиц на
+                            // щелчок — щелчок бился в кламп
+                            // SCALE_MIN/ZOOM_MAX). Паритет с канвасом — общая
+                            // чистая функция explain_ui::wheel_zoom_factor:
+                            // колесо вверх (LineDelta y = +1) — зум IN на
+                            // +5 %, тачпад PixelDelta — плавно.
+                            let factor = explain_ui::wheel_zoom_factor(match delta {
+                                MouseScrollDelta::LineDelta(_, y) => {
+                                    explain_ui::WheelInput::Line(y)
+                                }
+                                MouseScrollDelta::PixelDelta(pos) => {
+                                    explain_ui::WheelInput::Pixel(pos.y as f32)
+                                }
+                            });
                             let zoom_new = (state.zoom * factor).clamp(zoom_min, zoom_max);
                             let scale_new = base * zoom_new;
                             let clamped =
@@ -3759,9 +3771,13 @@ impl App {
             let panel = docs_ui::viewer_rect(viewport);
             if point_in_rect(panel, self.cursor) {
                 let scale = self.scale_factor();
+                // Ревизия владельца 2026-10-02: знак был инвертирован
+                // (y·PAN без минуса — колесо «от себя» листало ВВЕРХ).
+                // Паритет со списками (FR-059/автосвязь/карта): колесо от
+                // себя (y < 0) увеличивает offset — контент уезжает вверх.
                 let dy = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y * PAN_PX_PER_LINE,
-                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / scale,
+                    MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
+                    MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / scale,
                 };
                 let content = docs_ui::viewer_content_rect(panel);
                 if let Some(viewer) = self.docs.as_mut() {

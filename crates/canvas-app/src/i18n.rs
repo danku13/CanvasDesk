@@ -640,6 +640,9 @@ pub mod keys {
     pub const DOCS_PAGE_TEMPLATES: &str = "docs.page.templates";
     pub const DOCS_PAGE_FAQ: &str = "docs.page.faq";
     pub const DOCS_PAGE_AGENT_RECIPE: &str = "docs.page.agent_recipe";
+    /// Владелец 2026-10-02: пометка строк документации в глобальном поиске
+    /// (Ctrl+F) — результаты по докам должны отличаться от поиска по нодам.
+    pub const SEARCH_DOCS_SECTION: &str = "search.docs_section";
 
     // --- What-if (FR-017) ---
     pub const WHATIF_PILL: &str = "whatif.pill";
@@ -1355,6 +1358,8 @@ const RU: &[(&str, &str)] = &[
     (keys::DOCS_PAGE_TEMPLATES, "Шаблоны нод"),
     (keys::DOCS_PAGE_FAQ, "FAQ"),
     (keys::DOCS_PAGE_AGENT_RECIPE, "Рецепт для ИИ-агентов"),
+    // Владелец 2026-10-02: пометка строк документации в глобальном поиске
+    (keys::SEARCH_DOCS_SECTION, "Документация"),
     // --- What-if ---
     (keys::WHATIF_PILL, "What-if сценарии"),
     (keys::WHATIF_OVERRIDES, "подмен: {count}"),
@@ -2225,6 +2230,8 @@ const EN: &[(&str, &str)] = &[
     (keys::DOCS_PAGE_TEMPLATES, "Node templates"),
     (keys::DOCS_PAGE_FAQ, "FAQ"),
     (keys::DOCS_PAGE_AGENT_RECIPE, "AI-agent recipe"),
+    // Владелец 2026-10-02: пометка строк документации в глобальном поиске
+    (keys::SEARCH_DOCS_SECTION, "Documentation"),
     // --- What-if ---
     (keys::WHATIF_PILL, "What-if scenarios"),
     (keys::WHATIF_OVERRIDES, "overrides: {count}"),
