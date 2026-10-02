@@ -1166,6 +1166,32 @@ pub mod ui {
         (i < items).then_some(i)
     }
 
+    /// Origin контекстного меню с клампом/флипом к вьюпорту (дефект
+    /// адаптива №1 из аудита ui-kit, волна W-a: на 800×560 у нижней трети
+    /// хвост пунктов был недостижим — скролла у меню нет). Чистая функция;
+    /// КЛАМПНУТАЯ точка хранится в `ContextMenu::origin`, поэтому draw
+    /// (`canvas_menu_overlay`), hit-тесты (`menu_item_at_for`,
+    /// `menu_open_rect`) и hit-rect'ы реестра (FR-052 «ввод = тому, что
+    /// видно») читают origin из state и за край не выходят — отдельного
+    /// клампа на стороне draw не нужно.
+    /// Паттерн — образцы кодовой базы: по горизонтали кламп choice_menu
+    /// (`open_choice_menu`): правый край панели не покидает окно; по
+    /// вертикали флип тултипа (`handler.rs`): не хватает места под
+    /// курсором — панель раскрывается НАД курсором (нижний край на
+    /// курсоре), окно ниже меню — прижатие к верхнему краю (`max(0)`).
+    pub fn clamped_menu_origin(cursor: Vec2, items: usize, viewport: Vec2) -> Vec2 {
+        let h = MENU_PADDING * 2.0 + items as f32 * MENU_ITEM_HEIGHT;
+        let x = cursor[0].min((viewport[0] - MENU_WIDTH).max(0.0)).max(0.0);
+        let y = if cursor[1] + h > viewport[1] {
+            // Флип вверх; сверху тоже не влезает (меню выше окна) — кламп
+            // к верхнему краю, хвост может клипнуться, но шапка видна.
+            (cursor[1] - h).max(0.0)
+        } else {
+            cursor[1]
+        };
+        [x, y]
+    }
+
     /// Пункт меню пустого канваса (ПКМ мимо нод и связей).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum CanvasMenuItem {
@@ -1380,9 +1406,19 @@ pub mod ui {
             .filter(|&i| i < submenu.entries.len())
     }
 
-    /// Origin подменю справа от базового меню: колонка со сдвигом на ширину.
-    pub fn submenu_origin_next_to(menu_origin: Vec2) -> Vec2 {
-        [menu_origin[0] + MENU_WIDTH + 2.0, menu_origin[1]]
+    /// Origin подменю рядом с базовым меню с учётом вьюпорта: справа есть
+    /// место под колонку (меню + зазор + ширина подменю) — прежняя формула
+    /// «право от меню»; у правого края — флип влево (паттерн
+    /// `help_submenu_origin` в docs_ui). Зазор 2px в обе стороны.
+    /// Вложенных подменю 2-го уровня в `ContextMenu` нет (`submenu:
+    /// Option<Submenu>` — один уровень), флипать глубже нечему.
+    pub fn submenu_origin_next_to(menu_origin: Vec2, viewport: Vec2) -> Vec2 {
+        let right = menu_origin[0] + MENU_WIDTH + 2.0;
+        if right + MENU_WIDTH <= viewport[0] {
+            [right, menu_origin[1]]
+        } else {
+            [(menu_origin[0] - MENU_WIDTH - 2.0).max(0.0), menu_origin[1]]
+        }
     }
 
     /// Семя фокуса (T23) из интерактивных состояний: приоритет — нода под
@@ -2332,10 +2368,27 @@ pub mod ui {
         #[test]
         fn widgets_submenu_geometry_and_hit_test() {
             let menu_origin: Vec2 = [100.0, 50.0];
-            let sub_origin = submenu_origin_next_to(menu_origin);
+            // Широкий вьюпорт — справа есть место, прежняя формула без флипа
+            let wide_viewport: Vec2 = [2000.0, 1200.0];
+            let sub_origin = submenu_origin_next_to(menu_origin, wide_viewport);
             // Колонка начинается за шириной меню (+2 px зазор)
             assert_eq!(sub_origin[0], menu_origin[0] + MENU_WIDTH + 2.0);
             assert_eq!(sub_origin[1], menu_origin[1]);
+            // W-a: у правого края флип ВЛЕВО — колонка не покидает вьюпорт
+            // (аудит ui-kit дефект адаптива №1: всегда-вправо вылезал за край)
+            let edge_menu_origin: Vec2 = [560.0, 50.0];
+            let narrow_viewport: Vec2 = [800.0, 560.0];
+            let flipped = submenu_origin_next_to(edge_menu_origin, narrow_viewport);
+            assert_eq!(flipped[0], edge_menu_origin[0] - MENU_WIDTH - 2.0);
+            assert_eq!(flipped[1], edge_menu_origin[1]);
+            // Флипнутая колонка целиком во вьюпорте
+            let flipped_submenu = Submenu {
+                origin: flipped,
+                entries: Vec::new(),
+            };
+            let [fx, _fy, fw, _fh] = submenu_rect(&flipped_submenu);
+            assert!(fx >= 0.0);
+            assert!(fx + fw <= narrow_viewport[0], "флип у правого края");
 
             let entries = vec![
                 SubmenuEntry {
@@ -2412,7 +2465,7 @@ pub mod ui {
             let menu = ContextMenu {
                 origin: [0.0, 0.0],
                 submenu: Some(Submenu {
-                    origin: submenu_origin_next_to([0.0, 0.0]),
+                    origin: submenu_origin_next_to([0.0, 0.0], [2000.0, 1200.0]),
                     entries: vec![SubmenuEntry {
                         action: SubmenuAction::Insert("com.canvasdesk.clock".to_owned()),
                         label: "Clock".to_owned(),
