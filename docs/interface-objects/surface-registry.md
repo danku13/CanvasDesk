@@ -73,6 +73,14 @@
 | `empty` | Panels | Capture | — | empty-state (AC-1.1 FR-049) |
 | `minimap` | Panels | Capture | — | рисуется проходом рендерера |
 
+Телеметрия (FR-090): «открытие поверхности» = появление id в реестре
+после пересборки кадра (`build_frame_at` → `telemetry::surface_diff`,
+событие PostHog `surface_opened {surface}`). Ambient-хром — `world`,
+`corner_buttons`, `template_strip`, `empty`, `minimap` — активен без
+действия пользователя и открытием не считается; `whatif` трекается
+только по реальной активации сессии (`scene.whatif_active`), т.к. пилюля
+входа видна на вьюпортах ≥900×600 почти всегда.
+
 ## 4. Точки входа
 
 - `crates/canvas-app/src/app/ui_registry.rs` — декларации, кадр, маршрутизация.

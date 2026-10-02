@@ -55,6 +55,10 @@ pub(crate) async fn export_active() {
     };
     match download_blob(&name, &text, "application/json") {
         Ok(()) => {
+            // FR-090: продуктовое событие экспорта .canvas (мост
+            // canvasdesk:track; ключ/согласия — на стороне JS, FR-089)
+            let bytes = text.len().to_string();
+            canvas_app::app::telemetry::track("export_canvas", &[("bytes", bytes.as_str())]);
             tracing::info!(target: "canvas_web", file = %name, bytes = text.len(), "экспорт: download-blob отдан браузеру")
         }
         Err(err) => {
@@ -124,6 +128,9 @@ pub(crate) async fn export_html_active() {
     let file_name = format!("{}.html", name.strip_suffix(".canvas").unwrap_or(&name));
     match download_blob(&file_name, &html, "text/html") {
         Ok(()) => {
+            // FR-090: продуктовое событие экспорта HTML-артефакта (GAP-01)
+            let bytes = html.len().to_string();
+            canvas_app::app::telemetry::track("export_html", &[("bytes", bytes.as_str())]);
             tracing::info!(
                 target: "canvas_web",
                 file = %file_name,
