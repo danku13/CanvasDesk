@@ -234,6 +234,12 @@ pub struct SuggestSettings {
     pub show_gate_min_ctx: usize,
     /// Журнал `suggest-log.jsonl` (S0; opt-out).
     pub log_suggest: bool,
+    /// FR-079 follow-up: минимальная уверенность для показа карточки C3
+    /// (Platt-калиброванная). 0.0 — показывать все (поведение до правки).
+    /// 0.5 — умеренный фильтр. 1.0 — только самые уверенные. Клампится
+    /// [0, 1] при загрузке. На lex-режиме `confidence` всегда 0.0 —
+    /// threshold 0.0 сохраняет прежнее поведение (3 карточки).
+    pub confidence_threshold: f64,
     /// Подсекция l1-laya (читается только в сборке с feature).
     pub laya: LayaSettings,
 }
@@ -247,6 +253,7 @@ impl Default for SuggestSettings {
             max_options: 20,
             show_gate_min_ctx: 120,
             log_suggest: true,
+            confidence_threshold: 0.0,
             laya: LayaSettings::default(),
         }
     }
@@ -853,6 +860,10 @@ impl Settings {
         self.suggest.alpha = self.suggest.alpha.clamp(0.0, 1.0);
         self.suggest.max_options = self.suggest.max_options.clamp(5, 50);
         self.suggest.show_gate_min_ctx = self.suggest.show_gate_min_ctx.min(10_000);
+        self.suggest.confidence_threshold = self.suggest.confidence_threshold.clamp(0.0, 1.0);
+        if !self.suggest.confidence_threshold.is_finite() {
+            self.suggest.confidence_threshold = 0.0;
+        }
         self.suggest.laya.timeout_ms = self.suggest.laya.timeout_ms.clamp(100, 5_000);
         if !self.suggest.alpha.is_finite() {
             self.suggest.alpha = 0.85;
@@ -956,6 +967,7 @@ mod tests {
                 max_options: 20,
                 show_gate_min_ctx: 140,
                 log_suggest: false,
+                confidence_threshold: 0.5,
                 laya: LayaSettings {
                     model: "multilingual-ft".to_owned(),
                     endpoint: "http://127.0.0.1:8100".to_owned(),

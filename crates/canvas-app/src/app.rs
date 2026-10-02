@@ -5554,6 +5554,13 @@ impl App {
             self.settings.suggest.max_options,
         );
         if options.is_empty() {
+            // FR-079 follow-up: нет опций — показываем empty-state
+            // тултип «AI дополнений нет» (а не тихо). Якорь — текущая
+            // нода (index). on_cards_ready с пустым answers
+            // установит cards.empty = true.
+            self.suggest.cards_gen += 1;
+            let generation = self.suggest.cards_gen;
+            self.on_cards_ready(generation, Vec::new());
             return;
         }
         self.suggest.cards_gen += 1;
@@ -5591,8 +5598,15 @@ impl App {
         if generation != self.suggest.cards_gen {
             return;
         }
+        // FR-079 follow-up: фильтр по confidence_threshold. 0.0 — все
+        // (поведение до правки); 0.5 — умеренный фильтр. На lex-режиме
+        // confidence всегда 0.0 → threshold 0.0 сохраняет 3 карточки.
+        let threshold = self.settings.suggest.confidence_threshold;
         let mut items = Vec::new();
         for answer in &answers {
+            if answer.confidence < threshold {
+                continue;
+            }
             let Some(manifest_id) = self
                 .suggest
                 .catalog
@@ -5614,7 +5628,27 @@ impl App {
             }
         }
         if items.is_empty() {
-            self.suggest.cards = None;
+            // FR-079 follow-up: empty-state — предложений нет, но
+            // мы запускали suggest. Показываем тултип «AI дополнений
+            // нет» вместо тихого исчезновения. Якорь — последняя
+            // шаблонная нода (как в не-empty ветке ниже).
+            let anchor_id = self
+                .scene
+                .canvas
+                .nodes
+                .iter()
+                .rev()
+                .find(|n| n.template().is_some())
+                .map(|n| n.id.clone());
+            if let Some(node_id) = anchor_id {
+                self.suggest.cards = Some(suggest::SuggestCards {
+                    node_id,
+                    items: Vec::new(),
+                    empty: true,
+                });
+            } else {
+                self.suggest.cards = None;
+            }
             return;
         }
         let anchor_id = self
@@ -5628,7 +5662,11 @@ impl App {
         let Some(node_id) = anchor_id else {
             return;
         };
-        self.suggest.cards = Some(suggest::SuggestCards { node_id, items });
+        self.suggest.cards = Some(suggest::SuggestCards {
+            node_id,
+            items,
+            empty: false,
+        });
         // S0: shown по карточкам (top — первая карточка)
         if self.settings.suggest.log_suggest {
             if let Some(cards) = self.suggest.cards.as_ref() {
@@ -5660,26 +5698,34 @@ impl App {
         let Some(cards) = self.suggest.cards.as_ref() else {
             return Vec::new();
         };
-        let Some(node) = self
+        let Some(node_screen) = self.suggest_anchor_screen_rect() else {
+            return Vec::new();
+        };
+        suggest::card_rects(node_screen, self.viewport_logical(), cards.items.len())
+    }
+
+    /// FR-079 follow-up: экранная геометрия якоря стопки карточек (нода
+    /// с id = cards.node_id). Возвращает None, если нода удалена.
+    /// Используется и для обычных карточек (`suggest_card_rects`), и для
+    /// empty-state тултипа (overlay рисует 1 rect-призрак).
+    fn suggest_anchor_screen_rect(&self) -> Option<[f32; 4]> {
+        let cards = self.suggest.cards.as_ref()?;
+        let node = self
             .scene
             .canvas
             .nodes
             .iter()
-            .find(|n| n.id == cards.node_id)
-        else {
-            return Vec::new();
-        };
+            .find(|n| n.id == cards.node_id)?;
         let origin = self
             .camera
             .world_to_screen([node.x, node.y], self.viewport_logical());
         let scale = self.camera.zoom() * self.scale_factor();
-        let node_screen = [
+        Some([
             origin[0],
             origin[1],
             node.width * scale,
             node.height * scale,
-        ];
-        suggest::card_rects(node_screen, self.viewport_logical(), cards.items.len())
+        ])
     }
 
     /// C3: карточка под курсором (hover-подсветка; None — мимо).

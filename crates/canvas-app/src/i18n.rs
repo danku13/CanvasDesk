@@ -441,6 +441,9 @@ pub mod keys {
     pub const HINT_AI_DETAIL: &str = "hints.ai_detail";
     pub const HINT_AI_DETAIL_FUSION: &str = "hints.ai_detail_fusion";
     pub const HINT_DOLLAR_N: &str = "hints.dollar_n";
+    /// FR-079 follow-up: empty-state карточек C3 — предложений нет,
+    /// тултип рядом с якорем.
+    pub const SUGGEST_EMPTY: &str = "suggest.empty";
 
     // --- Онбординг (FR-028) ---
     pub const ONBOARDING_BACK: &str = "onboarding.back";
@@ -1075,6 +1078,7 @@ const RU: &[(&str, &str)] = &[
     (keys::HINT_AI_DETAIL, "ИИ · заменит ноду шаблоном"),
     (keys::HINT_AI_DETAIL_FUSION, "ИИ+ · заменит ноду шаблоном"),
     (keys::HINT_DOLLAR_N, "вход №{i}"),
+    (keys::SUGGEST_EMPTY, "✦ AI-дополнений нет"),
     // --- Онбординг ---
     // --- Галерея схем (FR-049) ---
     (keys::GALLERY_TITLE, "Шаблоны схем"),
@@ -1950,6 +1954,7 @@ const EN: &[(&str, &str)] = &[
     (keys::HINT_AI_DETAIL, "AI · replaces node with template"),
     (keys::HINT_AI_DETAIL_FUSION, "AI+ · replaces node with template"),
     (keys::HINT_DOLLAR_N, "input #{i}"),
+    (keys::SUGGEST_EMPTY, "✦ No AI suggestions"),
     // --- Onboarding ---
     // --- Scheme gallery (FR-049) ---
     (keys::GALLERY_TITLE, "Scheme templates"),
