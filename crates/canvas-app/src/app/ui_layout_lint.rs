@@ -287,12 +287,26 @@ fn lint_whatif_active() {
 
 #[test]
 fn lint_context_menu_open() {
-    lint_state("menu", |app, _vp| {
-        // FR-087: +1 пункт «Об авторе» → 10 базовых. Высота меню
-        // 12 + 10×26 = 272px; origin (400, 140) → bottom 412 < 560.
+    lint_state("menu", |app, vp| {
+        // W-a (дефект адаптива №1 из аудита ui-kit): линт видит РЕАЛЬНЫЙ
+        // кламп меню. Прежний фикс-ориджин (400, 140) был слепой зоной —
+        // любая регрессия клампа мимо него. Теперь курсор в правом-нижнем
+        // углу, origin — через ту же чистую функцию `clamped_menu_origin`,
+        // что открывает меню в input.rs; регрессия клампа = hit-rect
+        // menu-base вне вьюпорта → assert в lint_frame падает. Подменю
+        // «Виджеты ▸» раскрыто — флип подменю у правого края тоже под
+        // линтом; пункт один — вертикаль заведомо влезает.
+        let items = crate::ui::canvas_menu_visible_items_ext(false, false).len();
+        let origin = crate::ui::clamped_menu_origin([vp[0] - 1.0, vp[1] - 1.0], items, vp);
         app.menu = Some(crate::ui::ContextMenu {
-            origin: [400.0, 140.0],
-            submenu: None,
+            origin,
+            submenu: Some(crate::ui::Submenu {
+                origin: crate::ui::submenu_origin_next_to(origin, vp),
+                entries: vec![crate::ui::SubmenuEntry {
+                    action: crate::ui::SubmenuAction::Insert("com.canvasdesk.clock".to_owned()),
+                    label: "Clock".to_owned(),
+                }],
+            }),
         });
     });
 }

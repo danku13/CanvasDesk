@@ -2041,7 +2041,11 @@ impl App {
                                     submenu: None,
                                 });
                             } else {
-                                let submenu_origin = submenu_origin_next_to(menu.origin);
+                                // W-a (дефект адаптива №1): вьюпорт учитывается
+                                // в origin-хелпере — у правого края колонка
+                                // флипается влево, а не вылезает за экран
+                                let submenu_origin =
+                                    submenu_origin_next_to(menu.origin, self.viewport_logical());
                                 let mut entries: Vec<SubmenuEntry> = self
                                     .widgets
                                     .menu_entries()
@@ -3310,10 +3314,33 @@ impl App {
                                 // Повторный ПКМ по тому же пустому месту —
                                 // закрыть (тоггл, как у ноды/связи)
                                 Some(_) => None,
-                                _ => Some(ContextMenu {
-                                    origin: self.cursor,
-                                    submenu: None,
-                                }),
+                                _ => {
+                                    // W-a (дефект адаптива №1 из аудита ui-kit):
+                                    // origin клампится/флипается к вьюпорту при
+                                    // открытии — на 800×560 у ПКМ в нижней трети
+                                    // хвост пунктов был недостижим (скролла нет).
+                                    // Кламп хранится в state: draw, hit-тесты и
+                                    // hit-rect'ы реестра берут rect из menu.origin
+                                    // — поедут сами. Состав пунктов — тот же
+                                    // список, что у draw/hit-теста (batch-пункты
+                                    // FR-038 при N≥3 меняют высоту меню).
+                                    // clamped_menu_origin — полным путём: имени
+                                    // нет в import-списке app.rs, чужой файл
+                                    // под этот фикс не редактируется
+                                    let items = canvas_menu_visible_items_ext(
+                                        self.align_menu_visible(),
+                                        self.autowidth_menu_visible(),
+                                    )
+                                    .len();
+                                    Some(ContextMenu {
+                                        origin: crate::ui::clamped_menu_origin(
+                                            self.cursor,
+                                            items,
+                                            self.viewport_logical(),
+                                        ),
+                                        submenu: None,
+                                    })
+                                }
                             };
                         }
                     }
