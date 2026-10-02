@@ -3608,7 +3608,7 @@ impl App {
                                 explain_ui::base_scale(layout.bounds, body, state.is_defense());
                             let zoom_min = explain_ui::SCALE_MIN / base.max(f32::EPSILON);
                             let zoom_max = explain_ui::ZOOM_MAX / base.max(f32::EPSILON);
-                            let factor = (-dy * 0.18).exp();
+                            let factor = (-dy * 0.045).exp();
                             let zoom_new = (state.zoom * factor).clamp(zoom_min, zoom_max);
                             let scale_new = base * zoom_new;
                             let clamped =
@@ -3842,7 +3842,7 @@ impl App {
             // Ctrl+колесо — зум к позиции курсора (SPEC §8)
             let factor = match delta {
                 MouseScrollDelta::LineDelta(_, y) => ZOOM_STEP_PER_LINE.powf(y),
-                MouseScrollDelta::PixelDelta(pos) => (pos.y as f32 * 0.005).exp(),
+                MouseScrollDelta::PixelDelta(pos) => (pos.y as f32 * 0.00125).exp(),
             };
             self.camera.zoom_at(factor, self.cursor, viewport);
         } else {
