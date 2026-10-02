@@ -701,15 +701,16 @@ impl App {
                 return (quads, texts);
             };
             let body = explain_ui::body_rect(win);
-            // X5: вид/масштаб/пан едины с hit-тестами (explain_view); в
-            // защите — defense_reveal + укрупнение ×1.5 (AC-6.2/6.3).
-            // FR-083: 4-е значение — пан тела (контент прижат к левому-
-            // верхнему углу, переполнение закрывается панорамированием).
-            let (vis, layout, scale, pan) = self.explain_view(state, body);
+            // X5: вид/масштаб/база контента едины с hit-тестами
+            // (explain_view); в защите — defense_reveal + укрупнение ×1.5
+            // (AC-6.2/6.3). FR-084: 4-е значение — content_origin (BODY_PAD
+            // + центрирование оси, где контент влезает, + пан после
+            // pan_clamp): переполнение закрывается панорамированием.
+            let (vis, layout, scale, origin) = self.explain_view(state, body);
             let local = |x: f32, y: f32| {
                 [
-                    body[0] + explain_ui::BODY_PAD + x * scale + pan[0],
-                    body[1] + explain_ui::BODY_PAD + y * scale + pan[1],
+                    body[0] + explain_ui::BODY_PAD + x * scale + origin[0],
+                    body[1] + explain_ui::BODY_PAD + y * scale + origin[1],
                 ]
             };
             // FR-083: направление схемы (сторона источников/итога) — от
@@ -949,6 +950,171 @@ impl App {
                 let font = |px: f32| (px * scale).max(8.0);
                 let tx = rect[0] + 10.0;
                 let text_w = rect[2] - 16.0;
+                // FR-084: карточка-таблица — сестринские листья одного
+                // узла-источника (одинаковый node_id под одним родителем):
+                // шапка с заголовком узла + по строке на лист; кривые уже
+                // приходят в порты строк (рендер кривых не меняется).
+                if !laid.rows.is_empty() {
+                    // Шапка: заголовок узла в верхней зоне TABLE_HEADER_H
+                    texts.push(OwnedScreenText {
+                        text: node.title.clone(),
+                        origin: [tx, rect[1] + 6.0],
+                        width: text_w,
+                        font_size: font(12.0),
+                        color: palette.title,
+                        align: TextAlign::Left,
+                    });
+                    // Разделитель шапки: линия по нижней границе зоны
+                    // заголовка (полупрозрачный бордер)
+                    let mut sep = palette.palette_border;
+                    sep[3] *= 0.5;
+                    quads.push(screen_rect_quad(
+                        camera,
+                        viewport,
+                        [
+                            rect[0],
+                            rect[1] + explain_ui::TABLE_HEADER_H * scale,
+                            rect[2],
+                            1.0,
+                        ],
+                        sep,
+                        [0.0; 4],
+                        0.0,
+                    ));
+                    for row in &laid.rows {
+                        let leaf = &tree.nodes[row.leaf_idx];
+                        let row_font = (10.0 * scale).max(8.0);
+                        // Вертикальный центр строки (оптическая поправка +1 px)
+                        let row_y =
+                            rect[1] + row.y * scale + (row.h * scale - row_font) / 2.0 + 1.0;
+                        // Текст строки не заходит в защищённую зону иконки
+                        let row_w = explain_ui::table_row_text_width(rect[2], scale);
+                        // Значение строки: дельта what-if (AC-4.2) — формат
+                        // FR-017 «было → стало (+Δ)», цвет бейджа; Err —
+                        // текст ошибки; Ok — цифра
+                        let delta_str = match (
+                            &leaf.value,
+                            state.deltas.get(&(leaf.node_id.clone(), leaf.line)),
+                        ) {
+                            (Some(Ok(v)), Some(d)) => Some(
+                                canvas_core::expr::whatif_full_delta(&d.base, &d.whatif)
+                                    .unwrap_or_else(|| v.to_string()),
+                            ),
+                            _ => None,
+                        };
+                        // Адрес via строки (без дельты) — та же композиция,
+                        // что в адресной строке обычной карточки; via —
+                        // ребро родитель→лист (как в layout_tree)
+                        let mut text = if delta_str.is_none() {
+                            let via = vis.parent[row.leaf_idx].and_then(|p| {
+                                tree.nodes[p]
+                                    .children
+                                    .iter()
+                                    .find(|c| c.child == row.leaf_idx)
+                                    .and_then(|c| c.via.clone())
+                            });
+                            match via {
+                                Some(via) => {
+                                    let mut addr = if let Some(name) = &via.from_output {
+                                        self.trf(
+                                            keys::EXPLAIN_ADDR_OUTPUT,
+                                            &[("name", name.as_str())],
+                                        )
+                                    } else if let Some(line) = via.from_line {
+                                        self.trf(
+                                            keys::EXPLAIN_ADDR_SLOT,
+                                            &[("n", (line + 1).to_string().as_str())],
+                                        )
+                                    } else {
+                                        String::new()
+                                    };
+                                    if let Some(param) = &via.to_param {
+                                        if !addr.is_empty() {
+                                            addr.push_str(" · ");
+                                        }
+                                        addr.push_str(param);
+                                    }
+                                    addr
+                                }
+                                None => String::new(),
+                            }
+                        } else {
+                            String::new()
+                        };
+                        // Значение строки и её цвет: дельта — бейдж what-if,
+                        // ошибка — error, обычное значение — body
+                        let (value_str, value_color) = match delta_str {
+                            Some(s) => (s, palette.whatif_badge),
+                            None => match &leaf.value {
+                                Some(Ok(v)) => (v.to_string(), palette.body),
+                                Some(Err(e)) => (e.clone(), palette.error),
+                                None => (String::new(), palette.body),
+                            },
+                        };
+                        // Строка читается целиком: «выход kafka · 220 usd» —
+                        // имя и значение видны вместе; без адреса — просто
+                        // значение (лист-константа — компакт, без пометки)
+                        if !value_str.is_empty() && !text.contains(&value_str) {
+                            if !text.is_empty() {
+                                text.push_str(" · ");
+                            }
+                            text.push_str(&value_str);
+                        }
+                        if !text.is_empty() {
+                            texts.push(OwnedScreenText {
+                                text,
+                                origin: [tx, row_y],
+                                width: row_w,
+                                font_size: row_font,
+                                color: value_color,
+                                align: TextAlign::Left,
+                            });
+                        }
+                        // Иконка-карандаш — только у редактируемых строк
+                        // (лист со строкой Numi-листа и Ok-значением);
+                        // геометрия — row_edit_rect, одна для рендера и
+                        // hit-теста (детерминизм)
+                        let editable = leaf.kind == canvas_core::LineageNodeKind::Leaf
+                            && leaf.line.is_some()
+                            && matches!(&leaf.value, Some(Ok(_)));
+                        if editable {
+                            let icon = explain_ui::row_edit_rect(rect, row.y, row.h, scale);
+                            let icon_hovered = point_in_rect(icon, self.cursor);
+                            quads.push(screen_rect_quad(
+                                camera,
+                                viewport,
+                                icon,
+                                if icon_hovered {
+                                    palette.accent
+                                } else {
+                                    [0.0; 4]
+                                },
+                                if icon_hovered {
+                                    [0.0; 4]
+                                } else {
+                                    palette.palette_border
+                                },
+                                4.0,
+                            ));
+                            let icon_font = (11.0 * scale).max(8.0);
+                            texts.push(OwnedScreenText {
+                                text: explain_ui::EDIT_ICON_GLYPH.to_owned(),
+                                origin: [icon[0], icon[1] + (icon[3] - icon_font) / 2.0],
+                                width: icon[2],
+                                font_size: icon_font,
+                                color: if icon_hovered {
+                                    Color::rgb(255, 255, 255)
+                                } else {
+                                    palette.body
+                                },
+                                align: TextAlign::Center,
+                            });
+                        }
+                    }
+                    // Бейдж фронтира таблице не нужен (листья без детей),
+                    // обычный рендер ниже не выполняется
+                    continue;
+                }
                 // 1) Заголовок ноды-таблицы
                 texts.push(OwnedScreenText {
                     text: node.title.clone(),
@@ -1085,46 +1251,19 @@ impl App {
                         align: TextAlign::Center,
                     });
                 }
-                // X3 (AC-4.1): кнопка «Изменить» на редактируемом листе —
-                // подмена значения через WhatIfOverrides (FR-017); кнопка
-                // скрывается, пока открыто inline-поле (одно за раз)
-                let editable = node.kind == canvas_core::LineageNodeKind::Leaf
-                    && node.line.is_some()
-                    && matches!(&node.value, Some(Ok(_)));
-                if editable && state.edit.is_none() {
-                    let btn = explain_ui::edit_rect(rect, scale);
-                    let btn_hovered = point_in_rect(btn, self.cursor);
-                    quads.push(screen_rect_quad(
-                        camera,
-                        viewport,
-                        btn,
-                        if btn_hovered {
-                            palette.accent
-                        } else {
-                            palette.card_fill
-                        },
-                        palette.palette_border,
-                        5.0,
-                    ));
-                    texts.push(OwnedScreenText {
-                        text: self.tr(keys::EXPLAIN_EDIT).to_owned(),
-                        origin: [btn[0], btn[1] + 2.0],
-                        width: btn[2],
-                        font_size: (10.0 * scale).max(8.0),
-                        color: if btn_hovered {
-                            Color::rgb(255, 255, 255)
-                        } else {
-                            palette.body
-                        },
-                        align: TextAlign::Center,
-                    });
-                }
+                // X3 (AC-4.1): старая текстовая кнопка «Изменить» удалена —
+                // FR-084 заменяет её иконками-карандашами у строк таблиц
+                // (edit_rect из рендера больше не вызывается; hit-тест
+                // строк — за вводом через row_edit_rect)
             }
             // FR-083: индикатор «не всё влезло» — стрелки у краёв тела со
             // скрытым контентом + подсказка в футере справа. КЛИП: у
             // модального прохода (stage-квады/screen-тексты) скиссоры нет
             // (scissor FR-056 — только полосы реестра), контент рисуется
             // как есть; пан ограничен pan_clamp, индикатор обязателен.
+            // FR-084: стрелки переполнения — оконная семантика в координатах
+            // пана (не origin), поведение прежнее — пан клампится локально.
+            let pan = explain_ui::pan_clamp(state.pan, layout.bounds, scale, body);
             let arrows = explain_ui::overflow_arrows(pan, layout.bounds, scale, body);
             if arrows.iter().any(|&a| a) {
                 const ARROW: f32 = 22.0;
@@ -1229,13 +1368,14 @@ impl App {
                     ));
                 }
             }
-            // Hover узла дерева (кадр) — рамка акцентом. FR-083: пан тела
-            // не входит в геометрию node_at — точка передаётся минус пан.
+            // Hover узла дерева (кадр) — рамка акцентом. FR-084: база
+            // контента (origin) не входит в геометрию node_at — точка
+            // передаётся минус origin (инверсия замыкания local).
             cursor_idx = explain_ui::node_at(
                 &layout,
                 scale,
                 body,
-                [self.cursor[0] - pan[0], self.cursor[1] - pan[1]],
+                [self.cursor[0] - origin[0], self.cursor[1] - origin[1]],
             );
         }
         if let Some(s) = self.explain.as_mut() {

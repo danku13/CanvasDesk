@@ -34,6 +34,19 @@
 //! как kit::card в FR-059); чип «Данные изменены»/кнопка ✕ — прежние
 //! размеры (kit chip 24/icon_button 26 ≠ прежних 28/30 — числа дословно
 //! сильнее перечня «замена»).
+//!
+//! FR-084 (волна 1 — чистая геометрия; рендер/ввод подхватит волна 2):
+//! (1) [`content_origin`] — базовая точка контента в теле окна:
+//! центрирование по осям, где дерево помещается (переполняющие оси —
+//! прижаты, работает кламп пана [`pan_clamp`]); (2) сестринские листья
+//! одного узла-источника (одинаковый `node_id` под одним родителем)
+//! схлопываются в карточку-таблицу: [`LaidNode::rows`] несёт строки
+//! [`LaidRow`] (ссылка на лист + локальная геометрия), кривые приходят
+//! в порты строк (`port_y`), геометрия иконки редактирования строки —
+//! [`row_edit_rect`] + [`table_row_text_width`]. Ряды дерева ([`ROW_H`],
+//! родитель = среднее рядов детей) назначаются каждому листу по-прежнему;
+//! карточка-таблица занимает место первого листа группы (порядок
+//! `layout.nodes` сохранён).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -231,6 +244,16 @@ pub const CARD_H: f32 = 74.0;
 pub const ROW_H: f32 = 100.0;
 /// Поля лейаута — прототип `PAD`.
 pub const LAYOUT_PAD: f32 = 14.0;
+/// FR-084: шапка таблицы-карточки (заголовок узла-источника).
+pub const TABLE_HEADER_H: f32 = 30.0;
+/// FR-084: шаг строки таблицы (значение строки Numi-листа).
+pub const TABLE_ROW_STEP: f32 = 22.0;
+/// FR-084: защищённая зона иконки-карандаша в конце строки таблицы
+/// (текст строки не заходит в зону — пересечение невозможно).
+pub const EDIT_ICON_ZONE: f32 = 18.0;
+/// FR-084: глиф иконки редактирования строки (решение владельца:
+/// иконка вместо текстовой кнопки «Изменить» — стандарт UX).
+pub const EDIT_ICON_GLYPH: &str = "✎";
 /// Период ротации подписей честного лоадера (мс, AC-1.2).
 pub const LOADER_ROTATION_MS: u128 = 320;
 /// Длительность вспышки канвас→дерево (мс, У2/§6.5): затухающая рамка
@@ -341,6 +364,20 @@ pub fn visibility(
     vis
 }
 
+/// FR-084: строка таблицы-карточки — ссылка на лист дерева и локальная
+/// геометрия внутри карточки (до fit-масштаба).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaidRow {
+    /// Индекс листа в [`LineageTree::nodes`].
+    pub leaf_idx: usize,
+    /// Верх строки, локальные px карточки (после шапки).
+    pub y: f32,
+    /// Высота строки (= [`TABLE_ROW_STEP`]).
+    pub h: f32,
+    /// Y центра строки — порт кривой со стороны родителя.
+    pub port_y: f32,
+}
+
 /// Узел дерева в лейауте: индекс, колонка/ряд, прямоугольник (локальные px
 /// тела окна до масштаба), через какое ребро канваса пришёл (адресная
 /// строка и подсветка У2).
@@ -357,6 +394,10 @@ pub struct LaidNode {
     /// Ребро, через которое узел пришёл к родителю (None — корень вида или
     /// локальная переменная листа).
     pub via: Option<LineageVia>,
+    /// FR-084: строки таблицы-карточки — сестринские листья одного
+    /// `node_id` под одним родителем, DFS-порядок (порядок children).
+    /// Пусто — обычная карточка (не-лист или лист-корень без родителя).
+    pub rows: Vec<LaidRow>,
 }
 
 /// Кривая ветки: (безье `[p0, c0, c1, p1]`, к листу — цвет листа).
@@ -388,7 +429,10 @@ pub struct TreeLayout {
 /// контента не меняется). Вертикальный порядок детей и порядок Vec
 /// nodes/curves не меняются; порты кривых зеркалятся преобразованием
 /// (родитель принимает ребро со стороны источников, отдаёт в сторону
-/// детей).
+/// детей). FR-084: сестринские листья одного `node_id` под одним
+/// родителем образуют ОДНУ карточку-таблицу (строки — [`LaidNode::rows`]);
+/// карточка занимает место ПЕРВОГО листа группы (порядок обхода сохранён),
+/// высота — шапка + строки, кривые к листам приходят в порты строк.
 pub fn layout_tree(
     tree: &LineageTree,
     vis: &Visibility,
@@ -401,6 +445,13 @@ pub fn layout_tree(
     }
     let mut next_row: f32 = 0.0;
     let mut rows: Vec<f32> = vec![0.0; tree.nodes.len()];
+    // FR-084: открытые группы листьев — (индекс родителя, node_id) →
+    // индекс карточки-таблицы в layout.nodes (первый лист группы создаёт
+    // карточку, остальные её расширяют); leaf_ports — абсолютный Y порта
+    // строки каждого сгруппированного листа (кривые родителя приходят
+    // в эти порты).
+    let mut open_groups: BTreeMap<(usize, String), usize> = BTreeMap::new();
+    let mut leaf_ports: BTreeMap<usize, f32> = BTreeMap::new();
     // Итеративный DFS (G5-урок X1: глубина ограничена кучей, не стеком).
     // Стек задач: Enter(idx, col) / Exit(idx, col).
     enum Task {
@@ -450,22 +501,93 @@ pub fn layout_tree(
                         .find(|c| c.child == idx)
                         .and_then(|c| c.via.clone())
                 });
-                layout.nodes.push(LaidNode {
-                    idx,
-                    col,
-                    row,
-                    rect: [x, y, CARD_W, CARD_H],
-                    via,
-                });
+                // FR-084: сестринские листья одного узла-источника (одинаковый
+                // node_id под одним родителем) схлопываются в карточку-таблицу.
+                // Карточка создаётся на месте ПЕРВОГО листа группы (его Exit —
+                // порядок layout.nodes сохранён) и расширяется последующими
+                // сёстрами той же группы; ряды дерева (next_row) назначены
+                // каждому листу по-прежнему, rect[1] — ряд первого листа.
+                let is_leaf = tree.nodes[idx].kind == LineageNodeKind::Leaf;
+                let card_index = match (is_leaf, vis.parent[idx]) {
+                    (true, Some(parent)) => {
+                        let node_id = tree.nodes[idx].node_id.clone();
+                        let existing = open_groups.get(&(parent, node_id.clone())).copied();
+                        match existing {
+                            Some(card_i) => {
+                                // Расширяем таблицу: строка за строкой в
+                                // DFS-порядке листьев (порядок children).
+                                let card = &mut layout.nodes[card_i];
+                                let n = card.rows.len() as f32;
+                                let row_y = TABLE_HEADER_H + n * TABLE_ROW_STEP;
+                                let laid_row = LaidRow {
+                                    leaf_idx: idx,
+                                    y: row_y,
+                                    h: TABLE_ROW_STEP,
+                                    port_y: row_y + TABLE_ROW_STEP / 2.0,
+                                };
+                                leaf_ports.insert(idx, card.rect[1] + laid_row.port_y);
+                                card.rows.push(laid_row);
+                                card.rect[3] = TABLE_HEADER_H + (n + 1.0) * TABLE_ROW_STEP;
+                                card_i
+                            }
+                            None => {
+                                let laid_row = LaidRow {
+                                    leaf_idx: idx,
+                                    y: TABLE_HEADER_H,
+                                    h: TABLE_ROW_STEP,
+                                    port_y: TABLE_HEADER_H + TABLE_ROW_STEP / 2.0,
+                                };
+                                layout.nodes.push(LaidNode {
+                                    idx,
+                                    col,
+                                    row,
+                                    rect: [x, y, CARD_W, TABLE_HEADER_H + TABLE_ROW_STEP],
+                                    via,
+                                    rows: vec![laid_row.clone()],
+                                });
+                                let card_i = layout.nodes.len() - 1;
+                                leaf_ports.insert(idx, y + laid_row.port_y);
+                                open_groups.insert((parent, node_id), card_i);
+                                card_i
+                            }
+                        }
+                    }
+                    // Не-лист (Calc/Cycle/прочее) и лист-корень (родителя
+                    // нет — группировать не с кем) — обычная карточка.
+                    _ => {
+                        layout.nodes.push(LaidNode {
+                            idx,
+                            col,
+                            row,
+                            rect: [x, y, CARD_W, CARD_H],
+                            via,
+                            rows: Vec::new(),
+                        });
+                        layout.nodes.len() - 1
+                    }
+                };
                 // Ветки: родитель → видимые дети (ряды детей уже в rows —
                 // их Exit был раньше). Прототип: безье от правого порта
-                // родителя к левому порту ребёнка, середина по X.
-                let px = x + CARD_W;
-                let py = y + CARD_H / 2.0;
+                // родителя к левому порту ребёнка, середина по X. FR-084:
+                // порт родителя — из фактического rect (у таблицы высота
+                // своя; у обычной карточки это прежний y + CARD_H/2), а
+                // кривая к листу приходит в порт ЕГО строки таблицы.
+                let parent_rect = layout.nodes[card_index].rect;
+                let px = parent_rect[0] + parent_rect[2];
+                let py = parent_rect[1] + parent_rect[3] / 2.0;
                 for &c in &visible_children {
                     let ccol = col + 1;
                     let cx = LAYOUT_PAD + ccol as f32 * COL_W;
-                    let cy = LAYOUT_PAD + rows[c] * ROW_H + CARD_H / 2.0;
+                    let cy = if tree.nodes[c].kind == LineageNodeKind::Leaf {
+                        leaf_ports.get(&c).copied().unwrap_or_else(|| {
+                            // Недостижимо: каждый видимый лист Exit-ится
+                            // раньше родителя и попадает в leaf_ports;
+                            // защита от паники — прежняя середина карточки.
+                            LAYOUT_PAD + rows[c] * ROW_H + CARD_H / 2.0
+                        })
+                    } else {
+                        LAYOUT_PAD + rows[c] * ROW_H + CARD_H / 2.0
+                    };
                     let mx = (px + cx) / 2.0;
                     layout.curves.push(LaidCurve {
                         points: [[px, py], [mx, py], [mx, cy], [cx, cy]],
@@ -504,12 +626,13 @@ pub fn layout_tree(
     layout
 }
 
-/// Пол fit-масштаба (FR-083, порог читаемости): при масштабе 0.7 карточка
-/// 158×74 даёт 110.6×51.8 screen-px — в неё помещаются 4 строки текста с
-/// полом шрифта 8 px и межстрочным интервалом 1.5 (4 × 8 × 1.5 = 48 ≤
-/// 51.8; обоснование — тест `fit_scale_floor_keeps_text_readable`).
-/// Глубже — строки наезжают друг на друга, вместо сжатия включается
-/// панорамирование ([`pan_clamp`]).
+/// Пол fit-масштаба (FR-083, порог читаемости; FR-084): при масштабе 0.7
+/// обычная карточка 158×74 даёт 110.6×51.8 screen-px — в неё помещаются
+/// 4 строки текста с полом шрифта 8 px и межстрочным интервалом 1.5
+/// (4 × 8 × 1.5 = 48 ≤ 51.8); строка таблицы-карточки [`TABLE_ROW_STEP`]
+/// даёт 15.4 px ≥ 12 px (8 × 1.5). Обоснование — тест
+/// `fit_scale_floor_keeps_text_readable`. Глубже — строки наезжают друг
+/// на друга, вместо сжатия включается панорамирование ([`pan_clamp`]).
 pub const SCALE_MIN: f32 = 0.7;
 
 /// Fit-масштаб лейаута в тело окна: потолок 1.0 — только сжатие (без
@@ -585,10 +708,29 @@ pub fn overflow_arrows(pan: [f32; 2], bounds: [f32; 2], scale: f32, body: [f32; 
     [left, right, top, bottom]
 }
 
+/// FR-084: базовая точка контента в теле окна — [`BODY_PAD`] плюс
+/// центрирование по оси, где контент меньше доступной области
+/// (`body − 2·[`BODY_PAD`]`), плюс пан. Переполняющая ось — центрирование 0
+/// (контент прижат к левому-верхнему углу, работает кламп пана
+/// [`pan_clamp`] — вызывающий передаёт пан уже после клампа). Одна
+/// геометрия для рендера и hit-теста (детерминизм).
+pub fn content_origin(pan: [f32; 2], bounds: [f32; 2], scale: f32, body: [f32; 4]) -> [f32; 2] {
+    let avail_w = (body[2] - BODY_PAD * 2.0).max(0.0);
+    let avail_h = (body[3] - BODY_PAD * 2.0).max(0.0);
+    let content_w = bounds[0] * scale;
+    let content_h = bounds[1] * scale;
+    [
+        BODY_PAD + (avail_w - content_w).max(0.0) / 2.0 + pan[0],
+        BODY_PAD + (avail_h - content_h).max(0.0) / 2.0 + pan[1],
+    ]
+}
+
 // --- what-if из дерева (PRD-0007 X3, F-6/AC-4.1) ---------------------------
 
 /// Кнопка «Изменить» на карточке ЛИСТА (AC-4.1): правый нижний угол
 /// карточки. `rect` — локальные px карточки, `scale` — fit-масштаб.
+/// (FR-084: устарела — заменена зонами иконок строк; будет удалена
+/// интегратором.)
 pub fn edit_rect(card: [f32; 4], scale: f32) -> [f32; 4] {
     const W: f32 = 54.0;
     const H: f32 = 18.0;
@@ -599,6 +741,24 @@ pub fn edit_rect(card: [f32; 4], scale: f32) -> [f32; 4] {
         W * scale,
         H * scale,
     ]
+}
+
+/// FR-084: прямоугольник иконки-карандаша строки таблицы в экранных px
+/// (карточка уже преобразована локальный→экранный): правый край строки,
+/// ширина [`EDIT_ICON_ZONE`], вертикаль — строка целиком. Одна геометрия
+/// для рендера и hit-теста (детерминизм). Страж `max(card.x)` — иконка
+/// не вылезает за карточку на вырожденной ширине.
+pub fn row_edit_rect(card_screen: [f32; 4], row_y: f32, row_h: f32, scale: f32) -> [f32; 4] {
+    let w = EDIT_ICON_ZONE * scale;
+    let x = (card_screen[0] + card_screen[2] - w).max(card_screen[0]);
+    [x, card_screen[1] + row_y * scale, w, row_h * scale]
+}
+
+/// FR-084: ширина текста строки таблицы — карточка минус паддинги (16) и
+/// защищённая зона иконки ([`EDIT_ICON_ZONE`]); текст физически не заходит
+/// под иконку. Пол 0.0.
+pub fn table_row_text_width(card_w: f32, scale: f32) -> f32 {
+    ((card_w - 16.0 - EDIT_ICON_ZONE) * scale).max(0.0)
 }
 
 /// Inline-поле подмены (X3): закреплено в правом нижнем углу тела окна
@@ -614,8 +774,18 @@ pub fn field_rect(body: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// Кнопка «Изменить» под точкой: обходит карточки листьев (обратный
-/// порядок — верхние позже; hit-тест той же геометрии, что у рендера).
+/// Иконка редактирования под точкой: обходит карточки (обратный порядок —
+/// верхние позже; hit-тест той же геометрии, что у рендера). FR-084:
+/// точка — БЕЗ origin/базы контента (вызывающий вычитает origin из
+/// курсора; экранный rect карточки здесь — `body + BODY_PAD + rect*scale`,
+/// как раньше без пана). Для карточки-таблицы ([`LaidNode::rows`]) зона
+/// редактирования — иконка-карандаш в правом краю СТРОКИ
+/// ([`row_edit_rect`]): хит возвращает индекс ЛИСТА СТРОКИ (подмена
+/// адресует строку Numi-листа), редактируемость проверяется на лист
+/// строки. Карточка без строк (не-лист или лист-корень без группы) —
+/// фолбэк на прежнюю кнопку в правом нижнем углу ([`edit_rect`]) — чтобы
+/// не сломать не-табличные редактируемые карточки, если появятся
+/// (обычно редактируемые — всегда таблицы).
 pub fn edit_at(
     tree: &LineageTree,
     layout: &TreeLayout,
@@ -623,30 +793,50 @@ pub fn edit_at(
     body: [f32; 4],
     point: [f32; 2],
 ) -> Option<usize> {
-    for laid in layout.nodes.iter().rev() {
-        let node = tree.nodes.get(laid.idx)?;
-        // Подмена адресует строку Numi-листа: у итога-программы/шаблона
-        // её нет (line: None) — кнопка не показывается (X3-скоуп).
-        let editable = node.kind == LineageNodeKind::Leaf
-            && node.line.is_some()
-            && matches!(&node.value, Some(Ok(_)));
-        if !editable {
-            continue;
+    // Подмена адресует строку Numi-листа: у итога-программы/шаблона её
+    // нет (line: None) — иконка не показывается (X3-скоуп).
+    let editable = |idx: usize| -> bool {
+        match tree.nodes.get(idx) {
+            Some(node) => {
+                node.kind == LineageNodeKind::Leaf
+                    && node.line.is_some()
+                    && matches!(&node.value, Some(Ok(_)))
+            }
+            None => false,
         }
-        let [x, y] = {
-            [
-                body[0] + BODY_PAD + laid.rect[0] * scale,
-                body[1] + BODY_PAD + laid.rect[1] * scale,
-            ]
-        };
+    };
+    for laid in layout.nodes.iter().rev() {
+        let [x, y] = [
+            body[0] + BODY_PAD + laid.rect[0] * scale,
+            body[1] + BODY_PAD + laid.rect[1] * scale,
+        ];
         let card = [x, y, laid.rect[2] * scale, laid.rect[3] * scale];
-        let rect = edit_rect(card, scale);
-        if point[0] >= rect[0]
-            && point[0] <= rect[0] + rect[2]
-            && point[1] >= rect[1]
-            && point[1] <= rect[1] + rect[3]
-        {
-            return Some(laid.idx);
+        // FR-084: таблица-карточка — построчный hit по иконкам строк
+        // (строки не перекрываются, порядок обхода не важен).
+        for row in &laid.rows {
+            if !editable(row.leaf_idx) {
+                continue;
+            }
+            let rect = row_edit_rect(card, row.y, row.h, scale);
+            if point[0] >= rect[0]
+                && point[0] <= rect[0] + rect[2]
+                && point[1] >= rect[1]
+                && point[1] <= rect[1] + rect[3]
+            {
+                return Some(row.leaf_idx);
+            }
+        }
+        // Фолбэк: карточка без строк — прежняя кнопка в правом нижнем
+        // углу (лист-корень без группы; X3/AC-4.1).
+        if laid.rows.is_empty() && editable(laid.idx) {
+            let rect = edit_rect(card, scale);
+            if point[0] >= rect[0]
+                && point[0] <= rect[0] + rect[2]
+                && point[1] >= rect[1]
+                && point[1] <= rect[1] + rect[3]
+            {
+                return Some(laid.idx);
+            }
         }
     }
     None
@@ -1355,6 +1545,56 @@ mod tests {
         }
     }
 
+    /// FR-084: лист-строка Numi-листа с заданным node_id (детей нет).
+    fn leaf_node(node_id: &str) -> LineageNode {
+        LineageNode {
+            node_id: node_id.into(),
+            line: None,
+            kind: LineageNodeKind::Leaf,
+            value: None,
+            formula: Some("1".into()),
+            title: "L".into(),
+            label: None,
+            children: Vec::new(),
+        }
+    }
+
+    /// FR-084: родитель R (Calc) с тремя листьями-строками одного узла-
+    /// источника «src» (индексы 1–3) — группа для карточки-таблицы.
+    fn group_tree() -> LineageTree {
+        LineageTree {
+            root: LineageNodeId::total("r"),
+            nodes: vec![
+                LineageNode {
+                    node_id: "r".into(),
+                    line: None,
+                    kind: LineageNodeKind::Calc,
+                    value: None,
+                    formula: Some("$1 + $2 + $3".into()),
+                    title: "R".into(),
+                    label: None,
+                    children: vec![
+                        LineageChild {
+                            child: 1,
+                            via: None,
+                        },
+                        LineageChild {
+                            child: 2,
+                            via: None,
+                        },
+                        LineageChild {
+                            child: 3,
+                            via: None,
+                        },
+                    ],
+                },
+                leaf_node("src"),
+                leaf_node("src"),
+                leaf_node("src"),
+            ],
+        }
+    }
+
     /// FR-083: окно = 80 % вьюпорта без потолка — на большом вьюпорте
     /// ровно 80 % и центрировано (осознанное ломающее изменение
     /// «прототипа v4»: потолки 1320×900 удалены).
@@ -1504,18 +1744,24 @@ mod tests {
         assert!((SCALE_MIN..1.0).contains(&tiny));
     }
 
-    /// FR-083: пол fit-масштаба — дерево втрое больше тела не сжимается
-    /// глубже SCALE_MIN (0.7): 4 строки текста с полом шрифта 8 px при
-    /// межстрочном 1.5 (4 × 8 × 1.5 = 48 px) помещаются в карточку
-    /// 158×74 × 0.7 = 51.8 px по высоте; глубже — строки наезжают.
+    /// FR-083/FR-084: пол fit-масштаба — дерево втрое больше тела не
+    /// сжимается глубже SCALE_MIN (0.7): строка таблицы-карточки
+    /// TABLE_ROW_STEP (22 px) даёт 15.4 screen-px ≥ 8 × 1.5 = 12 px (пол
+    /// шрифта с межстрочным интервалом); обычная карточка 74 px даёт
+    /// 51.8 px ≥ 48 px (4 строки текста) — текст читаем, глубже — пан.
     #[test]
     fn fit_scale_floor_keeps_text_readable() {
         // Дерево втрое больше тела по обеим осям.
         let scale = fit_scale([3000.0, 2000.0], [0.0, 0.0, 1000.0, 700.0]);
         assert!((scale - SCALE_MIN).abs() < 1e-3, "пол 0.7, получен {scale}");
-        // Обоснование порога: 4 строки по 8 px с интервалом 1.5 влезают
-        // в карточку 158×74 при масштабе SCALE_MIN.
-        let card_h = 74.0 * SCALE_MIN;
+        // Таблица-строка: TABLE_ROW_STEP × SCALE_MIN ≥ 8 × 1.5.
+        let row_h = TABLE_ROW_STEP * SCALE_MIN;
+        assert!(
+            row_h >= 8.0 * 1.5 - 1e-3,
+            "строка таблицы {row_h} ≥ минимума 12 px"
+        );
+        // Обычная карточка 158×74 при SCALE_MIN держит 4 строки текста.
+        let card_h = CARD_H * SCALE_MIN;
         let rows = 4.0 * 8.0 * 1.5;
         assert!(
             rows <= card_h + 1e-3,
@@ -1732,8 +1978,10 @@ mod tests {
         assert!(st2.deltas.is_empty());
     }
 
-    /// X3 (AC-4.1): кнопка «Изменить» — только на редактируемых листьях
-    /// (Leaf + line: Some + значение Ok); hit-тест edit_at.
+    /// X3 (AC-4.1): иконка «Изменить» — только на редактируемых листьях
+    /// (Leaf + line: Some + значение Ok); hit-тест edit_at. FR-084: зона —
+    /// иконка-карандаш у ПРАВОГО КРАЯ СТРОКИ таблицы-карточки (лист под
+    /// родителем — таблица из одной строки).
     #[test]
     fn edit_button_targets_editable_leaves() {
         let mut tree = sample_tree();
@@ -1746,24 +1994,40 @@ mod tests {
         let vis = visibility(&tree, 0, 3, &empty);
         let layout = layout_tree(&tree, &vis, 0, LayoutDirection::Rtl);
         let body = [0.0, 0.0, 1200.0, 800.0];
-        // Точка кнопки листа c — из его карточки.
+        // Точка иконки строки листа c — правый край ЕГО строки (лист под
+        // родителем — таблица из одной строки).
         let laid = layout
             .nodes
             .iter()
             .find(|n| n.idx == 2)
             .expect("лист c в лейауте");
-        let x = body[0] + BODY_PAD + laid.rect[0] + laid.rect[2] - 20.0;
-        let y = body[1] + BODY_PAD + laid.rect[1] + laid.rect[3] - 10.0;
-        assert_eq!(edit_at(&tree, &layout, 1.0, body, [x, y]), Some(2));
-        // Точка кнопки листа d (не редактируемый) — None.
+        assert_eq!(laid.rows.len(), 1, "лист под родителем — таблица");
+        let row = &laid.rows[0];
+        let card_screen = [
+            body[0] + BODY_PAD + laid.rect[0],
+            body[1] + BODY_PAD + laid.rect[1],
+            laid.rect[2],
+            laid.rect[3],
+        ];
+        let rect = row_edit_rect(card_screen, row.y, row.h, 1.0);
+        let point = [rect[0] + rect[2] - 4.0, rect[1] + rect[3] / 2.0];
+        assert_eq!(edit_at(&tree, &layout, 1.0, body, point), Some(2));
+        // Точка иконки строки листа d (не редактируемый) — None.
         let laid_d = layout
             .nodes
             .iter()
             .find(|n| n.idx == 3)
             .expect("лист d в лейауте");
-        let xd = body[0] + BODY_PAD + laid_d.rect[0] + laid_d.rect[2] - 20.0;
-        let yd = body[1] + BODY_PAD + laid_d.rect[1] + laid_d.rect[3] - 10.0;
-        assert_eq!(edit_at(&tree, &layout, 1.0, body, [xd, yd]), None);
+        let row_d = &laid_d.rows[0];
+        let card_d = [
+            body[0] + BODY_PAD + laid_d.rect[0],
+            body[1] + BODY_PAD + laid_d.rect[1],
+            laid_d.rect[2],
+            laid_d.rect[3],
+        ];
+        let rect_d = row_edit_rect(card_d, row_d.y, row_d.h, 1.0);
+        let point_d = [rect_d[0] + rect_d[2] - 4.0, rect_d[1] + rect_d[3] / 2.0];
+        assert_eq!(edit_at(&tree, &layout, 1.0, body, point_d), None);
     }
 
     /// X3 (AC-4.1): inline-поле — start_edit задаёт preset (подмена или
@@ -1821,18 +2085,88 @@ mod tests {
         assert_eq!(st.finish_edit(), None);
     }
 
-    /// X3: кнопка «Изменить» рисуется в правом нижнем углу карточки
-    /// (edit_rect) — не вылезает за карточку при масштабе < 1.
+    /// X3/FR-084 (AC-4.1): hit по иконке-карандашу строки таблицы
+    /// возвращает индекс ЛИСТА ЭТОЙ строки (по таблице из 3 строк) —
+    /// прежний тест edit_rect_stays_inside_card заменён: геометрия
+    /// зоны покрыта row_edit_rect_and_text_width_geometry, здесь —
+    /// построчная адресация edit_at (в т.ч. при масштабе < 1).
     #[test]
-    fn edit_rect_stays_inside_card() {
-        for scale in [1.0f32, 0.5, 0.25] {
-            let card = [40.0, 30.0, 158.0, 74.0];
-            let rect = edit_rect(card, scale);
-            assert!(rect[0] >= card[0] && rect[1] >= card[1]);
-            assert!(rect[0] + rect[2] <= card[0] + card[2] + 0.01);
-            assert!(rect[1] + rect[3] <= card[1] + card[3] + 0.01);
-            assert!(rect[2] > 0.0 && rect[3] > 0.0);
+    fn edit_at_hits_table_row_icons_by_leaf() {
+        let mut tree = group_tree();
+        // Все три строки редактируемые (Leaf + line: Some + значение Ok).
+        for (i, node) in tree.nodes.iter_mut().enumerate().skip(1) {
+            node.line = Some(i - 1);
+            node.value = Some(Ok(canvas_core::expr::Value::scalar(i as f64)));
         }
+        let empty = BTreeSet::new();
+        let vis = visibility(&tree, 0, 3, &empty);
+        let layout = layout_tree(&tree, &vis, 0, LayoutDirection::Rtl);
+        let card = layout.nodes.iter().find(|n| n.idx == 1).expect("таблица");
+        assert_eq!(
+            card.rows.iter().map(|r| r.leaf_idx).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "строки таблицы в DFS-порядке"
+        );
+        let body = [0.0, 0.0, 1200.0, 800.0];
+        for scale in [1.0f32, 0.7] {
+            let card_screen = [
+                body[0] + BODY_PAD + card.rect[0] * scale,
+                body[1] + BODY_PAD + card.rect[1] * scale,
+                card.rect[2] * scale,
+                card.rect[3] * scale,
+            ];
+            for row in &card.rows {
+                let rect = row_edit_rect(card_screen, row.y, row.h, scale);
+                // Точка внутри зоны: правый край минус 4, центр по вертикали.
+                let point = [rect[0] + rect[2] - 4.0, rect[1] + rect[3] / 2.0];
+                assert_eq!(
+                    edit_at(&tree, &layout, scale, body, point),
+                    Some(row.leaf_idx),
+                    "иконка строки → лист {} (scale {scale})",
+                    row.leaf_idx
+                );
+            }
+        }
+    }
+
+    /// FR-084: клик по ТЕКСТУ строки (вне зоны иконки) НЕ открывает
+    /// редактирование — edit_at возвращает None; граница зоны: точка в
+    /// 2 px правее — уже хит (зона — правые EDIT_ICON_ZONE px строки).
+    #[test]
+    fn edit_at_ignores_row_text_click() {
+        let mut tree = group_tree();
+        for node in tree.nodes.iter_mut().skip(1) {
+            node.line = Some(0);
+            node.value = Some(Ok(canvas_core::expr::Value::scalar(1.0)));
+        }
+        let empty = BTreeSet::new();
+        let vis = visibility(&tree, 0, 3, &empty);
+        let layout = layout_tree(&tree, &vis, 0, LayoutDirection::Rtl);
+        let body = [0.0, 0.0, 1200.0, 800.0];
+        let card = layout.nodes.iter().find(|n| n.idx == 1).expect("таблица");
+        let card_screen = [
+            body[0] + BODY_PAD + card.rect[0],
+            body[1] + BODY_PAD + card.rect[1],
+            card.rect[2],
+            card.rect[3],
+        ];
+        let row = &card.rows[0];
+        let rect = row_edit_rect(card_screen, row.y, row.h, 1.0);
+        let cy = rect[1] + rect[3] / 2.0;
+        // Текст строки: левый край + паддинг и точка сразу слева зоны —
+        // обе мимо иконки.
+        for px in [card_screen[0] + 10.0, rect[0] - 2.0] {
+            assert_eq!(
+                edit_at(&tree, &layout, 1.0, body, [px, cy]),
+                None,
+                "клик по тексту строки (x = {px}) — не иконка"
+            );
+        }
+        // А в 1 px правее (внутри зоны) — хит по листу строки.
+        assert_eq!(
+            edit_at(&tree, &layout, 1.0, body, [rect[0] + 1.0, cy]),
+            Some(row.leaf_idx)
+        );
     }
 
     /// X5 (AC-6.1/6.4): вход в защиту одним действием сбрасывает вид на
@@ -2302,5 +2636,280 @@ mod tests {
         st.pan = [-90.0, -30.0];
         st.exit_defense();
         assert_eq!(st.pan, [0.0; 2]);
+    }
+
+    // --- FR-084: карточка-таблица строк одного узла + центрирование ---------
+
+    /// FR-084 (AC-2): три сестринских листа одного node_id — ОДНА карточка-
+    /// таблица (строки по порядку детей), отдельных карточек у второго и
+    /// третьего листа нет; высота = шапка + строки, ширина постоянна,
+    /// rect[1] — ряд первого листа.
+    #[test]
+    fn table_card_groups_sibling_leaves_by_node_id() {
+        let tree = group_tree();
+        let empty = BTreeSet::new();
+        let vis = visibility(&tree, 0, 3, &empty);
+        let layout = layout_tree(&tree, &vis, 0, LayoutDirection::Rtl);
+        // Карточек ровно две: родитель + одна таблица; листья 2/3 отдельных
+        // карточек не получили (карточка — на месте первого листа).
+        assert_eq!(layout.nodes.len(), 2);
+        assert!(layout.nodes.iter().all(|n| n.idx != 2 && n.idx != 3));
+        let card = layout.nodes.iter().find(|n| n.idx == 1).expect("таблица");
+        assert_eq!(card.rows.len(), 3);
+        // Строки в DFS-порядке (порядок children родителя).
+        assert_eq!(
+            card.rows.iter().map(|r| r.leaf_idx).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        // Локальная геометрия строки: шаг от шапки, port_y — центр строки,
+        // по возрастанию и внутри карточки.
+        for (i, r) in card.rows.iter().enumerate() {
+            assert!((r.y - (TABLE_HEADER_H + i as f32 * TABLE_ROW_STEP)).abs() < 1e-3);
+            assert!((r.h - TABLE_ROW_STEP).abs() < 1e-3);
+            assert!((r.port_y - (r.y + r.h / 2.0)).abs() < 1e-3);
+            assert!(r.port_y > 0.0 && r.port_y < card.rect[3]);
+        }
+        for pair in card.rows.windows(2) {
+            assert!(pair[0].port_y < pair[1].port_y, "порты строк по росту");
+        }
+        // Высота таблицы = шапка + 3 строки; ширина постоянна (CARD_W —
+        // Ltr/Rtl-зеркало и портовые тесты сохраняются).
+        assert!((card.rect[3] - (TABLE_HEADER_H + 3.0 * TABLE_ROW_STEP)).abs() < 1e-3);
+        assert!((card.rect[2] - CARD_W).abs() < 1e-3);
+        // rect[1] — ряд ПЕРВОГО листа группы (ряд 0).
+        assert!((card.rect[1] - (LAYOUT_PAD + 0.0 * ROW_H)).abs() < 1e-3);
+    }
+
+    /// FR-084: одинаковый node_id под РАЗНЫМИ родителями НЕ схлопывается —
+    /// две карточки по одной строке; не-лист с детьми — обычная карточка
+    /// (rows пуст, высота CARD_H); корень — тоже обычная карточка.
+    #[test]
+    fn same_node_id_under_different_parents_not_grouped() {
+        // 0(Calc) → 1(Calc), 2(Leaf «src»); 1 → 3(Leaf «src»).
+        let tree = LineageTree {
+            root: LineageNodeId::total("m"),
+            nodes: vec![
+                LineageNode {
+                    node_id: "m".into(),
+                    line: None,
+                    kind: LineageNodeKind::Calc,
+                    value: None,
+                    formula: Some("$a + $b".into()),
+                    title: "M".into(),
+                    label: None,
+                    children: vec![
+                        LineageChild {
+                            child: 1,
+                            via: None,
+                        },
+                        LineageChild {
+                            child: 2,
+                            via: None,
+                        },
+                    ],
+                },
+                LineageNode {
+                    node_id: "k".into(),
+                    line: None,
+                    kind: LineageNodeKind::Calc,
+                    value: None,
+                    formula: Some("$src".into()),
+                    title: "K".into(),
+                    label: None,
+                    children: vec![LineageChild {
+                        child: 3,
+                        via: None,
+                    }],
+                },
+                leaf_node("src"),
+                leaf_node("src"),
+            ],
+        };
+        let empty = BTreeSet::new();
+        let vis = visibility(&tree, 0, 3, &empty);
+        let layout = layout_tree(&tree, &vis, 0, LayoutDirection::Rtl);
+        // 4 карточки: корень, Calc 1 и ДВЕ отдельные таблицы «src».
+        assert_eq!(layout.nodes.len(), 4);
+        let t2 = layout.nodes.iter().find(|n| n.idx == 2).expect("таблица 2");
+        let t3 = layout.nodes.iter().find(|n| n.idx == 3).expect("таблица 3");
+        assert_eq!(t2.rows.len(), 1);
+        assert_eq!(t3.rows.len(), 1);
+        assert_eq!(t2.rows[0].leaf_idx, 2);
+        assert_eq!(t3.rows[0].leaf_idx, 3);
+        assert!((t2.rect[3] - (TABLE_HEADER_H + TABLE_ROW_STEP)).abs() < 1e-3);
+        // Не-лист с детьми — обычная карточка (rows пуст).
+        let k = layout.nodes.iter().find(|n| n.idx == 1).expect("calc 1");
+        assert!(k.rows.is_empty());
+        assert!((k.rect[3] - CARD_H).abs() < 1e-3);
+        // Корень — обычная карточка.
+        let root = layout.nodes.iter().find(|n| n.idx == 0).expect("корень");
+        assert!(root.rows.is_empty());
+    }
+
+    /// FR-084: ряды родителя = среднее рядов листьев — группировка ряды не
+    /// меняет (каждому листу назначается свой ряд по-прежнему; ряд карточки
+    /// = ряд первого листа группы).
+    #[test]
+    fn parent_row_is_average_of_leaf_rows_with_grouping() {
+        let tree = group_tree();
+        let empty = BTreeSet::new();
+        let vis = visibility(&tree, 0, 3, &empty);
+        let layout = layout_tree(&tree, &vis, 0, LayoutDirection::Rtl);
+        // Листья получили ряды 0, 1, 2 → родитель 1.0 (как без группировки).
+        let parent = layout.nodes.iter().find(|n| n.idx == 0).expect("родитель");
+        assert!((parent.row - 1.0).abs() < 1e-3);
+        let card = layout.nodes.iter().find(|n| n.idx == 1).expect("таблица");
+        assert!(
+            (card.row - 0.0).abs() < 1e-3,
+            "ряд карточки = ряд 1-го листа"
+        );
+        // sample_tree: одиночки-таблицы (по одной строке): c ряд 0 → b 0.0;
+        // d ряд 1 → a (0 + 1) / 2 = 0.5.
+        let st = sample_tree();
+        let vis = visibility(&st, 0, 3, &empty);
+        let layout = layout_tree(&st, &vis, 0, LayoutDirection::Rtl);
+        let row_of =
+            |l: &TreeLayout, i: usize| l.nodes.iter().find(|n| n.idx == i).expect("узел").row;
+        assert!((row_of(&layout, 2) - 0.0).abs() < 1e-3);
+        assert!((row_of(&layout, 3) - 1.0).abs() < 1e-3);
+        assert!((row_of(&layout, 1) - 0.0).abs() < 1e-3);
+        assert!((row_of(&layout, 0) - 0.5).abs() < 1e-3);
+    }
+
+    /// FR-084 (AC-3): кривых — по числу видимых детей (строк таблицы);
+    /// конец кривой листа — порт ЕГО строки [x ребёнка, card_y + port_y];
+    /// начало — правый порт родителя (у обычной карточки — как раньше).
+    #[test]
+    fn curves_end_at_table_row_ports() {
+        let tree = group_tree();
+        let empty = BTreeSet::new();
+        let vis = visibility(&tree, 0, 3, &empty);
+        let layout = layout_tree(&tree, &vis, 0, LayoutDirection::Rtl);
+        let card = layout.nodes.iter().find(|n| n.idx == 1).expect("таблица");
+        let parent = layout.nodes.iter().find(|n| n.idx == 0).expect("родитель");
+        assert_eq!(layout.curves.len(), 3, "по кривой на видимого ребёнка");
+        // Порядок кривых = порядок строк (кривые идут по порядку детей).
+        for (curve, r) in layout.curves.iter().zip(&card.rows) {
+            assert!(curve.to_leaf, "кривая к листу помечена");
+            // Конец — левый порт карточки, Y = порт строки.
+            assert!((curve.points[3][0] - card.rect[0]).abs() < 1e-3);
+            assert!(
+                (curve.points[3][1] - (card.rect[1] + r.port_y)).abs() < 1e-3,
+                "конец кривой = порт строки"
+            );
+            // Начало — правый порт родителя (Calc: прежняя середина).
+            assert!((curve.points[0][0] - (parent.rect[0] + CARD_W)).abs() < 1e-3);
+            assert!((curve.points[0][1] - (parent.rect[1] + CARD_H / 2.0)).abs() < 1e-3);
+        }
+    }
+
+    /// FR-084: Ltr-зеркало для таблицы-карточки — rtl.x + ltr.x + CARD_W =
+    /// bounds_w (ширина постоянна), Y/строки без изменений; кривые —
+    /// точное зеркало Rtl по X (порты строк сидят на зеркальных X).
+    #[test]
+    fn ltr_mirror_keeps_table_card_geometry() {
+        let tree = group_tree();
+        let empty = BTreeSet::new();
+        let vis = visibility(&tree, 0, 3, &empty);
+        let rtl = layout_tree(&tree, &vis, 0, LayoutDirection::Rtl);
+        let ltr = layout_tree(&tree, &vis, 0, LayoutDirection::Ltr);
+        assert_eq!(rtl.nodes.len(), ltr.nodes.len());
+        assert_eq!(rtl.curves.len(), ltr.curves.len());
+        let rc = rtl.nodes.iter().find(|n| n.idx == 1).expect("таблица rtl");
+        let lc = ltr.nodes.iter().find(|n| n.idx == 1).expect("таблица ltr");
+        assert!(
+            (rc.rect[0] + lc.rect[0] + CARD_W - rtl.bounds[0]).abs() < 1e-3,
+            "зеркало X для таблицы-карточки"
+        );
+        assert!((rc.rect[1] - lc.rect[1]).abs() < 1e-3);
+        assert_eq!(rc.rows, lc.rows, "строки/порты зеркалятся без изменений");
+        // Кривые Ltr — зеркало Rtl: сумма X = bounds_w, Y без изменений.
+        for (rcurve, lcurve) in rtl.curves.iter().zip(&ltr.curves) {
+            assert_eq!(rcurve.to_leaf, lcurve.to_leaf);
+            for (rp, lp) in rcurve.points.iter().zip(lcurve.points.iter()) {
+                assert!((rp[0] + lp[0] - rtl.bounds[0]).abs() < 1e-3);
+                assert!((rp[1] - lp[1]).abs() < 1e-3);
+            }
+        }
+    }
+
+    /// FR-084: иконка строки — правый край строки (= правый край карточки),
+    /// внутри карточки на любом масштабе; ширина текста: текст + зона
+    /// иконки + паддинги ≤ CARD_W; пол 0.0 на вырожденной ширине.
+    #[test]
+    fn row_edit_rect_and_text_width_geometry() {
+        let (ry, rh) = (TABLE_HEADER_H, TABLE_ROW_STEP);
+        let card_l = [40.0, 30.0, 158.0, TABLE_HEADER_H + TABLE_ROW_STEP];
+        for scale in [1.0f32, 0.7, 1.5] {
+            // card_screen — УЖЕ экранный rect (локальный → экран, масштаб
+            // от начала координат); row_y/row_h — локальные px строки.
+            let card_screen = [
+                card_l[0] * scale,
+                card_l[1] * scale,
+                card_l[2] * scale,
+                card_l[3] * scale,
+            ];
+            let r = row_edit_rect(card_screen, ry, rh, scale);
+            // Правый край иконки = правый край карточки, левый — внутри.
+            assert!((r[0] + r[2] - (card_screen[0] + card_screen[2])).abs() < 1e-3);
+            assert!(r[0] >= card_screen[0] - 1e-3);
+            // Вертикаль — строка целиком, внутри карточки.
+            assert!((r[1] - (card_screen[1] + ry * scale)).abs() < 1e-3);
+            assert!((r[3] - rh * scale).abs() < 1e-3);
+            assert!(r[1] >= card_screen[1] - 1e-3);
+            assert!(r[1] + r[3] <= card_screen[1] + card_screen[3] + 1e-3);
+            assert!((r[2] - EDIT_ICON_ZONE * scale).abs() < 1e-3);
+        }
+        // Вырожденная карточка (экранные px, scale 1.0): x прижат к левому
+        // краю (страж max).
+        let tiny = row_edit_rect([40.0, 0.0, 5.0, 52.0], ry, rh, 1.0);
+        assert!((tiny[0] - 40.0).abs() < 1e-3, "x не левее карточки");
+        assert!((tiny[2] - EDIT_ICON_ZONE).abs() < 1e-3);
+        // Ширина текста: формула и неразрывность суммы с зоной иконки.
+        for scale in [1.0f32, 0.7] {
+            let w = table_row_text_width(CARD_W, scale);
+            assert!((w - (CARD_W - 16.0 - EDIT_ICON_ZONE) * scale).abs() < 1e-3);
+            assert!(w >= 0.0);
+            assert!(
+                w + EDIT_ICON_ZONE * scale + 16.0 * scale <= CARD_W + 1e-3,
+                "текст + зона + паддинги ≤ CARD_W (scale {scale})"
+            );
+        }
+        // Пол 0.0 на вырожденной ширине.
+        assert_eq!(table_row_text_width(10.0, 1.0), 0.0);
+    }
+
+    /// FR-084 (AC-1): content_origin — (а) влезает по обеим осям →
+    /// центрирование с равными отступами в доступной области (origin >
+    /// BODY_PAD); (б) переполнение по обеим → origin = BODY_PAD + пан
+    /// (пан — после клампа pan_clamp); (в) смешанный случай — X центр,
+    /// Y прижат + пан.
+    #[test]
+    fn content_origin_centers_or_pins_content() {
+        let body = [0.0, 0.0, 500.0, 400.0];
+        let avail_w = body[2] - BODY_PAD * 2.0;
+        let avail_h = body[3] - BODY_PAD * 2.0;
+        // (а) Влезает по обеим осям: центрирование, равные отступы.
+        let o = content_origin([0.0, 0.0], [100.0, 100.0], 1.0, body);
+        assert!(o[0] > BODY_PAD && o[1] > BODY_PAD, "отступ больше поля");
+        assert!(((o[0] - BODY_PAD) - (avail_w - 100.0) / 2.0).abs() < 1e-3);
+        assert!(((o[1] - BODY_PAD) - (avail_h - 100.0) / 2.0).abs() < 1e-3);
+        // Равные отступы слева/справа и сверху/снизу (в пределах avail).
+        assert!(((o[0] - BODY_PAD) - (BODY_PAD + avail_w - (o[0] + 100.0))).abs() < 1e-3);
+        assert!(((o[1] - BODY_PAD) - (BODY_PAD + avail_h - (o[1] + 100.0))).abs() < 1e-3);
+        // (б) Переполнение по обеим осям: origin = BODY_PAD + пан.
+        let pan = pan_clamp([-900.0, 50.0], [1000.0, 800.0], 1.0, body);
+        let o = content_origin(pan, [1000.0, 800.0], 1.0, body);
+        assert!((o[0] - (BODY_PAD + pan[0])).abs() < 1e-3);
+        assert!((o[1] - (BODY_PAD + pan[1])).abs() < 1e-3);
+        // Нулевой пан — прижат ровно к BODY_PAD (прежнее поведение).
+        assert_eq!(
+            content_origin([0.0, 0.0], [1000.0, 800.0], 1.0, body),
+            [BODY_PAD, BODY_PAD]
+        );
+        // (в) Смешанный: X влезает (центр), Y переполнен (прижат + пан).
+        let o = content_origin([0.0, -100.0], [100.0, 800.0], 1.0, body);
+        assert!((o[0] - (BODY_PAD + (avail_w - 100.0) / 2.0)).abs() < 1e-3);
+        assert!((o[1] - (BODY_PAD - 100.0)).abs() < 1e-3);
     }
 }
