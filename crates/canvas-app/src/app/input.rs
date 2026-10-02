@@ -3724,6 +3724,48 @@ impl App {
                 return;
             }
         }
+        // W-a (аудит §8 п.4): колесо над панелью галереи схем скроллит
+        // каталог (окно видимости строк), а не панорамирует канвас под
+        // модалью — на 800×560 каталог из 10+ схем иначе достижим только
+        // клавиатурой. Образец — ветка ревью автосвязи выше: hit по rect
+        // поверхности → скролл → redraw → return.
+        if self.scheme_gallery.open {
+            let registry = canvas_core::schemes::SchemeRegistry::embedded();
+            let list = scheme_gallery_ui::rows(
+                registry,
+                &self.scheme_gallery,
+                &self.visible_scheme_categories(),
+            );
+            let lay = scheme_gallery_ui::layout(
+                self.viewport_logical(),
+                &list,
+                &self.scheme_gallery,
+                &self.visible_scheme_categories(),
+            );
+            if scheme_gallery_ui::point_in_rect(lay.panel_rect, self.cursor) {
+                // Знак — как у списков (FR-059/автосвязь/карта): колесо от
+                // себя (y < 0) увеличивает scroll_top. LineDelta — щелчки ×
+                // WHEEL_ROWS_PER_LINE строк (шаг шаблонного дока); тачпад
+                // PixelDelta — пропорционально (физические px → строки по
+                // высоте ROW_H).
+                let delta_rows = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => {
+                        -y * scheme_gallery_ui::WHEEL_ROWS_PER_LINE
+                    }
+                    MouseScrollDelta::PixelDelta(pos) => {
+                        -pos.y as f32 / self.scale_factor() / scheme_gallery_ui::ROW_H
+                    }
+                };
+                self.scheme_gallery.scroll_top = scheme_gallery_ui::wheel_scroll_top(
+                    self.scheme_gallery.scroll_top,
+                    delta_rows,
+                    list.len(),
+                    lay.visible_rows.len(),
+                );
+                self.request_redraw();
+                return;
+            }
+        }
         // FR-042 (E3, F-9): открытое main stage модально — колесо глушится
         // (пан/зум канваса в stage недоступны, инвариант 8)
         if self.main_stage.is_some() {

@@ -4219,26 +4219,28 @@ impl App {
         // Панель горячих клавиш (FR-004): у левого края, по центру;
         // рендерится независимо от панели настроек
         if self.hotkeys_open {
-            let mut panel = hotkeys_panel_rect_at(viewport, self.hotkeys_left_offset(viewport));
             // Фикс среза 2026-09-25 (wasm-аудит, скриншот 11_hotkeys):
             // константная ширина 340 рвала самое длинное описание
             // («…режим защиты: раскрыть следующий уровень») у кромки —
             // панель ДОТЯГИВАЕТСЯ до самого длинного описания
             // (измерение тем же лицом, что рисует строки).
-            {
-                let mut m = canvas_ui::measure::TextMeasurer::new();
-                let mut fs = canvas_render::text::measure_font_system();
-                let hk_pad = crate::ui::HOTKEYS_PADDING;
-                let longest = crate::ui::HOTKEYS
-                    .iter()
-                    .map(|(_, d)| {
-                        m.width_of(&mut fs, self.tr(d), crate::admin_ui::FONT_FAMILY, 12.0)
-                    })
-                    .fold(0.0_f32, f32::max);
-                panel[2] = panel[2].max(
-                    (hk_pad * 2.0 + crate::ui::HOTKEYS_KEY_COLUMN + longest + 2.0).min(viewport[0]),
-                );
-            }
+            // W-a (аудит §8 п.6): измерение вынесено в общую функцию
+            // ui_registry::hotkeys_panel_rect — тот же rect у hit-теста
+            // реестра («ввод = тому, что видно»).
+            // left_offset ДО захвата FontSystem: hotkeys_left_offset сам
+            // захватывает этот Mutex (меряет полосу доков) — вложенный
+            // захват неповторно-входящего Mutex = самозаблокировка.
+            let left = self.hotkeys_left_offset(viewport);
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let panel = ui_registry::hotkeys_panel_rect(
+                viewport,
+                left,
+                self.settings.button_corner,
+                &mut m,
+                &mut fs,
+                |k| self.tr(k),
+            );
             instances.push(CardInstance {
                 pos: [panel[0], panel[1]],
                 size: [panel[2], panel[3]],
