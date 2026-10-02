@@ -162,6 +162,32 @@ pub fn clamp_scroll(state: &mut SchemeGalleryState, visible: usize) {
     // Кламп скролла к размеру списка — вызывающий передаёт rows.len().
 }
 
+/// W-a (аудит §8 п.4): шаг колесa каталога — строк на щелчок колеса
+/// (паритет с шаблонным доком `template_ui::PANEL_WHEEL_LINES`).
+pub const WHEEL_ROWS_PER_LINE: f32 = 3.0;
+
+/// W-a (аудит §8 п.4): верх окна видимости после колес-скролла —
+/// `scroll_top + delta_rows` (строки), кламп на `0..=max_top`, где
+/// `max_top = список − окно видимости`: хвост каталога достижим,
+/// пустого окна нет (при пустом списке/окне — 0). Выбор не двигается
+/// (прецедент веток wheel-скролла input.rs); связка с [`clamp_scroll`]
+/// сохраняется — следующая клавиатурная навигация возвращает окно
+/// к выбранной строке.
+pub fn wheel_scroll_top(current: usize, delta_rows: f32, list_len: usize, visible: usize) -> usize {
+    let visible = visible.max(1);
+    let max_top = list_len.saturating_sub(visible);
+    // Округление суммы (не дельты): мелкие тачпад-шаги накапливаются,
+    // пока не наберут строку.
+    let next = (current as f32 + delta_rows).round();
+    if next <= 0.0 {
+        0
+    } else if next >= max_top as f32 {
+        max_top
+    } else {
+        next as usize
+    }
+}
+
 /// Раскладка галереи: панель по центру, шапка, фильтр, чипы, строки.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GalleryLayout {
@@ -658,6 +684,94 @@ mod tests {
         st.selected = 1;
         clamp_scroll(&mut st, 3);
         assert_eq!(st.scroll_top, 1, "выбранная строка видна сверху");
+    }
+
+    /// W-a (аудит §8 п.4): wheel_scroll_top клампит верх окна на
+    /// 0..=max_top (max_top = список − окно видимости); щелчок колеса —
+    /// WHEEL_ROWS_PER_LINE строк, тачпад — доля строки.
+    #[test]
+    fn wheel_scroll_top_grows_and_clamps() {
+        let (list_len, visible) = (10, 4);
+        let max_top = list_len - visible;
+        // Колесо от себя (y < 0 → delta_rows > 0): окно уходит вниз…
+        assert_eq!(
+            wheel_scroll_top(0, 1.0 * WHEEL_ROWS_PER_LINE, list_len, visible),
+            3
+        );
+        assert_eq!(wheel_scroll_top(3, 3.0, list_len, visible), 6);
+        // …и клампится на max_top: пустого окна и перелёта нет.
+        assert_eq!(wheel_scroll_top(6, 3.0, list_len, visible), max_top);
+        assert_eq!(wheel_scroll_top(6, 100.0, list_len, visible), max_top);
+        // Колесо на себя (y > 0 → delta_rows < 0): окно возвращается…
+        assert_eq!(
+            wheel_scroll_top(max_top, -3.0, list_len, visible),
+            max_top - 3
+        );
+        // …и клампится на 0.
+        assert_eq!(wheel_scroll_top(1, -100.0, list_len, visible), 0);
+        // Тачпад: доля строки накапливается округлением суммы (0.6 → 1).
+        assert_eq!(wheel_scroll_top(0, 0.6, list_len, visible), 1);
+        // Деградация: пустой каталог / окно ≥ списка — скролла нет.
+        assert_eq!(wheel_scroll_top(0, 3.0, 0, 1), 0);
+        assert_eq!(wheel_scroll_top(0, 3.0, 3, 10), 0);
+    }
+
+    /// W-a (аудит §8 п.4): на 800×560 каталог из 10 схем достижим до
+    /// конца колесом (вниз — до последней строки, вверх — до первой),
+    /// связка с clamp_scroll сохраняется: клавиатурная навигация
+    /// возвращает окно к выбранной строке.
+    #[test]
+    fn wheel_reaches_catalog_end_on_800x560() {
+        let registry = SchemeRegistry::embedded();
+        let mut st = state();
+        let list = rows(registry, &st, &all_visible(registry));
+        assert!(list.len() >= 10, "каталог 10+ схем (аудит 2026-09)");
+        let lay = layout([800.0, 560.0], &list, &st, &all_visible(registry));
+        let visible = lay.visible_rows.len();
+        assert!(visible < list.len(), "окно меньше списка — скролл нужен");
+        // Колесо вниз до упора: щелчок = −y · WHEEL_ROWS_PER_LINE.
+        let mut guard = 0;
+        loop {
+            let next = wheel_scroll_top(st.scroll_top, WHEEL_ROWS_PER_LINE, list.len(), visible);
+            if next == st.scroll_top {
+                break;
+            }
+            st.scroll_top = next;
+            guard += 1;
+            assert!(guard <= list.len(), "скролл обязан сойтись");
+        }
+        let lay_end = layout([800.0, 560.0], &list, &st, &all_visible(registry));
+        assert_eq!(
+            st.scroll_top,
+            list.len() - visible,
+            "кламп на хвост каталога"
+        );
+        assert!(
+            lay_end.visible_rows.contains(&(list.len() - 1)),
+            "последняя схема видна"
+        );
+        // Колесо вверх до упора — обратно к началу.
+        let mut guard = 0;
+        loop {
+            let next = wheel_scroll_top(st.scroll_top, -WHEEL_ROWS_PER_LINE, list.len(), visible);
+            if next == st.scroll_top {
+                break;
+            }
+            st.scroll_top = next;
+            guard += 1;
+            assert!(guard <= list.len(), "скролл обязан сойтись");
+        }
+        assert_eq!(st.scroll_top, 0, "окно вернулось к началу");
+        // Связка с clamp_scroll: колесо не ломает клавиатурную семантику —
+        // после wheel-скролла окно следует за выбранной строкой.
+        st.scroll_top = list.len() - visible;
+        st.selected = 0;
+        clamp_scroll(&mut st, visible);
+        let lay_sel = layout([800.0, 560.0], &list, &st, &all_visible(registry));
+        assert!(
+            lay_sel.visible_rows.contains(&0),
+            "clamp_scroll вернул выбранную строку в окно"
+        );
     }
 
     #[test]

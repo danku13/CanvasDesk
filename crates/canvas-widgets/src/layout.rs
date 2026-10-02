@@ -5,9 +5,14 @@
 //! полями (центр world, зум, viewport в логических px) — тестируемость на
 //! Linux (план M5 §4.1).
 
-/// Заголовок ноды (канвасный хром): совпадает с `cards::HEADER_HEIGHT`
-/// (canvas-render), продублирован, чтобы не тянуть GPU-крейт.
-pub const HEADER_H: f32 = 28.0;
+/// Заголовок ноды (канвасный хром) — дизайн-токен
+/// `canvas_core::tokens::CARD_HEADER_HEIGHT` (FR-023: 28 → 34), тот же,
+/// что у шапки карточек рендера (`cards::HEADER_HEIGHT`). Бывший
+/// локальный дубль 28.0 не обновили при FR-023 — контент/хит-тест
+/// WebView-виджета уезжали на 6px (аудит §7 «Рассинхрон дубликата»,
+/// §8 п.16). canvas-core — не GPU-крейт: прежняя причина дублирования
+/// («не тянуть canvas-render») устарела, реэкспорт исключает рассинхрон.
+pub use canvas_core::tokens::CARD_HEADER_HEIGHT as HEADER_H;
 /// Инсет рамки-зоны слева/справа/снизу (drag за рамку, SPEC §8).
 pub const EDGE_INSET: f32 = 8.0;
 
@@ -214,8 +219,9 @@ mod tests {
     fn content_rect_insets() {
         let node = [100.0, 200.0, 320.0, 200.0];
         let [cx, cy, cw, ch] = WidgetGeom { node }.content_rect();
-        assert_eq!((cx, cy), (108.0, 228.0), "инсет 8 слева, 28 сверху");
-        assert_eq!((cw, ch), (304.0, 164.0), "8+8 по бокам, 28+8 по вертикали");
+        // FR-023 (токен CARD_HEADER_HEIGHT): шапка 34 — дубль 28 рассинхронился
+        assert_eq!((cx, cy), (108.0, 234.0), "инсет 8 слева, 34 сверху");
+        assert_eq!((cw, ch), (304.0, 158.0), "8+8 по бокам, 34+8 по вертикали");
     }
 
     #[test]
@@ -227,7 +233,7 @@ mod tests {
         .content_rect();
         assert_eq!((cw, ch), (1.0, 1.0));
         assert_eq!(cx, 8.0);
-        assert_eq!(cy, 28.0);
+        assert_eq!(cy, 34.0, "FR-023: 34 (токен card.header_height)");
     }
 
     #[test]
@@ -235,9 +241,10 @@ mod tests {
         let cam = camera();
         let node = [0.0, 0.0, 320.0, 200.0];
         let r = webview_rect(&node, &cam, 1.0);
-        // Центр камеры (0,0) → экран (500, 300); контент начинается с +8/+28
-        assert_eq!((r.x, r.y), (508, 328));
-        assert_eq!((r.w, r.h), (304, 164));
+        // Центр камеры (0,0) → экран (500, 300); контент начинается с +8/+34
+        // (FR-023: шапка карточки 34, не дубль 28)
+        assert_eq!((r.x, r.y), (508, 334));
+        assert_eq!((r.w, r.h), (304, 158));
     }
 
     #[test]
@@ -249,10 +256,11 @@ mod tests {
             ..camera()
         };
         let r = webview_rect(&node, &cam, 1.5);
+        // Высота контента 200−34−8 = 158 → 158*2*1.5 = 474 (FR-023: 34)
         assert_eq!(r.w, 912);
-        assert_eq!(r.h, 492);
+        assert_eq!(r.h, 474);
         // Позиция: (8*2*1.5)+756... проверим через формулу
-        let [sx, sy] = cam.world_to_screen([8.0, 28.0]);
+        let [sx, sy] = cam.world_to_screen([8.0, 34.0]);
         assert_eq!(r.x, (sx * 1.5).round() as i32);
         assert_eq!(r.y, (sy * 1.5).round() as i32);
     }
@@ -286,20 +294,20 @@ mod tests {
     fn snapshot_size_clamped() {
         let cam = camera();
         let node = [0.0, 0.0, 2000.0, 1500.0];
-        // Контент 1984×1464, зум 1, scale 1 → кламп к 512
+        // Контент 1984×1458, зум 1, scale 1 → кламп к 512 (FR-023: 34)
         let (w, h) = snapshot_size(&node, &cam, 1.0);
         assert_eq!(w, 512);
         assert!(h <= 512, "пропорции сохранены: {h}");
-        // Малая нода — без клампа
+        // Малая нода — без клампа (высота контента 200−34−8 = 158, FR-023)
         let (w, h) = snapshot_size(&[0.0, 0.0, 320.0, 200.0], &cam, 1.0);
-        assert_eq!((w, h), (304, 164));
+        assert_eq!((w, h), (304, 158));
     }
 
     #[test]
     fn overlap_detection_for_airspace() {
         let cam = camera();
         let node = [0.0, 0.0, 320.0, 200.0];
-        // Контент на экране: x 508..812, y 328..492
+        // Контент на экране: x 508..812, y 334..492 (верх = шапка 34, FR-023)
         let far = [900.0, 100.0, 100.0, 100.0];
         assert!(!node_screen_rect_overlaps(&node, &cam, 1.0, &far));
         let near = [700.0, 400.0, 300.0, 200.0];
@@ -352,5 +360,16 @@ mod tests {
         assert_eq!(x1, 200.0);
         assert_eq!(y0, 0.0);
         assert_eq!(y1, 100.0);
+    }
+
+    /// W-a (аудит §8 п.16): HEADER_H — реэкспорт дизайн-токена
+    /// `canvas_core::tokens::CARD_HEADER_HEIGHT` (единый const с шапкой
+    /// карточек рендера), а не локальный дубль: рассинхрон «28 vs 34»
+    /// после FR-023 больше невозможен; тест фиксирует значение контракта
+    /// (34) — случайный откат дубля или токена ловится здесь.
+    #[test]
+    fn header_h_matches_card_header_token() {
+        assert_eq!(HEADER_H, canvas_core::tokens::CARD_HEADER_HEIGHT);
+        assert_eq!(HEADER_H, 34.0, "FR-023: 34 (токен card.header_height)");
     }
 }

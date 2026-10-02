@@ -805,6 +805,56 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
     }
 }
 
+/// W-a (аудит §8 п.6): панель хоткеев с ИЗМЕРЕННЫМ расширением — единый
+/// источник геометрии для отрисовки ([`super::overlays`]) и hit-rect
+/// реестра (контракт «hit-rect'ы из тех же layout-функций, что
+/// отрисовка»). Фикс среза 2026-09-25 (wasm-аудит, скриншот 11_hotkeys):
+/// константная ширина 340 рвала самое длинное описание («…режим защиты:
+/// раскрыть следующий уровень») у кромки — панель ДОТЯГИВАЕТСЯ до самого
+/// длинного описания (измерение тем же лицом, что рисует строки). Раньше
+/// измерение жило только в draw, реестр считал панель константной —
+/// правая часть видимой панели не пикалась (нарушение «ввод = тому,
+/// что видно»).
+pub(crate) fn hotkeys_panel_rect(
+    viewport: [f32; 2],
+    left_offset: f32,
+    corner: canvas_core::Corner,
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    tr: impl Fn(&'static str) -> &'static str,
+) -> [f32; 4] {
+    let mut panel = crate::ui::hotkeys_panel_rect_at(viewport, left_offset);
+    let longest = crate::ui::HOTKEYS
+        .iter()
+        .map(|(_, d)| m.width_of(fs, tr(d), crate::admin_ui::FONT_FAMILY, 12.0))
+        .fold(0.0_f32, f32::max);
+    let desired =
+        (crate::ui::HOTKEYS_PADDING * 2.0 + crate::ui::HOTKEYS_KEY_COLUMN + longest + 2.0)
+            .min(viewport[0]);
+    panel[2] = panel[2].max(desired);
+    // FR-054 (гейт G4 «0 налезаний одной полосы»): дотянутая панель на
+    // узких окнах (800×560, RU) наезжала на угловой кластер кнопок
+    // ⚙/тема/язык/«?» — та же полоса Panels. Налезание было только
+    // ВИЗУАЛЬНЫМ с фикса среза 2026-09-25: hit-rect реестра оставался
+    // константным, линт слепого кадра его не видел; синхронизация pick с
+    // draw (эта функция) сделала налезание видимым линту. Расширение
+    // клампится левой кромкой кластера (зазор SETTINGS_GAP); у левых
+    // углов кластер не мешает правому краю панели — просто отступ от
+    // кромки вьюпорта. Цена компромисса: на самом узком окне G4 самое
+    // длинное RU-описание снова частично срезается — перекрытие
+    // интерактивных кнопок хуже срезанного текста.
+    let right_limit = match corner {
+        canvas_core::Corner::TopRight | canvas_core::Corner::BottomRight => {
+            (crate::ui::help_button_rect(corner, viewport)[0] - crate::ui::SETTINGS_GAP).max(0.0)
+        }
+        canvas_core::Corner::TopLeft | canvas_core::Corner::BottomLeft => {
+            (viewport[0] - crate::ui::SETTINGS_MARGIN).max(0.0)
+        }
+    };
+    panel[2] = panel[2].min((right_limit - panel[0]).max(0.0));
+    panel
+}
+
 /// Hit-rect'ы поверхности из тех же чистых layout-функций, что использует
 /// ввод (детерминизм: pick ≡ поведению прежних веток).
 fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
@@ -872,8 +922,23 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
         id::HOTKEYS => {
             // FR-054 (G4): панель смещается правее полосы палитры (налезание
             // одного слоя запрещено) — тот же сдвиг, что у отрисовки.
-            let panel =
-                crate::ui::hotkeys_panel_rect_at(viewport, app.hotkeys_left_offset(viewport));
+            // W-a: ширина — ИЗМЕРЕННАЯ, общая функция с отрисовкой
+            // (pick = видимой панели).
+            // ПОРЯДОК ВАЖЕН: hotkeys_left_offset сам захватывает общий
+            // FontSystem (dock_strip_layout меряет полосу доков) — вызванный
+            // под уже захваченным guard'ом measure_font_system он
+            // самозаблокировал бы неповторно-входящий Mutex.
+            let left = app.hotkeys_left_offset(viewport);
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let panel = hotkeys_panel_rect(
+                viewport,
+                left,
+                app.settings.button_corner,
+                &mut m,
+                &mut fs,
+                |k| app.tr(k),
+            );
             surface
                 .hit_rects
                 .push(HitRect::interactive(rect(panel), "hotkeys-panel"));
@@ -1538,6 +1603,58 @@ mod tests {
             .expect("whatif в реестре");
         assert!(decl.degradation.hidden_at(800.0, 560.0));
         assert!(!decl.degradation.hidden_at(1280.0, 800.0));
+    }
+
+    /// W-a (аудит §8 п.6): pick-rect реестра панели хоткеев == draw-rect —
+    /// общая функция [`hotkeys_panel_rect`] с измеренным расширением.
+    /// Регресс: реестр считал панель константной ширины
+    /// (hotkeys_panel_rect_at) — правая часть дотянутой панели не
+    /// пикалась (нарушение «ввод = тому, что видно»).
+    #[test]
+    fn hotkeys_hit_rect_matches_draw_rect() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.hotkeys_open = true;
+        // канонический вьюпорт G4 (test_stub без окна — вьюпорт [0,0])
+        let viewport = [1280.0_f32, 800.0];
+        let frame = build_frame_at(&app, viewport);
+        let surface = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::HOTKEYS)
+            .expect("панель хоткеев в кадре");
+        let hit = surface
+            .hit_rects
+            .iter()
+            .find(|r| r.element == "hotkeys-panel")
+            .expect("hit-rect панели");
+        // left_offset ДО захвата FontSystem (см. порядок в fill_hit_rects:
+        // hotkeys_left_offset сам берёт этот же Mutex — вложенный захват =
+        // самозаблокировка неповторно-входящего Mutex). Константная база
+        // тоже считается до захвата — guard fs живёт до конца теста.
+        let left = app.hotkeys_left_offset(viewport);
+        let base = crate::ui::hotkeys_panel_rect_at(viewport, left);
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        let draw = hotkeys_panel_rect(
+            viewport,
+            left,
+            app.settings.button_corner,
+            &mut m,
+            &mut fs,
+            |k| app.tr(k),
+        );
+        assert_eq!(
+            (hit.rect.x, hit.rect.y, hit.rect.w, hit.rect.h),
+            (draw[0], draw[1], draw[2], draw[3]),
+            "pick = видимой панели"
+        );
+        // Расширение реально работает: измеренная ширина строго больше
+        // константной базы (длинные RU-описания не влезают в 340).
+        assert!(
+            draw[2] > base[2],
+            "измеренное расширение шире константной панели"
+        );
     }
 
     /// Esc-стек: порядок дословно воспроизводит прежнюю лестницу 8143–8232
