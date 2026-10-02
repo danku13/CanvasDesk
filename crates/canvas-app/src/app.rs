@@ -7447,15 +7447,23 @@ impl App {
     /// Клик при открытом окне (§6.4): ✕/чип «Данные изменены»/мета-крошки/
     /// узлы дерева; клик по фону (мимо окна) — закрытие, внутри окна мимо
     /// элементов — глотается (канвас клик не получает).
-    /// Вид/лейаут/масштаб кадра окна проверки — единые для рендера и
+    /// Вид/лейаут/масштаб/пан кадра окна проверки — единые для рендера и
     /// hit-тестов (детерминизм рендер/ввод). X5: в режиме защиты видимость
     /// управляется `defense_reveal` (шаги AC-6.3), масштаб — укрупнение
-    /// ×1.5 с вписыванием (AC-6.2) вместо обычного fit ≤ 1.0.
+    /// ×1.5 с вписыванием (AC-6.2) вместо обычного fit (потолок 1.0, пол
+    /// SCALE_MIN). FR-083: направление схемы — `state.direction` (тумблер
+    /// в шапке), 4-е значение — пан после `pan_clamp` (контент прижат к
+    /// левому-верхнему углу, переполнение — панорамирование).
     fn explain_view(
         &self,
         state: &ExplainState,
         body: [f32; 4],
-    ) -> (explain_ui::Visibility, explain_ui::TreeLayout, f32) {
+    ) -> (
+        explain_ui::Visibility,
+        explain_ui::TreeLayout,
+        f32,
+        [f32; 2],
+    ) {
         let tree = state.tree().expect("Ready: дерево есть");
         let auto = if state.is_defense() {
             state.defense_reveal
@@ -7463,13 +7471,14 @@ impl App {
             self.settings.explain_depth_limit
         };
         let vis = explain_ui::visibility(tree, state.view_root(), auto, &state.expanded);
-        let layout = explain_ui::layout_tree(tree, &vis, state.view_root());
+        let layout = explain_ui::layout_tree(tree, &vis, state.view_root(), state.direction);
         let scale = if state.is_defense() {
             explain_ui::defense_fit_scale(layout.bounds, body)
         } else {
             explain_ui::fit_scale(layout.bounds, body)
         };
-        (vis, layout, scale)
+        let pan = explain_ui::pan_clamp(state.pan, layout.bounds, scale, body);
+        (vis, layout, scale, pan)
     }
 
     /// Полоса результата D под world-точкой (F-1/AC-1.1): Some — корень

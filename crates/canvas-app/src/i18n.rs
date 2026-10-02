@@ -155,6 +155,14 @@ pub mod keys {
     pub const EXPLAIN_DEFENSE_ALL: &str = "explain.defense_all";
     /// X5: подсказка футера защиты (пробел/клик — шаг, Esc — выход).
     pub const EXPLAIN_DEFENSE_HINT: &str = "explain.defense_hint";
+    /// FR-083: тумблер направления схемы — поток слева-направо
+    /// (источники слева, итог справа; глиф рисует направление потока).
+    pub const EXPLAIN_DIR_LTR: &str = "explain.dir_ltr";
+    /// FR-083: тумблер направления схемы — прежний вид (итог слева,
+    /// источники справа).
+    pub const EXPLAIN_DIR_RTL: &str = "explain.dir_rtl";
+    /// FR-083: подсказка футера при переполнении дерева (пан включён).
+    pub const EXPLAIN_OVERFLOW_HINT: &str = "explain.overflow_hint";
     /// Настройка FR-039 (AC-2.3): лимит глубины авто-раскрытия дерева.
     pub const ROW_EXPLAIN_DEPTH: &str = "settings.row.explain_depth";
     pub const DESC_EXPLAIN_DEPTH: &str = "settings.desc.explain_depth";
@@ -1509,6 +1517,13 @@ const RU: &[(&str, &str)] = &[
         keys::EXPLAIN_DEFENSE_HINT,
         "Пробел/клик по узлу — следующий уровень · Esc — обычный вид",
     ),
+    // FR-083: тумблер направления (глиф потока) и подсказка переполнения
+    (keys::EXPLAIN_DIR_LTR, "→"),
+    (keys::EXPLAIN_DIR_RTL, "←"),
+    (
+        keys::EXPLAIN_OVERFLOW_HINT,
+        "Не всё влезло — тяните фон или крутите колесо",
+    ),
     (
         keys::EXPLAIN_META,
         "Цепочка расчёта цифры «{title}» · Esc — закрыть",
@@ -2359,6 +2374,13 @@ const EN: &[(&str, &str)] = &[
     (
         keys::EXPLAIN_DEFENSE_HINT,
         "Space/click a node — next level · Esc — normal view",
+    ),
+    // FR-083: direction toggle (flow glyph) and overflow hint
+    (keys::EXPLAIN_DIR_LTR, "→"),
+    (keys::EXPLAIN_DIR_RTL, "←"),
+    (
+        keys::EXPLAIN_OVERFLOW_HINT,
+        "Content overflows — drag the background or scroll",
     ),
     (
         keys::EXPLAIN_META,

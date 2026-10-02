@@ -18,12 +18,18 @@ impl App {
         // F-10 (Q6): открытие оверлея закрывает main stage
         self.close_main_stage();
         let revision = self.scene.revision;
+        // FR-083: направление схемы — из настроек (`explain_sources_left`);
+        // pan у нового состояния уже нулевой (открытие оверлея).
+        let direction =
+            explain_ui::LayoutDirection::from_sources_left(self.settings.explain_sources_left);
         if let Some(snap) = self.explain_cache.take() {
             if snap.root == root && snap.revision == revision {
                 // Переоткрытие из кэша: Ready сразу, чип — если модель
                 // всё-таки изменилась (from_snapshot сравнивает ревизии);
                 // дельты what-if восстанавливаются из снапшота (AC-4.2)
-                self.explain = Some(ExplainState::from_snapshot(snap, revision));
+                let mut state = ExplainState::from_snapshot(snap, revision);
+                state.direction = direction;
+                self.explain = Some(state);
                 self.request_redraw();
                 return;
             }
@@ -51,6 +57,9 @@ impl App {
             )
         };
         self.explain = Some(ExplainState::loading(root, revision, build));
+        if let Some(state) = self.explain.as_mut() {
+            state.direction = direction;
+        }
         self.request_redraw();
     }
 
@@ -692,15 +701,20 @@ impl App {
                 return (quads, texts);
             };
             let body = explain_ui::body_rect(win);
-            // X5: вид/масштаб едины с hit-тестами (explain_view); в защите —
-            // defense_reveal + укрупнение ×1.5 (AC-6.2/6.3)
-            let (vis, layout, scale) = self.explain_view(state, body);
+            // X5: вид/масштаб/пан едины с hit-тестами (explain_view); в
+            // защите — defense_reveal + укрупнение ×1.5 (AC-6.2/6.3).
+            // FR-083: 4-е значение — пан тела (контент прижат к левому-
+            // верхнему углу, переполнение закрывается панорамированием).
+            let (vis, layout, scale, pan) = self.explain_view(state, body);
             let local = |x: f32, y: f32| {
                 [
-                    body[0] + explain_ui::BODY_PAD + x * scale,
-                    body[1] + explain_ui::BODY_PAD + y * scale,
+                    body[0] + explain_ui::BODY_PAD + x * scale + pan[0],
+                    body[1] + explain_ui::BODY_PAD + y * scale + pan[1],
                 ]
             };
+            // FR-083: направление схемы (сторона источников/итога) — от
+            // него зависят бейдж фронтира и полоса-акцент карточки.
+            let ltr = state.direction == explain_ui::LayoutDirection::Ltr;
             // Ветки — под карточками (порядок рисования): безье из локальных
             // px лейаута → screen → мир (паттерн polyline_dots: линия —
             // цепочка перекрывающихся кружков)
@@ -741,6 +755,48 @@ impl App {
                 color: palette.quote,
                 align: TextAlign::Left,
             });
+            // FR-083: тумблер направления схемы в шапке (левее defense-
+            // тумблера) — стрелка в сторону потока: «→» — источники слева
+            // (Ltr), «←» — источники справа (Rtl). На узких окнах (кнопка
+            // заходит в мета-зону) — не рисуется и не ловит хит.
+            if explain_ui::direction_toggle_visible(win) {
+                let toggle = explain_ui::direction_toggle_rect(win);
+                let hovered = point_in_rect(toggle, self.cursor);
+                quads.push(screen_rect_quad(
+                    camera,
+                    viewport,
+                    toggle,
+                    if hovered {
+                        palette.accent
+                    } else {
+                        palette.card_fill
+                    },
+                    if hovered {
+                        [0.0; 4]
+                    } else {
+                        palette.palette_border
+                    },
+                    14.0,
+                ));
+                texts.push(OwnedScreenText {
+                    text: self
+                        .tr(if ltr {
+                            keys::EXPLAIN_DIR_LTR
+                        } else {
+                            keys::EXPLAIN_DIR_RTL
+                        })
+                        .to_owned(),
+                    origin: [toggle[0], toggle[1] + 5.0],
+                    width: toggle[2],
+                    font_size: 12.0,
+                    color: if hovered {
+                        Color::rgb(255, 255, 255)
+                    } else {
+                        palette.body
+                    },
+                    align: TextAlign::Center,
+                });
+            }
             // X5 (AC-6.1): тумблер режима защиты в шапке — одним действием
             {
                 let toggle = explain_ui::defense_toggle_rect(win);
@@ -878,7 +934,14 @@ impl App {
                         ));
                     }
                 }
-                let strip_rect = [rect[0], rect[1], (4.0 * scale).max(2.0), rect[3]];
+                // Полоса-акцент на стороне РОДИТЕЛЯ (FR-083): Rtl — слева
+                // (родитель левее), Ltr — справа (родитель правее).
+                let strip_w = (4.0 * scale).max(2.0);
+                let strip_rect = if ltr {
+                    [rect[0] + rect[2] - strip_w, rect[1], strip_w, rect[3]]
+                } else {
+                    [rect[0], rect[1], strip_w, rect[3]]
+                };
                 quads.push(screen_rect_quad(
                     camera, viewport, strip_rect, strip, [0.0; 4], 0.0,
                 ));
@@ -987,15 +1050,21 @@ impl App {
                     }
                 }
                 // Бейдж фронтира «+N глубже» (AC-2.3: ручное разворачивание)
+                // на стороне ДЕТЕЙ (FR-083): Rtl — правый нижний угол,
+                // Ltr — левый нижний.
                 if vis.frontier[laid.idx] {
                     let bw = 66.0;
                     let bh = 15.0;
-                    let badge = [
-                        rect[0] + rect[2] - bw - 6.0,
-                        rect[1] + rect[3] - bh - 5.0,
-                        bw,
-                        bh,
-                    ];
+                    let badge = if ltr {
+                        [rect[0] + 6.0, rect[1] + rect[3] - bh - 5.0, bw, bh]
+                    } else {
+                        [
+                            rect[0] + rect[2] - bw - 6.0,
+                            rect[1] + rect[3] - bh - 5.0,
+                            bw,
+                            bh,
+                        ]
+                    };
                     quads.push(screen_rect_quad(
                         camera,
                         viewport,
@@ -1051,6 +1120,70 @@ impl App {
                     });
                 }
             }
+            // FR-083: индикатор «не всё влезло» — стрелки у краёв тела со
+            // скрытым контентом + подсказка в футере справа. КЛИП: у
+            // модального прохода (stage-квады/screen-тексты) скиссоры нет
+            // (scissor FR-056 — только полосы реестра), контент рисуется
+            // как есть; пан ограничен pan_clamp, индикатор обязателен.
+            let arrows = explain_ui::overflow_arrows(pan, layout.bounds, scale, body);
+            if arrows.iter().any(|&a| a) {
+                const ARROW: f32 = 22.0;
+                const EDGE: f32 = 6.0;
+                let cy = body[1] + body[3] / 2.0 - ARROW / 2.0;
+                let cx = body[0] + body[2] / 2.0 - ARROW / 2.0;
+                let edge_arrows = [
+                    (arrows[0], [body[0] + EDGE, cy, ARROW, ARROW], "←"),
+                    (
+                        arrows[1],
+                        [body[0] + body[2] - ARROW - EDGE, cy, ARROW, ARROW],
+                        "→",
+                    ),
+                    (arrows[2], [cx, body[1] + EDGE, ARROW, ARROW], "↑"),
+                    (
+                        arrows[3],
+                        [cx, body[1] + body[3] - ARROW - EDGE, ARROW, ARROW],
+                        "↓",
+                    ),
+                ];
+                for (shown, rect, glyph) in edge_arrows {
+                    if !shown {
+                        continue;
+                    }
+                    quads.push(screen_rect_quad(
+                        camera,
+                        viewport,
+                        rect,
+                        palette.accent,
+                        [0.0; 4],
+                        7.0,
+                    ));
+                    texts.push(OwnedScreenText {
+                        text: glyph.to_owned(),
+                        origin: [rect[0], rect[1] + 3.0],
+                        width: rect[2],
+                        font_size: 12.0,
+                        color: Color::rgb(255, 255, 255),
+                        align: TextAlign::Center,
+                    });
+                }
+                // Подсказка в футере справа (в защите — левее кнопок футера);
+                // origin считается от правого края (Right-выравнивания в
+                // OwnedScreenText нет — сдвигает origin вручную).
+                const HINT_W: f32 = 320.0;
+                let hint_right = if state.is_defense() {
+                    explain_ui::defense_all_rect(win)[0] - 10.0
+                } else {
+                    win[0] + win[2] - explain_ui::BODY_PAD
+                };
+                texts.push(OwnedScreenText {
+                    text: self.tr(keys::EXPLAIN_OVERFLOW_HINT).to_owned(),
+                    origin: [hint_right - HINT_W, win[1] + win[3] - 27.0],
+                    width: HINT_W,
+                    font_size: 10.5,
+                    color: palette.quote,
+                    align: TextAlign::Left,
+                });
+            }
             // X3 (AC-4.1): inline-поле подмены — поверх дерева (правый
             // нижний угол тела); клик мимо/Enter — коммит, Esc — отмена
             if let Some(edit) = state.edit.as_ref() {
@@ -1096,8 +1229,14 @@ impl App {
                     ));
                 }
             }
-            // Hover узла дерева (кадр) — рамка акцентом
-            cursor_idx = explain_ui::node_at(&layout, scale, body, self.cursor);
+            // Hover узла дерева (кадр) — рамка акцентом. FR-083: пан тела
+            // не входит в геометрию node_at — точка передаётся минус пан.
+            cursor_idx = explain_ui::node_at(
+                &layout,
+                scale,
+                body,
+                [self.cursor[0] - pan[0], self.cursor[1] - pan[1]],
+            );
         }
         if let Some(s) = self.explain.as_mut() {
             s.cursor = cursor_idx;
