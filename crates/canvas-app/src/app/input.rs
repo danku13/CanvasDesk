@@ -2412,11 +2412,12 @@ impl App {
             // кликом по карточке (кнопка поверх); работает и в защите
             // (AC-4.4 — подмена из режима защиты)
             let edit_hit = self.explain.as_ref().and_then(|state| {
-                let (_, layout, scale, pan) = self.explain_view(state, body);
+                let (_, layout, scale, origin) = self.explain_view(state, body);
                 let tree = state.tree()?;
-                // FR-083: пан тела не входит в геометрию лейаута — точка
-                // минус пан (та же трансформация, что у рендера)
-                let point = [self.cursor[0] - pan[0], self.cursor[1] - pan[1]];
+                // FR-083/FR-084: база контента (origin) не входит в геометрию
+                // лейаута — точка минус origin (та же трансформация, что у
+                // рендера)
+                let point = [self.cursor[0] - origin[0], self.cursor[1] - origin[1]];
                 explain_ui::edit_at(tree, &layout, scale, body, point)
             });
             if let Some(idx) = edit_hit {
@@ -2431,10 +2432,11 @@ impl App {
                 return;
             }
             let hit = self.explain.as_ref().and_then(|state| {
-                let (_, layout, scale, pan) = self.explain_view(state, body);
-                // FR-083: точка минус пан — паритет с рендером (node_at
-                // работает в координатах контента)
-                let point = [self.cursor[0] - pan[0], self.cursor[1] - pan[1]];
+                let (_, layout, scale, origin) = self.explain_view(state, body);
+                // FR-083/FR-084: точка минус origin (база контента) —
+                // паритет с рендером (node_at работает в координатах
+                // контента)
+                let point = [self.cursor[0] - origin[0], self.cursor[1] - origin[1]];
                 explain_ui::node_at(&layout, scale, body, point)
             });
             if let Some(idx) = hit {
@@ -3575,9 +3577,15 @@ impl App {
                     .explain
                     .as_ref()
                     .map(|state| self.explain_view(state, body));
-                if let Some((_, layout, scale, pan)) = view {
-                    let raw = [pan[0] + dx, pan[1] + dy];
+                if let Some((_, layout, scale, _)) = view {
                     if let Some(state) = self.explain.as_mut() {
+                        // FR-084: 4-е значение explain_view — origin (база
+                        // контента: поле + центрирование + пан), приращение
+                        // панует сырой state.pan — базой служит пан после
+                        // pan_clamp, как раньше (центрирование считает
+                        // explain_view/origin)
+                        let clamped = explain_ui::pan_clamp(state.pan, layout.bounds, scale, body);
+                        let raw = [clamped[0] + dx, clamped[1] + dy];
                         state.pan = explain_ui::pan_clamp(raw, layout.bounds, scale, body);
                     }
                     self.request_redraw();
