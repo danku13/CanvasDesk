@@ -200,7 +200,9 @@ use winit::platform::windows::WindowAttributesExtWindows;
 use canvas_scene::{mcp_dispatch, mcp_unwrap_call, Viewport};
 
 /// Множитель зума на одну строку колеса мыши (Ctrl+колесо, SPEC §8).
-const ZOOM_STEP_PER_LINE: f32 = 1.1;
+/// CR-017: 1.1 → 1.024 — четверть лог-шага (по фидбэку владельца:
+/// «очень большой шаг зума»).
+const ZOOM_STEP_PER_LINE: f32 = 1.024;
 /// Пикселей панорамирования на строку колеса без Ctrl (скролл тачпада).
 const PAN_PX_PER_LINE: f32 = 40.0;
 // Ширина клип-бокса тултипа снята (правка владельца 2026-09-26):
