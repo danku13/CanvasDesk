@@ -662,7 +662,7 @@ impl App {
                             .explain
                             .as_ref()
                             .map(|state| {
-                                let (vis, _, _) = self.explain_view(state, body);
+                                let (vis, _, _, _) = self.explain_view(state, body);
                                 explain_ui::has_hidden(&vis)
                             })
                             .unwrap_or(false);
@@ -2326,6 +2326,20 @@ impl App {
                 self.open_explain(root);
                 return;
             }
+            // FR-083: тумблер направления схемы — Ltr ↔ Rtl одним действием;
+            // пан сбрасывается внутри toggle_direction, выбор сохраняется
+            // в настройки тем же механизмом, что language
+            if explain_ui::direction_toggle_visible(win)
+                && point_in_rect(explain_ui::direction_toggle_rect(win), self.cursor)
+            {
+                if let Some(state) = self.explain.as_mut() {
+                    state.toggle_direction();
+                    self.settings.explain_sources_left = state.direction.sources_left();
+                }
+                self.save_settings();
+                self.request_redraw();
+                return;
+            }
             // X5 (AC-6.1): тумблер режима защиты — вход/выход одним действием
             if point_in_rect(explain_ui::defense_toggle_rect(win), self.cursor) {
                 let depth = self.settings.explain_depth_limit;
@@ -2348,7 +2362,7 @@ impl App {
                     .explain
                     .as_ref()
                     .map(|state| {
-                        let (vis, _, _) = self.explain_view(state, body);
+                        let (vis, _, _, _) = self.explain_view(state, body);
                         explain_ui::has_hidden(&vis)
                     })
                     .unwrap_or(false);
@@ -2398,9 +2412,12 @@ impl App {
             // кликом по карточке (кнопка поверх); работает и в защите
             // (AC-4.4 — подмена из режима защиты)
             let edit_hit = self.explain.as_ref().and_then(|state| {
-                let (_, layout, scale) = self.explain_view(state, body);
+                let (_, layout, scale, pan) = self.explain_view(state, body);
                 let tree = state.tree()?;
-                explain_ui::edit_at(tree, &layout, scale, body, self.cursor)
+                // FR-083: пан тела не входит в геометрию лейаута — точка
+                // минус пан (та же трансформация, что у рендера)
+                let point = [self.cursor[0] - pan[0], self.cursor[1] - pan[1]];
+                explain_ui::edit_at(tree, &layout, scale, body, point)
             });
             if let Some(idx) = edit_hit {
                 // Preset — текущая подмена активного сценария (правка
@@ -2414,14 +2431,17 @@ impl App {
                 return;
             }
             let hit = self.explain.as_ref().and_then(|state| {
-                let (_, layout, scale) = self.explain_view(state, body);
-                explain_ui::node_at(&layout, scale, body, self.cursor)
+                let (_, layout, scale, pan) = self.explain_view(state, body);
+                // FR-083: точка минус пан — паритет с рендером (node_at
+                // работает в координатах контента)
+                let point = [self.cursor[0] - pan[0], self.cursor[1] - pan[1]];
+                explain_ui::node_at(&layout, scale, body, point)
             });
             if let Some(idx) = hit {
                 // Вид до мут-бейлка — hit-тест и клик используют одну
                 // геометрию (explain_view — чистая функция)
                 let vis = self.explain.as_ref().map(|state| {
-                    let (vis, _, _) = self.explain_view(state, body);
+                    let (vis, _, _, _) = self.explain_view(state, body);
                     vis
                 });
                 if let Some(state) = self.explain.as_mut() {
@@ -2461,6 +2481,23 @@ impl App {
             }
             self.close_explain();
             return;
+        }
+        // FR-083: нажатие по пустому фону тела — старт пан-драга дерева
+        // (клики по карточкам/кнопкам/крошкам вернулись выше); якорь —
+        // курсор нажатия, pan_start — текущий пан. Движение ведёт пан
+        // (on_cursor_moved), отпускание завершает (on_left_button).
+        // Клик без движения панует на пару пикселей — неотличимо от
+        // прежнего «глотания» клика фоном.
+        if ready {
+            let body = explain_ui::body_rect(win);
+            if point_in_rect(body, self.cursor) {
+                if let Some(state) = self.explain.as_mut() {
+                    state.pan_drag = Some(explain_ui::PanDrag {
+                        anchor: self.cursor,
+                        pan_start: state.pan,
+                    });
+                }
+            }
         }
         self.request_redraw();
     }
@@ -2896,6 +2933,14 @@ impl App {
                 self.request_redraw();
             }
             ElementState::Released => {
+                // FR-083: отпускание завершает пан-драг дерева окна проверки
+                // (пан остаётся, куда довели; микродвижение в пороге клика
+                // неотличимо от прежнего «глотания» клика фоном)
+                if let Some(state) = self.explain.as_mut() {
+                    if state.pan_drag.take().is_some() {
+                        self.request_redraw();
+                    }
+                }
                 // FR-025: отпускание нажатия на строке палитры — вставка:
                 // drag (порог пройден) — в world-точку курсора, клик — в
                 // центр viewport. Инстанциация на отпускании, а не на
@@ -3251,6 +3296,35 @@ impl App {
             self.request_redraw();
             return;
         }
+        // FR-083: пан-драг дерева окна проверки — пан следует за курсором
+        // (якорь и pan_start — в PanDrag с нажатия по фону тела); раньше
+        // канвас-драгов: модалка поверх, канвас под ней не двигается
+        if self.explain.as_ref().is_some_and(|s| s.is_ready()) {
+            let raw = self.explain.as_ref().and_then(|state| {
+                let drag = state.pan_drag.as_ref()?;
+                Some([
+                    drag.pan_start[0] + (logical[0] - drag.anchor[0]),
+                    drag.pan_start[1] + (logical[1] - drag.anchor[1]),
+                ])
+            });
+            if let Some(raw) = raw {
+                self.cursor = logical;
+                let viewport = self.viewport_logical();
+                let win = explain_ui::window_rect(viewport);
+                let body = explain_ui::body_rect(win);
+                let view = self
+                    .explain
+                    .as_ref()
+                    .map(|state| self.explain_view(state, body));
+                if let Some((_, layout, scale, _)) = view {
+                    if let Some(state) = self.explain.as_mut() {
+                        state.pan = explain_ui::pan_clamp(raw, layout.bounds, scale, body);
+                    }
+                    self.request_redraw();
+                    return;
+                }
+            }
+        }
         if self.panning() && self.main_stage.is_none() {
             let delta = [logical[0] - self.cursor[0], logical[1] - self.cursor[1]];
             self.camera.pan(delta);
@@ -3480,6 +3554,37 @@ impl App {
     }
 
     pub(super) fn on_mouse_wheel(&mut self, delta: MouseScrollDelta) {
+        // FR-083: колесо над телом окна проверки панорамирует дерево
+        // (вертикаль — колесо, горизонталь — наклон колеса/Shift-канал);
+        // знак — как у списков: от себя (y<0) — контент уходит вверх
+        if self.explain.as_ref().is_some_and(|s| s.is_ready()) {
+            let viewport = self.viewport_logical();
+            let win = explain_ui::window_rect(viewport);
+            let body = explain_ui::body_rect(win);
+            if point_in_rect(body, self.cursor) {
+                let (dx, dy) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => {
+                        (-x * PAN_PX_PER_LINE, y * PAN_PX_PER_LINE)
+                    }
+                    MouseScrollDelta::PixelDelta(pos) => (
+                        -pos.x as f32 / self.scale_factor(),
+                        pos.y as f32 / self.scale_factor(),
+                    ),
+                };
+                let view = self
+                    .explain
+                    .as_ref()
+                    .map(|state| self.explain_view(state, body));
+                if let Some((_, layout, scale, pan)) = view {
+                    let raw = [pan[0] + dx, pan[1] + dy];
+                    if let Some(state) = self.explain.as_mut() {
+                        state.pan = explain_ui::pan_clamp(raw, layout.bounds, scale, body);
+                    }
+                    self.request_redraw();
+                    return;
+                }
+            }
+        }
         // PRD-0007 (X4, D10): колесо над телом диалога ревью автосвязи
         // скроллит список предложений (12+), а не панорамирует канвас
         if self.autolink_review.is_some() {

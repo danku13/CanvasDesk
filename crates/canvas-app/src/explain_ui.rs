@@ -1,11 +1,17 @@
 //! PRD-0007 (FR-048 X2): окно проверки цепочки расчёта цифры — чистая
 //! модель (образец [`crate::whatif_ui`]/[`crate::settings_ui`]): геометрия
-//! окна поверх полноэкранного канваса (паттерн main stage — решение
-//! владельца, У9 v4: `docs/prototypes/ux-defense-mode.html`), tidy-лейаут
-//! дерева (колонка = уровень, ряд = порядок листьев; безье от правого
-//! порта родителя к левому порту ребёнка — как в прототипе), машина
-//! состояний §6.4 (Loading → Ready; Stale — чип «Данные изменены») и
-//! hit-тесты.
+//! окна поверх полноэкранного канваса (паттерн main stage), tidy-лейаут
+//! дерева (колонка = уровень, ряд = порядок листьев; безье от порта
+//! родителя к порту ребёнка — сторона портов зависит от направления
+//! [`LayoutDirection`], FR-083), машина состояний §6.4 (Loading → Ready;
+//! Stale — чип «Данные изменены») и hit-тесты.
+//!
+//! FR-083 (решение владельца, три правки поверх FR-048): (1) окно — 80 %
+//! вьюпорта без потолка (минимум 320×240 и поля [`WIN_MARGIN`]
+//! сохраняются); (2) направление схемы — тумблер в шапке: [`LayoutDirection`]
+//! с сохранением выбора в настройках (`explain_sources_left`, canvas-core);
+//! (3) пол fit-масштаба [`SCALE_MIN`] + панорамирование тела
+//! ([`pan_clamp`], колесо/драг по фону, индикатор переполнения).
 //!
 //! Честный лоадер (AC-1.2, У5): построение асинхронное — на нативе
 //! [`build_lineage`] уходит в фоновый поток (UI не блокируется, G5), окно
@@ -18,11 +24,11 @@
 //! внизу (§9.4-подобные сценарии лейаута/видимости/состояний).
 //!
 //! FR-060 (волна 2 миграции кита, паттерн U5 — числа дословно): окно —
-//! `kit::modal` (слот = вьюпорт, сжатый на [`WIN_MARGIN`]; прежние клампы
-//! потолков/полей/инварианта дословно — parity-тест); крошки — отбор по
-//! мета-зоне `take_while` вместо break-клампа (G5: политика hide, семантика
-//! прежняя); `Option::take` в автомате состояния — перенос владения, не
-//! срез контента (аудит G5 — про срезы `take(n)`/break-клампы/`truncate_chars`).
+//! `kit::modal` (слот = вьюпорт, сжатый на [`WIN_MARGIN`]; с FR-083 max =
+//! размер слота — потолка нет); крошки — отбор по мета-зоне `take_while`
+//! вместо break-клампа (G5: политика hide, семантика прежняя);
+//! `Option::take` в автомате состояния — перенос владения, не срез
+//! контента (аудит G5 — про срезы `take(n)`/break-клампы/`truncate_chars`).
 //! Дерево (`layout_tree`/`fit_scale`) — 2D-tidy-лейаут прототипа: кит
 //! список+скролл однородных строк здесь неприменим (documented отклонение,
 //! как kit::card в FR-059); чип «Данные изменены»/кнопка ✕ — прежние
@@ -45,14 +51,10 @@ use canvas_ui::kit;
 
 /// Поля окна от краёв вьюпорта (логические px).
 pub const WIN_MARGIN: f32 = 20.0;
-/// Доля ширины вьюпорта (прототип v4: `min(88vw, 1320px)`).
-pub const WIN_FRAC_W: f32 = 0.88;
-/// Доля высоты вьюпорта (прототип v4: `min(86vh, 900px)`).
-pub const WIN_FRAC_H: f32 = 0.86;
-/// Потолок ширины окна (логические px, прототип).
-pub const WIN_MAX_W: f32 = 1320.0;
-/// Потолок высоты окна (логические px, прототип).
-pub const WIN_MAX_H: f32 = 900.0;
+/// Доля ширины вьюпорта (FR-083: окно = 80 % вьюпорта, без потолка).
+pub const WIN_FRAC_W: f32 = 0.80;
+/// Доля высоты вьюпорта (FR-083: окно = 80 % вьюпорта, без потолка).
+pub const WIN_FRAC_H: f32 = 0.80;
 /// Инвариант читаемости узких окон (как у галереи схем): минимум 320×240.
 pub const WIN_MIN_W: f32 = 320.0;
 pub const WIN_MIN_H: f32 = 240.0;
@@ -67,11 +69,10 @@ pub const CHIP_W: f32 = 210.0;
 pub const CHIP_H: f32 = 28.0;
 
 /// Прямоугольник окна проверки — `kit::modal` (FR-060): слот = вьюпорт,
-/// сжатый на поля [`WIN_MARGIN`] (симметричный инсет сохраняет и прежний
-/// кламп-отступ от краёв, и центр окна); min = инвариант 320×240,
-/// max = потолки прототипа и ширина слота, desired = доли вьюпорта.
-/// Прежняя формула (доля → кламп потолка → кламп полей → центр)
-/// воспроизводится дословно (parity-тест).
+/// сжатый на поля [`WIN_MARGIN`]; FR-083: max = размер слота (потолка
+/// нет — окно всегда 80 % вьюпорта), desired = доли вьюпорта, min =
+/// инвариант 320×240. На крошечных вьюпортах инвариант приоритетен
+/// (панель сохраняет min — documented деградация kit::modal).
 /// `[x, y, w, h]` в логических px.
 pub fn window_rect(viewport: [f32; 2]) -> [f32; 4] {
     let slot = UiRect::new(
@@ -83,7 +84,7 @@ pub fn window_rect(viewport: [f32; 2]) -> [f32; 4] {
     let layout = kit::modal(
         slot,
         UiVec2::new(WIN_MIN_W, WIN_MIN_H),
-        UiVec2::new(WIN_MAX_W.min(slot.w), WIN_MAX_H.min(slot.h)),
+        UiVec2::new(slot.w, slot.h),
         UiVec2::new(viewport[0] * WIN_FRAC_W, viewport[1] * WIN_FRAC_H),
     );
     [
@@ -184,6 +185,35 @@ pub fn body_rect(win: [f32; 4]) -> [f32; 4] {
         win[2],
         (win[3] - HEADER_H - FOOTER_H).max(0.0),
     ]
+}
+
+// --- направление схемы (FR-083) ---------------------------------------------
+
+/// Направление потока схемы (FR-083).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LayoutDirection {
+    /// Источники слева, итог справа — чтение слева-направо (дефолт).
+    #[default]
+    Ltr,
+    /// Итог слева, источники справа — прежнее поведение прототипа.
+    Rtl,
+}
+
+impl LayoutDirection {
+    /// Конвертация из настройки canvas-core `explain_sources_left`
+    /// (core не знает тип направления — переводится здесь, в app).
+    pub fn from_sources_left(sources_left: bool) -> Self {
+        if sources_left {
+            Self::Ltr
+        } else {
+            Self::Rtl
+        }
+    }
+
+    /// Обратная конвертация в настройку `explain_sources_left`.
+    pub fn sources_left(self) -> bool {
+        matches!(self, Self::Ltr)
+    }
 }
 
 /// Внутренний паддинг тела (лейаут дерева от края тела).
@@ -351,7 +381,20 @@ pub struct TreeLayout {
 }
 
 /// Построить лейаут видимого поддерева `root_idx` (чистая функция).
-pub fn layout_tree(tree: &LineageTree, vis: &Visibility, root_idx: usize) -> TreeLayout {
+/// FR-083: `direction` задаёт сторону источников — лейаут строится как
+/// раньше (корень слева, [`LayoutDirection::Rtl`]), затем для Ltr
+/// зеркалится по X (`x = bounds_w − x − CARD_W`, точки кривых
+/// `p[0] = bounds_w − p[0]`; bounds после зеркалирования те же — ширина
+/// контента не меняется). Вертикальный порядок детей и порядок Vec
+/// nodes/curves не меняются; порты кривых зеркалятся преобразованием
+/// (родитель принимает ребро со стороны источников, отдаёт в сторону
+/// детей).
+pub fn layout_tree(
+    tree: &LineageTree,
+    vis: &Visibility,
+    root_idx: usize,
+    direction: LayoutDirection,
+) -> TreeLayout {
     let mut layout = TreeLayout::default();
     if root_idx >= tree.nodes.len() || !vis.visible[root_idx] {
         return layout;
@@ -444,22 +487,47 @@ pub fn layout_tree(tree: &LineageTree, vis: &Visibility, root_idx: usize) -> Tre
         .map(|n| n.rect[1] + n.rect[3])
         .fold(0.0f32, f32::max);
     layout.bounds = [max_w + LAYOUT_PAD, max_h + LAYOUT_PAD];
+    // FR-083: Ltr — зеркалирование по X (корень становится самым правым).
+    // bounds_w берётся ДО зеркалирования; после преобразования max(x + CARD_W)
+    // = bounds_w − min(x) = bounds_w − LAYOUT_PAD = max_w — bounds те же.
+    if direction == LayoutDirection::Ltr {
+        let bounds_w = layout.bounds[0];
+        for node in &mut layout.nodes {
+            node.rect[0] = bounds_w - node.rect[0] - CARD_W;
+        }
+        for curve in &mut layout.curves {
+            for p in &mut curve.points {
+                p[0] = bounds_w - p[0];
+            }
+        }
+    }
     layout
 }
 
-/// Fit-масштаб лейаута в тело окна (≤ 1 — только сжатие; прототип вписывает
-/// дерево в окно, потолок 1.0 — без растяжения маленьких деревьев).
+/// Пол fit-масштаба (FR-083, порог читаемости): при масштабе 0.7 карточка
+/// 158×74 даёт 110.6×51.8 screen-px — в неё помещаются 4 строки текста с
+/// полом шрифта 8 px и межстрочным интервалом 1.5 (4 × 8 × 1.5 = 48 ≤
+/// 51.8; обоснование — тест `fit_scale_floor_keeps_text_readable`).
+/// Глубже — строки наезжают друг на друга, вместо сжатия включается
+/// панорамирование ([`pan_clamp`]).
+pub const SCALE_MIN: f32 = 0.7;
+
+/// Fit-масштаб лейаута в тело окна: потолок 1.0 — только сжатие (без
+/// растяжения маленьких деревьев), пол [`SCALE_MIN`] — глубже текст
+/// нечитаем (FR-083: вместо сжатия — панорамирование).
 pub fn fit_scale(bounds: [f32; 2], body: [f32; 4]) -> f32 {
     let avail_w = (body[2] - BODY_PAD * 2.0).max(1.0);
     let avail_h = (body[3] - BODY_PAD * 2.0).max(1.0);
     (1.0_f32)
         .min(avail_w / bounds[0].max(1.0))
         .min(avail_h / bounds[1].max(1.0))
-        .max(0.05)
+        .max(SCALE_MIN)
 }
 
 /// Узел под точкой `point` (логические px окна): обратный обход — верхние
-/// карточки позже в списке (рисуются поверх).
+/// карточки позже в списке (рисуются поверх). FR-083: пан тела не входит
+/// в геометрию — вызывающий передаёт `point − pan` (та же трансформация,
+/// что у рендера с паном).
 pub fn node_at(layout: &TreeLayout, scale: f32, body: [f32; 4], point: [f32; 2]) -> Option<usize> {
     for laid in layout.nodes.iter().rev() {
         let x = body[0] + BODY_PAD + laid.rect[0] * scale;
@@ -474,6 +542,47 @@ pub fn node_at(layout: &TreeLayout, scale: f32, body: [f32; 4], point: [f32; 2])
         }
     }
     None
+}
+
+/// Кламп пана дерева в теле окна (FR-083, чистая функция): контент
+/// размером `bounds * scale` рисуется в `body` с отступом [`BODY_PAD`];
+/// ось, где контент помещается, — pan = 0 (контент прижат к левому-верхнему
+/// углу); переполняющая ось — pan клампится в `[avail − content, 0]`
+/// (отрицательный pan сдвигает контент влево/вверх, правый/нижний край
+/// становится достижим).
+pub fn pan_clamp(pan: [f32; 2], bounds: [f32; 2], scale: f32, body: [f32; 4]) -> [f32; 2] {
+    let avail_w = (body[2] - BODY_PAD * 2.0).max(0.0);
+    let avail_h = (body[3] - BODY_PAD * 2.0).max(0.0);
+    let content_w = bounds[0] * scale;
+    let content_h = bounds[1] * scale;
+    let pan_x = if content_w > avail_w {
+        pan[0].clamp(avail_w - content_w, 0.0)
+    } else {
+        0.0
+    };
+    let pan_y = if content_h > avail_h {
+        pan[1].clamp(avail_h - content_h, 0.0)
+    } else {
+        0.0
+    };
+    [pan_x, pan_y]
+}
+
+/// Индикаторы переполнения тела (FR-083): `[лево, право, верх, низ]` —
+/// какие стрелки показывать. Окно в контентных координатах:
+/// `[-pan, -pan + avail]`; стрелка у края — если за ним есть скрытый
+/// контент (переполнение возможно, только если `content > avail` по оси).
+pub fn overflow_arrows(pan: [f32; 2], bounds: [f32; 2], scale: f32, body: [f32; 4]) -> [bool; 4] {
+    let avail_w = (body[2] - BODY_PAD * 2.0).max(0.0);
+    let avail_h = (body[3] - BODY_PAD * 2.0).max(0.0);
+    let content_w = bounds[0] * scale;
+    let content_h = bounds[1] * scale;
+    const EPS: f32 = 0.5;
+    let left = content_w > avail_w && pan[0] < -EPS;
+    let right = content_w > avail_w && -pan[0] + avail_w < content_w - EPS;
+    let top = content_h > avail_h && pan[1] < -EPS;
+    let bottom = content_h > avail_h && -pan[1] + avail_h < content_h - EPS;
+    [left, right, top, bottom]
 }
 
 // --- what-if из дерева (PRD-0007 X3, F-6/AC-4.1) ---------------------------
@@ -562,13 +671,14 @@ pub const DEFENSE_SCALE_MAX: f32 = 1.5;
 
 /// Fit-масштаб режима защиты: вписать дерево в тело окна с УКРУПНЕНИЕМ
 /// до потолка [`DEFENSE_SCALE_MAX`] (в отличие от [`fit_scale`] — там
-/// потолок 1.0: обычный вид только сжимает).
+/// потолок 1.0: обычный вид только сжимает). FR-083: пол [`SCALE_MIN`] —
+/// глубже строки наезжают (переполнение закрывается панорамированием).
 pub fn defense_fit_scale(bounds: [f32; 2], body: [f32; 4]) -> f32 {
     let avail_w = (body[2] - BODY_PAD * 2.0).max(1.0);
     let avail_h = (body[3] - BODY_PAD * 2.0).max(1.0);
     (avail_w / bounds[0].max(1.0))
         .min(avail_h / bounds[1].max(1.0))
-        .clamp(0.05, DEFENSE_SCALE_MAX)
+        .clamp(SCALE_MIN, DEFENSE_SCALE_MAX)
 }
 
 /// Размер кнопки-тумблера «Режим защиты» (AC-6.1 — одним действием).
@@ -585,6 +695,33 @@ pub fn defense_toggle_rect(win: [f32; 4]) -> [f32; 4] {
         DEFENSE_TOGGLE_W,
         DEFENSE_TOGGLE_H,
     ]
+}
+
+/// Ширина кнопки-тумблера направления схемы (FR-083) — узкий квад под
+/// иконку-стрелку; высота — как у defense-тумблера.
+pub const DIRECTION_TOGGLE_W: f32 = 34.0;
+/// Высота тумблера направления — как у defense-тумблера (FR-083).
+pub const DIRECTION_TOGGLE_H: f32 = DEFENSE_TOGGLE_H;
+
+/// Кнопка-тумблер направления схемы (FR-083) — в шапке СЛЕВА от
+/// [`defense_toggle_rect`] с зазором 8 px, вертикальное центрирование по
+/// [`HEADER_H`] (как у соседей).
+pub fn direction_toggle_rect(win: [f32; 4]) -> [f32; 4] {
+    let defense = defense_toggle_rect(win);
+    [
+        defense[0] - DIRECTION_TOGGLE_W - 8.0,
+        win[1] + (HEADER_H - DIRECTION_TOGGLE_H) / 2.0,
+        DIRECTION_TOGGLE_W,
+        DIRECTION_TOGGLE_H,
+    ]
+}
+
+/// Виден ли тумблер направления на этом окне (FR-083, скрытие на узких
+/// окнах): кнопка прячется, когда её левый край заходит левее границы
+/// мета-зоны/крошек (`meta_rect` — левый край зоны подзаголовка в шапке;
+/// на узких окнах цепочка кнопок правого края наезжает на неё).
+pub fn direction_toggle_visible(win: [f32; 4]) -> bool {
+    direction_toggle_rect(win)[0] >= meta_rect(win)[0]
 }
 
 /// Кнопка «Раскрыть уровень» (AC-6.3, шаг) — правый край футера; Defense.
@@ -668,6 +805,17 @@ pub enum NodeClick {
     Leaf,
 }
 
+/// Панорамирование тела драгом по фону (FR-083): якорь (курсор нажатия)
+/// и pan на момент нажатия — на движении `pan = pan_start + (курсор −
+/// якорь)` с клампом [`pan_clamp`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PanDrag {
+    /// Курсор нажатия (логические px окна).
+    pub anchor: [f32; 2],
+    /// Pan на момент нажатия.
+    pub pan_start: [f32; 2],
+}
+
 /// Открытое окно проверки (§6.4): Loading (честный лоадер) или Ready
 /// (дерево + подсветка; Stale — чип). Runtime-состояние, не сериализуется.
 pub struct ExplainState {
@@ -712,6 +860,17 @@ pub struct ExplainState {
     pub pick: Option<usize>,
     /// Момент пика (вспышка затухает за [`PICK_FLASH_MS`], У2).
     pub pick_at: Option<Instant>,
+    /// Направление потока схемы (FR-083): тумблер в шапке; выбор
+    /// сохраняется в настройках (`explain_sources_left`). Дефолт — Ltr;
+    /// при открытии окна App инициализирует из настроек.
+    pub direction: LayoutDirection,
+    /// Пан содержимого дерева в теле окна (FR-083): `[dx, dy]`, кламп —
+    /// [`pan_clamp`] (контент прижат к левому-верхнему углу). Сбрасывается
+    /// при смене вида/защиты/направления/открытии.
+    pub pan: [f32; 2],
+    /// Драг-панорамирование фона тела (FR-083): Some — драг идёт.
+    /// Runtime-состояние — не сериализуется.
+    pub pan_drag: Option<PanDrag>,
 }
 
 impl ExplainState {
@@ -736,6 +895,9 @@ impl ExplainState {
             pre_defense: None,
             pick: None,
             pick_at: None,
+            direction: LayoutDirection::default(),
+            pan: [0.0; 2],
+            pan_drag: None,
         }
     }
 
@@ -767,6 +929,9 @@ impl ExplainState {
             pre_defense: None,
             pick: None,
             pick_at: None,
+            direction: LayoutDirection::default(),
+            pan: [0.0; 2],
+            pan_drag: None,
         }
     }
 
@@ -878,6 +1043,24 @@ impl ExplainState {
         *self.view_path.last().unwrap_or(&0)
     }
 
+    /// Сброс пана (FR-083): смена вида/защиты/направления возвращает окно
+    /// к левому-верхнему углу контента.
+    pub fn reset_pan(&mut self) {
+        self.pan = [0.0; 2];
+        self.pan_drag = None;
+    }
+
+    /// Тумблер направления схемы (FR-083): переключает [`LayoutDirection`]
+    /// и сбрасывает пан (вид схемы полностью меняется). Сохранение в
+    /// настройки — на стороне App (core не знает тип направления).
+    pub fn toggle_direction(&mut self) {
+        self.direction = match self.direction {
+            LayoutDirection::Ltr => LayoutDirection::Rtl,
+            LayoutDirection::Rtl => LayoutDirection::Ltr,
+        };
+        self.reset_pan();
+    }
+
     /// Клик по узлу дерева (AC-2.3 + У2): фронтир — раскрыть; узел с
     /// видимыми детьми — сфокусировать поддерево (крошка); лист — ничего.
     pub fn click_node(&mut self, idx: usize, vis: &Visibility) -> NodeClick {
@@ -895,9 +1078,10 @@ impl ExplainState {
             .unwrap_or(true)
         {
             self.view_path.push(idx);
-            // Вид сменился — У2-выделение сбрасывается.
+            // Вид сменился — У2-выделение и пан сбрасываются (FR-083).
             self.pick = None;
             self.pick_at = None;
+            self.reset_pan();
             return NodeClick::Focused;
         }
         NodeClick::Leaf
@@ -908,10 +1092,11 @@ impl ExplainState {
         if level < self.view_path.len() {
             self.view_path.truncate(level + 1);
         }
-        // Вид сменился — У2-выделение сбрасывается (узел может быть
-        // вне нового поддерева вида).
+        // Вид сменился — У2-выделение и пан сбрасываются (узел может быть
+        // вне нового поддерева вида; FR-083).
         self.pick = None;
         self.pick_at = None;
+        self.reset_pan();
     }
 
     // --- У2: синхронизация канвас→дерево (§6.5, X6) ------------------------
@@ -959,6 +1144,8 @@ impl ExplainState {
         }
         self.pick = Some(tree_idx);
         self.pick_at = Some(Instant::now());
+        // FR-083: «подвод» узла — пан возвращается к началу (смена вида).
+        self.reset_pan();
         true
     }
 
@@ -1058,11 +1245,13 @@ impl ExplainState {
         self.edit = None;
         self.pick = None;
         self.pick_at = None;
+        // FR-083: вид сброшен — пан тоже.
+        self.reset_pan();
     }
 
     /// Выйти из режима защиты (AC-6.4, Defense → Ready): окно возвращается
     /// к обычному виду (путь крошек и ручные раскрытия как до входа);
-    /// снапшот не меняется, канвас не затрагивается.
+    /// снапшот не меняется, канвас не затрагивается. FR-083: пан сбрасывается.
     pub fn exit_defense(&mut self) {
         if !self.defense {
             return;
@@ -1072,25 +1261,28 @@ impl ExplainState {
             self.view_path = path;
             self.expanded = expanded;
         }
+        self.reset_pan();
     }
 
     /// Шаг раскрытия (AC-6.3: пробел/кнопка — следующий уровень дерева от
     /// корня). `false` — шагать некуда (защита не активна, «раскрыть всё»
     /// уже нажато — 0, или скрытых уровней нет — проверка на App-стороне
-    /// через [`has_hidden`]).
+    /// через [`has_hidden`]). FR-083: пан сбрасывается (вид изменился).
     pub fn defense_step(&mut self) -> bool {
         if !self.defense || self.defense_reveal == 0 {
             return false;
         }
         self.defense_reveal = self.defense_reveal.saturating_add(1);
+        self.reset_pan();
         true
     }
 
     /// «Раскрыть всё» (AC-6.3): снять ограничение уровней (0 — без лимита,
-    /// семантика [`visibility`]).
+    /// семантика [`visibility`]). FR-083: пан сбрасывается (вид изменился).
     pub fn defense_reveal_all(&mut self) {
         if self.defense {
             self.defense_reveal = 0;
+            self.reset_pan();
         }
     }
 }
@@ -1163,36 +1355,57 @@ mod tests {
         }
     }
 
-    /// Окно: центр вьюпорта, потолки прототипа, кламп к краям.
+    /// FR-083: окно = 80 % вьюпорта без потолка — на большом вьюпорте
+    /// ровно 80 % и центрировано (осознанное ломающее изменение
+    /// «прототипа v4»: потолки 1320×900 удалены).
     #[test]
-    fn window_rect_centered_and_clamped() {
-        let vp = [1600.0, 1000.0];
+    fn window_rect_is_80_percent_and_centered() {
+        let vp = [2560.0, 1300.0];
         let win = window_rect(vp);
-        assert!((win[0] + win[2] / 2.0 - 800.0).abs() < 1e-3);
-        assert!((win[1] + win[3] / 2.0 - 500.0).abs() < 1e-3);
-        assert!(win[2] <= WIN_MAX_W + 1e-3 && win[3] <= WIN_MAX_H + 1e-3);
-        // Узкое окно: кламп к маргинам, минимум инварианта.
-        let small = window_rect([340.0, 250.0]);
-        assert!(small[2] >= WIN_MIN_W - 1e-3);
-        assert!(small[3] >= WIN_MIN_H - 1e-3);
-        assert!(small[0] >= -0.01);
+        // 80 % вьюпорта без потолка (прежний потолок 1320×900 ограничивал).
+        assert!((win[2] - 2048.0).abs() < 1e-3, "ширина 80 %: {}", win[2]);
+        assert!((win[3] - 1040.0).abs() < 1e-3, "высота 80 %: {}", win[3]);
+        assert!((win[0] - 256.0).abs() < 1e-3, "x = (vp−w)/2: {}", win[0]);
+        assert!((win[1] - 130.0).abs() < 1e-3, "y = (vp−h)/2: {}", win[1]);
+        // Центрировано на вьюпорте.
+        assert!((win[0] + win[2] / 2.0 - vp[0] / 2.0).abs() < 1e-3);
+        assert!((win[1] + win[3] / 2.0 - vp[1] / 2.0).abs() < 1e-3);
+        // Обычный вьюпорт: те же 80 %.
+        let mid = window_rect([1600.0, 1000.0]);
+        assert!((mid[2] - 1280.0).abs() < 1e-3);
+        assert!((mid[3] - 800.0).abs() < 1e-3);
+        assert!((mid[0] + mid[2] / 2.0 - 800.0).abs() < 1e-3);
+        assert!((mid[1] + mid[3] / 2.0 - 500.0).abs() < 1e-3);
     }
 
-    /// FR-060: `kit::modal` (слот = вьюпорт с полями [`WIN_MARGIN`]) ≡
-    /// прежней формуле (доля → потолок → поля → центр) дословно при всех
-    /// обычных вьюпортах; деградация «окно меньше инварианта» — панель
-    /// прижата к углу слота (сдвиг ≥ 0), как у диалога ревью (parity-тест).
+    /// FR-083: крошечный вьюпорт — окно прижато полями/инвариантом 320×240
+    /// (kit::modal: min приоритетен — documented деградация), без паники.
     #[test]
-    fn window_rect_kit_modal_matches_old_clamps() {
-        let old = |vw: f32, vh: f32| -> [f32; 4] {
-            let w = (vw * WIN_FRAC_W)
-                .clamp(WIN_MIN_W, WIN_MAX_W)
-                .min((vw - WIN_MARGIN * 2.0).max(WIN_MIN_W));
-            let h = (vh * WIN_FRAC_H)
-                .clamp(WIN_MIN_H, WIN_MAX_H)
-                .min((vh - WIN_MARGIN * 2.0).max(WIN_MIN_H));
-            [(vw - w) / 2.0, (vh - h) / 2.0, w, h]
-        };
+    fn window_rect_tiny_viewport_clamped_without_panic() {
+        // 340×250: слот 300×210 уже инварианта — панель сохраняет min
+        // (320×240), сдвиг неотрицателен.
+        let small = window_rect([340.0, 250.0]);
+        assert!((small[2] - WIN_MIN_W).abs() < 1e-3, "инвариант ширины");
+        assert!((small[3] - WIN_MIN_H).abs() < 1e-3, "инвариант высоты");
+        assert!(small[0] >= -0.01, "без ухода за левый край: {}", small[0]);
+        assert!(small[1] >= -0.01, "без ухода за верхний край: {}", small[1]);
+        // Совсем крошечный вьюпорт: min приоритетен, паники нет.
+        let tiny = window_rect([240.0, 200.0]);
+        assert!((tiny[2] - WIN_MIN_W).abs() < 1e-3);
+        assert!((tiny[3] - WIN_MIN_H).abs() < 1e-3);
+    }
+
+    /// FR-083: инвариант 320×240, когда 80 % вьюпорта меньше него
+    /// (380×290: 80 % = 304×232 < min — окно ровно min и центрировано).
+    #[test]
+    fn window_rect_min_invariant_when_fraction_smaller() {
+        let win = window_rect([380.0, 290.0]);
+        assert!((win[2] - WIN_MIN_W).abs() < 1e-3);
+        assert!((win[3] - WIN_MIN_H).abs() < 1e-3);
+        // Центрировано (поля симметричны, инвариант влезает в слот).
+        assert!((win[0] + win[2] / 2.0 - 190.0).abs() < 1e-3);
+        assert!((win[1] + win[3] / 2.0 - 145.0).abs() < 1e-3);
+        // Инвариант соблюдается на всех перечисленных вьюпортах.
         for &(vw, vh) in &[
             (1600.0, 1000.0),
             (1280.0, 800.0),
@@ -1202,11 +1415,14 @@ mod tests {
             (2400.0, 1200.0),
             (700.0, 1100.0),
         ] {
-            assert_eq!(
-                window_rect([vw, vh]),
-                old(vw, vh),
-                "kit::modal ≡ прежняя формула при {vw}×{vh}"
-            );
+            let win = window_rect([vw, vh]);
+            let fits = vw - WIN_MARGIN * 2.0 >= WIN_MIN_W && vh - WIN_MARGIN * 2.0 >= WIN_MIN_H;
+            if fits {
+                assert!(
+                    win[2] >= WIN_MIN_W - 1e-3 && win[3] >= WIN_MIN_H - 1e-3,
+                    "инвариант ≥ 320×240 при {vw}×{vh}"
+                );
+            }
         }
     }
 
@@ -1256,20 +1472,21 @@ mod tests {
     }
 
     /// Лейаут: листья в разных рядах, родитель — по среднему; ветки по
-    /// числу видимых детей; fit-масштаб ≤ 1.
+    /// числу видимых детей; fit-масштаб: потолок 1.0, пол [`SCALE_MIN`].
     #[test]
     fn layout_rows_columns_and_fit() {
         let tree = sample_tree();
         let empty = BTreeSet::new();
         let vis = visibility(&tree, 0, 3, &empty);
-        let layout = layout_tree(&tree, &vis, 0);
+        let layout = layout_tree(&tree, &vis, 0, LayoutDirection::Rtl);
         // Все 4 узла видимы (глубина ≤ 3).
         assert_eq!(layout.nodes.len(), 4);
         assert_eq!(layout.curves.len(), 3);
         // Листья C (индекс 2, колонка 2) и D (индекс 3, колонка 1) —
         // разные ряды; B между ними по колонке 1.
-        let by_idx = |i: usize| layout.nodes.iter().find(|n| n.idx == i).unwrap().clone();
-        let (c, d) = (by_idx(2), by_idx(3));
+        let by_idx =
+            |l: &TreeLayout, i: usize| l.nodes.iter().find(|n| n.idx == i).unwrap().clone();
+        let (c, d) = (by_idx(&layout, 2), by_idx(&layout, 3));
         assert_ne!(c.row, d.row);
         assert_eq!(c.col, 2);
         assert_eq!(d.col, 1);
@@ -1280,10 +1497,91 @@ mod tests {
             .curves
             .iter()
             .any(|c| c.to_leaf && c.points[3][0] > c.points[0][0]));
-        // Fit-масштаб: маленькое дерево в большое тело — 1.0; в крошечное — жмётся.
+        // Fit-масштаб: маленькое дерево в большое тело — 1.0; в крошечное —
+        // жмётся, но не глубже пола SCALE_MIN (FR-083: дальше — пан).
         assert_eq!(fit_scale(layout.bounds, [0.0, 0.0, 1200.0, 800.0]), 1.0);
         let tiny = fit_scale(layout.bounds, [0.0, 0.0, 300.0, 200.0]);
-        assert!((0.05..1.0).contains(&tiny));
+        assert!((SCALE_MIN..1.0).contains(&tiny));
+    }
+
+    /// FR-083: пол fit-масштаба — дерево втрое больше тела не сжимается
+    /// глубже SCALE_MIN (0.7): 4 строки текста с полом шрифта 8 px при
+    /// межстрочном 1.5 (4 × 8 × 1.5 = 48 px) помещаются в карточку
+    /// 158×74 × 0.7 = 51.8 px по высоте; глубже — строки наезжают.
+    #[test]
+    fn fit_scale_floor_keeps_text_readable() {
+        // Дерево втрое больше тела по обеим осям.
+        let scale = fit_scale([3000.0, 2000.0], [0.0, 0.0, 1000.0, 700.0]);
+        assert!((scale - SCALE_MIN).abs() < 1e-3, "пол 0.7, получен {scale}");
+        // Обоснование порога: 4 строки по 8 px с интервалом 1.5 влезают
+        // в карточку 158×74 при масштабе SCALE_MIN.
+        let card_h = 74.0 * SCALE_MIN;
+        let rows = 4.0 * 8.0 * 1.5;
+        assert!(
+            rows <= card_h + 1e-3,
+            "4 строки ({rows}) в карточке ({card_h})"
+        );
+        // Потолок 1.0 не сломан: маленькое дерево — ровно 1.0.
+        assert_eq!(fit_scale([100.0, 100.0], [0.0, 0.0, 1000.0, 700.0]), 1.0);
+    }
+
+    /// FR-083: pan_clamp — без переполнения pan = [0, 0]; переполнение по
+    /// обеим осям — кламп в [avail − content, 0] × [avail − content, 0];
+    /// частичный кламп — только по переполняющей оси.
+    #[test]
+    fn pan_clamp_cases() {
+        let body = [0.0, 0.0, 500.0, 400.0];
+        // Нет переполнения (контент 100×100 в avail 468×368) — pan = [0, 0].
+        assert_eq!(
+            pan_clamp([-50.0, -50.0], [100.0, 100.0], 1.0, body),
+            [0.0, 0.0]
+        );
+        // Переполнение по обеим осям (контент 1000×800): диапазоны
+        // x ∈ [468−1000, 0] = [−532, 0], y ∈ [368−800, 0] = [−432, 0].
+        assert_eq!(
+            pan_clamp([-600.0, 100.0], [1000.0, 800.0], 1.0, body),
+            [-532.0, 0.0]
+        );
+        // Частичный кламп: по X переполнение, по Y контент помещается.
+        assert_eq!(
+            pan_clamp([-900.0, -30.0], [1000.0, 100.0], 1.0, body),
+            [-532.0, 0.0]
+        );
+        // Положительный pan (тянем контент вправо-вниз) клампится в 0.
+        assert_eq!(
+            pan_clamp([40.0, 40.0], [1000.0, 800.0], 1.0, body),
+            [0.0, 0.0]
+        );
+        // Масштаб учитывается: контент bounds×scale = 500×50, диапазон
+        // X: [468−500, 0] = [−32, 0].
+        assert_eq!(
+            pan_clamp([-200.0, 0.0], [1000.0, 100.0], 0.5, body),
+            [-32.0, 0.0]
+        );
+    }
+
+    /// FR-083: индикаторы переполнения — стрелки только у краёв со
+    /// скрытым контентом; без переполнения стрелок нет; при промотке до
+    /// края стрелка у достигнутого края гаснет, у противоположного горит.
+    #[test]
+    fn overflow_arrows_sides() {
+        let body = [0.0, 0.0, 500.0, 400.0];
+        // Нет переполнения — стрелок нет.
+        assert_eq!(
+            overflow_arrows([0.0, 0.0], [100.0, 100.0], 1.0, body),
+            [false; 4]
+        );
+        // Переполнение, pan = 0 (контент прижат влево-вверх): скрыты
+        // правый и нижний края.
+        assert_eq!(
+            overflow_arrows([0.0, 0.0], [1000.0, 800.0], 1.0, body),
+            [false, true, false, true]
+        );
+        // Промотано вправо-вниз до конца (pan = min): скрыты левый и верхний.
+        assert_eq!(
+            overflow_arrows([-532.0, -432.0], [1000.0, 800.0], 1.0, body),
+            [true, false, true, false]
+        );
     }
 
     /// Hit-тест узла: точка внутри прямоугольника (с масштабом) находит
@@ -1293,7 +1591,7 @@ mod tests {
         let tree = sample_tree();
         let empty = BTreeSet::new();
         let vis = visibility(&tree, 0, 3, &empty);
-        let layout = layout_tree(&tree, &vis, 0);
+        let layout = layout_tree(&tree, &vis, 0, LayoutDirection::Rtl);
         let body = [0.0, 0.0, 1200.0, 800.0];
         let root = &layout.nodes[0];
         let x = body[0] + BODY_PAD + root.rect[0] + 5.0;
@@ -1446,7 +1744,7 @@ mod tests {
         tree.nodes[3].value = Some(Ok(canvas_core::expr::Value::scalar(7.0)));
         let empty = BTreeSet::new();
         let vis = visibility(&tree, 0, 3, &empty);
-        let layout = layout_tree(&tree, &vis, 0);
+        let layout = layout_tree(&tree, &vis, 0, LayoutDirection::Rtl);
         let body = [0.0, 0.0, 1200.0, 800.0];
         // Точка кнопки листа c — из его карточки.
         let laid = layout
@@ -1659,13 +1957,14 @@ mod tests {
     }
 
     /// X5 (AC-6.2): fit-масштаб защиты вписывает дерево в тело окна с
-    /// потолком 1.5 (маленькое дерево укрупняется, большое — сжимается).
+    /// потолком 1.5 (маленькое дерево укрупняется, большое — сжимается);
+    /// FR-083: пол SCALE_MIN — глубже текст нечитаем.
     #[test]
     fn defense_fit_scale_up_to_ceiling() {
         let tree = sample_tree();
         let empty = BTreeSet::new();
         let vis = visibility(&tree, 0, 3, &empty);
-        let layout = layout_tree(&tree, &vis, 0);
+        let layout = layout_tree(&tree, &vis, 0, LayoutDirection::Rtl);
         let body = [0.0, 0.0, 1200.0, 800.0];
         // Маленькое дерево в большое тело: обычный вид — 1.0, защита —
         // укрупнение до потолка (×1.5, AC-6.2).
@@ -1673,9 +1972,10 @@ mod tests {
         let d = defense_fit_scale(layout.bounds, body);
         assert!(d > 1.0, "защита укрупняет: {d}");
         assert!(d <= DEFENSE_SCALE_MAX + 1e-3);
-        // Гигантское дерево в маленькое тело — сжатие, как обычно.
+        // Гигантское дерево в маленькое тело — сжатие, но не глубже пола
+        // SCALE_MIN (FR-083: переполнение закрывает панорамирование).
         let tiny = defense_fit_scale(layout.bounds, [0.0, 0.0, 300.0, 200.0]);
-        assert!(tiny < 1.0);
+        assert!((tiny - SCALE_MIN).abs() < 1e-3, "пол 0.7, получен {tiny}");
         // Потолок соблюдён на любом входе.
         let huge = defense_fit_scale([1.0, 1.0], body);
         assert!((huge - DEFENSE_SCALE_MAX).abs() < 1e-3);
@@ -1817,5 +2117,190 @@ mod tests {
         assert_eq!(st.pick, None);
         // Пик по индексу вне дерева — отказ.
         assert!(!st.pick_from_canvas(99, 3));
+    }
+
+    /// FR-083 (а–г): лейаут в обоих направлениях на одном дереве — Ltr
+    /// корень самый правый, листья слева; множества rect идентичны с
+    /// точностью до зеркала X; кривые сидят на портах (сторона портов
+    /// зеркалится); rows одинаковы.
+    #[test]
+    fn layout_direction_ltr_mirrors_tree() {
+        let tree = sample_tree();
+        let empty = BTreeSet::new();
+        let vis = visibility(&tree, 0, 3, &empty);
+        let rtl = layout_tree(&tree, &vis, 0, LayoutDirection::Rtl);
+        let ltr = layout_tree(&tree, &vis, 0, LayoutDirection::Ltr);
+        assert_eq!(rtl.nodes.len(), ltr.nodes.len());
+        assert_eq!(rtl.curves.len(), ltr.curves.len());
+        // (а) Ltr: корень вида — самый правый узел, листья — левые.
+        fn by_idx(l: &TreeLayout, i: usize) -> &LaidNode {
+            l.nodes
+                .iter()
+                .find(|n| n.idx == i)
+                .unwrap_or_else(|| panic!("узел {i}"))
+        }
+        let max_x = ltr.nodes.iter().map(|n| n.rect[0]).fold(0.0f32, f32::max);
+        assert!(
+            (by_idx(&ltr, 0).rect[0] - max_x).abs() < 1e-3,
+            "корень правее всех"
+        );
+        for leaf in [2usize, 3] {
+            assert!(
+                by_idx(&ltr, leaf).rect[0] < by_idx(&ltr, 0).rect[0],
+                "лист {leaf} левее корня"
+            );
+        }
+        // (б) Множества rect идентичны до зеркала X: rtl.x = bounds_w −
+        // ltr.x − CARD_W (y/col/row/via неизменны); порядок Vec тот же.
+        assert!((rtl.bounds[0] - ltr.bounds[0]).abs() < 1e-3);
+        assert!((rtl.bounds[1] - ltr.bounds[1]).abs() < 1e-3);
+        for (r, l) in rtl.nodes.iter().zip(&ltr.nodes) {
+            assert_eq!(r.idx, l.idx, "порядок обхода не меняется");
+            assert!((r.rect[0] + l.rect[0] + CARD_W - rtl.bounds[0]).abs() < 1e-3);
+            assert!((r.rect[1] - l.rect[1]).abs() < 1e-3);
+            assert_eq!(r.col, l.col);
+            assert_eq!(r.via, l.via);
+        }
+        // (г) rows одинаковы в обоих направлениях.
+        for (r, l) in rtl.nodes.iter().zip(&ltr.nodes) {
+            assert!((r.row - l.row).abs() < 1e-3, "ряд узла {} сохранён", r.idx);
+        }
+        // (в) Кривые: первая/последняя точка на портах. Rtl — родитель
+        // отдаёт правым портом, ребёнок принимает левым; Ltr — наоборот.
+        let ports_match = |layout: &TreeLayout, rtl_ports: bool| {
+            layout.curves.iter().all(|c| {
+                let (start, end) = (c.points[0][0], c.points[3][0]);
+                let start_ok = layout.nodes.iter().any(|n| {
+                    if rtl_ports {
+                        (n.rect[0] + CARD_W - start).abs() < 1e-3
+                    } else {
+                        (n.rect[0] - start).abs() < 1e-3
+                    }
+                });
+                let end_ok = layout.nodes.iter().any(|n| {
+                    if rtl_ports {
+                        (n.rect[0] - end).abs() < 1e-3
+                    } else {
+                        (n.rect[0] + CARD_W - end).abs() < 1e-3
+                    }
+                });
+                start_ok && end_ok
+            })
+        };
+        assert!(ports_match(&rtl, true), "Rtl: правый порт → левый порт");
+        assert!(ports_match(&ltr, false), "Ltr: левый порт → правый порт");
+        // Кривые Ltr — точное зеркало Rtl (порядок Vec тот же), Y — без
+        // изменений (вертикальный порядок детей сохранён).
+        for (rc, lc) in rtl.curves.iter().zip(&ltr.curves) {
+            assert_eq!(rc.to_leaf, lc.to_leaf);
+            for (rp, lp) in rc.points.iter().zip(lc.points.iter()) {
+                assert!((rp[0] + lp[0] - rtl.bounds[0]).abs() < 1e-3);
+                assert!((rp[1] - lp[1]).abs() < 1e-3);
+            }
+        }
+    }
+
+    /// FR-083 (д): тумблер направления — левее defense-тумблера, без
+    /// пересечения с ним, вертикально отцентрован по шапке; на узком
+    /// окне прячется (пересекает мета-зону), на широком виден.
+    #[test]
+    fn direction_toggle_geometry_and_visibility() {
+        let win = [100.0, 100.0, 1200.0, 800.0];
+        let dir = direction_toggle_rect(win);
+        let defense = defense_toggle_rect(win);
+        // Левее defense-тумблера, зазор ~8 px, без пересечения.
+        assert!(dir[0] + dir[2] <= defense[0], "тумблер левее defense");
+        assert!((defense[0] - (dir[0] + dir[2]) - 8.0).abs() < 1e-3);
+        assert!((dir[1] + dir[3] / 2.0 - (win[1] + HEADER_H / 2.0)).abs() < 1e-3);
+        // Размер: ширина DIRECTION_TOGGLE_W, высота defense-тумблера.
+        assert!((dir[2] - DIRECTION_TOGGLE_W).abs() < 1e-3);
+        assert!((dir[3] - DEFENSE_TOGGLE_H).abs() < 1e-3);
+        // Видимость: широкое окно — виден; узкое (цепочка кнопок правого
+        // края заходит в мета-зону) — скрыт.
+        assert!(direction_toggle_visible(win), "широкое окно — виден");
+        assert!(
+            !direction_toggle_visible([100.0, 100.0, 400.0, 300.0]),
+            "узкое — скрыт"
+        );
+    }
+
+    /// FR-083: конвертация настройки `explain_sources_left` ↔ направление;
+    /// тумблер меняет направление и сбрасывает пан/драг.
+    #[test]
+    fn direction_settings_conversion_and_toggle_resets_pan() {
+        assert_eq!(
+            LayoutDirection::from_sources_left(true),
+            LayoutDirection::Ltr
+        );
+        assert_eq!(
+            LayoutDirection::from_sources_left(false),
+            LayoutDirection::Rtl
+        );
+        assert!(LayoutDirection::Ltr.sources_left());
+        assert!(!LayoutDirection::Rtl.sources_left());
+        // Дефолт — Ltr (источники слева), pan — нулевой.
+        let mut st = ExplainState::loading(
+            LineageNodeId::total("a"),
+            0,
+            ExplainBuild::Done(LineageOutcome {
+                tree: Ok(sample_tree()),
+                base: None,
+            }),
+        );
+        assert_eq!(st.direction, LayoutDirection::Ltr);
+        assert_eq!(st.pan, [0.0; 2]);
+        // Пан/драг установлены — тумблер сбрасывает их и меняет направление.
+        st.pan = [-120.0, -40.0];
+        st.pan_drag = Some(PanDrag {
+            anchor: [10.0, 10.0],
+            pan_start: [-120.0, -40.0],
+        });
+        st.toggle_direction();
+        assert_eq!(st.direction, LayoutDirection::Rtl);
+        assert_eq!(st.pan, [0.0; 2]);
+        assert!(st.pan_drag.is_none());
+        // Обратно — симметрично.
+        st.toggle_direction();
+        assert_eq!(st.direction, LayoutDirection::Ltr);
+    }
+
+    /// FR-083: смена вида (крошки/фокус/пик/защита/шаг) сбрасывает пан.
+    #[test]
+    fn pan_resets_on_view_and_defense_changes() {
+        let mut st = ExplainState::loading(
+            LineageNodeId::total("a"),
+            0,
+            ExplainBuild::Done(LineageOutcome {
+                tree: Ok(sample_tree()),
+                base: None,
+            }),
+        );
+        st.poll();
+        st.pan = [-90.0, -30.0];
+        // Крошка к корню — пан сброшен.
+        st.click_crumb(0);
+        assert_eq!(st.pan, [0.0; 2]);
+        // Фокус поддерева — пан сброшен.
+        let vis = visibility(st.tree().unwrap(), 0, 3, &st.expanded);
+        st.pan = [-90.0, -30.0];
+        assert_eq!(st.click_node(1, &vis), NodeClick::Focused);
+        assert_eq!(st.pan, [0.0; 2]);
+        // Пик канвас→дерево — пан сброшен.
+        st.pan = [-90.0, -30.0];
+        assert!(st.pick_from_canvas(2, 3));
+        assert_eq!(st.pan, [0.0; 2]);
+        // Вход/выход защиты — пан сброшен.
+        st.pan = [-90.0, -30.0];
+        st.enter_defense(1);
+        assert_eq!(st.pan, [0.0; 2]);
+        st.pan = [-90.0, -30.0];
+        st.defense_step();
+        assert_eq!(st.pan, [0.0; 2]);
+        st.pan = [-90.0, -30.0];
+        st.defense_reveal_all();
+        assert_eq!(st.pan, [0.0; 2]);
+        st.pan = [-90.0, -30.0];
+        st.exit_defense();
+        assert_eq!(st.pan, [0.0; 2]);
     }
 }

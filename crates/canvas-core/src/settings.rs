@@ -478,6 +478,13 @@ pub struct Settings {
     /// старые конфиги без поля грузятся выключенными (serde default).
     #[serde(default)]
     pub explain_coverage: bool,
+    /// FR-083: направление схемы в окне проверки цепочки — источники
+    /// слева, итог справа (true, чтение слева-направо — новый дефолт) или
+    /// источники справа (false, прежний вид прототипа). Хранится bool —
+    /// тип направления (`LayoutDirection`) знает только canvas-app
+    /// (ядро не зависит от UI). Старые конфиги без поля грузятся как
+    /// true (serde default на struct — значение из `Default`).
+    pub explain_sources_left: bool,
     /// FR-073: мастер-тумблер расталкивания при драге. false — ноды
     /// движутся как раньше (никто никого не выталкивает); остальные
     /// drag_push-настройки НЕ сбрасываются (паттерн snap_enabled). Старые
@@ -600,6 +607,9 @@ impl Default for Settings {
             autolink_enabled: true,
             // PRD-0007 (F-12): индикатор покрытия — opt-in (дефолт выкл).
             explain_coverage: false,
+            // FR-083: источники слева (чтение слева-направо) — новый дефолт
+            // направления схемы окна проверки (решение владельца).
+            explain_sources_left: true,
             // FR-073: расталкивание при драге включено (поведение прототипа
             // prototype-unified.html — дефолт-значения физики).
             drag_push_enabled: true,
@@ -922,6 +932,9 @@ mod tests {
             autolink_enabled: false,
             // PRD-0007 (F-12, X6): индикатор покрытия цепочками round-trip
             explain_coverage: true,
+            // FR-083: направление схемы round-trip (false — источники
+            // справа, не дефолт: проверяет сохранение выбора пользователя)
+            explain_sources_left: false,
             // FR-073: расталкивание при драге round-trip (включая тюнинг)
             drag_push_enabled: false,
             drag_push_gap_px: 24.0,
@@ -961,6 +974,21 @@ mod tests {
         assert_eq!(loaded, settings);
         assert!(warn.is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FR-083: `explain_sources_left` — старый конфиг без поля грузится
+    /// как true (источники слева, serde default на struct); явное false
+    /// сохраняет выбор пользователя.
+    #[test]
+    fn explain_sources_left_defaults_and_roundtrip() {
+        let (settings, warn) = Settings::load_toml_str("");
+        assert!(warn.is_none());
+        assert!(settings.explain_sources_left, "дефолт — источники слева");
+        let (settings, _) = Settings::load_toml_str("explain_sources_left = false\n");
+        assert!(
+            !settings.explain_sources_left,
+            "выбор пользователя сохранён"
+        );
     }
 
     /// FR-079: секция `[suggest]` — парсинг TOML (включая `lex+laya`),
