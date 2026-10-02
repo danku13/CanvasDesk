@@ -1753,16 +1753,28 @@ fn with_body_stack(
             // относительно measure_body_height (всегда zoom 1) → клип тела
             // резал строки. World-ширина даёт тот же перенос, что и рендер
             // блока (пропорциональный скейл), I-2 выполняется на любом зуме.
-            let (clamped, truncated) = clamp_desc_text(
-                font_system,
-                d,
-                body_width,
-                canvas_core::tokens::TABLE_DESC_CLAMP_LINES,
-            );
-            if clamped.is_empty() {
+            // Фикс 2026-10-03 («кнопка целиком/свернуть не отрабатывает»):
+            // в раскрытом состоянии кламп НЕ применяется — зона показывает
+            // ПОЛНЫЙ текст (контракт комментария выше и I-2 с
+            // estimated_result_reserve_height / measure_body_height, которые
+            // при раскрытии уже считают полные ряды). Раньше код клампил
+            // ВСЕГДА: клик по «⋯ целиком ▾» менял лишь надпись аффорданса
+            // на «▴ свернуть», сам текст оставался усечённым.
+            let (display, truncated) = if desc_expanded {
+                // Раскрыто: полный текст без бинароска клампа.
+                (d.to_owned(), false)
+            } else {
+                clamp_desc_text(
+                    font_system,
+                    d,
+                    body_width,
+                    canvas_core::tokens::TABLE_DESC_CLAMP_LINES,
+                )
+            };
+            if display.is_empty() {
                 Vec::new()
             } else {
-                let mut items = vec![desc_zone_item(theme, clamped)];
+                let mut items = vec![desc_zone_item(theme, display)];
                 if desc_expanded || truncated {
                     let text = if desc_expanded {
                         row_grid::desc_collapse_text_lang(language)
@@ -7341,5 +7353,100 @@ load = connections_per_sec / (servers * server_rate)\n";
                 "высота зоны описания зум-инвариантна (zoom {zoom})"
             );
         }
+    }
+
+    /// Фикс 2026-10-03 («кнопка целиком/свернуть не отрабатывает»): в
+    /// раскрытом состоянии зона описания показывает ПОЛНЫЙ текст (кламп не
+    /// применяется), аффорданс — «▴ свернуть»; в свёрнутом — кламп с «…» и
+    /// «⋯ целиком ▾». I-2: мера стека при раскрытии = рендер (обе стороны
+    /// видят полный текст — синхронно с estimated_result_reserve_height,
+    /// который полные ряды считал и до фикса).
+    #[test]
+    fn desc_zone_expanded_shows_full_text() {
+        let desc = "Длинное описание расчётной модели веб-сервиса, которое \
+                    заведомо не помещается в две строки узкого тела ноды и \
+                    потому обязано обрезаться многоточием по словам в \
+                    свёрнутом состоянии зоны описания.";
+        let body = "deploy = 40 $";
+        let clamp_h = canvas_core::tokens::TABLE_DESC_CLAMP_LINES as f32 * BODY_LINE_HEIGHT;
+
+        // Рендер шейпится тем же FontSystem, что и мера (measure_font_system,
+        // встроенные Noto): FontSystem::new() тянет системные шрифты — перенос
+        // строк различался бы, и паритет I-2 был бы недостижим.
+        // measure_body_height внутри лочит тот же мьютекс — гвард дропаем
+        // до вызова меры.
+        let rendered;
+        {
+            let mut fs = measure_font_system();
+
+            // Свёрнуто (дефолт): зона = кламп, аффорданс «⋯ целиком ▾».
+            let folded = shape_body(
+                &mut fs,
+                &ThemeColors::dark(),
+                body,
+                260.0,
+                1.0,
+                &[0],
+                &[],
+                Vec::new(),
+                &[],
+                canvas_core::Language::Ru,
+                Some(desc),
+                true,
+                false,
+                None,
+                &[],
+            );
+            let folded_desc = folded.blocks.first().map(|b| b.height).unwrap_or_default();
+            assert_eq!(folded_desc, clamp_h, "свёрнуто: зона описания = кламп");
+            assert!(
+                folded.blocks.get(1).is_some_and(|b| b.expander),
+                "свёрнуто: второй блок — аффорданс экспандера"
+            );
+
+            // Раскрыто: полный текст — зона ВЫШЕ клампа, аффорданс «▴ свернуть».
+            let expanded = shape_body(
+                &mut fs,
+                &ThemeColors::dark(),
+                body,
+                260.0,
+                1.0,
+                &[0],
+                &[],
+                Vec::new(),
+                &[],
+                canvas_core::Language::Ru,
+                Some(desc),
+                true,
+                true,
+                None,
+                &[],
+            );
+            let expanded_desc = expanded
+                .blocks
+                .first()
+                .map(|b| b.height)
+                .unwrap_or_default();
+            assert!(
+                expanded_desc > clamp_h,
+                "раскрыто: зона выше клампа ({expanded_desc} > {clamp_h})"
+            );
+            assert!(
+                expanded.blocks.get(1).is_some_and(|b| b.expander),
+                "раскрыто: второй блок — аффорданс экспандера"
+            );
+            rendered = expanded
+                .blocks
+                .iter()
+                .map(|block| block.offset[1] + block.height)
+                .fold(0.0f32, f32::max);
+        }
+
+        // I-2: мера стека = рендер при раскрытом описании (обе — полный текст).
+        let measured = measure_body_height(body, 260.0, &[0], desc, true, "");
+        assert_eq!(
+            measured, rendered,
+            "measure = render при раскрытом описании"
+        );
     }
 }
