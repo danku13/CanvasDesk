@@ -1202,28 +1202,37 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
 /// в полосы по [`UiLayer`]; `finish` сортирует по слою по возрастанию —
 /// порядок полос = контракт `UiFrame::draw_bands` (реестр), порядок внутри
 /// полосы = порядок push (порядок отрисовки сохранён дословно).
+///
+/// FR-CLIP: каждая полоса несёт собственный `clip: UiRect` — рендерер
+/// превращает его в scissor-бакет (`band_scissor_rect`), контент полосы
+/// не выходит за границы поверхности. Пустой клип (`is_empty`) = полоса
+/// рендерится в полном вьюпорте (историческое поведение); пустые
+/// instances/texts + пустой клип — `push` пропускает.
 #[derive(Default)]
 pub(crate) struct ScreenBands {
-    bands: Vec<(UiLayer, Vec<CardInstance>, Vec<OwnedScreenText>)>,
+    bands: Vec<(UiLayer, UiRect, Vec<CardInstance>, Vec<OwnedScreenText>)>,
 }
 
 impl ScreenBands {
     pub(crate) fn push(
         &mut self,
         layer: UiLayer,
+        clip: UiRect,
         instances: Vec<CardInstance>,
         texts: Vec<OwnedScreenText>,
     ) {
         if instances.is_empty() && texts.is_empty() {
             return;
         }
-        self.bands.push((layer, instances, texts));
+        self.bands.push((layer, clip, instances, texts));
     }
 
     /// Полосы в порядке отрисовки: слои по возрастанию (стабильно —
     /// порядок регистрации контента внутри слоя сохранён).
-    pub(crate) fn finish(mut self) -> Vec<(UiLayer, Vec<CardInstance>, Vec<OwnedScreenText>)> {
-        self.bands.sort_by_key(|(layer, _, _)| *layer);
+    pub(crate) fn finish(
+        mut self,
+    ) -> Vec<(UiLayer, UiRect, Vec<CardInstance>, Vec<OwnedScreenText>)> {
+        self.bands.sort_by_key(|(layer, _, _, _)| *layer);
         self.bands
     }
 }

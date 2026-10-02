@@ -193,12 +193,34 @@ impl ApplicationHandler<AppEvent> for App {
                 // дословно — визуальный порядок канонических состояний
                 // не меняется.
                 let mut screen_bands = ui_registry::ScreenBands::default();
+                // FR-CLIP: стандартный клип полосы = весь вьюпорт
+                // (поверхности с tight clip передают свой rect явно —
+                // пока только дропдаун настроек; остальные оверлеи рисуют
+                // разрозненные элементы без единого bounding rect).
+                let band_vp = self.viewport_logical();
+                let band_vp_clip = canvas_ui::UiRect::new(0.0, 0.0, band_vp[0], band_vp[1]);
                 {
-                    let (settings_instances, settings_texts, settings_icons) =
-                        self.settings_overlay();
-                    screen_bands.push(UiLayer::Panels, settings_instances, settings_texts);
+                    // FR-CLIP: settings_overlay возвращает основную полосу
+                    // (кнопки + модалка + строки) И отдельную полосу
+                    // выпадающего меню (popup над модалкой, клип = menu rect).
+                    let settings = self.settings_overlay();
+                    screen_bands.push(
+                        UiLayer::Panels,
+                        settings.clip,
+                        settings.instances,
+                        settings.texts,
+                    );
                     // FR-ICONS: иконки табов настроек (SVG-атлас; пусто для Glyph).
-                    self.icon_instances.extend(settings_icons);
+                    self.icon_instances.extend(settings.icons);
+                    // FR-CLIP: дропдаун-меню — отдельная полоса Popups поверх
+                    // модалки (clip = menu rect, popup может выходить за
+                    // границы модалки). Пустые Vec'ы → push пропускает.
+                    screen_bands.push(
+                        UiLayer::Popups,
+                        settings.dropdown_clip,
+                        settings.dropdown_instances,
+                        settings.dropdown_texts,
+                    );
                 }
                 // FR-055 (этап U4): витрина кита — модаль поверх всего
                 // (Modals/Block: pick через реестр, backdrop закрывает);
@@ -208,67 +230,77 @@ impl ApplicationHandler<AppEvent> for App {
                 // взаимоисключима с витриной кита/галереей схем
                 if self.admin_open {
                     let (admin_instances, admin_texts, admin_icons) = self.admin_panel_overlay();
-                    screen_bands.push(UiLayer::Modals, admin_instances, admin_texts);
+                    screen_bands.push(UiLayer::Modals, band_vp_clip, admin_instances, admin_texts);
                     // FR-ICONS: иконки админпанели (SVG-атлас; пусто для Glyph).
                     self.icon_instances.extend(admin_icons);
                 } else if self.kit_gallery_open {
                     let (kit_instances, kit_texts, kit_icons) = self.kit_gallery_overlay();
-                    screen_bands.push(UiLayer::Modals, kit_instances, kit_texts);
+                    screen_bands.push(UiLayer::Modals, band_vp_clip, kit_instances, kit_texts);
                     // FR-ICONS: иконки витрины кита (SVG-атлас; пусто для Glyph).
                     self.icon_instances.extend(kit_icons);
                 } else if self.scheme_gallery.open {
                     let (gal_instances, gal_texts) = self.scheme_gallery_overlay();
-                    screen_bands.push(UiLayer::Modals, gal_instances, gal_texts);
+                    screen_bands.push(UiLayer::Modals, band_vp_clip, gal_instances, gal_texts);
                 } else if self.empty_state_visible() {
                     let (es_instances, es_texts) = self.empty_state_overlay();
-                    screen_bands.push(UiLayer::Panels, es_instances, es_texts);
+                    screen_bands.push(UiLayer::Panels, band_vp_clip, es_instances, es_texts);
                 }
                 // Меню пустого канваса (T7): screen-space, константный размер
                 {
                     let (menu_instances, menu_texts) = self.canvas_menu_overlay();
-                    screen_bands.push(UiLayer::Popups, menu_instances, menu_texts);
+                    screen_bands.push(UiLayer::Popups, band_vp_clip, menu_instances, menu_texts);
                 }
                 // FR-050 Н2 (этап C): меню выбора (параметр приёмника /
                 // строка-источник) — полоса Popups поверх меню канваса
                 // (клики/Escape — через реестр поверхностей FR-052 U2)
                 {
                     let (choice_instances, choice_texts) = self.choice_menu_overlay();
-                    screen_bands.push(UiLayer::Popups, choice_instances, choice_texts);
+                    screen_bands.push(
+                        UiLayer::Popups,
+                        band_vp_clip,
+                        choice_instances,
+                        choice_texts,
+                    );
                 }
                 // FR-027: меню помощи «?» и просмотрщик документации —
                 // поверх канваса (просмотрщик выше меню: открытие закрывает
                 // меню, но порядок безопасен в любом состоянии)
                 {
                     let (help_instances, help_texts) = self.help_menu_overlay();
-                    screen_bands.push(UiLayer::Popups, help_instances, help_texts);
+                    screen_bands.push(UiLayer::Popups, band_vp_clip, help_instances, help_texts);
                     let (docs_instances, docs_texts) = self.docs_overlay();
-                    screen_bands.push(UiLayer::Popups, docs_instances, docs_texts);
+                    screen_bands.push(UiLayer::Popups, band_vp_clip, docs_instances, docs_texts);
                 }
                 // FR-028: онбординг-карусель — модальный оверлей первого запуска
                 {
                     let (onb_instances, onb_texts) = self.onboarding_overlay();
-                    screen_bands.push(UiLayer::Modals, onb_instances, onb_texts);
+                    screen_bands.push(UiLayer::Modals, band_vp_clip, onb_instances, onb_texts);
                 }
                 // Палитра выделения (FR-009/FR-010): тулбар под выделением;
                 // rect'ы запоминаются для airspace виджетов
                 let palette_view = self.palette_view();
                 if let Some((lay, groups, open)) = &palette_view {
                     let (pal_instances, pal_texts) = self.palette_overlay(lay, groups, *open);
-                    screen_bands.push(UiLayer::Widgets, pal_instances, pal_texts);
+                    screen_bands.push(UiLayer::Widgets, band_vp_clip, pal_instances, pal_texts);
                 }
                 // Панель поиска (T14): квады/тексты поверх всего канваса;
                 // владелец 2026-10-02: строки документации несут бейдж «?»
                 // (SVG-атлас; пусто для Glyph — там текстовый фолбэк в оверлее)
                 {
                     let (search_instances, search_texts, search_icons) = self.search_overlay();
-                    screen_bands.push(UiLayer::Panels, search_instances, search_texts);
+                    screen_bands.push(
+                        UiLayer::Panels,
+                        band_vp_clip,
+                        search_instances,
+                        search_texts,
+                    );
                     self.icon_instances.extend(search_icons);
                 }
                 // FR-050 Н9-4 (этап E): панель «Карта проливаний» — справа
                 // сверху (Block: клик мимо — закрыть; строки — переход)
                 {
                     let (map_instances, map_texts) = self.flow_map_overlay();
-                    screen_bands.push(UiLayer::Panels, map_instances, map_texts);
+                    screen_bands.push(UiLayer::Panels, band_vp_clip, map_instances, map_texts);
                 }
                 // PRD-0007 (X4, AC-5.5): бейдж предложений автосвязи —
                 // верх по центру, ненавязчивый (та же видимость, что у hit-rect)
@@ -294,7 +326,8 @@ impl ApplicationHandler<AppEvent> for App {
                         color: palette.body,
                         align: TextAlign::Center,
                     }];
-                    screen_bands.push(UiLayer::Panels, badge_quads, badge_texts);
+                    let badge_clip = canvas_ui::UiRect::new(badge[0], badge[1], badge[2], badge[3]);
+                    screen_bands.push(UiLayer::Panels, badge_clip, badge_quads, badge_texts);
                 }
                 // PRD-0007 (X6, F-12): индикатор покрытия цепочками —
                 // левый нижний угол канваса, opt-in (настройка FR-039);
@@ -321,7 +354,8 @@ impl ApplicationHandler<AppEvent> for App {
                             color: palette.body,
                             align: TextAlign::Center,
                         }];
-                        screen_bands.push(UiLayer::Panels, cov_quads, cov_texts);
+                        let cov_clip = canvas_ui::UiRect::new(chip[0], chip[1], chip[2], chip[3]);
+                        screen_bands.push(UiLayer::Panels, cov_clip, cov_quads, cov_texts);
                     }
                 }
                 // FR-018: палитра шаблонов (Ctrl+P) и wheel-меню
@@ -329,10 +363,15 @@ impl ApplicationHandler<AppEvent> for App {
                 // WorldOverlay (над секторами, под панелями)
                 {
                     let (tpl_instances, tpl_texts) = self.template_panel_overlay();
-                    screen_bands.push(UiLayer::Panels, tpl_instances, tpl_texts);
+                    screen_bands.push(UiLayer::Panels, band_vp_clip, tpl_instances, tpl_texts);
                     let (wheel_sectors, wheel_instances, wheel_texts) = self.wheel_overlay();
                     overlay_sectors.extend(wheel_sectors);
-                    screen_bands.push(UiLayer::WorldOverlay, wheel_instances, wheel_texts);
+                    screen_bands.push(
+                        UiLayer::WorldOverlay,
+                        band_vp_clip,
+                        wheel_instances,
+                        wheel_texts,
+                    );
                 }
                 // FR-021: popup подсказок Numi-ввода — поверх редактора
                 {
@@ -340,19 +379,24 @@ impl ApplicationHandler<AppEvent> for App {
                     // пересчёт каждый кадр, пока popup открыт.
                     self.sync_hints_anchor();
                     let (hint_instances, hint_texts) = self.hints_overlay();
-                    screen_bands.push(UiLayer::Popups, hint_instances, hint_texts);
+                    screen_bands.push(UiLayer::Popups, band_vp_clip, hint_instances, hint_texts);
                 }
                 // FR-079 (S3): C3-карточки «следующие ноды» — тот же слой
                 // попапов (транзиент поверх редактора, не модаль)
                 {
                     let (card_instances, card_texts) = self.suggest_cards_overlay();
-                    screen_bands.push(UiLayer::Popups, card_instances, card_texts);
+                    screen_bands.push(UiLayer::Popups, band_vp_clip, card_instances, card_texts);
                 }
                 // FR-017 (CP6): what-if нижний бар (пилюля/полоса/список/
                 // таблица сравнения) — поверх канваса
                 {
                     let (whatif_instances, whatif_texts) = self.whatif_overlay();
-                    screen_bands.push(UiLayer::Panels, whatif_instances, whatif_texts);
+                    screen_bands.push(
+                        UiLayer::Panels,
+                        band_vp_clip,
+                        whatif_instances,
+                        whatif_texts,
+                    );
                 }
                 // Тултип битой ссылки (T10, SPEC §7.5): у курсора — старый путь
                 // файла; screen-space, константный размер при любом зуме.
@@ -555,7 +599,7 @@ impl ApplicationHandler<AppEvent> for App {
                         palette.menu_fill,
                         palette.palette_border,
                     );
-                    screen_bands.push(UiLayer::Popups, tooltip_quads, tooltip_texts);
+                    screen_bands.push(UiLayer::Popups, band_vp_clip, tooltip_quads, tooltip_texts);
                 }
                 // T21: модальный диалог (screen-space): панель + тексты +
                 // кнопки; рендер после битой ссылки — поверх всего канваса.
@@ -615,7 +659,11 @@ impl ApplicationHandler<AppEvent> for App {
                         color: token_color(canvas_core::tokens::DIALOG_TEXT_MUTED),
                         align: TextAlign::Left,
                     });
-                    screen_bands.push(UiLayer::Modals, dialog_instances, dialog_texts);
+                    // FR-CLIP: диалог — модаль с единым rect (d_rect),
+                    // tight clip = rect диалога (фон/кнопки не выходят
+                    // за границы панели).
+                    let dialog_clip = canvas_ui::UiRect::new(dx, dy, dw, dh);
+                    screen_bands.push(UiLayer::Modals, dialog_clip, dialog_instances, dialog_texts);
                 }
                 // T21: toast — строка внизу центра, живёт 3 с (T21-A).
                 // Истечение проверяем ДО рендера (без borrow-конфликта)
@@ -637,8 +685,13 @@ impl ApplicationHandler<AppEvent> for App {
                     };
                     // CR-015: origin — левый край области (контракт ScreenText):
                     // область [40, viewport−40] по центру окна, текст в её центре.
+                    // FR-CLIP: тост — узкая полоса внизу центра, tight clip
+                    // = rect области текста (текст не выходит за [40, vp-40]).
+                    let toast_clip =
+                        canvas_ui::UiRect::new(40.0, ty, (viewport[0] - 80.0).max(0.0), 28.0);
                     screen_bands.push(
                         UiLayer::Toasts,
+                        toast_clip,
                         Vec::new(),
                         vec![OwnedScreenText {
                             text: text.clone(),
@@ -749,7 +802,7 @@ impl ApplicationHandler<AppEvent> for App {
                         self.cursor,
                         &ui_frame,
                     );
-                    screen_bands.push(UiLayer::Debug, dbg_instances, dbg_texts);
+                    screen_bands.push(UiLayer::Debug, band_vp_clip, dbg_instances, dbg_texts);
                 }
                 // FR-052 (U2): полосы в порядке отрисовки (слои по возрастанию)
                 // + Owned-тексты → заимствованные ScreenText (заём живёт до
@@ -757,7 +810,7 @@ impl ApplicationHandler<AppEvent> for App {
                 let bands = screen_bands.finish();
                 let band_screen_texts: Vec<Vec<ScreenText>> = bands
                     .iter()
-                    .map(|(_, _, texts)| {
+                    .map(|(_, _, _, texts)| {
                         texts
                             .iter()
                             .map(|t| ScreenText {
@@ -771,21 +824,23 @@ impl ApplicationHandler<AppEvent> for App {
                             .collect()
                     })
                     .collect();
-                let band_viewport = self.viewport_logical();
                 let screen_band_refs: Vec<canvas_render::ScreenBand> = bands
                     .iter()
                     .zip(&band_screen_texts)
-                    .map(|((layer, instances, _), texts)| canvas_render::ScreenBand {
-                        layer: *layer,
-                        // FR-056 (F-5 PRD-0009): клип полосы = SurfaceFrame.clip
-                        // поверхности в кадре реестра (UiFrame::from_registry —
-                        // сегодня вьюпорт; сужение клипов per-surface — волны
-                        // миграции FR-059/060, аудит G5). Рендер конвертирует
-                        // в физические px и исполняет scissor-бакетом.
-                        clip: canvas_ui::UiRect::new(0.0, 0.0, band_viewport[0], band_viewport[1]),
-                        instances,
-                        texts,
-                    })
+                    .map(
+                        |((layer, clip, instances, _), texts)| canvas_render::ScreenBand {
+                            layer: *layer,
+                            // FR-CLIP: клип полосы — per-surface (FR-056/FR-059/060).
+                            // Источник — `ScreenBands::push(clip, …)`: для большинства
+                            // полос это вьюпорт (разрозненные элементы без единого
+                            // rect), для popup'ов с единым rect — tight clip (дропдаун
+                            // настроек, диалог, тост, бейдж/индикатор). Рендер
+                            // конвертирует в физические px и исполняет scissor-бакетом.
+                            clip: *clip,
+                            instances,
+                            texts,
+                        },
+                    )
                     .collect();
                 // FR-042/FR-044: тексты main stage — отдельный список (не
                 // screen_texts панелей): рисуются группой ПОСЛЕ модального

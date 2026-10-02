@@ -9,6 +9,26 @@
 
 use super::*;
 
+/// FR-CLIP: результат сборки `settings_overlay` — основная полоса
+/// (кнопки + модалка + строки) и отдельная полоса выпадающего меню
+/// (popup над модалкой, может выходить за её границы).
+///
+/// - `clip` — клип основной полосы (вьюпорт: разрозненные элементы
+///   без единого rect; сужать нельзя — иначе угловые кнопки исчезнут).
+/// - `dropdown_clip` — клип дропдаун-полосы = `menu rect` (или пустой,
+///   если меню закрыто; пустая пара Vec'ов + пустой клип → `push`
+///   пропускает полосу, рендер её не видит).
+#[derive(Default)]
+pub(super) struct SettingsOverlayRender {
+    pub instances: Vec<CardInstance>,
+    pub texts: Vec<OwnedScreenText>,
+    pub icons: Vec<canvas_render::IconInstance>,
+    pub clip: canvas_ui::UiRect,
+    pub dropdown_instances: Vec<CardInstance>,
+    pub dropdown_texts: Vec<OwnedScreenText>,
+    pub dropdown_clip: canvas_ui::UiRect,
+}
+
 impl App {
     /// FR-017: данные таблицы сравнения (колонки + ячейки). Строки — union
     /// подменённых переменных всех сценариев; значения — прогон
@@ -2814,7 +2834,7 @@ impl App {
             size: [w, h + CHOICE_MENU_TITLE_H],
             fill: palette.menu_fill,
             border: [0.0; 4],
-            params: [6.0, 0.0, 0.0, 0.0],
+            params: [6.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         // Заголовок — приглушённым тоном (не пункт, не интерактивен)
@@ -2869,7 +2889,7 @@ impl App {
             size: [w, h],
             fill: palette.menu_fill,
             border: [0.0; 4],
-            params: [6.0, 0.0, 0.0, 0.0],
+            params: [6.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         // Hover-подсветка пункта (аффорданс — как строки палитры/поиска:
@@ -2933,7 +2953,7 @@ impl App {
                 size: [sw, sh],
                 fill: palette.menu_fill,
                 border: [0.0; 4],
-                params: [6.0, 0.0, 0.0, 0.0],
+                params: [6.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
             if submenu.entries.is_empty() {
@@ -3013,7 +3033,7 @@ impl App {
             size: [w, h],
             fill: palette.menu_fill,
             border: [0.0; 4],
-            params: [6.0, 0.0, 0.0, 0.0],
+            params: [6.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         let hovered = docs_ui::help_menu_item_at(menu.origin, self.cursor);
@@ -3046,7 +3066,7 @@ impl App {
                 size: [sw, sh],
                 fill: palette.menu_fill,
                 border: [0.0; 4],
-                params: [6.0, 0.0, 0.0, 0.0],
+                params: [6.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
             let hovered_sub = docs_ui::help_submenu_item_at(sub, self.cursor);
@@ -3102,7 +3122,7 @@ impl App {
                 size: [viewport[0], viewport[1]],
                 fill: [0.02, 0.02, 0.04, 0.45],
                 border: [0.0; 4],
-                params: [0.0, 0.0, 0.0, 0.0],
+                params: [0.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
         }
@@ -3112,7 +3132,7 @@ impl App {
             size: [panel[2], panel[3]],
             fill: palette.menu_fill,
             border: [0.0; 4],
-            params: [8.0, 0.0, 0.0, 0.0],
+            params: [8.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         // Шапка: раздел + × (hover-аффорданс)
@@ -3204,7 +3224,7 @@ impl App {
                     docs_ui::QuadKind::QuoteBar => color_to_rgba(palette.link),
                 },
                 border: [0.0; 4],
-                params: [0.0, 0.0, 0.0, 0.0],
+                params: [0.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
         }
@@ -3219,7 +3239,7 @@ impl App {
                 size: [link.rect[2], 1.0],
                 fill: color_to_rgba(palette.link),
                 border: [0.0; 4],
-                params: [0.0, 0.0, 0.0, 0.0],
+                params: [0.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
         }
@@ -3276,7 +3296,7 @@ impl App {
             size: [viewport[0], viewport[1]],
             fill: [0.02, 0.02, 0.04, 0.55],
             border: [0.0; 4],
-            params: [0.0, 0.0, 0.0, 0.0],
+            params: [0.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         let card = onboarding_ui::card_rect(viewport, state.step, self.settings.language);
@@ -3285,7 +3305,7 @@ impl App {
             size: [card[2], card[3]],
             fill: palette.menu_fill,
             border: [0.0; 4],
-            params: [10.0, 0.0, 0.0, 0.0],
+            params: [10.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         let text_x = card[0] + onboarding_ui::ONBOARDING_PAD;
@@ -3991,19 +4011,20 @@ impl App {
 
     /// Screen-space оверлей настроек: летающая кнопка всегда, панель — когда
     /// открыта. Координаты — логические px от левого верхнего угла окна.
-    pub(super) fn settings_overlay(
-        &self,
-    ) -> (
-        Vec<CardInstance>,
-        Vec<OwnedScreenText>,
-        Vec<canvas_render::IconInstance>,
-    ) {
+    ///
+    /// FR-CLIP: возвращает основную полосу (кнопки + модалка + строки) и
+    /// отдельную полосу выпадающего меню (popup над модалкой, может выходить
+    /// за её границы). Клипы: `clip` = вьюпорт (разрозненные элементы без
+    /// единого rect), `dropdown_clip` = `menu rect` (или пустой, если
+    /// меню закрыто — `push` пропустит пустую полосу).
+    pub(super) fn settings_overlay(&self) -> SettingsOverlayRender {
+        let mut render = SettingsOverlayRender::default();
         let mut instances = Vec::new();
         let mut texts = Vec::new();
         let mut icons = Vec::new();
         let viewport = self.viewport_logical();
         if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
-            return (instances, texts, icons);
+            return render;
         }
         let palette = self.effective_palette();
         // Вертикальная центровка иконки: лайн-бокс высотой font*1.3 по центру
@@ -4063,7 +4084,7 @@ impl App {
                 palette.menu_fill
             },
             border: [0.0; 4],
-            params: [8.0, 0.0, 0.0, 0.0],
+            params: [8.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         // Иконка темы — квадами: «☀»/«🌙» (U+2600/U+1F319) тоже вне
@@ -4096,7 +4117,7 @@ impl App {
                 palette.menu_fill
             },
             border: [0.0; 4],
-            params: [8.0, 0.0, 0.0, 0.0],
+            params: [8.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
@@ -4164,7 +4185,7 @@ impl App {
                 size: [panel[2], panel[3]],
                 fill: palette.menu_fill,
                 border: [0.0; 4],
-                params: [8.0, 0.0, 0.0, 0.0],
+                params: [8.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
             let pad = crate::ui::HOTKEYS_PADDING;
@@ -4228,7 +4249,13 @@ impl App {
             }
         }
         if !self.settings_open {
-            return (instances, texts, icons);
+            // FR-CLIP: модалка закрыта — основная полоса это только летающие
+            // кнопки (угол), клип не сужаем (вьюпорт). Дропдаун-полоса пуста.
+            render.instances = instances;
+            render.texts = texts;
+            render.icons = icons;
+            render.clip = canvas_ui::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
+            return render;
         }
         // FR-039: затемнение канваса под модалкой (паттерн онбординга
         // FR-028) — фокус на диалоге настроек, ввод под ним глушится
@@ -4237,7 +4264,7 @@ impl App {
             size: [viewport[0], viewport[1]],
             fill: [0.02, 0.02, 0.04, 0.45],
             border: [0.0; 4],
-            params: [0.0, 0.0, 0.0, 0.0],
+            params: [0.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         // FR-039: модалка по центру — layout несёт rect'ы навигации,
@@ -4249,7 +4276,7 @@ impl App {
             size: [modal[2], modal[3]],
             fill: palette.menu_fill,
             border: [0.0; 4],
-            params: [8.0, 0.0, 0.0, 0.0],
+            params: [8.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         // Левая колонка: пункты «иконка + название» (Obsidian); активный
@@ -4606,14 +4633,16 @@ impl App {
             }
         }
         // FR-026: выпадающее меню — поверх модалки: фон чуть ярче панели,
-        // hover/клавиатурное выделение пункта, галочка у текущего значения
+        // hover/клавиатурное выделение пункта, галочка у текущего значения.
+        // FR-CLIP: дропдаун рисуется в ОТДЕЛЬНУЮ полосу (popup над модалкой,
+        // клип = menu rect — может выходить за границы модалки).
         if let Some((row, items, menu_rect)) = &menu {
-            instances.push(CardInstance {
+            render.dropdown_instances.push(CardInstance {
                 pos: [menu_rect[0], menu_rect[1]],
                 size: [menu_rect[2], menu_rect[3]],
                 fill: hover_fill(palette.menu_fill),
                 border: [0.0; 4],
-                params: [8.0, 0.0, 0.0, 0.0],
+                params: [8.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
             let hovered_item = dropdown_item_at(*menu_rect, items.len(), self.cursor);
@@ -4623,7 +4652,7 @@ impl App {
                     || (self.settings_dropdown.open_row == Some(*row)
                         && self.settings_dropdown.selected == i);
                 if highlighted {
-                    instances.push(CardInstance {
+                    render.dropdown_instances.push(CardInstance {
                         pos: [menu_rect[0] + 3.0, y + 1.0],
                         size: [menu_rect[2] - 6.0, DROPDOWN_ROW_H - 2.0],
                         fill: [0.24, 0.30, 0.42, 0.6],
@@ -4633,7 +4662,7 @@ impl App {
                     });
                 }
                 if *current {
-                    texts.push(OwnedScreenText {
+                    render.dropdown_texts.push(OwnedScreenText {
                         text: "✓".to_owned(),
                         origin: [menu_rect[0] + 8.0, y + 5.0],
                         width: 18.0,
@@ -4642,7 +4671,7 @@ impl App {
                         align: TextAlign::Left,
                     });
                 }
-                texts.push(OwnedScreenText {
+                render.dropdown_texts.push(OwnedScreenText {
                     text: label.clone(),
                     origin: [menu_rect[0] + MENU_LABEL_X, y + 4.0],
                     width: menu_rect[2] - MENU_LABEL_X - DROPDOWN_MARGIN,
@@ -4651,8 +4680,20 @@ impl App {
                     align: TextAlign::Left,
                 });
             }
+            // FR-CLIP: клип дропдаун-полосы = rect меню (popup над модалкой).
+            render.dropdown_clip =
+                canvas_ui::UiRect::new(menu_rect[0], menu_rect[1], menu_rect[2], menu_rect[3]);
         }
-        (instances, texts, icons)
+        // FR-CLIP: клип основной полосы = вьюпорт. Settings_overlay рисует
+        // РАЗРОЗНЕННЫЕ элементы (угловые кнопки + модалка + панель hotkeys) —
+        // единого bounding rect нет, клип не сужаем (контракт задачи: tight
+        // clip только там, где есть единый rect — это дропдаун). Задача B
+        // (FR-CLIP) отдельно сужает тени params.w → 1.0 у popup-квадов.
+        render.instances = instances;
+        render.texts = texts;
+        render.icons = icons;
+        render.clip = canvas_ui::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
+        render
     }
 
     /// Подтверждение диалога (Enter/клик «Да»): установка или удаление.
