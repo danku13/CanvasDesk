@@ -6530,8 +6530,14 @@ impl App {
             .flatten()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or_else(|| json!({}));
-        let old_counter = consent.get("counter").and_then(Value::as_bool).unwrap_or(true);
-        let old_analytics = consent.get("analytics").and_then(Value::as_bool).unwrap_or(true);
+        let old_counter = consent
+            .get("counter")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let old_analytics = consent
+            .get("analytics")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
         let changed = old_counter != self.settings.telemetry_counter
             || old_analytics != self.settings.telemetry_analytics;
         if let Some(map) = consent.as_object_mut() {
