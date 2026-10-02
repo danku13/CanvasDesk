@@ -3608,7 +3608,9 @@ impl App {
                                 explain_ui::base_scale(layout.bounds, body, state.is_defense());
                             let zoom_min = explain_ui::SCALE_MIN / base.max(f32::EPSILON);
                             let zoom_max = explain_ui::ZOOM_MAX / base.max(f32::EPSILON);
-                            let factor = (-dy * 0.045).exp();
+                            // CR-017 (уточнение владельца): шаг зума ±5 %
+                            // за щелчок — 1.05^(−dy), LineDelta y = ±1/щелчок
+                            let factor = 1.05_f32.powf(-dy);
                             let zoom_new = (state.zoom * factor).clamp(zoom_min, zoom_max);
                             let scale_new = base * zoom_new;
                             let clamped =
