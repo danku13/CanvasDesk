@@ -8,6 +8,9 @@
 
 use super::*;
 
+// FR-060 (W-c): кит-геометрия прохода — rect'ы Painter'а в лог. px
+use canvas_ui::geometry::UiRect;
+
 impl App {
     /// Открыть окно проверки (§6.4): сессионный кэш — мгновенный Ready
     /// (AC-3.3, ≤ 1 с), иначе Loading с честным лоадером + фоновая сборка
@@ -517,6 +520,18 @@ impl App {
     /// Loading: окно + честный лоадер (кольцо + ротация подписей), канвас
     /// НЕ затемняется (У5 — затемнение и подсветка атомарны с деревом).
     /// Ready: дерево (ветки-безье + карточки узлов), чип Stale, футер.
+    ///
+    /// FR-060 (W-c, последний остаток волны): проход собирается через кит
+    /// [`Painter`] — items → `paint_items_to_stage` (конвенция world,
+    /// радиус/размер ÷ zoom — дословно прежние `screen_rect_quad`), а
+    /// состояния (hover/selected) — через [`WidgetState`] → `KitState`
+    /// (машина состояний FR-057; переходы указателя ведёт потребитель,
+    /// стиль выбирается по матрице кита). Цвета — прежние слоты (0
+    /// визуального скачка). Кружки-точки: у Painter точечного примитива
+    /// нет — ветки-безье идут квадратами с радиусом d/2 ([`dot_rect`],
+    /// геометрия `screen_dot`), кольцо лоадера — прямые `screen_dot`
+    /// после flush (в Loading-ветке точки — последние квады прохода,
+    /// порядок рисования сохранён дословно).
     pub(super) fn explain_frame(
         &mut self,
         viewport: [f32; 2],
@@ -531,6 +546,10 @@ impl App {
             };
             let palette = ThemeColors::from_theme(self.settings.theme);
             let camera = &self.camera;
+            let zoom = camera.zoom();
+            // FR-060: draw-журнал кита — items конвертируются в инстансы
+            // stage одним проходом в конце ветки (порядок = draw-порядок)
+            let mut d = Painter::new();
             let win = explain_ui::window_rect(viewport);
             // Заголовок корня — из живой модели (тот же title_for, что у
             // подписей проливания); в Loading дерева ещё нет
@@ -542,23 +561,25 @@ impl App {
                 .unwrap_or_else(|| "—".to_owned());
             // Окно (затемнение фона НЕ рисуем: в Ready затемняет цепочку
             // FocusView (F-4), в Loading затемнения нет вообще — У5)
-            quads.push(screen_rect_quad(
-                camera,
-                viewport,
-                win,
+            d.rect(
+                UiRect::new(win[0], win[1], win[2], win[3]),
                 palette.menu_fill,
                 palette.palette_border,
                 14.0,
-            ));
+            );
             // Шапка: заголовок + крошки + ✕ + чип Stale
-            texts.push(OwnedScreenText {
-                text: self.tr(keys::EXPLAIN_TITLE).to_owned(),
-                origin: [win[0] + 16.0, win[1] + 10.0],
-                width: (win[2] - 240.0).max(120.0),
-                font_size: 15.0,
-                color: palette.title,
-                align: TextAlign::Left,
-            });
+            d.label(
+                UiRect::new(
+                    win[0] + 16.0,
+                    win[1] + 10.0,
+                    (win[2] - 240.0).max(120.0),
+                    18.0,
+                ),
+                self.tr(keys::EXPLAIN_TITLE),
+                color_to_rgba(palette.title),
+                15.0,
+                PaintAlign::Left,
+            );
             // Мета-строка шапки: X6 — полные чипы-крошки пути вида (по чипу
             // на уровень, клик по чипу — обрезка пути, AC-2.3); без фокуса
             // (путь в корень) и в защите — прежний текст-подзаголовок.
@@ -588,75 +609,79 @@ impl App {
                     let Some(node) = tree.nodes.get(state.view_path[level]) else {
                         continue;
                     };
+                    // FR-060: текущая крошка — WidgetState::Selected
                     let current = level == last;
-                    quads.push(screen_rect_quad(
-                        camera,
-                        viewport,
-                        *rect,
-                        if current { palette.accent } else { [0.0; 4] },
+                    let mut crumb_state = WidgetState::default();
+                    crumb_state.set_selected(current);
+                    let selected = crumb_state.kit_state() == kit::KitState::Selected;
+                    d.rect(
+                        UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                        if selected { palette.accent } else { [0.0; 4] },
                         palette.palette_border,
                         6.0,
-                    ));
-                    texts.push(OwnedScreenText {
-                        text: node.title.clone(),
-                        origin: [rect[0] + 6.0, rect[1] + 2.5],
-                        width: (rect[2] - 10.0).max(8.0),
-                        font_size: 10.5,
-                        color: if current {
-                            palette.text_on_accent
+                    );
+                    d.label(
+                        UiRect::new(
+                            rect[0] + 6.0,
+                            rect[1] + 2.5,
+                            (rect[2] - 10.0).max(8.0),
+                            13.0,
+                        ),
+                        &node.title,
+                        if selected {
+                            color_to_rgba(palette.text_on_accent)
                         } else {
-                            palette.body
+                            color_to_rgba(palette.body)
                         },
-                        align: TextAlign::Left,
-                    });
+                        10.5,
+                        PaintAlign::Left,
+                    );
                 }
             } else {
-                texts.push(OwnedScreenText {
-                    text: meta,
-                    origin: [win[0] + 16.0, win[1] + 32.0],
-                    width: (win[2] - 240.0).max(120.0),
-                    font_size: 11.5,
-                    color: palette.quote,
-                    align: TextAlign::Left,
-                });
+                d.label(
+                    UiRect::new(
+                        win[0] + 16.0,
+                        win[1] + 32.0,
+                        (win[2] - 240.0).max(120.0),
+                        14.0,
+                    ),
+                    &meta,
+                    color_to_rgba(palette.quote),
+                    11.5,
+                    PaintAlign::Left,
+                );
             }
             let close = explain_ui::close_rect(win);
-            quads.push(screen_rect_quad(
-                camera,
-                viewport,
-                close,
+            d.rect(
+                UiRect::new(close[0], close[1], close[2], close[3]),
                 [0.0; 4],
                 palette.palette_border,
                 7.0,
-            ));
-            texts.push(OwnedScreenText {
-                text: "×".to_owned(),
-                origin: [close[0], close[1] + 2.0],
-                width: close[2],
-                font_size: 14.0,
-                color: palette.body,
-                align: TextAlign::Center,
-            });
+            );
+            d.label(
+                UiRect::new(close[0], close[1] + 2.0, close[2], 17.0),
+                "×",
+                color_to_rgba(palette.body),
+                14.0,
+                PaintAlign::Center,
+            );
             // Чип «Данные изменены» (AC-3.3/F-5): модель изменилась после
             // сборки — канвас и дерево не перерисовываются сами
             if state.is_ready() && state.revision != self.scene.revision {
                 let chip = explain_ui::chip_rect(win);
-                quads.push(screen_rect_quad(
-                    camera,
-                    viewport,
-                    chip,
+                d.rect(
+                    UiRect::new(chip[0], chip[1], chip[2], chip[3]),
                     color_to_rgba(palette.whatif_badge),
                     palette.palette_border,
                     14.0,
-                ));
-                texts.push(OwnedScreenText {
-                    text: self.tr(keys::EXPLAIN_STALE).to_owned(),
-                    origin: [chip[0], chip[1] + 5.0],
-                    width: chip[2],
-                    font_size: 11.5,
-                    color: palette.text_on_accent,
-                    align: TextAlign::Center,
-                });
+                );
+                d.label(
+                    UiRect::new(chip[0], chip[1] + 5.0, chip[2], 14.0),
+                    self.tr(keys::EXPLAIN_STALE),
+                    color_to_rgba(palette.text_on_accent),
+                    11.5,
+                    PaintAlign::Center,
+                );
             }
             // --- Loading: честный лоадер (AC-1.2, У5) -------------------
             if state.is_loading() {
@@ -665,6 +690,18 @@ impl App {
                 let cy = body[1] + body[3] / 2.0 - 20.0;
                 let elapsed = state.opened_at.elapsed().as_millis();
                 let spin = (elapsed as f32 / 900.0) * std::f32::consts::TAU;
+                // FR-060: хром окна — Painter; кольцо лоадера — прямые
+                // `screen_dot` ПОСЛЕ flush Painter'а (точечного примитива у
+                // Painter нет; в Loading-ветке точки — последние квады
+                // прохода, порядок рисования сохранён дословно).
+                paint_items_to_stage(
+                    d.take_items(),
+                    camera,
+                    viewport,
+                    zoom,
+                    &mut quads,
+                    &mut texts,
+                );
                 for i in 0..10 {
                     let angle = spin + i as f32 * std::f32::consts::TAU / 10.0;
                     let p = [cx + angle.cos() * 14.0, cy + angle.sin() * 14.0];
@@ -698,6 +735,14 @@ impl App {
             }
             // --- Ready: дерево (ветки + карточки), F-5 ------------------
             let Some(tree) = state.tree() else {
+                paint_items_to_stage(
+                    d.take_items(),
+                    camera,
+                    viewport,
+                    zoom,
+                    &mut quads,
+                    &mut texts,
+                );
                 return (quads, texts);
             };
             let body = explain_ui::body_rect(win);
@@ -729,44 +774,52 @@ impl App {
                 fill[3] = if curve.to_leaf { 0.9 } else { 0.55 };
                 for p in samples {
                     let sp = local(p[0], p[1]);
-                    quads.push(screen_dot(camera, viewport, sp, 4.0, fill));
+                    // FR-060: кружок — Painter-rect ([`dot_rect`]: квадрат
+                    // d×d с радиусом d/2 — та же геометрия, что screen_dot;
+                    // точки должны идти ПОД карточками — только через
+                    // draw-журнал Painter'а)
+                    let (dot, radius) = dot_rect(sp, 4.0);
+                    d.rect(dot, fill, [0.0; 4], radius);
                 }
             }
             // Разделитель футера + статистика видимого дерева
             let footer_line = [win[0], win[1] + win[3] - explain_ui::FOOTER_H, win[2], 1.0];
-            quads.push(screen_rect_quad(
-                camera,
-                viewport,
-                footer_line,
+            d.rect(
+                UiRect::new(
+                    footer_line[0],
+                    footer_line[1],
+                    footer_line[2],
+                    footer_line[3],
+                ),
                 palette.palette_border,
                 [0.0; 4],
                 0.0,
-            ));
-            texts.push(OwnedScreenText {
-                text: self.trf(
+            );
+            d.label(
+                UiRect::new(win[0] + 16.0, win[1] + win[3] - 28.0, 280.0, 16.0),
+                &self.trf(
                     keys::EXPLAIN_STATS,
                     &[
                         ("lv", layout.levels.to_string().as_str()),
                         ("n", layout.nodes.len().to_string().as_str()),
                     ],
                 ),
-                origin: [win[0] + 16.0, win[1] + win[3] - 28.0],
-                width: 280.0,
-                font_size: 13.0,
-                color: palette.quote,
-                align: TextAlign::Left,
-            });
+                color_to_rgba(palette.quote),
+                13.0,
+                PaintAlign::Left,
+            );
             // FR-083: тумблер направления схемы в шапке (левее defense-
             // тумблера) — стрелка в сторону потока: «→» — источники слева
             // (Ltr), «←» — источники справа (Rtl). На узких окнах (кнопка
             // заходит в мета-зону) — не рисуется и не ловит хит.
             if explain_ui::direction_toggle_visible(win) {
                 let toggle = explain_ui::direction_toggle_rect(win);
-                let hovered = point_in_rect(toggle, self.cursor);
-                quads.push(screen_rect_quad(
-                    camera,
-                    viewport,
-                    toggle,
+                // FR-060: hover тумблера — машина состояний виджета
+                let mut toggle_state = WidgetState::default();
+                toggle_state.set_pointer(point_in_rect(toggle, self.cursor), false);
+                let hovered = toggle_state.kit_state() == kit::KitState::Hovered;
+                d.rect(
+                    UiRect::new(toggle[0], toggle[1], toggle[2], toggle[3]),
                     if hovered {
                         palette.accent
                     } else {
@@ -778,61 +831,58 @@ impl App {
                         palette.palette_border
                     },
                     14.0,
-                ));
-                texts.push(OwnedScreenText {
-                    text: self
-                        .tr(if ltr {
-                            keys::EXPLAIN_DIR_LTR
-                        } else {
-                            keys::EXPLAIN_DIR_RTL
-                        })
-                        .to_owned(),
-                    origin: [toggle[0], toggle[1] + 7.5],
-                    width: toggle[2],
-                    font_size: 13.0,
-                    color: if hovered {
-                        palette.text_on_accent
+                );
+                d.label(
+                    UiRect::new(toggle[0], toggle[1] + 7.5, toggle[2], 16.0),
+                    self.tr(if ltr {
+                        keys::EXPLAIN_DIR_LTR
                     } else {
-                        palette.body
+                        keys::EXPLAIN_DIR_RTL
+                    }),
+                    if hovered {
+                        color_to_rgba(palette.text_on_accent)
+                    } else {
+                        color_to_rgba(palette.body)
                     },
-                    align: TextAlign::Center,
-                });
+                    13.0,
+                    PaintAlign::Center,
+                );
             }
             // X5 (AC-6.1): тумблер режима защиты в шапке — одним действием
             {
                 let toggle = explain_ui::defense_toggle_rect(win);
-                let hovered = point_in_rect(toggle, self.cursor);
                 let on = state.is_defense();
-                quads.push(screen_rect_quad(
-                    camera,
-                    viewport,
-                    toggle,
-                    if on || hovered {
+                // FR-060: hover + включённость — матрица кита (Hovered >
+                // Selected): акцент при любом непустом состоянии
+                let mut toggle_state = WidgetState::default();
+                toggle_state.set_pointer(point_in_rect(toggle, self.cursor), false);
+                toggle_state.set_selected(on);
+                let active = toggle_state.kit_state() != kit::KitState::Normal;
+                d.rect(
+                    UiRect::new(toggle[0], toggle[1], toggle[2], toggle[3]),
+                    if active {
                         palette.accent
                     } else {
                         palette.card_fill
                     },
                     if on { [0.0; 4] } else { palette.palette_border },
                     14.0,
-                ));
-                texts.push(OwnedScreenText {
-                    text: self
-                        .tr(if on {
-                            keys::EXPLAIN_DEFENSE_EXIT
-                        } else {
-                            keys::EXPLAIN_DEFENSE
-                        })
-                        .to_owned(),
-                    origin: [toggle[0], toggle[1] + 7.5],
-                    width: toggle[2],
-                    font_size: 13.0,
-                    color: if on || hovered {
-                        palette.text_on_accent
+                );
+                d.label(
+                    UiRect::new(toggle[0], toggle[1] + 7.5, toggle[2], 16.0),
+                    self.tr(if on {
+                        keys::EXPLAIN_DEFENSE_EXIT
                     } else {
-                        palette.body
+                        keys::EXPLAIN_DEFENSE
+                    }),
+                    if active {
+                        color_to_rgba(palette.text_on_accent)
+                    } else {
+                        color_to_rgba(palette.body)
                     },
-                    align: TextAlign::Center,
-                });
+                    13.0,
+                    PaintAlign::Center,
+                );
             }
             // X5 (AC-6.3): кнопки шага и «Раскрыть всё» + подсказка — футер
             // защиты; крошки в защите глушатся (вид на корне)
@@ -844,47 +894,53 @@ impl App {
                     (step, keys::EXPLAIN_DEFENSE_STEP, can_step),
                     (all, keys::EXPLAIN_DEFENSE_ALL, true),
                 ];
-                for (rect, key, active) in buttons {
-                    let hovered = point_in_rect(rect, self.cursor);
-                    quads.push(screen_rect_quad(
-                        camera,
-                        viewport,
-                        rect,
-                        if hovered && active {
+                for (rect, key, enabled) in buttons {
+                    // FR-060: состояние кнопки — машина виджета: Disabled
+                    // глушит hover (матрица Disabled > Hovered)
+                    let mut btn_state = WidgetState::default();
+                    btn_state.set_pointer(point_in_rect(rect, self.cursor), false);
+                    btn_state.set_disabled(!enabled);
+                    let ks = btn_state.kit_state();
+                    d.rect(
+                        UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                        if ks == kit::KitState::Hovered {
                             palette.accent
                         } else {
                             palette.card_fill
                         },
-                        if active {
-                            palette.palette_border
-                        } else {
+                        if ks == kit::KitState::Disabled {
                             [0.0; 4]
+                        } else {
+                            palette.palette_border
                         },
                         6.0,
-                    ));
-                    texts.push(OwnedScreenText {
-                        text: self.tr(key).to_owned(),
-                        origin: [rect[0], rect[1] + 6.5],
-                        width: rect[2],
-                        font_size: 13.0,
-                        color: if hovered && active {
-                            palette.text_on_accent
-                        } else if active {
-                            palette.body
+                    );
+                    d.label(
+                        UiRect::new(rect[0], rect[1] + 6.5, rect[2], 16.0),
+                        self.tr(key),
+                        if ks == kit::KitState::Hovered {
+                            color_to_rgba(palette.text_on_accent)
+                        } else if ks == kit::KitState::Disabled {
+                            color_to_rgba(palette.quote)
                         } else {
-                            palette.quote
+                            color_to_rgba(palette.body)
                         },
-                        align: TextAlign::Center,
-                    });
+                        13.0,
+                        PaintAlign::Center,
+                    );
                 }
-                texts.push(OwnedScreenText {
-                    text: self.tr(keys::EXPLAIN_DEFENSE_HINT).to_owned(),
-                    origin: [win[0] + 320.0, win[1] + win[3] - 27.0],
-                    width: (win[2] - 480.0).max(120.0),
-                    font_size: 12.0,
-                    color: palette.quote,
-                    align: TextAlign::Center,
-                });
+                d.label(
+                    UiRect::new(
+                        win[0] + 320.0,
+                        win[1] + win[3] - 27.0,
+                        (win[2] - 480.0).max(120.0),
+                        15.0,
+                    ),
+                    self.tr(keys::EXPLAIN_DEFENSE_HINT),
+                    color_to_rgba(palette.quote),
+                    12.0,
+                    PaintAlign::Center,
+                );
             }
             // Карточки узлов (F-3: значение + формула + адрес)
             for laid in &layout.nodes {
@@ -911,18 +967,23 @@ impl App {
                         color_to_rgba(palette.whatif_badge)
                     }
                 };
-                quads.push(screen_rect_quad(
-                    camera,
-                    viewport,
-                    rect,
+                // FR-060: состояние карточки — машина виджета (курсор —
+                // Hovered, клик по подсвеченной ноде — Selected); рамка
+                // акцентом при любом непустом состоянии (матрица кита)
+                let mut card_state = WidgetState::default();
+                card_state.set_pointer(hovered, false);
+                card_state.set_selected(picked);
+                let emphasized = card_state.kit_state() != kit::KitState::Normal;
+                d.rect(
+                    UiRect::new(rect[0], rect[1], rect[2], rect[3]),
                     palette.card_fill,
-                    if hovered || picked {
+                    if emphasized {
                         palette.accent
                     } else {
                         palette.palette_border
                     },
                     8.0,
-                ));
+                );
                 // У2-вспышка: затухающая рамка поверх выделения (700 мс);
                 // после затухания остаётся только рамка выделения выше.
                 if picked {
@@ -930,9 +991,12 @@ impl App {
                     if flash > 0.0 {
                         let mut glow = palette.accent;
                         glow[3] = flash;
-                        quads.push(screen_rect_quad(
-                            camera, viewport, rect, [0.0; 4], glow, 12.0,
-                        ));
+                        d.rect(
+                            UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                            [0.0; 4],
+                            glow,
+                            12.0,
+                        );
                     }
                 }
                 // Полоса-акцент на стороне РОДИТЕЛЯ (FR-083): Rtl — слева
@@ -943,9 +1007,12 @@ impl App {
                 } else {
                     [rect[0], rect[1], strip_w, rect[3]]
                 };
-                quads.push(screen_rect_quad(
-                    camera, viewport, strip_rect, strip, [0.0; 4], 0.0,
-                ));
+                d.rect(
+                    UiRect::new(strip_rect[0], strip_rect[1], strip_rect[2], strip_rect[3]),
+                    strip,
+                    [0.0; 4],
+                    0.0,
+                );
                 // Ревизия владельца 2026-10-02 (дефект «текст неадекватно
                 // меняется при зуме»): паддинги карточки масштабируются
                 // вместе с геометрией (прежде 10/16 px были захардкожены
@@ -960,31 +1027,28 @@ impl App {
                 // приходят в порты строк (рендер кривых не меняется).
                 if !laid.rows.is_empty() {
                     // Шапка: заголовок узла в верхней зоне TABLE_HEADER_H
-                    texts.push(OwnedScreenText {
-                        text: node.title.clone(),
-                        origin: [tx, rect[1] + 6.0 * scale],
-                        width: text_w,
-                        font_size: font(12.0),
-                        color: palette.title,
-                        align: TextAlign::Left,
-                    });
+                    d.label(
+                        UiRect::new(tx, rect[1] + 6.0 * scale, text_w, 16.0),
+                        &node.title,
+                        color_to_rgba(palette.title),
+                        font(12.0),
+                        PaintAlign::Left,
+                    );
                     // Разделитель шапки: линия по нижней границе зоны
                     // заголовка (полупрозрачный бордер)
                     let mut sep = palette.palette_border;
                     sep[3] *= 0.5;
-                    quads.push(screen_rect_quad(
-                        camera,
-                        viewport,
-                        [
+                    d.rect(
+                        UiRect::new(
                             rect[0],
                             rect[1] + explain_ui::TABLE_HEADER_H * scale,
                             rect[2],
                             1.0,
-                        ],
+                        ),
                         sep,
                         [0.0; 4],
                         0.0,
-                    ));
+                    );
                     for row in &laid.rows {
                         let leaf = &tree.nodes[row.leaf_idx];
                         let row_font = (10.0 * scale).max(8.0);
@@ -1065,14 +1129,13 @@ impl App {
                             text.push_str(&value_str);
                         }
                         if !text.is_empty() {
-                            texts.push(OwnedScreenText {
-                                text,
-                                origin: [tx, row_y],
-                                width: row_w,
-                                font_size: row_font,
-                                color: value_color,
-                                align: TextAlign::Left,
-                            });
+                            d.label(
+                                UiRect::new(tx, row_y, row_w, 14.0),
+                                &text,
+                                color_to_rgba(value_color),
+                                row_font,
+                                PaintAlign::Left,
+                            );
                         }
                         // Иконка-карандаш — только у редактируемых строк
                         // (лист со строкой Numi-листа и Ok-значением);
@@ -1090,11 +1153,12 @@ impl App {
                             let strip_inset = explain_ui::edit_icon_right_inset(scale, ltr);
                             let icon =
                                 explain_ui::row_edit_rect(rect, row.y, row.h, scale, strip_inset);
-                            let icon_hovered = point_in_rect(icon, self.cursor);
-                            quads.push(screen_rect_quad(
-                                camera,
-                                viewport,
-                                icon,
+                            // FR-060: hover иконки — машина состояний виджета
+                            let mut icon_state = WidgetState::default();
+                            icon_state.set_pointer(point_in_rect(icon, self.cursor), false);
+                            let icon_hovered = icon_state.kit_state() == kit::KitState::Hovered;
+                            d.rect(
+                                UiRect::new(icon[0], icon[1], icon[2], icon[3]),
                                 if icon_hovered {
                                     palette.accent
                                 } else {
@@ -1106,7 +1170,7 @@ impl App {
                                     palette.palette_border
                                 },
                                 4.0,
-                            ));
+                            );
                             // FR-085: SVG-иконка карандаша (FR-ICONS,
                             // screen-space физ. px) вместо текстового глифа
                             // (U+270E нет в вшитом шрифте — рисовался пустой
@@ -1138,18 +1202,22 @@ impl App {
                                 });
                             } else {
                                 let icon_font = (11.0 * scale).max(8.0);
-                                texts.push(OwnedScreenText {
-                                    text: explain_ui::EDIT_ICON_GLYPH.to_owned(),
-                                    origin: [icon[0], icon[1] + (icon[3] - icon_font) / 2.0],
-                                    width: icon[2],
-                                    font_size: icon_font,
-                                    color: if icon_hovered {
-                                        palette.text_on_accent
+                                d.label(
+                                    UiRect::new(
+                                        icon[0],
+                                        icon[1] + (icon[3] - icon_font) / 2.0,
+                                        icon[2],
+                                        icon_font + 2.0,
+                                    ),
+                                    explain_ui::EDIT_ICON_GLYPH,
+                                    if icon_hovered {
+                                        color_to_rgba(palette.text_on_accent)
                                     } else {
-                                        palette.body
+                                        color_to_rgba(palette.body)
                                     },
-                                    align: TextAlign::Center,
-                                });
+                                    icon_font,
+                                    PaintAlign::Center,
+                                );
                             }
                         }
                     }
@@ -1158,14 +1226,13 @@ impl App {
                     continue;
                 }
                 // 1) Заголовок ноды-таблицы
-                texts.push(OwnedScreenText {
-                    text: node.title.clone(),
-                    origin: [tx, rect[1] + 7.0 * scale],
-                    width: text_w,
-                    font_size: font(12.0),
-                    color: palette.title,
-                    align: TextAlign::Left,
-                });
+                d.label(
+                    UiRect::new(tx, rect[1] + 7.0 * scale, text_w, 16.0),
+                    &node.title,
+                    color_to_rgba(palette.title),
+                    font(12.0),
+                    PaintAlign::Left,
+                );
                 // 2) Значение (Ok — цифра; Err — диагностика; None — метка
                 // терминального узла: «цикл»/«не связано»/…)
                 // X3 (AC-4.2): на затронутых узлах — дельта what-if в
@@ -1199,34 +1266,31 @@ impl App {
                         palette.error,
                     ),
                 };
-                texts.push(OwnedScreenText {
-                    text: value_str,
-                    origin: [tx, rect[1] + 25.0 * scale],
-                    width: text_w,
-                    font_size: font(13.5),
-                    color: value_color,
-                    align: TextAlign::Left,
-                });
+                d.label(
+                    UiRect::new(tx, rect[1] + 25.0 * scale, text_w, 18.0),
+                    &value_str,
+                    color_to_rgba(value_color),
+                    font(13.5),
+                    PaintAlign::Left,
+                );
                 // 3) Формула узла/строки (у листа и терминалов нет)
                 if let Some(formula) = &node.formula {
-                    texts.push(OwnedScreenText {
-                        text: formula.clone(),
-                        origin: [tx, rect[1] + 44.0 * scale],
-                        width: text_w,
-                        font_size: font(10.5),
-                        color: palette.body,
-                        align: TextAlign::Left,
-                    });
+                    d.label(
+                        UiRect::new(tx, rect[1] + 44.0 * scale, text_w, 14.0),
+                        formula,
+                        color_to_rgba(palette.body),
+                        font(10.5),
+                        PaintAlign::Left,
+                    );
                 } else if node.kind == canvas_core::LineageNodeKind::Leaf {
                     // Лист-константа: пометка «исходное значение» (AC-1.4)
-                    texts.push(OwnedScreenText {
-                        text: self.tr(keys::EXPLAIN_LEAF_TAG).to_owned(),
-                        origin: [tx, rect[1] + 44.0 * scale],
-                        width: text_w,
-                        font_size: font(10.5),
-                        color: palette.quote,
-                        align: TextAlign::Left,
-                    });
+                    d.label(
+                        UiRect::new(tx, rect[1] + 44.0 * scale, text_w, 14.0),
+                        self.tr(keys::EXPLAIN_LEAF_TAG),
+                        color_to_rgba(palette.quote),
+                        font(10.5),
+                        PaintAlign::Left,
+                    );
                 }
                 // 4) Адресная строка ребра (AC-2.1: квалифицированный адрес)
                 if let Some(via) = &laid.via {
@@ -1247,14 +1311,13 @@ impl App {
                         addr.push_str(param);
                     }
                     if !addr.is_empty() {
-                        texts.push(OwnedScreenText {
-                            text: addr,
-                            origin: [tx, rect[1] + 58.0 * scale],
-                            width: text_w,
-                            font_size: font(9.5),
-                            color: palette.quote,
-                            align: TextAlign::Left,
-                        });
+                        d.label(
+                            UiRect::new(tx, rect[1] + 58.0 * scale, text_w, 12.0),
+                            &addr,
+                            color_to_rgba(palette.quote),
+                            font(9.5),
+                            PaintAlign::Left,
+                        );
                     }
                 }
                 // Бейдж фронтира «+N глубже» (AC-2.3: ручное разворачивание)
@@ -1273,25 +1336,22 @@ impl App {
                             bh,
                         ]
                     };
-                    quads.push(screen_rect_quad(
-                        camera,
-                        viewport,
-                        badge,
+                    d.rect(
+                        UiRect::new(badge[0], badge[1], badge[2], badge[3]),
                         palette.accent,
                         [0.0; 4],
                         7.0,
-                    ));
-                    texts.push(OwnedScreenText {
-                        text: self.trf(
+                    );
+                    d.label(
+                        UiRect::new(badge[0], badge[1] + 1.5, bw, 12.0),
+                        &self.trf(
                             keys::EXPLAIN_EXPAND_BADGE,
                             &[("n", vis.hidden_descendants[laid.idx].to_string().as_str())],
                         ),
-                        origin: [badge[0], badge[1] + 1.5],
-                        width: bw,
-                        font_size: 9.5,
-                        color: palette.text_on_accent,
-                        align: TextAlign::Center,
-                    });
+                        color_to_rgba(palette.text_on_accent),
+                        9.5,
+                        PaintAlign::Center,
+                    );
                 }
                 // X3 (AC-4.1): старая текстовая кнопка «Изменить» удалена —
                 // FR-084 заменяет её иконками-карандашами у строк таблиц
@@ -1300,9 +1360,11 @@ impl App {
             }
             // FR-083: индикатор «не всё влезло» — стрелки у краёв тела со
             // скрытым контентом + подсказка в футере справа. КЛИП: у
-            // модального прохода (stage-квады/screen-тексты) скиссоры нет
-            // (scissor FR-056 — только полосы реестра), контент рисуется
-            // как есть; пан ограничен pan_clamp, индикатор обязателен.
+            // модального прохода (Painter → stage-инстансы) скиссоры нет
+            // (scissor FR-056 — только полосы реестра; Painter::clip_rect
+            // — прозрачный проход до scissor-конвертации), контент
+            // рисуется как есть; пан ограничен pan_clamp, индикатор
+            // обязателен.
             // FR-084: стрелки переполнения — оконная семантика в координатах
             // пана (не origin), поведение прежнее — пан клампится локально.
             let pan = explain_ui::pan_clamp(state.pan, layout.bounds, scale, body);
@@ -1330,22 +1392,19 @@ impl App {
                     if !shown {
                         continue;
                     }
-                    quads.push(screen_rect_quad(
-                        camera,
-                        viewport,
-                        rect,
+                    d.rect(
+                        UiRect::new(rect[0], rect[1], rect[2], rect[3]),
                         palette.accent,
                         [0.0; 4],
                         7.0,
-                    ));
-                    texts.push(OwnedScreenText {
-                        text: glyph.to_owned(),
-                        origin: [rect[0], rect[1] + 3.0],
-                        width: rect[2],
-                        font_size: 12.0,
-                        color: palette.text_on_accent,
-                        align: TextAlign::Center,
-                    });
+                    );
+                    d.label(
+                        UiRect::new(rect[0], rect[1] + 3.0, rect[2], 15.0),
+                        glyph,
+                        color_to_rgba(palette.text_on_accent),
+                        12.0,
+                        PaintAlign::Center,
+                    );
                 }
                 // Подсказка в футере справа (в защите — левее кнопок футера);
                 // origin считается от правого края (Right-выравнивания в
@@ -1356,14 +1415,13 @@ impl App {
                 } else {
                     win[0] + win[2] - explain_ui::BODY_PAD
                 };
-                texts.push(OwnedScreenText {
-                    text: self.tr(keys::EXPLAIN_OVERFLOW_HINT).to_owned(),
-                    origin: [hint_right - HINT_W, win[1] + win[3] - 28.0],
-                    width: HINT_W,
-                    font_size: 12.0,
-                    color: palette.quote,
-                    align: TextAlign::Left,
-                });
+                d.label(
+                    UiRect::new(hint_right - HINT_W, win[1] + win[3] - 28.0, HINT_W, 15.0),
+                    self.tr(keys::EXPLAIN_OVERFLOW_HINT),
+                    color_to_rgba(palette.quote),
+                    12.0,
+                    PaintAlign::Left,
+                );
             }
             // Hover узла дерева (кадр) — рамка акцентом. FR-084: база
             // контента (origin) не входит в геометрию node_at — точка
@@ -1373,6 +1431,17 @@ impl App {
                 scale,
                 body,
                 [self.cursor[0] - origin[0], self.cursor[1] - origin[1]],
+            );
+            // FR-060: items кита → инстансы stage (screen→world, радиус и
+            // размер ÷ zoom — конвенция прежних ручных квадов; порядок
+            // items = draw-порядок — сохранён дословно)
+            paint_items_to_stage(
+                d.take_items(),
+                camera,
+                viewport,
+                zoom,
+                &mut quads,
+                &mut texts,
             );
         }
         if let Some(s) = self.explain.as_mut() {
@@ -1527,5 +1596,75 @@ impl App {
             color: palette.title,
             align: TextAlign::Center,
         });
+    }
+}
+
+/// FR-060 (W-c): кружок draw-прохода (ветки-безье) — Painter-rect:
+/// квадрат d×d с радиусом d/2 — та же геометрия, что `screen_dot`
+/// (конвертация stage делит размер и радиус на зум так же). Точечного
+/// примитива у [`Painter`] нет ([`PaintItem`] — Rect/Text/Icon).
+fn dot_rect(center: [f32; 2], diameter: f32) -> (UiRect, f32) {
+    let r = diameter / 2.0;
+    (
+        UiRect::new(center[0] - r, center[1] - r, diameter, diameter),
+        r,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Кружок через Painter-rect — геометрия `screen_dot` (квадрат d×d
+    /// вокруг центра, радиус d/2 → окружность на рендере).
+    #[test]
+    fn dot_rect_matches_screen_dot_geometry() {
+        let (rect, radius) = dot_rect([100.0, 50.0], 6.0);
+        assert_eq!(
+            rect,
+            UiRect::new(97.0, 47.0, 6.0, 6.0),
+            "квадрат d×d вокруг центра"
+        );
+        assert_eq!(radius, 3.0, "радиус = d/2 → окружность");
+        let (rect, radius) = dot_rect([0.0, 0.0], 4.0);
+        assert_eq!(rect, UiRect::new(-2.0, -2.0, 4.0, 4.0));
+        assert_eq!(radius, 2.0);
+    }
+
+    /// FR-060: состояние кнопки футера защиты — матрица кита: Disabled
+    /// глушит hover; активная кнопка ловит Hovered (стиль прохода:
+    /// акцент при Hovered, рамка/текст — по Disabled/Hovered/Normal).
+    #[test]
+    fn defense_button_widget_state_matrix() {
+        let state_of = |hovered: bool, enabled: bool| {
+            let mut s = WidgetState::default();
+            s.set_pointer(hovered, false);
+            s.set_disabled(!enabled);
+            s.kit_state()
+        };
+        assert_eq!(state_of(true, true), kit::KitState::Hovered);
+        assert_eq!(state_of(false, true), kit::KitState::Normal);
+        assert_eq!(state_of(true, false), kit::KitState::Disabled);
+        assert_eq!(state_of(false, false), kit::KitState::Disabled);
+    }
+
+    /// FR-060: карточка узла — Hovered/Selected → «emphasized» (рамка
+    /// акцентом); Normal — рамка панелей. Hover сильнее Selected —
+    /// результат тот же (рамка акцента в обоих состояниях).
+    #[test]
+    fn node_card_widget_state_matrix() {
+        let emphasized = |hovered: bool, picked: bool| {
+            let mut s = WidgetState::default();
+            s.set_pointer(hovered, false);
+            s.set_selected(picked);
+            s.kit_state() != kit::KitState::Normal
+        };
+        assert!(emphasized(false, true), "picked → Selected");
+        assert!(emphasized(true, false), "hover → Hovered");
+        assert!(emphasized(true, true), "hover + picked — рамка та же");
+        assert!(
+            !emphasized(false, false),
+            "обычная карточка — без рамки акцента"
+        );
     }
 }
