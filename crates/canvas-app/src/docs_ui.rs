@@ -7,14 +7,38 @@
 //! ([`layout_page`], таблицы за флагом `parse_blocks_opts` — заметки не
 //! затронуты), скролл с клампом ([`ScrollState`]) и hit-тесты ссылок.
 //!
+//! Волна W-c (аудит ui-kit, §10): скролл — ТИП КИТА
+//! (`canvas_ui::kit::ScrollState`; локальный дубль `offset`/`max_offset`
+//! удалён, семантика колеса/sync — [`wheel_scroll`]/[`sync_scroll`]);
+//! стопки пунктов меню «?» и подменю разделов — `kit::list_rows`
+//! (паттерн `hints_ui::hint_rows`); слот панели просмотрщика —
+//! `kit::stack` (паттерн `flowmap_ui`). Раскладка markdown-блоков и
+//! таблиц kit-примитивов не выражает (ячейки одной строки с одного y и
+//! перенос по ширине колонки — вне контракта `list_rows`/`Table`),
+//! поэтому в ней заменены только отступы на шкалу `canvas_core::tokens`
+//! (SPACING_*), ноль визуального скачка.
+//!
 //! Рендер и ввод — приложение (`main.rs`): квады + screen-тексты
 //! (паттерн `settings_overlay`), клик по разделу подменю открывает
 //! просмотрщик, колесо скроллит, клик по внутренней ссылке ведёт на
 //! страницу. Схема `config.toml` не меняется.
 
+use canvas_core::tokens;
 use canvas_core::Language;
 use canvas_render::gfm::{self, Block, LinkSegment};
+use canvas_ui::geometry::{UiRect, UiVec2};
+use canvas_ui::kit;
+use canvas_ui::layout::{stack, HAlign, VAlign};
 use canvas_ui::measure::TextMeasurer;
+
+/// FR-059-паттерн (волна W-c): состояние скролла просмотрщика — ТИП КИТА
+/// (`canvas_ui::kit::ScrollState`: поля `offset`/`content_h`/`viewport_h`,
+/// кламп — `scroll_by`+`clamp`, максимум — `max_offset()`). Путь
+/// `docs_ui::ScrollState` сохранён реэкспортом для потребителей
+/// (`app.rs`/`overlays.rs`); прежние ассоциированные `new`/`wheel`/
+/// `resize` локального дубля — свободные функции [`sync_scroll`] и
+/// [`wheel_scroll`] поверх кита.
+pub use canvas_ui::kit::ScrollState;
 
 use crate::i18n::{self, keys};
 
@@ -208,8 +232,9 @@ pub fn page_index_by_id(id: &str) -> Option<usize> {
 pub const HELP_MENU_WIDTH: f32 = 200.0;
 /// Высота пункта меню помощи.
 pub const HELP_MENU_ITEM_H: f32 = 28.0;
-/// Внутренний отступ колонки меню помощи.
-pub const HELP_MENU_PAD: f32 = 6.0;
+/// Внутренний отступ колонки меню помощи (`SPACING_S` — токен шкалы,
+/// значение прежнее: ноль визуального скачка).
+pub const HELP_MENU_PAD: f32 = tokens::SPACING_S;
 /// Ширина колонки подменю «Документация ▸»: «Расчёты и поток значений».
 pub const DOCS_SUBMENU_WIDTH: f32 = 260.0;
 /// Зазор между колонкой меню и подменю (паттерн `submenu_origin_next_to`).
@@ -261,14 +286,41 @@ pub fn help_menu_rect(origin: [f32; 2]) -> [f32; 4] {
     ]
 }
 
-/// Rect пункта меню помощи (hover/hit-тест/рендер).
-pub fn help_menu_item_rect(origin: [f32; 2], i: usize) -> [f32; 4] {
-    [
+/// Строки колонки меню — `kit::list_rows` (волна W-c; паттерн
+/// `hints_ui::hint_rows`): окно списка без прокрутки — высота ровно в
+/// пункты, зазор 0, offset 0 (прежняя стопка дословно, I-1).
+fn menu_item_rows(origin: [f32; 2], width: f32, count: usize) -> Vec<UiRect> {
+    let content_h = count as f32 * HELP_MENU_ITEM_H;
+    let area = UiRect::new(
         origin[0] + HELP_MENU_PAD,
-        origin[1] + HELP_MENU_PAD + i as f32 * HELP_MENU_ITEM_H,
-        HELP_MENU_WIDTH - HELP_MENU_PAD * 2.0,
-        HELP_MENU_ITEM_H,
-    ]
+        origin[1] + HELP_MENU_PAD,
+        (width - HELP_MENU_PAD * 2.0).max(0.0),
+        content_h,
+    );
+    let scroll = ScrollState {
+        offset: 0.0,
+        content_h,
+        viewport_h: content_h,
+    };
+    kit::list_rows(area, &scroll, HELP_MENU_ITEM_H, 0.0, count)
+        .into_iter()
+        .map(|(_, rect)| rect)
+        .collect()
+}
+
+/// Rect кита → `[x, y, w, h]` (публичный API меню — в координатах окна).
+fn rect_arr(rect: UiRect) -> [f32; 4] {
+    [rect.x, rect.y, rect.w, rect.h]
+}
+
+/// Rect пункта меню помощи (hover/рендер). Стопка — `menu_item_rows`
+/// (kit `list_rows`); валидные индексы — бит-в-бит прежней формуле, вне
+/// диапазона — пустой rect (прежняя формула границу не проверяла).
+pub fn help_menu_item_rect(origin: [f32; 2], i: usize) -> [f32; 4] {
+    menu_item_rows(origin, HELP_MENU_WIDTH, HELP_MENU_ITEMS.len())
+        .get(i)
+        .map(|rect| rect_arr(*rect))
+        .unwrap_or([0.0; 4])
 }
 
 /// Hit-test пункта меню помощи (вне пунктов/в паддингах — None).
@@ -324,14 +376,13 @@ pub fn help_submenu_rect(origin: [f32; 2]) -> [f32; 4] {
     ]
 }
 
-/// Rect пункта подменю разделов.
+/// Rect пункта подменю разделов (стопка — `menu_item_rows`,
+/// kit `list_rows`; валидные индексы — бит-в-бит прежней формуле).
 pub fn help_submenu_item_rect(origin: [f32; 2], i: usize) -> [f32; 4] {
-    [
-        origin[0] + HELP_MENU_PAD,
-        origin[1] + HELP_MENU_PAD + i as f32 * HELP_MENU_ITEM_H,
-        DOCS_SUBMENU_WIDTH - HELP_MENU_PAD * 2.0,
-        HELP_MENU_ITEM_H,
-    ]
+    menu_item_rows(origin, DOCS_SUBMENU_WIDTH, DOCS_PAGES.len())
+        .get(i)
+        .map(|rect| rect_arr(*rect))
+        .unwrap_or([0.0; 4])
 }
 
 /// Hit-test пункта подменю разделов: индекс страницы или None.
@@ -364,10 +415,18 @@ pub const DOCS_SCROLLBAR_W: f32 = 6.0;
 pub const DOCS_CLOSE_BUTTON: f32 = 26.0;
 
 /// Rect панели просмотрщика: правый док на всю высоту окна, ширина
-/// клампится к окну (320×240 — не шире окна).
+/// клампится к окну (320×240 — не шире окна). Волна W-c: слот — кит
+/// `stack` (End/Start, паттерн `flowmap_ui`), x/y — прежняя формула
+/// «правый край, ширина min(480, окно)» дословно.
 pub fn viewer_rect(viewport: [f32; 2]) -> [f32; 4] {
     let w = DOCS_PANEL_WIDTH.min(viewport[0].max(0.0));
-    [viewport[0] - w, 0.0, w, viewport[1]]
+    let panel = stack(
+        UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
+        UiVec2::new(w, viewport[1]),
+        HAlign::End,
+        VAlign::Start,
+    );
+    [panel.x, panel.y, panel.w, panel.h]
 }
 
 /// Rect кнопки × (закрыть) в шапке панели.
@@ -704,12 +763,14 @@ pub fn layout_page(
         match block {
             Block::Heading { level, text } => {
                 let kind = RowKind::Heading((*level).clamp(1, 6));
-                b.push_wrapped(text, kind, 0.0, if *level <= 2 { 8.0 } else { 6.0 });
+                b.push_wrapped(text, kind, 0.0, if *level <= 2 { tokens::SPACING_SM } else { tokens::SPACING_S });
             }
-            Block::Paragraph { text } => b.push_wrapped(text, RowKind::Body, 0.0, 6.0),
+            Block::Paragraph { text } => {
+                b.push_wrapped(text, RowKind::Body, 0.0, tokens::SPACING_S)
+            }
             Block::Quote { text } => {
-                let start_y = b.layout.content_height + 6.0;
-                b.push_wrapped(text, RowKind::Quote, 12.0, 6.0);
+                let start_y = b.layout.content_height + tokens::SPACING_S;
+                b.push_wrapped(text, RowKind::Quote, tokens::SPACING_LG, tokens::SPACING_S);
                 let end_y = b.layout.content_height;
                 if end_y > start_y {
                     b.layout.quads.push(DocQuad {
@@ -722,7 +783,7 @@ pub fn layout_page(
                 }
             }
             Block::Code { text } => {
-                let mut y = b.layout.content_height + 8.0;
+                let mut y = b.layout.content_height + tokens::SPACING_SM;
                 for line in text.split('\n') {
                     b.place_line(
                         &[DocSpan {
@@ -730,15 +791,15 @@ pub fn layout_page(
                             href: None,
                         }],
                         RowKind::Code,
-                        8.0,
+                        tokens::SPACING_SM,
                         y,
                     );
                     y += kind_metrics(RowKind::Code).1;
                 }
-                b.layout.content_height += 6.0;
+                b.layout.content_height += tokens::SPACING_S;
             }
             Block::Rule => {
-                let y = b.layout.content_height + 8.0;
+                let y = b.layout.content_height + tokens::SPACING_SM;
                 b.layout.quads.push(DocQuad {
                     x: 0.0,
                     y,
@@ -746,9 +807,11 @@ pub fn layout_page(
                     height: 1.5,
                     kind: QuadKind::Rule,
                 });
-                b.layout.content_height = y + 10.0;
+                b.layout.content_height = y + tokens::SPACING_MD;
             }
             Block::List { ordered, items } => {
+                // Отступы пункта (зазор 4, индент 16, хвост 4) — вне шкалы
+                // SPACING_*, дословно (кит-аналога блока списка нет).
                 for (n, item) in items.iter().enumerate() {
                     let marker = match item.checkbox {
                         Some(true) => "[x] ".to_owned(),
@@ -789,11 +852,14 @@ pub fn layout_page(
 /// с одного y; линия-подчёркивание под шапкой.
 fn layout_table(b: &mut PageBuilder, header: &[String], rows: &[Vec<String>]) {
     let cols = header.len().max(1);
-    let gap = 12.0;
+    // Зазор колонок и пад ячейки — шкала токенов (значения прежние:
+    // ноль визуального скачка); остальная геометрия (сжатие колонок,
+    // ячейки одной строки с одного y) — вне kit-аналогов, дословно.
+    let gap = tokens::SPACING_LG;
     let avail = (b.max_w - gap * (cols - 1) as f32).max(10.0);
     // Естественная ширина колонки — самая широкая ячейка (без переноса)
     let mut cell_w = |text: &str| {
-        b.m.width_of(b.fs, &strip_inline_markers(text), FAMILY, 12.0) + 6.0
+        b.m.width_of(b.fs, &strip_inline_markers(text), FAMILY, 12.0) + tokens::SPACING_S
     };
     let natural: Vec<f32> = (0..cols)
         .map(|c| {
@@ -816,7 +882,7 @@ fn layout_table(b: &mut PageBuilder, header: &[String], rows: &[Vec<String>]) {
     // Шапка: ячейки с одного y; строки-обёртки всех ячеек идут в порядке
     // y (внешний цикл — индекс строки, внутренний — колонка), чтобы
     // вектор lines оставался монотонным по y (инвариант раскладки)
-    let header_y = b.layout.content_height + 8.0;
+    let header_y = b.layout.content_height + tokens::SPACING_SM;
     let (font, cell_h) = kind_metrics(RowKind::TableCell { header: false });
     let header_cells: Vec<Vec<Vec<DocSpan>>> = header
         .iter()
@@ -845,7 +911,7 @@ fn layout_table(b: &mut PageBuilder, header: &[String], rows: &[Vec<String>]) {
         kind: QuadKind::Rule,
     });
     // Тело: строки таблицы — ячейки с одного y, высота по максимуму строк
-    let mut row_y = header_bottom + 10.0;
+    let mut row_y = header_bottom + tokens::SPACING_MD;
     for row in rows {
         let cells: Vec<Vec<Vec<DocSpan>>> = row
             .iter()
@@ -869,48 +935,44 @@ fn layout_table(b: &mut PageBuilder, header: &[String], rows: &[Vec<String>]) {
     b.layout.content_height = b.layout.content_height.max(row_y);
 }
 
-// --- Скролл ---
+// --- Скролл (kit ScrollState, волна W-c) ------------------------------------
 
-/// Состояние скролла просмотрщика: offset в `[0, max_offset]` после
-/// любого колеса (инвариант FR-027).
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct ScrollState {
-    pub offset: f32,
-    pub max_offset: f32,
+// Локальный дубль `ScrollState` (`offset`/`max_offset` + `new`/`wheel`/
+// `resize`) УДАЛЁН (волна W-c, аудит ui-kit §10): состояние скролла —
+// ТИП КИТА [`ScrollState`] (реэкспорт `canvas_ui::kit::ScrollState`,
+// поля `offset`/`content_h`/`viewport_h`). Инвариант FR-027 «offset в
+// `[0, max_offset]` после любого колеса» держат [`wheel_scroll`] и
+// [`sync_scroll`] через `ScrollState::clamp` кита.
+
+/// Колесо просмотрщика — семантика прежнего `ScrollState::wheel` поверх
+/// кита: прокрутка на `dy` (вниз > 0) с клампом в `[0, max_offset()]`
+/// (`scroll_by` + `clamp`); `true` — offset изменился.
+pub fn wheel_scroll(state: &mut ScrollState, dy: f32) -> bool {
+    let before = state.offset;
+    state.scroll_by(dy);
+    state.clamp();
+    (state.offset - before).abs() >= f32::EPSILON
 }
 
-impl ScrollState {
-    /// Новый скролл под контент: `max = max(0, content − view)`.
-    pub fn new(content_height: f32, view_height: f32) -> Self {
-        Self {
-            offset: 0.0,
-            max_offset: (content_height - view_height).max(0.0),
-        }
-    }
-
-    /// Прокрутить на dy (вниз > 0) с клампом; true — offset изменился.
-    pub fn wheel(&mut self, dy: f32) -> bool {
-        let next = (self.offset + dy).clamp(0.0, self.max_offset);
-        if (next - self.offset).abs() < f32::EPSILON {
-            return false;
-        }
-        self.offset = next;
-        true
-    }
-
-    /// Кламп после смены высоты окна (пересчёт max без сброса позиции).
-    pub fn resize(&mut self, content_height: f32, view_height: f32) {
-        self.max_offset = (content_height - view_height).max(0.0);
-        self.offset = self.offset.clamp(0.0, self.max_offset);
-    }
+/// Синхронизация скролла с контентом/окном — семантика прежних
+/// `ScrollState::new`/`resize`: полная высота контента → `content_h`
+/// («полный контент» кита), высота окна → `viewport_h`, затем кламп
+/// позиции без сброса. Идемпотентно — вызывает раскладка при открытии
+/// страницы/смене ширины панели (паттерн `flow_map_layout`).
+pub fn sync_scroll(state: &mut ScrollState, content_height: f32, view_height: f32) {
+    state.content_h = content_height;
+    state.viewport_h = view_height;
+    state.clamp();
 }
 
 /// Hit-test ссылки (FR-027): точка окна → цель ссылки или None. Точка
 /// пересчитывается в координаты контента (минус origin зоны и скролл);
 /// некликабельные внешние ссылки в `links` не попадают (фильтр сборки).
+/// Волна W-c: скролл — kit [`ScrollState`] по ссылке (тип кита не
+/// `Copy`; прежний параметр по значению работал на копии).
 pub fn link_at(
     layout: &PageLayout,
-    scroll: ScrollState,
+    scroll: &ScrollState,
     content_origin: [f32; 2],
     point: [f32; 2],
 ) -> Option<&LinkRect> {
@@ -1035,24 +1097,79 @@ mod tests {
         assert!(content[1] + content[3] <= wide[1] + wide[3]);
     }
 
-    /// Скролл: кламп offset после «перемотки» за границы; короткая
-    /// страница — max_offset = 0; resize пересчитает без сброса позиции.
+    /// Скролл (kit `ScrollState` + [`wheel_scroll`]/[`sync_scroll`]): кламп
+    /// offset после «перемотки» за границы; короткая страница —
+    /// `max_offset() = 0`; sync (resize) пересчитает без сброса позиции.
     #[test]
     fn scroll_clamps_offset() {
-        let mut s = ScrollState::new(2000.0, 500.0);
-        assert_eq!(s.max_offset, 1500.0);
-        assert!(!s.wheel(-500.0), "вверх из 0 — кламп, без изменения");
+        let mut s = ScrollState {
+            offset: 0.0,
+            content_h: 2000.0,
+            viewport_h: 500.0,
+        };
+        assert_eq!(s.max_offset(), 1500.0);
+        assert!(!wheel_scroll(&mut s, -500.0), "вверх из 0 — кламп, без изменения");
         assert_eq!(s.offset, 0.0);
-        assert!(s.wheel(9999.0));
-        assert_eq!(s.offset, 1500.0, "вниз — кламп к max");
-        assert!(!s.wheel(10.0), "на границе — без изменений");
-        let short = ScrollState::new(100.0, 500.0);
-        assert_eq!(short.max_offset, 0.0);
-        let mut s = ScrollState::new(2000.0, 500.0);
-        s.wheel(1000.0);
-        s.resize(2000.0, 1600.0);
-        assert_eq!(s.max_offset, 400.0);
-        assert_eq!(s.offset, 400.0);
+        assert!(wheel_scroll(&mut s, 9999.0));
+        assert_eq!(s.offset, 1500.0, "вниз — кламп к max_offset()");
+        assert!(!wheel_scroll(&mut s, 10.0), "на границе — без изменений");
+        let short = ScrollState {
+            offset: 0.0,
+            content_h: 100.0,
+            viewport_h: 500.0,
+        };
+        assert_eq!(short.max_offset(), 0.0);
+        assert!(!short.needs_scroll(), "короткая страница — скролл не нужен");
+        let mut s = ScrollState {
+            offset: 0.0,
+            content_h: 2000.0,
+            viewport_h: 500.0,
+        };
+        assert!(wheel_scroll(&mut s, 1000.0));
+        sync_scroll(&mut s, 2000.0, 1600.0);
+        assert_eq!(s.max_offset(), 400.0);
+        assert_eq!(s.offset, 400.0, "sync клампит позицию, не сбрасывая");
+    }
+
+    /// Волна W-c: kit `ScrollState` клампится так же, как прежний локальный
+    /// дубль (`offset`/`max_offset` + `new`/`wheel`/`resize`) — граничные
+    /// случаи (оракул — прежние ожидания теста `scroll_clamps_offset`).
+    /// Прямые kit-операции (`scroll_by`+`clamp`) дают тот же результат,
+    /// что и обёртки [`wheel_scroll`]/[`sync_scroll`].
+    #[test]
+    fn kit_scroll_state_clamps_like_old_local() {
+        // «new»: max = max(0, content − view) — метод `max_offset()` кита
+        let mk = |content: f32, view: f32| ScrollState {
+            offset: 0.0,
+            content_h: content,
+            viewport_h: view,
+        };
+        assert_eq!(mk(2000.0, 500.0).max_offset(), 1500.0);
+        assert_eq!(mk(100.0, 500.0).max_offset(), 0.0, "короткая страница");
+        assert_eq!(mk(500.0, 500.0).max_offset(), 0.0, "контент = окну");
+        assert_eq!(mk(50.0, 100.0).max_offset(), 0.0, "не уходит в минус");
+        // «wheel»: кламп с обеих сторон; на границе — false (без изменения)
+        let mut s = mk(200.0, 100.0);
+        assert!(!wheel_scroll(&mut s, -1.0), "выше 0 не уходит");
+        assert_eq!(s.offset, 0.0);
+        assert!(wheel_scroll(&mut s, 150.0));
+        assert_eq!(s.offset, 100.0, "кламп к max_offset()");
+        assert!(!wheel_scroll(&mut s, 0.5), "на нижней границе — без изменений");
+        assert!(!wheel_scroll(&mut s, -0.5), "на верхней границе — без изменений");
+        // «resize»: max пересчитан, позиция сохраняется и клампится к новой
+        let mut s = mk(200.0, 100.0);
+        assert!(wheel_scroll(&mut s, 100.0)); // offset = max = 100
+        sync_scroll(&mut s, 200.0, 200.0);
+        assert_eq!(s.max_offset(), 0.0);
+        assert_eq!(s.offset, 0.0, "sync ужал позицию к новой границе");
+        // Прямые kit-операции — паритет с обёртками
+        let mut direct = mk(200.0, 100.0);
+        direct.scroll_by(150.0);
+        direct.clamp();
+        assert_eq!(direct.offset, 100.0, "scroll_by+clamp = wheel_scroll вниз");
+        direct.scroll_by(-500.0);
+        direct.clamp();
+        assert_eq!(direct.offset, 0.0, "scroll_by+clamp = wheel_scroll вверх");
     }
 
     /// Hit-тест ссылок: по ссылке — цель; мимо/снаружи зоны — None.
@@ -1068,13 +1185,46 @@ mod tests {
         });
         let scroll = ScrollState {
             offset: 5.0,
-            max_offset: 500.0,
+            content_h: 600.0,
+            viewport_h: 100.0,
         };
         let origin = [100.0, 50.0];
-        let hit = link_at(&layout, scroll, origin, [100.0 + 40.0, 50.0 + 20.0 + 5.0]);
+        let hit = link_at(&layout, &scroll, origin, [100.0 + 40.0, 50.0 + 20.0 + 5.0]);
         assert_eq!(hit.map(|l| l.target.clone()), Some(LinkTarget::Page("faq")));
-        assert!(link_at(&layout, scroll, origin, [100.0 + 40.0, 50.0 + 100.0]).is_none());
-        assert!(link_at(&layout, scroll, origin, [100.0 + 200.0, 50.0 + 25.0]).is_none());
+        assert!(link_at(&layout, &scroll, origin, [100.0 + 40.0, 50.0 + 100.0]).is_none());
+        assert!(link_at(&layout, &scroll, origin, [100.0 + 200.0, 50.0 + 25.0]).is_none());
+    }
+
+    /// Волна W-c: стопки пунктов меню «?» и подменю — kit `list_rows`
+    /// (`menu_item_rows`); геометрия бит-в-бит прежней формуле
+    /// `[origin+PAD, origin+PAD+i·H, W−2·PAD, H]` (I-1 ноль скачка); вне
+    /// диапазона — пустой rect (не паника).
+    #[test]
+    fn menu_item_rows_match_old_stack_formula() {
+        let origin = [40.0, 60.0];
+        for i in 0..HELP_MENU_ITEMS.len() {
+            let [x, y, w, h] = help_menu_item_rect(origin, i);
+            assert_eq!(x, origin[0] + HELP_MENU_PAD);
+            assert_eq!(y, origin[1] + HELP_MENU_PAD + i as f32 * HELP_MENU_ITEM_H);
+            assert_eq!(w, HELP_MENU_WIDTH - HELP_MENU_PAD * 2.0);
+            assert_eq!(h, HELP_MENU_ITEM_H);
+        }
+        for i in 0..DOCS_PAGES.len() {
+            let [x, y, w, h] = help_submenu_item_rect(origin, i);
+            assert_eq!(x, origin[0] + HELP_MENU_PAD);
+            assert_eq!(y, origin[1] + HELP_MENU_PAD + i as f32 * HELP_MENU_ITEM_H);
+            assert_eq!(w, DOCS_SUBMENU_WIDTH - HELP_MENU_PAD * 2.0);
+            assert_eq!(h, HELP_MENU_ITEM_H);
+        }
+        // Вне диапазона — пустой rect (прежняя формула границу не проверяла)
+        assert_eq!(help_menu_item_rect(origin, HELP_MENU_ITEMS.len()), [0.0; 4]);
+        assert_eq!(help_submenu_item_rect(origin, DOCS_PAGES.len()), [0.0; 4]);
+        // Окно списка menu_item_rows — ровно в пункты, offset 0: прокрутка
+        // не нужна (kit-контракт «list_rows — чистая геометрия»)
+        assert!(menu_item_rows(origin, HELP_MENU_WIDTH, 5)
+            .iter()
+            .enumerate()
+            .all(|(i, rect)| { rect.y - (origin[1] + HELP_MENU_PAD + i as f32 * HELP_MENU_ITEM_H) == 0.0 }));
     }
 
     /// Меню помощи: hit-тесты пунктов и подменю; биекция подменю ↔
