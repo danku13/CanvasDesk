@@ -206,3 +206,26 @@ Stage Summary:
 - Витрина больше не падает: прод-путь Row на внешний пул (§4.7), оракул-тест паритета; после выката — повтор e2e-сценария на live (обязательный шаг приёмки)
 - Экономия бандла измерена и расписана: главный резерв — 1.82 МБ дубликатов (2 строки профиля), затем opt-level и шрифты; план в dev-researches
 - CI должен остаться зелёным: fmt/check/test/clippy прогнаны локально с тем же тулчейном
+
+---
+Task ID: FR-091 v2 (сессия web-f324f377-6d94-493b-8e7c-59b9f9d210a1)
+Agent: Super Z (main)
+Task: Запрос владельца: «по последним записям в posthog пока не вижу чтобы wasm часть была видна в replay, так же отображаются только html части»
+
+Work Log:
+- Синхронизация: origin/main ушёл вперёд (9bf0867 FR-094 + ece0079 FR-093 + docs до 8788ff2) — пулл, рабочий шум (996 файлов 0/0) сброшен; FR-094 (паника cosmic-text витрины) уже в trunk и задеплоен (66d42445, 13:24Z)
+- Диагноз на живом проде (agent-browser, consent analytics=true, инструментированный createImageBitmap + Worker): FPS-обсервер PostHog ДЕЙСТВИТЕЛЬНО снапшотит канвас (115 вызовов/25с ≈ 4.6fps, bitmap 768×480 = remote resolutionScale 0.6), но каждый снапшот 100% пуст (nzA=0/nzRGB=0) при живом рендере композитора (47% пикселей); прямой toDataURL — WebP 3КБ (пустой); атрибут контекста preserveDrawingBuffer:false, маркер __context отсутствует
+- Корень 1 (WebGL2): wgpu создаёт webgl2 без preserveDrawingBuffer → drawing buffer очищается после композитинга → readback пуст; патч getContext у PostHog ставится после цепочки SDK→decide→lazy-recorder и проигрывает гонку буту WASM
+- Корень 2 (WebGPU, браузер владельца с реальным GPU): растр webgpu-канваса рекордер не читает ВООБЩЕ — posthog/posthog#57008 (открытый issue, «works in 2D and WebGL», у WebGPU нет аналога preserveDrawingBuffer — gpuweb#2743); сверка с исходниками lazy-recorder.js v1.435.8 (getContext-патч форсит флаг, FPS-обсервер контекст-агностичен) + документация PostHog
+- Фикс 1: index.html — getContext-шим в <head> (webgl/webgl2/experimental-webgl → preserveDrawingBuffer:true, мерж opts) ДО любых getContext (wgpu, gpu-gate-проба) — детерминированный выигрыш гонки; исправлены неверные утверждения v1 в комментарии (webgpu-растр «читается» — опровергнуто; локальный canvasCapture.resolutionScale игнорируется — только remote date-default)
+- Фикс 2: canvas-render — wasm32 static PREFER_GL_FOR_CAPTURE + pub set_prefer_gl_for_capture; create_gpu_web при флаге пропускает WebGPU-ступень (create_gpu_web_gl — прямой GL-путь, общий хвост двухступенчатого); canvas-web/renderer_launch — analytics_recording_active() (localStorage canvasdesk.consent, семантика index.html: нет записи+конфига → false; нет поля/битая → true) ставит флаг до spawn_local — §3.1: ядро не знает про PostHog
+- Локальная верификация ДО пуша (тестовая страница: live index.html + шим + абсолютные URL ассетов, python http.server, CORS GitHub Pages): pdb=true, снапшоты 0 → 16000/16000 непустых пикселей (107 вызовов/25с), рендер идентичен (47% до/после), ошибок нет — фикс подтверждён на реальном приложении без пересборки
+- Гейты: fmt; check+clippy (натив+wasm32) -D warnings — 0; тесты 402+0 (canvas-render) + 51+0 (canvas-web); node --check шим-блока; пуш aeae900
+- Ретро-фикс 3809a64 (найден при live-приёмке): быстрый GL-путь читал window.inner_size() до layout канваса → «окно создано 0×0» + surface клампился 1×1, лечение — гонка Resized-vs-RedrawRequested (Resized обрабатывается только при живом рендерере, handler.rs); wait_canvas_layout() в launch() — 2 rAF до Renderer::new, окно рождается 1280×800, кламп исчез; гейты повторно зелёные
+- Live-приёмка финальная (Pages f526a8f7): консоль «захват канваса извне — WebGPU-ступень пропущена» → GL → «окно создано 1280×800»; readback nzA=16000 pdb=true; FPS-обсервер 48 вызовов/12с; CI/Pages/Tour — success; браузер закрыт (pagehide — флаш записи, в PostHog остался тестовый person probe-capture-test-01 как демо-реплей)
+- Доки: fr-091-session-replay-canvas-wasm.md (§3а v2: диагноз/фикс/верификация, §4, §6, §7, §8 + правки v1-утверждений), index-cr-fr.md (строка FR-091 + v2)
+
+Stage Summary:
+- Replay теперь видит WASM-слой: захват шёл постоянно, но снапшоты были пустыми (два корня: preserveDrawingBuffer у WebGL2-контекста wgpu + webgpu-нечитаемость posthog#57008); фикс — детерминированный getContext-шим + согласие analytics ⇒ WebGL2-бэкенд (отказавшимся остаётся WebGPU); смена согласия действует после перезагрузки
+- Отказ браузера кешировать HTML учтён: приёмка после выката обязательно с reload/revalidate (утренний замер мог видеть старый индекс из max-age=600)
+- Владельцу: новые записи (после 14:0xZ) в PostHog Replays показывают канвас; тестовый person probe-capture-test-01 можно посмотреть/удалить; поднять canvasFps с 4 до 12 при желании «видео-качества» (тяжелее аплоады)
