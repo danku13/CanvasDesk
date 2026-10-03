@@ -393,6 +393,25 @@ pub enum AppEvent {
     /// (возвращает накопленное), но эмититься наружу не будет —
     /// debug-only side-effect.
     TourSignal(String),
+    /// FR-095 (мобильный web): вьюпорт страницы изменился из-за
+    /// виртуальной клавиатуры — слушатель `window.visualViewport`
+    /// canvas-web пересчитал перекрытие низа экрана. `bottom_inset` —
+    /// перекрытие в лог. px (0 — клавиатуры нет/не перекрывает).
+    /// При активном редакторе заметки App пангует камеру вверх,
+    /// чтобы курсор остался видим (`on_visual_viewport`, input.rs).
+    /// На нативе не конструируется (источник — только web-слой).
+    VisualViewport { bottom_inset: f32 },
+    /// FR-096 (мобильный web): тик будильника long-press — canvas-web
+    /// ставит setTimeout на пороге [`canvas_core::touch::LONG_PRESS_MS`]
+    /// после касания. Неподвижный палец событий касания не рождает,
+    /// поэтому время для машины жеста доставляет платформа.
+    /// Решение — за машиной ([`TouchGesture::poll_long_press`]):
+    /// валидное удержание (без движения за slop, второй палец не пришёл,
+    /// ещё не выдано) → контекстное меню как у ПКМ. Вариант под wasm32:
+    /// источник — только canvas-web (будилка touch_platform), на нативе
+    /// событие не конструируется (гейт и в матч-руке handler.rs).
+    #[cfg(target_arch = "wasm32")]
+    LongPressPoll,
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -878,6 +897,19 @@ pub struct App {
     /// сверяется с расширенным допуском сдвига (палец гуляет сильнее
     /// курсора). Ставится в on_touch перед Pressed, гасится в on_left_button.
     press_from_touch: bool,
+    /// FR-095: текущий нижний инсет виртуальной клавиатуры (visualViewport,
+    /// лог. px; 0 — клавиатуры нет). Обновляется событием
+    /// AppEvent::VisualViewport; сдвиг камеры редактора — только при ИЗМЕНЕНИИ
+    /// инсета (каждый vv-scroll/resize пан не перетирает ручной пан).
+    visual_viewport_inset: f32,
+    /// FR-098: drag-скролл списка палитры активен (нажатие на пустом месте
+    /// дока/полосы, далее вертикальный драг; на таче колесо недоступно).
+    /// Ставится в click_template_panel (ветка «глотается»), гасится в
+    /// on_touch Release/Cancel и в on_left_button Released.
+    palette_touch_scroll: bool,
+    /// FR-098: аккумулятор вертикальных пикселей драг-скролла (лог. px;
+    /// каждые 40 px — линия колеса, тот же шаг, что в on_mouse_wheel).
+    palette_touch_scroll_acc: f32,
     /// Буфер обмена ОС (T7). M8/W3: backend за трейтом ClipboardBackend
     /// (натив — ArboardClipboard, web — navigator.clipboard).
     clipboard: Box<dyn ClipboardBackend>,
@@ -1401,6 +1433,14 @@ impl App {
             // FR-092: пустая машина жеста — наполняется WindowEvent::Touch (web)
             #[cfg(target_arch = "wasm32")]
             touch_gesture: TouchGesture::new(),
+            visual_viewport_inset: 0.0,
+            // FR-098: drag-скролл списка палитры (нажатие на пустом месте
+            // дока/полосы + вертикальный драг — на таче колесо недоступно).
+            // Ставится в click_template_panel (ветка «глотается»), гасится
+            // на Released/Cancel; аккумулятор пикселей → строки (40 px =
+            // линия колеса — тот же шаг, что в on_mouse_wheel).
+            palette_touch_scroll: false,
+            palette_touch_scroll_acc: 0.0,
             hud_visible: settings.hud_on_start,
             frame_meter: FrameMeter::new(),
             last_frame: None,
@@ -4808,6 +4848,23 @@ impl App {
         }
     }
 
+    /// FR-095 (мобильный web): активен ли текстовый ввод — то есть должен
+    /// ли web-слой держать фокус скрытого input-шима (виртуальная
+    /// клавиатура). Приёмники — те же, что у [`Self::insert_committed_text`]:
+    /// редактор заметки, панель поиска, поиск палитры (клавиатурный фокус
+    /// дока), поле подмены окна проверки. Web-слой (canvas-web) опрашивает
+    /// это состояние после каждого события цикла (TourAwareApp) — канал
+    /// app→web без новых мостов: App остаётся платформенно-нейтральным.
+    pub fn text_input_active(&self) -> bool {
+        self.editing.is_some()
+            || self.search.is_open()
+            || (self.template_panel.open && self.template_panel.focused)
+            || self
+                .explain
+                .as_ref()
+                .is_some_and(|state| state.edit.is_some())
+    }
+
     /// Клавиатура открытой панели поиска (T14): ввод, каретка, выбор, прыжок.
     fn on_search_key(&mut self, event: &KeyEvent) {
         let ctrl = self.modifiers.control_key();
@@ -7991,6 +8048,48 @@ fn wasm_js_err_display(err: &wasm_bindgen::JsValue) -> String {
     format!("{err:?}")
 }
 
+/// FR-096: монотонное время машины тач-жеста, мс (база — первый вызов
+/// процесса). Часы — wasm-безопасный alias [`canvas_core::time::Instant`]
+/// (`std::time::Instant` под wasm32 паникует — урок canvas-core::time);
+/// `OnceLock` лениво фиксирует базу. Чисто read-side: шаги жеста
+/// (`on_touch`) и тик long-press (LongPressPoll) сравниваются в одной
+/// шкале. Потребители — только wasm32 (тач-ввод).
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn gesture_clock_ms() -> u64 {
+    static BASE: std::sync::OnceLock<canvas_core::time::Instant> = std::sync::OnceLock::new();
+    BASE.get_or_init(canvas_core::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
+}
+
+/// FR-095: сдвиг камеры (лог. px, вертикаль) при перекрытии низа экрана
+/// виртуальной клавиатурой. Чистая функция — редактируемая нода обязана
+/// остаться видимой НАД инсетом с зазором `MARGIN`; если помещалась —
+/// сдвига нет (0). Знак результата — для `Camera::pan([0.0, dy])`
+/// (отрицательный dy — содержимое вверх).
+///
+/// Аргументы: `node_bottom_screen` — низ ноды на экране (лог. px),
+/// `viewport_h` — высота вьюпорта, `bottom_inset` — перекрытие низа
+/// клавиатурой (лог. px, ≥ 0).
+pub fn keyboard_shift_up(node_bottom_screen: f32, viewport_h: f32, bottom_inset: f32) -> f32 {
+    const MARGIN: f32 = 12.0;
+    let inset = bottom_inset.max(0.0);
+    if inset <= f32::EPSILON || viewport_h <= f32::EPSILON {
+        return 0.0;
+    }
+    let visible_bottom = (viewport_h - inset).max(0.0);
+    // Кламп цели: инсет ≥ вьюпорта — низ ноды к верхнему краю экрана
+    // (зазор MARGIN от топа), иначе переполнение уходит в минус и
+    // завышает сдвиг на MARGIN.
+    let target_bottom = (visible_bottom - MARGIN).max(MARGIN);
+    let overflow = node_bottom_screen - target_bottom;
+    if overflow > 0.0 {
+        overflow
+    } else {
+        0.0
+    }
+}
+
 /// Разбор аргументов вручную — две опции не оправдывают зависимость от clap.
 pub fn parse_args(args: &[String]) -> anyhow::Result<CliArgs> {
     let mut stress = None;
@@ -9010,6 +9109,32 @@ mod tests {
     use support::collision_obstacles;
 
     // --- PRD-0007 (FR-048 X2): чистые хелперы окна проверки ----------------
+
+    // --- FR-095: сдвиг камеры под виртуальную клавиатуру -------------------
+
+    /// Низ ноды ниже видимой области (viewport 700, инсет 300 → видимый
+    /// низ 400, зазор 12): сдвиг ровно на переполнение.
+    #[test]
+    fn keyboard_shift_up_pans_by_overflow() {
+        // Низ на 600: переполнение 600 − (700 − 300 − 12) = 212
+        assert!((keyboard_shift_up(600.0, 700.0, 300.0) - 212.0).abs() < 1e-4);
+        // Низ на границе зазора — сдвига нет
+        assert_eq!(keyboard_shift_up(388.0, 700.0, 300.0), 0.0);
+        // Нод выше — сдвига нет
+        assert_eq!(keyboard_shift_up(100.0, 700.0, 300.0), 0.0);
+    }
+
+    /// Без клавиатуры (инсет 0) сдвига нет; отрицательный инсет
+    /// (кривой vv) трактуется как 0; вырожденный вьюпорт защищён.
+    #[test]
+    fn keyboard_shift_up_guards() {
+        assert_eq!(keyboard_shift_up(900.0, 700.0, 0.0), 0.0);
+        assert_eq!(keyboard_shift_up(900.0, 700.0, -50.0), 0.0);
+        assert_eq!(keyboard_shift_up(600.0, 0.0, 300.0), 0.0);
+        // Инсет больше вьюпорта (кламп видимой области в 0): сдвиг —
+        // до верхнего края (переполнение = node_bottom − 0 − MARGIN)
+        assert!((keyboard_shift_up(600.0, 700.0, 800.0) - (600.0 - 12.0)).abs() < 1e-4);
+    }
 
     /// explain_chain_focus (F-4): узлы дерева → индексы канваса, рёбра
     /// via → индексы; невалидные id пропускаются; дубли (ромб) дедупятся.

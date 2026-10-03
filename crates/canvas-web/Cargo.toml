@@ -73,6 +73,14 @@ web-sys = { workspace = true, features = [
     "HtmlAnchorElement",
     "HtmlButtonElement",
     "HtmlElement",
+    # FR-095/097 (мобильный web): input-шим клавиатуры, visualViewport
+    # (перекрытие клавиатурой), matchMedia pointer:coarse (тач-цели)
+    "HtmlInputElement",
+    "KeyboardEvent",
+    "KeyboardEventInit",
+    "InputEvent",
+    "MediaQueryList",
+    "VisualViewport",
     "Event",
     "EventTarget",
     "DragEvent",

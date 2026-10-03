@@ -40,6 +40,9 @@ FLAGS = [
 VIEWPORTS = [
     (375, 667, "iPhone SE"),
     (390, 844, "iPhone 14"),
+    # FR-099: повороты/планшетные матрицы — телефон в ландшафте и iPad Air
+    (844, 390, "iPhone landscape"),
+    (820, 1180, "iPad Air"),
     (768, 1024, "iPad"),
     (1024, 768, "iPad landscape"),
     (1200, 800, "breakpoint+1"),

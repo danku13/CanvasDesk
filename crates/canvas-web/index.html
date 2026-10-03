@@ -7,7 +7,7 @@
 <html lang="ru">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>CanvasDesk — web</title>
     <!-- FR-028 v2 + FR-087 v2 (единый пикер первого запуска): первый экран —
          ОДНА страница с выбором языка и опциональной рабочей роли (class).
@@ -958,8 +958,10 @@
       @media (max-width: 1199px) {
         #w6-toolbar {
           top: auto;
-          bottom: 8px;
-          left: 8px;
+          /* FR-099 (safe-area): env(safe-area-inset-*) — notch/жест-бар
+           * iPhone не перекрывает тулбар; fallback 8px — старые браузеры */
+          bottom: max(8px, env(safe-area-inset-bottom));
+          left: max(8px, env(safe-area-inset-left));
           right: auto;
           justify-content: flex-start;
           max-width: max(120px, calc(100vw - 264px));
