@@ -1328,7 +1328,19 @@ impl App {
         // реагирует; выход виден всегда — «Пропустить» в углу)
         if let Some(state) = &self.onboarding {
             let viewport = self.viewport_logical();
-            let card = onboarding_ui::card_rect(viewport, state.step, self.settings.language);
+            // W-e: раскладка измеренная (общая с отрисовкой/реестром —
+            // «ввод = тому, что видно»)
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let lay = onboarding_ui::card_layout(
+                viewport,
+                state.step,
+                self.settings.language,
+                &mut canvas_ui::kit::ScrollState::default(),
+                &mut m,
+                &mut fs,
+            );
+            let card = lay.card;
             match onboarding_ui::button_at(card, state, self.cursor) {
                 Some(OnboardingButton::Next) => {
                     if state.is_last() {
@@ -1345,11 +1357,16 @@ impl App {
                         self.scheme_gallery.open();
                     } else if let Some(state) = self.onboarding.as_mut() {
                         state.next();
+                        // W-e: новый шаг — скролл тела в начало (кит
+                        // ScrollState; у нового шага другой контент)
+                        self.onboarding_scroll.offset = 0.0;
                     }
                 }
                 Some(OnboardingButton::Prev) => {
                     if let Some(state) = self.onboarding.as_mut() {
                         state.prev();
+                        // W-e: новый шаг — скролл тела в начало
+                        self.onboarding_scroll.offset = 0.0;
                     }
                 }
                 Some(OnboardingButton::Skip) => self.defer_onboarding(),
@@ -1717,6 +1734,9 @@ impl App {
                 // счётчик откладываний не трогается
                 Some(docs_ui::HelpMenuItem::Onboarding) => {
                     self.onboarding = Some(OnboardingState::default());
+                    // W-e: скролл тела — в начало (состояние прошлого
+                    // показа тура не протаскивается)
+                    self.onboarding_scroll.offset = 0.0;
                 }
                 // «Галерея схем» (FR-049): открыть модальную галерею
                 Some(docs_ui::HelpMenuItem::Schemes) => {
@@ -3745,6 +3765,49 @@ impl App {
                 self.request_redraw();
                 return;
             }
+        }
+        // W-e (аудит ui-kit §8 №12): колесо над карточкой онбординга скроллит
+        // тело (кит список+скролл, состояние `App::onboarding_scroll`), а не
+        // панорамирует канвас под модалью — при клампе высоты карточки
+        // контент достижим колесом, футер с CTA остаётся видим. Образец —
+        // ветки автосвязи/витрины: hit по rect зоны из той же раскладки, что
+        // рисование/ввод («ввод = тому, что видно») → скролл → redraw →
+        // return. Знак — как у списков: колесо от себя (y < 0) увеличивает
+        // offset. Колесо над карточкой мимо тела (шапка/футер) — глотается
+        // (модаль; прежнее поведение — Block-поверхность гасила колесо).
+        if let Some(state) = self.onboarding {
+            let viewport = self.viewport_logical();
+            let mut scroll = self.onboarding_scroll.clone();
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let lay = onboarding_ui::card_layout(
+                viewport,
+                state.step,
+                self.settings.language,
+                &mut scroll,
+                &mut m,
+                &mut fs,
+            );
+            let body = onboarding_ui::body_area(lay.card);
+            let dy = match delta {
+                MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
+                MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),
+            };
+            if point_in_rect(body, self.cursor) {
+                scroll.scroll_by(dy);
+                scroll.clamp();
+                self.onboarding_scroll = scroll;
+                self.request_redraw();
+                return;
+            }
+            if onboarding_ui::point_in_card(lay.card, self.cursor) {
+                self.request_redraw();
+                return;
+            }
+            // Мимо карточки — тоже глотается (Block-поверхность: канвас под
+            // туром не панорамируется/не зумится)
+            self.request_redraw();
+            return;
         }
         // W-a (аудит §8 п.4): колесо над панелью галереи схем скроллит
         // каталог (окно видимости строк), а не панорамирует канвас под
