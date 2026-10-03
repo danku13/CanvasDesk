@@ -1,0 +1,49 @@
+[package]
+publish = false # внутренний крейт закрытого продукта; не публикуется на crates.io (CP0, ADR-0008)
+name = "canvas-llm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "LLM-слой CanvasDesk: унифицированный LlmProvider trait для 6 провайдеров (BYOK + Sign-in-with-ChatGPT)"
+
+# FR-LLM-A / ADR-0016: чистый трейт-слой без зависимостей в дефолтной сборке.
+# Сетевые зависимости (ureq) и serde-деривы включаются только за feature
+# `l1-llm` (правило ADR-0011 wasm-гейт, AGENTS.md «без сети в хосте»).
+# Трейт и типы компилируются под wasm32-unknown-unknown без оговорок
+# (default features = []) — потребительские крейты (canvas-app/canvas-suggest)
+# подключают сеть только за явным feature-флагом.
+[dependencies]
+# Все зависимости — optional, активируются только за feature `l1-llm`.
+# Это сохраняет zero-dep дефолтное дерево и wasm-гейт (ADR-0011).
+ureq = { version = "2", default-features = false, features = ["json"], optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+sha2 = { version = "0.10", optional = true }
+async-trait = { version = "0.1", optional = true }
+
+[dev-dependencies]
+# только для тестовых фикстур: разбор JSON-ответов провайдеров
+serde.workspace = true
+serde_json.workspace = true
+
+[features]
+default = []
+# FR-LLM-A: serde-деривы на типах (Message, ToolDef, Settings, …) и доступность
+# `serde_json::Value` в публичном API. Может включаться независимо от
+# сетевого слоя (например, для логирования ToolCall в JSON без ureq).
+serde = ["dep:serde", "dep:serde_json"]
+# FR-LLM-A: сетевой слой LLM-провайдеров (ureq no-TLS, http-only).
+# Включает трейт с async-методами + serde-деривы типов + адаптеры
+# OpenAI-compat и Anthropic. Для HTTPS-эндпоинтов (api.openai.com и т.п.)
+# используйте `l1-llm-tls`.
+l1-llm = [
+    "serde",
+    "dep:ureq",
+    "dep:sha2",
+    "dep:async-trait",
+]
+# FR-LLM-A: TLS для HTTPS-эндпоинтов (desktop). Подключает `ureq/tls`,
+# который тянет rustls/webpki-roots. wasm-сборка TLS не использует
+# (web-sys::fetch + cloud-proxy).
+l1-llm-tls = ["l1-llm", "ureq/tls"]

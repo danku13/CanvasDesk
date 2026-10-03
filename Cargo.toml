@@ -36,6 +36,11 @@ canvas-ui = { path = "crates/canvas-ui", version = "0.5.0" }
 # за feature-флагом l1-laya в транспорте; ядро продукта от него не зависит
 # (выпиливаемость, PoC-отчёт §12)
 canvas-suggest = { path = "crates/canvas-suggest", version = "0.5.0" }
+# FR-LLM-A / ADR-0016: LLM-слой — унифицированный LlmProvider trait для 6
+# провайдеров (OpenAI/OpenRouter/z.ai/Moonshot/Ollama + Anthropic; ChatGPT
+# OAuth и Laya — отдельные адаптеры потоков D и C). Feature-gated: дефолтная
+# сборка без сети (ADR-0011 wasm-гейт, AGENTS.md «без сети в хосте»).
+canvas-llm = { path = "crates/canvas-llm", version = "0.5.0" }
 # модель и сериализация
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
