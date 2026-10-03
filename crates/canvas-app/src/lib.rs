@@ -159,8 +159,8 @@ pub mod ui {
     pub const MENU_WIDTH: f32 = 240.0;
     /// Высота пункта меню в логических px.
     pub const MENU_ITEM_HEIGHT: f32 = 26.0;
-    /// Внутренний отступ меню в логических px.
-    pub const MENU_PADDING: f32 = 6.0;
+    /// Внутренний отступ меню в логических px (spacing-scale токен `SPACING_S`).
+    pub const MENU_PADDING: f32 = canvas_core::tokens::SPACING_S;
     /// Сдвиг подписи пункта: слева место под образец цвета / галочку ✓.
     /// Для меню с checkmark column (dropdown) — оставляет 26px слева
     /// (✓ на +8, ширина 18, текст на +26). Для canvas-меню (без
@@ -172,7 +172,8 @@ pub mod ui {
     /// цвета (toggle-флаги НЕ рисуем галочкой — см. canvas_menu_overlay),
     /// поэтому 26px gap выглядит как «странный отступ». 10px — нормальный
     /// left padding для текста (соответствует choice_menu, line 2719).
-    pub const CANVAS_MENU_LABEL_X: f32 = 10.0;
+    /// Значение — spacing-scale токен `SPACING_MD`.
+    pub const CANVAS_MENU_LABEL_X: f32 = canvas_core::tokens::SPACING_MD;
     /// Фон меню — тёмный, почти непрозрачный.
     pub const MENU_FILL: [f32; 4] = [0.11, 0.11, 0.13, 0.97];
 

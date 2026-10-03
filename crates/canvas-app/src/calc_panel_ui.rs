@@ -202,8 +202,8 @@ fn edge_value(edge: &Edge, values: &PanelValues<'_>) -> RowValue {
 pub const PANEL_ROW_H: f32 = 22.0;
 /// Высота заголовка группы.
 pub const PANEL_TITLE_H: f32 = 18.0;
-/// Внутренний отступ панели.
-pub const PANEL_PAD: f32 = 10.0;
+/// Внутренний отступ панели (spacing-scale токен `SPACING_MD`).
+pub const PANEL_PAD: f32 = canvas_core::tokens::SPACING_MD;
 /// Ширина колонки «Переменные» (прототип Р-4).
 pub const VARS_COL_W: f32 = 360.0;
 /// Минимальная ширина колонки «Расчёт».

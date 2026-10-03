@@ -12,18 +12,22 @@
 
 use std::collections::HashSet;
 
+// Spacing-scale токены (W-d): значения = прежним литералам (I-1 ноль скачка).
+use canvas_core::tokens::SPACING_MD as ROW_TEXT_RIGHT_PAD;
+use canvas_core::tokens::SPACING_SM as PANEL_BOTTOM_MARGIN;
+
 /// Ширина панели, логические px (клампится к окну − 2×PANEL_SIDE_MARGIN).
 pub const PANEL_WIDTH: f32 = 460.0;
-/// Боковой отступ панели от краёв окна, логические px.
-pub const PANEL_SIDE_MARGIN: f32 = 12.0;
-/// Отступ панели от верхнего края окна, логические px.
-pub const PANEL_TOP_MARGIN: f32 = 12.0;
+/// Боковой отступ панели от краёв окна, логические px (токен `SPACING_LG`).
+pub use canvas_core::tokens::SPACING_LG as PANEL_SIDE_MARGIN;
+/// Отступ панели от верхнего края окна, логические px (токен `SPACING_LG`).
+pub use canvas_core::tokens::SPACING_LG as PANEL_TOP_MARGIN;
 /// Высота поля ввода, логические px.
 pub const INPUT_HEIGHT: f32 = 36.0;
 /// Максимум видимых строк результата (далее — прокрутка).
 pub const MAX_VISIBLE_ROWS: usize = 8;
-/// Внутренний отступ содержимого панели, логические px.
-pub const PANEL_PADDING: f32 = 8.0;
+/// Внутренний отступ содержимого панели, логические px (токен `SPACING_SM`).
+pub use canvas_core::tokens::SPACING_SM as PANEL_PADDING;
 
 // FR-088: адаптивная вёрстка строк результата. Высота строки — НЕ константа,
 // а замер контента тем же TextMeasurer, что и раскладка (ui-kit §5:
@@ -38,18 +42,18 @@ pub const SUB_FONT_SIZE: f32 = 11.0;
 pub const TITLE_LINE_H: f32 = 17.0;
 /// Высота строки подзаголовка (кегль 11 · 1.3 ≈ 15).
 pub const SUB_LINE_H: f32 = 15.0;
-/// Вертикальный пад строки результата (сверху и снизу).
-pub const ROW_PAD_V: f32 = 6.0;
+/// Вертикальный пад строки результата (сверху и снизу; токен `SPACING_S`).
+pub use canvas_core::tokens::SPACING_S as ROW_PAD_V;
 /// Зазор между блоком заголовка и подзаголовком.
 pub const TITLE_SUB_GAP: f32 = 2.0;
-/// Отступ текста строки слева (строки нод).
-pub const ROW_TEXT_X: f32 = 10.0;
+/// Отступ текста строки слева (строки нод; токен `SPACING_MD`).
+pub use canvas_core::tokens::SPACING_MD as ROW_TEXT_X;
 /// Отступ текста слева у строк-доков (зона бейджа «?»).
 pub const ROW_TEXT_X_DOCS: f32 = 30.0;
-/// Правый пад текста строки.
-const ROW_TEXT_RIGHT_PAD: f32 = 10.0;
-/// Нижний запас панели от края окна (кламп суммарной высоты, FR-088).
-const PANEL_BOTTOM_MARGIN: f32 = 8.0;
+// Приватные токены `ROW_TEXT_RIGHT_PAD` (правый пад текста строки) и
+// `PANEL_BOTTOM_MARGIN` (нижний запас панели от края окна, кламп суммарной
+// высоты FR-088) импортированы сверху из `canvas_core::tokens`
+// (`SPACING_MD` / `SPACING_SM`).
 
 /// Высота строки результата по контенту: пад + заголовок (+ пад + зазор +
 /// строки подзаголовка). Единый источник для раскладки и тестов.

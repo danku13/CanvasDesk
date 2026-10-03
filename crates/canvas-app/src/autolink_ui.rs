@@ -191,8 +191,9 @@ pub const DLG_MIN_H: f32 = 240.0;
 pub const HEADER_H: f32 = 58.0;
 /// Потолок высоты окна (прежний литерал 760 у клампа высоты).
 pub const DLG_MAX_H: f32 = 760.0;
-/// Верхний пад тела списка (прежний шаг «+8» от верха тела).
-pub const BODY_TOP_PAD: f32 = 8.0;
+/// Верхний пад тела списка (прежний шаг «+8» от верха тела; spacing-scale
+/// токен `SPACING_SM`).
+pub const BODY_TOP_PAD: f32 = canvas_core::tokens::SPACING_SM;
 /// Высота футера (подсказка + массовые кнопки).
 pub const FOOTER_H: f32 = 52.0;
 /// Высота баннера отклонённых (У8).
@@ -201,8 +202,8 @@ pub const BANNER_H: f32 = 42.0;
 pub const GROUP_H: f32 = 34.0;
 /// Высота строки предложения.
 pub const ROW_H: f32 = 32.0;
-/// Зазор между группами.
-pub const GROUP_GAP: f32 = 8.0;
+/// Зазор между группами (spacing-scale токен `SPACING_SM`).
+pub const GROUP_GAP: f32 = canvas_core::tokens::SPACING_SM;
 /// Ширина чипа «100%»/единиц.
 pub const PCT_W: f32 = 46.0;
 /// Ширина кнопок строки («Принять»/«Отклонить»).
@@ -262,7 +263,7 @@ pub fn close_rect(win: [f32; 4]) -> [f32; 4] {
 pub fn banner_rect(win: [f32; 4]) -> [f32; 4] {
     [
         win[0] + 16.0,
-        win[1] + HEADER_H + 8.0,
+        win[1] + HEADER_H + canvas_core::tokens::SPACING_SM,
         win[2] - 32.0,
         BANNER_H - 8.0,
     ]
@@ -271,7 +272,7 @@ pub fn banner_rect(win: [f32; 4]) -> [f32; 4] {
 /// Кнопка «Вернуть все» — правый край баннера.
 pub fn restore_rect(banner: [f32; 4]) -> [f32; 4] {
     [
-        banner[0] + banner[2] - RESTORE_W - 10.0,
+        banner[0] + banner[2] - RESTORE_W - canvas_core::tokens::SPACING_MD,
         banner[1] + 4.0,
         RESTORE_W,
         BANNER_H - 16.0,
@@ -285,7 +286,7 @@ pub fn restore_rect(banner: [f32; 4]) -> [f32; 4] {
 /// одном Y). Вызывающий (сцена/рендер) вычисляет флаг из `review.counts()`.
 pub fn body_rect(win: [f32; 4], banner_visible: bool) -> [f32; 4] {
     let banner_off = if banner_visible { BANNER_H } else { 0.0 };
-    let top = win[1] + HEADER_H + 8.0 + banner_off;
+    let top = win[1] + HEADER_H + canvas_core::tokens::SPACING_SM + banner_off;
     [
         win[0],
         top,
@@ -305,8 +306,18 @@ pub fn footer_buttons(win: [f32; 4]) -> [[f32; 4]; 3] {
     let footer = footer_rect(win);
     let y = footer[1] + (FOOTER_H - 30.0) / 2.0;
     let create = [footer[0] + footer[2] - CREATE_W - 16.0, y, CREATE_W, 30.0];
-    let accept_all = [create[0] - FOOT_BTN_W - 10.0, y, FOOT_BTN_W, 30.0];
-    let reject_all = [accept_all[0] - FOOT_BTN_W - 10.0, y, FOOT_BTN_W, 30.0];
+    let accept_all = [
+        create[0] - FOOT_BTN_W - canvas_core::tokens::SPACING_MD,
+        y,
+        FOOT_BTN_W,
+        30.0,
+    ];
+    let reject_all = [
+        accept_all[0] - FOOT_BTN_W - canvas_core::tokens::SPACING_MD,
+        y,
+        FOOT_BTN_W,
+        30.0,
+    ];
     [create, accept_all, reject_all]
 }
 
@@ -399,10 +410,20 @@ pub fn rows_layout(review: &Review, win: [f32; 4], scroll: f32) -> RowsLayout {
                 continue;
             };
             let row = [rect.x, rect.y, rect.w, rect.h];
-            let right = row[0] + row[2] - 8.0;
+            let right = row[0] + row[2] - canvas_core::tokens::SPACING_SM;
             let reject = [right - BTN_W, row[1] + 4.0, BTN_W, ROW_H - 8.0];
-            let accept = [reject[0] - BTN_W - 8.0, row[1] + 4.0, BTN_W, ROW_H - 8.0];
-            let pct = [accept[0] - PCT_W - 10.0, row[1] + 4.0, PCT_W, ROW_H - 8.0];
+            let accept = [
+                reject[0] - BTN_W - canvas_core::tokens::SPACING_SM,
+                row[1] + 4.0,
+                BTN_W,
+                ROW_H - 8.0,
+            ];
+            let pct = [
+                accept[0] - PCT_W - canvas_core::tokens::SPACING_MD,
+                row[1] + 4.0,
+                PCT_W,
+                ROW_H - 8.0,
+            ];
             layout.rows.push((
                 item_idx,
                 RowRects {
@@ -421,7 +442,7 @@ pub fn rows_layout(review: &Review, win: [f32; 4], scroll: f32) -> RowsLayout {
 
 /// Полная высота контента (с учётом свёрнутых групп).
 pub fn content_height(review: &Review) -> f32 {
-    let mut h = 8.0;
+    let mut h = BODY_TOP_PAD;
     for (gi, group) in review.groups.iter().enumerate() {
         h += GROUP_H;
         if !review.collapsed.contains(&gi) {

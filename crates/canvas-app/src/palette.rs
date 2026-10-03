@@ -58,8 +58,8 @@ use crate::{preset_color, CardInstance, Vec2};
 pub const PAL_BUTTON: f32 = 30.0;
 /// Высота подписи под кнопкой группы.
 pub const PAL_CAPTION_H: f32 = 12.0;
-/// Внутренний отступ бара.
-pub const PAL_BAR_PAD: f32 = 6.0;
+/// Внутренний отступ бара (spacing-scale токен `SPACING_S`).
+pub const PAL_BAR_PAD: f32 = canvas_core::tokens::SPACING_S;
 /// Зазор между кнопками групп.
 pub const PAL_GAP: f32 = 5.0;
 /// Высота строки выпадающего перечня.
@@ -70,10 +70,11 @@ pub const PAL_ROW_W: f32 = 176.0;
 pub const PAL_DROP_PAD: f32 = 5.0;
 /// Зазор между баром и колонкой.
 pub const PAL_DROP_GAP: f32 = 3.0;
-/// Зазор от якоря (низ выделения) до бара.
-pub const PAL_ANCHOR_GAP: f32 = 10.0;
-/// Минимальный отступ бара/колонки от краёв окна.
-pub const PAL_MARGIN: f32 = 8.0;
+/// Зазор от якоря (низ выделения) до бара (spacing-scale токен `SPACING_MD`).
+pub const PAL_ANCHOR_GAP: f32 = canvas_core::tokens::SPACING_MD;
+/// Минимальный отступ бара/колонки от краёв окна (spacing-scale токен
+/// `SPACING_SM`).
+pub const PAL_MARGIN: f32 = canvas_core::tokens::SPACING_SM;
 /// Сторона квадрата иконки в строке выпадашки.
 pub const PAL_ICON: f32 = 18.0;
 
