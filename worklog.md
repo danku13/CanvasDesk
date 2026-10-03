@@ -151,3 +151,20 @@ Stage Summary:
 - docs_ui.rs на ките во всём, что кит выражает: ScrollState — тип кита, меню/списки — list_rows, слот панели — stack; раскладка markdown/таблиц дословна и переведена на шкалу токенов (ноль визуального скачка, тесты-оракулы прежних формул)
 - Проводка потребителей осталась за следующей волной (drop-in: docs_ui::sync_scroll/wheel_scroll, link_at по ссылке) — перечислены с точными строками
 - Коммит 61353ac (код docs_ui.rs) в ветке wc-docs-kit; worklog дополнен
+
+---
+Task ID: W-c/W-d реализация (сессия web-51d33571)
+Agent: Super Z (main, сессия web-51d33571)
+Task: Реализация волн W-c и W-d аудита ui-kit (6 параллельных агентов в worktrees + проводка/интеграция)
+
+Work Log:
+- 6 параллельных агентов в git-worktrees: 1-a explain+tooltip (66d0f0e — агент дважды падал по таймауту API, код допринят и закоммичен main-агентом после ревью: API Painter/WidgetState/kit::tooltip сверены, cargo check/test/clippy чисто), 1-b settings-kit (cc4cb38), 1-c docs-kit (61353ac), 1-d template+corner (4a2b0eb + типовой фикс Color→[f32;4]), 2-a spacing-tokens (39f4964), 2-b token-mirror (c63e60c)
+- Проводка docs выполнена main-агентом (ec1c86d): потребители kit ScrollState — input.rs (link_at по ссылке, sync_scroll/wheel_scroll), app.rs/ui_registry.rs/ui_layout_lint.rs (ScrollState::new → default+sync_scroll), overlays.rs (max_offset() метод); E0106 link_at решён явным 'a; паритет-тест агента исправлен (у max прокрутка вверх меняет позицию — семантика прежнего wheel)
+- Слияние 6 веток в main без конфликтов (overlays.rs — регионы 2570-2710/4240-4290 vs 3293-3297 разнесены)
+- Гейты на merged main: cargo fmt --all -- --check (чисто после fmt-коммита); clippy --workspace --all-targets -D warnings — чисто; cargo test --workspace — 2391 passed / 0 failed (было 2378; +13 тестов W-c/W-d)
+- Тулчейн rust 1.99 установлен в среде сессии (стабильно для будущих волн)
+
+Stage Summary:
+- W-c закрыта: explain_frame → Painter+WidgetState (последний остаток FR-060: items → paint_items_to_stage, hover/selected — матрица KitState; painter-клипы доступны для scissor FR-056); tooltip → kit::tooltip + перенос по ШИРИНЕ (TextMeasurer, дефект B8: неразрывные пути не клипаются, NBSP-разряды целы); settings — pill-тумблер → kit switch (36×20, RADIUS_PILL), dropdown → kit dropdown_menu (flip+кламп кита, скролл W-a сохранён); docs — локальный дубль ScrollState удалён → kit, меню → list_rows; template strip/flyout → kit dropdown_menu/list_rows (ручные клампы §8.11 устранены); corner buttons → kit IconButton (hit==draw, rect'ы lib.rs не тронуты)
+- W-d закрыта: SPACING_*/RADIUS_* вместо литералов-дублей (24 замены: menu/calc/autolink/palette/search; 16.0/4.0 — вне шкалы, осознанно); зеркало tokens.rs достроено: 5 edge + 3 motion + 4 LOD-токена (паритет-тесты JSON↔Rust; consumers — алиасы с прежними именами); card.header_height подтверждён (W-a); решение по ThemeColors — Вариант A: семантика живёт в themes/*.json (37 слотов × 7 пресетов, тест-зеркало), colors.json остаётся примитивами (§7а отчёта)
+- Остатки: W-e (решения владельца: BP_COMPACT/MOBILE, тач-цели web ≥44px, разморозка onboarding, пагинация template-строк)
