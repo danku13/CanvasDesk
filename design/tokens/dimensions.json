@@ -25,13 +25,13 @@
   },
 
   "edge": {
-    "dot": { "$type": "dimension", "$value": 2.5, "$desc": "EDGE_DOT cards.rs:627 — диаметр бусины" },
-    "arrow_len": { "$type": "dimension", "$value": 10.0, "$desc": "ARROW_LEN cards.rs:651" },
-    "arrow_angle_deg": { "$type": "dimension", "$value": 30.0, "$desc": "ARROW_ANGLE cards.rs:652 (FRAC_PI_6)" },
-    "arrow_dots": { "$type": "dimension", "$value": 4.0, "$desc": "ARROW_DOTS cards.rs:653" },
-    "dash_period": { "$type": "dimension", "$value": 8.0, "$desc": "DASH_PERIOD cards.rs:656 (в диаметрах бусины)" },
-    "dash_duty": { "$type": "dimension", "$value": 0.6, "$desc": "DASH_DUTY cards.rs:657" },
-    "dot_spacing": { "$type": "dimension", "$value": 3.0, "$desc": "DOT_SPACING cards.rs:660" }
+    "dot": { "$type": "dimension", "$value": 2.5, "$desc": "EDGE_DOT cards.rs — диаметр бусины; зеркало tokens::EDGE_DOT" },
+    "arrow_len": { "$type": "dimension", "$value": 10.0, "$desc": "ARROW_LEN cards.rs; зеркало tokens::EDGE_ARROW_LEN" },
+    "arrow_angle_deg": { "$type": "dimension", "$value": 30.0, "$desc": "ARROW_ANGLE cards.rs (FRAC_PI_6 = 30°, рендер конвертирует π/180); зеркало tokens::EDGE_ARROW_ANGLE_DEG (W-d)" },
+    "arrow_dots": { "$type": "dimension", "$value": 4.0, "$desc": "ARROW_DOTS cards.rs (usize); зеркало tokens::EDGE_ARROW_DOTS (W-d)" },
+    "dash_period": { "$type": "dimension", "$value": 8.0, "$desc": "DASH_PERIOD cards.rs (в диаметрах бусины); зеркало tokens::EDGE_DASH_PERIOD (W-d)" },
+    "dash_duty": { "$type": "dimension", "$value": 0.6, "$desc": "DASH_DUTY cards.rs; зеркало tokens::EDGE_DASH_DUTY (W-d)" },
+    "dot_spacing": { "$type": "dimension", "$value": 3.0, "$desc": "DOT_SPACING cards.rs; зеркало tokens::EDGE_DOT_SPACING (W-d)" }
   },
 
   "typography": {
@@ -61,5 +61,13 @@
     "leader_y_frac": { "$type": "dimension", "$value": 0.62, "$desc": "text.rs LEADER_Y_FRAC — базовая линия строки" },
     "zebra_run_min": { "$type": "dimension", "$value": 4, "$desc": "text.rs ZEBRA_RUN_MIN — зебра в прогонах от 4 строк (O-7)" },
     "desc_clamp_lines": { "$type": "dimension", "$value": 2, "$desc": "D-8: кламп зоны описания, строк" }
+  },
+
+  "render": {
+    "$note": "LOD-пороги рендера по зуму (W-d): FR-016 — анализ узких мест; PRD-0004 §7.1 / file-LOD SPEC §6.2 — анатомия ноды. Значения = текущим константам cards.rs/anatomy.rs (I-1: ноль скачка). Единицы: world zoom, кроме badges — эффективный zoom × scale_factor.",
+    "lod_analysis_border": { "$type": "dimension", "$value": 0.25, "$desc": "ANALYSIS_BORDER_MIN_ZOOM cards.rs — ниже рамка серьёзности не рисуется (только цвет Overload, FR-016); зеркало tokens::LOD_ANALYSIS_BORDER" },
+    "lod_analysis_badges": { "$type": "dimension", "$value": 0.6, "$desc": "ANALYSIS_BADGES_MIN_ZOOM cards.rs (эффективный зум) — ниже бейджи метрик скрыты; значение совпадает с границей file-LOD L0→L1 (SPEC §6.2), семантики разные — токены раздельные; зеркало tokens::LOD_ANALYSIS_BADGES" },
+    "lod_node_l0_max": { "$type": "dimension", "$value": 0.6, "$desc": "LOD_L0_MAX_ZOOM anatomy.rs — ниже силуэт L0: хедер A + полоса D (PRD-0004 §7.1); зеркало tokens::LOD_NODE_L0_MAX_ZOOM" },
+    "lod_node_l1_max": { "$type": "dimension", "$value": 1.5, "$desc": "LOD_L1_MAX_ZOOM anatomy.rs — выше полное тело L2 + line-порты; зеркало tokens::LOD_NODE_L1_MAX_ZOOM" }
   }
 }

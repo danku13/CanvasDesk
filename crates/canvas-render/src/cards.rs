@@ -30,11 +30,13 @@ pub use canvas_core::tokens::BROKEN_BORDER;
 
 /// Минимальный зум (мировой масштаб), при котором рисуется РАМКА
 /// серьёзности (LOD FR-016: ниже — только Overload).
-pub const ANALYSIS_BORDER_MIN_ZOOM: f32 = 0.25;
+/// FR-046 (W-d): значение — из design-токенов (`dimensions.json#render`).
+pub use canvas_core::tokens::LOD_ANALYSIS_BORDER as ANALYSIS_BORDER_MIN_ZOOM;
 /// Минимальный ЭФФЕКТИВНЫЙ зум (zoom × scale_factor, физический масштаб),
 /// при котором рисуются БЕЙДЖИ метрик (LOD FR-016: ниже — только цветные
 /// рамки; мера физической читаемости, как `titles_visible`).
-pub const ANALYSIS_BADGES_MIN_ZOOM: f32 = 0.6;
+/// FR-046 (W-d): значение — из design-токенов (`dimensions.json#render`).
+pub use canvas_core::tokens::LOD_ANALYSIS_BADGES as ANALYSIS_BADGES_MIN_ZOOM;
 
 /// Рамка серьёзности узкого места (тёмная тема): жёлтый — Warn
 /// (#F5A623, документ FR-016), красный — Critical, ярко-красный —
@@ -872,18 +874,24 @@ pub use canvas_core::tokens::EDGE_FLOW as FLOW_EDGE_COLOR;
 /// Цвет резиновой линии (drag новой связи) — акцент с прозрачностью;
 /// FR-046: из design-токенов (акцент α0.70).
 pub const DRAFT_COLOR: [f32; 4] = canvas_core::tokens::EDGE_DRAFT;
-/// Длина уса стрелки в world-px.
-const ARROW_LEN: f32 = 10.0;
-/// Угол уса стрелки от обратного направления касательной.
-const ARROW_ANGLE: f32 = std::f32::consts::FRAC_PI_6; // 30°
-/// Кружков на ус стрелки.
-const ARROW_DOTS: usize = 4;
-/// Период пунктира в единицах диаметра кружка (черта + пропуск).
-const DASH_PERIOD: f32 = 8.0;
-/// Доля периода пунктира, занятая чертой.
-const DASH_DUTY: f32 = 0.6;
-/// Шаг одиночных точек (стиль «точки») в единицах диаметра.
-const DOT_SPACING: f32 = 3.0;
+/// Длина уса стрелки в world-px — из design-токенов (FR-046, W-d).
+pub use canvas_core::tokens::EDGE_ARROW_LEN as ARROW_LEN;
+/// Угол уса стрелки от обратного направления касательной (радианы) —
+/// из design-токенов (FR-046, W-d): токен хранит ГРАДУСЫ
+/// (`edge.arrow_angle_deg`), рендер конвертирует π/180 (при 30° —
+/// прежний FRAC_PI_6, ноль скачка).
+const ARROW_ANGLE: f32 =
+    canvas_core::tokens::EDGE_ARROW_ANGLE_DEG * (std::f32::consts::PI / 180.0);
+/// Кружков на ус стрелки — из design-токенов (FR-046, W-d).
+pub use canvas_core::tokens::EDGE_ARROW_DOTS as ARROW_DOTS;
+/// Период пунктира в единицах диаметра кружка (черта + пропуск) —
+/// из design-токенов (FR-046, W-d).
+pub use canvas_core::tokens::EDGE_DASH_PERIOD as DASH_PERIOD;
+/// Доля периода пунктира, занятая чертой — из design-токенов (FR-046, W-d).
+pub use canvas_core::tokens::EDGE_DASH_DUTY as DASH_DUTY;
+/// Шаг одиночных точек (стиль «точки») в единицах диаметра —
+/// из design-токенов (FR-046, W-d).
+pub use canvas_core::tokens::EDGE_DOT_SPACING as DOT_SPACING;
 
 // --- Режим фокуса (T23, brainstorm-focus) ---
 

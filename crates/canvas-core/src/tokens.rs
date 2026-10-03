@@ -15,6 +15,15 @@
 //! Семантические слоты (что каким цветом красится) — не здесь, а в
 //! `canvas-render::theme::ThemeColors` и компонентных палитрах; здесь —
 //! только примитивы.
+//!
+//! §7а (аудит ui-kit, волна W-d — решение по семантическому слою):
+//! источником семантики остаются темы-пресеты `design/tokens/themes/*.json`
+//! (полный реестр слотов `ThemeColors` — `crate::theme_presets::REQUIRED_KEYS`,
+//! валидация I-47.1); `colors.json` остаётся слоем примитивов — семантика
+//! в него НЕ дублируется (вариант A). Паритет семантики: валидация
+//! I-47.1 + тесты canvas-render (маппинг/`is_dark`/контраст G3/`from_settings`),
+//! отсюда — тест-зеркало набора слотов против каждого пресета
+//! (`json_theme_presets_carry_full_semantic_slot_set`).
 
 // ---------------------------------------------------------------------------
 // Цвета (design/tokens/colors.json)
@@ -211,10 +220,24 @@ pub const CONTROL_SELECTED_FILL_LIGHT: [f32; 4] = CONTROL_HOVER_FILL_LIGHT;
 /// app.rs:2808 (#8a909c).
 pub const CONTROL_DISABLED_TEXT: [u8; 3] = [138, 144, 156];
 
-/// Диаметр бусины связи. Источник: `EDGE_DOT` cards.rs:627.
+/// Диаметр бусины связи. Источник: `EDGE_DOT` cards.rs.
 pub const EDGE_DOT: f32 = 2.5;
-/// Длина уса стрелки. Источник: `ARROW_LEN` cards.rs:651.
+/// Длина уса стрелки. Источник: `ARROW_LEN` cards.rs.
 pub const EDGE_ARROW_LEN: f32 = 10.0;
+/// Угол уса стрелки, ГРАДУСЫ (единицы JSON; рендер конвертирует в радианы
+/// π/180 — `cards::ARROW_ANGLE` = FRAC_PI_6). Источник: dimensions.json
+/// `edge.arrow_angle_deg`, константа `ARROW_ANGLE` cards.rs (W-d).
+pub const EDGE_ARROW_ANGLE_DEG: f32 = 30.0;
+/// Кружков на ус стрелки. Источник: `ARROW_DOTS` cards.rs (W-d).
+pub const EDGE_ARROW_DOTS: usize = 4;
+/// Период пунктира в диаметрах бусины (черта + пропуск). Источник:
+/// `DASH_PERIOD` cards.rs (W-d).
+pub const EDGE_DASH_PERIOD: f32 = 8.0;
+/// Доля периода пунктира, занятая чертой. Источник: `DASH_DUTY` cards.rs (W-d).
+pub const EDGE_DASH_DUTY: f32 = 0.6;
+/// Шаг одиночных точек (стиль «точки») в диаметрах бусины. Источник:
+/// `DOT_SPACING` cards.rs (W-d).
+pub const EDGE_DOT_SPACING: f32 = 3.0;
 
 /// Кегль заголовка карточки, world px (FR-023). Источник: `TITLE_FONT_SIZE` text.rs:66.
 pub const TYPE_TITLE: f32 = 16.0;
@@ -258,6 +281,16 @@ pub const FOCUS_BREATH_MS: u64 = 1600;
 pub const BODY_BLOCK_FLIP_MS: u64 = 150;
 /// Переход клампа описания D-8 «⋯ целиком ▾» (FR-061 D-14). Источник: motion.json.
 pub const BODY_CLAMP_MS: u64 = 150;
+/// Пульс одного ребра в волне каскада проливаний — полуволна 0→1→0
+/// (FR-050 Н9-1, этап E). Источник: animate.rs (зеркало W-d).
+pub const SPILL_WAVE_EDGE_MS: u64 = 600;
+/// Шаг волны каскада между топологическими порядками рёбер
+/// (FR-050 Н9-1, этап E). Источник: animate.rs (зеркало W-d).
+pub const SPILL_WAVE_STEP_MS: u64 = 200;
+/// «Показать источник»: длительность подсветки истока/связи/приёмника
+/// с затемнением остального (FR-050 Н9-3, этап E). Источник: animate.rs,
+/// потребитель app.rs (зеркало W-d).
+pub const SHOW_SOURCE_MS: u64 = 2500;
 
 // ---------------------------------------------------------------------------
 // Таблица тела ноды (FR-061 D-14, design/tokens/dimensions.json#table,
@@ -295,6 +328,30 @@ pub const TABLE_DESC_CLAMP_LINES: usize = 2;
 /// Диагностика колоночных направляющих в DebugOverlay (Q9: на ноде невидимы).
 /// Вне продуктовой палитры — принцип debug_overlay.rs. Источник: colors.json.
 pub const TABLE_GUIDE_DEBUG_COLOR: [f32; 4] = [0.549, 0.949, 0.2, 0.851];
+
+// ---------------------------------------------------------------------------
+// LOD-пороги рендера (design/tokens/dimensions.json#render, W-d): границы
+// детализации по зуму — FR-016 (анализ узких мест) и PRD-0004 §7.1 /
+// file-LOD SPEC §6.2 (анатомия ноды). Значения = текущим константам
+// cards.rs/anatomy.rs (I-1: ноль скачка).
+// ---------------------------------------------------------------------------
+
+/// Минимальный зум (мировой масштаб), при котором рисуется РАМКА
+/// серьёзности (ниже — только цвет Overload, FR-016). Источник:
+/// `ANALYSIS_BORDER_MIN_ZOOM` cards.rs.
+pub const LOD_ANALYSIS_BORDER: f32 = 0.25;
+/// Минимальный ЭФФЕКТИВНЫЙ зум (zoom × scale_factor), при котором рисуются
+/// БЕЙДЖИ метрик (FR-016, мера физической читаемости). Значение совпадает
+/// с границей file-LOD L0→L1 (`LOD_NODE_L0_MAX_ZOOM`, SPEC §6.2) —
+/// семантики разные, токены раздельные. Источник:
+/// `ANALYSIS_BADGES_MIN_ZOOM` cards.rs.
+pub const LOD_ANALYSIS_BADGES: f32 = 0.6;
+/// Порог L0→L1 анатомии ноды: ниже — силуэт (хедер A + полоса D),
+/// PRD-0004 §7.1. Источник: `LOD_L0_MAX_ZOOM` anatomy.rs.
+pub const LOD_NODE_L0_MAX_ZOOM: f32 = 0.6;
+/// Порог L1→L2 анатомии ноды: выше — полное тело + line-порты + лейблы
+/// слотов. Источник: `LOD_L1_MAX_ZOOM` anatomy.rs.
+pub const LOD_NODE_L1_MAX_ZOOM: f32 = 1.5;
 
 // ---------------------------------------------------------------------------
 // Тест паритета JSON↔Rust (инвариант I-5): расхождение = красный тест.
@@ -597,6 +654,23 @@ mod parity_tests {
         assert_eq!(dim("card.result_strip.$value"), CARD_RESULT_STRIP_H);
         assert_eq!(dim("edge.dot.$value"), EDGE_DOT);
         assert_eq!(dim("edge.arrow_len.$value"), EDGE_ARROW_LEN);
+        // W-d (§7): добор зеркала — 5 edge-токенов стрелки/пунктира.
+        assert_eq!(dim("edge.arrow_angle_deg.$value"), EDGE_ARROW_ANGLE_DEG);
+        assert_eq!(dim("edge.arrow_dots.$value") as usize, EDGE_ARROW_DOTS);
+        assert_eq!(dim("edge.dash_period.$value"), EDGE_DASH_PERIOD);
+        assert_eq!(dim("edge.dash_duty.$value"), EDGE_DASH_DUTY);
+        assert_eq!(dim("edge.dot_spacing.$value"), EDGE_DOT_SPACING);
+        // W-d (§7): LOD-пороги рендера.
+        assert_eq!(
+            dim("render.lod_analysis_border.$value"),
+            LOD_ANALYSIS_BORDER
+        );
+        assert_eq!(
+            dim("render.lod_analysis_badges.$value"),
+            LOD_ANALYSIS_BADGES
+        );
+        assert_eq!(dim("render.lod_node_l0_max.$value"), LOD_NODE_L0_MAX_ZOOM);
+        assert_eq!(dim("render.lod_node_l1_max.$value"), LOD_NODE_L1_MAX_ZOOM);
         assert_eq!(dim("typography.title_size.$value"), TYPE_TITLE);
         assert_eq!(dim("typography.title_line.$value"), TYPE_TITLE_LINE);
         assert_eq!(dim("typography.body_size.$value"), TYPE_BODY);
@@ -653,6 +727,49 @@ mod parity_tests {
         // FR-061 (D-14): переходы режимов Н-3 (контракт runtime v1).
         assert_eq!(ms("body_block_flip_ms.$value"), BODY_BLOCK_FLIP_MS);
         assert_eq!(ms("body_clamp_ms.$value"), BODY_CLAMP_MS);
+        // W-d (§7): добор зеркала — волна каскада проливаний и «Показать
+        // источник» (FR-050 Н9-1/Н9-3).
+        assert_eq!(ms("spill_wave_edge_ms.$value"), SPILL_WAVE_EDGE_MS);
+        assert_eq!(ms("spill_wave_step_ms.$value"), SPILL_WAVE_STEP_MS);
+        assert_eq!(ms("show_source_ms.$value"), SHOW_SOURCE_MS);
+    }
+
+    /// §7а (W-d, вариант A): семантический слой `ThemeColors` живёт в
+    /// themes/*.json — каждый пресет несёт ровно реестр семантических
+    /// слотов [`crate::theme_presets::REQUIRED_KEYS`] (инвариант I-47.1),
+    /// значения — читаемый hex `#RRGGBB[AA]`; colors.json остаётся слоем
+    /// примитивов (семантика в него не дублируется). Полный пер-слотовый
+    /// паритет `ThemeColors` ↔ JSON (58 полей: 37 из JSON + 21 выведенных
+    /// по задокументированным правилам) — тесты canvas-render
+    /// (theme_presets.rs: маппинг/is_dark/контраст G3/from_settings).
+    #[test]
+    fn json_theme_presets_carry_full_semantic_slot_set() {
+        for preset in crate::theme_presets::PRESETS {
+            let doc: Value = serde_json::from_str(preset.json)
+                .unwrap_or_else(|e| panic!("{}: пресет не читается: {e}", preset.id));
+            let colors = doc
+                .get("colors")
+                .and_then(|v| v.as_object())
+                .unwrap_or_else(|| panic!("{}: нет объекта colors", preset.id));
+            assert_eq!(
+                colors.len(),
+                crate::theme_presets::REQUIRED_KEYS.len(),
+                "{}: набор слотов != REQUIRED_KEYS (I-47.1)",
+                preset.id
+            );
+            for key in crate::theme_presets::REQUIRED_KEYS {
+                let raw = colors
+                    .get(*key)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_else(|| panic!("{}: нет слота {key}", preset.id));
+                assert!(
+                    raw.starts_with('#') && (raw.len() == 7 || raw.len() == 9),
+                    "{}/{}: не #RRGGBB[AA]: {raw}",
+                    preset.id,
+                    key
+                );
+            }
+        }
     }
 
     #[test]

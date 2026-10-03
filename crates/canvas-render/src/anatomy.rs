@@ -36,9 +36,11 @@ pub use canvas_core::tokens::CARD_HEADER_HEIGHT;
 pub use canvas_core::tokens::TYPE_RESULT_LINE as RESULT_LINE_HEIGHT;
 
 /// Порог L0→L1: ниже — силуэт (хедер + полоса D). Граница file-LOD §6.2.
-pub const LOD_L0_MAX_ZOOM: f32 = 0.6;
+/// FR-046 (W-d): значение — из design-токенов (`dimensions.json#render`).
+pub use canvas_core::tokens::LOD_NODE_L0_MAX_ZOOM as LOD_L0_MAX_ZOOM;
 /// Порог L1→L2: выше — полное тело + line-порты + лейблы слотов.
-pub const LOD_L1_MAX_ZOOM: f32 = 1.5;
+/// FR-046 (W-d): значение — из design-токенов (`dimensions.json#render`).
+pub use canvas_core::tokens::LOD_NODE_L1_MAX_ZOOM as LOD_L1_MAX_ZOOM;
 
 /// LOD-уровень расчётной ноды (PRD-0004 §7.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
