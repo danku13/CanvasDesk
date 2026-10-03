@@ -29,6 +29,17 @@ impl RendererLauncher for SpawnLocalRendererLaunch {
         let slot = RendererSlot::new();
         #[cfg(target_arch = "wasm32")]
         {
+            // FR-091 v2: согласие analytics=true → сессия записывается
+            // (PostHog session recording читает канвас растром). Сообщаем
+            // рендереру «capture-режим»: create_gpu_web пропустит
+            // WebGPU-ступень (растр webgpu-канваса рекордеру нечитаем —
+            // posthog/posthog#57008), WebGL2 читается при
+            // preserveDrawingBuffer:true (web-шим index.html ставит его
+            // до создания контекста). Ставится до spawn_local — флаг
+            // гарантированно прочитан внутри Renderer::new. Правило §3.1:
+            // согласия/JS-состояние читает web-слой, ядро не знает про
+            // PostHog.
+            canvas_render::renderer::set_prefer_gl_for_capture(analytics_recording_active());
             // winit 0.30 создаёт canvas при create_window, но НЕ вставляет
             // его в DOM (with_append по умолчанию выключен; attrs строятся
             // в canvas-app — §3.1: web-знания туда не идут). Платформенный
@@ -60,6 +71,33 @@ impl RendererLauncher for SpawnLocalRendererLaunch {
         let _ = (&window, prefer_dx12);
         RendererLaunch::Pending(slot)
     }
+}
+
+/// FR-091 v2 (web): согласие на аналитику → запись сеанса активна.
+/// Источник правды — JSON `canvasdesk.consent` в localStorage (тот же,
+/// что у JS-модуля телеметрии в index.html: `readConsent`). Семантика
+/// зеркалит index.html: нет ни согласий, ни `canvasdesk.config` —
+/// свежий визит, пикер ещё не показан, SDK не грузится → запись
+/// невозможна → WebGPU остаётся. Запись без поля/битая — дефолт true
+/// (как предвыбранные чекбоксы пикера и «старые конфиги считаются
+/// согласившимися», FR-089).
+#[cfg(target_arch = "wasm32")]
+fn analytics_recording_active() -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    let Ok(Some(storage)) = window.local_storage() else {
+        return false;
+    };
+    let consent_raw = storage.get_item("canvasdesk.consent").ok().flatten();
+    let config_raw = storage.get_item("canvasdesk.config").ok().flatten();
+    if consent_raw.is_none() && config_raw.is_none() {
+        return false;
+    }
+    consent_raw
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get("analytics").and_then(serde_json::Value::as_bool))
+        .unwrap_or(true)
 }
 
 /// Вставка winit-канваса в DOM (wasm): winit 0.30 не делает этого сам

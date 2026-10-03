@@ -556,6 +556,36 @@ pub struct Renderer {
     theme: ThemeColors,
 }
 
+/// FR-091 v2 (web): «захват канваса извне активен» — сессия будет
+/// записываться (PostHog session recording читает канвас растром через
+/// `createImageBitmap`). Устанавливается платформенным слоем (canvas-web,
+/// `renderer_launch`) ДО первого [`Renderer::new`] по согласию
+/// `analytics=true` (FR-089). Эффект: [`create_gpu_web`] пропускает
+/// WebGPU-ступень — растр webgpu-канваса рекордеру нечитаем
+/// (posthog/posthog#57008), WebGL2 читается при
+/// `preserveDrawingBuffer:true` (web-шим index.html). Флаг не
+/// PostHog-специфичен: любой внешний читатель канваса (скриншоты,
+/// тесты) на webgpu столкнётся с тем же ограничением платформы.
+/// Один set на старте — достаточно AtomicBool (Relaxed: set в том же
+/// JS-потоке до любого create_gpu_web, гонки нет).
+#[cfg(target_arch = "wasm32")]
+static PREFER_GL_FOR_CAPTURE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// FR-091 v2 (web): включить «capture-режим» — предпочесть GL (WebGL2)
+/// бэкенд WebGPU. Вызывается платформенным слоем canvas-web до
+/// [`Renderer::new`]; повторные вызовы просто перезаписывают флаг.
+#[cfg(target_arch = "wasm32")]
+pub fn set_prefer_gl_for_capture(v: bool) {
+    PREFER_GL_FOR_CAPTURE.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// FR-091 v2 (web): читатель флага для [`create_gpu_web`].
+#[cfg(target_arch = "wasm32")]
+fn prefer_gl_for_capture() -> bool {
+    PREFER_GL_FOR_CAPTURE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Web (wasm32): двухступенчатый выбор GPU-бэкенда (FR-WASM-02).
 ///
 /// wgpu 22 на web не умеет фолбэк внутри одного `Instance`: если в браузере
@@ -576,13 +606,55 @@ pub struct Renderer {
 /// есть адаптер (gles/web.rs `enumerate_adapters` без surface_hint
 /// возвращает пустой список).
 /// `None` — не работает ни один бэкенд (canvas-web покажет DOM-заглушку).
+///
+/// FR-091 v2: при включённом захвате канваса извне (session recording —
+/// см. [`set_prefer_gl_for_capture`]) WebGPU-ступень ПРОПУСКАЕТСЯ: растр
+/// webgpu-канваса рекордер PostHog не читает (аналога preserveDrawingBuffer
+/// у WebGPU нет — posthog/posthog#57008), WebGL2 же читается при
+/// preserveDrawingBuffer:true (форсится web-шимом index.html ДО любых
+/// getContext — wgpu получает читаемый буфер). Смена бэкенда — разовая,
+/// при старте: смена согласия подействует после перезагрузки страницы.
 #[cfg(target_arch = "wasm32")]
 async fn create_gpu_web(window: &Arc<Window>) -> Option<(GpuContext, wgpu::Surface<'static>)> {
-    // FR-WEBGPU-DIAG: логирование каждой ступени. Браузерное `No available
-    // adapters.` в console — нативное сообщение Chrome (не наше); наш warn
-    // идёт следом с конкретной ступенью. Retry в GpuContext::new решает
-    // timing-race на старте (Intel Arc + Chrome).
-    // Ступень 1 — WebGPU: адаптер без surface, канвас не трогаем.
+    // FR-091 v2: «захват канваса извне активен» → сразу GL (WebGL2).
+    if prefer_gl_for_capture() {
+        tracing::info!(
+            "create_gpu_web: захват канваса извне (session recording) — \
+             WebGPU-ступень пропущена"
+        );
+        return create_gpu_web_gl(window).await;
+    }
+    create_gpu_web_two_step(window).await
+}
+
+/// FR-091 v2: GL-путь (WebGL2) без WebGPU-ступени — общий хвост
+/// [`create_gpu_web_gl`] и ступени 2 [`create_gpu_web_two_step`]:
+/// surface до адаптера (в WebGL2 контекст канваса и есть адаптер —
+/// gles/web.rs `enumerate_adapters` без surface_hint возвращает пустой
+/// список); канвас к этому моменту не занят ни одним контекстом.
+/// Лимиты устройства — downlevel (gpu.rs).
+#[cfg(target_arch = "wasm32")]
+async fn create_gpu_web_gl(window: &Arc<Window>) -> Option<(GpuContext, wgpu::Surface<'static>)> {
+    tracing::info!("create_gpu_web: GL (WebGL2) — surface до адаптера");
+    let gl_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::GL,
+        ..Default::default()
+    });
+    let surface = gl_instance.create_surface(window.clone()).ok()?;
+    let gpu = GpuContext::new(gl_instance, Some(&surface)).await?;
+    tracing::info!(backend = ?wgpu::Backends::GL, "web GPU-бэкенд выбран");
+    Some((gpu, surface))
+}
+
+/// FR-WEBGPU-DIAG: логирование каждой ступени. Браузерное `No available
+/// adapters.` в console — нативное сообщение Chrome (не наше); наш warn
+/// идёт следом с конкретной ступенью. Retry в GpuContext::new решает
+/// timing-race на старте (Intel Arc + Chrome).
+/// Ступень 1 — WebGPU: адаптер без surface, канвас не трогаем.
+#[cfg(target_arch = "wasm32")]
+async fn create_gpu_web_two_step(
+    window: &Arc<Window>,
+) -> Option<(GpuContext, wgpu::Surface<'static>)> {
     tracing::info!("create_gpu_web: ступень 1 — WebGPU (BROWSER_WEBGPU)");
     let webgpu_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::BROWSER_WEBGPU,
@@ -605,17 +677,9 @@ async fn create_gpu_web(window: &Arc<Window>) -> Option<(GpuContext, wgpu::Surfa
             "web WebGPU-адаптер недоступен (3 retry попытки исчерпаны) — фолбэк на GL (WebGL2)"
         );
     }
-    // Ступень 2 — GL (WebGL2): surface до адаптера; канвас к этому моменту
-    // не занят ни одним контекстом. Лимиты устройства — downlevel (gpu.rs).
+    // Ступень 2 — GL (WebGL2) — общий хвост create_gpu_web_gl.
     tracing::info!("create_gpu_web: ступень 2 — GL (WebGL2)");
-    let gl_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::GL,
-        ..Default::default()
-    });
-    let surface = gl_instance.create_surface(window.clone()).ok()?;
-    let gpu = GpuContext::new(gl_instance, Some(&surface)).await?;
-    tracing::info!(backend = ?wgpu::Backends::GL, "web GPU-бэкенд выбран");
-    Some((gpu, surface))
+    create_gpu_web_gl(window).await
 }
 
 impl Renderer {
