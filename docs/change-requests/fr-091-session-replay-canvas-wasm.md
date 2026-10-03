@@ -175,11 +175,18 @@ session_recording: {
       402 passed/0 failed (canvas-render) + canvas-web зелёные.
 - [x] Синтаксис inline-скриптов index.html — `node --check` (включая
       новый шим-блок).
-- [ ] **Live-приёмка после выката v2** (этот пуш): повтор пробы на
-      https://danku13.github.io/CanvasDesk/app/ — снапшоты непустые,
-      консоль показывает пропуск WebGPU-ступени при analytics=true;
-      владельцу: новая сессия с «Метриками» → Replays → канвас виден
-      (в т.ч. в браузере с реальным GPU — через WebGL2-бэкенд).
+- [x] **Live-приёмка после выката v2** (aeae900 + 3809a64, Pages f526a8f7):
+      консоль — «захват канваса извне (session recording) — WebGPU-ступень
+      пропущена» → «GL (WebGL2) — surface до адаптера» → «рендер
+      инициализирован backend=Gl» → «окно создано 1280×800» (кламп 1×1
+      исчез после follow-up 3809a64); прямой readback канваса — nzA=16000/
+      nzRGB=16000, pdb=true; FPS-обсервер жив на проде (48 вызовов
+      createImageBitmap за 12 с ≈ 4 fps); CI/Pages/Tour — success.
+      Владельцу: новая сессия с «Метриками» → Replays → канвас виден
+      (в т.ч. в браузере с реальным GPU — через WebGL2-бэкенд); в проекте
+      остался тестовый person `probe-capture-test-01` (distinct_id
+      headless-приёмок этой сессии) — можно удалить или использовать как
+      демо-реплей.
 
 Владельцу в PostHog (опционально):
 
