@@ -167,6 +167,12 @@ mod export_ui;
 mod handler;
 /// Обработка ввода — дочерний модуль (этап 3 рефакторинга 2026-09-24).
 mod input;
+// FR-092: тач-типы используются только web-веткой (мобильный wasm) —
+// на нативе они не нужны (тачскрины Windows идут через OS-эмуляцию мыши)
+#[cfg(target_arch = "wasm32")]
+use canvas_core::touch::TouchGesture;
+#[cfg(target_arch = "wasm32")]
+use winit::event::{Touch, TouchPhase};
 /// Оверлеи приложения — дочерний модуль (этап 2 рефакторинга 2026-09-24).
 mod overlays;
 mod stage;
@@ -838,6 +844,12 @@ pub struct App {
     middle_pressed: bool,
     space_pressed: bool,
     left_pressed: bool,
+    /// FR-092 (мобильный web): машина жеста касания (тап/драг → левая
+    /// кнопка, два пальца — пан+пинч; логика — canvas_core::touch).
+    /// На нативе инертна: ветка WindowEvent::Touch в обработчике под
+    /// wasm32, тачскрины Windows идут через OS-эмуляцию мыши.
+    #[cfg(target_arch = "wasm32")]
+    touch_gesture: TouchGesture,
     /// HUD с fps/p95/счётчиком видимых нод (F3, T5).
     hud_visible: bool,
     /// Замер интервалов между кадрами (окно 300 кадров).
@@ -1378,6 +1390,9 @@ impl App {
             middle_pressed: false,
             space_pressed: false,
             left_pressed: false,
+            // FR-092: пустая машина жеста — наполняется WindowEvent::Touch (web)
+            #[cfg(target_arch = "wasm32")]
+            touch_gesture: TouchGesture::new(),
             hud_visible: settings.hud_on_start,
             frame_meter: FrameMeter::new(),
             last_frame: None,

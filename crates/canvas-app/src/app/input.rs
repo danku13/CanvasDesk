@@ -4010,6 +4010,82 @@ impl App {
         self.request_redraw();
     }
 
+    /// FR-092 (мобильный web): тач-ввод. winit-web для pointerType=touch
+    /// шлёт ТОЛЬКО WindowEvent::Touch (совместимые mouse-события подавлены
+    /// prevent_default, pointer.rs winit 0.30) — без перевода в мышиный
+    /// пайплайн web-сборка на телефоне отрисовывается, но не отвечает ни на
+    /// тап, ни на драг («работает только HTML-оверлей»). Распределение
+    /// пальцев — чистая машина `canvas_core::touch::TouchGesture` (тесты в
+    /// ядре): один палец — тап/драг как левая кнопка мыши; два пальца —
+    /// пан серединой + pinch-зум дистанцией (якорь — середина, механика
+    /// Miro/Figma). Гейт wasm32: нативные тачскрины (Windows) продолжают
+    /// идти через OS-эмуляцию мыши — поведение натива не меняется.
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn on_touch(&mut self, touch: Touch) {
+        use canvas_core::touch::{Action, Phase};
+        // FR-092: оракул браузерного дыма — доставка тач-событий (?log=debug)
+        tracing::debug!(
+            target: "canvas_app",
+            id = touch.id,
+            phase = ?touch.phase,
+            x = touch.location.x,
+            y = touch.location.y,
+            "touch: событие"
+        );
+        let phase = match touch.phase {
+            TouchPhase::Started => Phase::Started,
+            TouchPhase::Moved => Phase::Moved,
+            TouchPhase::Ended => Phase::Ended,
+            TouchPhase::Cancelled => Phase::Cancelled,
+        };
+        let pos = [touch.location.x, touch.location.y];
+        let action = self
+            .touch_gesture
+            .step(touch.id, phase, pos, self.scale_factor() as f64);
+        // FR-092: оракул — решение машины жеста (тап/драг/отмена/два пальца)
+        tracing::debug!(target: "canvas_app", ?action, "touch: действие");
+        match action {
+            Action::None => {}
+            Action::Press(p) => {
+                // Курсор ДО нажатия: on_left_button работает по self.cursor
+                self.on_cursor_moved(PhysicalPosition::new(p[0], p[1]));
+                self.on_left_button(ElementState::Pressed);
+            }
+            Action::Move(p) => {
+                self.on_cursor_moved(PhysicalPosition::new(p[0], p[1]));
+            }
+            Action::Release(p) => {
+                // Финальная позиция перед отпусканием (палец мог не двигаться)
+                self.on_cursor_moved(PhysicalPosition::new(p[0], p[1]));
+                self.on_left_button(ElementState::Released);
+            }
+            Action::Cancel => {
+                // Прерывание без коммита (второй палец/pointercancel):
+                // резиновый прямоугольник и драг ноды не оставляем
+                self.cancel_pointer_transients();
+                self.request_redraw();
+            }
+            Action::TwoFinger {
+                pan,
+                zoom_anchor,
+                zoom_factor,
+            } => {
+                // Глушение под модалкой/screen-space UI — паритет
+                // on_pinch/on_mouse_wheel (FR-052: панели поглощают жесты)
+                if self.main_stage.is_none() && !self.cursor_over_screen_surface() {
+                    if pan != [0.0, 0.0] {
+                        self.camera.pan(pan);
+                    }
+                    if (zoom_factor - 1.0).abs() > f32::EPSILON {
+                        self.camera
+                            .zoom_at(zoom_factor, zoom_anchor, self.viewport_logical());
+                    }
+                    self.request_redraw();
+                }
+            }
+        }
+    }
+
     /// FR-050 Н2 (этап C): клик по меню выбора — пункт выполняет действие
     /// (геометрия отрисовки: сдвиг на заголовок); клик по заголовку/
     /// паддингу — отмена: ребро не создаётся (меню уже снято диспетчером
