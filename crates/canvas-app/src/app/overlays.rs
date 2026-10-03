@@ -751,7 +751,7 @@ impl App {
             // Владелец 2026-10-02: строки документации помечены бейджем «?»
             // (SVG из атласа, в Glyph-наборе — текстовый фолбэк) — не поиск
             // по нодам; текст строк сдвинут вправо на зону бейджа.
-            let is_docs = entry.kind == canvas_render::search_ui::SearchRowKind::Docs;
+            let is_docs = entry.kind == crate::search_ui::SearchRowKind::Docs;
             if is_docs {
                 let badge_rect = [row_rect[0] + 8.0, row_rect[1] + 6.0, 16.0, 16.0];
                 let badge_tint = crate::palette::color_to_rgba(palette.icon);
@@ -788,7 +788,7 @@ impl App {
                 text: rt.title.clone(),
                 origin: rt.title_pos,
                 width: rt.text_width,
-                font_size: canvas_render::search_ui::TITLE_FONT_SIZE,
+                font_size: crate::search_ui::TITLE_FONT_SIZE,
                 color: palette.title,
                 align: TextAlign::Left,
             });
@@ -797,7 +797,7 @@ impl App {
                     text: line.clone(),
                     origin: *pos,
                     width: rt.text_width,
-                    font_size: canvas_render::search_ui::SUB_FONT_SIZE,
+                    font_size: crate::search_ui::SUB_FONT_SIZE,
                     color: palette.body,
                     align: TextAlign::Left,
                 });

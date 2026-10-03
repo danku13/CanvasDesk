@@ -125,11 +125,11 @@ use crate::flowmap_ui;
 // (чистый модуль); состояние подсветки — StageCalcFocus в App.
 use crate::calc_panel_ui;
 use crate::calc_panel_ui::{layout as calc_panel_layout, PanelValues, RowValue, StageCalcFocus};
-use canvas_render::renderer_init::{RendererLaunch, RendererLauncher, RendererSlot};
-use canvas_render::search_ui::{
+use crate::search_ui::{
     layout as search_layout, scan_scene, PanelAction, SceneEntry, SearchInput, SearchPanel,
     SearchRow,
 };
+use canvas_render::renderer_init::{RendererLaunch, RendererLauncher, RendererSlot};
 use canvas_render::sectors::SectorInstance;
 use canvas_render::text::{
     body_area, measure_body_height, BodyHit, BodyHitKind, LineErrorHit, OverlayText, ScreenText,
