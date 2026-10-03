@@ -1685,11 +1685,16 @@ mod tests {
         app.docs = Some(DocsViewer {
             page,
             layout: crate::docs_ui::layout_page(page, content[2], &mut measurer, &mut fs),
-            scroll: crate::docs_ui::ScrollState::new(
-                crate::docs_ui::layout_page(page, content[2], &mut measurer, &mut fs)
-                    .content_height,
-                content[3],
-            ),
+            scroll: {
+                let mut scroll = crate::docs_ui::ScrollState::default();
+                crate::docs_ui::sync_scroll(
+                    &mut scroll,
+                    crate::docs_ui::layout_page(page, content[2], &mut measurer, &mut fs)
+                        .content_height,
+                    content[3],
+                );
+                scroll
+            },
             layout_width: content[2],
         });
         app.help_menu = Some(HelpMenuState {

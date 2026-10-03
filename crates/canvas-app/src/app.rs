@@ -7252,7 +7252,8 @@ impl App {
         let mut measurer = canvas_ui::measure::TextMeasurer::new();
         let mut fs = canvas_render::text::measure_font_system();
         let layout = docs_ui::layout_page(page, content[2], &mut measurer, &mut fs);
-        let scroll = docs_ui::ScrollState::new(layout.content_height, content[3]);
+        let mut scroll = docs_ui::ScrollState::default();
+        docs_ui::sync_scroll(&mut scroll, layout.content_height, content[3]);
         self.docs = Some(DocsViewer {
             page,
             layout,
