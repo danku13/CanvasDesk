@@ -106,6 +106,15 @@ use canvas_core::tokens::{
     TYPE_HUD as HUD_FONT_SIZE, TYPE_HUD_LINE as HUD_LINE_HEIGHT, TYPE_RESULT as RESULT_FONT_SIZE,
     TYPE_TITLE as TITLE_FONT_SIZE, TYPE_TITLE_LINE as TITLE_LINE_HEIGHT,
 };
+
+/// Межстрочный множитель текстовых слоёв (screen-band/stage/overlay-буферы и
+/// клип `screen_text_area`): строка = кегль × 1.3. Паритет прежних литералов
+/// `* 1.3` (4 места этого файла) — поведение не меняется; в
+/// `canvas_core::tokens` типографского слота для ОТНОСИТЕЛЬНОГО множителя
+/// нет (TYPE_*_LINE — абсолютные высоты строк отдельных слоёв), вынос в
+/// tokens — кандидат W-g.
+pub const LINE_HEIGHT_FACTOR: f32 = 1.3;
+
 /// Левый отступ заголовка в world-px (без иконки).
 /// FR-023: 8 → 12 — адекватный отступ заголовка от края карточки
 /// (согласован с BODY_PADDING и визуальным ритмом шапки).
@@ -120,6 +129,14 @@ const ICON_WIDTH: f32 = 22.0;
 /// Минимальный физический размер заголовка: ниже текст нечитаем — не готовим
 /// (LOD-порог, уточняется в T11 по SPEC §6.2).
 const MIN_TITLE_PX: f32 = 4.0;
+
+/// FR-017 (CP6): what-if превью показывается только при читаемом зуме —
+/// ниже порога тело и подсветка не рисуются (LOD SPEC §6.2). Паритет
+/// прежнего литерала `zoom() >= 0.6`. Значение совпадает с
+/// `tokens::LOD_NODE_L0_MAX_ZOOM`/`LOD_ANALYSIS_BADGES`, но семантика своя —
+/// по решению W-d (dimensions.json#render: «семантики разные — токены
+/// раздельные») отдельный слот не заводился; вынос в tokens — кандидат W-g.
+pub const WHATIF_LOD_ZOOM_MIN: f32 = 0.6;
 
 /// Левый отступ НАРИСОВАННОГО заголовка от левого края карточки — ЕДИНАЯ
 /// формула рендера и inline-редактора (ревизия 2026-09-30: чип справа,
@@ -415,7 +432,7 @@ fn screen_text_area<'a>(
     }
     let left = left.round();
     let top = (st.origin[1] * scale_factor).round();
-    let line_height = st.font_size * scale_factor * 1.3;
+    let line_height = st.font_size * scale_factor * LINE_HEIGHT_FACTOR;
     TextArea {
         buffer,
         left,
@@ -3009,7 +3026,7 @@ impl TextSystem {
         // (LOD SPEC §6.2: ниже порога превью тело и подсветка не рисуются).
         let empty_whatif: std::collections::HashMap<String, crate::WhatIfNode> =
             std::collections::HashMap::new();
-        let whatif_nodes = if frame.camera.zoom() >= 0.6 {
+        let whatif_nodes = if frame.camera.zoom() >= WHATIF_LOD_ZOOM_MIN {
             frame.whatif_nodes
         } else {
             &empty_whatif
@@ -4100,7 +4117,7 @@ impl TextSystem {
             let mut buffers: Vec<Buffer> = Vec::with_capacity(band.texts.len());
             for st in band.texts {
                 let font = st.font_size * scale_factor;
-                let line_height = font * 1.3;
+                let line_height = font * LINE_HEIGHT_FACTOR;
                 let mut buffer =
                     Buffer::new(&mut self.font_system, Metrics::new(font, line_height));
                 buffer.set_wrap(&mut self.font_system, Wrap::None);
@@ -4127,7 +4144,7 @@ impl TextSystem {
         let mut stage_buffers: Vec<Buffer> = Vec::with_capacity(frame.stage_texts.len());
         for st in frame.stage_texts {
             let font = st.font_size * scale_factor;
-            let line_height = font * 1.3;
+            let line_height = font * LINE_HEIGHT_FACTOR;
             let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font, line_height));
             buffer.set_wrap(&mut self.font_system, Wrap::None);
             buffer.set_size(
@@ -4152,7 +4169,7 @@ impl TextSystem {
             Vec::with_capacity(frame.stage_overlay_texts.len());
         for st in frame.stage_overlay_texts {
             let font = st.font_size * scale_factor;
-            let line_height = font * 1.3;
+            let line_height = font * LINE_HEIGHT_FACTOR;
             let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font, line_height));
             buffer.set_wrap(&mut self.font_system, Wrap::None);
             buffer.set_size(

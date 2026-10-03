@@ -35,7 +35,7 @@
 | `autolink` | Modals | **на ките** (kit::modal+list_rows+ScrollState) | 0 | низкий (parity-тесты 7 вьюпортов) |
 | `dialog` | Modals | геометрия на ките, draw сырой | 0 (токены) | низкий (эталон зоны) |
 | `empty` | Panels | геометрия на ките, draw сырой | 0 | `.take(2)` — строки описания теряются |
-| `search` | Panels | вёрстка на ките, но **модуль в canvas-render** | 3 в draw | сильный (клампы, узкое окно −40px) |
+| `search` | Panels | вёрстка на ките; модуль перенесён в canvas-app *(закрыто W-f, ветка wf-render)* | 3 в draw | сильный (клампы, узкое окно −40px) |
 | `stage` | Modals | частично (Table v2 + Painter; пилюли/подписи — hand) | 1 (0x14161c) | ручные формулы; truncate_chars ×10 |
 | `explain` | Modals | частично (kit::modal; дерево — documented hand) | 0 в модели; **13+ в draw** | сильный сам по себе; **нет scissor** у прохода |
 | `menu` (ПКМ) | Popups | частично (rows=list_rows; панель сырая) | 2 в draw | **нет клампа/флипа к вьюпорту**; на 800×560 хвост пунктов клипуется, скролла нет |
@@ -101,6 +101,8 @@ W3.2 формально исполнен, но ВСЕ дети — `MeasuredItem
 ### B7. `search` — вёрстка на ките, модуль вне canvas-app
 Живёт в `canvas-render` (исключение из модели), в реестре, hit из тех же функций. Вёрстка — constrain/stack/pad/Column::lay_out_measured + ellipsis/wrap (`search_ui.rs:419-543`) — G5-чисто. Draw-путь (`overlays.rs:645-769`) — 3 литерала-дубля токенов (рамка `[0.22,0.24,0.30,0.9]` = WHEEL_BORDER; selected `[0.18,0.29,0.48,0.95]`; hover `[0.24,0.30,0.42,0.6]`). Локальная шкала констант (460/36/13/11/12/8/10/6) мимо SPACING_*/RADIUS_*.
 
+*Статус W-f (закрыто): модуль перенесён в `crates/canvas-app/src/search_ui.rs` — внутри рендера использований не было (проверено rg), потребители — только canvas-app; публичный API бит-в-бит, юнит-тесты зелёные на новом месте (ветка wf-render).*
+
 ### B8. `tooltip` — перенос по числу слов
 Ширина бокса измеряется честно (`tooltip.rs:143-163`), но перенос — `wrap_words(text, 10)` по счёту слов (`:99-118`), а не `TextMeasurer::wrap` по ширине: 10 длинных слов шире окна → бокос клампится и текст молча клипается. 7 литералов цвета в `handler.rs:421-586` (error = значение токена ERROR, но литералом; 0xd4d4d4; янтарь 0xf5a623; голубой 0x9cc3e6). Локальные константы дублируют кит-`TOOLTIP_OFFSET`.
 
@@ -130,13 +132,13 @@ W3.2 формально исполнен, но ВСЕ дети — `MeasuredItem
 - **Рассинхрон зеркала токенов**: 5 dimension-токенов из `design/tokens/dimensions.json` (edge.arrow_angle_deg/arrow_dots/dash_period/dash_duty/dot_spacing) живут только локальными константами `cards.rs:876-886` без паритет-теста; 3 motion-токена — в `canvas-render/animate.rs:18-26` мимо tokens.rs.
 - **Рассинхрон дубликата**: `canvas-widgets::layout::HEADER_H = 28.0` с комментарием «совпадает с cards::HEADER_HEIGHT», фактический `CARD_HEADER_HEIGHT = 34.0` (FR-023 поднял, дубль не обновили) — контент/хит-тест WebView-виджета смещены на 6px.
 - Семантический слой `ThemeColors` (~45 слотов) существует только в Rust — в `design/tokens/colors.json` его нет (JSON покрывает примитивы).
-- Межстрочный множитель экранного текста `1.3` захардкожен (`text.rs:418`); LOD-пороги (0.25/0.6/1.5) вне токенов.
+- Межстрочный множитель экранного текста `1.3` захардкожен (`text.rs:418`); LOD-пороги (0.25/0.6/1.5) вне токенов. *(W-f: вынесены в именованные константы `text.rs` — `LINE_HEIGHT_FACTOR`, `WHATIF_LOD_ZOOM_MIN`, значения паритетны; слоты в tokens — кандидат W-g.)*
 
 ### 7а. Зеркало токенов и семантика: состояние после W-d
 
 - **Зеркало достроено** (`canvas-core/src/tokens.rs`, паритет-тесты JSON↔Rust на месте): 5 edge-токенов (`EDGE_ARROW_ANGLE_DEG/EDGE_ARROW_DOTS/EDGE_DASH_PERIOD/EDGE_DASH_DUTY/EDGE_DOT_SPACING`), 3 motion (`SPILL_WAVE_EDGE_MS/STEP_MS`, `SHOW_SOURCE_MS`), 4 LOD-порога в новой группе `dimensions.json#render` (`lod_analysis_border/lod_analysis_badges/lod_node_l0_max/lod_node_l1_max`); `card.header_height` уже сведён в W-a (токен + паритет + `pub use` в canvas-widgets). Потребители (`cards.rs`, `animate.rs`, `anatomy.rs`) — алиасы/реэкспорты токенов с прежними именами (ноль изменений поведения).
 - **Решение по ThemeColors — вариант A**: семантика живёт в `design/tokens/themes/*.json` (они уже рантайм-источник: `canvas_core::theme_presets`, валидация набора слотов I-47.1 — 37 семантических слотов `REQUIRED_KEYS` у каждого из 7 пресетов); `colors.json` остаётся слоем примитивов, дублировать ~58 полей `ThemeColors` в него не нужно. Паритет: тест-зеркало реестра слотов в tokens.rs (`json_theme_presets_carry_full_semantic_slot_set`) + существующие тесты canvas-render (маппинг, `is_dark`, контраст G3, `from_settings`). Follow-up за владельцем theme.rs/theme_presets.rs: полный пер-слотовый тест «58 полей = 37 из JSON + 21 выведенных по задокументированным правилам».
-- **Остатки вне рамок W-d** (text.rs — чужая территория): литерал `zoom() >= 0.6` (what-if превью, text.rs:3012 — совпадает с `LOD_NODE_L0_MAX_ZOOM`) и межстрочный `1.3` (text.rs:418).
+- **Остатки вне рамок W-d** (text.rs — чужая территория): литерал `zoom() >= 0.6` (what-if превью, text.rs:3012 — совпадает с `LOD_NODE_L0_MAX_ZOOM`) и межстрочный `1.3` (text.rs:418). *(W-f: оба вынесены в именованные константы text.rs — `WHATIF_LOD_ZOOM_MIN` и `LINE_HEIGHT_FACTOR`; отдельные токены не заводились — см. dimensions.json#render «семантики разные — токены раздельные», кандидат W-g.)*
 
 ## 8. Дефекты адаптива — приоритизированный список
 
@@ -186,7 +188,7 @@ W3.2 формально исполнен, но ВСЕ дети — `MeasuredItem
 
 ## 11. Источники
 
-- Модель/геометрия: `crates/canvas-app/src/{menu-зона: lib.rs, overlays.rs, input.rs, handler.rs}`; поверхностные модули `*_ui.rs`; `app/{ui_registry,ui_layout_lint,tooltip,explain,stage,support}.rs`
-- Рендер-UI: `canvas-render/src/{search_ui,minimap_pass,text,cards,theme,tokens-зеркало}.rs`; `canvas-core/src/tokens.rs`
+- Модель/геометрия: `crates/canvas-app/src/{menu-зона: lib.rs, overlays.rs, input.rs, handler.rs}`; поверхностные модули `*_ui.rs` (в т.ч. `search_ui.rs` — перенесён из canvas-render, W-f); `app/{ui_registry,ui_layout_lint,tooltip,explain,stage,support}.rs`
+- Рендер-UI: `canvas-render/src/{minimap_pass,text,cards,theme,tokens-зеркало}.rs`; `canvas-core/src/tokens.rs`
 - Web: `canvas-web/index.html`, `src/toolbar.rs`; world-виджеты: `canvas-widgets/src/layout.rs`
 - Доки-эталон: `docs/ui-kit.md`, `docs/interface-objects/surface-registry.md`, FR-059/060/062/068, CR-014, CR-015

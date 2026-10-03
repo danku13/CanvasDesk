@@ -2,7 +2,8 @@
 //! T1: GPU-контекст, оконный рендер с clear-проходом.
 //! T2: камера (screen↔world), бесконечная сетка.
 //! T5: culling видимых нод по spatial index, замер кадра (HUD).
-//! T13: миникарта (CPU-снимок + GPU-квад). T14: поиск (UI-модель, анимации).
+//! T13: миникарта (CPU-снимок + GPU-квад). T14: поиск — UI-модель панели
+//! перенесена в canvas-app (W-f, аудит ui-kit B7), рендер читает её оттуда.
 
 /// PRD-0004 N1: анатомия ноды — контракт зон A–E и LOD-уровней.
 pub mod anatomy;
@@ -29,7 +30,6 @@ pub mod renderer_init;
 /// FR-061 этап B (Н-3 пре-PRD PRD-0004): табличная модель тела ноды —
 /// декларативные строки данных (D-2) + проход A направляющих (D-6/D-11).
 pub mod row_grid;
-pub mod search_ui;
 pub mod sectors;
 pub mod stage;
 pub mod stats;

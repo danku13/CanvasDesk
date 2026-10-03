@@ -9,7 +9,15 @@
 //!
 //! Ввод НЕ использует `EditingSession` (это многострочный редактор заметок):
 //! поле поиска — однострочное, своя лёгкая модель `SearchInput`.
-
+//!
+//! W-f (аудит ui-kit §5/B7): модуль перенесён из `canvas-render` в
+//! `canvas-app` — внутри рендера он НЕ использовался (единственные
+//! потребители — app.rs/overlays.rs/ui_layout_lint.rs canvas-app), а вёрстка
+//! целиком на примитивах `canvas_ui`. Публичный API сохранён бит-в-бит;
+//! единственная правка тела — пути `crate::text::{measure_font_system,
+//! SANS_FAMILY}` → `canvas_render::text::*` (владелец глобального FontSystem —
+//! рендер; canvas-app и прежде читал его через тот же путь
+//! `canvas_render::text`).
 use std::collections::HashSet;
 
 // Spacing-scale токены (W-d): значения = прежним литералам (I-1 ноль скачка).
@@ -407,7 +415,7 @@ pub fn layout(window_w: f32, window_h: f32, panel: &SearchPanel) -> PanelLayout 
     // канонические shared-точки на вызов (Text-детей нет — замерщик
     // геометрию не читает).
     let mut m = canvas_ui::measure::TextMeasurer::new();
-    let mut fs = crate::text::measure_font_system();
+    let mut fs = canvas_render::text::measure_font_system();
     layout_with(window_w, window_h, panel, &mut m, &mut fs)
 }
 
@@ -499,7 +507,7 @@ pub fn layout_with(
         let title = m.ellipsis(
             fs,
             &row.title,
-            crate::text::SANS_FAMILY,
+            canvas_render::text::SANS_FAMILY,
             TITLE_FONT_SIZE,
             text_w,
         );
@@ -509,7 +517,7 @@ pub fn layout_with(
             m.wrap(
                 fs,
                 &row.subtitle,
-                crate::text::SANS_FAMILY,
+                canvas_render::text::SANS_FAMILY,
                 SUB_FONT_SIZE,
                 text_w,
             )
@@ -544,7 +552,7 @@ pub fn layout_with(
         gap: 0.0,
         ..Column::default()
     }
-    .lay_out_measured(inner, &items, m, fs, crate::text::SANS_FAMILY, 12.0);
+    .lay_out_measured(inner, &items, m, fs, canvas_render::text::SANS_FAMILY, 12.0);
 
     let input = &rects[0];
     let input_rect = [input.x, input.y, input.right(), input.bottom()];
