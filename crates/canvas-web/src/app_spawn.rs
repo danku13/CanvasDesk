@@ -216,6 +216,12 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     // W6: DOM-панель хранилища (открыть/недавние/экспорт) + приём drop
     crate::toolbar::install(proxy.clone());
     crate::drop_files::install(proxy.clone());
+    // FR-096/097 (мобильный web): будилка long-press (палец без движения
+    // событий не рождает — время доставляет платформа) + coarse-указатель
+    // (matchMedia pointer:coarse → hit-тесты тач-целей FR-097).
+    if let Some(window) = web_sys::window() {
+        crate::touch_platform::install(&window, &proxy);
+    }
     // Мост ввода кириллицы/IME (wasm-аудит 2026-09-25): winit-web теряет
     // insertText — DOM beforeinput доставляет текст в App через proxy.
     crate::ime::install(proxy);

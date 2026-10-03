@@ -88,6 +88,11 @@ pub mod scheme_gallery_ui;
 /// T-038.4.
 pub mod snap;
 
+/// FR-097 (мобильный web): тач-цели canvas-UI ≥ 44 лог. px — hit-only
+/// расширение зон попадания на coarse-указателе (hit ≥ draw, визуалы
+/// не меняются); источник флага — `canvas_core::web_bridge`.
+pub mod touch_targets;
+
 /// FR-050 Н9-4 (этап E): «Карта проливаний» — чистая модель и раскладка
 /// панели-оверлея всех проливаний канваса (строки «источник → параметр ·
 /// значение», hit-тесты, кап с «… ещё N»). Рендер и ввод — app.rs.
@@ -481,6 +486,13 @@ pub mod ui {
             });
             self.last = Some((at, pos));
             double
+        }
+
+        /// FR-096: сброс пары (long-press разрывает цепочку: нажатие,
+        /// открывшее контекстное меню, не должно сцепляться со следующим
+        /// тапом — после меню последовал бы «двойной тап» создания заметки).
+        pub fn reset(&mut self) {
+            self.last = None;
         }
     }
 
@@ -1701,6 +1713,34 @@ pub mod ui {
                 [110.0, 100.0],
                 DOUBLE_CLICK_DIST
             ));
+        }
+
+        /// FR-096: reset разрывает пару — нажатие, открывшее контекстное
+        /// меню long-press'ом, не сцепляется со следующим тапом (иначе
+        /// первый тап по меню/канвасу после меню считался бы двойным).
+        #[test]
+        fn double_click_reset_breaks_pair() {
+            let t0 = Instant::now();
+            let mut d = DoubleClick::new();
+            assert!(!touch_slop_register(&mut d, t0, [100.0, 100.0]));
+            // Long-press открыл меню — детектор сброшен
+            d.reset();
+            assert!(!touch_slop_register(
+                &mut d,
+                t0 + Duration::from_millis(300),
+                [108.0, 104.0]
+            ));
+            // Обычная пара после сброса работает как с чистого листа
+            assert!(touch_slop_register(
+                &mut d,
+                t0 + Duration::from_millis(520),
+                [112.0, 108.0]
+            ));
+        }
+
+        /// Хелпер: регистрация тача с расширенным допуском (FR-093).
+        fn touch_slop_register(d: &mut DoubleClick, at: Instant, pos: [f32; 2]) -> bool {
+            d.register(at, pos, DOUBLE_CLICK_DIST_TOUCH)
         }
 
         /// Генератор id (T7/T9): первый свободный по префиксу.

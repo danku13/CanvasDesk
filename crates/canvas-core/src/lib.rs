@@ -81,6 +81,9 @@ pub mod tokens;
 pub mod touch;
 /// FR-032: валидация модели — чистая функция ядра (коды E-*/W-*).
 pub mod validate;
+/// FR-095/096/097 (мобильный web): атомарный мост состояния
+/// canvas-app ↔ canvas-web (будилка long-press, coarse-указатель).
+pub mod web_bridge;
 /// FR-017 (CP6): what-if сценарии — именованные построчные подмены,
 /// персистентность в `canvasdesk.whatif`.
 pub mod whatif;
