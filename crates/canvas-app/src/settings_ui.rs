@@ -1212,16 +1212,34 @@ pub fn pill_knob_rect(track: [f32; 4], on: bool) -> [f32; 4] {
 fn modal_size(viewport: [f32; 2]) -> [f32; 2] {
     use canvas_ui::geometry::UiVec2;
     use canvas_ui::layout::constrain;
-    let design = constrain(
-        UiVec2::new(MODAL_MIN_W, MODAL_MIN_H),
-        UiVec2::new(MODAL_MAX_W, MODAL_MAX_H),
-        UiVec2::new(viewport[0] * 0.45, viewport[1] * 0.6),
-    );
+    // FR-098: точки MODAL_BP_COMPACT/MOBILE оживают (ранее — константы
+    // без реализации, аудит ui-kit §W-e):
+    // - < BP_MOBILE (телефон): модаль занимает окно целиком с полями
+    //   SETTINGS_MARGIN — стандарт мобильной модали; навигация остаётся
+    //   колонкой (инвариант различимости — тест клампа 320×240);
+    // - < BP_COMPACT (планшет/узкий десктоп): доля высоты 0.6 → 0.75 —
+    //   больше контента без скролла; ширина — прежняя (0.45 уже даёт
+    //   кламп к MODAL_MIN_W).
+    let mobile = viewport[0] < MODAL_BP_MOBILE;
+    let fraction_h = if viewport[0] < MODAL_BP_COMPACT {
+        0.75
+    } else {
+        0.6
+    };
     let window_max = UiVec2::new(
         (viewport[0] - SETTINGS_MARGIN * 2.0).max(1.0),
         (viewport[1] - SETTINGS_MARGIN * 2.0).max(1.0),
     );
-    let size = constrain(UiVec2::new(0.0, 0.0), window_max, design);
+    let size = if mobile {
+        window_max
+    } else {
+        let design = constrain(
+            UiVec2::new(MODAL_MIN_W, MODAL_MIN_H),
+            UiVec2::new(MODAL_MAX_W, MODAL_MAX_H),
+            UiVec2::new(viewport[0] * 0.45, viewport[1] * fraction_h),
+        );
+        constrain(UiVec2::new(0.0, 0.0), window_max, design)
+    };
     [size.x, size.y]
 }
 
@@ -2264,6 +2282,24 @@ mod tests {
         // Вне диапазона таб — первый таб
         let fallback = modal_layout(99, [1920.0, 1080.0]);
         assert_eq!(fallback.rows, modal_layout(0, [1920.0, 1080.0]).rows);
+    }
+
+    /// FR-098: breakpoints оживают — телефон (модаль на всё окно),
+    /// компакт (выше доля высоты), граница BP_COMPACT — прежняя ветка.
+    #[test]
+    fn modal_size_breakpoints_mobile_and_compact() {
+        // Телефон 390×844 (< BP_MOBILE): модаль = окно минус поля
+        let layout = modal_layout(0, [390.0, 844.0]);
+        assert_eq!(layout.rect[2], 390.0 - SETTINGS_MARGIN * 2.0);
+        assert_eq!(layout.rect[3], 844.0 - SETTINGS_MARGIN * 2.0);
+        // Компакт 1024×768 (< BP_COMPACT): доля высоты 0.75 → 576;
+        // ширина — прежний кламп к MODAL_MIN_W (0.45*1024 = 460 → 560)
+        let layout = modal_layout(0, [1024.0, 768.0]);
+        assert_eq!(layout.rect[3], 576.0);
+        // Граница 1280 (== BP_COMPACT, не ниже) — прежняя ветка 0.6
+        // (0.6*720 = 432; сравнение с допуском — float-путь constrain)
+        let layout = modal_layout(0, [1280.0, 720.0]);
+        assert!((layout.rect[3] - 432.0).abs() < 1e-2);
     }
 
     /// Структура модалки: 4 пункта навигации; строки — только активного

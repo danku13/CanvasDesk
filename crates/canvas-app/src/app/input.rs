@@ -1619,8 +1619,12 @@ impl App {
             }
         }
         if !handled && point_in_rect(rect_xywh(lay.panel_rect), self.cursor) {
-            // Внутри дока, мимо элементов — глотаем
+            // Внутри дока, мимо элементов — глотаем; FR-098: кандидат в
+            // drag-скролл списка (вертикальный драг пальцем — колесо на
+            // таче недоступно; сброс — Release/Cancel/Released кнопки)
             handled = true;
+            self.palette_touch_scroll = true;
+            self.palette_touch_scroll_acc = 0.0;
         }
         if handled {
             self.request_redraw();
@@ -2589,6 +2593,11 @@ impl App {
             "mouse: левая кнопка"
         );
         self.left_pressed = state == ElementState::Pressed;
+        // FR-098: отпускание кнопки завершает drag-скролл палитры
+        // (тач-путь сбрасывает флаг в on_touch Release/Cancel, мышиный — здесь)
+        if state == ElementState::Released {
+            self.palette_touch_scroll = false;
+        }
         // T15: первый клик по канвасу снимает WS_EX_NOACTIVATE — с этого
         // момента окно может получать фокус («WS_EX_NOACTIVATE до первого
         // клика», TASKS T15); ошибки не критичны, флаг ставим до вызова
@@ -4112,9 +4121,47 @@ impl App {
                 self.on_left_button(ElementState::Pressed);
             }
             Action::Move(p) => {
+                // FR-098: drag-скролл списка палитры — драг по пустому месту
+                // дока крутит список (на таче колеса нет); шаг — линия
+                // колеса 40 лог. px, знак — как у touch-скролла списков:
+                // палец вниз (dy > 0) уменьшает scroll_top. Паритет кламп
+                // шаблонов не трогает: template_drag (драг строки-кандидат)
+                // приоритетнее — скролл не подхватывается.
+                if self.palette_touch_scroll && self.template_drag.is_none() && self.left_pressed {
+                    let prev_y = self.cursor[1] as f64;
+                    self.palette_touch_scroll_acc += (p[1] - prev_y) as f32;
+                    let lines = (self.palette_touch_scroll_acc / 40.0) as i32;
+                    if lines != 0 {
+                        self.palette_touch_scroll_acc -= lines as f32 * 40.0;
+                        let viewport = self.viewport_logical();
+                        let rows = template_panel_rows(
+                            &self.templates,
+                            &self.template_panel,
+                            self.settings.language,
+                            &self.template_category_names(),
+                        );
+                        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+                        let mut fs = canvas_render::text::measure_font_system();
+                        let lay = template_panel_layout(
+                            viewport[0],
+                            viewport[1],
+                            &self.templates,
+                            &self.template_panel,
+                            &rows,
+                            &mut measurer,
+                            &mut fs,
+                            &self.template_category_names(),
+                        );
+                        self.template_panel
+                            .scroll_by(-lines * template_ui::PANEL_WHEEL_LINES, lay.max_scroll);
+                        self.request_redraw();
+                    }
+                }
                 self.on_cursor_moved(PhysicalPosition::new(p[0], p[1]));
             }
             Action::Release(p) => {
+                // FR-098: драг-скролл палитры завершён
+                self.palette_touch_scroll = false;
                 // Финальная позиция перед отпусканием (палец мог не двигаться)
                 self.on_cursor_moved(PhysicalPosition::new(p[0], p[1]));
                 self.on_left_button(ElementState::Released);
@@ -4122,6 +4169,7 @@ impl App {
             Action::Cancel => {
                 // Прерывание без коммита (второй палец/pointercancel):
                 // резиновый прямоугольник и драг ноды не оставляем
+                self.palette_touch_scroll = false;
                 self.cancel_pointer_transients();
                 self.request_redraw();
             }
