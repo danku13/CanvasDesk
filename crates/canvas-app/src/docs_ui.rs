@@ -763,7 +763,16 @@ pub fn layout_page(
         match block {
             Block::Heading { level, text } => {
                 let kind = RowKind::Heading((*level).clamp(1, 6));
-                b.push_wrapped(text, kind, 0.0, if *level <= 2 { tokens::SPACING_SM } else { tokens::SPACING_S });
+                b.push_wrapped(
+                    text,
+                    kind,
+                    0.0,
+                    if *level <= 2 {
+                        tokens::SPACING_SM
+                    } else {
+                        tokens::SPACING_S
+                    },
+                );
             }
             Block::Paragraph { text } => {
                 b.push_wrapped(text, RowKind::Body, 0.0, tokens::SPACING_S)
@@ -970,12 +979,12 @@ pub fn sync_scroll(state: &mut ScrollState, content_height: f32, view_height: f3
 /// некликабельные внешние ссылки в `links` не попадают (фильтр сборки).
 /// Волна W-c: скролл — kit [`ScrollState`] по ссылке (тип кита не
 /// `Copy`; прежний параметр по значению работал на копии).
-pub fn link_at(
-    layout: &PageLayout,
+pub fn link_at<'a>(
+    layout: &'a PageLayout,
     scroll: &ScrollState,
     content_origin: [f32; 2],
     point: [f32; 2],
-) -> Option<&LinkRect> {
+) -> Option<&'a LinkRect> {
     let x = point[0] - content_origin[0];
     let y = point[1] - content_origin[1] + scroll.offset;
     layout.links.iter().find(|link| {
@@ -1108,7 +1117,10 @@ mod tests {
             viewport_h: 500.0,
         };
         assert_eq!(s.max_offset(), 1500.0);
-        assert!(!wheel_scroll(&mut s, -500.0), "вверх из 0 — кламп, без изменения");
+        assert!(
+            !wheel_scroll(&mut s, -500.0),
+            "вверх из 0 — кламп, без изменения"
+        );
         assert_eq!(s.offset, 0.0);
         assert!(wheel_scroll(&mut s, 9999.0));
         assert_eq!(s.offset, 1500.0, "вниз — кламп к max_offset()");
@@ -1154,8 +1166,20 @@ mod tests {
         assert_eq!(s.offset, 0.0);
         assert!(wheel_scroll(&mut s, 150.0));
         assert_eq!(s.offset, 100.0, "кламп к max_offset()");
-        assert!(!wheel_scroll(&mut s, 0.5), "на нижней границе — без изменений");
-        assert!(!wheel_scroll(&mut s, -0.5), "на верхней границе — без изменений");
+        assert!(
+            !wheel_scroll(&mut s, 0.5),
+            "на нижней границе — без изменений"
+        );
+        assert!(
+            wheel_scroll(&mut s, -0.5),
+            "у max прокрутка вверх — позиция меняется (не граница)"
+        );
+        assert_eq!(s.offset, 99.5, "сдвиг ровно на dy");
+        assert!(
+            wheel_scroll(&mut s, -200.0),
+            "прокрутка выше начала — позиция изменилась"
+        );
+        assert_eq!(s.offset, 0.0, "кламп к 0 после прокрутки выше начала");
         // «resize»: max пересчитан, позиция сохраняется и клампится к новой
         let mut s = mk(200.0, 100.0);
         assert!(wheel_scroll(&mut s, 100.0)); // offset = max = 100
@@ -1224,7 +1248,9 @@ mod tests {
         assert!(menu_item_rows(origin, HELP_MENU_WIDTH, 5)
             .iter()
             .enumerate()
-            .all(|(i, rect)| { rect.y - (origin[1] + HELP_MENU_PAD + i as f32 * HELP_MENU_ITEM_H) == 0.0 }));
+            .all(|(i, rect)| {
+                rect.y - (origin[1] + HELP_MENU_PAD + i as f32 * HELP_MENU_ITEM_H) == 0.0
+            }));
     }
 
     /// Меню помощи: hit-тесты пунктов и подменю; биекция подменю ↔

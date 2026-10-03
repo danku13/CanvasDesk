@@ -1777,7 +1777,7 @@ impl App {
                 let link = self.docs.as_ref().and_then(|viewer| {
                     docs_ui::link_at(
                         &viewer.layout,
-                        viewer.scroll,
+                        &viewer.scroll,
                         [content[0], content[1]],
                         self.cursor,
                     )
@@ -3904,11 +3904,13 @@ impl App {
                         viewer.layout =
                             docs_ui::layout_page(viewer.page, content[2], &mut measurer, &mut fs);
                         viewer.layout_width = content[2];
-                        viewer
-                            .scroll
-                            .resize(viewer.layout.content_height, content[3]);
+                        docs_ui::sync_scroll(
+                            &mut viewer.scroll,
+                            viewer.layout.content_height,
+                            content[3],
+                        );
                     }
-                    if viewer.scroll.wheel(dy) {
+                    if docs_ui::wheel_scroll(&mut viewer.scroll, dy) {
                         self.request_redraw();
                     }
                 }

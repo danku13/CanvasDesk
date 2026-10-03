@@ -3290,11 +3290,11 @@ impl App {
             });
         }
         // Скроллбар-аффорданс справа (ползунок по пропорции offset/max)
-        if viewer.scroll.max_offset > 0.0 {
+        if viewer.scroll.max_offset() > 0.0 {
             let track_h = content[3];
             let thumb_h = (track_h * track_h / viewer.layout.content_height).clamp(24.0, track_h);
             let free = (track_h - thumb_h).max(0.0);
-            let thumb_y = content[1] + free * viewer.scroll.offset / viewer.scroll.max_offset;
+            let thumb_y = content[1] + free * viewer.scroll.offset / viewer.scroll.max_offset();
             instances.push(CardInstance {
                 pos: [
                     panel[0] + panel[2] - docs_ui::DOCS_SCROLLBAR_W - 2.0,
