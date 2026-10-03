@@ -67,7 +67,7 @@
 | `explain` | Modals | Block | explain | PRD-0007 X2 |
 | `dialog` | Modals | Block | dialog | T21 |
 | `gallery` | Modals | Block | gallery | FR-049 |
-| `onboarding` | Modals | Block | onboarding | FR-028 |
+| `onboarding` | Modals | Block | onboarding | FR-028; W-e: разморожен (решение владельца 03.10.2026), мигрирован на ui-kit — `kit::modal`+поля клампа, скролл тела `ScrollState`, `TextMeasurer::wrap`, Painter+`WidgetState`/`button_style`, слоты цветов |
 | `kit_gallery` | Modals | Block | kit_gallery | FR-055 U4: витрина кита («?» → «О интерфейсе», Q5-a); Esc/backdrop/✕ закрывают |
 | `admin_panel` | Modals | Block | admin_panel | FR-070: UI-админпанель («?» → «UI-консоль»); Esc/backdrop/✕ закрывают; сайдбар секций; свотчи токенов — live-правка |
 | `empty` | Panels | Capture | — | empty-state (AC-1.1 FR-049) |
