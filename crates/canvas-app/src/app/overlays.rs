@@ -2589,13 +2589,13 @@ impl App {
                 | canvas_ui::kit::KitState::Selected => canvas_ui::kit::control_style_of(
                     palette.palette_hover_fill,
                     palette.palette_border,
-                    palette.title,
+                    color_to_rgba(palette.title),
                     canvas_core::tokens::RADIUS_CHIP,
                 ),
                 _ => canvas_ui::kit::control_style_of(
                     palette.palette_chip_fill,
                     [0.0; 4],
-                    palette.title,
+                    color_to_rgba(palette.title),
                     canvas_core::tokens::RADIUS_CHIP,
                 ),
             }
@@ -2632,7 +2632,7 @@ impl App {
                 origin: [rect[0] + 8.0, rect[1] + 6.0],
                 width: rect[2] - 12.0,
                 font_size: 12.0,
-                color: style.text,
+                color: palette.title,
                 align: TextAlign::Left,
             });
         }
@@ -2640,7 +2640,7 @@ impl App {
         let chevron_style = canvas_ui::kit::control_style_of(
             palette.palette_chip_fill,
             [0.0; 4],
-            palette.title,
+            color_to_rgba(palette.title),
             canvas_core::tokens::RADIUS_CHIP,
         );
         instances.push(CardInstance {
@@ -2656,7 +2656,7 @@ impl App {
             origin: [strip.chevron_rect[0], strip.chevron_rect[1] + 5.0],
             width: strip.chevron_rect[2],
             font_size: 13.0,
-            color: chevron_style.text,
+            color: palette.title,
             align: TextAlign::Center,
         });
         // Flyout раскрытой категории: строки шаблонов (только видимое окно)
@@ -2705,7 +2705,7 @@ impl App {
                     } else {
                         [0.0; 4]
                     },
-                    palette.title,
+                    color_to_rgba(palette.title),
                     canvas_core::tokens::RADIUS_CHIP,
                 );
                 template_card_row(
@@ -4175,7 +4175,12 @@ impl App {
             fill: settings_style.fill,
             border: settings_style.border,
             // params.y = рамка выделения: подсветка кнопки при открытой панели
-            params: [settings_style.radius, self.settings_open as u8 as f32, 0.0, 0.0],
+            params: [
+                settings_style.radius,
+                self.settings_open as u8 as f32,
+                0.0,
+                0.0,
+            ],
             corners: [0.0; 4],
         });
         // Иконка настроек — КВАДАМИ, не текстовым глифом: «⚙» (U+2699)
@@ -4260,7 +4265,7 @@ impl App {
             origin: [language_button[0], icon_top(language_button, 13.0)],
             width: language_button[2],
             font_size: 13.0,
-            color: language_style.text,
+            color: palette.title,
             align: TextAlign::Center,
         });
         // FR-027: кнопка «?» — четвёртый элемент кластера (⚙/тема/язык/помощь):
@@ -4277,7 +4282,12 @@ impl App {
             size: [help_button[2], help_button[3]],
             fill: help_style.fill,
             border: help_style.border,
-            params: [help_style.radius, self.help_menu.is_some() as u8 as f32, 0.0, 0.0],
+            params: [
+                help_style.radius,
+                self.help_menu.is_some() as u8 as f32,
+                0.0,
+                0.0,
+            ],
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
@@ -4285,7 +4295,7 @@ impl App {
             origin: [help_button[0], icon_top(help_button, 18.0)],
             width: help_button[2],
             font_size: 18.0,
-            color: help_style.text,
+            color: palette.title,
             align: TextAlign::Center,
         });
         // Панель горячих клавиш (FR-004): у левого края, по центру;
