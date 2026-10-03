@@ -2,12 +2,19 @@
 //! (образец [`crate::hints_ui`]/`template_ui`): табы ([`SETTINGS_TABS`]),
 //! род строки ([`row_kind`]), перечень значений многозначной настройки
 //! ([`dropdown_options`]) с чистым применением выбора
-//! ([`apply_dropdown_value`]), геометрия модалки и меню с клампом к окну
-//! ([`modal_layout`]/[`dropdown_layout`]) и hit-тесты.
+//! ([`apply_dropdown_value`]), геометрия модалки ([`modal_layout`], прокрутка
+//! контента W-a — [`modal_layout_scrolled`]) и hit-тесты.
+//!
+//! Волна W-c (аудит ui-kit §10): контролы строк — примитивы кита
+//! `canvas-ui`. Тумблер — kit `switch` (геометрия трека/бегунка —
+//! [`control_rect`]/[`pill_knob_rect`], слоты стиля — `track_style`/`knob_fill`
+//! кита); выпадающее меню — kit `dropdown_menu` («якорь + flip», кламп к
+//! окну — [`dropdown_layout`]); логика опций/применения и hit-поведение
+//! строк не тронуты.
 //!
 //! Отличия от панели FR-026 (ревизия владельцем 2026-09-20): модалка по
 //! центру окна над затемнением (не панель у угла кнопки); строки
-//! «лейбл + описание + контрол» (pill-тумблер / dropdown-кнопка);
+//! «лейбл + описание + контрол» (kit-switch / dropdown-кнопка);
 //! таб «Внешний вид» — карточки темы + dropdown языка (FR-040); размер
 //! адаптивный с потолками (расчёт на Full HD+, контрольные точки
 //! [`MODAL_BP_COMPACT`]/[`MODAL_BP_MOBILE`] — константы без реализации);
@@ -27,10 +34,12 @@ use canvas_core::{
 use crate::i18n::{self, keys};
 use crate::ui::{point_in_rect, SETTINGS_MARGIN};
 
-/// Высота пункта выпадающего меню.
-pub const DROPDOWN_ROW_H: f32 = 26.0;
-/// Внутренние поля выпадающего меню.
-pub const DROPDOWN_MARGIN: f32 = 6.0;
+/// Высота пункта выпадающего меню — kit-метрика строки списка
+/// (`canvas_ui::kit::LIST_ROW_H`, значение прежнего литерала 26).
+pub const DROPDOWN_ROW_H: f32 = canvas_ui::kit::LIST_ROW_H;
+/// Внутренние поля выпадающего меню — токен
+/// `canvas_core::tokens::SPACING_S` (значение прежнего литерала 6).
+pub const DROPDOWN_MARGIN: f32 = canvas_core::tokens::SPACING_S;
 
 // Модалка настроек (FR-039): адаптивный размер с потолками — расчёт на
 // десктопы Full HD и выше (1920×1080 → ~864×640).
@@ -55,8 +64,9 @@ pub const MODAL_NAV_WIDTH: f32 = 180.0;
 pub const MODAL_NAV_ITEM_H: f32 = 34.0;
 /// Высота заголовка раздела в правой панели.
 pub const MODAL_TITLE_HEIGHT: f32 = 30.0;
-/// Внутренние поля модалки и её панелей.
-pub const MODAL_PADDING: f32 = 12.0;
+/// Внутренние поля модалки и её панелей — токен
+/// `canvas_core::tokens::SPACING_LG` (значение прежнего литерала 12).
+pub const MODAL_PADDING: f32 = canvas_core::tokens::SPACING_LG;
 /// Высота строки настройки (лейбл + описание в 2 строки, контрол справа).
 /// 44 → 52 (wasm-аудит 2026-09-25): однострочное описание при ширине
 /// «строка − контрол» рвалось у кромки dropdown'а («…прижата лета|»);
@@ -68,10 +78,8 @@ pub const MODAL_THEME_CARD_H: f32 = 56.0;
 pub const MODAL_THEME_GAP: f32 = 14.0;
 /// Высота строки-подсказки внизу левой колонки.
 pub const MODAL_HINT_HEIGHT: f32 = 24.0;
-/// Размер pill-тумблера: трек и ручка (логические px).
-pub const PILL_TRACK_W: f32 = 34.0;
-pub const PILL_TRACK_H: f32 = 18.0;
-pub const PILL_KNOB: f32 = 14.0;
+// W-c: метрики тумблера — kit (`canvas_ui::kit::SWITCH_W`/`SWITCH_H`/
+// `SWITCH_KNOB_PAD`), прежние константы PILL_* удалены; см. [`control_rect`].
 /// Размер dropdown-кнопки в строке.
 pub const DROPDOWN_BTN_W: f32 = 170.0;
 pub const DROPDOWN_BTN_H: f32 = 24.0;
@@ -461,12 +469,12 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
     }
 }
 
-/// Род строки: тумблер (pill-тумблер, клик переключает) или dropdown
+/// Род строки: тумблер (kit-switch, клик переключает) или dropdown
 /// (клик открывает меню значений). Инвариант (юнит-тест): `Toggle` — ровно
 /// для `bool`-полей `Settings`, `Dropdown` — для остальных.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowKind {
-    /// Булева настройка: клик — переключить (pill-тумблер, меню избыточно).
+    /// Булева настройка: клик — переключить (kit-switch, меню избыточно).
     Toggle,
     /// Многозначная настройка: клик — открыть выпадающее меню.
     Dropdown,
@@ -527,7 +535,7 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
 /// Текущее значение настройки для dropdown-кнопки (контрол на строке
 /// показывает значение — HIG «Pop-Up Buttons»; тексты из таблицы
 /// [`crate::i18n`], язык — `settings.language`). Для тумблеров — `None`
-/// (состояние видно по позиции pill-ручки).
+/// (состояние видно по позиции бегунка kit-switch).
 pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
     let language = settings.language;
     match row {
@@ -1122,16 +1130,57 @@ impl ModalLayout {
     }
 }
 
-/// Rect контрола внутри строки: pill-тумблер у тумблера, dropdown-кнопка
+// --- W-c: контролы строк — kit-примитивы -------------------------------------
+
+/// Нейтральный срез палитры для ЧИСТО-геометрических вызовов kit `switch`:
+/// геометрия трека/бегунка слотов не читает (слоты идут только в
+/// `track_style`/`knob_fill` — заливки, выбор которых остаётся за рисующим
+/// слоем, контракт F-8 «цвета — только слоты»). Нули в рендер не попадают.
+const SWITCH_GEOMETRY_PALETTE: canvas_ui::kit::KitPalette = canvas_ui::kit::KitPalette {
+    panel_fill: [0.0; 4],
+    panel_border: [0.0; 4],
+    control_fill: [0.0; 4],
+    control_border: [0.0; 4],
+    control_primary: [0.0; 4],
+    control_danger: [0.0; 4],
+    hover_fill: [0.0; 4],
+    primary_hover_fill: [0.0; 4],
+    selected_fill: [0.0; 4],
+    text: [0.0; 4],
+    text_title: [0.0; 4],
+    text_muted: [0.0; 4],
+    disabled_text: [0.0; 4],
+    accent: [0.0; 4],
+};
+
+/// Kit-раскладка тумблера строки настроек — единственный источник геометрии
+/// трека/бегунка (`canvas_ui::kit::switch`: трек SWITCH_W×SWITCH_H, радиус
+/// RADIUS_PILL; бегунок SWITCH_H−2·SWITCH_KNOB_PAD, отступ SWITCH_KNOB_PAD,
+/// позиция — по `on`).
+fn kit_switch_layout(
+    slot: canvas_ui::geometry::UiRect,
+    on: bool,
+) -> canvas_ui::kit::SwitchLayout {
+    canvas_ui::kit::switch(slot, on, canvas_ui::kit::KitState::Normal, &SWITCH_GEOMETRY_PALETTE)
+}
+
+/// Rect контрола внутри строки: kit-switch (трек) у тумблера, dropdown-кнопка
 /// у выпадающего списка (справа от строки, вертикально по центру).
 pub fn control_rect(row_rect: [f32; 4], kind: RowKind) -> [f32; 4] {
     match kind {
-        RowKind::Toggle => [
-            row_rect[0] + row_rect[2] - MODAL_PADDING - PILL_TRACK_W,
-            row_rect[1] + (row_rect[3] - PILL_TRACK_H) / 2.0,
-            PILL_TRACK_W,
-            PILL_TRACK_H,
-        ],
+        // W-c: трек kit-switch в зоне справа — та же выкладка `stack` по
+        // центру зоны, что внутри kit::switch (позиция бегунка на трек
+        // не влияет, поэтому здесь `on: false`).
+        RowKind::Toggle => {
+            let zone = canvas_ui::geometry::UiRect::new(
+                row_rect[0] + row_rect[2] - MODAL_PADDING - canvas_ui::kit::SWITCH_W,
+                row_rect[1],
+                canvas_ui::kit::SWITCH_W,
+                row_rect[3],
+            );
+            let track = kit_switch_layout(zone, false).track;
+            [track.x, track.y, track.w, track.h]
+        }
         RowKind::Dropdown => [
             row_rect[0] + row_rect[2] - MODAL_PADDING - DROPDOWN_BTN_W,
             row_rect[1] + (row_rect[3] - DROPDOWN_BTN_H) / 2.0,
@@ -1141,20 +1190,16 @@ pub fn control_rect(row_rect: [f32; 4], kind: RowKind) -> [f32; 4] {
     }
 }
 
-/// Rect ручки pill-тумблера по треку и состоянию (включён — справа,
-/// акцентный цвет; выключен — слева, приглушённый).
+/// Rect бегунка тумблера по треку и состоянию (W-c: геометрия —
+/// `canvas_ui::kit::switch`): квадрат SWITCH_H−2·SWITCH_KNOB_PAD с отступом
+/// SWITCH_KNOB_PAD; включён — справа, выключен — слева. Цвета (слоты
+/// заливки) — за рисующим слоем (F-8), на геометрию они не влияют.
 pub fn pill_knob_rect(track: [f32; 4], on: bool) -> [f32; 4] {
-    let x = if on {
-        track[0] + track[2] - PILL_KNOB - 2.0
-    } else {
-        track[0] + 2.0
-    };
-    [
-        x,
-        track[1] + (track[3] - PILL_KNOB) / 2.0,
-        PILL_KNOB,
-        PILL_KNOB,
-    ]
+    let kit = kit_switch_layout(
+        canvas_ui::geometry::UiRect::new(track[0], track[1], track[2], track[3]),
+        on,
+    );
+    [kit.knob.x, kit.knob.y, kit.knob.w, kit.knob.h]
 }
 
 /// Адаптивный размер модалки — два яруса `constrain` (FR-054, примитивы U3):
@@ -1569,32 +1614,36 @@ pub fn modal_theme_card_at(layout: &ModalLayout, point: [f32; 2]) -> Option<Them
     None
 }
 
-/// Геометрия выпадающего меню `[x, y, w, h]` с клампом к окну: ниже
-/// контрола-якоря; не влезает снизу — выше строки. Ширина — параметр
-/// (FR-039: в модалке это ширина контрола, у угловой панели была жёстко
-/// `PANEL_WIDTH`); кламп по горизонтали и вертикали — паттерн
-/// `hints_ui::popup_layout` (FR-021). `count == 0` — пустой rect.
+/// Геометрия выпадающего меню `[x, y, w, h]` (W-c: раскладка и кламп — kit
+/// `canvas_ui::kit::dropdown_menu`, «якорь + flip»): ниже контрола-якоря;
+/// не влезает снизу — НАД якорем; не влезает и сверху — прижато к низу
+/// вьюпорта; по горизонтали зажато во вьюпорт; финальная гарантия — kit
+/// `viewport_clamp` (меню не выходит за вьюпорт). Вьюпорт сжат на поля
+/// [`DROPDOWN_MARGIN`] — прежние клампы к краям окна дословно (паттерн
+/// `hints_ui::popup_rect`/`palette::margin_viewport`). Ширина — параметр
+/// с прежним минимумом 80; кит поднимает меню до ширины якоря (width ≥
+/// anchor.w) — в модалке параметр равен ширине контрола (FR-039 §1).
+/// Высота — прежняя: `count·[`DROPDOWN_ROW_H`] + 2·[`DROPDOWN_MARGIN`]`,
+/// пункты внутри меню считаются от верхнего поля ([`dropdown_item_at`]
+/// согласован). Логика опций/применения ([`dropdown_options`]/[
+/// `apply_dropdown_value`]) не тронута. `count == 0` — пустой rect.
 pub fn dropdown_layout(anchor: [f32; 4], viewport: [f32; 2], count: usize, width: f32) -> [f32; 4] {
     if count == 0 {
         return [0.0; 4];
     }
+    use canvas_ui::geometry::{UiRect, UiVec2};
+    // Вьюпорт, сжатый на поля DROPDOWN_MARGIN, — слот клампов kit dropdown_menu.
+    let inset = UiRect::new(
+        DROPDOWN_MARGIN,
+        DROPDOWN_MARGIN,
+        (viewport[0] - DROPDOWN_MARGIN * 2.0).max(0.0),
+        (viewport[1] - DROPDOWN_MARGIN * 2.0).max(0.0),
+    );
     let height = count as f32 * DROPDOWN_ROW_H + DROPDOWN_MARGIN * 2.0;
-    let width = width
-        .max(80.0)
-        .min((viewport[0] - DROPDOWN_MARGIN * 2.0).max(0.0));
-    let mut x = anchor[0];
-    if x + width > viewport[0] - DROPDOWN_MARGIN {
-        x = viewport[0] - DROPDOWN_MARGIN - width;
-    }
-    let x = x.max(DROPDOWN_MARGIN);
-    // Ниже контрола; не влезает снизу — выше (не перекрывая саму строку)
-    let below = anchor[1] + anchor[3] + 2.0;
-    let y = if below + height <= viewport[1] - DROPDOWN_MARGIN {
-        below
-    } else {
-        (anchor[1] - height - 2.0).max(DROPDOWN_MARGIN)
-    };
-    [x, y, width, height]
+    let content = UiVec2::new(width.max(80.0), height);
+    let anchor_rect = UiRect::new(anchor[0], anchor[1], anchor[2], anchor[3]);
+    let menu = canvas_ui::kit::dropdown_menu(anchor_rect, inset, content).menu;
+    [menu.x, menu.y, menu.w, menu.h]
 }
 
 /// Hit-test пункта выпадающего меню: индекс пункта под точкой или `None`
@@ -2339,8 +2388,9 @@ mod tests {
         }
     }
 
-    /// Контролы в строках: pill-тумблер у тумблера, dropdown-кнопка у
-    /// выпадающего списка; ручка pill отражает состояние (вкл — справа).
+    /// Контролы в строках: kit-switch (трек SWITCH_W×SWITCH_H) у тумблера,
+    /// dropdown-кнопка у выпадающего списка; бегунок kit-тумблера отражает
+    /// состояние (вкл — справа), стиль трека — kit ControlStyle из слотов.
     #[test]
     fn control_rects_follow_row_kind() {
         for row in SETTINGS_ROWS {
@@ -2352,21 +2402,42 @@ mod tests {
             assert!(control[0] >= rect[0] && control[0] + control[2] <= rect[0] + rect[2] + 0.01);
             assert!(control[1] >= rect[1] && control[1] + control[3] <= rect[1] + rect[3] + 0.01);
             match row_kind(row) {
-                RowKind::Toggle => assert_eq!(control[2], PILL_TRACK_W),
+                RowKind::Toggle => assert_eq!(control[2], canvas_ui::kit::SWITCH_W),
                 RowKind::Dropdown => assert_eq!(control[2], DROPDOWN_BTN_W),
             }
         }
-        // Ручка pill: выкл — слева, вкл — справа
-        let track = [100.0, 10.0, PILL_TRACK_W, PILL_TRACK_H];
+        // W-c: трек тумблера — kit-геометрия (SWITCH_W×SWITCH_H по центру
+        // строки); бегунок — kit::switch: квадрат SWITCH_H−2·SWITCH_KNOB_PAD
+        // с отступом SWITCH_KNOB_PAD; выкл — слева, вкл — справа.
+        let track = control_rect([100.0, 10.0, 300.0, MODAL_ROW_HEIGHT], RowKind::Toggle);
+        assert_eq!(
+            (track[2], track[3]),
+            (canvas_ui::kit::SWITCH_W, canvas_ui::kit::SWITCH_H)
+        );
+        let knob_side = canvas_ui::kit::SWITCH_H - 2.0 * canvas_ui::kit::SWITCH_KNOB_PAD;
         let off = pill_knob_rect(track, false);
         let on = pill_knob_rect(track, true);
-        assert!(off[0] < on[0]);
-        assert_eq!(on[0] + on[2], track[0] + track[2] - 2.0);
+        assert_eq!((off[2], off[3]), (knob_side, knob_side));
+        assert_eq!((on[2], on[3]), (knob_side, knob_side));
+        assert!(off[0] < on[0], "выкл — слева, вкл — справа");
+        assert_eq!(off[0], track[0] + canvas_ui::kit::SWITCH_KNOB_PAD);
+        assert_eq!(on[0] + on[2], track[0] + track[2] - canvas_ui::kit::SWITCH_KNOB_PAD);
+        assert_eq!(on[1], track[1] + canvas_ui::kit::SWITCH_KNOB_PAD);
+        // Стиль трека — kit ControlStyle (радиус pill из шкалы токенов);
+        // заливка бегунка — слот палитры (нейтральный срез геометрию
+        // не меняет — см. SWITCH_GEOMETRY_PALETTE)
+        let kit = kit_switch_layout(
+            canvas_ui::geometry::UiRect::new(track[0], track[1], track[2], track[3]),
+            true,
+        );
+        assert_eq!(kit.track_style.radius, canvas_core::tokens::RADIUS_PILL);
+        assert_eq!(kit.knob_fill, SWITCH_GEOMETRY_PALETTE.text_title);
     }
 
-    /// `dropdown_layout` с параметрической шириной: кламп к окну у правого
-    /// края модалки и в узком окне; у нижнего края — выше контрола; 0
-    /// пунктов — пусто; меню не перекрывает якорную строку целиком.
+    /// `dropdown_layout` (kit dropdown_menu): кламп к окну у правого края
+    /// модалки и в узком окне; у нижнего края — flip выше контрола; 0
+    /// пунктов — пусто; меню не уже якоря (контракт кита) и не перекрывает
+    /// якорную строку целиком.
     #[test]
     fn dropdown_layout_clamps_to_window() {
         assert_eq!(
@@ -2414,17 +2485,66 @@ mod tests {
             menu[1] >= DROPDOWN_MARGIN - 0.01
                 && menu[1] + menu[3] <= 240.0 - DROPDOWN_MARGIN + 0.01
         );
-        // Ширина меньше потолка — ширина якоря; гигантская — кламп к окну
+        // W-c: меню не уже якоря (контракт kit dropdown_menu — при ширине
+        // параметра меньше якоря кит поднимает до ширины якоря); гигантская
+        // ширина обрезана вьюпортом (финальная гарантия viewport_clamp)
         let menu = dropdown_layout([50.0, 20.0, 120.0, 28.0], [800.0, 600.0], 3, 100.0);
-        assert_eq!(menu[2], 100.0);
+        assert_eq!(menu[2], 120.0);
         let menu = dropdown_layout([50.0, 20.0, 120.0, 28.0], [800.0, 600.0], 3, 5000.0);
-        assert!(menu[2] <= 800.0 - DROPDOWN_MARGIN * 2.0);
+        assert_eq!(menu[2], 800.0 - DROPDOWN_MARGIN * 2.0);
         // У нижнего края — меню выше контрола
         let menu = dropdown_layout([50.0, 200.0, 300.0, 28.0], narrow, 5, DROPDOWN_BTN_W);
         assert!(menu[1] + menu[3] <= 200.0, "меню выше якорного контрола");
         // Меню ниже контрола, когда влезает
         let menu = dropdown_layout([50.0, 20.0, 300.0, 28.0], [800.0, 600.0], 3, DROPDOWN_BTN_W);
         assert!(menu[1] >= 20.0 + 28.0, "меню ниже якорного контрола");
+    }
+
+    /// W-c: кламп dropdown у краёв окна — финальная гарантия `viewport_clamp`
+    /// кита: якорь у правого края — меню сдвинуто влево (правый край на
+    /// поле), у нижнего края — flip вверх (меню выше якоря), якорь в левом
+    /// верхнем углу — меню зажато в поле окна, меню шире окна — обрезано
+    /// до вьюпорта. Ни один край меню не выходит за [`DROPDOWN_MARGIN`].
+    #[test]
+    fn dropdown_layout_clamps_at_window_edges() {
+        let viewport = [800.0, 600.0];
+        let lim = DROPDOWN_MARGIN;
+        // Правый край: якорь у кромки — правый край меню не правее поля окна
+        let anchor = [viewport[0] - 20.0, 100.0, DROPDOWN_BTN_W, DROPDOWN_BTN_H];
+        let menu = dropdown_layout(anchor, viewport, 3, DROPDOWN_BTN_W);
+        assert!(menu[0] >= lim - 0.01, "левый край внутри поля");
+        assert!(
+            menu[0] + menu[2] <= viewport[0] - lim + 0.01,
+            "правый край меню — не правее поля окна"
+        );
+        // Нижний край: вниз не влезает — flip, меню ВЫШЕ якоря и внутри окна
+        let anchor = [
+            100.0,
+            viewport[1] - DROPDOWN_BTN_H,
+            DROPDOWN_BTN_W,
+            DROPDOWN_BTN_H,
+        ];
+        let menu = dropdown_layout(anchor, viewport, 3, DROPDOWN_BTN_W);
+        assert!(
+            menu[1] + menu[3] <= anchor[1] + 0.01,
+            "меню выше якорного контрола (flip)"
+        );
+        assert!(menu[1] >= lim - 0.01 && menu[1] + menu[3] <= viewport[1] - lim + 0.01);
+        // Левый-верхний угол: якорь левее поля — меню зажато во вьюпорт,
+        // левый край — на поле (обрезка viewport_clamp кита)
+        let menu = dropdown_layout(
+            [0.0, 0.0, DROPDOWN_BTN_W, DROPDOWN_BTN_H],
+            viewport,
+            3,
+            DROPDOWN_BTN_W,
+        );
+        assert_eq!(menu[0], lim, "левый край меню — на поле окна");
+        assert!(menu[1] >= lim - 0.01);
+        // Меню шире окна: обрезано до вьюпорта, края — на полях окна
+        let menu = dropdown_layout([50.0, 20.0, 120.0, 28.0], viewport, 3, 5000.0);
+        assert_eq!(menu[0], lim);
+        assert_eq!(menu[2], viewport[0] - lim * 2.0);
+        assert!(menu[1] >= lim - 0.01 && menu[1] + menu[3] <= viewport[1] - lim + 0.01);
     }
 
     /// Hit-тест пунктов меню: пункты 0/средний/последний, паддинги и мимо
