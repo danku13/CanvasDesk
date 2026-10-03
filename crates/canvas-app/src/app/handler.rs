@@ -67,6 +67,15 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
             WindowEvent::PinchGesture { delta, .. } => self.on_pinch(delta),
+            // FR-092 (мобильный web): касания — единственный канал ввода на
+            // телефонах/планшетах. winit-web шлёт pointerType=touch ТОЛЬКО
+            // как WindowEvent::Touch (совместимые mouse-события подавлены
+            // prevent_default — pointer.rs winit 0.30): без этой ветки
+            // web-сборка отрисовывается, но не отвечает на тап/драг/пинч
+            // («на мобильных работает только HTML-оверлей»). Гейт wasm32 —
+            // поведение натива (тачскрины Windows) не меняется.
+            #[cfg(target_arch = "wasm32")]
+            WindowEvent::Touch(touch) => self.on_touch(touch),
             WindowEvent::RedrawRequested => {
                 // FR-049 (US-5): ?template=<id> — применить на первом кадре
                 // (вьюпорт известен — zoom-to-fit корректен); неизвестный

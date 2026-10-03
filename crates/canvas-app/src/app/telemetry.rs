@@ -135,7 +135,7 @@ fn surface_diff_web(app: &App, registry: &SurfaceRegistry) {
     use std::cell::RefCell;
     let present = tracked_present(app, registry);
     thread_local! {
-        static PREV: RefCell<Option<HashSet<String>>> = RefCell::new(None);
+        static PREV: RefCell<Option<HashSet<String>>> = const { RefCell::new(None) };
     }
     PREV.with(|prev_cell| {
         let mut prev = prev_cell.borrow_mut();
