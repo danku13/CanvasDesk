@@ -436,9 +436,23 @@ pub mod ui {
     /// Максимальный интервал между кликами двойного клика (winit его не даёт, T7).
     const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(500);
     /// Максимальный сдвиг курсора между кликами двойного клика (логические px).
-    const DOUBLE_CLICK_DIST: f64 = 5.0;
+    ///
+    /// Только для мыши: курсор между кликами почти не дрожит. Для тача —
+    /// [`DOUBLE_CLICK_DIST_TOUCH`] (FR-093).
+    pub const DOUBLE_CLICK_DIST: f64 = 5.0;
+    /// Сдвиг между тапами двойного тапа (логические px, FR-093).
+    ///
+    /// Палец не попадает дважды в ту же точку: живой двойной тап на телефоне
+    /// гуляет на 10–20 лог. px (верифицировано мобильной эмуляцией DPR 3:
+    /// при прежнем мышино м допуске 5.0 создавали ноду только тапы
+    /// «пиксель в пиксель», джиттер 10 лог. px уже не засчитывался).
+    /// Значение ~ треть ширины пальца и меньше зазора между соседними
+    /// нодами — случайная пара тапов по двум близким нодам не сойдёт за
+    /// двойной тап по пустому месту.
+    pub const DOUBLE_CLICK_DIST_TOUCH: f64 = 32.0;
 
-    /// Детектор двойного клика (T7): интервал и сдвиг между нажатиями ЛКМ.
+    /// Детектор двойного клика/тапа (T7, FR-093): интервал и сдвиг между
+    /// нажатиями ЛКМ / касаниями (тач — расширенный допуск `slop`).
     pub struct DoubleClick {
         last: Option<(Instant, Vec2)>,
     }
@@ -455,11 +469,15 @@ pub mod ui {
         }
 
         /// Зарегистрировать нажатие; true — это второй клик пары.
-        pub fn register(&mut self, at: Instant, pos: Vec2) -> bool {
+        ///
+        /// `slop` — допуск сдвига позиции (лог. px); выбирается на стороне
+        /// вызова по происхождению нажатия: мышь — [`DOUBLE_CLICK_DIST`],
+        /// тач — [`DOUBLE_CLICK_DIST_TOUCH`] (FR-093).
+        pub fn register(&mut self, at: Instant, pos: Vec2, slop: f64) -> bool {
             let double = self.last.is_some_and(|(time, prev)| {
                 at.duration_since(time) <= DOUBLE_CLICK_INTERVAL
-                    && (pos[0] as f64 - prev[0] as f64).abs() <= DOUBLE_CLICK_DIST
-                    && (pos[1] as f64 - prev[1] as f64).abs() <= DOUBLE_CLICK_DIST
+                    && (pos[0] as f64 - prev[0] as f64).abs() <= slop
+                    && (pos[1] as f64 - prev[1] as f64).abs() <= slop
             });
             self.last = Some((at, pos));
             double
@@ -1602,20 +1620,87 @@ pub mod ui {
         fn double_click_detection() {
             let t0 = Instant::now();
             let mut detector = DoubleClick::new();
-            assert!(!detector.register(t0, [100.0, 100.0]), "первый клик");
-            assert!(detector.register(t0 + Duration::from_millis(200), [102.0, 99.0]));
+            assert!(
+                !detector.register(t0, [100.0, 100.0], DOUBLE_CLICK_DIST),
+                "первый клик"
+            );
+            assert!(detector.register(
+                t0 + Duration::from_millis(200),
+                [102.0, 99.0],
+                DOUBLE_CLICK_DIST
+            ));
             // Третий клик сразу после — тоже double (считаем парами)
-            assert!(detector.register(t0 + Duration::from_millis(300), [100.0, 100.0]));
+            assert!(detector.register(
+                t0 + Duration::from_millis(300),
+                [100.0, 100.0],
+                DOUBLE_CLICK_DIST
+            ));
 
             let mut detector = DoubleClick::new();
-            assert!(!detector.register(t0, [0.0, 0.0]));
+            assert!(!detector.register(t0, [0.0, 0.0], DOUBLE_CLICK_DIST));
             // Интервал превышен
-            assert!(!detector.register(t0 + Duration::from_millis(600), [0.0, 0.0]));
+            assert!(!detector.register(
+                t0 + Duration::from_millis(600),
+                [0.0, 0.0],
+                DOUBLE_CLICK_DIST
+            ));
 
             let mut detector = DoubleClick::new();
-            assert!(!detector.register(t0, [0.0, 0.0]));
+            assert!(!detector.register(t0, [0.0, 0.0], DOUBLE_CLICK_DIST));
             // Курсор ушёл дальше порога
-            assert!(!detector.register(t0 + Duration::from_millis(100), [50.0, 0.0]));
+            assert!(!detector.register(
+                t0 + Duration::from_millis(100),
+                [50.0, 0.0],
+                DOUBLE_CLICK_DIST
+            ));
+        }
+
+        /// FR-093: двойной тап — расширенный допуск сдвига. Палец гуляет
+        /// сильнее курсора: джиттер 10–20 лог. px засчитывается (мышиный
+        /// 5.0 его бы отверг), 40 — нет; мышиный допуск не изменился.
+        #[test]
+        fn double_click_touch_slop() {
+            let t0 = Instant::now();
+            let touch = |d: &mut DoubleClick, at: Instant, pos: [f32; 2]| {
+                d.register(at, pos, DOUBLE_CLICK_DIST_TOUCH)
+            };
+
+            // Живой двойной тап: джиттер 12/16 лог. px — double
+            let mut d = DoubleClick::new();
+            assert!(!touch(&mut d, t0, [100.0, 100.0]));
+            assert!(touch(
+                &mut d,
+                t0 + Duration::from_millis(220),
+                [112.0, 116.0]
+            ));
+
+            // Граница допуска (ровно 32 по оси) — ещё double
+            let mut d = DoubleClick::new();
+            assert!(!touch(&mut d, t0, [0.0, 0.0]));
+            assert!(touch(&mut d, t0 + Duration::from_millis(200), [32.0, 0.0]));
+
+            // Слишком далеко даже для тача
+            let mut d = DoubleClick::new();
+            assert!(!touch(&mut d, t0, [100.0, 100.0]));
+            assert!(!touch(
+                &mut d,
+                t0 + Duration::from_millis(200),
+                [140.0, 100.0]
+            ));
+
+            // Интервал для тача тот же: превышен — не double
+            let mut d = DoubleClick::new();
+            assert!(!touch(&mut d, t0, [0.0, 0.0]));
+            assert!(!touch(&mut d, t0 + Duration::from_millis(600), [0.0, 0.0]));
+
+            // Мышиный допуск прежний: 10 лог. px мимо
+            let mut d = DoubleClick::new();
+            assert!(!d.register(t0, [100.0, 100.0], DOUBLE_CLICK_DIST));
+            assert!(!d.register(
+                t0 + Duration::from_millis(200),
+                [110.0, 100.0],
+                DOUBLE_CLICK_DIST
+            ));
         }
 
         /// Генератор id (T7/T9): первый свободный по префиксу.

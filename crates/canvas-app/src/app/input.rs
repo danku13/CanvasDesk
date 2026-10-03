@@ -2546,6 +2546,9 @@ impl App {
     }
 
     pub(super) fn on_left_button(&mut self, state: ElementState) {
+        // FR-093: происхождение нажатия (тач/мышь) — допуск двойного клика;
+        // гасим сразу: одно нажатие — один учёт, в Released флаг не несётся
+        let press_from_touch = std::mem::take(&mut self.press_from_touch);
         // Оракул браузерного дыма: приход события кнопки (координатная
         // сверка headless-тестов, ?log=debug)
         tracing::debug!(
@@ -2798,8 +2801,18 @@ impl App {
                 }
                 // Двойной клик (winit его не даёт — свой детектор, T7):
                 // по пустому месту — новая заметка, по text-ноде —
-                // редактирование, по линии связи — лейбл связи (T8)
-                if self.double_click.register(Instant::now(), self.cursor) {
+                // редактирование, по линии связи — лейбл связи (T8).
+                // FR-093: тач — расширенный допуск сдвига (палец гуляет
+                // сильнее курсора, живой двойной тап ~10–20 лог. px)
+                let double_click_slop = if press_from_touch {
+                    crate::ui::DOUBLE_CLICK_DIST_TOUCH
+                } else {
+                    crate::ui::DOUBLE_CLICK_DIST
+                };
+                if self
+                    .double_click
+                    .register(Instant::now(), self.cursor, double_click_slop)
+                {
                     let avoid = self.settings.edges_avoid_nodes;
                     match hit {
                         None => match edge_at(&self.scene.canvas, world, avoid) {
@@ -4049,6 +4062,9 @@ impl App {
         match action {
             Action::None => {}
             Action::Press(p) => {
+                // FR-093: это нажатие — от тача; двойной тап сверяется
+                // с расширенным допуском (флаг гасится в on_left_button)
+                self.press_from_touch = true;
                 // Курсор ДО нажатия: on_left_button работает по self.cursor
                 self.on_cursor_moved(PhysicalPosition::new(p[0], p[1]));
                 self.on_left_button(ElementState::Pressed);
