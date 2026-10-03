@@ -874,6 +874,10 @@ pub struct App {
     editor_dragging: bool,
     /// Детектор двойного клика ЛКМ (T7).
     double_click: DoubleClick,
+    /// FR-093: нажатие пришло от тача (on_touch, wasm32) — двойной тап
+    /// сверяется с расширенным допуском сдвига (палец гуляет сильнее
+    /// курсора). Ставится в on_touch перед Pressed, гасится в on_left_button.
+    press_from_touch: bool,
     /// Буфер обмена ОС (T7). M8/W3: backend за трейтом ClipboardBackend
     /// (натив — ArboardClipboard, web — navigator.clipboard).
     clipboard: Box<dyn ClipboardBackend>,
@@ -1406,6 +1410,7 @@ impl App {
             title_then_body: None,
             editor_dragging: false,
             double_click: DoubleClick::new(),
+            press_from_touch: false,
             clipboard,
             menu: None,
             palette_hover: PaletteHover::new(),
