@@ -26,18 +26,6 @@ pub(super) fn centered_box(rect: [f32; 4], inset: f32) -> ([f32; 2], f32) {
     ([rect[0] + inset, rect[1]], width)
 }
 
-/// Усечение строки до `max` символов с многоточием (FR-044: ширина пилюль
-/// и строк stage оценивается по числу символов — средняя advance моно 12 px;
-/// точное измерение недоступно на стороне приложения — шейпинг в TextSystem).
-pub(super) fn truncate_chars(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_owned();
-    }
-    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
-    out.push('…');
-    out
-}
-
 /// Screen-прямоугольник → world-квад (паттерн stage: позиция через
 /// screen_to_world, размер/радиус делятся на зум — константный экранный
 /// размер при любом зуме).

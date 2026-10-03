@@ -166,8 +166,8 @@ W3.2 формально исполнен, но ВСЕ дети — `MeasuredItem
 | `app/explain.rs:1426` | каретка: `chars × 12 × 0.62` | `TextMeasurer::width_of` |
 | `palette.rs:777-779` | кнопки групп: `chars × 5.5 + 2.0` | `MeasuredItem::Text` |
 | `template_ui.rs:1068,1228` | `WHEEL_TPL_TEXT_CHARS=15`, `split_two_lines` по chars | `TextMeasurer::wrap` |
-| `support.rs:32-39` | `truncate_chars` — единый источник, 10 вызовов в stage | `ellipsis` |
-| `stage.rs:640,795,1149,1321` | ширины пилюль: `chars × 7.2/6.3` | TextMeasurer |
+| `support.rs:32-39` | `truncate_chars` — единый источник, 10 вызовов в stage | ~~`ellipsis`~~ ✅ закрыто W-f 04.10.2026: функция удалена, все вызовы — измеренное усечение (`TextMeasurer::ellipsis`, бюджет — ширина сайта отрисовки) |
+| `stage.rs:640,795,1149,1321` | ширины пилюль: `chars × 7.2/6.3` | TextMeasurer ✅ закрыто W-f 04.10.2026: `TextMeasurer::width_of` + паддинг-токены SPACING_XL/LG (паритет 24/12), минимумы сохранены |
 | `onboarding_ui.rs:31-48` | `CHAR_W_FACTOR 0.62` + ручной перенос | kit `wrap` (после разморозки) |
 | `app/tooltip.rs:99-118` | `wrap_words(text, 10)` по числу слов | kit `wrap` по ширине |
 | `docs_ui.rs:117-126` | сниппет: срез 44 символа | measured-срез (спорно: контентный поиск) |

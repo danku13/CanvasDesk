@@ -41,6 +41,109 @@ fn template_chip_label_w(s: f32) -> f32 {
     label_px / s
 }
 
+// ---------------------------------------------------------------------------
+// CR-015 (W-f, аудит ui-kit §9): измеренные ширины/усечение текста stage —
+// замена посимвольного `truncate_chars` (support.rs) и оценок «chars × K px».
+// Замер — внешний общий пул шейпинга приложения
+// ([`canvas_render::text::measure_font_system`], §4.7 контракта Table) —
+// FR-094: FontSystem НЕ создаётся в draw-пути; кегль/семейство/вес — паритет
+// screen-конвейеру рендера (`sans_attrs` — SANS MEDIUM, все stage-тексты
+// шейпятся им, text.rs `stage_texts`).
+// ---------------------------------------------------------------------------
+
+/// Паддинг пилюли веера (stage-локальные px) — прежний литерал 24.0
+/// (инсеты текста 12+12); SPACING_XL = 24.0 — точный паритет (W-d токены).
+const STAGE_PILL_PAD: f32 = canvas_core::tokens::SPACING_XL;
+
+/// Минимальная ширина пилюли веера (stage-локальные px) — прежний
+/// `.max(56.0)` (паритет, деградационный минимум читаемости).
+const STAGE_PILL_MIN_W: f32 = 56.0;
+
+/// Паддинг подписей концов рёбер (исток/приёмник, stage-локальные px) —
+/// прежний литерал 12.0 (инсеты текста 6+6); SPACING_LG = 12.0 — паритет.
+const STAGE_EDGE_LABEL_PAD: f32 = canvas_core::tokens::SPACING_LG;
+
+/// Контекст замера stage-кадра: владеет TextMeasurer (кэш на область
+/// использования) и guard'ом общего FontSystem шейпинга; `s` — масштаб
+/// раскладки stage. Единицы замера — stage-локальные px: кегль отрисовки
+/// масштабируется как рендер (`font = (px·s).max(8)`), результат делится
+/// на `s` (паттерн [`template_chip_label_w`]).
+pub(super) struct StageMeasure {
+    m: canvas_ui::measure::TextMeasurer,
+    /// Guard общего пула шейпинга (не `FontSystem::new()` — FR-094);
+    /// держится до конца области — вложенных захватов быть не должно.
+    _fs: std::sync::MutexGuard<'static, cosmic_text::FontSystem>,
+    s: f32,
+}
+
+impl StageMeasure {
+    /// Захватить общий пул шейпинга с кэшем на кадр/проход.
+    fn new(s: f32) -> Self {
+        Self {
+            m: canvas_ui::measure::TextMeasurer::new(),
+            _fs: canvas_render::text::measure_font_system(),
+            s: s.max(f32::EPSILON),
+        }
+    }
+
+    /// Однострочная ширина текста в stage-локальных px при кегле отрисовки
+    /// `size` (stage-локальный номинал).
+    fn width(&mut self, text: &str, size: f32) -> f32 {
+        let px = (size * self.s).max(8.0);
+        self.m
+            .width_of(&mut self._fs, text, canvas_render::text::SANS_FAMILY, px)
+            / self.s
+    }
+
+    /// Измеренное усечение с многоточием под бюджет `max_w` stage-локальных
+    /// px (замена `truncate_chars(s, N)`): нулевой бюджет — пустая строка.
+    fn ellipsis(&mut self, text: &str, max_w: f32, size: f32) -> String {
+        let budget = (max_w * self.s).max(0.0);
+        if budget <= 0.0 {
+            return String::new();
+        }
+        let px = (size * self.s).max(8.0);
+        self.m.ellipsis(
+            &mut self._fs,
+            text,
+            canvas_render::text::SANS_FAMILY,
+            px,
+            budget,
+        )
+    }
+}
+
+/// Совмещённый текст однострочной пилюли (Compact/Scroll): «адрес ·
+/// значение» — единый источник для раскладки ([`Self::stage_pill_state`])
+/// и отрисовки (stage_frame §8); пустые части не порождают разделитель.
+fn stage_pill_combined(addr: &str, value: &str) -> String {
+    if value.is_empty() {
+        addr.to_owned()
+    } else if addr.is_empty() {
+        value.to_owned()
+    } else {
+        format!("{addr} · {value}")
+    }
+}
+
+/// Ширина пилюли веера по ИЗМЕРЕННОЙ ширине текста (stage-локальные px):
+/// measured + паддинг, минимум [`STAGE_PILL_MIN_W`], кап — ширина коридора
+/// (пилюля не шире коридора; [`stage_fan_label_layout`] клампит центр, не
+/// ширину — прежде широкие пилюли переливались за коридор).
+fn stage_pill_width(text_w: f32, corridor_w: f32) -> f32 {
+    ((text_w + STAGE_PILL_PAD).max(STAGE_PILL_MIN_W)).min(corridor_w.max(STAGE_PILL_MIN_W))
+}
+
+/// Бюджет ширины подписей концов рёбер (исток/приёмник, stage-локальные
+/// px): зона между колонками истока и приёмника — те же отступы, что
+/// сужают коридор пилюль (10 от порта + 6 зазор, см.
+/// [`Self::stage_pill_corridor`]); подпись длиннее — измеренное усечение.
+fn stage_edge_label_span(stage: &MainStageState) -> f32 {
+    let src = &stage.slice.nodes[0];
+    let dst = &stage.slice.nodes[1];
+    ((dst.x - 10.0) - (src.x + src.width + 10.0)).max(0.0)
+}
+
 /// FR-068 этап M2 (Table v2, `docs/plans/fr-068-table-v2.md` §8 — первый
 /// кандидат): строки панели «Как считается» — 2×retained-Table
 /// («Переменные»/«Расчёт»). Пересборка [`canvas_ui::kit::TableRow`] из
@@ -620,28 +723,35 @@ impl App {
         } else {
             calc_panel_ui::PILL_H_TWO_LINE
         };
-        let mut texts: Vec<(usize, String, f32)> = Vec::with_capacity(order.len());
+        // FR-044 Р-1: коридор — ДО ширин пилюль: он не зависит от текстов
+        // пилюль и задаёт их бюджет (пилюля не шире коридора)
+        let corridor = self.stage_pill_corridor(stage);
+        // CR-015 (W-f): ширины пилюль — измеренные (кегль отрисовки: Full —
+        // адрес 12, однострочные — «адрес · значение» 11); замена
+        // «chars × 7.2». Сырой текст — тот же, что отрисовывает кадр
+        // ([`stage_pill_combined`] — общий источник с §8)
+        let s = stage.scale.max(f32::EPSILON);
+        let mut mx = StageMeasure::new(s);
+        let mut texts: Vec<(usize, f32)> = Vec::with_capacity(order.len());
         for &oi in &order {
             let edge = &stage.slice.edges[oi];
-            let addr = truncate_chars(&self.stage_edge_addr_text(edge), 42);
-            let text = if one_line {
-                let value = truncate_chars(&self.stage_edge_value_text(edge), 42);
-                let combined = if value.is_empty() {
-                    addr
-                } else if addr.is_empty() {
-                    value
-                } else {
-                    format!("{addr} · {value}")
-                };
-                truncate_chars(&combined, 56)
+            let (raw, size) = if one_line {
+                (
+                    stage_pill_combined(
+                        &self.stage_edge_addr_text(edge),
+                        &self.stage_edge_value_text(edge),
+                    ),
+                    11.0,
+                )
             } else {
-                addr
+                (self.stage_edge_addr_text(edge), 12.0)
             };
-            let w = (text.chars().count() as f32 * 7.2 + 24.0).max(56.0);
-            texts.push((oi, text, w));
+            let w = stage_pill_width(mx.width(&raw, size), corridor.w);
+            texts.push((oi, w));
         }
+        drop(mx);
         // Окно прокрутки (Scroll): подмножество стопки
-        let visible: Vec<(usize, String, f32)> = match mode {
+        let visible: Vec<(usize, f32)> = match mode {
             calc_panel_ui::PillZoneMode::Scroll { first, visible, .. } => {
                 texts.into_iter().skip(first).take(visible).collect()
             }
@@ -649,12 +759,11 @@ impl App {
         };
         let sorted: Vec<(usize, f32, f32, Option<f32>)> = visible
             .into_iter()
-            .map(|(item, _text, w)| {
+            .map(|(item, w)| {
                 let pref = ctx.lines[item].mid[0];
                 (item, w, pill_h, Some(pref))
             })
             .collect();
-        let corridor = self.stage_pill_corridor(stage);
         let axis_y = ctx.zone.y + ctx.zone.h / 2.0;
         let laid = stage_fan_label_layout(sorted, corridor, ctx.zone, axis_y);
         let rects = laid
@@ -688,15 +797,22 @@ impl App {
     /// FR-044 Р-1: коридор пилюль между колонками нод, суженный на зоны
     /// подписей концов рёбер (7b): пилюли не наезжают на подписи.
     /// `src_label_max`/`dst_label_max` — ширины колонок подписей концов
-    /// (владелец 2026-09-22).
+    /// (владелец 2026-09-22) — измеренные ([`Self::stage_src_label_layout`]
+    /// /[`Self::stage_dst_label_layout`], CR-015/W-f; замер — внешний общий
+    /// пул шейпинга, guard на проход коридора).
     pub(super) fn stage_pill_corridor(&self, stage: &MainStageState) -> StageLocalRect {
         let src_title = title_for(&stage.slice.nodes[0]);
+        let span = stage_edge_label_span(stage);
+        let mut mx = StageMeasure::new(stage.scale);
         let mut src_label_max = 0.0_f32;
         let mut dst_label_max = 0.0_f32;
         for edge in stage.slice.edges.iter() {
-            src_label_max = src_label_max.max(self.stage_src_label_width(edge));
-            dst_label_max = dst_label_max.max(self.stage_dst_label_width(edge, &src_title));
+            let (_, _, w) = self.stage_src_label_layout(edge, &mut mx, span);
+            src_label_max = src_label_max.max(w);
+            let (_, w) = self.stage_dst_label_layout(edge, &src_title, &mut mx, span);
+            dst_label_max = dst_label_max.max(w);
         }
+        drop(mx);
         let src = &stage.slice.nodes[0];
         let dst = &stage.slice.nodes[1];
         let mut corridor = fan_corridor(
@@ -764,11 +880,14 @@ impl App {
     /// R5/R6: `out: <имя>` / «строка N») над значением; без адресации —
     /// только значение (прежний вид 7b); control-ребро значения не несёт
     /// и подписи у истока не имеет (управление — не значение, инвариант 5).
+    /// CR-015 (W-f): строки возвращаются БЕЗ усечения — измеренное
+    /// усечение под бюджет ширины делает [`Self::stage_src_label_layout`]
+    /// (общий расчёт с раскладкой коридора).
     pub(super) fn stage_src_label_lines(&self, edge: &Edge) -> (Option<String>, String) {
         if edge.flow_kind() != FlowKind::Value {
             return (None, String::new());
         }
-        let value = truncate_chars(&self.stage_edge_value_text(edge), 24);
+        let value = self.stage_edge_value_text(edge);
         if let Some(output) = edge.from_output.as_deref() {
             let slot = i18n::trf(
                 self.settings.language,
@@ -788,30 +907,54 @@ impl App {
         (None, value)
     }
 
-    /// FR-044 (7b) + Р-3-а: ширина подписи у истока (максимум строк;
-    /// 0 — подписи нет).
-    pub(super) fn stage_src_label_width(&self, edge: &Edge) -> f32 {
+    /// FR-044 (7b) + Р-3-а: подпись у истока с ИЗМЕРЕННЫМ усечением и её
+    /// ширина (CR-015/W-f — замена `truncate_chars(…, 24)` и
+    /// «chars × 6.3 + 12»): строки усекаются [`StageMeasure::ellipsis`]
+    /// под бюджет `max_w` (stage-локальные px), ширина пилюли — измеренная
+    /// ширина самой широкой строки + паддинг (SPACING_LG — паритет
+    /// прежних 12.0). Возврат: (лейбл слота, значение, ширина).
+    pub(super) fn stage_src_label_layout(
+        &self,
+        edge: &Edge,
+        mx: &mut StageMeasure,
+        max_w: f32,
+    ) -> (Option<String>, String, f32) {
         let (slot, value) = self.stage_src_label_lines(edge);
-        let w = |text: &str| text.chars().count() as f32 * 6.3 + 12.0;
-        let mut width = 0.0_f32;
-        if let Some(slot) = slot.as_deref() {
-            width = width.max(w(slot));
+        let slot = slot.map(|text| mx.ellipsis(&text, max_w, 10.5));
+        let value = mx.ellipsis(&value, max_w, 10.5);
+        let mut text_w = 0.0_f32;
+        if let Some(text) = slot.as_deref() {
+            text_w = text_w.max(mx.width(text, 10.5));
         }
         if !value.is_empty() {
-            width = width.max(w(&value));
+            text_w = text_w.max(mx.width(&value, 10.5));
         }
-        width
+        let w = if text_w > 0.0 {
+            text_w + STAGE_EDGE_LABEL_PAD
+        } else {
+            0.0
+        };
+        (slot, value, w)
     }
 
-    /// FR-044 (7b): ширина подписи квалифицированного адреса у приёмника
-    /// (0 — адресации нет).
-    pub(super) fn stage_dst_label_width(&self, edge: &Edge, src_title: &str) -> f32 {
-        let qualified = self.stage_dst_label_text(edge, src_title);
-        if qualified.is_empty() {
+    /// FR-044 (7b): подпись квалифицированного адреса у приёмника с
+    /// ИЗМЕРЕННЫМ усечением и её ширина (CR-015/W-f — замена
+    /// `truncate_chars(…, 26)` и «chars × 6.3 + 12»; бюджет `max_w` —
+    /// stage-локальные px). Возврат: (текст, ширина; 0 — подписи нет).
+    pub(super) fn stage_dst_label_layout(
+        &self,
+        edge: &Edge,
+        src_title: &str,
+        mx: &mut StageMeasure,
+        max_w: f32,
+    ) -> (String, f32) {
+        let text = mx.ellipsis(&self.stage_dst_label_text(edge, src_title), max_w, 10.5);
+        let w = if text.is_empty() {
             0.0
         } else {
-            qualified.chars().count() as f32 * 6.3 + 12.0
-        }
+            mx.width(&text, 10.5) + STAGE_EDGE_LABEL_PAD
+        };
+        (text, w)
     }
 
     /// FR-044 (7b) + Р-3-а: текст подписи адреса у приёмника —
@@ -1057,6 +1200,13 @@ impl App {
                         || self.selected_nodes.contains(&idx)
                 })
         };
+        // Метка чипа шаблона — константа кадра (замер до захвата замерщика
+        // §6/7/7b: template_chip_label_w берёт guard пула сам)
+        let template_label_w = template_chip_label_w(s);
+        // CR-015 (W-f): замерщик кадра для строк текст-нод, полосы
+        // результата и подписей концов рёбер (§6/7/7b) — внешний общий пул
+        // шейпинга (FR-094), кэш на область; отпускается до §8
+        let mut mx = StageMeasure::new(s);
         for node in stage.slice.nodes.iter() {
             quads.push(transform.instance_to_world(
                 &card_instance(node, is_selected(node), &palette),
@@ -1071,7 +1221,7 @@ impl App {
             // FontSystem рендера).
             if node.template().is_some() {
                 let label = "ШАБЛОН".to_string();
-                let label_w = template_chip_label_w(s);
+                let label_w = template_label_w;
                 let label_px = label_w * s;
                 let chip = header_chip_instance(
                     node,
@@ -1105,7 +1255,7 @@ impl App {
                 // ноды заголовок не доходит до правой зоны (чип + квад-
                 // иконка: 12+16+6 поля/зазора + метка чипа + 6 до текста)
                 let title_w_world = if node.template().is_some() {
-                    let label_w = template_chip_label_w(s);
+                    let label_w = template_label_w;
                     (node.width
                         - 24.0
                         - canvas_render::cards::TEMPLATE_ICON_MARGIN_H
@@ -1146,8 +1296,6 @@ impl App {
             let avail_h =
                 (node.height - HEADER_HEIGHT - BODY_TOP_GAP - BODY_PADDING - footer_h).max(0.0);
             let max_rows = ((avail_h / BODY_LINE_HEIGHT).floor() as usize).max(1);
-            // Оценка ширины моно-строки: advance ≈ 0.6·font (stage-локальные px)
-            let char_w = 7.2f32;
             for (li, line) in text.lines().enumerate().take(max_rows) {
                 let row_y = body_top
                     + li as f32 * BODY_LINE_HEIGHT
@@ -1158,11 +1306,17 @@ impl App {
                     Some(ExprOutcome::Err(_)) => ("!".to_owned(), true),
                     None => (String::new(), false),
                 };
-                let value_w = value_text.chars().count() as f32 * char_w;
-                // Левая колонка — исходная строка; усечение под зазор до
-                // колонки значения (прототип: truncate до ширины карточки)
-                let fit =
-                    ((node.width - BODY_PADDING * 2.0 - value_w - 14.0) / char_w).max(3.0) as usize;
+                // CR-015 (W-f): ширина значения — измеренная кеглем
+                // отрисовки (замена «chars × 7.2»); правое прижатие точное
+                let value_w = if value_text.is_empty() {
+                    0.0
+                } else {
+                    mx.width(&value_text, 12.0)
+                };
+                // Бюджет левой колонки — тело минус значение и зазор
+                // (14.0 — паритет прежнего зазора до значения); усечение —
+                // измеренное (замена truncate_chars по числу символов)
+                let line_budget = (node.width - BODY_PADDING * 2.0 - value_w - 14.0).max(0.0);
                 let color = if is_err {
                     palette.error
                 } else if outcome.is_some() {
@@ -1171,7 +1325,7 @@ impl App {
                     palette.quote
                 };
                 texts.push(OwnedScreenText {
-                    text: truncate_chars(line.trim_end(), fit),
+                    text: mx.ellipsis(line.trim_end(), line_budget, 12.0),
                     origin: transform.map_point([node.x + BODY_PADDING, row_y + 2.0]),
                     width: transform.map_size(node.width - BODY_PADDING * 2.0),
                     font_size: font(12.0),
@@ -1179,7 +1333,7 @@ impl App {
                     align: TextAlign::Left,
                 });
                 if !value_text.is_empty() {
-                    let vw = value_text.chars().count() as f32 * char_w;
+                    let vw = value_w;
                     texts.push(OwnedScreenText {
                         text: value_text,
                         origin: transform
@@ -1195,11 +1349,14 @@ impl App {
             if let Some(outcome) = self.scene.expr_results.get(&node.id) {
                 let (value_text, color) = match outcome {
                     ExprOutcome::Ok(value) => (format!("= {value}"), palette.body),
-                    ExprOutcome::Err(msg) => {
-                        (truncate_chars(&format!("! {msg}"), 40), palette.error)
-                    }
+                    ExprOutcome::Err(msg) => (format!("! {msg}"), palette.error),
                 };
-                let vw = value_text.chars().count() as f32 * char_w;
+                // CR-015 (W-f): усечение полосы — измеренное по её бюджету
+                // (замена truncate_chars(…, 40) по числу символов; узнаваемый
+                // «= …» прежде мог переливаться за клип — теперь многоточие)
+                let strip_budget = (node.width - BODY_PADDING * 2.0 - 14.0).max(0.0);
+                let value_text = mx.ellipsis(&value_text, strip_budget, 12.0);
+                let vw = mx.width(&value_text, 12.0);
                 let strip_h = RESULT_LINE_HEIGHT + 6.0;
                 let strip_y = node.y + node.height - BODY_PADDING - strip_h;
                 quads.push(transform.instance_to_world(
@@ -1252,13 +1409,16 @@ impl App {
         // приёмника — квалифицированный адрес «Объект · строка N /
         // Объект.output», control-ребро — «управление» (инвариант 5).
         // Подложка — цвет подложки stage (меню): подписи не сливаются с
-        // линиями веера (прототип R6: подложка от рёбер). Оценка ширины —
-        // advance ≈ 0.6·шрифта (как у строк карточки). Ширины колонок —
+        // линиями веера (прототип R6: подложка от рёбер). Ширина и
+        // усечение подписей — ИЗМЕРЕННЫЕ (CR-015/W-f: StageMeasure,
+        // замена «6.3·символ» и truncate_chars; бюджет — зона между
+        // колонками, [`stage_edge_label_span`]). Ширины колонок —
         // те же хелперы, что сужают коридор пилюль (единый расчёт).
         // FR-044 Р-5 + Q3: подписи рёбер вне фокуса приглушены с анимацией.
         // FR-068 (W3-продолжение): Painter-путь (stage_area — тот же
         // StageTransform; радиус 4 — stage-локальные px, масштаб s)
         let src_title = title_for(&stage.slice.nodes[0]);
+        let label_span = stage_edge_label_span(stage);
         let mut chrome = Painter::new();
         for (i, edge) in stage.slice.edges.iter().enumerate() {
             let Some(line) = lines.get(i) else {
@@ -1266,10 +1426,9 @@ impl App {
             };
             let alpha = edge_alpha(i);
             // Исток: лейбл слота выхода + значение строки/ноды (Р-3-а)
-            let (slot_line, value) = self.stage_src_label_lines(edge);
+            let (slot_line, value, w) = self.stage_src_label_layout(edge, &mut mx, label_span);
             let two_line = slot_line.is_some() && !value.is_empty();
             if !value.is_empty() || slot_line.is_some() {
-                let w = self.stage_src_label_width(edge);
                 let (h, by) = if two_line {
                     (30.0, line.from[1] - 15.0)
                 } else {
@@ -1316,10 +1475,10 @@ impl App {
                     );
                 }
             }
-            // Приёмник: квалифицированный адрес истока (Объект.Поле)
-            let qualified = truncate_chars(&self.stage_dst_label_text(edge, &src_title), 26);
+            // Приёмник: квалифицированный адрес истока (Объект.Поле) —
+            // измеренное усечение + ширина (CR-015/W-f)
+            let (qualified, w) = self.stage_dst_label_layout(edge, &src_title, &mut mx, label_span);
             if !qualified.is_empty() {
-                let w = qualified.chars().count() as f32 * 6.3 + 12.0;
                 let bx = line.to[0] - 10.0 - w;
                 let by = line.to[1] - 9.0;
                 let mut fill = palette.menu_fill;
@@ -1347,6 +1506,9 @@ impl App {
             &mut quads,
             &mut texts,
         );
+        // Замерщик §6/7/7b отпущен ДО §8: stage_pill_state/индикаторы берут
+        // guard общего пула шейпинга сами (вложенных захватов нет)
+        drop(mx);
         // 8) Пилюли подписей веера (FR-044 Р-1 + Q2): адресация + значение,
         // лейн-стопка в коридоре между колонками — общий расчёт с hit-
         // тестом клика ([`Self::stage_pill_state`], детерминизм); зона
@@ -1358,78 +1520,84 @@ impl App {
         // stage-локальные px, масштаб s)
         let (pill_rects, pill_mode) = self.stage_pill_state(stage, &ctx);
         let mut chrome = Painter::new();
-        for (item, pill_rect) in pill_rects {
-            let edge = &stage.slice.edges[item];
-            let addr = truncate_chars(&self.stage_edge_addr_text(edge), 42);
-            let value = truncate_chars(&self.stage_edge_value_text(edge), 42);
-            let sel = selected_slice == Some(item);
-            let alpha = edge_alpha(item);
-            let mut fill = palette.edge_label_fill;
-            fill[3] *= alpha;
-            chrome.rect(
-                stage_area(
-                    &transform,
-                    pill_rect.x,
-                    pill_rect.y,
-                    pill_rect.w,
-                    pill_rect.h,
-                ),
-                fill,
-                if sel { SELECTION_BORDER } else { [0.0; 4] },
-                9.0 * s,
-            );
-            if matches!(pill_mode, calc_panel_ui::PillZoneMode::Full) {
-                chrome.label(
+        {
+            // CR-015 (W-f): тексты пилюль — измеренное усечение по
+            // текстовой области СВОЕЙ пилюли (pill_rect.w − паддинг; ширина
+            // задана в [`Self::stage_pill_state`] тем же замером —
+            // детерминизм раскладка = отрисовка). Guard пула — на цикл,
+            // отпущен до §8a (индикаторы → коридор замеряют сами).
+            let mut mx = StageMeasure::new(s);
+            for (item, pill_rect) in pill_rects {
+                let edge = &stage.slice.edges[item];
+                let text_budget = (pill_rect.w - STAGE_PILL_PAD).max(0.0);
+                let sel = selected_slice == Some(item);
+                let alpha = edge_alpha(item);
+                let mut fill = palette.edge_label_fill;
+                fill[3] *= alpha;
+                chrome.rect(
                     stage_area(
                         &transform,
-                        pill_rect.x + 12.0,
-                        pill_rect.y + 5.0,
-                        pill_rect.w - 16.0,
-                        14.0,
+                        pill_rect.x,
+                        pill_rect.y,
+                        pill_rect.w,
+                        pill_rect.h,
                     ),
-                    &addr,
-                    color_to_rgba(dim_text_color(palette.title, alpha)),
-                    font(12.0),
-                    PaintAlign::Left,
+                    fill,
+                    if sel { SELECTION_BORDER } else { [0.0; 4] },
+                    9.0 * s,
                 );
-                if !value.is_empty() {
+                if matches!(pill_mode, calc_panel_ui::PillZoneMode::Full) {
+                    let addr = mx.ellipsis(&self.stage_edge_addr_text(edge), text_budget, 12.0);
                     chrome.label(
                         stage_area(
                             &transform,
                             pill_rect.x + 12.0,
-                            pill_rect.y + 18.0,
+                            pill_rect.y + 5.0,
+                            pill_rect.w - 16.0,
+                            14.0,
+                        ),
+                        &addr,
+                        color_to_rgba(dim_text_color(palette.title, alpha)),
+                        font(12.0),
+                        PaintAlign::Left,
+                    );
+                    let value = mx.ellipsis(&self.stage_edge_value_text(edge), text_budget, 11.0);
+                    if !value.is_empty() {
+                        chrome.label(
+                            stage_area(
+                                &transform,
+                                pill_rect.x + 12.0,
+                                pill_rect.y + 18.0,
+                                pill_rect.w - 16.0,
+                                13.0,
+                            ),
+                            &value,
+                            color_to_rgba(dim_text_color(palette.edge_label, alpha)),
+                            font(11.0),
+                            PaintAlign::Left,
+                        );
+                    }
+                } else {
+                    // Compact/Scroll: одна строка «адрес · значение»
+                    let combined = stage_pill_combined(
+                        &self.stage_edge_addr_text(edge),
+                        &self.stage_edge_value_text(edge),
+                    );
+                    let combined = mx.ellipsis(&combined, text_budget, 11.0);
+                    chrome.label(
+                        stage_area(
+                            &transform,
+                            pill_rect.x + 12.0,
+                            pill_rect.y + (pill_rect.h - 12.0) / 2.0,
                             pill_rect.w - 16.0,
                             13.0,
                         ),
-                        &value,
-                        color_to_rgba(dim_text_color(palette.edge_label, alpha)),
+                        &combined,
+                        color_to_rgba(dim_text_color(palette.title, alpha)),
                         font(11.0),
                         PaintAlign::Left,
                     );
                 }
-            } else {
-                // Compact/Scroll: одна строка «адрес · значение»
-                let combined = if value.is_empty() {
-                    addr
-                } else if addr.is_empty() {
-                    value
-                } else {
-                    format!("{addr} · {value}")
-                };
-                let combined = truncate_chars(&combined, 56);
-                chrome.label(
-                    stage_area(
-                        &transform,
-                        pill_rect.x + 12.0,
-                        pill_rect.y + (pill_rect.h - 12.0) / 2.0,
-                        pill_rect.w - 16.0,
-                        13.0,
-                    ),
-                    &combined,
-                    color_to_rgba(dim_text_color(palette.title, alpha)),
-                    font(11.0),
-                    PaintAlign::Left,
-                );
             }
         }
         // 8a) Q2 (Scroll): индикаторы «↑ ещё N» / «ещё N ↓» — клики листают
@@ -1489,8 +1657,9 @@ impl App {
         // (calc_panel_ui, скролл вместо среза «… ещё N»); отрисовка —
         // через [`Painter`] (items → модальный проход stage,
         // `paint_items_to_stage`); ширины текстов — ИЗМЕРЕННЫЕ
-        // (TextMeasurer/ellipsis — замена эвристики «6.3·символ»,
-        // правило U5); бегунок — kit::scroll_bar (цвет — слот рамки).
+        // (TextMeasurer; W-f: «6.3·символ»/truncate_chars по всему stage
+        // заменены измерением — пилюли/подписи/строки);
+        // бегунок — kit::scroll_bar (цвет — слот рамки).
         // FR-068 этап M2 (Table v2): строки обеих колонок — 2×Table
         // (retained; см. [`paint_calc_panel_rows`] — геометрия/стили
         // прежнего kit-цикла дословно, I-1; оракул T7).
@@ -1613,6 +1782,10 @@ impl App {
             // FR-068 (W3-продолжение): Painter-путь мини-карточек (как у
             // пилюль/подписей — stage_area; радиус 8 — stage-локальные px)
             let mut chrome = Painter::new();
+            // CR-015 (W-f): усечение заголовка мини-карточки — измеренное
+            // по текстовой области (card_w − 2×инсет 8; прежний срез —
+            // 26 символов); guard пула — на цикл мини-карточек
+            let mut mx = StageMeasure::new(s);
             for ext in &ctx.model.ext_sources {
                 let focused =
                     ctx.focus.as_ref().is_some_and(|focus| {
@@ -1640,9 +1813,10 @@ impl App {
                     },
                     8.0 * s,
                 );
+                let title_budget = (card_w - 16.0).max(0.0);
                 chrome.label(
                     stage_area(&transform, src.x + 8.0, ext_y + 4.0, card_w - 16.0, 12.0),
-                    &truncate_chars(&ext.title, 26),
+                    &mx.ellipsis(&ext.title, title_budget, 10.5),
                     color_to_rgba(dim_text_color(palette.body, dim_alpha)),
                     font(10.5),
                     PaintAlign::Left,
@@ -2149,6 +2323,107 @@ mod tests {
         assert_eq!(
             table_items, ref_items,
             "журнал Table-пути ≡ ручному kit-циклу (I-1)"
+        );
+    }
+
+    // --- CR-015 (W-f): измеренные ширины/усечение stage (StageMeasure) ---
+
+    /// W-f (a): ширина пилюли = измеренная ширина текста кеглем отрисовки
+    /// плюс паддинг (SPACING_XL — паритет прежних 24.0), минимум 56
+    /// сохранён, кап — ширина коридора. RU/EN строки — детерминированный
+    /// FontSystem рендера ([`canvas_render::text::measure_font_system`]).
+    #[test]
+    fn wf_pill_width_is_measured_plus_padding() {
+        for text in ["Заявки.поле0 · 1389 rps", "Deals.count · 42"] {
+            let text_w = {
+                let mut mx = StageMeasure::new(1.0);
+                mx.width(text, 12.0)
+            };
+            assert!(text_w > 0.0, "измеренная ширина положительна: {text}");
+            let w = stage_pill_width(text_w, 10_000.0);
+            assert_eq!(w, text_w + STAGE_PILL_PAD, "пилюля = measured + паддинг");
+            assert!(w >= STAGE_PILL_MIN_W, "минимум пилюли сохранён");
+        }
+        // Короткий текст: минимум ширины пилюли
+        let short_w = {
+            let mut mx = StageMeasure::new(1.0);
+            mx.width("·", 12.0)
+        };
+        assert_eq!(stage_pill_width(short_w, 10_000.0), STAGE_PILL_MIN_W);
+        // Кап коридора: пилюля не шире коридора
+        assert_eq!(stage_pill_width(10_000.0, 300.0), 300.0);
+    }
+
+    /// W-f (b): длинный текст усекается ellipsis'ом и результат реально
+    /// влезает в бюджет; помещающийся текст возвращается целиком.
+    #[test]
+    fn wf_long_text_ellipsis_fits_budget() {
+        let text = "Очень длинный квалифицированный адрес переменной Заявки.СреднийЧек";
+        let full_w = {
+            let mut mx = StageMeasure::new(1.0);
+            let w = mx.width(text, 12.0);
+            // Помещается — целиком (усечение не искажает)
+            assert_eq!(mx.ellipsis(text, w + 1.0, 12.0), text);
+            w
+        };
+        let cut = {
+            let mut mx = StageMeasure::new(1.0);
+            mx.ellipsis(text, full_w * 0.5, 12.0)
+        };
+        assert!(cut.ends_with('\u{2026}'), "хвост — символ многоточия");
+        let cut_w = {
+            let mut mx = StageMeasure::new(1.0);
+            mx.width(&cut, 12.0)
+        };
+        assert!(
+            cut_w <= full_w * 0.5 + canvas_ui::measure::FIT_EPS + f32::EPSILON,
+            "усечённый текст ({cut_w}) влезает в бюджет {}",
+            full_w * 0.5
+        );
+    }
+
+    /// W-f (c): пустая строка не паникует — нулевая ширина, пустое
+    /// усечение; нулевой бюджет — пустая строка; пилюля пустого текста —
+    /// минимум ширины.
+    #[test]
+    fn wf_empty_text_no_panic() {
+        let mut mx = StageMeasure::new(1.0);
+        assert_eq!(mx.width("", 12.0), 0.0);
+        assert_eq!(mx.ellipsis("", 100.0, 12.0), "");
+        assert_eq!(
+            mx.ellipsis("текст", 0.0, 12.0),
+            "",
+            "нулевой бюджет — пусто"
+        );
+        assert_eq!(stage_pill_width(0.0, 10_000.0), STAGE_PILL_MIN_W);
+        // Совмещение пустых частей пилюли — без разделителя и паники
+        assert_eq!(stage_pill_combined("", ""), "");
+        assert_eq!(stage_pill_combined("адрес", ""), "адрес");
+        assert_eq!(stage_pill_combined("", "значение"), "значение");
+    }
+
+    /// W-f: паритет масштаба замера с рендером — кегль отрисовки
+    /// `font(px) = (px·s).max(8)`, локальная ширина = screen/s (паттерн
+    /// template_chip_label_w); при малом масштабе срабатывает пол 8 px.
+    #[test]
+    fn wf_measure_scales_like_render_font() {
+        let w_local = {
+            let mut mx = StageMeasure::new(0.5);
+            mx.width("Заявки.поле", 12.0)
+        };
+        let w_direct = {
+            let mut fs = canvas_render::text::measure_font_system();
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            m.width_of(
+                &mut fs,
+                "Заявки.поле",
+                canvas_render::text::SANS_FAMILY,
+                8.0,
+            ) / 0.5
+        };
+        assert_eq!(
+            w_local, w_direct,
+            "локальный замер = screen/s при поле 8 px"
         );
     }
 }
