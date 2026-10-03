@@ -132,6 +132,12 @@ W3.2 формально исполнен, но ВСЕ дети — `MeasuredItem
 - Семантический слой `ThemeColors` (~45 слотов) существует только в Rust — в `design/tokens/colors.json` его нет (JSON покрывает примитивы).
 - Межстрочный множитель экранного текста `1.3` захардкожен (`text.rs:418`); LOD-пороги (0.25/0.6/1.5) вне токенов.
 
+### 7а. Зеркало токенов и семантика: состояние после W-d
+
+- **Зеркало достроено** (`canvas-core/src/tokens.rs`, паритет-тесты JSON↔Rust на месте): 5 edge-токенов (`EDGE_ARROW_ANGLE_DEG/EDGE_ARROW_DOTS/EDGE_DASH_PERIOD/EDGE_DASH_DUTY/EDGE_DOT_SPACING`), 3 motion (`SPILL_WAVE_EDGE_MS/STEP_MS`, `SHOW_SOURCE_MS`), 4 LOD-порога в новой группе `dimensions.json#render` (`lod_analysis_border/lod_analysis_badges/lod_node_l0_max/lod_node_l1_max`); `card.header_height` уже сведён в W-a (токен + паритет + `pub use` в canvas-widgets). Потребители (`cards.rs`, `animate.rs`, `anatomy.rs`) — алиасы/реэкспорты токенов с прежними именами (ноль изменений поведения).
+- **Решение по ThemeColors — вариант A**: семантика живёт в `design/tokens/themes/*.json` (они уже рантайм-источник: `canvas_core::theme_presets`, валидация набора слотов I-47.1 — 37 семантических слотов `REQUIRED_KEYS` у каждого из 7 пресетов); `colors.json` остаётся слоем примитивов, дублировать ~58 полей `ThemeColors` в него не нужно. Паритет: тест-зеркало реестра слотов в tokens.rs (`json_theme_presets_carry_full_semantic_slot_set`) + существующие тесты canvas-render (маппинг, `is_dark`, контраст G3, `from_settings`). Follow-up за владельцем theme.rs/theme_presets.rs: полный пер-слотовый тест «58 полей = 37 из JSON + 21 выведенных по задокументированным правилам».
+- **Остатки вне рамок W-d** (text.rs — чужая территория): литерал `zoom() >= 0.6` (what-if превью, text.rs:3012 — совпадает с `LOD_NODE_L0_MAX_ZOOM`) и межстрочный `1.3` (text.rs:418).
+
 ## 8. Дефекты адаптива — приоритизированный список
 
 1. **Меню ПКМ без клампа/флипа** (`input.rs:3307`, `lib.rs:1146,1377`) + мёртвый скролл + слепая зона G4-линта — на 800×560 пункты недостижимы.
@@ -174,7 +180,7 @@ W3.2 формально исполнен, но ВСЕ дети — `MeasuredItem
 
 **W-c (догоняющая миграция кита):** explain_frame → Painter+WidgetState (последний остаток FR-060); settings dropdown/switch → kit; docs-меню/таблицы → примитивы + kit ScrollState; template strip/flyout → dropdown_menu/list_rows; corner buttons → IconButton; tooltip → kit-Tooltip + wrap.
 
-**W-d (токены):** подключить SPACING_*/RADIUS_* вместо литералов-дублей; достроить зеркало tokens.rs (5+3 токенов без паритета); HEADER_H и LOD-пороги → dimensions.json; решить, входит ли семантический слой ThemeColors в colors.json.
+**W-d (токены):** подключить SPACING_*/RADIUS_* вместо литералов-дублей; достроить зеркало tokens.rs (5+3 токенов без паритета); HEADER_H и LOD-пороги → dimensions.json; решить, входит ли семантический слой ThemeColors в colors.json. Решение (см. §7а).
 
 **W-e (решения владельца):** BP_COMPACT/BP_MOBILE (реализовать или удалить); тач-цели web ≥44px; разморозка onboarding; пагинация template-строк → ScrollState.
 

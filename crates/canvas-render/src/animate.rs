@@ -14,16 +14,17 @@ pub const FOCUS_FADE_MS: u32 = 150;
 /// «Дыхание» подсвеченных связей — один цикл (план T23 §3, зона B).
 pub const FOCUS_PULSE_MS: u32 = 1600;
 /// FR-050 Н9-1 (этап E): пульс одного ребра в волне каскада —
-/// полуволна 0 → 1 → 0; токен motion.json `spill_wave_edge_ms`.
-pub const SPILL_WAVE_EDGE_MS: u32 = 600;
+/// полуволна 0 → 1 → 0. FR-046 (W-d): значение — из design-токенов
+/// (`motion.json#spill_wave_edge_ms`, зеркало `canvas_core::tokens`).
+pub const SPILL_WAVE_EDGE_MS: u32 = canvas_core::tokens::SPILL_WAVE_EDGE_MS as u32;
 /// FR-050 Н9-1 (этап E): шаг волны между уровнями каскада — задержка
-/// рёбер следующего топологического порядка; токен
-/// motion.json `spill_wave_step_ms`.
-pub const SPILL_WAVE_STEP_MS: u32 = 200;
+/// рёбер следующего топологического порядка. FR-046 (W-d): значение —
+/// из design-токенов (`motion.json#spill_wave_step_ms`).
+pub const SPILL_WAVE_STEP_MS: u32 = canvas_core::tokens::SPILL_WAVE_STEP_MS as u32;
 /// FR-050 Н9-3 (этап E): «Показать источник» — сколько держится
-/// подсветка истока/связи/приёмника с затемнением остального; токен
-/// motion.json `show_source_ms`.
-pub const SHOW_SOURCE_MS: u32 = 2500;
+/// подсветка истока/связи/приёмника с затемнением остального.
+/// FR-046 (W-d): значение — из design-токенов (`motion.json#show_source_ms`).
+pub const SHOW_SOURCE_MS: u32 = canvas_core::tokens::SHOW_SOURCE_MS as u32;
 
 /// Ease-out cubic: быстрый старт, плавное докатывание. t клампится в [0, 1].
 pub fn ease_out_cubic(t: f32) -> f32 {
