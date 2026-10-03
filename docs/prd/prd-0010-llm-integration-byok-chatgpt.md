@@ -175,7 +175,15 @@ CanvasDesk получает LLM-слой для трёх AI-сценариев: 
 - **F-2.5:** Fallback: ошибка/таймаут → `fusion(lex, ∅) = lex` (как Laya)
 - **F-2.6:** LLM-mm отключена в CI (golden-тесты только lex)
 - **F-2.7:** Debounce 500мс для inline-UX
-- **F-2.8:** Prefetch: запрос при фокусе ноды (до начала правки)
+- **F-2.8:** Prefetch: запрос при фокусе ноды (до начала правки), кэш по хешу контекста (TTL 5 мин)
+- **F-2.9:** Redact context перед отправкой (Q1): `price=<redacted> руб` — явный маркер, сохраняем unit
+- **F-2.10:** Loading-state skeleton (Q7): полупрозрачный квад с spinner → morph в ghost-node
+- **F-2.11:** Confidence-threshold в settings (Q7, default 0.5): если confidence < threshold → скрыть подсказку
+- **F-2.12:** Custom-node suggest (Q7, НОВОЕ): LLM генерирует 3 варианта кастомных нод (title + formula + params), 3 ghost-nodes рядом. Промпт передаёт доступные формулы/операторы (из expr.rs) + право создать кастомную.
+- **F-2.13:** Custom-нода валидация через expr_eval (Q7): битые варианты скрываются
+- **F-2.14:** Cost limit per request (Q7): перед запросом estimate_cost, если > limit → skip + fallback lex
+- **F-2.15:** Benchmark redacted vs raw (R10): на этапе 2, если падение >10% p@1 → fallback на consent-dialog
+- **F-2.16:** "Сохранить как шаблон" (Q7): после применения custom-ноды → GitHub issue (тип enhancement) к canvasdesk repo
 
 ### F-3: Graph builder (этап 3)
 
@@ -196,17 +204,24 @@ CanvasDesk получает LLM-слой для трёх AI-сценариев: 
 - **F-4.5:** Undo на каждую agent-операцию (FR-006)
 - **F-4.6:** Подтверждение для деструктивных ops (`node_delete`)
 - **F-4.7:** `graph_validate` перед apply
+- **F-4.8:** Selection-aware context (Q3): `selected_nodes: Vec<usize>` (пусто = весь канвас). Промпт: "Modify ONLY selected or create new connected. Do NOT touch others."
+- **F-4.9:** Validation whitelist (Q3): graph_apply проверяет — каждая op либо создаёт новую ноду, либо модифицирует selected. Непросимые → REJECT
+- **F-4.10:** Разрешённые ops над selected (Q3): edit text/color, delete (confirm), move, create/delete edges
+- **F-4.11:** Confirm всей связки (Q3): preview (ghost-nodes), accept/reject
+- **F-4.12:** FR-010 v2 layout (Sugiyama-lite) для agent result — ноды расставлены по графу, не кластер в углу
 
 ### F-5: Sign-in-with-ChatGPT (этап 5)
 
 - **F-5.1:** `canvas-llm/src/chatgpt_oauth/` — OAuth-клиент (PKCE, JWKS, refresh)
 - **F-5.2:** Localhost HTTP listener (desktop), deep-link `canvasdesk://oauth/callback` (web)
-- **F-5.3:** Token storage: keychain (desktop), OPFS encrypted (web)
+- **F-5.3:** Token storage: keychain (desktop), OPFS encrypted (web) — **бэкенд не нужен для хранения** (Q6 ответ: всё локально)
 - **F-5.4:** id_token verification (JWT, JWKS, issuer/audience/nonce)
 - **F-5.5:** Model discovery: `GET /v1/models`
 - **F-5.6:** Inference: `POST /v1/responses` (streaming SSE)
 - **F-5.7:** Refresh flow: access_token истёк → refresh_token → новый токен
 - **F-5.8:** UI: «Continue with ChatGPT» button в Settings
+- **F-5.9:** Graceful degradation (Q6): OAuth не работает → fallback на BYOK, toast "ChatGPT недоступен, переключились на {fallback}"
+- **F-5.10:** Cloud function для wasm ТОЛЬКО для OAuth-callback redirect (Q6, не хранит токены)
 
 ### F-6: Web proxy для wasm (этап 6)
 
@@ -214,6 +229,28 @@ CanvasDesk получает LLM-слой для трёх AI-сценариев: 
 - **F-6.2:** `canvas-llm` в wasm → fetch к proxy
 - **F-6.3:** Proxy: валидация CORS, rate-limit per-user, audit log
 - **F-6.4:** OAuth redirect_uri для wasm: deep-link + cloud function для token exchange
+
+### F-7: Settings "AI and Models" таб + Статусная панель (Q2+Q4)
+
+- **F-7.1:** Новый 9-й таб "AI and Models" в Settings (после "Внешний вид")
+- **F-7.2:** Per-feature выбор провайдера (Q2): Suggest / Graph Builder / Agent Panel — каждый со своим dropdown. ChatGPT OAuth недоступен для Suggest
+- **F-7.3:** Rate limit counter (Q2): local counting, "ChatGPT: 47/80 сообщений осталось"
+- **F-7.4:** Cost limit (Q7): $1/день по умолчанию, slider. При 80% — dialog расширения
+- **F-7.5:** Confidence threshold (Q7): default 0.5, slider
+- **F-7.6:** Telemetry opt-in (Q7): default OFF, возможно через PostHug
+- **F-7.7:** Data residency (Q5): Local / Cloud / Self-hosted + описание
+- **F-7.8:** Self-hosted endpoint (Q5): URL + API key, ответственность пользователя
+- **F-7.9:** Статусная панель (Q4): справа над миникартой. Активная модель, включённые функции, cost за сессию, cost за день/лимит. ⚙ → Settings, ⏸ → pause AI. На mobile/узких — прятать
+- **F-7.10:** Cost estimation engine (Q4): before/after request, tariff calculator
+
+### F-8: Onboarding AI-режима + User documentation (Q5)
+
+- **F-8.1:** Новый экран онбординга (после language/role): "Выберите режим AI: Local / Cloud / Self-hosted"
+- **F-8.2:** Сохранение выбора в `data_residency` setting
+- **F-8.3:** Ссылка на user-docs/ai-features.md
+- **F-8.4:** `user-docs/ai-features.md` — полный гайд: AI-функции, какие данные отправляются, privacy-режимы, self-hosted, cost
+- **F-8.5:** Онбординг-тур сценарий `sdk/web-onboarding/src/scenarios/ai-mode.ts`
+- **F-8.6:** Информация о self-hosted в Settings с однозначным описанием что включает пользователь
 
 ---
 
@@ -268,32 +305,44 @@ Benchmark: `docs/dev-researches/llm-mm-source-benchmark.md` (11 моделей, 
 
 ---
 
-## 8. Дорожная карта
+## 8. Дорожная карта — 4 параллельных потока
 
-| Этап | Что | Сессий | Зависимости |
-|---|---|---|---|
-| 1 | canvas-llm crate + BYOK-провайдеры (OpenAI-compat + Anthropic) | 2-3 | ADR-0016 |
-| 2 | Suggest с LLM mm-source | 1 | Этап 1 |
-| 3 | Graph builder (.byok → граф) | 2-3 | Этап 1 |
-| 4 | Agent panel (tool-calling через MCP) | 3-4 | Этап 1 |
-| 5 | Sign-in-with-ChatGPT (OAuth) | 2-3 | Этап 1 |
-| 6 | Web proxy для wasm | 1-2 | Этап 1, 5 |
-| **Итого** | | **12-16** | |
+Полный план: `docs/dev-researches/llm-implementation-plan-4-streams.md`
 
-MVP-граница: этапы 1–2 (валидация UX + cost). Этапы 3–6 — после подтверждения.
+| Поток | Что | Сессий | Файлы (owned) | Зависимости |
+|---|---|---|---|---|
+| **A** | canvas-llm crate (ядро): LlmProvider trait, 6 провайдеров, redact engine, cost engine, compliance | 3-4 | `crates/canvas-llm/` (всё кроме `chatgpt_oauth/`) | ADR-0016 |
+| **B** | Settings "AI and Models" + Статусная панель + Onboarding + User-docs | 3-4 | settings_ui.rs, ai_status_panel.rs, onboarding_ui.rs, ai-mode.ts, ai-features.md | LlmSettings от A |
+| **C** | Suggest LLM mm-source + Custom-node suggest + Cache + Skeleton | 3-4 | canvas-suggest/src/llm/, suggest.rs, overlays.rs (suggest) | LlmProvider от A, redact от A |
+| **D** | Graph builder + Agent panel + ChatGPT OAuth + Web proxy | 8-11 | canvas-graph-builder/, agent_panel.rs, graph_builder_ui.rs, chatgpt_oauth/, llm_proxy.rs | LlmProvider от A, graph_apply/validate из canvas-mcp |
+| **Итого** | | **17-23** | | Критический путь: D (8-11) |
+
+**Порядок запуска:**
+1. Поток A (1 сессия) — создать crate с trait + stub
+2. Потоки B, C, D параллельно (+ A продолжает)
+3. Интеграция (1-2 сессии) — wire-up, end-to-end тесты
+
+MVP-граница: потоки A+C (suggest с LLM) — валидация UX + cost. Потоки B+D — после подтверждения.
 
 ---
 
 ## 9. Открытые вопросы
 
-| ID | Вопрос | Решение |
-|---|---|---|
-| Q1 | α-пересчёт для fusion с LLM (0.85 для Laya → ? для LLM) | Замер на test-сплите после этапа 2 |
-| Q2 | Platt-перекалибровка под LLM confidence (отличается от Laya) | После этапа 2, ECE-замер |
-| Q3 | Cloud-proxy: Cloudflare Workers vs Vercel vs self-hosted | Решение на этапе 6 |
-| Q4 | Deep-link `canvasdesk://` для OAuth на web — регистрация схемы | Решение на этапе 5 |
-| Q5 | Agent panel: auto-apply vs подтверждение каждой операции | Решение на этапе 4 (UX-тест) |
-| Q6 | Privacy: consent-диалог для cloud LLM (контекст нод уходит) | Решение на этапе 1 |
+Все критические вопросы (Q1-Q7) решены владельцем (2026-10-03). Остаются технические:
+
+| ID | Вопрос | Решение | Статус |
+|---|---|---|---|
+| Q1 | Privacy consent | Redact с явным маркером `price=<redacted> руб` (Q1 ответ) | ✓ решено |
+| Q2 | ChatGPT OAuth для suggest | Per-feature, ChatGPT только graph/agent (Q2 ответ) | ✓ решено |
+| Q3 | Agent auto-apply vs confirm | Confirm всей связки, selection-aware, все ops над selected разрешены (Q3 ответ) | ✓ решено |
+| Q4 | Cost visibility | Статусная панель справа над миникартой, прятать на mobile (Q4 ответ) | ✓ решено |
+| Q5 | Offline-first vs cloud-first | Hybrid + self-hosted любой + документация + онбординг (Q5 ответ) | ✓ решено |
+| Q6 | ChatGPT OAuth хранение | Всё локально, бэкенд не нужен, cloud function только для wasm redirect (Q6 ответ) | ✓ решено |
+| Q7 | Suggest UX | Loading skeleton + confidence threshold + 3 custom ghost-nodes + expr_eval + GitHub issue для шаблонов + $1/день лимит (Q7 ответ) | ✓ решено |
+| T1 | α-пересчёт для fusion с LLM | Замер на test-сплите в потоке C | отложено |
+| T2 | Platt-перекалибровка под LLM confidence | После потока C, ECE-замер | отложено |
+| T3 | Telemetry: PostHug vs свой backend | Опционально, возможно PostHug custom event | отложено |
+| T4 | Benchmark redacted vs raw | В потоке C, если падение >10% → consent-dialog fallback | отложено |
 
 ---
 
@@ -332,6 +381,7 @@ MVP-граница: этапы 1–2 (валидация UX + cost). Этапы 
 ## 12. История
 
 - `2026-10-03` — агент (Super Z): PRD создан. 3 AI-сценария (suggest, graph builder, agent panel), 6 провайдеров, гибрид BYOK + Sign-in-with-ChatGPT. 6 этапов (12-16 сессий). Статус: черновик. Связан с ADR-0016.
+- `2026-10-03` — агент (Super Z): правка — финальные ответы владельца на Q1-Q7. Добавлены: F-2.9..F-2.16 (redact, custom-node, skeleton, confidence, cost-limit, save-as-template), F-4.8..F-4.12 (selection-aware, whitelist, confirm, FR-010 layout), F-5.9..F-5.10 (graceful degradation, cloud function для wasm OAuth). План 4 параллельных потоков в `docs/dev-researches/llm-implementation-plan-4-streams.md`. 17-23 сессии.
 
 ---
 
