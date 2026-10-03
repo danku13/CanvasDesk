@@ -1157,11 +1157,13 @@ const SWITCH_GEOMETRY_PALETTE: canvas_ui::kit::KitPalette = canvas_ui::kit::KitP
 /// трека/бегунка (`canvas_ui::kit::switch`: трек SWITCH_W×SWITCH_H, радиус
 /// RADIUS_PILL; бегунок SWITCH_H−2·SWITCH_KNOB_PAD, отступ SWITCH_KNOB_PAD,
 /// позиция — по `on`).
-fn kit_switch_layout(
-    slot: canvas_ui::geometry::UiRect,
-    on: bool,
-) -> canvas_ui::kit::SwitchLayout {
-    canvas_ui::kit::switch(slot, on, canvas_ui::kit::KitState::Normal, &SWITCH_GEOMETRY_PALETTE)
+fn kit_switch_layout(slot: canvas_ui::geometry::UiRect, on: bool) -> canvas_ui::kit::SwitchLayout {
+    canvas_ui::kit::switch(
+        slot,
+        on,
+        canvas_ui::kit::KitState::Normal,
+        &SWITCH_GEOMETRY_PALETTE,
+    )
 }
 
 /// Rect контрола внутри строки: kit-switch (трек) у тумблера, dropdown-кнопка
@@ -2421,7 +2423,10 @@ mod tests {
         assert_eq!((on[2], on[3]), (knob_side, knob_side));
         assert!(off[0] < on[0], "выкл — слева, вкл — справа");
         assert_eq!(off[0], track[0] + canvas_ui::kit::SWITCH_KNOB_PAD);
-        assert_eq!(on[0] + on[2], track[0] + track[2] - canvas_ui::kit::SWITCH_KNOB_PAD);
+        assert_eq!(
+            on[0] + on[2],
+            track[0] + track[2] - canvas_ui::kit::SWITCH_KNOB_PAD
+        );
         assert_eq!(on[1], track[1] + canvas_ui::kit::SWITCH_KNOB_PAD);
         // Стиль трека — kit ControlStyle (радиус pill из шкалы токенов);
         // заливка бегунка — слот палитры (нейтральный срез геометрию
