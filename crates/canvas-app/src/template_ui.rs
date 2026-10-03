@@ -558,21 +558,32 @@ pub fn dock_strip_layout(
         (window_h - height - PANEL_TOP_MARGIN).max(PANEL_TOP_MARGIN),
     );
     let x = PANEL_MARGIN;
-    let rows = categories
-        .iter()
-        .enumerate()
-        .map(|(i, name)| {
-            (
-                [
-                    x + STRIP_PAD_H,
-                    y + STRIP_PAD_V + i as f32 * CATEGORY_ROW_H,
-                    width - STRIP_PAD_H * 2.0,
-                    CATEGORY_ROW_H,
-                ],
-                name.clone(),
-            )
-        })
-        .collect();
+    // W-c (аудит ui-kit §10): строки категорий — окно kit::list_rows
+    // (ScrollState без прокрутки: вьюпорт = контент — вся полоса видна);
+    // прежняя стопка «y + PAD_V + i·CATEGORY_ROW_H» воспроизводится
+    // дословно (hit-тест реестра зовёт эту же функцию — hit==draw).
+    let rows_area = canvas_ui::geometry::UiRect::new(
+        x + STRIP_PAD_H,
+        y + STRIP_PAD_V,
+        (width - STRIP_PAD_H * 2.0).max(0.0),
+        rows_h,
+    );
+    let strip_scroll = canvas_ui::kit::ScrollState {
+        offset: 0.0,
+        content_h: rows_h,
+        viewport_h: rows_h,
+    };
+    let rows = canvas_ui::kit::list_rows(
+        rows_area,
+        &strip_scroll,
+        CATEGORY_ROW_H,
+        0.0,
+        categories.len(),
+    )
+    .into_iter()
+    .zip(categories.iter())
+    .map(|((_, r), name)| ([r.x, r.y, r.w, r.h], name.clone()))
+    .collect();
     StripLayout {
         rect: [x, y, width, height],
         rows,
@@ -601,12 +612,34 @@ pub struct FlyoutLayout {
     pub max_scroll: usize,
 }
 
-/// Раскладка flyout справа от строки-категории (`strip_row_rect`, xywh):
-/// ширина — [`flyout_width`] (кламп к правому краю окна с отступом
-/// [`PANEL_MARGIN`]), высота — по числу items, но не больше окна минус
-/// отступы; вертикально центрирована относительно строки-категории и
-/// клампится в `[PANEL_TOP_MARGIN, window_h − h − PANEL_TOP_MARGIN]`, так что
-/// строки никогда не вылезают за область видимости.
+/// Инсет строки-карточки flyout от её шага ([`ROW_HEIGHT`]): карточка ниже
+/// соседней на 4 px (прежний литерал `ROW_HEIGHT - 4.0`), зазор между
+/// карточками — те же 4 px (шаг строки `list_rows` = row_h + gap =
+/// [`ROW_HEIGHT`]).
+pub const FLYOUT_ROW_INSET: f32 = 4.0;
+
+/// Раскладка flyout справа от строки-категории (`strip_row_rect`, xywh).
+///
+/// W-c (аудит ui-kit §8 п.11, §10 — «flyout — ручные клампы»): ручные
+/// клампы координат у краёв заменены kit-dropdown
+/// `canvas_ui::kit::dropdown_menu` («якорь + flip + финальный кламп к
+/// вьюпорту», паттерн `hints_ui::popup_rect`):
+/// - якорь — тонкая линия у ПРАВОГО края строки категории: flyout
+///   раскрывается справа от полосы с прежним зазором [`FLYOUT_GAP`]
+///   (зазор зашит в позицию якоря), по вертикали якорь = строка категории;
+/// - вьюпорт — окно с полями [`PANEL_TOP_MARGIN`] по вертикали и
+///   [`PANEL_MARGIN`] справа: кит сам опускает меню ПОД строку, у нижнего
+///   края разворачивает НАД ней (flip), переполнение прижимает к низу и
+///   финально клампит к вьюпорту — строки никогда не вылезают за область
+///   видимости;
+/// - ширина — [`flyout_width`]: горизонтальный кламп кита держит правый
+///   край за [`PANEL_MARGIN`] (у узкого окна сдвигает меню влево, совсем
+///   не влезающее — обрезает до вьюпорта).
+///
+/// Строки — окно `kit::list_rows` ([`ScrollState`]): шаг [`ROW_HEIGHT`]
+/// (карточка = `ROW_HEIGHT − FLYOUT_ROW_INSET`, зазор = `FLYOUT_ROW_INSET` —
+/// прежняя стопка дословно); рисуются только ПОЛНОСТЬЮ видимые строки
+/// (частичный низ — прежний контракт flyout: полоса скроллится построчно).
 pub fn flyout_layout(
     strip_row_rect: [f32; 4],
     item_count: usize,
@@ -614,37 +647,70 @@ pub fn flyout_layout(
     window_h: f32,
     scroll_top: usize,
 ) -> FlyoutLayout {
-    let x = strip_row_rect[0] + strip_row_rect[2] + FLYOUT_GAP;
-    let width = flyout_width().min((window_w - x - PANEL_MARGIN).max(FLYOUT_MIN_W));
-    let natural_h = item_count as f32 * ROW_HEIGHT + FLYOUT_PAD_V * 2.0;
-    let max_h = (window_h - PANEL_TOP_MARGIN * 2.0).max(ROW_HEIGHT + FLYOUT_PAD_V * 2.0);
-    let height = natural_h.min(max_h);
+    use canvas_ui::geometry::{UiRect, UiVec2};
+    use canvas_ui::kit::{self, ScrollState};
+
+    // Вьюпорт: поля PANEL_TOP_MARGIN сверху/снизу, PANEL_MARGIN справа
+    // (левая граница — край окна: flyout и так правее полосы).
+    let viewport = UiRect::new(
+        0.0,
+        PANEL_TOP_MARGIN,
+        (window_w - PANEL_MARGIN).max(0.0),
+        (window_h - PANEL_TOP_MARGIN * 2.0).max(0.0),
+    );
+    // Якорь — правый край строки категории + FLYOUT_GAP, высота = строка.
+    let anchor = UiRect::new(
+        strip_row_rect[0] + strip_row_rect[2] + FLYOUT_GAP,
+        strip_row_rect[1],
+        1.0,
+        strip_row_rect[3],
+    );
+    // Желаемый контент: ширина flyout, высота — все строки + вертикальные
+    // поля (кламп высоты к вьюпорту — внутри dropdown_menu).
+    let content = UiVec2::new(
+        flyout_width(),
+        item_count as f32 * ROW_HEIGHT + FLYOUT_PAD_V * 2.0,
+    );
+    let menu = kit::dropdown_menu(anchor, viewport, content).menu;
+    // Окно строк — из ФИНАЛЬНОЙ высоты меню (кламп кита учтён): прежняя
+    // формула visible_count по клампнутой высоте.
     let visible_count = if item_count == 0 {
         0
     } else {
-        (((height - FLYOUT_PAD_V * 2.0) / ROW_HEIGHT).floor() as usize)
+        (((menu.h - FLYOUT_PAD_V * 2.0) / ROW_HEIGHT).floor() as usize)
             .max(1)
             .min(item_count)
     };
     let max_scroll = item_count.saturating_sub(visible_count);
     let top = scroll_top.min(max_scroll);
-    let row_cy = strip_row_rect[1] + strip_row_rect[3] / 2.0;
-    let y = (row_cy - height / 2.0).clamp(
-        PANEL_TOP_MARGIN,
-        (window_h - PANEL_TOP_MARGIN - height).max(PANEL_TOP_MARGIN),
+    // Строки — kit::list_rows: offset построчный (шаг ROW_HEIGHT), карточка
+    // ниже шага на FLYOUT_ROW_INSET. Частично видимый низ (остаток деления
+    // высоты окна на шаг) не рисуется — фильтр полной видимости (у кита
+    // нет scissor'а на этом проходе, прежний контракт «целые строки»).
+    let area = UiRect::new(
+        menu.x + FLYOUT_PAD_H,
+        menu.y + FLYOUT_PAD_V,
+        (menu.w - FLYOUT_PAD_H * 2.0).max(0.0),
+        (menu.h - FLYOUT_PAD_V * 2.0).max(0.0),
     );
-    let row_rects = (0..visible_count.min(item_count - top))
-        .map(|v| {
-            [
-                x + FLYOUT_PAD_H,
-                y + FLYOUT_PAD_V + v as f32 * ROW_HEIGHT,
-                width - FLYOUT_PAD_H * 2.0,
-                ROW_HEIGHT - 4.0,
-            ]
-        })
-        .collect();
+    let scroll = ScrollState {
+        offset: top as f32 * ROW_HEIGHT,
+        content_h: item_count as f32 * ROW_HEIGHT,
+        viewport_h: area.h,
+    };
+    let row_rects = kit::list_rows(
+        area,
+        &scroll,
+        ROW_HEIGHT - FLYOUT_ROW_INSET,
+        FLYOUT_ROW_INSET,
+        item_count,
+    )
+    .into_iter()
+    .filter(|(_, r)| r.bottom() <= area.bottom() + 0.01)
+    .map(|(_, r)| [r.x, r.y, r.w, r.h])
+    .collect();
     FlyoutLayout {
-        rect: [x, y, width, height],
+        rect: [menu.x, menu.y, menu.w, menu.h],
         row_rects,
         scroll_top: top,
         max_scroll,
@@ -1332,6 +1398,9 @@ pub fn sector_point(center: Vec2, angle: f32, radius: f32) -> Vec2 {
 mod tests {
     use super::*;
 
+    /// W-c: зазор dropdown кита (tests — алиас полного пути).
+    const FLYOUT_GAP_KIT: f32 = canvas_ui::kit::DROPDOWN_GAP;
+
     fn registry() -> TemplateRegistry {
         TemplateRegistry::mock()
     }
@@ -1716,21 +1785,68 @@ mod tests {
         assert!((scrolled.row_rects[0][1] - (scrolled.rect[1] + FLYOUT_PAD_V)).abs() < 0.01);
     }
 
+    /// W-c: flyout — kit-dropdown («якорь + flip»): места под строкой
+    /// хватает — меню раскрывается ПОД строкой категории с зазором
+    /// DROPDOWN_GAP кита (прежнее центрирование на строке заменено
+    /// контрактным поведением dropdown, паттерн hints_ui::popup_rect).
     #[test]
-    fn flyout_layout_few_items_centers_on_row() {
-        // Мало items — высота по содержимому, вертикальный центр flyout —
-        // центр строки-категории; скролла нет
+    fn flyout_layout_few_items_anchor_below_row() {
         let strip_row = [12.0, 200.0, 80.0, CATEGORY_ROW_H];
         let fly = flyout_layout(strip_row, 3, 1280.0, 800.0, 0);
         let expected_h = 3.0 * ROW_HEIGHT + FLYOUT_PAD_V * 2.0;
         assert!((fly.rect[3] - expected_h).abs() < 0.01);
-        let row_cy = strip_row[1] + strip_row[3] / 2.0;
-        assert!(
-            (fly.rect[1] + fly.rect[3] / 2.0 - row_cy).abs() < 0.01,
-            "flyout центрирован относительно строки категории"
-        );
+        // Под строкой: верх = низ строки + DROPDOWN_GAP (кит), правее полосы
+        assert!((fly.rect[1] - (strip_row[1] + strip_row[3] + FLYOUT_GAP_KIT)).abs() < 0.01);
+        assert!((fly.rect[0] - (strip_row[0] + strip_row[2] + FLYOUT_GAP)).abs() < 0.01);
         assert_eq!(fly.max_scroll, 0);
         assert_eq!(fly.row_rects.len(), 3);
+        // Строки — прежняя стопка: от верха flyout + FLYOUT_PAD_V, шаг
+        // ROW_HEIGHT, карточка = ROW_HEIGHT − FLYOUT_ROW_INSET
+        for (v, rect) in fly.row_rects.iter().enumerate() {
+            assert!((rect[1] - (fly.rect[1] + FLYOUT_PAD_V + v as f32 * ROW_HEIGHT)).abs() < 0.01);
+            assert!((rect[3] - (ROW_HEIGHT - FLYOUT_ROW_INSET)).abs() < 0.01);
+        }
+    }
+
+    /// W-c: kit-dropdown flip — строка у нижнего края: места под строкой
+    /// нет, меню разворачивается НАД строкой (низ = верх строки −
+    /// DROPDOWN_GAP) и не выходит за верхний отступ вьюпорта.
+    #[test]
+    fn flyout_layout_flips_above_at_bottom_edge() {
+        let window_h = 600.0;
+        // Строка вплотную к нижнему отступу
+        let strip_row = [12.0, window_h - PANEL_TOP_MARGIN - CATEGORY_ROW_H, 80.0, CATEGORY_ROW_H];
+        let fly = flyout_layout(strip_row, 3, 1280.0, window_h, 0);
+        let expected_h = 3.0 * ROW_HEIGHT + FLYOUT_PAD_V * 2.0;
+        assert!((fly.rect[3] - expected_h).abs() < 0.01);
+        // Низ меню — над якорем с зазором DROPDOWN_GAP кита
+        let menu_bottom = fly.rect[1] + fly.rect[3];
+        assert!((menu_bottom - (strip_row[1] - FLYOUT_GAP_KIT)).abs() < 0.01);
+        // Внутри вьюпорта по вертикали
+        assert!(fly.rect[1] >= PANEL_TOP_MARGIN - 0.01);
+    }
+
+    /// W-c: горизонтальный кламп кита — у узкого окна flyout сдвигается
+    /// влево (правый край за PANEL_MARGIN), совсем не влезающее меню
+    /// обрезается до вьюпорта (финальная гарантия dropdown_menu); строки
+    /// остаются внутри меню.
+    #[test]
+    fn flyout_layout_clamps_to_right_edge_and_narrow_window() {
+        let strip_row = [12.0, 200.0, 80.0, CATEGORY_ROW_H];
+        // Окно 400: меню (300) не помещается справа от полосы — x сдвинут
+        // влево, правый край = window_w − PANEL_MARGIN
+        let fly = flyout_layout(strip_row, 3, 400.0, 600.0, 0);
+        assert!((fly.rect[0] + fly.rect[2] - (400.0 - PANEL_MARGIN)).abs() < 0.01);
+        assert!(fly.rect[0] >= 0.0);
+        // Окно 200 (меню шире вьюпорта): ширина обрезана до вьюпорта,
+        // строки не вылезают за меню
+        let narrow = flyout_layout(strip_row, 3, 200.0, 600.0, 0);
+        assert!(narrow.rect[0] >= 0.0);
+        assert!(narrow.rect[0] + narrow.rect[2] <= 200.0 - PANEL_MARGIN + 0.01);
+        for rect in &narrow.row_rects {
+            assert!(rect[0] >= narrow.rect[0] - 0.01);
+            assert!(rect[0] + rect[2] <= narrow.rect[0] + narrow.rect[2] + 0.01);
+        }
     }
 
     #[test]
