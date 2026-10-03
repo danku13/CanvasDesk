@@ -229,3 +229,24 @@ Stage Summary:
 - Replay теперь видит WASM-слой: захват шёл постоянно, но снапшоты были пустыми (два корня: preserveDrawingBuffer у WebGL2-контекста wgpu + webgpu-нечитаемость posthog#57008); фикс — детерминированный getContext-шим + согласие analytics ⇒ WebGL2-бэкенд (отказавшимся остаётся WebGPU); смена согласия действует после перезагрузки
 - Отказ браузера кешировать HTML учтён: приёмка после выката обязательно с reload/revalidate (утренний замер мог видеть старый индекс из max-age=600)
 - Владельцу: новые записи (после 14:0xZ) в PostHog Replays показывают канвас; тестовый person probe-capture-test-01 можно посмотреть/удалить; поднять canvasFps с 4 до 12 при желании «видео-качества» (тяжелее аплоады)
+
+---
+Task ID: W-e реализация (сессия web-51d33571)
+Agent: интегратор Super Z + 4 параллельных агента (worktrees we-*)
+
+Task: Волна W-e «решения владельца» аудита ui-kit (docs/dev-researches/ui-kit-adoption-audit.md §10): BP_COMPACT/BP_MOBILE — реализовать (вариант «A»); тач-цели web ≥44px; разморозка onboarding; пагинация template-строк → ScrollState. Решения владельца от 03.10.2026: брейкпоинты — вариант «A»; onboarding — разморозить.
+
+Work Log:
+- 4 параллельных агента в worktrees (we-bp 6d75ced, we-touch 5790d2e, we-template da1bb92, we-onboard 809a41c) + сальваж: на 1-a/1-c/1-d инфраструктура дважды рвала транспорт, наработка каждый раз восстанавливалась из worktree и дожималась
+- 1-a брейкпоинты настроек (вариант «A»): ModalMode Desktop/Compact(<1280, одна колонка + компактный таб-бар на measured-примитивах)/Mobile(<768, полноэкранный лист); скролл W-a и kit switch/dropdown W-c без регресса; DegradationPolicy::Always (настройки адаптируются, не прячутся); G4-тесты 1280×800/1279×800/1024×640/800×560/767×600
+- 1-b тач-цели web (дефект №14, CR-014): тулбар/тур-кнопки/роли/consent ≥44×44, author-bar 46×46 (::after hit при визуале 28px), #btn-recent — кап 240px эллипсиса жив; Playwright-аудит 19/19 (новый scripts/web_touch_targets_audit.py), регресс-тесты тура 11/11; index.html ↔ sdk/web-onboarding синхронно
+- 1-c разморозка onboarding (решение владельца 03.10.2026): kit::modal по слоту вьюпорта С ПОЛЯМИ (SPACING_LG — аудит §8 №12), тело ужимается kit ScrollState/list_rows при клампе высоты (футер с CTA всегда виден), TextMeasurer::wrap вместо CHAR_W_FACTOR 0.62 (§9 CR-015), draw → Painter + WidgetState/button_style (замена ад-хок hover_fill ×1.3), 6 литералов → слоты темы; hit-rect'ы из той же card_layout («ввод = тому, что видно»); ui-kit.md/surface-registry.md обновлены. Дожим интегратором: фикс самодедлока теста (MutexGuard measure_font_system через onboarding_overlay), тест Skip приведён к дизайну (ghost в правом верхнем углу — NN/g), граница теста ширины 216 (пословный перенос кита не дробит «markdown-разметкой» 146.3px > 144px ниже стресс-поля)
+- 1-d template-строки: break-пагинация и кэп MAX_VISIBLE_ROWS=12 удалены; окно строк = kit ScrollState по измеренной высоте панели (wheel/клавиатура/«ввод = тому, что видно»), бегунок kit::scroll_bar, хвост клеится к низу; >12 строк на высоких окнах (1280×1000/1200), хвост достижим на 800×560
+- Интеграция: 4 merge --no-ff в main + конфликт §10 W-e аудит-дока разрешён сводным статусом; origin/main (36d69dc FR-091 v2) влит
+
+Stage Summary:
+- Волна W-e закрыта полностью (все 4 пункта §10): main = 2101424 (9211e85 we-touch, 879a121 we-bp, 16ccdfc we-template, f09affc we-onboard + origin)
+- Гейты на merged main: cargo fmt --all -- --check ✓; clippy --workspace --all-targets -D warnings ✓ (0 ошибок); cargo test --workspace — 2416 passed / 0 failed (83 бинарника; canvas-app lib 503: было 492, +11)
+- Владельцу на ручную приёмку: (1) web-стенд Ctrl+, сузить окно <1280/<768 — компакт/лист настроек; (2) Ctrl+P — колесо/стрелки по строкам шаблонов на 800×560 и высоком окне; (3) первый запуск — карточка онбординга на 800×560/240×180 (поля, футер виден, тело скроллится); (4) Pages — тулбар/тур с тача (hit ≥44)
+- Известное ограничение (вне скоупа W-e): пословный перенос кита не дробит неразрывные токены — на карточке онбординга ниже ширины 216 возможен перелив ≤2px («markdown-разметкой»); брейк по дефису/посимвольный брейк — кандидат в отдельный FR к canvas-ui
+- Открытые остатки аудита (на отдельные волны): CR-015 stage truncate_chars ×10, auto_width.rs «10 слов × 6 chars», docs-сниппет 44 символа, ~25 литералов DOM-палитр web-shell (не вошли в 1-b), text.rs (zoom 0.6/1.3), перенос search из canvas-render
