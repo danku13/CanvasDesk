@@ -492,19 +492,29 @@ impl Row {
 
     /// Полная геометрия строки в слоте (вид [`RowLayout`] kit-функций):
     /// направляющие одной строки ([`row_guides`]; правый край — край слота,
-    /// зазор — `props.opts.gap`) + [`row_layout`]. `Component::layout`
-    /// возвращает плоский срез ([`row_rects`]); этот метод оставляет
-    /// потребителю именованные ячейки (лидер, `label_shown`).
-    pub fn layout_row(&self, slot: UiRect) -> RowLayout {
+    /// зазор — `props.opts.gap`) + [`row_layout`]; потребитель получает
+    /// именованные ячейки (лидер, `label_shown`), `Component::layout` —
+    /// плоский срез через [`row_rects`]).
+    /// Вёрстка строки с ВНЕШНИМИ пулами шейпинга — FR-094, продакшн-контракт
+    /// §4.7: потребитель передаёт общий FontSystem рендера
+    /// (`canvas-render::text::measure_font_system`). В wasm внутренний пул
+    /// компонента (`FontSystem::new()`) ПУСТ — системных шрифтов в браузере
+    /// нет, первый же шейпинг паникует «no default font found» (cosmic-text
+    /// shape.rs) и роняет кадр; дефолтный [`Row::layout_row`] —
+    /// тесты/standalone (там пул наполняет сам тест).
+    pub fn layout_row_with(
+        &self,
+        m: &mut TextMeasurer,
+        fs: &mut cosmic_text::FontSystem,
+        slot: UiRect,
+    ) -> RowLayout {
         let parts = self.parts();
         let rows = [parts];
-        let mut m = self.measurer.borrow_mut();
-        let mut fs = self.font_system.borrow_mut();
         // Одна строка — направляющие всегда построены (RowGuides::measure
         // возвращает None только на пустом списке строк).
         let guides = row_guides(
-            &mut m,
-            &mut fs,
+            m,
+            fs,
             ROW_DEFAULT_FAMILY,
             ROW_DEFAULT_SIZE,
             &rows,
@@ -513,8 +523,8 @@ impl Row {
         )
         .expect("одна строка — направляющие всегда построены");
         row_layout(
-            &mut m,
-            &mut fs,
+            m,
+            fs,
             ROW_DEFAULT_FAMILY,
             ROW_DEFAULT_SIZE,
             slot,
@@ -522,6 +532,34 @@ impl Row {
             &rows[0],
             &self.props.opts,
         )
+    }
+
+    /// Вёрстка строки дефолтными (внутренними) пулами компонента —
+    /// тесты/standalone-сценарии; продакшн обязан идти через
+    /// [`Row::layout_row_with`] (FR-094, §4.7 — см. доку метода).
+    pub fn layout_row(&self, slot: UiRect) -> RowLayout {
+        let mut m = self.measurer.borrow_mut();
+        let mut fs = self.font_system.borrow_mut();
+        self.layout_row_with(&mut m, &mut fs, slot)
+    }
+
+    /// Отрисовка строки с ВНЕШНИМИ пулами шейпинга (FR-094, §4.7 —
+    /// геометрия пересчитывается внешним пулом, `rects` — выдача
+    /// `layout_row_with`/`row_rects`; см. доку [`Row::layout_row_with`]).
+    pub fn paint_with(
+        &self,
+        painter: &mut Painter,
+        m: &mut TextMeasurer,
+        fs: &mut cosmic_text::FontSystem,
+        rects: &[UiRect],
+    ) {
+        let Some(&slot) = rects.first() else {
+            return;
+        };
+        let lay = self.layout_row_with(m, fs, slot);
+        let parts = self.parts();
+        let style = row_style(self.state.kit_state(), &self.props.palette);
+        paint_row(painter, &lay, &parts, &style, ROW_DEFAULT_SIZE);
     }
 }
 
@@ -891,6 +929,47 @@ mod tests {
         assert_eq!(rects, row_rects(&lay), "плоская выдача = oracle row_layout");
         assert_eq!(rects[0], slot, "индекс 0 — слот строки (hit-цель)");
         assert_eq!(rects.len(), 6, "row, dot, label, value, unit, badge");
+    }
+
+    /// FR-094: `layout_row_with`/`paint_with` (внешние пулы, продакшн
+    /// §4.7) дают ту же геометрию и те же элементы отрисовки, что дефолтный
+    /// путь, когда оба пула несут одно и то же лицо — контракт «внешний пул
+    /// = внутренний на том же шрифте» (wasm: внутренний пуст, продакшн
+    /// обязан передавать внешний).
+    #[test]
+    fn layout_row_with_matches_internal_on_same_font() {
+        let slot = UiRect::new(10.0, 20.0, 300.0, 22.0);
+        let row = Row::new(RowProps {
+            marker: RowMarker::Dot,
+            label: "путь /api/rps".to_owned(),
+            value: "1389".to_owned(),
+            badge: Some("← источник".to_owned()),
+            opts: RowOpts::default(),
+            palette: palette_a(),
+        });
+        // Внутренний пул наполняем тем же лицом, что внешний.
+        load_display_font(&mut row.font_system.borrow_mut());
+        let mut m = TextMeasurer::new();
+        let mut fs = font_system();
+
+        let internal = row_rects(&row.layout_row(slot));
+        let external = row_rects(&row.layout_row_with(&mut m, &mut fs, slot));
+        assert_eq!(
+            internal, external,
+            "внешний пул = внутренний на том же лице"
+        );
+
+        // paint_with — те же элементы, что Component::paint (тот же стиль
+        // и геометрия): сравниваем выдачу Painter'ов.
+        let mut p_internal = crate::paint::Painter::new();
+        row.paint(&mut p_internal, &internal);
+        let mut p_external = crate::paint::Painter::new();
+        row.paint_with(&mut p_external, &mut m, &mut fs, &external);
+        assert_eq!(
+            p_internal.items(),
+            p_external.items(),
+            "paint_with = Component::paint на том же лице"
+        );
     }
 
     /// W3: `Component::paint` эмитит элементы строки (draw-порядок
