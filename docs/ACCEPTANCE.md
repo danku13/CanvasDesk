@@ -1096,3 +1096,15 @@ ADR-0015, конечная цель — своя UI-библиотека с zero
 | FR-097.2 | Покрытие: строки/чипы/поле/кнопка сворачивания дока, строки flyout, чипы полосы, кнопки онбординга | ✅ |
 | FR-097.3 | Десктоп: hit-зоны бит-в-бит прежние (coarse=false — флаг не установлен) | ✅ |
 | P0.gates | fmt + clippy -D warnings (натив, wasm32) + test --workspace (494 app/core) + wasm_gate --check | ✅ |
+
+### FR-098/099 — Мобильный P1: breakpoints, drag-скролл, safe-area (2026-10-03)
+
+| # | Критерий | Статус |
+|---|---|---|
+| FR-098.1 | < BP_MOBILE: модаль настроек = окно минус поля; тест 390×844 | ✅ |
+| FR-098.2 | < BP_COMPACT: доля высоты 0.75 (1024×768 → 576); граница 1280 — прежняя ветка | ✅ |
+| FR-098.3 | Drag-скролл палитры: нажатие на пустом месте + драг → scroll_by; приоритет template_drag; сброс Released/Cancel | ✅ |
+| FR-099.1 | viewport-fit=cover + env(safe-area-inset-bottom/left) для тулбара (max-фолбэк 8px) | ✅ |
+| FR-099.2 | Аудит-матрица: +844×390 (телефон ландшафт), +820×1180 (iPad Air) | ✅ |
+| FR-099.3 | Онбординг: не заморожен (should_show_onboarding без изменений), тач-цели — FR-097 | ✅ |
+| P1.gates | fmt + clippy -D warnings (натив, wasm32) + test --workspace + wasm_gate --check | ✅ |

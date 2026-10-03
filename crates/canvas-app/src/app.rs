@@ -902,6 +902,14 @@ pub struct App {
     /// AppEvent::VisualViewport; сдвиг камеры редактора — только при ИЗМЕНЕНИИ
     /// инсета (каждый vv-scroll/resize пан не перетирает ручной пан).
     visual_viewport_inset: f32,
+    /// FR-098: drag-скролл списка палитры активен (нажатие на пустом месте
+    /// дока/полосы, далее вертикальный драг; на таче колесо недоступно).
+    /// Ставится в click_template_panel (ветка «глотается»), гасится в
+    /// on_touch Release/Cancel и в on_left_button Released.
+    palette_touch_scroll: bool,
+    /// FR-098: аккумулятор вертикальных пикселей драг-скролла (лог. px;
+    /// каждые 40 px — линия колеса, тот же шаг, что в on_mouse_wheel).
+    palette_touch_scroll_acc: f32,
     /// Буфер обмена ОС (T7). M8/W3: backend за трейтом ClipboardBackend
     /// (натив — ArboardClipboard, web — navigator.clipboard).
     clipboard: Box<dyn ClipboardBackend>,
@@ -1422,6 +1430,13 @@ impl App {
             #[cfg(target_arch = "wasm32")]
             touch_gesture: TouchGesture::new(),
             visual_viewport_inset: 0.0,
+            // FR-098: drag-скролл списка палитры (нажатие на пустом месте
+            // дока/полосы + вертикальный драг — на таче колесо недоступно).
+            // Ставится в click_template_panel (ветка «глотается»), гасится
+            // на Released/Cancel; аккумулятор пикселей → строки (40 px =
+            // линия колеса — тот же шаг, что в on_mouse_wheel).
+            palette_touch_scroll: false,
+            palette_touch_scroll_acc: 0.0,
             hud_visible: settings.hud_on_start,
             frame_meter: FrameMeter::new(),
             last_frame: None,
