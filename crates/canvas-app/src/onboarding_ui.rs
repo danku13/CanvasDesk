@@ -224,13 +224,38 @@ pub fn body_lines(
         return Vec::new();
     };
     let avail = (width - ONBOARDING_PAD * 2.0).max(10.0);
-    m.wrap(
+    let wrapped = m.wrap(
         fs,
         i18n::tr(language, step.body_key),
         FAMILY,
         ONBOARDING_BODY_FONT,
         avail,
-    )
+    );
+    // W-e follow-up (CI windows): сверхширокий токен без переносов
+    // («markdown-разметкой» на Windows-метриках — 226.6 > бюджета 192)
+    // выходил за карточку и на рендере, и в тесте бюджета. Жёсткий
+    // посимвольный разрыв в бюджет: строка либо влезает, либо рвётся
+    // глиф за глифом (тексты онбординга — кириллица/латиница).
+    let mut lines: Vec<String> = Vec::with_capacity(wrapped.len());
+    for line in wrapped {
+        if m.width_of(fs, &line, FAMILY, ONBOARDING_BODY_FONT) <= avail {
+            lines.push(line);
+            continue;
+        }
+        let mut cur = String::new();
+        for ch in line.chars() {
+            let mut next = cur.clone();
+            next.push(ch);
+            if m.width_of(fs, &next, FAMILY, ONBOARDING_BODY_FONT) > avail && !cur.is_empty() {
+                lines.push(std::mem::take(&mut cur));
+            }
+            cur.push(ch);
+        }
+        if !cur.is_empty() {
+            lines.push(cur);
+        }
+    }
+    lines
 }
 
 /// Отступ от верха карточки до первой строки тела (заголовок +
