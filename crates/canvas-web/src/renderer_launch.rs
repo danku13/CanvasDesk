@@ -29,6 +29,17 @@ impl RendererLauncher for SpawnLocalRendererLaunch {
         let slot = RendererSlot::new();
         #[cfg(target_arch = "wasm32")]
         {
+            // FR-091 v2: согласие analytics=true → сессия записывается
+            // (PostHog session recording читает канвас растром). Сообщаем
+            // рендереру «capture-режим»: create_gpu_web пропустит
+            // WebGPU-ступень (растр webgpu-канваса рекордеру нечитаем —
+            // posthog/posthog#57008), WebGL2 читается при
+            // preserveDrawingBuffer:true (web-шим index.html ставит его
+            // до создания контекста). Ставится до spawn_local — флаг
+            // гарантированно прочитан внутри Renderer::new. Правило §3.1:
+            // согласия/JS-состояние читает web-слой, ядро не знает про
+            // PostHog.
+            canvas_render::renderer::set_prefer_gl_for_capture(analytics_recording_active());
             // winit 0.30 создаёт canvas при create_window, но НЕ вставляет
             // его в DOM (with_append по умолчанию выключен; attrs строятся
             // в canvas-app — §3.1: web-знания туда не идут). Платформенный
@@ -47,6 +58,21 @@ impl RendererLauncher for SpawnLocalRendererLaunch {
             let deliver = slot.clone();
             let wake = window.clone();
             wasm_bindgen_futures::spawn_local(async move {
+                // FR-091 v2: capture-режим (согласие analytics) идёт в GL без
+                // WebGPU-ретраев — адаптер разрешается за миллисекунды, и
+                // Renderer::new успевает прочитать window.inner_size() ДО
+                // первого layout'а канваса (ResizeObserver winit'а ещё не
+                // сработал): 0×0 → surface клампится в 1×1 (предупреждение
+                // «физический размер canvas превышает…»), корректный размер
+                // возвращал бы только Resized — а он обрабатывается лишь при
+                // живом рендерере (handler.rs), т.е. лечится гонкой порядка
+                // событий, не гарантией. Дожидаемся двух анимационных кадров
+                // ДО старта Renderer::new — layout канваса гарантированно
+                // случился (rAF №1 выполняется до layout своего кадра,
+                // ResizeObserver срабатывает в layout кадра №1; rAF №2 — уже
+                // после него). ~32 мс к буту — незаметно; Resized приходит
+                // позже и резайзит в тот же размер (идемпотентно).
+                wait_canvas_layout().await;
                 let result = canvas_render::Renderer::new(window, prefer_dx12).await;
                 deliver.put(result);
                 // GPU готов: разбудить кадр-цикл — App заберёт слот в
@@ -60,6 +86,56 @@ impl RendererLauncher for SpawnLocalRendererLaunch {
         let _ = (&window, prefer_dx12);
         RendererLaunch::Pending(slot)
     }
+}
+
+/// FR-091 v2 (web): дождаться layout-кадра канваса — см. комментарий в
+/// `launch`. Ошибки не блокируют бут: нет window — сразу вернуться;
+/// rAF не запланировался (фоновая вкладка: колбэки не выполняются до
+/// видимости) — промис резолвится сразу, Renderer::new читает текущий
+/// размер, surface вылечится событием Resized (прежнее поведение).
+#[cfg(target_arch = "wasm32")]
+async fn wait_canvas_layout() {
+    let Some(win) = web_sys::window() else {
+        return;
+    };
+    for _ in 0..2 {
+        let win = win.clone();
+        let mut executor = move |resolve: js_sys::Function, _reject: js_sys::Function| {
+            if win.request_animation_frame(&resolve).is_err() {
+                // планирование сорвалось — не висим вечным промисом
+                let _ = resolve.call0(&wasm_bindgen::JsValue::NULL);
+            }
+        };
+        let promise = js_sys::Promise::new(&mut executor);
+        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+    }
+}
+
+/// FR-091 v2 (web): согласие на аналитику → запись сеанса активна.
+/// Источник правды — JSON `canvasdesk.consent` в localStorage (тот же,
+/// что у JS-модуля телеметрии в index.html: `readConsent`). Семантика
+/// зеркалит index.html: нет ни согласий, ни `canvasdesk.config` —
+/// свежий визит, пикер ещё не показан, SDK не грузится → запись
+/// невозможна → WebGPU остаётся. Запись без поля/битая — дефолт true
+/// (как предвыбранные чекбоксы пикера и «старые конфиги считаются
+/// согласившимися», FR-089).
+#[cfg(target_arch = "wasm32")]
+fn analytics_recording_active() -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    let Ok(Some(storage)) = window.local_storage() else {
+        return false;
+    };
+    let consent_raw = storage.get_item("canvasdesk.consent").ok().flatten();
+    let config_raw = storage.get_item("canvasdesk.config").ok().flatten();
+    if consent_raw.is_none() && config_raw.is_none() {
+        return false;
+    }
+    consent_raw
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|v| v.get("analytics").and_then(serde_json::Value::as_bool))
+        .unwrap_or(true)
 }
 
 /// Вставка winit-канваса в DOM (wasm): winit 0.30 не делает этого сам

@@ -1471,15 +1471,25 @@ impl App {
         // === Пересборка поверхностей (волна 2): демо компонентного слоя и
         // недостающих layout-примитивов ===
         // Компонент Row (FR-068 W3): retained-компонент из Props раскладки —
-        // Component::layout + Component::paint (строка рисуется китом);
+        // layout_row_with + paint_with (§4.7, FR-094; строка рисуется китом);
         // нулевой слот — секция за краем окна (компонент не собирается).
         if lay.component_row_slot.w > 0.0 {
-            // Component trait в скоупе — вызовы Component::layout/paint.
-            use canvas_ui::component::Component as _;
+            // FR-094: продакшн-контракт §4.7 — пулы шейпинга ВНЕШНИЕ (общий
+            // FontSystem рендера, как у Table: guides_with/row_layout_with).
+            // Дефолтный Component::layout/paint ходит во внутренний пул Row
+            // (FontSystem::new()) — в wasm он ПУСТ (системных шрифтов нет):
+            // первый шейпинг секции падал паникой «no default font found»
+            // (cosmic-text shape.rs:251) и ронял rAF-цикл — витрина
+            // «замирала» на последнем кадре. Дефолтные пути Row — только
+            // тесты/standalone (дока Row::layout_row_with).
             let row = canvas_ui::component::row::Row::new(lay.component_row_props.clone());
-            let rects = row.layout(canvas_ui::layout::default_backend(), lay.component_row_slot);
+            let rects = canvas_ui::component::row::row_rects(&row.layout_row_with(
+                &mut m,
+                &mut fs,
+                lay.component_row_slot,
+            ));
             let mut painter = canvas_ui::paint::Painter::new();
-            row.paint(&mut painter, &rects);
+            row.paint_with(&mut painter, &mut m, &mut fs, &rects);
             d.paint_items(painter.take_items());
         }
         // Компонент Panel (FR-068 W3): хром панели — слоты panel_style,
