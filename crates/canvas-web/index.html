@@ -532,7 +532,51 @@
               var posthog = mod.default;
               posthog.init(POSTHOG_KEY, {
                 api_host: POSTHOG_HOST,
-                capture_exceptions: true
+                capture_exceptions: true,
+                /* FR-091: session replay — захват WASM-канваса. Весь UI
+                 * рисуется Rust/wgpu в ОДИН <canvas> (WebGPU, winit
+                 * вставляет в body), для rrweb это чёрный ящик: запись
+                 * сеанса показывала только DOM-слой (пикер первого
+                 * запуска), канвас — пустой. Canvas capture выключен у
+                 * PostHog по умолчанию (канвас не маскируется
+                 * DOM-механикой) — включаем явно.
+                 *
+                 * captureCanvas (локальный конфиг, приоритет над
+                 * настройками проекта Settings → Session replay):
+                 *   recordCanvas  — включить захват;
+                 *   canvasFps     — 0–12 кадров/с (дефолт PostHog 4);
+                 *   canvasQuality — "0"–"1" (WebP-качество, дефолт 0.4).
+                 * canvasCapture.resolutionScale — 0.1–1, даунскейл
+                 * кадров (0.6 = рекомендованный дефолт PostHog «defaults
+                 * 2026-05-30»): полноэкранный канвас без даунскейла даёт
+                 * тяжёлые аплоады. Механика (проверено по исходникам
+                 * lazy-recorder/recorder v1.435.8): FPS-обсервер
+                 * снапшотит ВСЕ <canvas> в DOM через
+                 * createImageBitmap — контекст-агностично (2d / webgl /
+                 * webgpu: webgpu-канвас читается как растр последнего
+                 * презентованного кадра; требует posthog-js ≥ 1.105.7,
+                 * тянем @1 → 1.435.8). В записи виден и «видео»-слой
+                 * WASM, и события FR-090 (surface_opened и т.д.) в
+                 * таймлайне реплея.
+                 *
+                 * Приватность: содержимое заметок попадает в записи
+                 * (только для согласившихся на аналитику — гейт FR-089).
+                 * Для маскировки областей — canvasCapture.maskRegionsFn
+                 * (posthog-js ≥ 1.408: пиксели под регионами не покидают
+                 * браузер); альтернатива — не включать recordCanvas и
+                 * включить захват в настройках проекта (локальные опции
+                 * всё равно выигрывают — убрать их, чтобы управлялось из
+                 * PostHog). */
+                session_recording: {
+                  captureCanvas: {
+                    recordCanvas: true,
+                    canvasFps: 4,
+                    canvasQuality: "0.4"
+                  },
+                  canvasCapture: {
+                    resolutionScale: 0.6
+                  }
+                }
               });
               ph = posthog;
               phPending = false;
