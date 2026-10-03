@@ -117,6 +117,16 @@ DOM-панель хранилища web-сборки (`#w6-toolbar`, 3 кноп�
 - `2026-09-20` — агент: создан документ по итогам аудита вёрстки (CR-014), статус `в работе`.
 - `2026-09-20` — агент: реализованы правки CSS/`toolbar.rs`/`docs/index.md`, аудит
   Playwright зелёный на 6 вьюпортах, гейты репо зелёные, статус `выполнено`.
+- `2026-09-25` — агент W-e (дефект №14 аудита ui-kit, ветка `we-touch`): тач-цели
+  ≥44×44 на ЛЮБОМ указателе (до правки — только на coarse, и не везде). Тулбар W6 —
+  `border-box + min-height/min-width 44px`; author-bar и крестик «Об авторе» —
+  хит-зона `::after inset −8px` (визуал без изменений); кнопки пикера первого
+  запуска (`#role-grid button`, `.secondary`) и строки согласия — `min-height:
+  44px` border-box; `.cd-tour-btn` — `min-height/min-width 44px` (синхронно в
+  `index.html`, `sdk/web-onboarding/canvasdesk-tour.js`, `src/styles.ts`);
+  отступ `#tour-menu` 44→56px под новую высоту тулбара. Пункты `#tour-menu` и
+  строки `.link-row` уже были ≥44 — не тронуты. Приёмка — CR-014.11 в
+  `docs/ACCEPTANCE.md`.
 
 ## Источники истины
 
