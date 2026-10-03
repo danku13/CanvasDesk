@@ -546,18 +546,28 @@
                  *   recordCanvas  — включить захват;
                  *   canvasFps     — 0–12 кадров/с (дефолт PostHog 4);
                  *   canvasQuality — "0"–"1" (WebP-качество, дефолт 0.4).
-                 * canvasCapture.resolutionScale — 0.1–1, даунскейл
-                 * кадров (0.6 = рекомендованный дефолт PostHog «defaults
-                 * 2026-05-30»): полноэкранный канвас без даунскейла даёт
-                 * тяжёлые аплоады. Механика (проверено по исходникам
-                 * lazy-recorder/recorder v1.435.8): FPS-обсервер
-                 * снапшотит ВСЕ <canvas> в DOM через
-                 * createImageBitmap — контекст-агностично (2d / webgl /
-                 * webgpu: webgpu-канвас читается как растр последнего
-                 * презентованного кадра; требует posthog-js ≥ 1.105.7,
-                 * тянем @1 → 1.435.8). В записи виден и «видео»-слой
-                 * WASM, и события FR-090 (surface_opened и т.д.) в
-                 * таймлайне реплея.
+                 * canvasCapture.resolutionScale — даунскейл кадров;
+                 * ВАЖНО (FR-091 v2, сверено с исходниками lazy-recorder
+                 * v1.435.8): локальное resolutionScale ИГНОРИРУЕТСЯ —
+                 * масштаб приходит только из удалённого date-default
+                 * конфига проекта («defaults 2026-05-30» = 0.6;
+                 * подтверждено live: снапшоты 1280×800 → 768×480). Блок
+                 * оставлен как документация намерения и на случай
+                 * появления локального приоритета в будущих SDK.
+                 * Механика (исходники + live-репро 2026-10-03):
+                 * FPS-обсервер снапшотит ВСЕ <canvas> в DOM через
+                 * createImageBitmap. 2d — читается; webgl/webgl2 —
+                 * читается ТОЛЬКО при preserveDrawingBuffer:true (иначе
+                 * буфер после композитинга пуст — getContext-шим выше
+                 * форсит флаг до создания контекста, перманентно выигрывая
+                 * гонку у патча рекордера); webgpu — НЕ читается вовсе
+                 * (аналога preserveDrawingBuffer нет,
+                 * posthog/posthog#57008), поэтому при analytics=true
+                 * canvas-web предпочитает WebGL2-бэкенд
+                 * (set_prefer_gl_for_capture, renderer_launch.rs).
+                 * Требует posthog-js ≥ 1.105.7 (тянем @1 → 1.435.8).
+                 * В записи виден и «видео»-слой WASM, и события FR-090
+                 * (surface_opened и т.д.) в таймлайне реплея.
                  *
                  * Приватность: содержимое заметок попадает в записи
                  * (только для согласившихся на аналитику — гейт FR-089).
@@ -718,6 +728,45 @@
             }
           }
           return orig.call(this, desc);
+        };
+      })();
+    </script>
+    <script>
+      /* FR-091 v2: читаемый WebGL2-канвас для session recording (и любых
+         внешних читателей растра). PostHog FPS-обсервер снапшотит каждый
+         <canvas> через createImageBitmap → WebP. Два платформенных факта
+         (воспроизведены на live-сайте 2026-10-03):
+         1) WebGL2 drawing buffer после композитинга браузер очищает, если
+            контекст создан без preserveDrawingBuffer (дефолт) — readback
+            (createImageBitmap / toDataURL) возвращает 100% прозрачный
+            растр, при том что compositor показывает отрендеренный кадр.
+            Сам PostHog патчит HTMLCanvasElement.prototype.getContext и
+            форсит флаг, но его патч ставится после загрузки SDK +
+            decide-запроса + lazy-recorder.js — и проигрывает гонку буту
+            WASM: wgpu создаёт webgl2-контекст раньше патча. Этот шим
+            ставится в <head> синхронно — ДО любых getContext (wgpu,
+            gpu_gate-проба, тесты), выбор бэкенда не меняет. Цена —
+            сохранённый drawing buffer (незначительно для UI-нагрузки
+            редактора; перф-компромисс осознанный).
+         2) WebGPU-контекстов шим не касается: у WebGPU аналога
+            preserveDrawingBuffer нет, и растр webgpu-канваса рекордер
+            PostHog не читает вовсе (posthog/posthog#57008). Поэтому при
+            включённом согласии analytics canvas-web предпочитает
+            WebGL2-бэкенд (renderer_launch →
+            canvas_render::set_prefer_gl_for_capture) — см. Rust-сторону.
+         Правило §3.1: web-костыли живут в web-слое. */
+      (function () {
+        var proto = HTMLCanvasElement.prototype;
+        var orig = proto.getContext;
+        proto.getContext = function (type, opts) {
+          if (
+            type === "webgl" ||
+            type === "webgl2" ||
+            type === "experimental-webgl"
+          ) {
+            opts = Object.assign({}, opts, { preserveDrawingBuffer: true });
+          }
+          return orig.call(this, type, opts);
         };
       })();
     </script>
