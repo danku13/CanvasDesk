@@ -2251,7 +2251,10 @@ impl App {
                 self.settings.language,
                 &self.template_category_names(),
             );
-            self.template_panel.move_selection(1, &rows);
+            // W-e: следование выделения — по измеренной высоте окна строк
+            // (та же panel_layout, что у рисования/hit-теста)
+            let rows_area_h = self.template_rows_area_h(&rows);
+            self.template_panel.move_selection(1, &rows, rows_area_h);
             self.request_redraw();
             return true;
         }
@@ -2262,7 +2265,8 @@ impl App {
                 self.settings.language,
                 &self.template_category_names(),
             );
-            self.template_panel.move_selection(-1, &rows);
+            let rows_area_h = self.template_rows_area_h(&rows);
+            self.template_panel.move_selection(-1, &rows, rows_area_h);
             self.request_redraw();
             return true;
         }
@@ -2294,6 +2298,28 @@ impl App {
             }
         }
         true
+    }
+
+    /// W-e: измеренная высота окна строк развёрнутого дока (`rows_area`
+    /// из `template_panel_layout`) — для клавиатурного следования
+    /// выделения (`TemplatePanel::move_selection`) без дублирования
+    /// геометрии: та же раскладка, что у рисования и hit-теста.
+    fn template_rows_area_h(&self, rows: &[template_ui::PanelRow]) -> f32 {
+        let viewport = self.viewport_logical();
+        // FR-054: ширины чипов — измеренные (measurer на вызов, паттерн U3).
+        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        template_panel_layout(
+            viewport[0],
+            viewport[1],
+            &self.templates,
+            &self.template_panel,
+            rows,
+            &mut measurer,
+            &mut fs,
+            &self.template_category_names(),
+        )
+        .rows_area[3]
     }
 
     /// Оверлей палитры шаблонов (FR-018, Ctrl+P; FR-024 — стиль Miro
@@ -2508,6 +2534,29 @@ impl App {
                 color: palette.body,
                 align: TextAlign::Left,
             });
+            // W-e: бегунок окна строк — kit scroll_bar (образец FR-059/flowmap):
+            // усечение списка показывается явно вместо прежнего молчаливого
+            // кэпа MAX_VISIBLE_ROWS; цвет — слот рамки панелей (как у flowmap)
+            let kit_palette = palette.kit_palette();
+            if let Some(knob) = canvas_ui::kit::scroll_bar(
+                canvas_ui::geometry::UiRect::new(
+                    lay.rows_area[0],
+                    lay.rows_area[1],
+                    lay.rows_area[2],
+                    lay.rows_area[3],
+                ),
+                &lay.scroll,
+                &kit_palette,
+            ) {
+                instances.push(CardInstance {
+                    pos: [knob.x, knob.y],
+                    size: [knob.w, knob.h],
+                    fill: palette.palette_border,
+                    border: [0.0; 4],
+                    params: [2.0, 0.0, 0.0, 1.0],
+                    corners: [0.0; 4],
+                });
+            }
         } // else: развёрнутый док
           // FR-025: ghost-превью drag карточки шаблона — призрак дропа
           // (Т9) в world-точке курсора, отрисованный screen-space поверх
