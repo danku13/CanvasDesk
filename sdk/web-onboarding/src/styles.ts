@@ -63,7 +63,12 @@ export const DEFAULT_STYLES = `
   background: #262c35;
   color: #d5d9e0;
   cursor: pointer;
-  min-height: 28px;
+  /* W-e (дефект №14 аудита ui-kit): тач-цель ≥44×44 CSS px (WCAG 2.5.5 /
+   * Apple HIG). border-box — min-height вместе с рамкой; min-width —
+   * горизонталь той же цели (короткие «Назад»/«Back» не сжимаются). */
+  box-sizing: border-box;
+  min-height: 44px;
+  min-width: 44px;
   -webkit-user-select: none;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -125,7 +130,7 @@ export const DEFAULT_STYLES = `
   }
   .cd-tour-btn {
     padding: 10px 14px;
-    min-height: 36px;
+    min-height: 44px;
   }
 }
 `;
