@@ -1031,6 +1031,10 @@ pub struct App {
     /// FR-028: онбординг-тур (автозапуск при первом запуске либо пункт
     /// «Пройти онбординг» из меню «?»). Открытый тур блокирует ввод канваса.
     onboarding: Option<OnboardingState>,
+    /// W-e: скролл тела карточки онбординга (кит [`canvas_ui::kit::ScrollState`]) —
+    /// при клампе высоты карточки к окну контент ужимается прокруткой
+    /// (футер с CTA всегда видим). Сброс — при смене шага/открытии тура.
+    onboarding_scroll: canvas_ui::kit::ScrollState,
     /// Превью зоны дропа (T9): план вставки на время DragOver.
     drop_preview: Option<DropPreview>,
     /// Модальный диалог T21 (установка/удаление пакета): глушит ввод канваса.
@@ -1484,6 +1488,7 @@ impl App {
             help_menu: None,
             docs: None,
             onboarding: show_onboarding.then(OnboardingState::default),
+            onboarding_scroll: canvas_ui::kit::ScrollState::default(),
             drop_preview: None,
             dialog: None,
             toast: None,
@@ -12479,6 +12484,158 @@ mod suggest_flow_tests {
         assert!(
             app.suggest.cards.is_none(),
             "show-гейт: без соседей карточек нет"
+        );
+    }
+}
+
+/// W-e (миграция онбординга на кит, разморозка 03.10.2026): draw-сторона —
+/// headless-тесты оверлея (паттерн suggest-тестов: App на заглушках,
+/// вьюпорт — `test_viewport`).
+#[cfg(test)]
+mod we_onboarding_draw_tests {
+    use super::*;
+
+    /// Заглушка App с открытым туром на шаге `step` и вьюпортом `viewport`.
+    fn onboarding_stub(viewport: [f32; 2], step: usize) -> App {
+        let scene = SceneState::new(
+            Canvas::default(),
+            PathBuf::from("target/tmp/we-onboarding-draw.canvas"),
+        );
+        let cache_dir =
+            std::env::temp_dir().join(format!("canvasdesk-we-onb-{}", std::process::id()));
+        std::fs::create_dir_all(&cache_dir).expect("tmp cache dir");
+        let (search_responder, _rx) = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let responder: canvas_core::SearchResponder = std::sync::Arc::new(move |event| {
+                let _ = tx.send(event);
+            });
+            (responder, rx)
+        };
+        let mut app = App::new(
+            scene,
+            Box::new(canvas_core::NoopThumbs),
+            Settings::default(),
+            None,
+            Some(cache_dir),
+            std::sync::Arc::new(|_event: canvas_core::DragEvent| {}),
+            std::sync::Arc::new(|_event: canvas_widgets::WidgetEvent| {}),
+            Box::new(canvas_core::NoopWatch),
+            Box::new(canvas_core::MemSearch::new(search_responder)),
+            Box::new(canvas_core::NoopClipboard),
+            Some(Box::new(canvas_core::MemWidgetState::default())),
+            false,
+            Box::new(canvas_render::renderer_init::NoopRendererLaunch),
+        );
+        app.test_viewport = Some(viewport);
+        app.onboarding = Some(crate::onboarding_ui::OnboardingState { step });
+        app.onboarding_scroll = canvas_ui::kit::ScrollState::default();
+        app
+    }
+
+    /// Аудит ui-kit §8 №12 (draw-сторона): при клампе высоты карточки
+    /// (240×180) тело ужимается — видимых строк меньше полного контента,
+    /// строки тела не заходят в футер с CTA (футер всегда виден).
+    #[test]
+    fn onboarding_overlay_draw_squeezes_body_and_keeps_footer_visible() {
+        for step in 0..crate::onboarding_ui::ONBOARDING_STEPS.len() {
+            let app = onboarding_stub([240.0, 180.0], step);
+            // Полный контент шага (та же раскладка, что карточка). Guard
+            // глобального FontSystem (`measure_font_system` → MutexGuard)
+            // ОБЯЗАН быть отпущен до вызова `onboarding_overlay()` — тот
+            // берёт тот же мьютекс внутри (иначе самодедлок теста).
+            let full = {
+                let (mut m, mut fs) = (
+                    canvas_ui::measure::TextMeasurer::new(),
+                    canvas_render::text::measure_font_system(),
+                );
+                crate::onboarding_ui::card_layout(
+                    [240.0, 180.0],
+                    step,
+                    app.settings.language,
+                    &mut canvas_ui::kit::ScrollState::default(),
+                    &mut m,
+                    &mut fs,
+                )
+            };
+            let (quads, texts) = app.onboarding_overlay();
+            assert!(!quads.is_empty() && !texts.is_empty(), "кадр не пустой");
+            let card = full.card;
+            let body = crate::onboarding_ui::body_area(card);
+            let footer_top = card[1] + card[3] - crate::onboarding_ui::ONBOARDING_FOOTER_H;
+            // Строки тела: только видимое окно (kit::list_rows) — меньше
+            // полного контента при клампе, каждая в зоне тела
+            let body_texts: Vec<_> = texts
+                .iter()
+                .filter(|t| {
+                    t.font_size == crate::onboarding_ui::ONBOARDING_BODY_FONT
+                        && t.origin[1] < footer_top
+                })
+                .collect();
+            assert!(
+                body_texts.len() < full.lines.len(),
+                "шаг {step}: видимых строк {} >= полного контента {} — контент не ужимается",
+                body_texts.len(),
+                full.lines.len()
+            );
+            for t in &body_texts {
+                assert!(
+                    t.origin[1] + crate::onboarding_ui::ONBOARDING_BODY_LINE_H <= footer_top + 0.01,
+                    "шаг {step}: строка тела y={} налезает на футер (footer_top={footer_top})",
+                    t.origin[1]
+                );
+                assert!(t.origin[1] >= body[1] - 0.01, "строка выше зоны тела");
+            }
+            // CTA виден: подпись кнопки «Далее/Готово» — внутри rect кнопки
+            // в футере (hit-тест и отрисовка — одна геометрия)
+            let next_rect = crate::onboarding_ui::button_rect(
+                card,
+                crate::onboarding_ui::OnboardingButton::Next,
+            );
+            assert!(
+                texts.iter().any(|t| {
+                    t.origin[0] == next_rect[0]
+                        && t.width == next_rect[2]
+                        && t.origin[1] >= next_rect[1]
+                        && t.origin[1] + 13.0 * 1.3 <= next_rect[1] + next_rect[3] + 0.01
+                }),
+                "шаг {step}: подпись CTA вне кнопки футера"
+            );
+        }
+    }
+
+    /// Цвета — только слоты (аудит §4 A1: 6 литералов draw удалены):
+    /// кадр оверлея не содержит прежних литералов (фон-затемнение 0.85,
+    /// вторичная заливка DIALOG_BUTTON_SECONDARY, приглушённая точка
+    /// [0.30, 0.33, 0.40, 0.9]). CTA-литерал совпадал со слотом
+    /// `control_primary` — проверяем саму заливку CTA.
+    #[test]
+    fn onboarding_overlay_draw_uses_theme_slots_only() {
+        let app = onboarding_stub([1280.0, 800.0], 0);
+        let (quads, _) = app.onboarding_overlay();
+        let palette = app.effective_palette();
+        let forbidden: [[f32; 4]; 3] = [
+            [0.02, 0.02, 0.04, 0.85], // бывший литерал затемнения
+            [0.20, 0.23, 0.29, 1.0],  // бывший литерал вторичной кнопки
+            [0.30, 0.33, 0.40, 0.9],  // бывший литерал неактивной точки
+        ];
+        for q in &quads {
+            assert!(
+                !forbidden.contains(&q.fill),
+                "литерал цвета в кадре онбординга: {:?}",
+                q.fill
+            );
+        }
+        // CTA — слот control_primary кита (значение прежнего литерала)
+        assert!(
+            quads
+                .iter()
+                .any(|q| q.fill == canvas_core::tokens::DIALOG_BUTTON_PRIMARY),
+            "CTA не нарисован слотом control_primary"
+        );
+        // Затемнение — слот stage_dim (бывший литерал имел ту же триаду RGB)
+        assert!(
+            quads.iter().any(|q| q.fill == palette.stage_dim),
+            "затемнение не слотом stage_dim"
         );
     }
 }

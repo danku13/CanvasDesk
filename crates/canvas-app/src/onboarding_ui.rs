@@ -5,14 +5,29 @@
 //! карусели ([`OnboardingState`]: `next`/`prev` с клампом, подпись
 //! «Далее»/«Готово») и геометрия карточки с кнопками и клампом к окну.
 //!
+//! W-e (разморозка решением владельца 03.10.2026, миграция на ui-kit):
+//! геометрия — `kit::modal` по слоту вьюпорта С ПОЛЯМИ
+//! ([`ONBOARDING_VIEWPORT_MARGIN`] — раньше карточка клампилась к кромкам
+//! вплотную, аудит ui-kit §8 №12); при клампе высоты тело ужимается
+//! скроллом `kit::ScrollState` (футер с CTA всегда видим); перенос тела —
+//! измеренный `TextMeasurer::wrap` (замена символьной эвристики
+//! `CHAR_W_FACTOR 0.62` — строка onboarding в §9 CR-015/аудита).
+//!
 //! Рендер и ввод — приложение (`main.rs`): затемнение канваса (паттерн
 //! FR-022), карточка поверх, ввод канваса под ней блокируется. Поля
 //! `onboarding_done`/`onboarding_defers` и кламп — `canvas-core`
 //! settings.rs (схема `config.toml`, `#[serde(default)]`).
 
 use canvas_core::{Language, Settings, ONBOARDING_MAX_DEFERS};
+use canvas_ui::geometry::{UiRect, UiVec2};
+use canvas_ui::kit::{self, ScrollState};
+use canvas_ui::measure::TextMeasurer;
 
 use crate::i18n::{self, keys};
+
+/// Семейство замера/отрисовки строк (паритет sans_attrs рендера —
+/// Weight::MEDIUM, тот же шейпинг, что у `OwnedScreenText`).
+const FAMILY: &str = canvas_render::text::SANS_FAMILY;
 
 /// Автопоказ тура при старте (таблица решений FR-028): не пройден до конца
 /// И отложен менее `ONBOARDING_MAX_DEFERS` раз. Ручной вход из меню «?»
@@ -21,34 +36,8 @@ pub fn should_show_onboarding(settings: &Settings) -> bool {
     !settings.onboarding_done && settings.onboarding_defers < ONBOARDING_MAX_DEFERS
 }
 
-/// Консервативная оценка ширины глифа (доля от кегля) — ЛОКАЛЬНАЯ
-/// эвристика онбординга (FR-054: эвристика `docs_ui::text_width` удалена
-/// вместе с миграцией доков на измеренный текст; перенос онбординга
-/// сознательно НЕ переведён на TextMeasurer — решение владельца «онбординг
-/// не дорабатывать, пользовательских изменений нет»: консервативная
-/// переоценка переносит строку раньше фактической границы и сохраняет
-/// прежние точки переноса карточек).
-const CHAR_W_FACTOR: f32 = 0.62;
-/// Оценка ширины пробела (доля от кегля).
-const SPACE_W_FACTOR: f32 = 0.34;
-
-/// Оценка ширины текста (логические px) по кеглю — прежний контракт
-/// `docs_ui::text_width`, живёт рядом с единственным потребителем.
-fn text_width(text: &str, font: f32) -> f32 {
-    text.chars()
-        .map(|c| {
-            if c == ' ' || c == '\u{00a0}' {
-                SPACE_W_FACTOR
-            } else {
-                CHAR_W_FACTOR
-            }
-        })
-        .sum::<f32>()
-        * font
-}
-
 /// Шаг тура: заголовок и абзац тела (короткие тексты, перенос по ширине
-/// карточки — локальная консервативная оценка `text_width`). Зарезервированный
+/// карточки — измеренный `TextMeasurer::wrap`). Зарезервированный
 /// `action` для v2 — интерактивная чек-точка демо-канваса (машина состояний
 /// не переписывается).
 pub struct OnboardingStep {
@@ -183,6 +172,10 @@ impl OnboardingState {
 
 // --- Геометрия карточки ---
 
+/// Поля клампа карточки к вьюпорту (W-e, аудит ui-kit §8 №12): слот
+/// модали = окно минус поля (токен `SPACING_LG`); раньше карточка
+/// клампилась к кромкам вплотную.
+pub const ONBOARDING_VIEWPORT_MARGIN: f32 = canvas_core::tokens::SPACING_LG;
 /// Ширина карточки тура (логические px).
 pub const ONBOARDING_CARD_WIDTH: f32 = 460.0;
 /// Внутренние поля карточки.
@@ -215,42 +208,29 @@ pub enum OnboardingButton {
     Skip,
 }
 
-/// Строки тела шага после переноса по ширине карточки (консервативная
-/// оценка ширины глифа — перенос раньше реальной границы, строки не
-/// вылезают за клип). Один источник для высоты карточки ([`card_rect`])
-/// и рендера (main.rs) — раскладка и геометрия не разъезжаются.
-pub fn body_lines(step: usize, width: f32, language: Language) -> Vec<String> {
+/// Строки тела шага после переноса по ширине карточки — измеренный
+/// `TextMeasurer::wrap` (W-e, CR-015: замена эвристики
+/// «символы × 0.62»; те же метрики, что у шейпинга рендера). Один источник
+/// для высоты карточки ([`card_layout`]) и рендера (overlays.rs) —
+/// раскладка и геометрия не разъезжаются.
+pub fn body_lines(
+    step: usize,
+    width: f32,
+    language: Language,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> Vec<String> {
     let Some(step) = ONBOARDING_STEPS.get(step) else {
         return Vec::new();
     };
     let avail = (width - ONBOARDING_PAD * 2.0).max(10.0);
-    let mut lines: Vec<String> = Vec::new();
-    let mut cur_w = 0.0;
-    for word in i18n::tr(language, step.body_key).split(' ') {
-        let w = text_width(word, ONBOARDING_BODY_FONT);
-        let need = w + if cur_w > 0.0 {
-            ONBOARDING_BODY_FONT * SPACE_W_FACTOR
-        } else {
-            0.0
-        };
-        if need <= avail - cur_w {
-            match lines.last_mut() {
-                Some(line) => {
-                    line.push(' ');
-                    line.push_str(word);
-                }
-                None => lines.push(word.to_owned()),
-            }
-            cur_w += need;
-        } else {
-            lines.push(word.to_owned());
-            cur_w = w.min(avail);
-        }
-    }
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
-    lines
+    m.wrap(
+        fs,
+        i18n::tr(language, step.body_key),
+        FAMILY,
+        ONBOARDING_BODY_FONT,
+        avail,
+    )
 }
 
 /// Отступ от верха карточки до первой строки тела (заголовок +
@@ -259,20 +239,69 @@ pub fn body_top_offset() -> f32 {
     ONBOARDING_PAD + ONBOARDING_TITLE_LINE_H + ONBOARDING_DOTS_TOP + ONBOARDING_DOT + 10.0
 }
 
-/// Rect карточки тура `[x, y, w, h]`: центр окна, ширина клампится к окну,
-/// высота — по контенту шага (заголовок + точки + тело + футер), на
-/// маленьких окнах клампится к высоте окна (инвариант FR-028).
-pub fn card_rect(viewport: [f32; 2], step: usize, language: Language) -> [f32; 4] {
-    let w = ONBOARDING_CARD_WIDTH.min(viewport[0].max(0.0));
-    let body_h = body_lines(step, w, language).len() as f32 * ONBOARDING_BODY_LINE_H;
-    let h = (body_top_offset() + body_h + ONBOARDING_PAD + ONBOARDING_FOOTER_H)
-        .min(viewport[1].max(0.0));
+/// Зона тела шага в карточке: от якоря первой строки до футера с CTA
+/// (минус нижний пад). Общий источник высоты окна видимости скролла для
+/// раскладки ([`card_layout`]), колеса ввода и отрисовки (видимые строки).
+pub fn body_area(card: [f32; 4]) -> [f32; 4] {
     [
-        ((viewport[0] - w) / 2.0).max(0.0),
-        ((viewport[1] - h) / 2.0).max(0.0),
-        w,
-        h,
+        card[0] + ONBOARDING_PAD,
+        card[1] + body_top_offset(),
+        (card[2] - ONBOARDING_PAD * 2.0).max(0.0),
+        (card[3] - body_top_offset() - ONBOARDING_PAD - ONBOARDING_FOOTER_H).max(0.0),
     ]
+}
+
+/// Раскладка карточки шага (W-e): слот = вьюпорт минус поля
+/// ([`ONBOARDING_VIEWPORT_MARGIN`]), панель — `kit::modal` (центр слота,
+/// как dialog/autolink); ширина — кламп к слоту, высота — по измеренному
+/// телу с клампом к слоту (инвариант FR-028 «карточка целиком в окне» —
+/// теперь ещё и с полями). При клампе высоты контент ужимается:
+/// скролл-состояние тела синхронизируется с контентом/окном (футер с CTA
+/// всегда видим — в скролл-зону не входит). Один источник для реестра
+/// (hit-rect'ы), ввода (кнопки) и отрисовки — «ввод = тому, что видно».
+pub struct OnboardingLayout {
+    /// Rect карточки `[x, y, w, h]` (центр окна, кламп с полями).
+    pub card: [f32; 4],
+    /// Строки тела после измеренного переноса по ширине карточки.
+    pub lines: Vec<String>,
+}
+
+/// Раскладка карточки шага: карточка + строки тела + синхронизация
+/// скролл-состояния тела (кит [`ScrollState`] — offset сохраняется,
+/// content_h/viewport_h обновляются, позиция клампится; паттерн
+/// `flow_map_layout`).
+pub fn card_layout(
+    viewport: [f32; 2],
+    step: usize,
+    language: Language,
+    scroll: &mut ScrollState,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> OnboardingLayout {
+    let margin = ONBOARDING_VIEWPORT_MARGIN;
+    let slot = UiRect::new(
+        margin,
+        margin,
+        (viewport[0] - margin * 2.0).max(0.0),
+        (viewport[1] - margin * 2.0).max(0.0),
+    );
+    let w = ONBOARDING_CARD_WIDTH.min(slot.w);
+    let lines = body_lines(step, w, language, m, fs);
+    let body_h = lines.len() as f32 * ONBOARDING_BODY_LINE_H;
+    let desired_h = body_top_offset() + body_h + ONBOARDING_PAD + ONBOARDING_FOOTER_H;
+    // Кламп высоты к слоту: desired пре-клампнут, поэтому min-инвариант
+    // модали (приоритетен — parity FR-060) не конфликтует с клампом FR-028.
+    let h = desired_h.min(slot.h);
+    let size = UiVec2::new(w, h);
+    let panel = kit::modal(slot, size, size, size).panel;
+    let card = [panel.x, panel.y, panel.w, panel.h];
+    // Скролл тела: при клампе высоты viewport_h < content_h — строки
+    // прокручиваются (колесо ввода; видимые строки — `kit::list_rows`).
+    let body = body_area(card);
+    scroll.content_h = lines.len() as f32 * ONBOARDING_BODY_LINE_H;
+    scroll.viewport_h = body[3];
+    scroll.clamp();
+    OnboardingLayout { card, lines }
 }
 
 /// Прогресс-точки: центры по горизонтали (рендер — квады-кружки).
@@ -287,7 +316,8 @@ pub fn progress_dots(card: [f32; 4]) -> (Vec<f32>, f32) {
     (centers, y)
 }
 
-/// Rect кнопки карточки: Prev — слева, Next — справа (оба в футере);
+/// Rect кнопки карточки (футер прибит к низу карточки — при клампе высоты
+/// кнопки остаются достижимы): Prev — слева, Next — справа (оба в футере);
 /// Skip — в правом верхнем углу карточки (выход виден всегда — NN/g).
 pub fn button_rect(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
     let footer_y =
@@ -354,6 +384,29 @@ mod tests {
     use super::*;
     use canvas_core::ONBOARDING_MAX_DEFERS;
 
+    /// Замерщик + FontSystem для тестов (глобальный замерный шрифт —
+    /// короткий скоуп, паттерн tooltip/dialog).
+    fn measurer() -> (TextMeasurer, cosmic_text::FontSystem) {
+        (TextMeasurer::new(), cosmic_text::FontSystem::new())
+    }
+
+    /// Раскладка шага со свежим скролл-состоянием (тесты геометрии).
+    fn layout(viewport: [f32; 2], step: usize, language: Language) -> OnboardingLayout {
+        let mut scroll = ScrollState::default();
+        layout_sync(viewport, step, language, &mut scroll)
+    }
+
+    /// Раскладка шага с внешним скролл-состоянием (тесты скролла).
+    fn layout_sync(
+        viewport: [f32; 2],
+        step: usize,
+        language: Language,
+        scroll: &mut ScrollState,
+    ) -> OnboardingLayout {
+        let (mut m, mut fs) = measurer();
+        card_layout(viewport, step, language, scroll, &mut m, &mut fs)
+    }
+
     /// Инвариант триггера (таблица решений FR-028): показ = не пройден И
     /// откладываний < 3; пройден — никогда (любые defers).
     #[test]
@@ -417,27 +470,35 @@ mod tests {
         }
     }
 
-    /// Инвариант клампа: карточка целиком внутри окна на любом viewport
-    /// (включая 320×240) и любом шаге; ширина не больше окна.
+    /// Инвариант клампа (расширен W-e): карточка целиком внутри окна С
+    /// ПОЛЯМИ ([`ONBOARDING_VIEWPORT_MARGIN`]) на G4-окнах (1280×800 /
+    /// 1024×640 / 800×560) и стресс-окнах (320×240 / 240×180) на любом
+    /// шаге; ширина не больше окна; кнопки внутри карточки.
     #[test]
     fn card_clamped_to_window() {
         for viewport in [
             [1600.0, 900.0],
-            [1280.0, 720.0],
+            [1280.0, 800.0],
+            [1024.0, 640.0],
+            [800.0, 560.0],
             [320.0, 240.0],
             [240.0, 180.0],
         ] {
             for step in 0..ONBOARDING_STEPS.len() {
-                let card = card_rect(viewport, step, Language::Ru);
-                assert!(card[0] >= 0.0, "за левым краем: {card:?}");
-                assert!(card[1] >= 0.0, "за верхним краем: {card:?}");
+                let card = layout(viewport, step, Language::Ru).card;
+                let margin = ONBOARDING_VIEWPORT_MARGIN;
+                assert!(card[0] >= margin - 0.01, "за левым полем: {card:?}");
+                assert!(card[1] >= margin - 0.01, "за верхним полем: {card:?}");
                 assert!(
-                    card[0] + card[2] <= viewport[0] + 1.0,
-                    "за правым: {card:?}"
+                    card[0] + card[2] <= viewport[0] - margin + 0.01,
+                    "за правым полем: {card:?}"
                 );
-                assert!(card[1] + card[3] <= viewport[1] + 1.0, "за низом: {card:?}");
-                assert!(card[2] <= viewport[0] + 1.0, "шире окна: {card:?}");
-                assert!(card[3] <= viewport[1] + 1.0, "выше окна: {card:?}");
+                assert!(
+                    card[1] + card[3] <= viewport[1] - margin + 0.01,
+                    "за нижним полем: {card:?}"
+                );
+                assert!(card[2] <= viewport[0] + 0.01, "шире окна: {card:?}");
+                assert!(card[3] <= viewport[1] + 0.01, "выше окна: {card:?}");
                 // Кнопки внутри карточки
                 for button in [
                     OnboardingButton::Prev,
@@ -452,13 +513,104 @@ mod tests {
         }
     }
 
+    /// Стресс 240×180 (W-e): при клампе высоты контент ужимается, футер с
+    /// CTA НЕ перекрывается телом и остаётся достижим; тело прокручивается
+    /// до конца (последняя строка достижима скроллом).
+    #[test]
+    fn stress_240x180_footer_visible_and_body_reachable() {
+        let viewport = [240.0, 180.0];
+        for step in 0..ONBOARDING_STEPS.len() {
+            let lay = layout(viewport, step, Language::Ru);
+            let card = lay.card;
+            // Футер (кнопки) прибит к низу карточки и НЕ входит в скролл-зону
+            let body = body_area(card);
+            let footer_top = card[1] + card[3] - ONBOARDING_FOOTER_H;
+            assert!(
+                body[1] + body[3] <= footer_top + 0.01,
+                "тело налезает на футер: body={body:?} footer_top={footer_top}"
+            );
+            // CTA (Next, и Prev со 2-го шага) — в футере; Skip — ghost в
+            // правом верхнем углу карточки (выход виден всегда — NN/g,
+            // дизайн [`button_rect`]: `card[1] + 10`), в футер не входит,
+            // но обязан быть внутри карточки.
+            let next = button_rect(card, OnboardingButton::Next);
+            assert!(next[1] >= footer_top - 0.01, "CTA выше футера: {next:?}");
+            let skip = button_rect(card, OnboardingButton::Skip);
+            assert!(
+                skip[0] >= card[0]
+                    && skip[1] >= card[1]
+                    && skip[0] + skip[2] <= card[0] + card[2] + 0.01
+                    && skip[1] + skip[3] <= card[1] + card[3] + 0.01,
+                "Skip вне карточки: {skip:?}"
+            );
+            // Контент ужимается скроллом: окно видимости = зона тела,
+            // полный контент достижим (offset ≤ max_offset показывает низ)
+            let content_h = lay.lines.len() as f32 * ONBOARDING_BODY_LINE_H;
+            let mut scroll = ScrollState::default();
+            let relaid = layout_sync(viewport, step, Language::Ru, &mut scroll);
+            assert!((relaid.lines.len() as f32 * ONBOARDING_BODY_LINE_H - content_h).abs() < 0.01);
+            assert!(
+                (scroll.viewport_h - body[3]).abs() < 0.01,
+                "окно = зона тела"
+            );
+            if content_h > body[3] {
+                assert!(scroll.needs_scroll(), "контент выше окна — скролл нужен");
+                scroll.offset = scroll.max_offset(); // прокрутка до конца
+                                                     // Последняя строка целиком в окне видимости
+                let visible_tail = content_h - scroll.offset;
+                assert!(
+                    visible_tail <= scroll.viewport_h + 0.01,
+                    "хвост контента не влез после прокрутки до конца"
+                );
+            }
+            // Кнопки кликабельны (hit-тест работает при клампе)
+            let next = button_rect(card, OnboardingButton::Next);
+            let state = OnboardingState { step };
+            assert_eq!(
+                button_at(card, &state, [next[0] + 5.0, next[1] + 10.0]),
+                Some(OnboardingButton::Next),
+                "CTA достижим на шаге {step}"
+            );
+        }
+    }
+
+    /// Измеренный перенос (W-e, CR-015): каждая строка тела укладывается в
+    /// ширину карточки минус пад (замер тем же `TextMeasurer::width_of`, что
+    /// и перенос); ручная эвристика 0.62 удалена.
+    ///
+    /// Нижняя граница ширины — 216: kit-перенос пословный, неразрывный
+    /// токен длиннее бюджета не дробит (ниже поля найден кейс
+    /// «markdown-разметкой» — 146.3px > 144px бюджета карточки 192 на
+    /// стресс-поле 240×180; перелив ≤ одного слова ≈ 2px — задокументированное
+    /// ограничение кита, жёсткий посимвольный брейк/брейк по дефису —
+    /// не скоуп W-e). Достижимость/футер на 240×180 покрывает
+    /// [`stress_240x180_footer_visible_and_body_reachable`].
+    #[test]
+    fn body_lines_fit_measured_width() {
+        for width in [ONBOARDING_CARD_WIDTH, 240.0, 216.0] {
+            for step in 0..ONBOARDING_STEPS.len() {
+                let avail = width - ONBOARDING_PAD * 2.0;
+                let (mut m, mut fs) = measurer();
+                for language in [Language::Ru, Language::En] {
+                    for line in body_lines(step, width, language, &mut m, &mut fs) {
+                        let w = m.width_of(&mut fs, &line, FAMILY, ONBOARDING_BODY_FONT);
+                        assert!(
+                            w <= avail + 0.5,
+                            "строка {w:.1} шире бюджета {avail:.1}: {line:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Hit-тесты кнопок: Next/Skip кликабельны на каждом шаге; Prev —
     /// только со 2-го; мимо кнопок — None; клик в теле карточки глотается.
     #[test]
     fn button_hit_tests() {
         let viewport = [1600.0, 900.0];
         let mut state = OnboardingState::default();
-        let card = card_rect(viewport, state.step, Language::Ru);
+        let card = layout(viewport, state.step, Language::Ru).card;
         let next = button_rect(card, OnboardingButton::Next);
         assert_eq!(
             button_at(card, &state, [next[0] + 5.0, next[1] + 10.0]),
@@ -478,7 +630,7 @@ mod tests {
         );
         // Второй шаг: «Назад» есть
         state.next();
-        let card = card_rect(viewport, state.step, Language::Ru);
+        let card = layout(viewport, state.step, Language::Ru).card;
         let prev = button_rect(card, OnboardingButton::Prev);
         assert_eq!(
             button_at(card, &state, [prev[0] + 5.0, prev[1] + 10.0]),
@@ -496,7 +648,7 @@ mod tests {
     #[test]
     fn progress_dots_layout() {
         let viewport = [1600.0, 900.0];
-        let card = card_rect(viewport, 0, Language::Ru);
+        let card = layout(viewport, 0, Language::Ru).card;
         let (centers, y) = progress_dots(card);
         assert_eq!(centers.len(), ONBOARDING_STEPS.len());
         assert!(y > card[1]);
@@ -516,11 +668,11 @@ mod tests {
     fn card_height_follows_content() {
         let viewport = [1600.0, 900.0];
         let heights: Vec<f32> = (0..ONBOARDING_STEPS.len())
-            .map(|step| card_rect(viewport, step, Language::Ru)[3])
+            .map(|step| layout(viewport, step, Language::Ru).card[3])
             .collect();
         assert!(heights.iter().all(|&h| h > 100.0), "карточка не пустая");
         // Узкое окно не даёт карточке вылезти
-        let narrow = card_rect([320.0, 240.0], 0, Language::Ru);
+        let narrow = layout([320.0, 240.0], 0, Language::Ru).card;
         assert!(narrow[2] <= 320.0);
     }
 }

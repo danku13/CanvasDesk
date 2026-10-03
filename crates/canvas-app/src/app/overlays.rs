@@ -3425,150 +3425,181 @@ impl App {
 
     /// FR-028: оверлей онбординга — затемнение канваса + карточка по центру
     /// (заголовок, тело, прогресс-точки, кнопки Назад/Далее|Готово/Пропустить).
+    ///
+    /// W-e (разморозка 03.10.2026, миграция на кит; аудит ui-kit §4 A1):
+    /// отрисовка — [`Painter`] (образец `autolink_frame` после FR-060),
+    /// конвертация — `paint_items_to_band` (screen-конвенция полосы
+    /// `Modals`); ручных квадов/`CardInstance` в пути больше нет. Состояния
+    /// кнопок — [`WidgetState`] → `KitState` → `kit::button_style`
+    /// (замена ад-хок «ярления» `hover_fill` ×1.3+0.04). Цвета — только
+    /// слоты темы/кита (бывшие 6 литералов draw): затемнение — `stage_dim`,
+    /// карточка — `modal_style` (`panel_fill`/`panel_border`,
+    /// `RADIUS_PANEL` = прежний литерал 10), точки — `link`/`panel_border`,
+    /// кнопки — слоты `button_style` (CTA `control_primary` = прежний
+    /// литерал `DIALOG_BUTTON_PRIMARY`). Тело — видимое окно
+    /// `kit::list_rows` над скролл-состоянием ([`App::onboarding_scroll`]):
+    /// при клампе высоты карточки строки прокручиваются, футер с CTA всегда
+    /// виден (аудит §8 №12).
     pub(super) fn onboarding_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
-        let mut instances = Vec::new();
+        let mut quads = Vec::new();
         let mut texts = Vec::new();
         let Some(state) = &self.onboarding else {
-            return (instances, texts);
+            return (quads, texts);
         };
         let viewport = self.viewport_logical();
         if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
-            return (instances, texts);
+            return (quads, texts);
         }
         let palette = self.effective_palette();
         let Some(step) = onboarding_ui::ONBOARDING_STEPS.get(state.step) else {
-            return (instances, texts);
+            return (quads, texts);
         };
+        // W-e: раскладка измеренная (kit::modal + TextMeasurer::wrap), общая
+        // с реестром/вводом; скролл-состояние тела синхронизируется кадром
+        // (offset сохраняется, content/viewport клампятся раскладкой).
+        let mut scroll = self.onboarding_scroll.clone();
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        let lay = onboarding_ui::card_layout(
+            viewport,
+            state.step,
+            self.settings.language,
+            &mut scroll,
+            &mut m,
+            &mut fs,
+        );
+        let card = lay.card;
+        let kit_palette = palette.kit_palette();
+        // FR-057: draw-журнал кита — items конвертируются в инстансы полосы
+        // одним проходом в конце (порядок = draw-порядок)
+        let mut d = Painter::new();
         // Затемнение (паттерн wheel FR-022): тур поверх неинтерактивного
-        // канваса — фокус на карточке
-        instances.push(CardInstance {
-            pos: [0.0, 0.0],
-            size: [viewport[0], viewport[1]],
-            fill: [0.02, 0.02, 0.04, 0.85],
-            border: [0.0; 4],
-            params: [0.0, 0.0, 0.0, 1.0],
-            corners: [0.0; 4],
-        });
-        let card = onboarding_ui::card_rect(viewport, state.step, self.settings.language);
-        instances.push(CardInstance {
-            pos: [card[0], card[1]],
-            size: [card[2], card[3]],
-            fill: palette.menu_fill,
-            border: [0.0; 4],
-            params: [10.0, 0.0, 0.0, 1.0],
-            corners: [0.0; 4],
-        });
-        let text_x = card[0] + onboarding_ui::ONBOARDING_PAD;
-        let text_w = card[2] - onboarding_ui::ONBOARDING_PAD * 2.0;
-        // Заголовок
-        texts.push(OwnedScreenText {
-            text: self.tr(step.title_key).to_owned(),
-            origin: [text_x, card[1] + onboarding_ui::ONBOARDING_PAD],
-            width: text_w,
-            font_size: onboarding_ui::ONBOARDING_TITLE_FONT,
-            color: palette.title,
-            align: TextAlign::Left,
-        });
-        // Прогресс-точки: текущая — акцент, остальные — приглушены
+        // канваса — фокус на карточке. Слот stage_dim (бывший литерал
+        // [0.02, 0.02, 0.04, 0.85] — та же триада RGB, альфа слота темы).
+        d.rect(
+            canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
+            palette.stage_dim,
+            [0.0; 4],
+            0.0,
+        );
+        // Карточка — kit-панель модали (слоты panel_fill/panel_border,
+        // радиус RADIUS_PANEL = прежний литерал 10; как dialog/autolink)
+        d.panel(
+            canvas_ui::geometry::UiRect::new(card[0], card[1], card[2], card[3]),
+            &kit::modal_style(&kit_palette),
+        );
+        // Заголовок (слот title)
+        d.label(
+            canvas_ui::geometry::UiRect::new(
+                card[0] + onboarding_ui::ONBOARDING_PAD,
+                card[1] + onboarding_ui::ONBOARDING_PAD,
+                (card[2] - onboarding_ui::ONBOARDING_PAD * 2.0).max(0.0),
+                onboarding_ui::ONBOARDING_TITLE_LINE_H,
+            ),
+            self.tr(step.title_key),
+            color_to_rgba(palette.title),
+            onboarding_ui::ONBOARDING_TITLE_FONT,
+            PaintAlign::Left,
+        );
+        // Прогресс-точки: текущая — слот link (как прежде), остальные —
+        // panel_border (бывший литерал [0.30, 0.33, 0.40, 0.9])
         let (centers, dots_y) = onboarding_ui::progress_dots(card);
+        let dot_r = onboarding_ui::ONBOARDING_DOT / 2.0;
         for (i, cx) in centers.iter().enumerate() {
-            let current = i == state.step;
-            let r = onboarding_ui::ONBOARDING_DOT / 2.0;
-            instances.push(CardInstance {
-                pos: [cx - r, dots_y],
-                size: [r * 2.0, r * 2.0],
-                fill: if current {
-                    color_to_rgba(palette.link)
-                } else {
-                    [0.30, 0.33, 0.40, 0.9]
-                },
-                border: [0.0; 4],
-                params: [r, 0.0, 0.0, 1.0],
-                corners: [0.0; 4],
-            });
+            let fill = if i == state.step {
+                color_to_rgba(palette.link)
+            } else {
+                palette.palette_border
+            };
+            d.rect(
+                canvas_ui::geometry::UiRect::new(cx - dot_r, dots_y, dot_r * 2.0, dot_r * 2.0),
+                fill,
+                [0.0; 4],
+                dot_r,
+            );
         }
-        // Тело шага (строки переноса — тот же источник, что высота карточки)
-        let body_top = card[1] + onboarding_ui::body_top_offset();
-        for (i, line) in onboarding_ui::body_lines(state.step, card[2], self.settings.language)
-            .iter()
-            .enumerate()
-        {
-            texts.push(OwnedScreenText {
-                text: line.clone(),
-                origin: [
-                    text_x,
-                    body_top + i as f32 * onboarding_ui::ONBOARDING_BODY_LINE_H,
-                ],
-                width: text_w,
-                font_size: onboarding_ui::ONBOARDING_BODY_FONT,
-                color: palette.body,
-                align: TextAlign::Left,
-            });
+        // Тело шага: видимое окно строк — kit::list_rows над скролл-состоянием
+        // тела (строки — тот же измеренный источник, что высота карточки:
+        // lay.lines). При клампе высоты видны только строки окна — контент
+        // ужимается прокруткой, футер с CTA не перекрывается.
+        let body = onboarding_ui::body_area(card);
+        for (idx, row) in kit::list_rows(
+            canvas_ui::geometry::UiRect::new(body[0], body[1], body[2], body[3]),
+            &scroll,
+            onboarding_ui::ONBOARDING_BODY_LINE_H,
+            0.0,
+            lay.lines.len(),
+        ) {
+            let Some(line) = lay.lines.get(idx) else {
+                continue;
+            };
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    body[0],
+                    row.y,
+                    body[2],
+                    onboarding_ui::ONBOARDING_BODY_LINE_H,
+                ),
+                line,
+                color_to_rgba(palette.body),
+                onboarding_ui::ONBOARDING_BODY_FONT,
+                PaintAlign::Left,
+            );
         }
         // Кнопки: Назад (слева, не на первом шаге), Далее/Готово (справа,
-        // акцент), Пропустить (правый верх — выход виден всегда, NN/g)
+        // primary), Пропустить (правый верх — ghost, выход виден всегда —
+        // NN/g). Состояния — WidgetState (FR-057: переходы указателя ведёт
+        // потребитель, стиль — матрица кита); стиль — слоты button_style
+        // (бывшие литералы CTA/вторичной заливки/рамки и hover_fill).
+        // Контракт кита: зажатие не ведётся (pressed_now = false) — клик
+        // обрабатывает `click_onboarding` по button_at.
         let buttons = [
             (
                 OnboardingButton::Prev,
+                kit::ButtonVariant::Secondary,
                 state.prev_label_key().map(|key| self.tr(key).to_owned()),
+                13.0,
             ),
             (
                 OnboardingButton::Next,
+                kit::ButtonVariant::Primary,
                 Some(self.tr(state.next_label_key()).to_owned()),
+                13.0,
             ),
             (
                 OnboardingButton::Skip,
+                kit::ButtonVariant::Ghost,
                 Some(self.tr(keys::ONBOARDING_SKIP).to_owned()),
+                11.0,
             ),
         ];
-        for (button, label) in &buttons {
-            let Some(label) = label.clone() else {
+        for (button, variant, label, font) in &buttons {
+            let Some(label) = label else {
                 continue;
             };
             let rect = onboarding_ui::button_rect(card, *button);
-            let hovered = point_in_rect(rect, self.cursor);
-            let accent = *button == OnboardingButton::Next;
-            instances.push(CardInstance {
-                pos: [rect[0], rect[1]],
-                size: [rect[2], rect[3]],
-                fill: if hovered {
-                    hover_fill(if accent {
-                        [0.16, 0.32, 0.60, 1.0]
-                    } else {
-                        palette.menu_fill
-                    })
-                } else if accent {
-                    [0.16, 0.32, 0.60, 1.0]
-                } else {
-                    [0.20, 0.23, 0.29, 1.0]
-                },
-                border: [
-                    0.35,
-                    0.40,
-                    0.50,
-                    if *button == OnboardingButton::Skip {
-                        0.7
-                    } else {
-                        1.0
-                    },
-                ],
-                params: [6.0, 0.0, 0.0, 1.0],
-                corners: [0.0; 4],
-            });
-            texts.push(OwnedScreenText {
-                text: label,
-                origin: [rect[0], rect[1] + (rect[3] - 13.0 * 1.3) / 2.0],
-                width: rect[2],
-                font_size: if *button == OnboardingButton::Skip {
-                    11.0
-                } else {
-                    13.0
-                },
-                color: palette.title,
-                align: TextAlign::Center,
-            });
+            let mut widget = WidgetState::default();
+            widget.set_pointer(point_in_rect(rect, self.cursor), false);
+            let style = kit::button_style(*variant, widget.kit_state(), &kit_palette);
+            d.control(
+                canvas_ui::geometry::UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                &style,
+            );
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    rect[0],
+                    rect[1] + (rect[3] - font * 1.3) / 2.0,
+                    rect[2],
+                    font * 1.3,
+                ),
+                label,
+                style.text,
+                *font,
+                PaintAlign::Center,
+            );
         }
-        (instances, texts)
+        paint_items_to_band(d.take_items(), &mut quads, &mut texts);
+        (quads, texts)
     }
 
     /// Оверлей палитры выделения: бар с кнопками групп (иконка + подпись),
