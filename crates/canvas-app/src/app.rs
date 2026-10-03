@@ -23,7 +23,7 @@ use crate::onboarding_ui::{self, OnboardingButton, OnboardingState};
 use crate::palette::{
     color_to_rgba, icon_quads, icon_text, palette_bar_size, palette_groups, palette_hit,
     palette_layout, palette_origin, template_update_group, PaletteAction, PaletteHit, PaletteHover,
-    PaletteLayout, PaletteTarget, PAL_ICON,
+    PaletteLayout, PaletteTarget, PAL_CAPTION_FONT, PAL_ICON,
 };
 use crate::scheme_gallery_ui;
 use crate::settings_ui::{
@@ -3702,8 +3702,10 @@ impl App {
         self.push_undo();
         let id = next_free_id(&self.scene.canvas, "note");
         // FR-080: auto-width по контенту. Для пустой новой заметки —
-        // auto_width_for_text(None) вернёт TARGET+padding (440px),
-        // нода создаётся «на вырост» — при вводе 10 слов не дёргается.
+        // auto_width_for_text(None) вернёт измеренный эталон «10 средних
+        // слов» + padding (≈440px, CR-015: px — из метрик шрифта, не из
+        // «7 px/char»), нода создаётся «на вырост» — при вводе 10 слов
+        // не дёргается.
         // Раньше хардкод 260px (Node::text default) — короткая заметка
         // выглядела куцо, длинная не помещалась.
         let width = crate::auto_width::auto_width_for_text(None);
@@ -6475,8 +6477,13 @@ impl App {
         }
         let viewport = self.viewport_logical();
         let anchor = self.palette_anchor_screen(&target)?;
-        let origin = palette_origin(anchor, palette_bar_size(&groups), viewport);
-        let lay = palette_layout(origin, &groups, viewport);
+        // CR-015: ширины кнопок групп — по измеренным подписям (тот же пул
+        // шейпинга, что у draw-путей — FR-094); замерщик на вызов (кадр
+        // палитры — десятки строк, кэш переиспользует внутри вызова).
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        let origin = palette_origin(anchor, palette_bar_size(&mut m, &mut fs, &groups), viewport);
+        let lay = palette_layout(&mut m, &mut fs, origin, &groups, viewport);
         Some((lay, groups, target))
     }
 

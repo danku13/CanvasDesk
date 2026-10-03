@@ -1185,8 +1185,17 @@ pub const WHEEL_HUB_R: f32 = 24.0;
 pub const WHEEL_HUB_D: f32 = 48.0;
 /// Отступ wheel от краёв окна при клампе центра.
 pub const WHEEL_SCREEN_MARGIN: f32 = 8.0;
-/// Предел символов строки имени в подписи сектора (длиннее — перенос).
-pub const WHEEL_TPL_TEXT_CHARS: usize = 15;
+/// Ширина слота подписи шаблона в секторе wheel (лог. px) — дизайн-граница
+/// переноса, единая для раскладки ([`split_two_lines`]) и отрисовки
+/// (`overlays.rs`: подпись центрируется в слоте этой ширины при кегле
+/// [`WHEEL_TPL_FONT`]). CR-015: прежний символьный бюджет
+/// `WHEEL_TPL_TEXT_CHARS = 15` (~96 px кегля 11) расходился со слотом
+/// отрисовки 64 px — строки переноса клипались рендером; теперь строки
+/// переноса обязаны влезать в слот ПО ИЗМЕРЕННОЙ ШИРИНЕ.
+pub const WHEEL_TPL_TEXT_W: f32 = 64.0;
+/// Кегль подписи шаблона в секторе wheel — паритет отрисовке (overlays.rs,
+/// screen-тексты подписи сектора).
+pub const WHEEL_TPL_FONT: f32 = 11.0;
 
 /// Состояние радиального меню шаблонов (FR-018, `Shift+клик` по пустому
 /// месту). `screen` — центр в логических px (для рендера/hit-test),
@@ -1342,13 +1351,20 @@ fn ring_sectors(k: usize, count: usize, hit_of: impl FnMut(usize) -> WheelHit) -
         .collect()
 }
 
-/// Перенос имени шаблона в подписи сектора: имя длиннее `max_chars`
-/// символов делится на две строки по самому позднему подходящему разделителю
-/// (пробел или дефис) так, чтобы обе части влезали; не получилось — одна
-/// строка (хвост клипается рендером по ширине подписи).
-pub fn split_two_lines(name: &str, max_chars: usize) -> (String, Option<String>) {
-    let chars = |s: &str| s.chars().count();
-    if chars(name) <= max_chars {
+/// Перенос имени шаблона в подписи сектора: имя ШИРЕ бюджета `max_w`
+/// (по измеренной ширине при кегле подписи [`WHEEL_TPL_FONT`] — CR-015)
+/// делится на две строки по самому позднему подходящему разделителю
+/// (пробел или дефис) так, чтобы ОБЕ части влезали в бюджет по измеренной
+/// ширине; не получилось — одна строка (хвост клипается рендером по ширине
+/// слота [`WHEEL_TPL_TEXT_W`]). Замерщик/FontSystem — внешние (тот же пул
+/// шейпинга, что у draw-путей — FR-094).
+pub fn split_two_lines(
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    name: &str,
+    max_w: f32,
+) -> (String, Option<String>) {
+    if m.width_of(fs, name, FAMILY, WHEEL_TPL_FONT) <= max_w {
         return (name.to_owned(), None);
     }
     let mut best: Option<usize> = None; // байт-позиция начала второй строки
@@ -1357,11 +1373,13 @@ pub fn split_two_lines(name: &str, max_chars: usize) -> (String, Option<String>)
             continue;
         }
         let split = byte + ch.len_utf8();
-        let (n1, n2) = (chars(&name[..split]), chars(&name[split..]));
-        if n1 <= max_chars
-            && n2 <= max_chars
-            && n1 >= 2
-            && n2 >= 2
+        let (n1, n2) = (&name[..split], &name[split..]);
+        // Обе части влезают в бюджет ПО ИЗМЕРЕННОЙ ШИРИНЕ и не вырождены
+        // (минимум 2 символа — семантическая страховка от обрывков «Т-»).
+        if m.width_of(fs, n1, FAMILY, WHEEL_TPL_FONT) <= max_w
+            && m.width_of(fs, n2, FAMILY, WHEEL_TPL_FONT) <= max_w
+            && n1.chars().count() >= 2
+            && n2.chars().count() >= 2
             && best.map_or(true, |b| split > b)
         {
             best = Some(split);
@@ -2479,34 +2497,74 @@ mod tests {
 
     #[test]
     fn wheel_split_two_lines_names() {
-        // Короткие — одна строка
-        assert_eq!(split_two_lines("Воркер", 15), ("Воркер".to_owned(), None));
+        // CR-015: замер реальным шейпингом (детерминированный fs — тот же
+        // пул, что у приложения); ожидания — ШИРИННЫЕ: части переноса
+        // обязаны влезать в бюджет по измеренной ширине при кегле подписи.
+        let width = |s: &str| {
+            let mut fs = canvas_render::text::measure_font_system();
+            let mut m = TextMeasurer::new();
+            m.width_of(&mut fs, s, FAMILY, WHEEL_TPL_FONT)
+        };
+        let split = |name: &str, max_w: f32| {
+            let mut fs = canvas_render::text::measure_font_system();
+            let mut m = TextMeasurer::new();
+            split_two_lines(&mut m, &mut fs, name, max_w)
+        };
+
+        // Короткие — одна строка: имя влезает в слот ПО ИЗМЕРЕННОЙ ШИРИНЕ
+        assert!(width("Воркер") <= WHEEL_TPL_TEXT_W);
         assert_eq!(
-            split_two_lines("API-шлюз", 15),
+            split("Воркер", WHEEL_TPL_TEXT_W),
+            ("Воркер".to_owned(), None)
+        );
+        assert!(width("API-шлюз") <= WHEEL_TPL_TEXT_W);
+        assert_eq!(
+            split("API-шлюз", WHEEL_TPL_TEXT_W),
             ("API-шлюз".to_owned(), None)
         );
-        // Длинные — перенос по пробелу, обе части влезают
+        // Ровно на границе бюджета — ещё одна строка (семантика «<=»)
         assert_eq!(
-            split_two_lines("Балансировщик нагрузки", 15),
-            ("Балансировщик".to_owned(), Some("нагрузки".to_owned()))
+            split("Воркер", width("Воркер")),
+            ("Воркер".to_owned(), None)
         );
+
+        // Длинное — перенос по пробелу: ОБЕ части влезают в бюджет по
+        // измеренной ширине, разделитель — самый поздний подходящий.
+        // Бюджет «на 1 px меньше ширины имени» — перенос обязан случиться
+        // при любых метриках шрифта (относительный тест).
+        let name = "БД SQL (реплика)";
+        let (l1, l2) = split(name, width(name) - 1.0);
+        assert_eq!(l1, "БД SQL");
+        assert_eq!(l2, Some("(реплика)".to_owned()));
+        assert!(width(&l1) <= width(name) - 1.0);
+        assert!(width(l2.as_deref().unwrap()) <= width(name) - 1.0);
+        // Тот же сценарий с фактическим слотом подписи (продакшн-бюджет)
+        let (l1, l2) = split("БД SQL (реплика)", WHEEL_TPL_TEXT_W);
+        assert_eq!(l1, "БД SQL");
+        assert_eq!(l2, Some("(реплика)".to_owned()));
+        assert!(width(&l1) <= WHEEL_TPL_TEXT_W);
+        assert!(width(l2.as_deref().unwrap()) <= WHEEL_TPL_TEXT_W);
+
+        // Нет пробела — дефис (бюджет «ширина имени − 1» — обе части
+        // заведомо уже имени, перенос по самому позднему дефису)
+        let (l1, l2) = split("TCP-балансировщик", width("TCP-балансировщик") - 1.0);
+        assert_eq!(l1, "TCP-");
+        assert_eq!(l2, Some("балансировщик".to_owned()));
+        assert!(width(&l1) <= width("TCP-балансировщик") - 1.0);
+
+        // Баланс «самого позднего» разделителя: все пары слов одной
+        // ширины — перенос у последнего пробела, вторая строка минимальна
+        let name = "АА ББ ВВ ГГ ДД";
+        let (l1, l2) = split(name, width(name) - 1.0);
+        assert_eq!(l1, "АА ББ ВВ ГГ");
+        assert_eq!(l2, Some("ДД".to_owned()));
+
+        // Развалить нельзя (части шире бюджета) — одна строка (клип
+        // рендером по ширине слота); семантика прежняя
+        let name = "оченьдлинноеслово безпробелов";
         assert_eq!(
-            split_two_lines("БД SQL (реплика)", 15),
-            ("БД SQL".to_owned(), Some("(реплика)".to_owned()))
-        );
-        assert_eq!(
-            split_two_lines("Сервис аутентификации", 15),
-            ("Сервис".to_owned(), Some("аутентификации".to_owned()))
-        );
-        // Нет пробела — дефис
-        assert_eq!(
-            split_two_lines("TCP-балансировщик", 15),
-            ("TCP-".to_owned(), Some("балансировщик".to_owned()))
-        );
-        // Развалить нельзя — одна строка (клип рендером)
-        assert_eq!(
-            split_two_lines("оченьдлинноеслово безпробелов", 8),
-            ("оченьдлинноеслово безпробелов".to_owned(), None)
+            split(name, width("безпробелов") - 1.0),
+            (name.to_owned(), None)
         );
     }
 

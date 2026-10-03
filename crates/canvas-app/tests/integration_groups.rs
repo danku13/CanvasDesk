@@ -71,8 +71,13 @@ fn test_group_via_node_menu() {
     // кнопке группы → открытая колонка → hit-test строки «Сгруппировать»)
     let viewport = [1600.0, 900.0];
     let anchor = [800.0, 400.0];
-    let origin = palette_origin(anchor, palette_bar_size(&groups), viewport);
-    let lay = palette_layout(origin, &groups, viewport);
+    // CR-015: ширины кнопок — по измеренным подписям (тот же пул шейпинга,
+    // что у draw-путей — FR-094)
+    let mut m = canvas_ui::measure::TextMeasurer::new();
+    let mut fs = canvas_render::text::measure_font_system();
+    let origin = palette_origin(anchor, palette_bar_size(&mut m, &mut fs, &groups), viewport);
+    let lay = palette_layout(&mut m, &mut fs, origin, &groups, viewport);
+    drop(fs);
     let ai = groups.iter().position(|g| g.label == "Действия").unwrap();
     // Hover на кнопке группы — триггер раскрытия колонки (раскрытие
     // срабатывает ТОЛЬКО от кнопки, не от пустой области колонки)
