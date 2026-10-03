@@ -168,3 +168,20 @@ Stage Summary:
 - W-c закрыта: explain_frame → Painter+WidgetState (последний остаток FR-060: items → paint_items_to_stage, hover/selected — матрица KitState; painter-клипы доступны для scissor FR-056); tooltip → kit::tooltip + перенос по ШИРИНЕ (TextMeasurer, дефект B8: неразрывные пути не клипаются, NBSP-разряды целы); settings — pill-тумблер → kit switch (36×20, RADIUS_PILL), dropdown → kit dropdown_menu (flip+кламп кита, скролл W-a сохранён); docs — локальный дубль ScrollState удалён → kit, меню → list_rows; template strip/flyout → kit dropdown_menu/list_rows (ручные клампы §8.11 устранены); corner buttons → kit IconButton (hit==draw, rect'ы lib.rs не тронуты)
 - W-d закрыта: SPACING_*/RADIUS_* вместо литералов-дублей (24 замены: menu/calc/autolink/palette/search; 16.0/4.0 — вне шкалы, осознанно); зеркало tokens.rs достроено: 5 edge + 3 motion + 4 LOD-токена (паритет-тесты JSON↔Rust; consumers — алиасы с прежними именами); card.header_height подтверждён (W-a); решение по ThemeColors — Вариант A: семантика живёт в themes/*.json (37 слотов × 7 пресетов, тест-зеркало), colors.json остаётся примитивами (§7а отчёта)
 - Остатки: W-e (решения владельца: BP_COMPACT/MOBILE, тач-цели web ≥44px, разморозка onboarding, пагинация template-строк)
+
+---
+Task ID: pages-rollout-verify (сессия web-f324f377-6d94-493b-8e7c-59b9f9d210a1)
+Agent: Super Z (main)
+Task: Запрос владельца: «продолжай Выкат на Pages (обычный trunk build) — до выката старые записи останутся "пустыми", ретроспективы не будет»
+
+Work Log:
+- Факт выката: pages-web.yml уже отработал на main@0e4028d (run 37108516379, все шаги зелёные, Deploy 08:08:34Z) — единая сборка сайта docs + /app из trunk; ожидание владельца «до выката» снято: index.html с FR-091 уже в проде с этого деплоя
+- Live-верификация по https: /app/index.html (200) несёт FR-091-конфиг `session_recording.captureCanvas {recordCanvas:true, canvasFps:4, canvasQuality:"0.4"}` + `canvasCapture.resolutionScale 0.6` и ключ EU; ассеты `canvas-web-c236b3e412eee141.js` (143 891 Б, application/javascript) и `canvas-web-c236b3e412eee141_bg.wasm` (12 256 109 Б, application/wasm) — 200, last-modified 08:08:30 = момент шага Deploy
+- Браузерный смоук live-сайта (agent-browser, 1280×800, чекбокс «Метрики» снят — тест-человек в PostHog не создаётся): пикер отрендерен → «Продолжить без роли» → canvas 1280×800 в DOM, контекст webgl2 (WebGPU в headless недоступен — штатный фолбэк gpu-gate), рендер жив (46% пикселей вне фона на скриншоте), консоль без ошибок, запросов к eu.i.posthog.com — ноль: гейт согласия FR-089 работает на проде
+- localStorage после смоука: `canvasdesk.config {language=ru, telemetry_counter=true, telemetry_analytics=false}` + `canvasdesk.consent` с anonId — согласия пишутся корректно; скриншот-доказательство сохранён вне репо
+- Этот коммит (worklog) пушом повторно прогоняет полный цикл trunk build (CI + Pages) — контроль воспроизводимости конвейера после выката
+
+Stage Summary:
+- Выкат завершён и подтверждён: новые записи сеансов будут содержать WASM-слой (4 кадра/с WebP, масштаб 0.6) и события FR-090 в таймлайне; старые записи остаются без канваса — ретроспективы нет, как и ожидалось
+- FYI: бандл вырос сверх §8.8 — ~12.5 МБ raw / ~4.9 МБ по сети против лимитов 8/4 (деплой не блокируется, отчёт размера информационный) — кандидат на внимание в будущих волнах
+- Владельцу: (1) PostHog → Settings → General → Allowed domains — добавить https://danku13.github.io, если ещё не добавлен; (2) приёмка глазами: новая сессия с включёнными «Метриками» → Replays → в записи виден канвас
