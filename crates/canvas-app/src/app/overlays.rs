@@ -2569,28 +2569,60 @@ impl App {
             template_ui::dock_strip_layout(&categories, viewport[1], &mut measurer, &mut fs);
         let icon_tint = color_to_rgba(palette.icon);
         let open_category = self.template_hover.as_ref().and_then(|h| h.open);
-        // Подложка полосы
+        // W-c (аудит ui-kit §10): хром полосы/строк/flyout — kit-стили
+        // (ControlStyle из СЛОТОВ темы — контракт F-8; слоты palette_* —
+        // источник вида строк шаблонов, U5 «ноль визуального скачка»,
+        // паттерн пилота whatif_overlay: panel_style_of/control_style_of).
+        // Радиусы — шкала токенов (RADIUS_CHIP = прежний литерал 6).
+        let strip_panel_style = canvas_ui::kit::panel_style_of(
+            palette.menu_fill,
+            palette.palette_border,
+            8.0,
+            canvas_core::tokens::SPACING_MD,
+        );
+        let row_style = |state: canvas_ui::kit::KitState| {
+            // Состояния строки: hover/раскрытая категория — прежняя пара
+            // palette_hover_fill + рамка palette_border; обычная — чип.
+            match state {
+                canvas_ui::kit::KitState::Hovered
+                | canvas_ui::kit::KitState::Pressed
+                | canvas_ui::kit::KitState::Selected => canvas_ui::kit::control_style_of(
+                    palette.palette_hover_fill,
+                    palette.palette_border,
+                    palette.title,
+                    canvas_core::tokens::RADIUS_CHIP,
+                ),
+                _ => canvas_ui::kit::control_style_of(
+                    palette.palette_chip_fill,
+                    [0.0; 4],
+                    palette.title,
+                    canvas_core::tokens::RADIUS_CHIP,
+                ),
+            }
+        };
+        // Подложка полосы (kit PanelStyle: слоты menu_fill/palette_border)
         instances.push(CardInstance {
             pos: [strip.rect[0], strip.rect[1]],
             size: [strip.rect[2], strip.rect[3]],
-            fill: palette.menu_fill,
-            border: palette.palette_border,
-            params: [8.0, 0.0, 0.0, 1.0],
+            fill: strip_panel_style.fill,
+            border: strip_panel_style.border,
+            params: [strip_panel_style.radius, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
-        // Строки категорий: hover-подсветка под курсором и у раскрытой
+        // Строки категорий: состояния — WidgetState кита (FR-057: hover/
+        // селекция раскрытой категории — матрица приоритетов), стиль —
+        // ControlStyle из слотов
         for (i, ((rect, name), raw)) in strip.rows.iter().zip(raw_categories.iter()).enumerate() {
-            let row_hover = point_in_rect(*rect, self.cursor) || open_category == Some(i);
+            let mut row_widget = WidgetState::default();
+            row_widget.set_pointer(point_in_rect(*rect, self.cursor), false);
+            row_widget.set_selected(open_category == Some(i));
+            let style = row_style(row_widget.kit_state());
             instances.push(CardInstance {
                 pos: [rect[0], rect[1]],
                 size: [rect[2], rect[3]],
-                fill: if row_hover {
-                    palette.palette_hover_fill
-                } else {
-                    palette.palette_chip_fill
-                },
-                border: [0.0; 4],
-                params: [6.0, 0.0, 0.0, 1.0],
+                fill: style.fill,
+                border: style.border,
+                params: [style.radius, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
             // FR-087: счётчик — по видимым шаблонам (роль/ручной фильтр).
@@ -2600,17 +2632,23 @@ impl App {
                 origin: [rect[0] + 8.0, rect[1] + 6.0],
                 width: rect[2] - 12.0,
                 font_size: 12.0,
-                color: palette.title,
+                color: style.text,
                 align: TextAlign::Left,
             });
         }
-        // Шеврон «развернуть док» — строка внизу полосы
+        // Шеврон «развернуть док» — строка внизу полосы (kit-стиль чипа)
+        let chevron_style = canvas_ui::kit::control_style_of(
+            palette.palette_chip_fill,
+            [0.0; 4],
+            palette.title,
+            canvas_core::tokens::RADIUS_CHIP,
+        );
         instances.push(CardInstance {
             pos: [strip.chevron_rect[0], strip.chevron_rect[1]],
             size: [strip.chevron_rect[2], strip.chevron_rect[3]],
-            fill: palette.palette_chip_fill,
-            border: [0.0; 4],
-            params: [6.0, 0.0, 0.0, 1.0],
+            fill: chevron_style.fill,
+            border: chevron_style.border,
+            params: [chevron_style.radius, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
@@ -2618,7 +2656,7 @@ impl App {
             origin: [strip.chevron_rect[0], strip.chevron_rect[1] + 5.0],
             width: strip.chevron_rect[2],
             font_size: 13.0,
-            color: palette.title,
+            color: chevron_style.text,
             align: TextAlign::Center,
         });
         // Flyout раскрытой категории: строки шаблонов (только видимое окно)
@@ -2632,32 +2670,49 @@ impl App {
             };
             // FR-087: строки flyout — видимые шаблоны (роль/ручной фильтр).
             let items = self.visible_templates_by_category(raw);
+            // W-c: панель flyout — kit PanelStyle (те же слоты, что у полосы)
             instances.push(CardInstance {
                 pos: [fly.rect[0], fly.rect[1]],
                 size: [fly.rect[2], fly.rect[3]],
-                fill: palette.menu_fill,
-                border: palette.palette_border,
-                params: [8.0, 0.0, 0.0, 1.0],
+                fill: strip_panel_style.fill,
+                border: strip_panel_style.border,
+                params: [strip_panel_style.radius, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
             for (v, rect) in fly.row_rects.iter().enumerate() {
                 let Some(manifest) = items.get(fly.scroll_top + v) else {
                     break;
                 };
-                let row_hover = point_in_rect(*rect, self.cursor);
-                template_card_row(
-                    manifest,
-                    *rect,
-                    if row_hover {
+                // W-c: состояние строки — WidgetState кита (hover), стиль —
+                // ControlStyle из слотов (карточка = palette_row_fill,
+                // hover = palette_hover_fill + рамка palette_border — прежний
+                // вид; радиус карточки рисует template_card_row).
+                let mut row_widget = WidgetState::default();
+                row_widget.set_pointer(point_in_rect(*rect, self.cursor), false);
+                let row_state = row_widget.kit_state();
+                let hovered = matches!(
+                    row_state,
+                    canvas_ui::kit::KitState::Hovered | canvas_ui::kit::KitState::Pressed
+                );
+                let row_style = canvas_ui::kit::control_style_of(
+                    if hovered {
                         palette.palette_hover_fill
                     } else {
                         palette.palette_row_fill
                     },
-                    if row_hover {
+                    if hovered {
                         palette.palette_border
                     } else {
                         [0.0; 4]
                     },
+                    palette.title,
+                    canvas_core::tokens::RADIUS_CHIP,
+                );
+                template_card_row(
+                    manifest,
+                    *rect,
+                    row_style.fill,
+                    row_style.border,
                     palette,
                     icon_tint,
                     self.settings.language,
@@ -4089,20 +4144,38 @@ impl App {
         // Вертикальная центровка иконки: лайн-бокс высотой font*1.3 по центру
         // кнопки (так же считает рендер screen-текстов).
         let icon_top = |rect: [f32; 4], font_size: f32| rect[1] + (rect[3] - font_size * 1.3) / 2.0;
+        // W-c (аудит ui-kit §10): угловой кластер ⚙/тема/язык/«?» — kit
+        // IconButton: рамка/фон/hover — `icon_button_style` (Ghost-слоты
+        // палитры кита, паттерн kit_gallery_overlay), состояния —
+        // WidgetState (FR-057) вместо ручного hover-ярления. Сами иконки —
+        // прежние (⚙ — квады: U+2699 вне покрытия шрифта; тема — квад-круг;
+        // «?» — глиф кита icon_glyph(Icon::Question)).
+        // Hit==draw: rect'ы lib.rs (button_rect/theme_button_rect/…) — ОДНИ
+        // и те же для hit-теста реестра и отрисовки; слот кита здесь = сама
+        // кнопка (ICON_BUTTON_SIZE 26 ≠ SETTINGS_BUTTON 36 — inset
+        // icon_button_rect не применяется, хром рисуется на весь слот).
+        let corner_palette = self.effective_palette().kit_palette();
+        let corner_state = |rect: [f32; 4], selected: bool| {
+            let mut widget = WidgetState::default();
+            widget.set_pointer(point_in_rect(rect, self.cursor), false);
+            widget.set_selected(selected);
+            widget.kit_state()
+        };
         let button = button_rect(self.settings.button_corner, viewport);
-        // Hover-аффорданс: курсор над кнопкой — заливка ярче
-        let settings_hovered = point_in_rect(button, self.cursor);
+        // Kit-стиль кнопки: Normal — control_fill без рамки, hover — слот
+        // hover_fill + accent-рамка ( Selected — подсветка панели, рамка
+        // выделения — params.y ниже, слота в ките нет).
+        let settings_style = canvas_ui::kit::icon_button_style(
+            corner_state(button, self.settings_open),
+            &corner_palette,
+        );
         instances.push(CardInstance {
             pos: [button[0], button[1]],
             size: [button[2], button[3]],
-            fill: if settings_hovered {
-                hover_fill(palette.menu_fill)
-            } else {
-                palette.menu_fill
-            },
-            border: [0.0; 4],
+            fill: settings_style.fill,
+            border: settings_style.border,
             // params.y = рамка выделения: подсветка кнопки при открытой панели
-            params: [8.0, self.settings_open as u8 as f32, 0.0, 0.0],
+            params: [settings_style.radius, self.settings_open as u8 as f32, 0.0, 0.0],
             corners: [0.0; 4],
         });
         // Иконка настроек — КВАДАМИ, не текстовым глифом: «⚙» (U+2699)
@@ -4132,18 +4205,16 @@ impl App {
         }
         // Кнопка переключения темы — рядом с кнопкой настроек (в тот же угол).
         // Иконка показывает ЦЕЛЬ: в тёмной теме «солнце» (клик — светлая).
+        // W-c: хром — kit IconButton (icon_button_style), состояние — WidgetState.
         let theme_button = theme_button_rect(self.settings.button_corner, viewport);
-        let theme_hovered = point_in_rect(theme_button, self.cursor);
+        let theme_style =
+            canvas_ui::kit::icon_button_style(corner_state(theme_button, false), &corner_palette);
         instances.push(CardInstance {
             pos: [theme_button[0], theme_button[1]],
             size: [theme_button[2], theme_button[3]],
-            fill: if theme_hovered {
-                hover_fill(palette.menu_fill)
-            } else {
-                palette.menu_fill
-            },
-            border: [0.0; 4],
-            params: [8.0, 0.0, 0.0, 1.0],
+            fill: theme_style.fill,
+            border: theme_style.border,
+            params: [theme_style.radius, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         // Иконка темы — квадами: «☀»/«🌙» (U+2600/U+1F319) тоже вне
@@ -4164,19 +4235,19 @@ impl App {
         // FR-040 v2: кнопка переключения языка (RU/EN) — третий элемент
         // кластера (⚙ → ☼ → RU/EN → ?). Иконка — короткий код активного
         // языка (2 буквы), чтобы не зависеть от покрытия шрифтов глифами
-        // эмодзи. Hover-аффорданс как у соседних кнопок.
+        // эмодзи. W-c: kit-стиль кнопки с текстовой меткой (цвет текста —
+        // слот style.text кита), состояние — WidgetState.
         let language_button = language_button_rect(self.settings.button_corner, viewport);
-        let language_hovered = point_in_rect(language_button, self.cursor);
+        let language_style = canvas_ui::kit::icon_button_style(
+            corner_state(language_button, false),
+            &corner_palette,
+        );
         instances.push(CardInstance {
             pos: [language_button[0], language_button[1]],
             size: [language_button[2], language_button[3]],
-            fill: if language_hovered {
-                hover_fill(palette.menu_fill)
-            } else {
-                palette.menu_fill
-            },
-            border: [0.0; 4],
-            params: [8.0, 0.0, 0.0, 1.0],
+            fill: language_style.fill,
+            border: language_style.border,
+            params: [language_style.radius, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
@@ -4189,31 +4260,32 @@ impl App {
             origin: [language_button[0], icon_top(language_button, 13.0)],
             width: language_button[2],
             font_size: 13.0,
-            color: palette.title,
+            color: language_style.text,
             align: TextAlign::Center,
         });
         // FR-027: кнопка «?» — четвёртый элемент кластера (⚙/тема/язык/помощь):
-        // вход в меню документации и онбординга; hover-аффорданс как у ⚙
+        // вход в меню документации и онбординга. W-c: хром — kit IconButton,
+        // глиф — кит icon_glyph(Icon::Question) (та же «?»), цвет — слот
+        // style.text; открытому меню — KitState::Selected + рамка выделения.
         let help_button = help_button_rect(self.settings.button_corner, viewport);
-        let help_hovered = point_in_rect(help_button, self.cursor);
+        let help_style = canvas_ui::kit::icon_button_style(
+            corner_state(help_button, self.help_menu.is_some()),
+            &corner_palette,
+        );
         instances.push(CardInstance {
             pos: [help_button[0], help_button[1]],
             size: [help_button[2], help_button[3]],
-            fill: if help_hovered {
-                hover_fill(palette.menu_fill)
-            } else {
-                palette.menu_fill
-            },
-            border: [0.0; 4],
-            params: [8.0, self.help_menu.is_some() as u8 as f32, 0.0, 0.0],
+            fill: help_style.fill,
+            border: help_style.border,
+            params: [help_style.radius, self.help_menu.is_some() as u8 as f32, 0.0, 0.0],
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
-            text: "?".to_owned(),
+            text: canvas_ui::kit::icon_glyph(canvas_ui::kit::Icon::Question).to_owned(),
             origin: [help_button[0], icon_top(help_button, 18.0)],
             width: help_button[2],
             font_size: 18.0,
-            color: palette.title,
+            color: help_style.text,
             align: TextAlign::Center,
         });
         // Панель горячих клавиш (FR-004): у левого края, по центру;
