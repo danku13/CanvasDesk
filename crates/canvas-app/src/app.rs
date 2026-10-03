@@ -30,8 +30,8 @@ use crate::settings_ui::{
     apply_dropdown_value, control_rect, dropdown_item_at, dropdown_layout, dropdown_options,
     dropdown_value, modal_layout, modal_layout_scrolled, modal_nav_at, modal_row_at,
     modal_scroll_max, modal_theme_card_at, pill_knob_rect, row_desc_key, row_kind, row_label_key,
-    DropdownState, RowKind, SettingsRow, DROPDOWN_MARGIN, DROPDOWN_ROW_H, MODAL_ROW_LABEL_W,
-    SETTINGS_TABS,
+    DropdownState, ModalMode, RowKind, SettingsRow, DROPDOWN_MARGIN, DROPDOWN_ROW_H,
+    MODAL_ROW_LABEL_W, SETTINGS_TABS,
 };
 use crate::suggest;
 // FR-038 (T-038.4): snap-движок (T-038.2) — чистая геометрия магнитной
