@@ -185,3 +185,47 @@ Stage Summary:
 - Выкат завершён и подтверждён: новые записи сеансов будут содержать WASM-слой (4 кадра/с WebP, масштаб 0.6) и события FR-090 в таймлайне; старые записи остаются без канваса — ретроспективы нет, как и ожидалось
 - FYI: бандл вырос сверх §8.8 — ~12.5 МБ raw / ~4.9 МБ по сети против лимитов 8/4 (деплой не блокируется, отчёт размера информационный) — кандидат на внимание в будущих волнах
 - Владельцу: (1) PostHog → Settings → General → Allowed domains — добавить https://danku13.github.io, если ещё не добавлен; (2) приёмка глазами: новая сессия с включёнными «Метриками» → Replays → в записи виден канвас
+
+---
+Task ID: FR-094 (сессия web-f324f377-6d94-493b-8e7c-59b9f9d210a1)
+Agent: Super Z (main)
+Task: Запрос владельца: «нужно проанализировать где у нас есть возможность для экономии на wasm бандле. так же проверь почему падает витрина интерфейса с логом: …no default font found (cosmic-text shape.rs:251)… chrome.action.show is not a function»
+
+Work Log:
+- Пулл main@ece0079 (FR-093); деплой b99777f — тот же бандл, что в логе владельца
+- Репро падения на live (agent-browser): пикер → «без роли» → Esc онбординга → «Blank canvas» (кнопка empty-карточки) → «?»-меню (кнопка кластера настроек, [1100..1136]×[48..84], WEB_TOOLBAR_INSET=36) → «О интерфейсе» → витрина открывается, верхние секции живут → синтетический `wheel` на канвасе (agent-browser scroll страницу не трогает — шлётся dispatchEvent WheelEvent) → паника «no default font found» в консоли — воспроизведено в точности
+- Корень: overlays.rs `kit_gallery_overlay` секция компонентного слоя — `Row::new` + ДЕФОЛТНЫЕ `Component::layout/paint` (внутренний `FontSystem::new()`): в wasm fontdb пуста (нет системных шрифтов) → cosmic-text shape.rs:251 паника → wasm-трап → rAF умирает. Все Table-потребители уже на `_with`-контракте §4.7 (внешний fs) — витрина нарушила его только в секции Row; kit_ui.rs:2430 — тест, не прод
+- `chrome.action.show is not a function` — из браузерного РАСШИРЕНИЯ (MV3 API), rrweb-console-record в записи сеанса пишет консоль целиком; к приложению отношения не имеет (задокументировано в FR-094)
+- Фикс: `Row::layout_row_with(m, fs, slot)` + `Row::paint_with(painter, m, fs, rects)` (тело прежнего layout_row бит-в-бит, пулы снаружи); `layout_row` делегирует внутренним полям; overlays.rs — секция Row на внешние m/fs функции (MutexGuard-коэрция), `use Component as _` из блока удалён; новый тест `layout_row_with_matches_internal_on_same_font` (геометрия + элементы Painter паритет внеш/внутр на одном лице)
+- Гейты локально (rustup 1.99 поставлен в сессию): fmt чисто; canvas-ui 207 passed/0 failed; canvas-app все зелёные; clippy 0 (натив + wasm32 lib); wasm32 lib check — чисто (bin/main.rs под wasm не собирается by design — проверяется lib, как в CI-гейте)
+- Анализ бандла (live b99777f, Python-парсер секций/сегментов): code 6.78 МБ (55.3%) + data 5.41 МБ (44.1%); в data 1 908 940 байт ЧИСТЫХ ДУБЛИКАТОВ (548 пар сегментов с равным md5, крупнейшие 318К/305К/305К/217К/217К…×2) — thin LTO не схлопывает одинаковые статик-таблицы; unicode-крейты в Cargo.lock одиночные → дубль не от версий; шрифты 1.86 МБ вшиты (name-таблицы идентифицируются, сырые байты перепакованы wasm-bindgen/wasm-opt); i18n ~353 КБ; user-docs 155 КБ; [profile.release] — только lto="thin" (opt-level дефолт 3, panic unwind, cgu дефолт)
+- Доку: docs/dev-researches/wasm-bundle-size-analysis.md (замеры, рецепты с приоритетами: lto=fat+cgu=1 ≈ −1.8 МБ; opt-level=s −1..−2 МБ; panic=abort −5..10%; вынос шрифтов −1.86 МБ с CDN-кешем; план и риски, §8.8-пересмотр)
+- Доки: fr-094-kit-row-external-font-pool.md (CR: диагноз/фикс/приёмка/расшифровка chrome.action), index-cr-fr.md (+FR-094), этот журнал
+
+Stage Summary:
+- Витрина больше не падает: прод-путь Row на внешний пул (§4.7), оракул-тест паритета; после выката — повтор e2e-сценария на live (обязательный шаг приёмки)
+- Экономия бандла измерена и расписана: главный резерв — 1.82 МБ дубликатов (2 строки профиля), затем opt-level и шрифты; план в dev-researches
+- CI должен остаться зелёным: fmt/check/test/clippy прогнаны локально с тем же тулчейном
+
+---
+Task ID: FR-091 v2 (сессия web-f324f377-6d94-493b-8e7c-59b9f9d210a1)
+Agent: Super Z (main)
+Task: Запрос владельца: «по последним записям в posthog пока не вижу чтобы wasm часть была видна в replay, так же отображаются только html части»
+
+Work Log:
+- Синхронизация: origin/main ушёл вперёд (9bf0867 FR-094 + ece0079 FR-093 + docs до 8788ff2) — пулл, рабочий шум (996 файлов 0/0) сброшен; FR-094 (паника cosmic-text витрины) уже в trunk и задеплоен (66d42445, 13:24Z)
+- Диагноз на живом проде (agent-browser, consent analytics=true, инструментированный createImageBitmap + Worker): FPS-обсервер PostHog ДЕЙСТВИТЕЛЬНО снапшотит канвас (115 вызовов/25с ≈ 4.6fps, bitmap 768×480 = remote resolutionScale 0.6), но каждый снапшот 100% пуст (nzA=0/nzRGB=0) при живом рендере композитора (47% пикселей); прямой toDataURL — WebP 3КБ (пустой); атрибут контекста preserveDrawingBuffer:false, маркер __context отсутствует
+- Корень 1 (WebGL2): wgpu создаёт webgl2 без preserveDrawingBuffer → drawing buffer очищается после композитинга → readback пуст; патч getContext у PostHog ставится после цепочки SDK→decide→lazy-recorder и проигрывает гонку буту WASM
+- Корень 2 (WebGPU, браузер владельца с реальным GPU): растр webgpu-канваса рекордер не читает ВООБЩЕ — posthog/posthog#57008 (открытый issue, «works in 2D and WebGL», у WebGPU нет аналога preserveDrawingBuffer — gpuweb#2743); сверка с исходниками lazy-recorder.js v1.435.8 (getContext-патч форсит флаг, FPS-обсервер контекст-агностичен) + документация PostHog
+- Фикс 1: index.html — getContext-шим в <head> (webgl/webgl2/experimental-webgl → preserveDrawingBuffer:true, мерж opts) ДО любых getContext (wgpu, gpu-gate-проба) — детерминированный выигрыш гонки; исправлены неверные утверждения v1 в комментарии (webgpu-растр «читается» — опровергнуто; локальный canvasCapture.resolutionScale игнорируется — только remote date-default)
+- Фикс 2: canvas-render — wasm32 static PREFER_GL_FOR_CAPTURE + pub set_prefer_gl_for_capture; create_gpu_web при флаге пропускает WebGPU-ступень (create_gpu_web_gl — прямой GL-путь, общий хвост двухступенчатого); canvas-web/renderer_launch — analytics_recording_active() (localStorage canvasdesk.consent, семантика index.html: нет записи+конфига → false; нет поля/битая → true) ставит флаг до spawn_local — §3.1: ядро не знает про PostHog
+- Локальная верификация ДО пуша (тестовая страница: live index.html + шим + абсолютные URL ассетов, python http.server, CORS GitHub Pages): pdb=true, снапшоты 0 → 16000/16000 непустых пикселей (107 вызовов/25с), рендер идентичен (47% до/после), ошибок нет — фикс подтверждён на реальном приложении без пересборки
+- Гейты: fmt; check+clippy (натив+wasm32) -D warnings — 0; тесты 402+0 (canvas-render) + 51+0 (canvas-web); node --check шим-блока; пуш aeae900
+- Ретро-фикс 3809a64 (найден при live-приёмке): быстрый GL-путь читал window.inner_size() до layout канваса → «окно создано 0×0» + surface клампился 1×1, лечение — гонка Resized-vs-RedrawRequested (Resized обрабатывается только при живом рендерере, handler.rs); wait_canvas_layout() в launch() — 2 rAF до Renderer::new, окно рождается 1280×800, кламп исчез; гейты повторно зелёные
+- Live-приёмка финальная (Pages f526a8f7): консоль «захват канваса извне — WebGPU-ступень пропущена» → GL → «окно создано 1280×800»; readback nzA=16000 pdb=true; FPS-обсервер 48 вызовов/12с; CI/Pages/Tour — success; браузер закрыт (pagehide — флаш записи, в PostHog остался тестовый person probe-capture-test-01 как демо-реплей)
+- Доки: fr-091-session-replay-canvas-wasm.md (§3а v2: диагноз/фикс/верификация, §4, §6, §7, §8 + правки v1-утверждений), index-cr-fr.md (строка FR-091 + v2)
+
+Stage Summary:
+- Replay теперь видит WASM-слой: захват шёл постоянно, но снапшоты были пустыми (два корня: preserveDrawingBuffer у WebGL2-контекста wgpu + webgpu-нечитаемость posthog#57008); фикс — детерминированный getContext-шим + согласие analytics ⇒ WebGL2-бэкенд (отказавшимся остаётся WebGPU); смена согласия действует после перезагрузки
+- Отказ браузера кешировать HTML учтён: приёмка после выката обязательно с reload/revalidate (утренний замер мог видеть старый индекс из max-age=600)
+- Владельцу: новые записи (после 14:0xZ) в PostHog Replays показывают канвас; тестовый person probe-capture-test-01 можно посмотреть/удалить; поднять canvasFps с 4 до 12 при желании «видео-качества» (тяжелее аплоады)

@@ -1,13 +1,13 @@
 # FR-091: Session replay — видимость WASM-слоя (захват wgpu-канваса)
 
-- **Статус:** выполнено (2026-10-03)
+- **Статус:** выполнено (2026-10-03); **v2-доработка** (2026-10-03, тот же день): «по последним записям в posthog пока не видно, чтобы wasm часть была видна в replay» — конфигурация записи была верной, но сам канвас нечитаем для рекордера (см. §3а)
 - **Тип:** FR
 - **Приоритет:** желательно
 - **Владелец:** danku13
-- **Источник:** диалог с владельцем (сессия 2026-10-03): «сейчас при записи сеанса я вижу только то что происходит на web слое, но не вижу ничего на wasm слое, как это исправить?»
+- **Источник:** диалог с владельцем (сессия 2026-10-03): «сейчас при записи сеанса я вижу только то что происходит на web слое, но не вижу ничего на wasm слое, как это исправить?»; v2: «по последним записям в posthog пока не вижу чтобы wasm часть была видна в replay, так же отображаются только html части»
 - **Связанные задачи:** FR-089 (телеметрия/PostHog/согласия), FR-090 (события из Rust, `surface_opened`), M8 (wasm-port, wgpu-рендер)
 - **Создан:** 2026-10-03
-- **Обновлён:** 2026-10-03
+- **Обновлён:** 2026-10-03 (v2)
 
 ## 1. Описание (What)
 
@@ -46,6 +46,24 @@ session_recording: {
 | Rust | без изменений (события поверхностей уже FR-090) | — |
 | Натив (десктоп) | без изменений: слой телеметрии — web-only (FR-089) | — |
 | PostHog (UI проекта) | опционально: Settings → Session replay → включить canvas recording — тот же эффект на уровне проекта; локальные опции `captureCanvas` имеют приоритет | §6 |
+
+## 3а. v2 — почему записи всё ещё показывали только HTML (2026-10-03)
+
+После выката конфигурации §1 записи появились, но канвас в реплее остался невидимым. Живой эксперимент на проде (headless-браузер, инструментированный `createImageBitmap` + согласие `analytics=true`) дал точный диагноз:
+
+1. **Захват был активен и снапшотил канвас**: FPS-обсервер вызывал `createImageBitmap` на канвасе 1280×800 с частотой ≈4.6 кадра/с (115 вызовов за ~25 с), bitmap 768×480 (remote date-default `resolutionScale 0.6` действует, локальное значение игнорируется).
+2. **Каждый снапшот был 100% прозрачным** (`nzA=0/nzRGB=0` из 16 000 сэмплов) — при том что композитор показывал отрендеренный кадр (47% пикселей вне фона на скриншоте того же момента). Прямой `toDataURL` — тот же результат (WebP 3 КБ — пустой).
+3. **Корень (WebGL2-путь)**: контекст создан wgpu с дефолтным `preserveDrawingBuffer:false` → после композитинга браузер очищает drawing buffer → любой readback (`createImageBitmap`/`toDataURL`) возвращает пустой растр. Сам PostHog патчит `HTMLCanvasElement.prototype.getContext` и форсит флаг — но патч ставится после цепочки «SDK-импорт → /decide → lazy-recorder.js → record()» и проигрывает гонку буту WASM (wgpu создаёт контекст раньше): маркер `__context` на канвасе отсутствовал, атрибут — `preserveDrawingBuffer:false`.
+4. **Корень (WebGPU-путь — браузер владельца с реальным GPU)**: растр webgpu-канваса PostHog не читает ВООБЩЕ — у WebGPU нет аналога `preserveDrawingBuffer` (posthog/posthog#57008, открытый issue; их документация заявляет «works in 2D and WebGL» без WebGPU).
+
+### Фикс v2 — два независимых механизма
+
+| # | Где | Что | Закрывает |
+|---|---|---|---|
+| 1 | `canvas-web/index.html` (getContext-шим, §4) | `preserveDrawingBuffer:true` для `webgl/webgl2/experimental-webgl` — ставится синхронно в `<head>` ДО любых `getContext` (wgpu, gpu-gate-проба), перманентно выигрывая гонку у патча рекордера | WebGL2-путь (в т.ч. фолбэк headless/старых GPU) |
+| 2 | `canvas-render` (`set_prefer_gl_for_capture`) + `canvas-web/renderer_launch` | при согласии `analytics=true` (JSON `canvasdesk.consent`, семантика index.html) `create_gpu_web` пропускает WebGPU-ступень — сразу GL (WebGL2), читаемый для рекордера | WebGPU-путь (браузеры с реальным GPU) |
+
+Правило §3.1 соблюдено: согласия читает web-слой (canvas-web), ядро (canvas-render) получает абстрактный флаг «захват канваса извне» и не знает про PostHog. Отказавшимся от аналитики WebGPU остаётся (запись не идёт — компромиссов нет); смена согласия действует после перезагрузки (выбор бэкенда разовый, при старте). Цена WebGL2+preserveDrawingBuffer — сохранённый drawing buffer; рендер не деградировал (§6: 47% пикселей до/после — идентично).
 
 ## 3. Анализ (Why) — механика, проверенная по исходникам SDK
 
@@ -100,8 +118,11 @@ session_recording: {
 
 | Что | Где | Как |
 |---|---|---|
-| Конфиг реплея | `crates/canvas-web/index.html` (`loadPostHog` → `posthog.init`) | `session_recording: {captureCanvas: {recordCanvas: true, canvasFps: 4, canvasQuality: "0.4"}, canvasCapture: {resolutionScale: 0.6}}` + комментарий (приоритет локальных опций, механика FPS-обсервера, приватность, маскировка) |
-| Доки | этот документ; индекс CR (ревизия 8); worklog | — |
+| Конфиг реплея (v1) | `crates/canvas-web/index.html` (`loadPostHog` → `posthog.init`) | `session_recording: {captureCanvas: {recordCanvas: true, canvasFps: 4, canvasQuality: "0.4"}, canvasCapture: {resolutionScale: 0.6}}` + комментарий (приоритет локальных опций, механика FPS-обсервера, приватность, маскировка; v2 — исправлены неверные утверждения: локальный resolutionScale игнорируется, webgpu-канвас НЕ читается) |
+| v2: getContext-шим | `crates/canvas-web/index.html` (новый `<script>` после WebGPU-limits-шима) | патч `HTMLCanvasElement.prototype.getContext`: `webgl/webgl2/experimental-webgl` → `preserveDrawingBuffer:true` (мерж в opts), ставится синхронно в `<head>` до любых getContext |
+| v2: capture-режим рендера | `crates/canvas-render/src/renderer.rs` | wasm32-only: `static PREFER_GL_FOR_CAPTURE` + `pub fn set_prefer_gl_for_capture(bool)`; `create_gpu_web` при флаге пропускает WebGPU-ступень (новый прямой GL-путь `create_gpu_web_gl`, общий хвост двухступенчатого пути) |
+| v2: чтение согласия | `crates/canvas-web/src/renderer_launch.rs` | `analytics_recording_active()` (localStorage `canvasdesk.consent`, семантика index.html: нет записи+конфига → false — свежий визит; нет поля/битая → true — дефолты чекбоксов) → `set_prefer_gl_for_capture` до `spawn_local` |
+| Доки | этот документ (§3а/§4/§6/§7/§8); worklog | — |
 
 ## 5. Точки входа (Entry Points)
 
@@ -110,6 +131,8 @@ session_recording: {
   плеера, синхронизация по времени).
 
 ## 6. Проверка (Verification)
+
+### v1 (2026-10-03, утром)
 
 - [x] Конфиг-механика подтверждена разбором артефактов SDK v1.435.8:
       main-бандл (jsDelivr `+esm`), `lazy-recorder.js`,
@@ -124,22 +147,46 @@ session_recording: {
       bot-фильтра webdriver/HeadlessChrome по прецеденту FR-090 §6,
       шпион `createImageBitmap`/fetch/XHR/sendBeacon, полноэкранный
       канвас с рендер-циклом): SDK инициализируется с новым конфигом
-      без ошибок консоли; lazy-recorder загружен
-      (`__PosthogExtensions__.initSessionRecording`); FPS-обсервер
-      вызывает `createImageBitmap` на канвасе ровно с ~4 fps (514
-      вызовов за ~90 с); флеш на visibilitychange → `POST
-      https://eu.i.posthog.com/s/` **200**, тело **16 КБ** (DOM-снапшот
-      тестовой страницы дал бы 1–3 КБ — кадры канваса в payload);
-      события `/e/` + beacon `/i/v0/e/` — 200. WebGPU-адаптер в
-      headless-браузере агента недоступен (`requestAdapter` → null) —
-      стенд прогнан на 2d-фолбэке; контекст-агностичность для webgpu
-      подтверждена исходниками recorder.js (§3) — путь захвата
-      идентичен. Запись тестовой сессии (distinct_id `fr091-stand-*`)
-      можно открыть в PostHog как ручную приёмку: реплей показывает
-      «видео» канваса.
-- [x] Синтаксис 9 inline-скриптов index.html — `node --check`.
-- [ ] **cargo-гейты — не требуются** (изменение только в web-слое,
-      Rust не тронут). CI проходит по обычному расписанию.
+      без ошибок консоли; lazy-recorder загружен; FPS-обсервер вызывает
+      `createImageBitmap` ~4 fps (514 вызовов за ~90 с); флеш на
+      visibilitychange → `POST https://eu.i.posthog.com/s/` **200**;
+      синтаксис 9 inline-скриптов — `node --check`.
+- [x] cargo-гейты v1 — не требовались (изменение только в web-слое).
+
+### v2 (2026-10-03, после обеда)
+
+- [x] **Диагноз на живом прод-сайте** (b99777f→66d42445, headless,
+      consent `analytics=true`): проба `createImageBitmap` — 115
+      снапшотов/25 с (захват активен), каждый 100% пуст
+      (`nzA=0/nzRGB=0`), атрибут контекста `preserveDrawingBuffer:false`,
+      композитор при этом показывает рендер (47% пикселей) —
+      воспроизведён баг владельца «только html части».
+- [x] **Фикс-гипотеза проверена на реальном приложении без пересборки**
+      (тестовая страница: live index.html + шим в `<head>` + абсолютные
+      URL ассетов 66d42445, локальный http-сервер, GitHub Pages CORS):
+      атрибут `preserveDrawingBuffer:true`, 107 снапшотов/25 с,
+      снапшоты **полностью непустые** (`nzA=16000/nzRGB=16000` из
+      16 000 сэмплов, 768×480) — контент канваса пошёл в пайплайн
+      записи; рендер не деградировал (47% до/после — идентично),
+      ошибок страницы нет.
+- [x] **Гейты локально** (тулчейн 1.99, как в CI): `cargo fmt` — чисто;
+      `cargo check` canvas-render + canvas-web — натив и wasm32 — чисто;
+      `cargo clippy -- -D warnings` — оба таргета — 0; `cargo test` —
+      402 passed/0 failed (canvas-render) + canvas-web зелёные.
+- [x] Синтаксис inline-скриптов index.html — `node --check` (включая
+      новый шим-блок).
+- [x] **Live-приёмка после выката v2** (aeae900 + 3809a64, Pages f526a8f7):
+      консоль — «захват канваса извне (session recording) — WebGPU-ступень
+      пропущена» → «GL (WebGL2) — surface до адаптера» → «рендер
+      инициализирован backend=Gl» → «окно создано 1280×800» (кламп 1×1
+      исчез после follow-up 3809a64); прямой readback канваса — nzA=16000/
+      nzRGB=16000, pdb=true; FPS-обсервер жив на проде (48 вызовов
+      createImageBitmap за 12 с ≈ 4 fps); CI/Pages/Tour — success.
+      Владельцу: новая сессия с «Метриками» → Replays → канвас виден
+      (в т.ч. в браузере с реальным GPU — через WebGL2-бэкенд); в проекте
+      остался тестовый person `probe-capture-test-01` (distinct_id
+      headless-приёмок этой сессии) — можно удалить или использовать как
+      демо-реплей.
 
 Владельцу в PostHog (опционально):
 
@@ -157,13 +204,31 @@ session_recording: {
   `session_recording` (captureCanvas/canvasCapture) в `posthog.init`,
   комментарий с механикой и приватностью; CR-документ, индекс ревизия 8;
   верификация по исходникам SDK v1.435.8 + браузерный стенд.
+- 2026-10-03 (v2) — агент (Super Z, та же сессия) — доработка по
+  фидбэку владельца «в replay только html части»: диагноз live-экспериментом
+  (снапшоты пустые из-за preserveDrawingBuffer:false у wgpu-контекста
+  + webgpu нечитаем вовсе, posthog#57008); фикс — getContext-шим
+  index.html + `set_prefer_gl_for_capture` (согласие → WebGL2-бэкенд);
+  фиксированы неверные утверждения v1 в комментариях и этом документе
+  (webgpu-растр, локальный resolutionScale); эмпирическая приёмка до/после
+  на реальном приложении; гейты fmt/check/clippy/test натив+wasm32.
 
 ## 8. Источники истины (References)
 
-- `crates/canvas-web/index.html` — блок `session_recording` в `posthog.init`.
+- `crates/canvas-web/index.html` — блок `session_recording` в `posthog.init`
+  + getContext-шим (FR-091 v2).
+- `crates/canvas-web/src/renderer_launch.rs` — `analytics_recording_active`,
+  вызов `set_prefer_gl_for_capture` (FR-091 v2).
+- `crates/canvas-render/src/renderer.rs` — `PREFER_GL_FOR_CAPTURE`/
+  `set_prefer_gl_for_capture`, `create_gpu_web`/`create_gpu_web_gl`/
+  `create_gpu_web_two_step` (FR-091 v2).
 - posthog-js v1.435.8: `lazy-recorder.js` (резолв конфига, сборка
   rrweb-опций), `recorder.js` (`initCanvasFPSObserver`,
-  `createImageBitmap`-снапшоты, encode-воркер).
-- PostHog docs: Session replay → Canvas recording (v1.105.7+, 4 fps,
-  replay settings, `maskRegionsFn` v1.408+).
+  `createImageBitmap`-снапшоты, encode-воркер, патч getContext с
+  форсированием preserveDrawingBuffer).
+- PostHog docs: Session replay → Canvas recording (v1.105.7+, 2D и
+  WebGL; WebGPU отсутствует) — docs/session-replay/canvas-recording.
+- PostHog issue #57008 «Session recording support for webgpu-backed
+  canvas» — webgpu-канвасы не попадают в replay (нет аналога
+  preserveDrawingBuffer, gpuweb#2743).
 - FR-089 (согласия/гейт SDK), FR-090 (события поверхностей в таймлайне).
