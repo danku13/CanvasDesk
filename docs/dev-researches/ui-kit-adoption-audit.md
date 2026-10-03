@@ -123,7 +123,7 @@ W3.2 формально исполнен, но ВСЕ дети — `MeasuredItem
 | `stage.rs` | 1 | `0x14161c` (`:1091`) |
 | `text.rs` | 1 | `chip_text_color` #14161c — «тёмный на любой теме» (FR-075, осознанно) |
 | `debug_overlay.rs` | 12 | диагностические, задокументированы как исключение |
-| `canvas-web/index.html` | ~25 | две локальные DOM-палитры (тулбар+пикер+тур), не связаны с ThemeColors |
+| `canvas-web/index.html` | ~25 | Закрыто W-f 04.10.2026: shell-литералы → CSS-переменные `--cd-*` (`:root` index.html; 29 слотов / 28 уникальных значений, 90 использований: head-CSS 28 + body-CSS 39 + JS-бандл тура 20 + `DIM_DEFAULTS` 1 + `gpu_gate.rs` 2; значения байт-в-байт прежние, паритет — `scripts/web_shell_palette_parity.py`). Данные-цвета сознательно не мигрированы: палитры тем канваса в index.html отсутствуют (theme-presets — `canvas-core`), `fill="white"/"black"` SVG-маски тура — геометрия маски, а не палитра; standalone-бандл `sdk/web-onboarding/canvasdesk-tour.js` — вне скоупа (литералы для переносимости) |
 
 ## 7. Хардкод размеров и дыры в токенах
 
