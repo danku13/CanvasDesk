@@ -58,6 +58,21 @@ impl RendererLauncher for SpawnLocalRendererLaunch {
             let deliver = slot.clone();
             let wake = window.clone();
             wasm_bindgen_futures::spawn_local(async move {
+                // FR-091 v2: capture-режим (согласие analytics) идёт в GL без
+                // WebGPU-ретраев — адаптер разрешается за миллисекунды, и
+                // Renderer::new успевает прочитать window.inner_size() ДО
+                // первого layout'а канваса (ResizeObserver winit'а ещё не
+                // сработал): 0×0 → surface клампится в 1×1 (предупреждение
+                // «физический размер canvas превышает…»), корректный размер
+                // возвращал бы только Resized — а он обрабатывается лишь при
+                // живом рендерере (handler.rs), т.е. лечится гонкой порядка
+                // событий, не гарантией. Дожидаемся двух анимационных кадров
+                // ДО старта Renderer::new — layout канваса гарантированно
+                // случился (rAF №1 выполняется до layout своего кадра,
+                // ResizeObserver срабатывает в layout кадра №1; rAF №2 — уже
+                // после него). ~32 мс к буту — незаметно; Resized приходит
+                // позже и резайзит в тот же размер (идемпотентно).
+                wait_canvas_layout().await;
                 let result = canvas_render::Renderer::new(window, prefer_dx12).await;
                 deliver.put(result);
                 // GPU готов: разбудить кадр-цикл — App заберёт слот в
@@ -70,6 +85,29 @@ impl RendererLauncher for SpawnLocalRendererLaunch {
         #[cfg(not(target_arch = "wasm32"))]
         let _ = (&window, prefer_dx12);
         RendererLaunch::Pending(slot)
+    }
+}
+
+/// FR-091 v2 (web): дождаться layout-кадра канваса — см. комментарий в
+/// `launch`. Ошибки не блокируют бут: нет window — сразу вернуться;
+/// rAF не запланировался (фоновая вкладка: колбэки не выполняются до
+/// видимости) — промис резолвится сразу, Renderer::new читает текущий
+/// размер, surface вылечится событием Resized (прежнее поведение).
+#[cfg(target_arch = "wasm32")]
+async fn wait_canvas_layout() {
+    let Some(win) = web_sys::window() else {
+        return;
+    };
+    for _ in 0..2 {
+        let win = win.clone();
+        let mut executor = move |resolve: js_sys::Function, _reject: js_sys::Function| {
+            if win.request_animation_frame(&resolve).is_err() {
+                // планирование сорвалось — не висим вечным промисом
+                let _ = resolve.call0(&wasm_bindgen::JsValue::NULL);
+            }
+        };
+        let promise = js_sys::Promise::new(&mut executor);
+        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
     }
 }
 
