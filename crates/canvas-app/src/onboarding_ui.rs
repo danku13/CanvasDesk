@@ -316,12 +316,24 @@ pub fn button_rect(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
 
 /// Hit-test кнопки карточки. «Назад» на первом шаге отсутствует (None),
 /// «Далее»/«Готово» и «Пропустить» доступны всегда (инвариант карусели).
+/// FR-097: на coarse-указателе тач-цели кнопок дотягиваются до 44 лог. px
+/// (hit-only, кламп в карточку — расширенная зона не выходит за оверлей;
+/// на точном указателе — прежние зоны).
 pub fn button_at(
     card: [f32; 4],
     state: &OnboardingState,
     point: [f32; 2],
 ) -> Option<OnboardingButton> {
+    let coarse = crate::touch_targets::pointer_coarse();
     let hit = |rect: [f32; 4]| {
+        let rect = if coarse {
+            crate::touch_targets::intersect_xywh(
+                crate::touch_targets::expand_xywh(rect, crate::touch_targets::MIN_TOUCH_TARGET),
+                card,
+            )
+        } else {
+            rect
+        };
         point[0] >= rect[0]
             && point[0] <= rect[0] + rect[2]
             && point[1] >= rect[1]

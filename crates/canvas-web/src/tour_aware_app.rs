@@ -39,7 +39,13 @@ impl TourAwareApp {
 
     /// Дренировать pending tour-сигналы и эмитить каждый в JS-bus.
     /// Идемпотентно: пустой drain → 0 эмиссий.
+    ///
+    /// FR-095: там же синхронизируется состояние текстового ввода
+    /// ([`App::text_input_active`] → шим виртуальной клавиатуры): хук
+    /// срабатывает после КАЖДОГО события цикла, поэтому переход
+    /// редактор/поиск ↔ канвас доезжает до web-слоя без отдельных мостов.
     fn drain_and_emit(&mut self) {
+        crate::ime::set_text_input_active(self.inner.text_input_active());
         let signals = self.inner.drain_tour_signals();
         for name in signals {
             crate::tour_signal::emit(&name);

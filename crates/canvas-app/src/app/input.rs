@@ -1554,20 +1554,34 @@ impl App {
             &self.template_category_names(),
         );
         let mut handled = false;
+        // FR-097: контейнер для клампа тач-хитов — прямоугольник дока
+        // (расширенные зоны не выходят за панель, канвас не перекрывается)
+        let panel_hit = rect_xywh(lay.panel_rect);
         // Кнопка сворачивания дока («‹» в шапке)
-        if point_in_rect(rect_xywh(lay.collapse_rect), self.cursor) {
+        if point_in_rect(
+            crate::touch_targets::touch_hit_xywh(rect_xywh(lay.collapse_rect), panel_hit),
+            self.cursor,
+        ) {
             self.template_panel.close();
             self.persist_palette_dock();
             handled = true;
         }
         // Клик по полю поиска — клавиатурный фокус в панель
-        if !handled && point_in_rect(rect_xywh(lay.input_rect), self.cursor) {
+        if !handled
+            && point_in_rect(
+                crate::touch_targets::touch_hit_xywh(rect_xywh(lay.input_rect), panel_hit),
+                self.cursor,
+            )
+        {
             self.template_panel.focus_search();
             handled = true;
         }
         if !handled {
             for (rect, name, _active) in &lay.category_rects {
-                if point_in_rect(rect_xywh(*rect), self.cursor) {
+                if point_in_rect(
+                    crate::touch_targets::touch_hit_xywh(rect_xywh(*rect), panel_hit),
+                    self.cursor,
+                ) {
                     self.template_panel.category =
                         if self.template_panel.category.as_deref() == Some(name) {
                             None
@@ -1587,7 +1601,11 @@ impl App {
             // — кандидат в drag; вставка — на отпускании: клик —
             // в центр viewport, drag — в точку курсора)
             for (rect, row) in lay.row_rects.iter().zip(lay.rows.iter()) {
-                if point_in_rect(rect_xywh(*rect), self.cursor) {
+                // FR-097: тач-цель строки ≥ 44 лог. px (кламп в док)
+                if point_in_rect(
+                    crate::touch_targets::touch_hit_xywh(rect_xywh(*rect), panel_hit),
+                    self.cursor,
+                ) {
                     if let PanelRow::Template(index) = row {
                         self.template_drag = Some(template_ui::PanelDrag {
                             index: *index,
@@ -1637,10 +1655,17 @@ impl App {
                     hover.open.and_then(|cat| {
                         raw_categories.get(cat).and_then(|raw| {
                             let items = self.visible_templates_by_category(raw);
+                            // FR-097: тач-цель строки flyout ≥ 44 лог. px
+                            // (кламп в прямоугольник flyout)
                             fly.row_rects
                                 .iter()
                                 .enumerate()
-                                .find(|(_, rect)| point_in_rect(**rect, self.cursor))
+                                .find(|(_, rect)| {
+                                    point_in_rect(
+                                        crate::touch_targets::touch_hit_xywh(**rect, fly.rect),
+                                        self.cursor,
+                                    )
+                                })
                                 .and_then(|(v, _)| {
                                     items.get(fly.scroll_top + v).and_then(|m| {
                                         self.templates.list().iter().position(|lm| lm.id == m.id)
@@ -1662,7 +1687,13 @@ impl App {
         if let Some(i) = strip
             .rows
             .iter()
-            .position(|(rect, _)| point_in_rect(*rect, self.cursor))
+            // FR-097: тач-цель чипа категории ≥ 44 лог. px (кламп в полосу)
+            .position(|(rect, _)| {
+                point_in_rect(
+                    crate::touch_targets::touch_hit_xywh(*rect, strip.rect),
+                    self.cursor,
+                )
+            })
         {
             // Пин-переключение flyout категории (WAI-ARIA)
             self.template_hover
@@ -4035,8 +4066,10 @@ impl App {
     /// пан серединой + pinch-зум дистанцией (якорь — середина, механика
     /// Miro/Figma). Гейт wasm32: нативные тачскрины (Windows) продолжают
     /// идти через OS-эмуляцию мыши — поведение натива не меняется.
+    /// FR-096: `event_loop` нужен маршруту long-press (контекстное меню —
+    /// тот же `on_right_button`, что у ПКМ).
     #[cfg(target_arch = "wasm32")]
-    pub(super) fn on_touch(&mut self, touch: Touch) {
+    pub(super) fn on_touch(&mut self, event_loop: &ActiveEventLoop, touch: Touch) {
         use canvas_core::touch::{Action, Phase};
         // FR-092: оракул браузерного дыма — доставка тач-событий (?log=debug)
         tracing::debug!(
@@ -4054,9 +4087,13 @@ impl App {
             TouchPhase::Cancelled => Phase::Cancelled,
         };
         let pos = [touch.location.x, touch.location.y];
-        let action = self
-            .touch_gesture
-            .step(touch.id, phase, pos, self.scale_factor() as f64);
+        let action = self.touch_gesture.step(
+            touch.id,
+            phase,
+            pos,
+            self.scale_factor() as f64,
+            super::gesture_clock_ms(),
+        );
         // FR-092: оракул — решение машины жеста (тап/драг/отмена/два пальца)
         tracing::debug!(target: "canvas_app", ?action, "touch: действие");
         match action {
@@ -4065,6 +4102,11 @@ impl App {
                 // FR-093: это нажатие — от тача; двойной тап сверяется
                 // с расширенным допуском (флаг гасится в on_left_button)
                 self.press_from_touch = true;
+                // FR-096: платформенная будилка long-press — web-слой
+                // замечает смену поколения и ставит setTimeout →
+                // AppEvent::LongPressPoll (палец без движения событий
+                // касания не рождает; валидность решает машина)
+                canvas_core::web_bridge::bump_touch_press_gen();
                 // Курсор ДО нажатия: on_left_button работает по self.cursor
                 self.on_cursor_moved(PhysicalPosition::new(p[0], p[1]));
                 self.on_left_button(ElementState::Pressed);
@@ -4082,6 +4124,11 @@ impl App {
                 // резиновый прямоугольник и драг ноды не оставляем
                 self.cancel_pointer_transients();
                 self.request_redraw();
+            }
+            // FR-096: долгое нажатие без движения — контекстное меню
+            // (на таче ПКМ нет; маршрут — тот же, что у десктопной ПКМ)
+            Action::LongPress(p) => {
+                self.on_touch_long_press(event_loop, p);
             }
             Action::TwoFinger {
                 pan,
@@ -4101,6 +4148,60 @@ impl App {
                     self.request_redraw();
                 }
             }
+        }
+    }
+
+    /// FR-096: long-press → контекстное меню. Маршрут — тот же, что у
+    /// десктопной ПКМ (`on_right_button` Pressed): меню ноды/связи/параметра
+    /// или меню пустого канваса. Начальное нажатие тача уже прошло мышиный
+    /// пайплайн (Action::Press) — транзиенты драга/рамки снимаются
+    /// (меню вместо драга), детектор двойного тапа сбрасывается:
+    /// нажатие, открывшее меню, не должно сцепляться со следующим тапом
+    /// (FR-093). Последующий отпускание приходит как Action::Cancel
+    /// (машина) — кликом в меню не пролезает.
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn on_touch_long_press(&mut self, event_loop: &ActiveEventLoop, pos: [f64; 2]) {
+        // Курсор — в точку long-press (меню открывается под пальцем)
+        self.on_cursor_moved(PhysicalPosition::new(pos[0], pos[1]));
+        // Драг/рамка/resize от начального Press не оставляются
+        self.cancel_pointer_transients();
+        // Пара «long-press + следующий тап» — не двойной тап
+        self.double_click.reset();
+        // Оракул браузерного дыма: long-press распознан (?log=debug)
+        tracing::debug!(target: "canvas_app", x = pos[0], y = pos[1], "touch: long-press — контекстное меню");
+        self.on_right_button(ElementState::Pressed, event_loop);
+    }
+
+    /// FR-095 (мобильный web): клавиатура изменила видимый вьюпорт
+    /// (AppEvent::VisualViewport от слушателя visualViewport canvas-web).
+    /// При активном редакторе заметки пануем камеру вверх на переполнение,
+    /// чтобы низ редактируемой ноды остался видим над клавиатурой
+    /// (чистая геометрия — `keyboard_shift_up`). Пан — только при ИЗМЕНЕНИИ
+    /// инсета: частые vv-scroll/resize во время набора не перетирают
+    /// ручной пан. Автовозврат при опускании клавиатуры не делаем
+    /// (сознательное ограничение v1 — камера не «прыгает» обратно).
+    pub(super) fn on_visual_viewport(&mut self, bottom_inset: f32) {
+        let changed = (bottom_inset - self.visual_viewport_inset).abs() >= 1.0;
+        self.visual_viewport_inset = bottom_inset;
+        if !changed || bottom_inset <= 0.0 {
+            return;
+        }
+        // v1: сдвигаем только активный редактор заметки (поиск/палитра —
+        // экранные панели у верха, клавиатурой не перекрываются)
+        let Some(index) = self.editing.as_ref().and_then(|s| s.node_index()) else {
+            return;
+        };
+        let Some(node) = self.scene.canvas.nodes.get(index) else {
+            return;
+        };
+        let viewport = self.viewport_logical();
+        let bottom_screen = self
+            .camera
+            .world_to_screen([node.x, node.y + node.height], viewport)[1];
+        let shift = keyboard_shift_up(bottom_screen, viewport[1], bottom_inset);
+        if shift > 0.0 {
+            self.camera.pan([0.0, -shift]);
+            self.request_redraw();
         }
     }
 
