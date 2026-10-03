@@ -1815,7 +1815,12 @@ mod tests {
     fn flyout_layout_flips_above_at_bottom_edge() {
         let window_h = 600.0;
         // Строка вплотную к нижнему отступу
-        let strip_row = [12.0, window_h - PANEL_TOP_MARGIN - CATEGORY_ROW_H, 80.0, CATEGORY_ROW_H];
+        let strip_row = [
+            12.0,
+            window_h - PANEL_TOP_MARGIN - CATEGORY_ROW_H,
+            80.0,
+            CATEGORY_ROW_H,
+        ];
         let fly = flyout_layout(strip_row, 3, 1280.0, window_h, 0);
         let expected_h = 3.0 * ROW_HEIGHT + FLYOUT_PAD_V * 2.0;
         assert!((fly.rect[3] - expected_h).abs() < 0.01);
