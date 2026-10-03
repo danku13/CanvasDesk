@@ -1,4 +1,24 @@
 ---
+Task ID: PRD-0010-UI-прототип
+Agent: Super Z (main)
+Task: Спроектировать UI 5 новых AI-компонентов LLM-интеграции (PRD-0010/ADR-0016) и доработать docs/prototypes/prototype-unified.html: статусная панель AI, custom-node suggest, агент-панель, таб настроек «AI and Models», онбординг AI-режима
+
+Work Log:
+- Прочитаны контекстные доки: PRD-0010 (F-2.12-16, F-4, F-7, F-8, Q1-Q7), byok-chatgpt-oauth-design, DESIGN_RULES §1-12, user-docs/interface.md, исходный prototype-unified.html (4296 строк: ЧАСТЬ A-X, suggest FR-079)
+- README-комментарий в шапке HTML-файла: состав, демо-входы, состояния, правила (Esc-лестница, токены, cost-движок)
+- CSS: 5 блоков в каноничном стиле (--cd/--ai токены, паттерны sgset/rdlg): #aistatus+#minimock (220×140 мок, F-7.9 <900px, отъезд right:400px при agent-open), #agentpanel (шторка 388px), #aisetov (9-й таб, 640px), #onbov (карточки-радио), #limov (warn-диалог); пульт: группа «AI (PRD-0010)» + padding-bottom 326px против перекрытия стопкой правого-нижнего угла
+- ЧАСТЬ AI (~700 строк JS): состояние AI{}; cost-движок aiSpend/aiDemoLimit (80% → aiOpenLimit, 100% → error); статусная панель (модель/провайдер по активной фиче, feats-тумблеры гейтят sgRunAI/sgShowCards/agSend, пауза); custom suggest (AI_CUSTOM 3 варианта, conf 0.87/0.74/0.42, skeleton+spinner → каскадный morph, confidence-бар, порог F-2.11 скрывает 3-й, флип у края + подъём над попапом C1, применение = замена ноды через SG.undo + тост «Сохранить как шаблон» F-2.16); агент-панель (agUser/agBot/agToolRow, tool-calls graph_read→node_create→graph_validate, preview Sugiyama-lite от выделенной ноды + тег AGENT PREVIEW, Accept = graph_apply одним батчем, Reject, rate-счётчик ChatGPT 47/80, 429/лимит error-сообщения); настройки (per-feature провайдеры с disabled ChatGPT для Suggest, health-check /v1/models, модель, слайдеры cost-limit/conf-threshold, residency radio+описания, self-hosted endpoint+валидация, телеметрия OFF); онбординг (3 режима, privacy-блок, Продолжить применяет residency+провайдеры)
+- Хуки в существующий код: sgRunAI canAi += AI.feat.suggest&&!AI.paused, isHybrid |= aiSuggestLLM(); sgRenderPopup: лейбл движка «lex + AI · BYOK» + секция «⚡ custom-ноды · LLM»; sgPositionSurfaces/aiCustomLayout: agPad против перекрытия агент-панелью; mousedown: клик по ghost до закрытия ввода; updateHover: тултипы ghost (confidence+порог, preview); keydown: aiKeydown перед sgKeydown (онбординг→лимит→настройки→preview→панель, Ctrl+I); render: aiDrawGhosts после sgDrawEditing; resetAll: aiResetAll; resize: aiSyncShell (sghud над стопкой); TOUR +2 шага (14), #info +5 пунктов
+- Багфиксы по ходу: agSend перезаписывал tool-строки (текст вынесен в .ag-txt), Esc из фокуса чата глотался stopPropagation, ghost-ноды перекрывались попапом (подъём над pr.top), README-заголовок ЧАСТИ L восстановлен после вставки
+- E2E в headless-браузере (agent-browser, 18 скриншотов): агент-цикл (запрос→tools→preview→Accept→ноды CAC/LTV на канвасе, day $0.12→$0.14, rate 47→46), custom-цикл (генерация→morph→клик по ghost→замена ноды+тост), демо лимита (80% warn+диалог→100% full+error-ghost→сброс), онбординг (Local → laya/ollama/ollama), настройки (selfhost endpoint, телеметрия), узкое окно 800px (aistatus+minimock display:none), обе темы, Ctrl+I/Esc-лестница, reset; node --check 4561 строк JS — OK, теги сбалансированы, консоль чистая
+- docs/prototypes/README.md: секция «AI-компоненты LLM-интеграции» + тур 14 шагов
+
+Stage Summary:
+- prototype-unified.html: 4296 → ~5900 строк, 5 AI-компонентов PRD-0010 в стиле существующего прототипа, все состояния (loading/empty/error/success), интерактивные toggle/dropdown/slider, адаптивность F-7.9
+- Интеграция бесшовная: suggest-гейты FR-079 уважают AI.feat/paused/провайдера; Esc-лестница расширена в начале; cost-движок единый для custom/агента
+- Владельцу на приёмку: пульт «AI (PRD-0010)» → «Демо лимита» (3 клика: 80%→100%→сброс), «Агент-панель» (Ctrl+I), «Ввод в ноде (C1)» → секция custom-нод; вариант conf 0,42 скрыт порогом 0,50 — понизить слайдер в «Настройки AI»
+
+---
 Task ID: FR-089-активация
 Agent: Super Z (main)
 Task: PostHog-настройки владельца (EU cloud, phc_-ключ) — вписать ключ, включить продуктовые события из приложения, e2e-верификация доставки

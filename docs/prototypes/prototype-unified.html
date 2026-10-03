@@ -4,6 +4,72 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Объединённый прототип CanvasDesk — сцена · анатомия ноды Н-3 · связи В-C · оверлеи</title>
+<!--
+  ════════════════════════════════════════════════════════════════════
+  README — prototype-unified.html (CanvasDesk, docs/prototypes)
+  ════════════════════════════════════════════════════════════════════
+  Автономный интерактивный прототип (vanilla JS + Canvas 2D, офлайн,
+  без зависимостей). Слияние 7 UX-прототипов (см. DESIGN_RULES.md §11)
+  + LLM-интеграция PRD-0010 / ADR-0016 (ЧАСТЬ AI).
+
+  ЧТО ВНУТРИ
+  · Сцена — пан/зум, LOD 0.6/1.5, пучки ×N, тело ноды Н-3, связи В-C,
+    what-if, расталкивание при драге (ЧАСТЬ X).
+  · Подсказки FR-079 — попап C1 (L0 мгновенно + ИИ-строки), карточки
+    C3, настройки opt-in, dev-HUD S0 (ЧАСТЬ S).
+  · Оверлеи — main stage, проверка цепочки + режим защиты, ревью
+    автосвязей; Esc-лестница (DESIGN_RULES §11.3).
+
+  НОВОЕ — AI-компоненты LLM-интеграции (PRD-0010, ЧАСТЬ AI):
+  1. Статусная панель AI (#aistatus, правый нижний угол НАД мок-
+     миникартой) — активная модель + провайдер, функции-тумблеры
+     Suggest/Graph/Agent, cost сессии/дня с прогресс-баром, ⚙ →
+     настройки, ⏸ → пауза; 80% дневного лимита — диалог расширения;
+     прячется на узких окнах (<900px), отъезжает влево при открытой
+     агент-панели; не перекрывает миникарту.
+  2. Custom-node suggest (расширение FR-079, Q7) — во время ввода
+     в ноде кнопка «3 custom-варианта» в попапе C1: 3 ghost-ноды
+     LLM рядом с редактируемой (не перекрывая её), skeleton со
+     spinner → morph в реальную, subtle confidence-бар (число — в
+     тултипе, порог скрывает слабые — F-2.11), тост «Сохранить как
+     шаблон» после применения (F-2.16).
+  3. Агент-панель (#agentpanel, справа, Ctrl+I) — чат с историей
+     tool-calls (42 MCP-инструмента), context-aware чип (Selected/
+     entire canvas), cost estimate перед запросом, preview ghost-
+     нодами на канвасе + Accept/Reject (Q3), rate limit ChatGPT,
+     состояния empty/loading/error/success.
+  4. Настройки «AI and Models» (#aisetov, 9-й таб) — per-feature
+     провайдеры (Suggest без ChatGPT OAuth — Q2), API-ключ с
+     «Проверить ключ», выбор модели, rate limit counter, слайдеры
+     cost-лимита ($1/день) и confidence-порога (0,5), data
+     residency Local/Cloud/Self-hosted, self-hosted endpoint,
+     телеметрия opt-in (default OFF).
+  5. Онбординг AI-режима (#onbov) — «Выберите режим AI»: Local only
+     / Cloud / Self-hosted с описаниями, «Подробнее о privacy»,
+     выбор применяет провайдеров и residency (F-8).
+
+  ДЕМО-ВХОДЫ — пульт → группа «AI (PRD-0010)»: статусная панель
+  (тумблер), Агент-панель (Ctrl+I), Настройки AI, Онбординг AI,
+  «Демо лимита» (80% → 100% → сброс: показывает диалог расширения
+  и error-состояния custom/агента). Custom-ноды: пульт → Подсказки
+  → включить движок → «Ввод в ноде (C1)» → в попапе секция
+  «custom-ноды».
+
+  СОСТОЯНИЯ: loading (skeleton ghost-ноды, tool-строки агента),
+  empty (нет вариантов выше порога; пустая панель агента), error
+  (429 rate limit / дневной лимит), success (morph, apply, тосты).
+
+  ПРАВИЛА: токены только через CSS-переменные/--cd-паттерны
+  DESIGN_RULES §4–6; Esc-лестница расширена в начале: онбординг →
+  80%-диалог → настройки AI → preview агента → панель агента →
+  (существующая лестница). Cost-движок честный: каждый мок-запрос
+  списывает оценку в Session/Day (F-7.10).
+
+  Контекст: docs/prd/prd-0010-llm-integration-byok-chatgpt.md ·
+  docs/adr/adr-0016-llm-layer-canvas-llm.md · docs/prototypes/
+  DESIGN_RULES.md §12.
+  ════════════════════════════════════════════════════════════════════
+-->
 <style>
 /* ============================================================
    ОБЪЕДИНЁННЫЙ ПРОТОТИП — единый дизайн-фундамент
@@ -65,7 +131,7 @@ body.rdv-open #info, body.rdv-open #controls { opacity:.08; pointer-events:none;
 .dotu { background:transparent; border:1.6px dashed var(--amber); border-radius:50%; }
 .obl { font-family:var(--mono); font-style:italic; color:var(--flow); }
 
-#controls { top:12px; right:12px; width:284px; max-height:calc(100vh - 24px); overflow-y:auto; }
+#controls { top:12px; right:12px; width:284px; max-height:calc(100vh - 24px); overflow-y:auto; padding-bottom:326px; }
 #controls .grp-title { font-size:10px; text-transform:uppercase; letter-spacing:.09em; color:var(--dim); margin:10px 0 6px; padding-top:8px; border-top:1px solid var(--line); }
 #controls .grp-title:first-of-type { margin-top:2px; border-top:none; padding-top:0; }
 #controls .row { display:flex; align-items:center; gap:8px; margin-bottom:7px; flex-wrap:wrap; }
@@ -371,6 +437,185 @@ body.light .sgset .badge { color:#33507a; }
 }
 #toast.show { opacity:1; transform:translateX(-50%); }
 
+/* ============================================================
+   AI (PRD-0010): статусная панель + мок-миникарта
+   ============================================================ */
+#minimock { position:fixed; right:12px; bottom:12px; width:220px; height:140px; z-index:25;
+  background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:8px 10px;
+  backdrop-filter:blur(6px); overflow:hidden; transition:right .22s ease; }
+#minimock .mm-t { font-size:9px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); }
+#minimock .mm-view { position:absolute; border:1.5px solid rgba(255,255,255,.6); border-radius:2px; left:88px; top:52px; width:84px; height:56px; }
+body.light #minimock .mm-view { border-color:rgba(20,24,40,.5); }
+#minimock .mm-n { position:absolute; border-radius:2.5px; opacity:.8; }
+#aistatus { position:fixed; right:12px; bottom:160px; width:302px; z-index:26;
+  background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:9px 11px;
+  backdrop-filter:blur(6px); box-shadow:0 6px 24px rgba(0,0,0,.18); font-size:12px;
+  transition:right .22s ease, opacity .2s ease; }
+body.agent-open #aistatus, body.agent-open #minimock { right:400px; }
+#aistatus .ais-row { display:flex; align-items:center; gap:6px; min-width:0; }
+#aistatus .ais-head { margin-bottom:7px; }
+#aistatus .ais-dot { width:8px; height:8px; border-radius:50%; background:var(--ai);
+  box-shadow:0 0 0 3px rgba(177,140,255,.14); flex:none; }
+body.light #aistatus .ais-dot { box-shadow:0 0 0 3px rgba(124,77,224,.14); }
+#aistatus.paused .ais-dot { background:var(--dim); box-shadow:none; }
+#aistatus .ais-model { font-weight:600; font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#aistatus .ais-prov { font-size:9.5px; color:var(--dim); border:1px solid var(--line); border-radius:99px; padding:1px 7px; white-space:nowrap; flex:none; }
+#aistatus .ais-sp { flex:1; }
+#aistatus .ais-btn { width:24px; height:24px; border-radius:6px; border:1px solid var(--line);
+  background:none; color:var(--dim); cursor:pointer; font-size:12px; line-height:1; flex:none; padding:0; }
+#aistatus .ais-btn:hover { border-color:var(--accent); color:var(--accent); }
+#aistatus .ais-feats { display:flex; gap:5px; flex-wrap:wrap; }
+#aistatus .ais-feat { font-size:10.5px; padding:2.5px 9px; border-radius:99px; border:1px solid var(--line);
+  background:none; color:var(--dim); cursor:pointer; white-space:nowrap; transition:all .15s; }
+#aistatus .ais-feat.on { border-color:rgba(177,140,255,.42); background:rgba(177,140,255,.12); color:var(--ai); }
+body.light #aistatus .ais-feat.on { border-color:rgba(124,77,224,.42); background:rgba(124,77,224,.10); color:var(--ai); }
+#aistatus .ais-costs { margin-top:7px; font-size:11px; color:var(--dim); display:flex; gap:6px; align-items:baseline; }
+#aistatus .ais-costs b { color:var(--txt); font-family:var(--mono); font-weight:600; }
+#aistatus .ais-bar { height:4px; border-radius:2px; background:var(--panel2); overflow:hidden; margin-top:5px; }
+#aistatus .ais-bar i { display:block; height:100%; width:0%; background:var(--flow); transition:width .35s ease, background .2s ease; }
+#aistatus .ais-bar.warn i { background:var(--warn); }
+#aistatus .ais-bar.full i { background:var(--rej); }
+#aistatus .ais-paused-lb { display:none; font-size:10px; color:var(--warn); margin-top:5px; }
+#aistatus.paused .ais-paused-lb { display:block; }
+#aistatus.paused .ais-feats, #aistatus.paused .ais-costs { opacity:.45; }
+@media (max-width:900px){ #aistatus, #minimock { display:none; } }
+
+/* ---------- AI: агент-панель (чат справа) ---------- */
+#agentpanel { position:fixed; top:0; right:0; height:100%; width:388px; max-width:94vw; z-index:44;
+  background:var(--panel); border-left:1px solid var(--line); display:flex; flex-direction:column;
+  transform:translateX(105%); transition:transform .22s ease; backdrop-filter:blur(6px);
+  box-shadow:-10px 0 36px rgba(0,0,0,.28); }
+#agentpanel.open { transform:none; }
+.ag-head { display:flex; align-items:center; gap:9px; padding:12px 14px; border-bottom:1px solid var(--line); }
+.ag-head .bolt { color:var(--ai); font-size:14px; }
+.ag-head .ttl { font-weight:600; font-size:13.5px; }
+.ag-head .sub { color:var(--dim); font-size:10px; display:block; margin-top:1px; }
+.ag-head .dclose { margin-left:auto; }
+.ag-ctx { display:flex; gap:6px; padding:8px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+.ag-chip { font-size:10px; padding:2.5px 9px; border-radius:99px; border:1px solid var(--line);
+  color:var(--txt); background:var(--panel2); white-space:nowrap; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+.ag-chip.ai { border-color:rgba(177,140,255,.42); color:var(--ai); background:rgba(177,140,255,.08); }
+body.light .ag-chip.ai { border-color:rgba(124,77,224,.42); color:var(--ai); background:rgba(124,77,224,.06); }
+.ag-log { flex:1; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:9px; }
+.ag-empty { color:var(--dim); font-size:11.5px; line-height:1.55; border:1px dashed var(--line);
+  border-radius:10px; padding:12px 13px; }
+.ag-msg { font-size:12.5px; line-height:1.5; border-radius:10px; padding:8px 11px; max-width:94%; }
+.ag-msg .t { font-size:9px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin-bottom:3px; }
+.ag-msg.user { align-self:flex-end; background:rgba(77,163,255,.12); border:1px solid rgba(77,163,255,.3); }
+body.light .ag-msg.user { background:rgba(47,127,232,.09); }
+.ag-msg.bot { align-self:flex-start; background:var(--panel2); border:1px solid var(--line); }
+.ag-msg.err { align-self:flex-start; background:rgba(229,105,122,.08); border:1px solid rgba(229,105,122,.38); color:var(--rej); }
+.ag-msg.preview { border-color:rgba(177,140,255,.5); }
+.ag-tools { margin-top:6px; border-top:1px dashed var(--line); padding-top:6px; display:flex; flex-direction:column; gap:3px; }
+.ag-tool { font-family:var(--mono); font-size:10.5px; color:var(--dim); line-height:1.45; }
+.ag-tool .fn { color:var(--ai); }
+.ag-tool b { color:var(--ok); font-weight:600; }
+.ag-tool.wrn { color:var(--warn); }
+.ag-tool.sk { height:10px; border-radius:5px; width:72%;
+  background:linear-gradient(90deg, rgba(177,140,255,.07), rgba(177,140,255,.18), rgba(177,140,255,.07));
+  background-size:220% 100%; animation:sgShimmer 1.15s linear infinite; }
+.ag-acts { display:flex; gap:8px; margin-top:8px; }
+.ag-acts button { flex:1; font-size:11.5px; padding:5px 10px; border-radius:7px; cursor:pointer;
+  border:1px solid var(--line); background:none; color:var(--txt); }
+.ag-acts button.acc { border-color:rgba(63,191,127,.5); color:var(--ok); font-weight:600; }
+.ag-acts button.acc:hover { background:rgba(63,191,127,.1); }
+.ag-acts button.rej:hover { border-color:var(--rej); color:var(--rej); }
+.ag-acts button:disabled { opacity:.4; cursor:default; }
+.ag-est { padding:6px 14px; font-size:10.5px; color:var(--dim); border-top:1px solid var(--line); font-family:var(--mono); }
+.ag-inrow { display:flex; gap:8px; padding:9px 14px 6px; border-top:1px solid var(--line); }
+.ag-inrow textarea { flex:1; resize:none; background:var(--panel2); color:var(--txt); border:1px solid var(--line);
+  border-radius:8px; font:12.5px/1.45 inherit; padding:7px 10px; min-height:34px; max-height:110px; }
+.ag-inrow textarea:focus { outline:none; border-color:var(--accent); }
+.ag-inrow button { align-self:flex-end; }
+.ag-quick { display:flex; gap:6px; padding:3px 14px 12px; flex-wrap:wrap; }
+.ag-quick button { font-size:10.5px; padding:3.5px 10px; border-radius:99px; border:1px solid var(--line);
+  background:none; color:var(--dim); cursor:pointer; }
+.ag-quick button:hover { border-color:rgba(177,140,255,.5); color:var(--ai); }
+body.light .ag-quick button:hover { border-color:rgba(124,77,224,.5); }
+
+/* ---------- AI: настройки «AI and Models» (9-й таб, паттерн sgset) ---------- */
+#aisetov { position:fixed; inset:0; z-index:78; background:rgba(8,10,14,.55); display:flex; align-items:center; justify-content:center; }
+#aisetov.hidden { display:none; }
+.aiset { width:640px; max-width:96vw; max-height:90vh; overflow:hidden; background:var(--panel-solid);
+  border:1px solid var(--line); border-radius:14px; display:flex; flex-direction:column;
+  box-shadow:0 24px 80px rgba(0,0,0,.5); animation:winIn .25s ease; }
+.aiset .atabs { display:flex; gap:2px; padding:10px 12px 0; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+.aiset .atabs button { font-size:11.5px; padding:5px 11px; border:none; background:none; color:var(--dim);
+  cursor:pointer; border-radius:7px 7px 0 0; border-bottom:2px solid transparent; }
+.aiset .atabs button:hover { color:var(--txt); }
+.aiset .atabs button.on { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+.aiset .abody { padding:10px 18px 8px; overflow-y:auto; }
+.aiset .asgrp { font-size:10px; text-transform:uppercase; letter-spacing:.09em; color:var(--dim); margin:13px 0 6px; }
+.aiset .asgrp:first-child { margin-top:3px; }
+.aiset .asrow { display:flex; align-items:center; gap:10px; margin-bottom:7px; font-size:12.5px; }
+.aiset .asrow .fl { width:128px; flex:none; color:var(--txt); }
+.aiset .asrow .fl small { display:block; color:var(--dim); font-size:9.5px; }
+.aiset select { background:var(--panel2); color:var(--txt); border:1px solid var(--line); border-radius:7px;
+  font-size:12px; padding:4px 8px; cursor:pointer; max-width:290px; }
+.aiset select:focus { outline:none; border-color:var(--accent); }
+.aiset select option { background:var(--panel-solid); color:var(--txt); }
+.aiset input[type=text], .aiset input[type=password] { background:var(--panel2); color:var(--txt);
+  border:1px solid var(--line); border-radius:7px; padding:5px 9px; font-size:12px; font-family:var(--mono); }
+.aiset input[type=text]:focus, .aiset input[type=password]:focus { outline:none; border-color:var(--accent); }
+.aiset input[type=range] { flex:1; accent-color:var(--accent); }
+.aiset .note { font-size:11px; color:var(--dim); line-height:1.5; }
+.aiset .hbadge { font-size:10px; font-weight:700; padding:2.5px 9px; border-radius:99px; background:var(--chip); color:#9cc3e6; white-space:nowrap; }
+body.light .aiset .hbadge { color:#33507a; }
+.aiset .hbadge.ok { background:rgba(63,191,127,.15); color:var(--ok); }
+.aiset .hbadge.err { background:rgba(229,105,122,.14); color:var(--rej); }
+.aiset .slb { display:flex; justify-content:space-between; font-size:11.5px; color:var(--dim); margin-bottom:3px; }
+.aiset .slb b { color:var(--txt); font-family:var(--mono); font-weight:600; }
+.aiset .radio3 { display:flex; flex-direction:column; gap:6px; }
+.aiset .radio3 label { display:flex; gap:9px; align-items:flex-start; padding:8px 11px; border:1px solid var(--line);
+  border-radius:9px; cursor:pointer; font-size:12.5px; transition:border-color .15s; }
+.aiset .radio3 label.sel { border-color:var(--accent); background:rgba(77,163,255,.07); }
+body.light .aiset .radio3 label.sel { background:rgba(47,127,232,.06); }
+.aiset .radio3 input { margin-top:2.5px; accent-color:var(--accent); }
+.aiset .radio3 .rd { font-weight:600; }
+.aiset .radio3 .ds { display:block; color:var(--dim); font-size:11px; margin-top:1px; line-height:1.45; }
+.aiset .srow2 { margin-bottom:9px; }
+.aiset .keyrow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.aiset .keyrow input { flex:1; min-width:170px; }
+.aiset .afoot { display:flex; gap:8px; align-items:center; padding:10px 18px 14px; border-top:1px solid var(--line); }
+.aiset .afoot .hint { flex:1; font-size:11px; color:var(--dim); }
+
+/* ---------- AI: онбординг AI-режима ---------- */
+#onbov { position:fixed; inset:0; z-index:82; background:rgba(9,10,13,.66); display:flex; align-items:center; justify-content:center; animation:ovIn .22s ease; }
+#onbov.hidden { display:none; }
+.onbo { width:600px; max-width:95vw; max-height:90vh; overflow-y:auto; background:var(--panel-solid);
+  border:1px solid var(--line); border-radius:16px; padding:26px 30px 22px;
+  box-shadow:0 24px 80px rgba(0,0,0,.55); animation:winIn .3s ease; }
+.onbo .ostep { font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:var(--ai); margin-bottom:7px; font-weight:700; }
+.onbo h1 { font-size:19px; font-weight:600; margin-bottom:4px; }
+.onbo .osub { color:var(--dim); font-size:12.5px; margin-bottom:16px; }
+.onbo .omode { display:block; border:1px solid var(--line); border-radius:11px; padding:12px 15px; cursor:pointer; margin-bottom:8px; transition:border-color .15s, background .15s; }
+.onbo .omode:hover { border-color:var(--accent); }
+.onbo .omode.sel { border-color:var(--accent); background:rgba(77,163,255,.07); box-shadow:0 0 0 1px var(--accent); }
+body.light .onbo .omode.sel { background:rgba(47,127,232,.06); }
+.onbo .omode .on1 { font-weight:600; font-size:13.5px; display:flex; align-items:center; gap:9px; }
+.onbo .omode .on1 i.rd { width:13px; height:13px; border-radius:50%; border:2px solid var(--dim); flex:none; transition:all .15s; }
+.onbo .omode.sel .on1 i.rd { border-color:var(--accent); background:var(--accent); box-shadow:inset 0 0 0 2.5px var(--panel-solid); }
+.onbo .omode .on1 .tag { margin-left:auto; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.07em;
+  padding:1.5px 8px; border-radius:99px; background:rgba(177,140,255,.13); color:var(--ai); border:1px solid rgba(177,140,255,.3); }
+body.light .onbo .omode .on1 .tag { background:rgba(124,77,224,.1); border-color:rgba(124,77,224,.3); }
+.onbo .omode .onds { color:var(--dim); font-size:11.5px; margin-top:4px; padding-left:22px; line-height:1.5; }
+.onbo .oacts { display:flex; gap:8px; margin-top:18px; align-items:center; }
+.onbo .opriv { display:none; margin-top:15px; border:1px solid var(--line); border-radius:10px; padding:11px 13px; font-size:11.5px; color:var(--dim); line-height:1.6; }
+.onbo .opriv.show { display:block; }
+.onbo .opriv b { color:var(--txt); }
+.onbo .opriv code { font-family:var(--mono); font-size:10.5px; color:var(--ai); }
+
+/* ---------- AI: диалог 80% дневного лимита ---------- */
+#limov { position:fixed; inset:0; z-index:84; background:rgba(9,10,13,.5); display:flex; align-items:center; justify-content:center; animation:ovIn .22s ease; }
+#limov.hidden { display:none; }
+.limdlg { width:450px; max-width:94vw; background:var(--panel-solid); border:1px solid rgba(224,163,79,.5);
+  border-radius:14px; padding:18px 22px 16px; box-shadow:0 24px 80px rgba(0,0,0,.55); animation:winIn .25s ease; }
+.limdlg h2 { font-size:15px; display:flex; gap:9px; align-items:center; }
+.limdlg h2 .w { color:var(--warn); font-size:17px; }
+.limdlg p { font-size:12.5px; color:var(--dim); margin:9px 0 15px; line-height:1.55; }
+.limdlg p b { color:var(--txt); font-family:var(--mono); font-weight:600; }
+.limdlg .lacts { display:flex; gap:8px; flex-wrap:wrap; }
+
 @media (max-width:980px) {
   #info { width:236px; }
   #tour { min-width:0; }
@@ -397,6 +642,11 @@ body.light .sgset .badge { color:#33507a; }
     <li><b>Esc-лестница</b> — меню → drag → ревью → защита → цепочка → stage → выделение</li>
     <li><b>Расталкивание при драге</b> — тяните ноду сквозь соседей: они уступают дорогу (якорь + ореол MTV) и съезжаются обратно; сейф-зазор держит дистанцию между любыми нодами; если активная встала «между» — уехавшие получают новые якоря (пульт «Драг · расталкивание»)</li>
     <li><b>Подсказки FR-079</b> — двойной клик по ноде: попап с локальными строками мгновенно + ИИ-строки догрузкой (таймаут 800 мс — тихий откат), карточки «следующие ноды» у свежего шаблона, настройки opt-in, HUD телеметрии</li>
+    <li><b>AI-статус (PRD-0010)</b> — панель справа над миникартой: модель+провайдер, функции-тумблеры Suggest/Graph/Agent, cost сессии/дня (80% лимита — диалог расширения), ⚙ настройки, ⏸ пауза; прячется <900px, отъезжает при открытой агент-панели</li>
+    <li><b>Custom-ноды suggest (Q7)</b> — в попапе C1: «3 custom-варианта» → 3 ghost-ноды LLM рядом с редактируемой: skeleton со spinner → morph, confidence-бар (порог скрывает слабые — F-2.11), клик — применить, тост «Сохранить как шаблон» (F-2.16)</li>
+    <li><b>Агент-панель (Ctrl+I)</b> — чат с историей tool-calls, context-aware чип, cost estimate, preview ghost-нодами на канвасе + Accept/Reject (Q3), rate limit ChatGPT, 429/лимит — error-состояния</li>
+    <li><b>AI and Models (9-й таб)</b> — per-feature провайдеры (Suggest без ChatGPT — Q2), ключ + «Проверить ключ», модель, слайдеры cost-лимита и confidence, data residency, self-hosted endpoint, телеметрия OFF</li>
+    <li><b>Онбординг AI</b> — экран первого запуска: Local / Cloud / Self-hosted + «Подробнее о privacy» (F-8)</li>
   </ul>
   <div class="legend">
     <s><span class="dotv"></span>value / проливание</s>
@@ -500,6 +750,17 @@ body.light .sgset .badge { color:#33507a; }
   <div class="btns row">
     <button class="ctl" id="sgSetBtn">Настройки подсказок</button>
     <button class="ctl" id="sgHudBtn">HUD подсказок</button>
+  </div>
+
+  <div class="grp-title">AI · LLM-интеграция (PRD-0010)</div>
+  <div class="row"><label class="toggle"><input type="checkbox" id="aiPanelTgl" checked>статусная панель AI (над миникартой)</label></div>
+  <div class="btns row">
+    <button class="ctl" id="aiAgentBtn">Агент-панель</button>
+    <button class="ctl" id="aiSetBtn">Настройки AI</button>
+  </div>
+  <div class="btns row">
+    <button class="ctl" id="aiOnbBtn">Онбординг AI</button>
+    <button class="ctl" id="aiDemoBtn" title="Симуляция расхода: 1-й клик — 80% лимита (диалог расширения), 2-й — 100% (error-состояния), 3-й — сброс дня">Демо лимита</button>
   </div>
   <div id="readout">зум 100% · LOD 1 · Н-3 · В-C</div>
 </div>
@@ -623,6 +884,217 @@ body.light .sgset .badge { color:#33507a; }
   <div class="hrow" id="sghudGates">гейты: —</div>
   <div class="hrow" id="sghudCnt">показов 0 · принято 0 · отклонено 0 · правок после 0</div>
   <div class="hjr" id="sghudLog"></div>
+</div>
+
+<!-- ══════════ AI (PRD-0010): мок-миникарта (плейсхолдер продукта) ══════════ -->
+<div id="minimock" title="Миникарта (мок-плейсхолдер, 220×140 по DESIGN_RULES §5) — статусная панель AI расположена НАД ней и не перекрывает её">
+  <div class="mm-t">Миникарта · мок</div>
+  <div class="mm-n" style="left:16px; top:40px; width:44px; height:26px; background:rgba(49,184,166,.4);"></div>
+  <div class="mm-n" style="left:74px; top:30px; width:52px; height:30px; background:rgba(77,163,255,.4);"></div>
+  <div class="mm-n" style="left:52px; top:80px; width:40px; height:24px; background:rgba(167,139,250,.4);"></div>
+  <div class="mm-n" style="left:132px; top:64px; width:34px; height:22px; background:rgba(217,161,60,.4);"></div>
+  <div class="mm-view"></div>
+</div>
+
+<!-- ══════════ AI (PRD-0010, F-7.9/Q4): статусная панель — правый нижний угол, над миникартой ══════════ -->
+<div id="aistatus" title="AI-статус (PRD-0010): модель, функции, cost. На узких окнах (<900px) прячется; при открытой агент-панели отъезжает влево">
+  <div class="ais-row ais-head">
+    <span class="ais-dot" id="aiDot"></span>
+    <span class="ais-model" id="aiModel">glm-5.3-flash</span>
+    <span class="ais-prov" id="aiProv">BYOK</span>
+    <span class="ais-sp"></span>
+    <button class="ais-btn" id="aiPause" title="Пауза всех AI-функций (⏸/▶)">⏸</button>
+    <button class="ais-btn" id="aiGear" title="Открыть настройки AI (9-й таб «AI and Models»)">⚙</button>
+  </div>
+  <div class="ais-row ais-feats">
+    <button class="ais-feat on" data-f="suggest" title="Suggest: LLM-подсказки шаблонов и custom-ноды. Клик — вкл/выкл">Suggest ✓</button>
+    <button class="ais-feat on" data-f="graph" title="Graph Builder: генерация графов из текста. Клик — вкл/выкл">Graph ✓</button>
+    <button class="ais-feat on" data-f="agent" title="Agent Panel: агентные операции через MCP. Клик — вкл/выкл">Agent ✓</button>
+  </div>
+  <div class="ais-row ais-costs">
+    <span class="ais-cost" title="Cost за сессию (накопительный)">Session: <b id="aiSession">$0.04</b></span>
+    <span>·</span>
+    <span class="ais-cost" title="Cost за день / дневной лимит (F-7.4)">Day: <b id="aiDay">$0.12</b>&nbsp;/&nbsp;<span id="aiLim">$1.00</span></span>
+  </div>
+  <div class="ais-bar" id="aiBar" title="Дневной лимит: 80% — диалог расширения, 100% — LLM-запросы отклоняются"><i></i></div>
+  <div class="ais-paused-lb">AI на паузе — нажмите ▶, чтобы возобновить</div>
+</div>
+
+<!-- ══════════ AI (PRD-0010, F-4): агент-панель — чат справа, Ctrl+I ══════════ -->
+<div id="agentpanel" role="complementary" aria-label="AI Агент — панель tool-calling">
+  <div class="ag-head">
+    <span class="bolt">⚡</span>
+    <span><span class="ttl">AI Агент</span><span class="sub">tool-calling · 42 MCP-инструмента · PRD-0010 F-4</span></span>
+    <button class="dclose" id="agClose" title="Закрыть (Esc)">✕</button>
+  </div>
+  <div class="ag-ctx">
+    <span class="ag-chip" id="agCtxChip" title="Контекст запроса: выделенные ноды или весь канвас (Q3/F-4.8)">Context: entire canvas</span>
+    <span class="ag-chip" id="agProvChip" title="Провайдер Agent Panel (Настройки → AI and Models)">ChatGPT OAuth</span>
+    <span class="ag-chip" id="agRateChip" title="Rate limit подписки ChatGPT, локальный счётчик (F-7.3)">ChatGPT: 47/80</span>
+  </div>
+  <div class="ag-log" id="agLog">
+    <div class="ag-empty" id="agEmpty">Панель агента пуста. Опишите задачу текстом — агент вызовет MCP-инструменты (node_create, graph_validate, graph_apply…), покажет <b>preview ghost-нодами</b> на канвасе и спросит Accept/Reject. Деструктивные операции — только с подтверждением.</div>
+  </div>
+  <div class="ag-est" id="agEst">Запрос ~$0.02 · день $0.12 / $1.00</div>
+  <div class="ag-inrow">
+    <textarea id="agInput" rows="1" placeholder="Опишите задачу: «создай ноду CAC и свяжи с LTV» (Enter — отправить)"></textarea>
+    <button class="ctl primary" id="agSend" title="Отправить запрос агенту">➤</button>
+  </div>
+  <div class="ag-quick" id="agQuick">
+    <button data-q="Создай ноды CAC и LTV и свяжи их">CAC ↔ LTV</button>
+    <button data-q="Построй воронку: Визиты → Регистрации → Покупки">Воронка из 3 нод</button>
+    <button data-q="Прочитай канвас и проверь целостность графа">Проверка графа</button>
+  </div>
+</div>
+
+<!-- ══════════ AI (PRD-0010, F-7): настройки «AI and Models» — 9-й таб ══════════ -->
+<div id="aisetov" class="hidden">
+  <div class="aiset" role="dialog" aria-label="Настройки — AI and Models">
+    <div class="atabs" id="aiTabs">
+      <button>Общие</button><button>Канвас</button><button>Связи</button><button>Внешний вид</button>
+      <button>Шаблоны</button><button>Данные</button><button>Горячие клавиши</button><button>Профиль</button>
+      <button class="on">AI and Models</button>
+    </div>
+    <div class="abody">
+      <div class="asgrp">Per-feature провайдер (Q2)</div>
+      <div class="asrow">
+        <span class="fl">Suggest<small>подсказки шаблонов и custom-ноды</small></span>
+        <select id="aiProvSuggest">
+          <option value="chatgpt" disabled>ChatGPT OAuth — недоступен для Suggest (Q2)</option>
+          <option value="byok">BYOK (свой ключ)</option>
+          <option value="ollama">Ollama (local)</option>
+          <option value="laya">Laya sidecar (local)</option>
+          <option value="off">Off</option>
+        </select>
+      </div>
+      <div class="asrow">
+        <span class="fl">Graph Builder<small>генерация графов из текста</small></span>
+        <select id="aiProvGraph">
+          <option value="chatgpt">ChatGPT OAuth</option>
+          <option value="byok">BYOK (свой ключ)</option>
+          <option value="ollama">Ollama (local)</option>
+          <option value="off">Off</option>
+        </select>
+      </div>
+      <div class="asrow">
+        <span class="fl">Agent Panel<small>агентные операции через MCP</small></span>
+        <select id="aiProvAgent">
+          <option value="chatgpt">ChatGPT OAuth</option>
+          <option value="byok">BYOK (свой ключ)</option>
+          <option value="ollama">Ollama (local)</option>
+          <option value="off">Off</option>
+        </select>
+      </div>
+      <div class="note">Fallback-цепочка при ошибке/429: ChatGPT OAuth → BYOK → lex (suggest) / отказ (graph, agent). Ключи хранятся в OS keychain (desktop) / OPFS encrypted (web) — не в config.</div>
+
+      <div class="asgrp" id="aiKeyGrp">BYOK — API ключ и модель</div>
+      <div id="aiKeyBlock">
+        <div class="asrow keyrow">
+          <input type="password" id="aiKeyInput" placeholder="sk-…" autocomplete="off" title="Ключ провайдера BYOK (mock: в продукте — OS keychain)">
+          <button class="ctl" id="aiKeyBtn">Проверить ключ</button>
+          <span class="hbadge ok" id="aiKeyBadge">ключ валиден · 12 моделей</span>
+        </div>
+        <div class="asrow">
+          <span class="fl">Модель<small>список /v1/models</small></span>
+          <select id="aiModelSel">
+            <option value="glm-5.3-flash">glm-5.3-flash — p@1 1.000 · $0.121/1k (benchmark)</option>
+            <option value="glm-5.2">glm-5.2</option>
+            <option value="deepseek-v3.2">deepseek-v3.2</option>
+            <option value="kimi-k2.5">kimi-k2.5</option>
+            <option value="nemotron-super:free">nemotron-super:free — $0</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="asgrp" id="aiRateGrp">Rate limit подписки ChatGPT (F-7.3)</div>
+      <div class="asrow" id="aiRateBlock">
+        <span class="hbadge" id="aiRateBadge">ChatGPT: 47/80 сообщений осталось</span>
+        <span class="note">локальный счётчик; при 0 — fallback на BYOK, тост «ChatGPT недоступен»</span>
+      </div>
+
+      <div class="asgrp">Лимиты и качество</div>
+      <div class="srow2">
+        <div class="slb"><span>Cost limit — дневной лимит расходов</span><b id="aiCostLimV">$1.00 / день</b></div>
+        <input type="range" id="aiCostLim" min="0.25" max="5" step="0.25" value="1">
+        <div class="note" style="margin-top:3px">80% лимита — диалог расширения; 100% — LLM-запросы отклоняются, работает lex (F-7.4, Q7)</div>
+      </div>
+      <div class="srow2">
+        <div class="slb"><span>Confidence threshold — порог показа custom-нод</span><b id="aiConfThrV">0,50</b></div>
+        <input type="range" id="aiConfThr" min="0" max="1" step="0.05" value="0.5">
+        <div class="note" style="margin-top:3px">варианты с confidence ниже порога скрываются (F-2.11); влияет на ghost-ноды suggest</div>
+      </div>
+
+      <div class="asgrp">Data residency (Q5)</div>
+      <div class="radio3" id="aiResid">
+        <label data-v="local"><input type="radio" name="aires" value="local"><span><span class="rd">Local only (Laya / Ollama)</span><span class="ds">Работает offline · данные не покидают машину · качество ниже cloud</span></span></label>
+        <label data-v="cloud" class="sel"><input type="radio" name="aires" value="cloud" checked><span><span class="rd">Cloud (ChatGPT / BYOK)</span><span class="ds">Лучшее качество · контекст канваса уходит провайдеру (redact: price=&lt;redacted&gt;) · дневной лимит cost</span></span></label>
+        <label data-v="selfhost"><input type="radio" name="aires" value="selfhost"><span><span class="rd">Self-hosted (ваш GPU-сервер)</span><span class="ds">Cloud-качество · данные остаются в вашем контуре · нужен endpoint (ответственность пользователя)</span></span></label>
+      </div>
+      <div id="aiSelfhostBlock" style="display:none">
+        <div class="asrow keyrow" style="margin-top:8px">
+          <input type="text" id="aiShUrl" placeholder="https://llm.corp.local/v1" title="Self-hosted endpoint (OpenAI-compatible)">
+          <input type="password" id="aiShKey" placeholder="API key endpoint'а" autocomplete="off" style="max-width:150px">
+          <button class="ctl" id="aiShBtn">Проверить</button>
+          <span class="hbadge" id="aiShBadge">не проверен</span>
+        </div>
+      </div>
+
+      <div class="asgrp">Телеметрия (opt-in)</div>
+      <div class="asrow">
+        <label class="dtoggle"><span class="lbl">Анонимные события использования</span><span class="switch" id="aiTelTgl"></span></label>
+      </div>
+      <div class="note">default OFF (Q7): события показов/принятий подсказок и cost — только после явного согласия; без PII. Полный гайд: <code style="font-family:var(--mono); font-size:10px">user-docs/ai-features.md</code></div>
+    </div>
+    <div class="afoot">
+      <span class="hint">Изменения применяются сразу · Esc — закрыть · в прототипе активен только 9-й таб, остальные — мок</span>
+      <button class="ctl primary" id="aiSetDone">Готово</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ AI (PRD-0010, F-8): онбординг AI-режима ══════════ -->
+<div id="onbov" class="hidden">
+  <div class="onbo" role="dialog" aria-label="Онбординг — выберите режим AI">
+    <div class="ostep">Шаг 3 из 3 · AI-режим</div>
+    <h1>Выберите режим AI</h1>
+    <div class="osub">CanvasDesk работает с любым режимом — поменять можно позже в настройках (9-й таб «AI and Models»).</div>
+    <label class="omode" data-v="local">
+      <span class="on1"><i class="rd"></i>Local only (Laya / Ollama)<span class="tag">offline</span></span>
+      <span class="onds">Работает offline · данные не уходят с машины · подсказки ниже cloud-качества, graph/agent — через Ollama на вашей машине.</span>
+    </label>
+    <label class="omode" data-v="cloud">
+      <span class="on1"><i class="rd"></i>Cloud (ChatGPT / BYOK)<span class="tag">лучшее качество</span></span>
+      <span class="onds">Лучшее качество · контекст канваса уходит провайдеру (числа маскируются: price=&lt;redacted&gt;) · дневной лимит $1.00 по умолчанию.</span>
+    </label>
+    <label class="omode" data-v="selfhost">
+      <span class="on1"><i class="rd"></i>Self-hosted (ваш GPU-сервер)<span class="tag">в контуре</span></span>
+      <span class="onds">Cloud-качество · данные остаются в вашем контуре · нужен OpenAI-compatible endpoint (Настройки → AI and Models).</span>
+    </label>
+    <div class="oacts">
+      <button class="ctl" id="aiOnbPriv">Подробнее о privacy</button>
+      <span style="flex:1"></span>
+      <button class="ctl primary" id="aiOnbGo" disabled>Продолжить</button>
+    </div>
+    <div class="opriv" id="aiOnbPrivBox">
+      <b>Что отправляется.</b> Только контекст редактируемой ноды и её соседей; числа маскируются явным маркером (<code>price=&lt;redacted&gt; руб</code> — единица сохраняется, Q1). Сами канвасы, файлы и ключи — не отправляются никогда.<br><br>
+      <b>Где живут ключи.</b> BYOK-ключи — в OS keychain (desktop) / OPFS encrypted (web); OAuth-токены ChatGPT — тоже локально, бэкенд не участвует.<br><br>
+      <b>Телеметрия.</b> Отключена по умолчанию; включается только явным opt-in в настройках.<br><br>
+      Полный гайд — <code>user-docs/ai-features.md</code> (в продукте открывается из этого экрана).
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ AI (PRD-0010, F-7.4): диалог 80% дневного лимита ══════════ -->
+<div id="limov" class="hidden">
+  <div class="limdlg" role="alertdialog" aria-label="Дневной лимит AI — 80%">
+    <h2><span class="w">⚠</span> Дневной лимит AI: 80%</h2>
+    <p>Израсходовано <b id="limSpent">$0.80</b> из <b id="limTotal">$1.00</b> дневного лимита. AI продолжит работать, но сейчас удобно решить, как быть дальше: расширить лимит, поставить AI на паузу или продолжить как есть.</p>
+    <div class="lacts">
+      <button class="ctl primary" id="limRaise">Увеличить лимит</button>
+      <button class="ctl" id="limPause">Пауза AI до завтра</button>
+      <button class="ctl" id="limDismiss">Продолжить</button>
+    </div>
+  </div>
 </div>
 
 <div id="toast"></div>
@@ -2201,6 +2673,25 @@ function updateHover(){
   if (!mouse.inside) { hoverPrim = null; return; }
   const wx = s2wx(mouse.cx), wy = s2wy(mouse.cy);
   const lod = curLod();
+  // 0) AI ghost-ноды: custom suggest (Q7) + preview агента (Q3)
+  const gh = aiCustomGhostAt(wx, wy);
+  if (gh>=0){
+    const it = AI.custom.items[gh];
+    hoverPrim = {kind:'aighost'};
+    cv.style.cursor = 'pointer';
+    setTooltip('<span class="tt-t">'+it.title+' · LLM вариант '+(gh+1)+'</span>confidence '+fmtF(it.conf,2)+' · порог '+fmtF(AI.confThr,2)+' (F-2.11) · клик — применить (Ctrl+Z вернёт), после — тост «Сохранить как шаблон» (F-2.16)');
+    return;
+  }
+  if (AI.agent.preview){
+    for (const nd of AI.agent.preview.nodes){
+      const ph = 30 + nd.rows.length*20 + 26;
+      if (wx>=nd.x && wx<=nd.x+nd.w && wy>=nd.y && wy<=nd.y+ph){
+        hoverPrim = {kind:'aighost'};
+        setTooltip('<span class="tt-t">'+nd.title+' · Agent preview</span>Ghost-нода: канвас не изменён до Accept/Reject в панели (Q3, F-4.11)');
+        return;
+      }
+    }
+  }
   // 1) угол ресайза героя
   if (rszHit(wx, wy)){ hoverPrim = {kind:'rsz'}; cv.style.cursor='ew-resize'; setTooltip('Тяните, чтобы менять ширину ноды ('+M.W_MIN+'–'+M.W_MAX+' px). Направляющие и режим бейджей пересчитываются живьём.'); return; }
   // 2) ноды
@@ -2271,6 +2762,9 @@ cv.addEventListener('wheel', e=>{
 cv.addEventListener('mousedown', e=>{
   if (e.button!==0) return;
   hideTooltip();
+  // AI (Q7): клик по custom ghost-ноде LLM — применить (до закрытия ввода; ghost не перекрывает ноду)
+  const ghIdx = aiCustomGhostAt(s2wx(e.clientX), s2wy(e.clientY));
+  if (ghIdx>=0){ aiCustomApply(ghIdx); return; }
   if (SG.editing) sgEndEditing('dismiss'); // клик мимо — закрыть ввод (как в продукте)
   if (SG.cards) sgDismissCards(true);      // клик мимо — скрыть карточки C3
   if (menuOpen) closeMenu();
@@ -2539,6 +3033,7 @@ function closeMenu(){ menuEl.style.display='none'; menuOpen=false; }
 
 /* ---------- клавиатура: Esc-лестница, Del, Space ---------- */
 window.addEventListener('keydown', e=>{
+  if (aiKeydown(e)) return; // AI: онбординг → 80%-диалог → настройки AI → preview агента → панель (PRD-0010)
   if (sgKeydown(e)) return; // подсказки S: настройки → ввод C1 → карточки C3 → Ctrl+Z
   if (e.key==='Escape'){
     if (menuOpen){ closeMenu(); cancelDrag(); return; }
@@ -3399,10 +3894,11 @@ function sgRunAI(ed){
   const n = nodeById(ed.id); if (!n){ return; }
   const gate = sgGates(n, ed.prefix);
   SG.lastGate = gate; sgHudUpdate();
-  const canAi = SG.enabled && SG.engine!=='off';
+  const canAi = SG.enabled && SG.engine!=='off' && AI.feat.suggest && !AI.paused; // AI (PRD-0010): тумблер Suggest + пауза
   if (!canAi || !gate.ok){ ed.ai='blocked'; sgRenderPopup(); return; }
   const gen = ed.gen;
-  const isHybrid = SG.engine==='lex+laya' && SG.l1==='ready';
+  // гибрид: Laya sidecar (SG.l1) ИЛИ LLM-провайдер Suggest из «AI and Models» (PRD-0010, F-2.2)
+  const isHybrid = SG.engine==='lex+laya' && (SG.l1==='ready' || aiSuggestLLM());
   if (!isHybrid){
     // lex (или тихая деградация L1): мгновенно, без skeleton (Doherty — нет ожидания)
     ed.ai='done'; ed.res=sgRank(ed.prefix);
@@ -3444,8 +3940,9 @@ function sgRenderPopup(){
   if (!ed){ pop.classList.add('hidden'); return; }
   const l0 = sgL0(ed.prefix);
   const eng = !SG.enabled||SG.engine==='off' ? '<span class="warn">движок выключен</span>'
+    : !AI.feat.suggest||AI.paused ? '<span class="warn">suggest выключен в AI-статусе</span>'
     : SG.engine==='lex' ? '<span class="ok">lex</span>'
-    : (SG.l1==='ready' ? '<span class="ok">lex + AI</span>' : '<span class="warn">lex · L1 недоступен</span>');
+    : (SG.l1==='ready' ? '<span class="ok">lex + AI</span>' : (aiSuggestLLM() ? '<span class="ok">lex + AI · '+aiProvLabel(AI.prov.suggest)+'</span>' : '<span class="warn">lex · L1 недоступен</span>'));
   let h = '<div class="sgp-head"><span>Подсказки</span><span class="eng">'+eng+'</span></div>';
   h += '<div class="sgp-sec">локальные · мгновенно</div>';
   if (!l0.length) h += '<div class="sg-row empty">нет локальных совпадений — печатайте дальше</div>';
@@ -3486,6 +3983,21 @@ function sgRenderPopup(){
     } else if (ed.ai==='done'){
       h += '<div class="sg-row empty">нет подходящих шаблонов</div>';
     }
+    /* AI (PRD-0010, Q7): секция custom-нод — 3 варианта LLM ghost-нодами рядом с нодой */
+    if (ed.ai==='done' && AI.feat.suggest && !AI.paused && aiSuggestLLM()){
+      h += '<div class="sgp-sec"><span class="bolt">⚡</span>custom-ноды · LLM</div>';
+      if (AI.custom && AI.custom.phase==='loading'){
+        h += '<div class="sg-row empty">3 ghost-ноды генерируются на канвасе (skeleton → morph)… ~$0.012</div>';
+      } else if (AI.custom && AI.custom.phase==='error'){
+        h += '<div class="sg-row empty">rate limit — fallback lex (дневной лимит cost)</div>';
+      } else if (AI.custom && AI.custom.phase==='done'){
+        const vis = AI.custom.items.filter(x=>x.conf>=AI.confThr).length;
+        h += '<div class="sg-row empty">готово: '+vis+' из 3 выше порога '+fmtF(AI.confThr,2)+' — клик по ghost-ноде применит</div>';
+      } else {
+        h += '<div class="sg-row ai cgen" id="sgCustomGen"><div class="top"><span class="t">Сгенерировать 3 custom-варианта</span><span class="b">LLM</span></div>'
+          + '<span class="rsn">ghost-ноды появятся рядом с нодой (не перекрывая): skeleton → morph, confidence-бар, порог '+fmtF(AI.confThr,2)+'</span></div>';
+      }
+    }
     /* ai==='blocked' → секции нет: молчим (продуктовое правило «не показывай, если не уверен») */
   }
   h += '<div class="sgp-foot"><span>↑↓ выбор</span><span>Tab принять</span><span>Esc закрыть</span>'
@@ -3494,6 +4006,8 @@ function sgRenderPopup(){
   pop.classList.remove('hidden');
   pop.querySelectorAll('.sg-row.l0').forEach(el=>{ el.onclick = ()=>{ if (SG.editing){ SG.editing.sel=+el.dataset.i; sgAcceptIdx(+el.dataset.i); } }; });
   pop.querySelectorAll('.sg-row.ai').forEach(el=>{ el.onclick = ()=>{ sgAcceptIdx(l0.length + +el.dataset.a); }; });
+  const gen = pop.querySelector('#sgCustomGen');
+  if (gen) gen.onclick = ()=>aiCustomStart(); // AI (Q7): 3 custom-варианта LLM
   sgPositionSurfaces();
 }
 function sgAcceptIdx(i){
@@ -3578,7 +4092,7 @@ function sgUndo(){
 /* ---- C3: карточки «следующие ноды» ---- */
 function sgShowCards(nodeId, fromKey){
   if (!nodeById(nodeId)) return;
-  if (!SG.enabled || SG.engine==='off') return;
+  if (!SG.enabled || SG.engine==='off' || !AI.feat.suggest || AI.paused) return;
   if (SG.domain==='framework'){
     sgLog('suppressed',{top:'cards:domain'});
     sgHudUpdate();
@@ -3775,13 +4289,14 @@ function sgKeydown(e){
 
 /* ---- позиционирование поверхностей (каждый кадр, мир→экран) ---- */
 function sgPositionSurfaces(){
+  const agPad = document.body.classList.contains('agent-open') ? AGENT_W+16 : 0; // AI: панель отодвигает попапы (не перекрывает)
   const pop = document.getElementById('sgpop');
   if (SG.editing && !pop.classList.contains('hidden')){
     const n = nodeById(SG.editing.id);
     if (n){
       const g = nodeGeom(n, curLod());
       let x = w2sx(n.x), y = w2sy(n.y + g.h + 48);
-      pop.style.left = clamp(x, 8, innerWidth-366)+'px';
+      pop.style.left = clamp(x, 8, innerWidth-366-agPad)+'px';
       pop.style.top  = clamp(y, 8, innerHeight-300)+'px';
     }
   }
@@ -3790,8 +4305,8 @@ function sgPositionSurfaces(){
     const n = nodeById(SG.cards.nodeId);
     if (n){
       let x = w2sx(n.x+n.w)+14, y = w2sy(n.y+16);
-      if (x > innerWidth-268) x = w2sx(n.x)-266;
-      cel.style.left = clamp(x, 8, innerWidth-266)+'px';
+      if (x > innerWidth-268-agPad) x = w2sx(n.x)-266;
+      cel.style.left = clamp(x, 8, innerWidth-266-agPad)+'px';
       cel.style.top  = clamp(y, 8, innerHeight-240)+'px';
     }
   }
@@ -3820,6 +4335,867 @@ function sgDrawEditing(){
   ctx.restore();
 }
 
+
+/* ============================================================
+   ЧАСТЬ AI. LLM-интеграция (PRD-0010 / ADR-0016): статусная панель,
+   custom-node suggest (Q7), агент-панель (F-4), настройки «AI and
+   Models» (F-7), онбординг AI-режима (F-8), cost-движок (F-7.10)
+   ------------------------------------------------------------
+   Правила (наследуют DESIGN_RULES §1–8 и §12):
+   · цвета — только через PAL/токены (нет литералов в компонентах);
+   · «одна точка входа на поверхность»: пульт «AI (PRD-0010)» +
+     нативные входы (⚙ статуса, Ctrl+I агента, 80%-диалог по событию);
+   · Esc-лестница расширена В НАЧАЛО: онбординг → 80%-диалог →
+     настройки AI → preview агента → агент-панель → (существующая);
+   · cost-движок честный: каждый мок-запрос списывает оценку (F-7.10);
+   · custom-ноды: skeleton → morph, confidence-бар без цифр на
+     канвасе (Duke) — число в тултипе, порог скрывает слабые (F-2.11);
+   · агент: preview ghost-нодами + Accept/Reject (Q3, F-4.11),
+     tool-calls в истории, rate limit ChatGPT локальным счётчиком;
+   · узкие окна <900px: статусная панель и мок-миникарта прячутся
+     (F-7.9); агент-панель отодвигает их влево (не перекрывает).
+   ============================================================ */
+const AI = {
+  paused:false,
+  feat:{suggest:true, graph:true, agent:true},
+  prov:{suggest:'byok', graph:'chatgpt', agent:'chatgpt'},
+  model:'glm-5.3-flash',
+  keyOk:true, keyMask:'sk-zai-…8f2d',
+  cost:{session:0.04, day:0.12, limit:1.00},
+  limitShown:false,
+  rate:{used:33, total:80},
+  residency:'cloud',
+  telemetry:false,
+  confThr:0.50,
+  selfhostOk:false,
+  active:'suggest',
+  panel:true,
+  set:false, onb:false, lim:false, onbChoice:null,
+  custom:null,                 // {nodeId, phase:'loading'|'done'|'error', items, t0, errWhy}
+  agent:{open:false, busy:false, preview:null, est:0.02}
+};
+const AGENT_W = 388;
+const CG_W = 236, CG_H = 86, CG_GAP = 12;
+
+/* ---- hex → rgba по альфе (движение литералов в токены PAL) ---- */
+function aiA(hex, a){
+  const h = String(hex).replace('#','');
+  const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16);
+  return 'rgba('+r+','+g+','+b+','+a+')';
+}
+
+/* ================= cost-движок (F-7.10, Q4) ================= */
+function aiBarSync(){
+  const bar = document.getElementById('aiBar');
+  const pct = clamp(AI.cost.day/AI.cost.limit*100, 0, 100);
+  bar.querySelector('i').style.width = pct+'%';
+  bar.classList.toggle('warn', pct>=80 && pct<100);
+  bar.classList.toggle('full', pct>=100);
+}
+function aiCostSync(){
+  document.getElementById('aiSession').textContent = '$'+AI.cost.session.toFixed(2);
+  document.getElementById('aiDay').textContent = '$'+AI.cost.day.toFixed(2);
+  document.getElementById('aiLim').textContent = '$'+AI.cost.limit.toFixed(2);
+  document.getElementById('agEst').textContent = 'Запрос ~$0.02 · день $'+AI.cost.day.toFixed(2)+' / $'+AI.cost.limit.toFixed(2);
+  aiBarSync();
+}
+function aiSpend(v, why){
+  AI.cost.session += v; AI.cost.day += v;
+  aiCostSync();
+  const pct = AI.cost.day/AI.cost.limit*100;
+  if (pct>=100){
+    // 100%: LLM-запросы отклоняются (error-состояния custom/агента), lex работает
+    if (AI.custom && AI.custom.phase==='loading'){ AI.custom.phase='error'; AI.custom.errWhy='rate limit: дневной лимит исчерпан — fallback lex'; }
+    hint('Дневной лимит AI исчерпан ('+why+') — LLM-запросы отклоняются. «Демо лимита» в пульте сбросит день; лимит — в «Настройки AI»');
+    return;
+  }
+  if (pct>=80 && !AI.limitShown){ AI.limitShown = true; aiOpenLimit(); }
+}
+function aiDemoLimit(){
+  const over = AI.cost.day >= AI.cost.limit;
+  if (!over && AI.cost.day/AI.cost.limit < 0.8){
+    AI.cost.day = AI.cost.limit*0.8 + 0.001;   // → диалог 80%
+    aiCostSync(); aiOpenLimit();
+    hint('Демо: день = 80% лимита — открыт диалог расширения (F-7.4). Ещё клик — 100% (error-состояния), ещё — сброс');
+  } else if (!over){
+    AI.cost.day = AI.cost.limit + 0.01;        // → 100%, error-состояния
+    aiCostSync();
+    hint('Демо: день = 100% лимита — custom-ноды/агент отвечают rate limit; попробуйте запрос в агент-панели');
+  } else {
+    AI.cost.day = 0.12; AI.limitShown = false; // сброс дня
+    if (AI.custom) AI.custom = null;
+    aiCostSync();
+    showToast('Дневной лимит сброшен: день $0.12 / $'+AI.cost.limit.toFixed(2)+' — AI снова доступен');
+  }
+}
+
+/* ================= статусная панель (F-7.9, Q4) ================= */
+function aiProvLabel(p){ return {byok:'BYOK', chatgpt:'ChatGPT OAuth', ollama:'Ollama', laya:'Laya (local)', selfhost:'Self-hosted', off:'Off'}[p]||p; }
+function aiProvModel(p){
+  return {byok:AI.model, chatgpt:'gpt-5.2', ollama:'llama3.1:8b', laya:'laya-1.13', selfhost:'qwen2.5-72b', off:null}[p]||null;
+}
+function aiSetActive(feature){
+  AI.active = feature;
+  const p = AI.prov[feature], m = aiProvModel(p);
+  document.getElementById('aiModel').textContent = m || 'выключено';
+  document.getElementById('aiModel').title = 'Активная модель · провайдер '+(m?aiProvLabel(p):'—');
+  document.getElementById('aiProv').textContent = aiProvLabel(p);
+  aiSyncFeats();
+}
+function aiSuggestLLM(){
+  const p = AI.prov.suggest;
+  if (p==='byok') return AI.keyOk;
+  if (p==='ollama' || p==='selfhost') return true;
+  if (p==='laya') return SG.l1==='ready';
+  return false; // off
+}
+function aiSyncFeats(){
+  document.querySelectorAll('#aistatus .ais-feat').forEach(b=>{
+    const on = AI.feat[b.dataset.f] && !AI.paused;
+    b.classList.toggle('on', on);
+    b.textContent = {suggest:'Suggest', graph:'Graph', agent:'Agent'}[b.dataset.f] + (on?' ✓':'');
+  });
+}
+function aiSyncPanel(){
+  const el = document.getElementById('aistatus');
+  el.classList.toggle('paused', AI.paused);
+  el.style.display = AI.panel ? '' : 'none';
+  document.getElementById('aiPause').textContent = AI.paused ? '▶' : '⏸';
+  aiSetActive(AI.active);
+  aiCostSync();
+  aiSyncShell();
+}
+function aiSyncShell(){
+  // sghud поднимается над стопкой правого-низнего угла (миникарта → AI-статус)
+  const hud = document.getElementById('sghud');
+  const st = document.getElementById('aistatus');
+  let bottom = 160; // 12 + 140 (миникарта) + 8
+  if (getComputedStyle(st).display!=='none' && st.offsetHeight) bottom += st.offsetHeight + 8;
+  hud.style.bottom = bottom+'px';
+}
+document.querySelectorAll('#aistatus .ais-feat').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    const f = b.dataset.f;
+    AI.feat[f] = !AI.feat[f];
+    if (f==='suggest' && !AI.feat.suggest){
+      if (AI.custom) AI.custom = null;
+      if (SG.editing) sgEndEditing('dismiss');
+    }
+    if (f==='agent' && !AI.feat.agent) aiRejectPreview('Agent выключен тумблером «Agent» в статусной панели');
+    aiSyncFeats();
+    hint('AI-функция '+({suggest:'Suggest', graph:'Graph Builder', agent:'Agent Panel'}[f])+': '+(AI.feat[f]?'включена':'выключена')+' — тумблер статусной панели (Q4)');
+  });
+});
+document.getElementById('aiPause').addEventListener('click', ()=>{
+  AI.paused = !AI.paused;
+  if (AI.paused){
+    if (AI.custom) AI.custom = null;
+    if (SG.editing) sgEndEditing('dismiss');
+    aiRejectPreview('AI на паузе');
+    showToast('AI на паузе — все LLM-функции приостановлены (⏸)');
+  } else {
+    showToast('AI возобновлён — функции снова активны (▶)');
+  }
+  aiSyncPanel();
+});
+document.getElementById('aiGear').addEventListener('click', aiOpenSettings);
+document.getElementById('aiPanelTgl').addEventListener('change', e=>{
+  AI.panel = e.target.checked;
+  aiSyncPanel();
+  if (!AI.panel) hint('Статусная панель AI скрыта (демо F-7.9: на mobile/узких окнах панель прячется так же — <900px)');
+});
+
+/* ============ custom-node suggest (Q7, F-2.12…F-2.16) ============ */
+const AI_CUSTOM = [
+  {title:'CPL по каналам', conf:0.87, chip:'финансы',
+   params:[P('spend','712 000','₽'), P('leads','691','')],
+   calc:[C('CPL',[['v','spend'],['op',' ÷ '],['v','leads']],'1 030','₽')],
+   res:{v:'1 030', u:'₽'}},
+  {title:'Воронка подписки', conf:0.74, chip:'метрики',
+   params:[P('visits','30,0','млн'), P('cr1','12','%'), P('cr2','4','%')],
+   calc:[C('conv',[['v','visits'],['op',' · '],['v','cr1'],['op',' · '],['v','cr2']],'4,1','%')],
+   res:{v:'4,1', u:'%'}},
+  {title:'LTV / CAC', conf:0.42, chip:'финансы',
+   params:[P('ltv','1 980','₽'), P('cac','1 030','₽')],
+   calc:[C('ratio',[['v','ltv'],['op',' ÷ '],['v','cac']],'2,2','×')],
+   res:{v:'2,2', u:'×'}}
+];
+function aiCustomLayout(){
+  // мировые координаты справа от редактируемой ноды; флип влево у правого края —
+  // ghost-ноды никогда не перекрывают редактируемую (требование Q7)
+  const ed = SG.editing; if (!ed) return [];
+  const n = nodeById(ed.id); if (!n) return [];
+  const g = nodeGeom(n, curLod());
+  let x = n.x + g.w + 56;
+  const agPad = document.body.classList.contains('agent-open') ? AGENT_W+16 : 0;
+  if (w2sx(x + CG_W) > innerWidth - 16 - agPad) x = n.x - 56 - CG_W;
+  const totalH = 3*CG_H + 2*CG_GAP;
+  let y0 = n.y;
+  if (w2sy(y0 + totalH) > innerHeight - 96) y0 = s2wy(innerHeight - 96) - totalH;
+  if (w2sy(y0) < 8) y0 = s2wy(8);
+  // ghost-колонка не должна прятаться за попапом C1: пересечение — поднимаем над попапом
+  const pop = document.getElementById('sgpop');
+  if (pop && !pop.classList.contains('hidden')){
+    const pr = pop.getBoundingClientRect();
+    const gx1 = w2sx(x), gx2 = w2sx(x+CG_W), gy1 = w2sy(y0), gy2 = w2sy(y0+totalH);
+    if (gx1 < pr.right && gx2 > pr.left && gy1 < pr.bottom && gy2 > pr.top){
+      const yOver = s2wy(Math.max(8, pr.top - totalH - 14));
+      if (w2sy(yOver + totalH) <= Math.max(8, pr.top - 14)) y0 = yOver;
+    }
+  }
+  const arr = [];
+  for (let i=0;i<3;i++) arr.push({x, y: y0 + i*(CG_H+CG_GAP)});
+  return arr;
+}
+function aiCustomStart(){
+  const ed = SG.editing;
+  if (!ed || AI.custom || AI.agent.busy) return;
+  if (AI.paused || !AI.feat.suggest){ hint('Suggest выключен (статусная панель AI) — custom-ноды недоступны'); return; }
+  if (!aiSuggestLLM()){ hint('LLM-провайдер Suggest недоступен — выберите провайдера и проверьте ключ в «Настройки AI»'); return; }
+  if (AI.cost.day >= AI.cost.limit){ aiCustomShowError('rate limit: дневной лимит исчерпан — fallback lex'); return; }
+  AI.custom = {nodeId:ed.id, phase:'loading', items:null, t0:Date.now(), errWhy:null};
+  aiSpend(0.012, 'suggest: 3 custom-варианта');
+  sgLog('shown',{top:'custom:loading'});
+  emit('sgCustomLoading');
+}
+function aiCustomShowError(why){
+  AI.custom = {nodeId:SG.editing.id, phase:'error', items:null, t0:Date.now(), errWhy:why};
+  hint(why+' — работает локальный поиск (тихая деградация)');
+}
+function aiCustomResolve(){
+  // skeleton → morph: LLM вернул 3 варианта (mock glm-5.3-flash, latency 1.4s)
+  if (!AI.custom) return;
+  AI.custom.phase = 'done';
+  AI.custom.items = AI_CUSTOM.map(x=>Object.assign({}, x));
+  sgLog('shown',{top:'custom:done', score:AI_CUSTOM[0].conf});
+  sgRenderPopup(); // строка в попапе: «готово: N из 3 выше порога»
+  emit('sgCustomDone');
+  hint('Custom-ноды LLM готовы: клик — применить · confidence-бар — subtle, число в тултипе · порог '+AI.confThr.toFixed(2).replace('.',',')+' скрывает слабые (F-2.11)');
+}
+function aiCustomGhostAt(wx, wy){
+  const c = AI.custom;
+  if (!c || c.phase!=='done' || !SG.editing || SG.editing.id!==c.nodeId) return -1;
+  const pos = aiCustomLayout();
+  for (let i=0;i<pos.length && i<c.items.length;i++){
+    if (c.items[i].conf < AI.confThr) continue; // ниже порога — не кликабельна (скрыта)
+    const p = pos[i];
+    if (wx>=p.x && wx<=p.x+CG_W && wy>=p.y && wy<=p.y+CG_H) return i;
+  }
+  return -1;
+}
+function aiCustomApply(idx){
+  const c = AI.custom, ed = SG.editing;
+  if (!c || c.phase!=='done' || !ed || ed.id!==c.nodeId) return;
+  const item = c.items[idx];
+  if (!item || item.conf < AI.confThr) return;
+  const nodeId = ed.id;
+  sgEndEditing('accept');
+  // замена редактируемой ноды custom-нодой (прецедент палитры, как sgInstantiate)
+  const node = {
+    id:'sgc'+(sgUid++), title:item.title, cat:'template', obj:item.title,
+    meta:'custom · LLM · conf '+item.conf.toFixed(2), chipLabel:item.chip,
+    desc:'Custom-нода: сгенерирована LLM по контексту (prompt: доступные формулы/операторы expr.rs, Q7). Применена из ghost-превью.',
+    params:item.params.map(p=>Object.assign({},p)),
+    calc:item.calc.map(cc=>Object.assign({},cc)),
+    res:Object.assign({},item.res), sgNew:true, sgAccepted:true
+  };
+  const old = nodeById(nodeId);
+  if (old){
+    SG.undo = {type:'replace', old, oldEdges:edges.filter(e=>e.from===nodeId||e.to===nodeId), newId:node.id};
+    SG.replaced.push({node:old, edges:SG.undo.oldEdges});
+    edges = edges.filter(e=>e.from!==nodeId && e.to!==nodeId);
+    const i = NODES.indexOf(old); NODES.splice(i,1,node);
+    node.x = old.x; node.y = old.y; node.w = old.w;
+    delete PH.anchors[nodeId]; delete INIT_POS[nodeId];
+  } else {
+    node.x = s2wx(innerWidth/2)-150; node.y = s2wy(innerHeight/2)-60; node.w = 300;
+    SG.undo = {type:'insert', ids:[node.id]};
+    NODES.push(node);
+  }
+  PH.anchors[node.id] = {x:node.x, y:node.y};
+  INIT_POS[node.id] = {x:node.x, y:node.y, w:node.w};
+  AI.custom = null;
+  dataVersion++; invalidateLayouts();
+  aiSpend(0.004, 'suggest: custom apply');
+  sgLog('accepted',{top:'custom:'+item.title});
+  // F-2.16: после применения custom-ноды — тост «Сохранить как шаблон»
+  showToast('Custom-нода «'+item.title+'» применена · Ctrl+Z — отмена · «Сохранить как шаблон» — в каталог (GitHub issue, mock)');
+  hint('Custom-нода применена. «Сохранить как шаблон» опубликует её в каталоге шаблонов (F-2.16: GitHub issue типа enhancement)');
+}
+
+/* ---- отрисовка custom ghost-нод (мир, каждый кадр) ---- */
+function aiGhostShell(x, y, w, h, mode){
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, 10);
+  if (mode==='done'){
+    ctx.fillStyle = aiA(PAL.analysis, .07); ctx.fill();
+    ctx.setLineDash([6,4]); ctx.strokeStyle = aiA(PAL.analysis, .55); ctx.lineWidth = 1.4; ctx.stroke(); ctx.setLineDash([]);
+  } else if (mode==='loading'){
+    ctx.fillStyle = aiA(PAL.analysis, .045); ctx.fill();
+    ctx.setLineDash([4,5]); ctx.strokeStyle = aiA(PAL.analysis, .32); ctx.lineWidth = 1.2; ctx.stroke(); ctx.setLineDash([]);
+  } else if (mode==='empty'){
+    ctx.fillStyle = aiA(PAL.sub==='#9a9aa5'?'#9a9aa5':PAL.sub, .05); ctx.fill();
+    ctx.setLineDash([4,5]); ctx.strokeStyle = aiA('#9a9aa5', .4); ctx.lineWidth = 1.2; ctx.stroke(); ctx.setLineDash([]);
+  } else if (mode==='error'){
+    ctx.fillStyle = aiA(PAL.err||PAL.rej||'#ff7a76', .06); ctx.fill();
+    ctx.setLineDash([5,4]); ctx.strokeStyle = aiA(PAL.err||PAL.rej||'#ff7a76', .55); ctx.lineWidth = 1.3; ctx.stroke(); ctx.setLineDash([]);
+  }
+}
+function aiDrawCustomGhosts(){
+  const c = AI.custom;
+  if (!c || !SG.editing || SG.editing.id!==c.nodeId) return;
+  const pos = aiCustomLayout(); if (!pos.length) return;
+  const t = Date.now(), el = t - c.t0;
+  ctx.save();
+  ctx.textBaseline = 'alphabetic';
+  if (c.phase==='loading'){
+    pos.forEach((p, i)=>{
+      aiGhostShell(p.x, p.y, CG_W, CG_H, 'loading');
+      const a = 0.5 + 0.5*Math.sin(t/260 + i*1.1);
+      ctx.fillStyle = aiA(PAL.analysis, .10 + .08*a);
+      ctx.beginPath(); ctx.roundRect(p.x+12, p.y+14, CG_W*0.55, 9, 4); ctx.fill();
+      ctx.beginPath(); ctx.roundRect(p.x+12, p.y+30, CG_W*0.40, 7, 4); ctx.fill();
+      ctx.beginPath(); ctx.roundRect(p.x+12, p.y+45, CG_W*0.62, 7, 4); ctx.fill();
+      ctx.strokeStyle = aiA(PAL.analysis, .85); ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(p.x+CG_W-19, p.y+CG_H-19, 6, t/280, t/280+4.4); ctx.stroke();
+      ctx.fillStyle = PAL.sub; ctx.font = '10px '+SANS;
+      ctx.fillText('LLM генерирует вариант '+(i+1)+'…', p.x+12, p.y+CG_H-12);
+    });
+    if (el > 1400) aiCustomResolve();
+  } else if (c.phase==='done'){
+    let vis = 0;
+    c.items.forEach((it, i)=>{
+      const p = pos[i]; if (!p) return;
+      if (it.conf < AI.confThr) return; // F-2.11: ниже порога — скрыта молча
+      vis++;
+      const morph = clamp((el - i*130)/320, 0, 1); // каскадный morph skeleton → ghost
+      if (morph <= 0){ // ещё skeleton этой строки
+        aiGhostShell(p.x, p.y, CG_W, CG_H, 'loading');
+        ctx.strokeStyle = aiA(PAL.analysis, .85); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(p.x+CG_W-19, p.y+CG_H-19, 6, t/280, t/280+4.4); ctx.stroke();
+        return;
+      }
+      ctx.globalAlpha = morph;
+      aiGhostShell(p.x, p.y, CG_W, CG_H, 'done');
+      ctx.fillStyle = PAL.title; ctx.font = '600 12px '+SANS;
+      ctx.fillText(it.title, p.x+12, p.y+18);
+      ctx.fillStyle = PAL.sub; ctx.font = '10.5px '+MONO;
+      ctx.fillText(it.calc[0].fx.map(x=>x[1]).join(''), p.x+12, p.y+34);
+      ctx.fillStyle = PAL.val; ctx.font = '600 11.5px '+MONO;
+      ctx.fillText(it.res.v+(it.res.u?' '+it.res.u:''), p.x+12, p.y+52);
+      ctx.fillStyle = aiA(PAL.analysis, .9); ctx.font = '600 9.5px '+SANS;
+      ctx.fillText('LLM · вариант '+(i+1), p.x+12, p.y+CG_H-20);
+      // confidence-бар: subtle, число — в тултипе (Duke: не показываем цифру)
+      ctx.fillStyle = aiA(PAL.analysis, .16);
+      ctx.beginPath(); ctx.roundRect(p.x+12, p.y+CG_H-13, CG_W-24, 3, 1.5); ctx.fill();
+      ctx.fillStyle = aiA(PAL.analysis, .8);
+      ctx.beginPath(); ctx.roundRect(p.x+12, p.y+CG_H-13, (CG_W-24)*it.conf, 3, 1.5); ctx.fill();
+      ctx.globalAlpha = 1;
+    });
+    if (!vis){ // empty-состояние: всё ниже порога
+      const p = pos[0];
+      aiGhostShell(p.x, p.y, CG_W, 58, 'empty');
+      ctx.fillStyle = PAL.sub; ctx.font = '11px '+SANS;
+      ctx.fillText('Нет вариантов выше порога '+AI.confThr.toFixed(2).replace('.',','), p.x+12, p.y+24);
+      ctx.font = '10px '+SANS;
+      ctx.fillText('Понизьте Confidence threshold в «Настройки AI»', p.x+12, p.y+42);
+    }
+  } else if (c.phase==='error'){
+    const p = pos[0];
+    aiGhostShell(p.x, p.y, CG_W, 58, 'error');
+    ctx.fillStyle = PAL.err||PAL.rej||'#ff7a76'; ctx.font = '600 11px '+SANS;
+    ctx.fillText('Rate limit', p.x+12, p.y+22);
+    ctx.fillStyle = PAL.sub; ctx.font = '10px '+SANS;
+    ctx.fillText('fallback: lex — локальные подсказки работают', p.x+12, p.y+38);
+    ctx.fillText('День: $'+AI.cost.day.toFixed(2)+' / $'+AI.cost.limit.toFixed(2)+' — «Демо лимита» сбросит', p.x+12, p.y+52);
+  }
+  ctx.restore();
+}
+
+/* ---- отрисовка preview агента (мир, каждый кадр): ghost-ноды + рёбра + тег ---- */
+function aiDrawAgentPreview(){
+  const pv = AI.agent.preview;
+  if (!pv) return;
+  ctx.save();
+  ctx.textBaseline = 'alphabetic';
+  const pulse = 0.45 + 0.15*Math.sin(Date.now()/450);
+  // рёбра (до нод, под ними)
+  pv.edges.forEach(ed=>{
+    const a = pv.nodes[ed[0]], b = pv.nodes[ed[1]];
+    if (!a || !b) return;
+    const x1 = a.x+a.w, y1 = a.y+46, x2 = b.x, y2 = b.y+46;
+    ctx.strokeStyle = aiA(PAL.analysis, .7); ctx.lineWidth = 1.8; ctx.setLineDash([5,4]);
+    ctx.beginPath(); ctx.moveTo(x1, y1);
+    ctx.bezierCurveTo(x1+clamp(Math.abs(x2-x1)*0.45,40,120), y1, x2-clamp(Math.abs(x2-x1)*0.45,40,120), y2, x2, y2);
+    ctx.stroke(); ctx.setLineDash([]);
+    const mx = (x1+x2)/2, my = (y1+y2)/2, txt = ed[2]||'value';
+    ctx.font = '10px '+MONO;
+    const w = ctx.measureText(txt).width + 10;
+    ctx.fillStyle = PAL.pillBg;
+    ctx.beginPath(); ctx.roundRect(mx-w/2, my-9, w, 16, 8); ctx.fill();
+    ctx.fillStyle = PAL.pillText;
+    ctx.fillText(txt, mx-w/2+5, my+3.5);
+  });
+  pv.nodes.forEach(nd=>{
+    const h = 30 + nd.rows.length*20 + 26;
+    ctx.beginPath(); ctx.roundRect(nd.x, nd.y, nd.w, h, 10);
+    ctx.fillStyle = aiA(PAL.analysis, .08); ctx.fill();
+    ctx.setLineDash([7,5]); ctx.lineWidth = 1.6;
+    ctx.strokeStyle = aiA(PAL.analysis, pulse); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = aiA(PAL.analysis, .13);
+    ctx.beginPath(); ctx.roundRect(nd.x, nd.y, nd.w, 26, [10,10,0,0]); ctx.fill();
+    ctx.fillStyle = PAL.title; ctx.font = '600 12px '+SANS;
+    ctx.fillText(nd.title, nd.x+10, nd.y+17.5);
+    nd.rows.forEach((r, j)=>{
+      const ry = nd.y + 34 + j*20;
+      ctx.fillStyle = PAL.text; ctx.font = '11px '+SANS;
+      ctx.fillText(r[0], nd.x+10, ry+8);
+      ctx.fillStyle = PAL.val; ctx.font = '600 11px '+MONO;
+      const val = r[1]+(r[2]?' '+r[2]:'');
+      ctx.fillText(val, nd.x+nd.w-10-ctx.measureText(val).width, ry+8);
+    });
+    const sy = nd.y + h - 26;
+    ctx.fillStyle = aiA(PAL.analysis, .10);
+    ctx.beginPath(); ctx.roundRect(nd.x, sy, nd.w, 26, [0,0,10,10]); ctx.fill();
+    ctx.fillStyle = PAL.sub; ctx.font = '600 9px '+SANS;
+    ctx.fillText('ИТОГ', nd.x+10, sy+16.5);
+    ctx.fillStyle = PAL.val; ctx.font = '600 12px '+MONO;
+    const rv = nd.res.v + (nd.res.u?' '+nd.res.u:'');
+    ctx.fillText(rv, nd.x+nd.w-10-ctx.measureText(rv).width, sy+17.5);
+  });
+  const n0 = pv.nodes[0];
+  if (n0){
+    ctx.font = '700 9px '+SANS;
+    const tag = 'AGENT PREVIEW · ожидает подтверждения';
+    const w = ctx.measureText(tag).width + 12;
+    ctx.fillStyle = PAL.analysis;
+    ctx.beginPath(); ctx.roundRect(n0.x, n0.y-19, w, 14, 7); ctx.fill();
+    ctx.fillStyle = PAL.chipTxt||'#14161c';
+    ctx.fillText(tag, n0.x+6, n0.y-8.5);
+  }
+  ctx.restore();
+}
+function aiDrawGhosts(){ aiDrawCustomGhosts(); aiDrawAgentPreview(); }
+
+/* ================= агент-панель (F-4, Q3) ================= */
+function agLogEl(){ return document.getElementById('agLog'); }
+function agScroll(){ const l = agLogEl(); l.scrollTop = l.scrollHeight; }
+function agUser(txt){
+  const empty = document.getElementById('agEmpty'); if (empty) empty.remove();
+  const d = document.createElement('div');
+  d.className = 'ag-msg user';
+  d.innerHTML = '<div class="t">Вы</div>'+String(txt).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  agLogEl().appendChild(d); agScroll();
+}
+function agBot(txt, kind, withTools){
+  const empty = document.getElementById('agEmpty'); if (empty) empty.remove();
+  const d = document.createElement('div');
+  d.className = 'ag-msg '+kind;
+  d.innerHTML = '<div class="t">'+(kind==='err'?'ошибка':'AI Агент')+'</div><span class="ag-txt">'+txt+'</span>'
+    + (withTools ? '<div class="ag-tools"><div class="ag-tool sk"></div><div class="ag-tool sk"></div></div>' : '');
+  agLogEl().appendChild(d); agScroll();
+  return d;
+}
+function agToolRow(d, html){
+  const t = d.querySelector('.ag-tools');
+  const r = document.createElement('div');
+  r.className = 'ag-tool'; r.innerHTML = html;
+  if (t) t.appendChild(r); agScroll();
+}
+function agCtxSync(){
+  const chip = document.getElementById('agCtxChip');
+  if (selection && selection.type==='node'){
+    const n = nodeById(selection.id);
+    chip.textContent = 'Selected: 1 — '+(n?n.title:'?');
+    chip.classList.add('ai');
+  } else {
+    chip.textContent = 'Context: entire canvas';
+    chip.classList.remove('ai');
+  }
+  document.getElementById('agProvChip').textContent = aiProvLabel(AI.prov.agent);
+  const rc = document.getElementById('agRateChip');
+  if (AI.prov.agent==='chatgpt'){ rc.style.display=''; rc.textContent = 'ChatGPT: '+(AI.rate.total-AI.rate.used)+'/'+AI.rate.total; }
+  else rc.style.display = 'none';
+  aiCostSync();
+}
+function aiAgentOpen(){
+  if (document.getElementById('drawer').classList.contains('open')) document.getElementById('drawer').classList.remove('open'); // F-10: панель одна
+  AI.agent.open = true;
+  document.body.classList.add('agent-open');
+  document.getElementById('agentpanel').classList.add('open');
+  agCtxSync();
+  setTimeout(()=>{ document.getElementById('agInput').focus(); }, 240);
+  hint('Агент-панель: опишите задачу — tool-calls в истории, preview ghost-нодами на канвасе, Accept/Reject (Q3). Esc — отклонить preview, ещё Esc — закрыть панель');
+}
+function aiAgentClose(){
+  AI.agent.open = false;
+  document.body.classList.remove('agent-open');
+  document.getElementById('agentpanel').classList.remove('open');
+}
+function aiAgentBuildPreview(txt){
+  const t = txt.toLowerCase();
+  let spec;
+  if (/cac/.test(t) && /ltv/.test(t)){
+    spec = {nodes:[
+        {title:'CAC', rows:[['spend','712 000','₽'],['leads','691','']], res:{v:'1 030', u:'₽'}},
+        {title:'LTV', rows:[['ARPU','350','₽'],['retention','0,85','']], res:{v:'1 980', u:'₽'}}],
+      edges:[[0,1,'LTV/CAC']]};
+  } else if (/воронк|funnel|визит|регистрац|покупк/.test(t)){
+    spec = {nodes:[
+        {title:'Визиты', rows:[['DAU','1 000 000','']], res:{v:'30,0', u:'млн/мес'}},
+        {title:'Регистрации', rows:[['cr1','12','%']], res:{v:'3,6', u:'млн'}},
+        {title:'Покупки', rows:[['cr2','4','%']], res:{v:'144,4', u:'тыс.'}}],
+      edges:[[0,1,'visits'],[1,2,'regs']]};
+  } else {
+    spec = {nodes:[
+        {title:'Новая нода', rows:[['параметр','—','']], res:{v:'—', u:''}},
+        {title:'Связанная нода', rows:[['параметр','—','']], res:{v:'—', u:''}}],
+      edges:[[0,1,'value']]};
+  }
+  // FR-010 v2 (Sugiyama-lite): цепочка слева-направо от якоря, не кластер в углу (F-4.12)
+  const anchor = (selection && selection.type==='node') ? nodeById(selection.id) : null;
+  let baseX = anchor ? anchor.x + anchor.w + 90 : s2wx(innerWidth*0.5) - spec.nodes.length*155;
+  let baseY = anchor ? anchor.y - 10 : s2wy(innerHeight*0.42) - 60;
+  if (!anchor){
+    baseX = clamp(baseX, s2wx(40), s2wx(innerWidth-720));
+    baseY = clamp(baseY, s2wy(120), s2wy(innerHeight-360));
+  }
+  AI.agent.preview = {
+    nodes: spec.nodes.map((nd,i)=>({title:nd.title, rows:nd.rows, res:nd.res, x: baseX+i*320, y: baseY, w:240})),
+    edges: spec.edges
+  };
+}
+function aiAcceptPreview(){
+  const pv = AI.agent.preview;
+  if (!pv) return;
+  const idmap = [];
+  pv.nodes.forEach(nd=>{
+    const node = {
+      id:'ag'+(sgUid++), title:nd.title, cat:'template', obj:nd.title,
+      meta:'agent · tool-calling', chipLabel:'AI',
+      desc:'Создано AI-агентом через graph_apply (PRD-0010 F-4): preview принят кнопкой Accept.',
+      params: nd.rows.map(r=>P(r[0], r[1], r[2])),
+      calc: [], res: Object.assign({}, nd.res), sgNew:true
+    };
+    node.x = nd.x; node.y = nd.y; node.w = nd.w;
+    NODES.push(node);
+    PH.anchors[node.id] = {x:nd.x, y:nd.y};
+    INIT_POS[node.id] = {x:nd.x, y:nd.y, w:nd.w};
+    idmap.push(node.id);
+  });
+  pv.edges.forEach(ed=>{
+    const a = idmap[ed[0]], b = idmap[ed[1]];
+    if (!a || !b) return;
+    const src = nodeById(a);
+    edges.push({ id:'u'+(uid++), from:a, fp:{kind:'node'}, to:b, tp:{kind:'node'}, type:'value',
+      v: src.res ? src.res.v+(src.res.u?' '+src.res.u:'') : '?' });
+  });
+  AI.agent.preview = null;
+  dataVersion++; invalidateLayouts();
+  const n = pv.nodes.length, m = pv.edges.length;
+  const last = agLogEl().lastElementChild;
+  const acts = last && last.querySelector('.ag-acts');
+  if (acts){ acts.querySelectorAll('button').forEach(b=>{ b.disabled = true; }); }
+  agBot('✓ Применено: '+n+' '+pluralRu(n,'нода','ноды','нод')+', '+m+' '+pluralRu(m,'связь','связи','связей')+' · graph_apply — один undo-шаг (F-4.5). Деструктивные ops по-прежнему требуют confirm.', 'bot');
+  showToast('Agent: применено '+n+'×'+m+' · undo одним шагом · graph_validate пройден');
+  emit('agApplied');
+}
+function aiRejectPreview(why){
+  if (!AI.agent.preview) return;
+  AI.agent.preview = null;
+  const last = agLogEl().lastElementChild;
+  const acts = last && last.querySelector('.ag-acts');
+  if (acts){ acts.querySelectorAll('button').forEach(b=>{ b.disabled = true; }); }
+  agBot((why? why+'. ': '')+'Превью отклонено — ghost-ноды убраны, канвас не изменён. Переформулируйте запрос или уточните контекст.', 'bot');
+}
+function agSend(txtRaw){
+  const txt = String(txtRaw||'').trim();
+  const inp = document.getElementById('agInput');
+  if (!txt || AI.agent.busy) return;
+  if (AI.paused){ agBot('AI на паузе (⏸ в статусной панели). Нажмите ▶, чтобы возобновить.', 'err'); return; }
+  if (!AI.feat.agent){ agBot('Agent выключен — тумблер «Agent ✓» в статусной панели AI.', 'err'); return; }
+  if (AI.prov.agent==='off'){ agBot('Провайдер Agent Panel: Off. Выберите провайдера в «Настройки AI» (9-й таб).', 'err'); return; }
+  if (AI.cost.day >= AI.cost.limit){
+    agBot('⚠ Rate limit: дневной лимит cost исчерпан ($'+AI.cost.day.toFixed(2)+' / $'+AI.cost.limit.toFixed(2)+'). Запрос отклонён — увеличьте лимит в «Настройки AI» или сбросьте день («Демо лимита» в пульте).', 'err');
+    return;
+  }
+  if (AI.prov.agent==='chatgpt' && AI.rate.total-AI.rate.used <= 0){
+    agBot('⚠ 429 rate limit: подписка ChatGPT исчерпана ('+AI.rate.total+'/'+AI.rate.total+'). Fallback: BYOK — Настройки → AI and Models (F-5.9).', 'err');
+    return;
+  }
+  agUser(txt);
+  inp.value = ''; inp.style.height = 'auto';
+  AI.agent.busy = true;
+  // cost estimate перед запросом (F-3.7/F-7.10)
+  const est = AI.agent.est;
+  const d = agBot('Планирую… контекст: '+(selection&&selection.type==='node' ? 'выбранная нода «'+nodeById(selection.id).title+'»' : 'весь канвас')+' · оценка ~$'+est.toFixed(2), 'bot', true);
+  const steps = [
+    [520,  ()=>agToolRow(d, '<span class="fn">graph_read</span> {context: '+(selection?'selected':'canvas')+'} → <b>ok</b>')],
+    [1050, ()=>agToolRow(d, '<span class="fn">node_create</span> ×'+(/воронк|funnel/.test(txt.toLowerCase())?3:2)+' → <b>ok</b>')],
+    [1550, ()=>agToolRow(d, '<span class="fn">graph_validate</span> → <b>ok</b> · циклов нет · юниты сходятся')]
+  ];
+  steps.forEach(([ms, fn])=>setTimeout(()=>{ if (d.isConnected) fn(); }, ms));
+  setTimeout(()=>{
+    if (!d.isConnected){ AI.agent.busy = false; return; }
+    d.querySelector('.ag-tools').querySelectorAll('.ag-tool.sk').forEach(s=>s.remove());
+    // rate limit: локальный счётчик ChatGPT (F-7.3)
+    if (AI.prov.agent==='chatgpt'){
+      AI.rate.used++;
+      if (AI.rate.total-AI.rate.used <= 0){
+        agBot('⚠ 429 rate limit: подписка ChatGPT исчерпана. Последний запрос исполнен — следующий после смены провайдера (BYOK) или завтра.', 'err');
+        AI.agent.busy = false; agCtxSync();
+        return;
+      }
+    }
+    aiAgentBuildPreview(txt);
+    const n = AI.agent.preview.nodes.length, m = AI.agent.preview.edges.length;
+    d.querySelector('.ag-txt').innerHTML = 'Предлагаю связку: <b>'+n+' '+pluralRu(n,'нода','ноды','нод')+'</b>, <b>'+m+' '+pluralRu(m,'связь','связи','связей')+'</b> (последовательность graph_apply, один undo-шаг). Ghost-превью — на канвасе справа'+(selection?' от выделенной ноды':'')+'. Фактический расход: $0.021.';
+    const acts = document.createElement('div');
+    acts.className = 'ag-acts';
+    acts.innerHTML = '<button class="acc">Accept — применить</button><button class="rej">Reject</button>';
+    acts.querySelector('.acc').onclick = ()=>aiAcceptPreview();
+    acts.querySelector('.rej').onclick = ()=>aiRejectPreview();
+    d.appendChild(acts);
+    d.classList.add('preview');
+    agScroll();
+    aiSpend(0.021, 'agent: preview');
+    aiCtxNote(); agCtxSync();
+    AI.agent.busy = false;
+    hint('Preview агента на канвасе: Accept/Reject — в панели или Esc (отклонить). Ghost-ноды не изменяют канвас до подтверждения (Q3)');
+    emit('agPreview');
+  }, 1950);
+}
+function aiCtxNote(){}
+document.getElementById('agClose').addEventListener('click', aiAgentClose);
+document.getElementById('agSend').addEventListener('click', ()=>agSend(document.getElementById('agInput').value));
+document.getElementById('agInput').addEventListener('keydown', e=>{
+  if (e.key==='Enter' && !e.shiftKey){ e.preventDefault(); agSend(document.getElementById('agInput').value); return; }
+  // Esc и Ctrl+I — пропускаем вверх: Esc-лестница AI (preview → панель), Ctrl+I — тумблер панели
+  if (e.key==='Escape' || ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='i')) return;
+  e.stopPropagation();
+});
+document.getElementById('agInput').addEventListener('input', e=>{
+  e.target.style.height = 'auto';
+  e.target.style.height = Math.min(110, e.target.scrollHeight)+'px';
+});
+document.querySelectorAll('#agQuick button').forEach(b=>{
+  b.addEventListener('click', ()=>agSend(b.dataset.q));
+});
+
+/* ================= настройки «AI and Models» (F-7) ================= */
+function aiOpenSettings(){
+  if (SG.set) sgCloseSettings(); // F-10: один оверлей настроек
+  AI.set = true;
+  aiOnbClose(true);
+  document.getElementById('aisetov').classList.remove('hidden');
+  aiSyncSettings();
+}
+function aiCloseSettings(){ AI.set = false; document.getElementById('aisetov').classList.add('hidden'); }
+function aiSyncSettings(){
+  document.getElementById('aiProvSuggest').value = AI.prov.suggest;
+  document.getElementById('aiProvGraph').value = AI.prov.graph;
+  document.getElementById('aiProvAgent').value = AI.prov.agent;
+  const byok = Object.values(AI.prov).indexOf('byok')>=0;
+  document.getElementById('aiKeyGrp').style.display = byok?'':'none';
+  document.getElementById('aiKeyBlock').style.display = byok?'':'none';
+  const badge = document.getElementById('aiKeyBadge');
+  badge.textContent = AI.keyOk ? 'ключ валиден · 12 моделей' : 'ключ не проверен';
+  badge.className = 'hbadge'+(AI.keyOk?' ok':'');
+  document.getElementById('aiModelSel').value = AI.model;
+  const chatgpt = Object.values(AI.prov).indexOf('chatgpt')>=0;
+  document.getElementById('aiRateGrp').style.display = chatgpt?'':'none';
+  document.getElementById('aiRateBlock').style.display = chatgpt?'':'none';
+  document.getElementById('aiRateBadge').textContent = 'ChatGPT: '+(AI.rate.total-AI.rate.used)+'/'+AI.rate.total+' сообщений осталось';
+  document.getElementById('aiCostLim').value = AI.cost.limit;
+  document.getElementById('aiCostLimV').textContent = '$'+AI.cost.limit.toFixed(2)+' / день';
+  document.getElementById('aiConfThr').value = AI.confThr;
+  document.getElementById('aiConfThrV').textContent = fmtF(AI.confThr,2);
+  document.querySelectorAll('#aiResid label').forEach(l=>{
+    const sel = l.dataset.v===AI.residency;
+    l.classList.toggle('sel', sel);
+    l.querySelector('input').checked = sel;
+  });
+  document.getElementById('aiSelfhostBlock').style.display = AI.residency==='selfhost'?'':'none';
+  document.getElementById('aiTelTgl').classList.toggle('on', AI.telemetry);
+}
+document.getElementById('aiProvSuggest').addEventListener('change', e=>{
+  AI.prov.suggest = e.target.value; aiSetActive('suggest');
+  hint('Suggest → '+aiProvLabel(e.target.value)+(e.target.value==='off'?' — custom-ноды и ИИ-строки отключены':'')+'. ChatGPT OAuth недоступен для Suggest (Q2)');
+});
+document.getElementById('aiProvGraph').addEventListener('change', e=>{
+  AI.prov.graph = e.target.value; aiSetActive('graph');
+  hint('Graph Builder → '+aiProvLabel(e.target.value)+' (per-feature провайдер, Q2)');
+});
+document.getElementById('aiProvAgent').addEventListener('change', e=>{
+  AI.prov.agent = e.target.value; aiSetActive('agent'); agCtxSync();
+  hint('Agent Panel → '+aiProvLabel(e.target.value)+(e.target.value==='chatgpt'?' — работает rate limit подписки (F-7.3)':''));
+});
+document.getElementById('aiKeyBtn').addEventListener('click', ()=>{
+  const b = document.getElementById('aiKeyBadge');
+  const v = document.getElementById('aiKeyInput').value.trim();
+  if (!v){ b.textContent = 'ключ пустой — введите ключ'; b.className = 'hbadge err'; AI.keyOk = false; aiSetActive(AI.active); return; }
+  b.textContent = 'проверяю /v1/models…'; b.className = 'hbadge';
+  setTimeout(()=>{
+    AI.keyOk = true;
+    AI.keyMask = v.length>12 ? v.slice(0,6)+'…'+v.slice(-4) : v;
+    b.textContent = 'ключ валиден · 12 моделей'; b.className = 'hbadge ok';
+    aiSetActive(AI.active);
+    hint('BYOK health-check ok (F-1.9): ключ валиден, /v1/models вернул 12 моделей. В продукте ключ уходит в OS keychain');
+  }, 900);
+});
+document.getElementById('aiModelSel').addEventListener('change', e=>{
+  AI.model = e.target.value; aiSetActive(AI.active);
+  hint('Модель BYOK: '+AI.model+(AI.model==='glm-5.3-flash'?' — p@1 1.000 на benchmark (лучший результат)':''));
+});
+document.getElementById('aiCostLim').addEventListener('input', e=>{
+  AI.cost.limit = +e.target.value;
+  document.getElementById('aiCostLimV').textContent = '$'+AI.cost.limit.toFixed(2)+' / день';
+  aiCostSync();
+  if (AI.cost.day < AI.cost.limit*0.8) AI.limitShown = false; // лимит поднят — диалог больше не нужен
+});
+document.getElementById('aiConfThr').addEventListener('input', e=>{
+  AI.confThr = +e.target.value;
+  document.getElementById('aiConfThrV').textContent = fmtF(AI.confThr,2);
+  if (AI.custom && AI.custom.phase==='done') hint('Порог confidence: '+fmtF(AI.confThr,2)+' — варианты ниже порога скрыты/появлены живьём (F-2.11)');
+});
+document.querySelectorAll('#aiResid input').forEach(r=>{
+  r.addEventListener('change', ()=>{
+    AI.residency = r.value;
+    aiSyncSettings();
+    hint('Data residency: '+({local:'Local only — данные не покидают машину (Laya/Ollama)', cloud:'Cloud — контекст уходит провайдеру с redact (Q1)', selfhost:'Self-hosted — данные в вашем контуре, endpoint настраивается ниже'})[r.value]);
+  });
+});
+document.getElementById('aiShBtn').addEventListener('click', ()=>{
+  const b = document.getElementById('aiShBadge');
+  const url = document.getElementById('aiShUrl').value.trim();
+  if (!/^https?:\/\/.+/.test(url)){ b.textContent = 'неверный URL'; b.className = 'hbadge err'; AI.selfhostOk = false; return; }
+  b.textContent = 'проверяю…'; b.className = 'hbadge';
+  setTimeout(()=>{ AI.selfhostOk = true; b.textContent = 'endpoint отвечает · OpenAI-compatible'; b.className = 'hbadge ok'; hint('Self-hosted endpoint проверен (F-7.8): ответственность за данные — на пользователе (Q5)'); }, 800);
+});
+document.getElementById('aiTelTgl').addEventListener('click', ()=>{
+  AI.telemetry = !AI.telemetry;
+  document.getElementById('aiTelTgl').classList.toggle('on', AI.telemetry);
+  hint('Телеметрия (opt-in, default OFF): '+(AI.telemetry?'включена — анонимные события без PII (Q7/F-7.6)':'выключена'));
+});
+document.getElementById('aiSetDone').addEventListener('click', aiCloseSettings);
+document.getElementById('aisetov').addEventListener('mousedown', e=>{ if (e.target.id==='aisetov') aiCloseSettings(); });
+document.querySelectorAll('#aiTabs button').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    if (!b.classList.contains('on')) hint('В прототипе реализован 9-й таб «AI and Models» (F-7.1) — таб «'+b.textContent+'» существует в продукте, здесь — мок');
+  });
+});
+
+/* ================= онбординг AI-режима (F-8) ================= */
+function aiOnbOpen(){
+  AI.onb = true; AI.onbChoice = null;
+  document.getElementById('onbov').classList.remove('hidden');
+  document.querySelectorAll('.onbo .omode').forEach(m=>m.classList.remove('sel'));
+  document.getElementById('aiOnbGo').disabled = true;
+  document.getElementById('aiOnbPrivBox').classList.remove('show');
+}
+function aiOnbClose(silent){
+  AI.onb = false;
+  document.getElementById('onbov').classList.add('hidden');
+  if (!silent) hint('Онбординг закрыт без выбора — можно открыть позже: пульт → «Онбординг AI» (F-8.1)');
+}
+document.querySelectorAll('.onbo .omode').forEach(m=>{
+  m.addEventListener('click', ()=>{
+    document.querySelectorAll('.onbo .omode').forEach(x=>x.classList.remove('sel'));
+    m.classList.add('sel');
+    AI.onbChoice = m.dataset.v;
+    document.getElementById('aiOnbGo').disabled = false;
+  });
+});
+document.getElementById('aiOnbPriv').addEventListener('click', ()=>{
+  document.getElementById('aiOnbPrivBox').classList.toggle('show');
+});
+document.getElementById('aiOnbGo').addEventListener('click', ()=>{
+  const c = AI.onbChoice || 'cloud';
+  AI.residency = c;
+  if (c==='local'){ AI.prov.suggest = 'laya'; AI.prov.graph = 'ollama'; AI.prov.agent = 'ollama'; }
+  else if (c==='cloud'){ AI.prov.suggest = 'byok'; AI.prov.graph = 'chatgpt'; AI.prov.agent = 'chatgpt'; }
+  else { AI.prov.suggest = 'selfhost'; AI.prov.graph = 'selfhost'; AI.prov.agent = 'selfhost'; }
+  aiSetActive('suggest'); agCtxSync(); aiSyncPanel();
+  aiOnbClose(true);
+  showToast('AI-режим: '+({local:'Local only — offline, данные не уходят', cloud:'Cloud — качество выше, данные у провайдеру (redact)', selfhost:'Self-hosted — cloud-качество в вашем контуре'})[c]);
+  hint('Онбординг (F-8.2): residency = '+c+' сохранена в настройки; провайдеры per-feature переопределены');
+});
+
+/* ================= диалог 80% дневного лимита (F-7.4) ================= */
+function aiOpenLimit(){
+  AI.lim = true;
+  document.getElementById('limSpent').textContent = '$'+AI.cost.day.toFixed(2);
+  document.getElementById('limTotal').textContent = '$'+AI.cost.limit.toFixed(2);
+  document.getElementById('limov').classList.remove('hidden');
+}
+function aiCloseLimit(){ AI.lim = false; document.getElementById('limov').classList.add('hidden'); }
+document.getElementById('limRaise').addEventListener('click', ()=>{ aiCloseLimit(); aiOpenSettings(); hint('Слайдер «Cost limit» поднимет лимит — при снижении порога ниже текущего расхода диалог не повторяется'); });
+document.getElementById('limPause').addEventListener('click', ()=>{
+  aiCloseLimit();
+  if (!AI.paused){ AI.paused = true; aiSyncPanel(); }
+  showToast('AI на паузе до завтра (⏸) — LLM-запросы приостановлены');
+});
+document.getElementById('limDismiss').addEventListener('click', ()=>{
+  aiCloseLimit();
+  hint('Продолжаем: 80% лимита — предупреждение, не блокировка; 100% отклонит LLM-запросы');
+});
+document.getElementById('limov').addEventListener('mousedown', e=>{ if (e.target.id==='limov') aiCloseLimit(); });
+
+/* ================= пульт AI + горячие клавиши ================= */
+document.getElementById('aiAgentBtn').addEventListener('click', ()=>{ AI.agent.open ? aiAgentClose() : aiAgentOpen(); });
+document.getElementById('aiSetBtn').addEventListener('click', aiOpenSettings);
+document.getElementById('aiOnbBtn').addEventListener('click', aiOnbOpen);
+document.getElementById('aiDemoBtn').addEventListener('click', aiDemoLimit);
+
+/* ---- Esc-лестница: AI-поверхности в начале (см. DESIGN_RULES §11.3) ---- */
+function aiKeydown(e){
+  if (AI.onb){ if (e.key==='Escape') aiOnbClose(); return true; }
+  if (AI.lim){ if (e.key==='Escape') aiCloseLimit(); return true; }
+  if (AI.set){ if (e.key==='Escape') aiCloseSettings(); return true; }
+  if (AI.agent.open){
+    if (e.key==='Escape'){
+      if (AI.agent.preview) aiRejectPreview();
+      else aiAgentClose();
+      return true;
+    }
+    if (document.activeElement && document.activeElement.id==='agInput') return false; // ввод в чате
+    if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='i'){ e.preventDefault(); aiAgentClose(); return true; }
+    return false;
+  }
+  if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='i'){ e.preventDefault(); aiAgentOpen(); return true; }
+  return false;
+}
+
+/* ================= кадр + сброс ================= */
+function aiFrame(){
+  if (AI.agent.open) agCtxSync(); // context-chip живёт за выделением на канвасе
+}
+function aiResetAll(){
+  AI.paused = false;
+  AI.feat = {suggest:true, graph:true, agent:true};
+  AI.prov = {suggest:'byok', graph:'chatgpt', agent:'chatgpt'};
+  AI.model = 'glm-5.3-flash';
+  AI.keyOk = true; AI.keyMask = 'sk-zai-…8f2d';
+  AI.cost = {session:0.04, day:0.12, limit:1.00};
+  AI.limitShown = false;
+  AI.rate = {used:33, total:80};
+  AI.residency = 'cloud'; AI.telemetry = false; AI.confThr = 0.50; AI.selfhostOk = false;
+  AI.active = 'suggest'; AI.panel = true;
+  AI.custom = null;
+  AI.set = false; AI.onb = false; AI.lim = false; AI.onbChoice = null;
+  AI.agent = {open:false, busy:false, preview:null, est:0.02};
+  aiAgentClose();
+  document.getElementById('aisetov').classList.add('hidden');
+  document.getElementById('onbov').classList.add('hidden');
+  document.getElementById('limov').classList.add('hidden');
+  agLogEl().innerHTML = '<div class="ag-empty" id="agEmpty">Панель агента пуста. Опишите задачу текстом — агент вызовет MCP-инструменты (node_create, graph_validate, graph_apply…), покажет <b>preview ghost-нодами</b> на канвасе и спросит Accept/Reject. Деструктивные операции — только с подтверждением.</div>';
+  document.getElementById('aiPanelTgl').checked = true;
+  aiSyncPanel();
+}
+
+/* ================= init AI ================= */
+aiSyncPanel();
+agCtxSync();
+aiSyncShell();
 
 /* ============================================================
    ЧАСТЬ L. Оболочка: пульт, тур, hint, readout, fit, цикл
@@ -3916,7 +5292,9 @@ const TOUR = [
   {txt:'Осталось <b>«Ревью автосвязей»</b> в пульте: массовые действия, «Вернуть все», создание одним undo-батом. Далее — «Решения и вопросы».', ev:null},
   {txt:'<b>Подсказки FR-079</b>: включите тумблер «движок включён» в пульте, затем двойной клик по ноде «Гипотеза» (или кнопка «Ввод в ноде»). Печатайте: локальные строки мгновенны, ИИ-строки догружаются skeleton-ом.', ev:'sgAiShown'},
   {txt:'<b>Tab</b> — принять ИИ-строку: шаблон заменит ноду (Ctrl+Z — undo одним шагом). У новой ноды — <b>карточки «следующие ноды» (C3)</b>: клик вставляет следующую в цепочку.', ev:'sgCardShown'},
-  {txt:'Проверьте <b>«домен: framework»</b> в пульте — подавление C4 (на не-расчётном канвасе ИИ молчит), <b>HUD</b> — вердикты гейтов и журнал S0, <b>«Настройки»</b> — opt-in и согласие на веса L1 (~650 МБ).', ev:null}
+  {txt:'Проверьте <b>«домен: framework»</b> в пульте — подавление C4 (на не-расчётном канвасе ИИ молчит), <b>HUD</b> — вердикты гейтов и журнал S0, <b>«Настройки»</b> — opt-in и согласие на веса L1 (~650 МБ).', ev:null},
+  {txt:'<b>AI-компоненты (PRD-0010)</b>: статусная панель справа над миникартой — модель, функции-тумблеры, cost сессии/дня (80% — диалог расширения), ⚙/⏸. <b>Агент-панель</b> (Ctrl+I) — чат: tool-calls, preview ghost-нодами, Accept/Reject, rate limit.', ev:null},
+  {txt:'<b>Custom-ноды suggest (Q7)</b>: во время ввода в ноде кликните «3 custom-варианта» в попапе — ghost-ноды LLM появятся рядом: skeleton → morph, confidence-бар (порог — в «Настройки AI», 9-й таб), клик — применить + тост «Сохранить как шаблон». Онбординг AI — в пульте.', ev:null}
 ];
 let tourIdx = -1;
 function renderTourStep(){
@@ -3982,6 +5360,7 @@ function resetAll(){
   if (SG.editing) sgEndEditing('dismiss');
   if (SG.cards) sgDismissCards(true);
   if (SG.set) sgCloseSettings();
+  aiResetAll(); // AI (PRD-0010): cost, пауза, провайдеры, панели, preview, custom
   SG.undo = null; SG.l1 = 'missing'; SG.log = []; SG.shownTimes = [];
   SG.stats = {shown:0, accepted:0, dismissed:0, edited:0};
   SG.enabled = false; SG.engine = 'lex+laya'; SG.domain = 'calc'; SG.lat = 650;
@@ -4209,6 +5588,7 @@ function render(){
   drawEdges(bundles, lod);
   drawNodes(lod);
   sgDrawEditing();
+  aiDrawGhosts(); // AI (PRD-0010): custom-ноды suggest + preview агента — мир, над нодами
   drawBundleRings(bundles, lod);
   ctx.setTransform(dpr,0,0,dpr,0,0);
   drawBadges(bundles, lod);
@@ -4216,6 +5596,7 @@ function render(){
   if (stage) drawStage();
   updateHover();
   sgFrame();
+  aiFrame(); // AI: context-chip агент-панели следует за выделением
   updateReadouts();
   } catch(err){ __renderErr = String(err && err.stack || err).slice(0,300); }
 }
@@ -4281,7 +5662,7 @@ document.getElementById('pushResetBtn').addEventListener('click', ()=>{
   phInitAnchors();
   hintDefault();
 });
-window.addEventListener('resize', ()=>{ resize(); if (chain) renderChain(); });
+window.addEventListener('resize', ()=>{ resize(); if (chain) renderChain(); aiSyncShell(); });
 rebuildEdges();
 recalcDAU();
 rvClosed = RV_GROUPS.map(()=>false);
