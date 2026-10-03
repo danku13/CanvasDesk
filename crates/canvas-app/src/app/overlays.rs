@@ -4425,8 +4425,12 @@ impl App {
             params: [8.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
-        // Левая колонка: пункты «иконка + название» (Obsidian); активный
+        // Навигация: Desktop — левая колонка «иконка + название» (Obsidian);
+        // компакт/мобайл (W-e) — горизонтальный таб-бар: иконка по центру
+        // слота, имя активного раздела читается в заголовке ниже. Активный
         // раздел — акцентная подложка, неактивные — hover-подсветка
+        // (заливки/слоты общие — различается только посадка иконки/подписи).
+        let compact_tabs = layout.mode != ModalMode::Desktop;
         let tab_index = self.settings_tab.min(SETTINGS_TABS.len() - 1);
         for (i, tab) in SETTINGS_TABS.iter().enumerate() {
             let Some(item) = layout.nav_items.get(i) else {
@@ -4470,12 +4474,30 @@ impl App {
             let icon_color = if active { palette.link } else { palette.icon };
             let icon_tint = crate::palette::color_to_rgba(icon_color);
             let icon_set = self.icon_set_active();
+            // Посадка иконки: Desktop — слева колонки (отступ 12, слот 20);
+            // компакт/мобайл — по центру слота таб-бара. Глиф-фолбэк —
+            // той же посадке (центр слота / колонка).
+            let icon_size = 16.0f32.min(item[3] - 4.0);
+            let icon_y = item[1] + (item[3] - icon_size) / 2.0;
+            let glyph_y = item[1] + (item[3] - 14.0 * 1.3) / 2.0;
+            let (icon_x, glyph_origin, glyph_width, glyph_align) = if compact_tabs {
+                (
+                    item[0] + (item[2] - icon_size) / 2.0,
+                    [item[0], glyph_y],
+                    item[2],
+                    TextAlign::Center,
+                )
+            } else {
+                (
+                    item[0] + 12.0 + (20.0 - icon_size) / 2.0,
+                    [item[0] + 12.0, glyph_y],
+                    20.0,
+                    TextAlign::Left,
+                )
+            };
             if icon_set.is_some() && !icon_name.is_empty() {
                 if let Some(set) = icon_set {
                     if let Some((uv_min, uv_max)) = canvas_render::icon_uv(set, icon_name) {
-                        let icon_size = 16.0f32.min(item[3] - 4.0);
-                        let icon_x = item[0] + 12.0 + (20.0 - icon_size) / 2.0;
-                        let icon_y = item[1] + (item[3] - icon_size) / 2.0;
                         icons.push(canvas_render::IconInstance {
                             pos: [icon_x, icon_y],
                             size: [icon_size, icon_size],
@@ -4486,42 +4508,50 @@ impl App {
                     } else {
                         texts.push(OwnedScreenText {
                             text: tab.icon.to_owned(),
-                            origin: [item[0] + 12.0, item[1] + (item[3] - 14.0 * 1.3) / 2.0],
-                            width: 20.0,
+                            origin: glyph_origin,
+                            width: glyph_width,
                             font_size: 14.0,
                             color: icon_color,
-                            align: TextAlign::Left,
+                            align: glyph_align,
                         });
                     }
                 }
             } else {
                 texts.push(OwnedScreenText {
                     text: tab.icon.to_owned(),
-                    origin: [item[0] + 12.0, item[1] + (item[3] - 14.0 * 1.3) / 2.0],
-                    width: 20.0,
+                    origin: glyph_origin,
+                    width: glyph_width,
                     font_size: 14.0,
                     color: icon_color,
+                    align: glyph_align,
+                });
+            }
+            // Название раздела — только в левой колонке (Desktop); в
+            // компакт/мобайл имя активного раздела читается в заголовке
+            // под таб-баром (слоты ~62px не вмещают подписи без эвристик).
+            if !compact_tabs {
+                texts.push(OwnedScreenText {
+                    text: self.tr(tab.title_key).to_owned(),
+                    origin: [item[0] + 36.0, item[1] + (item[3] - 13.0 * 1.3) / 2.0],
+                    width: item[2] - 36.0 - 6.0,
+                    font_size: 13.0,
+                    color: if active { palette.title } else { palette.body },
                     align: TextAlign::Left,
                 });
             }
+        }
+        // Подсказка внизу левой колонки (перенос из подвала панели FR-026);
+        // компакт/мобайл — левой колонки нет (hint_rect пуст).
+        if !compact_tabs {
             texts.push(OwnedScreenText {
-                text: self.tr(tab.title_key).to_owned(),
-                origin: [item[0] + 36.0, item[1] + (item[3] - 13.0 * 1.3) / 2.0],
-                width: item[2] - 36.0 - 6.0,
-                font_size: 13.0,
-                color: if active { palette.title } else { palette.body },
+                text: self.tr(keys::SETTINGS_HINT).to_owned(),
+                origin: [layout.hint_rect[0], layout.hint_rect[1] + 4.0],
+                width: layout.hint_rect[2],
+                font_size: 11.0,
+                color: palette.icon,
                 align: TextAlign::Left,
             });
         }
-        // Подсказка внизу левой колонки (перенос из подвала панели FR-026)
-        texts.push(OwnedScreenText {
-            text: self.tr(keys::SETTINGS_HINT).to_owned(),
-            origin: [layout.hint_rect[0], layout.hint_rect[1] + 4.0],
-            width: layout.hint_rect[2],
-            font_size: 11.0,
-            color: palette.icon,
-            align: TextAlign::Left,
-        });
         // Заголовок раздела (правая панель)
         let tab_def = &SETTINGS_TABS[tab_index];
         texts.push(OwnedScreenText {

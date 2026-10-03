@@ -16,9 +16,15 @@
 //! центру окна над затемнением (не панель у угла кнопки); строки
 //! «лейбл + описание + контрол» (kit-switch / dropdown-кнопка);
 //! таб «Внешний вид» — карточки темы + dropdown языка (FR-040); размер
-//! адаптивный с потолками (расчёт на Full HD+, контрольные точки
-//! [`MODAL_BP_COMPACT`]/[`MODAL_BP_MOBILE`] — константы без реализации);
-//! поиск по настройкам — отклонён владельцем (не реализуем).
+//! адаптивный с потолками (расчёт на Full HD+); брейкпоинты ширины
+//! [`MODAL_BP_COMPACT`]/[`MODAL_BP_MOBILE`] реализованы (вариант «A»,
+//! решение владельца 03.10.2026, волна W-e аудита ui-kit §10):
+//! [`modal_mode`] → [`ModalMode`] — Desktop (≥1280: двухколоночная
+//! раскладка прежняя), Compact (768..1280: одноколоночная, горизонтальный
+//! таб-бар, ширина клампится к вьюпорту минус поля), Mobile (<768:
+//! полноэкранный лист вьюпорт минус внешние поля). Скролл контента
+//! (W-a) работает во всех трёх режимах; поиск по настройкам — отклонён
+//! владельцем (не реализуем).
 //!
 //! Все тексты настроек — через таблицу строк [`crate::i18n`] (ключи,
 //! без хардкода — база локализации FR-040); значения из `canvas-core`
@@ -52,16 +58,24 @@ pub const MODAL_MAX_W: f32 = 880.0;
 pub const MODAL_MIN_H: f32 = 400.0;
 /// Потолок высоты модалки (логические px).
 pub const MODAL_MAX_H: f32 = 640.0;
-/// Контрольная точка «компакт» (ширина окна, логические px) — задел под
-/// будущую адаптацию планшетов; поведение ниже точки в v1 не реализуется.
+/// Контрольная точка «компакт» (ширина окна, логические px): при
+/// viewport ≥ точки — двухколоночная раскладка (навигация слева); ниже —
+/// компактная одноколоночная с горизонтальным таб-баром (W-e, вариант «A»,
+/// решение владельца 03.10.2026).
 pub const MODAL_BP_COMPACT: f32 = 1280.0;
-/// Контрольная точка «мобильный» (ширина окна, логические px) — задел под
-/// будущую адаптацию телефонов; поведение ниже точки в v1 не реализуется.
+/// Контрольная точка «мобильный» (ширина окна, логические px): при
+/// viewport ≥ точки — модалка собственного размера (дизайн-формула с
+/// клампом к окну); ниже — полноэкранный лист вьюпорт минус внешние поля
+/// [`SETTINGS_MARGIN`] (W-e, вариант «A», решение владельца 03.10.2026).
 pub const MODAL_BP_MOBILE: f32 = 768.0;
 /// Ширина левой колонки навигации (клампится на узких окнах).
 pub const MODAL_NAV_WIDTH: f32 = 180.0;
 /// Высота пункта левой навигации.
 pub const MODAL_NAV_ITEM_H: f32 = 34.0;
+/// Высота горизонтального таб-бара компакт/мобайл-режимов (W-e) — та же
+/// kit-метрика пункта, что у вертикальной навигации ([`MODAL_NAV_ITEM_H`]):
+/// слоты крупнее иконки 16px, «таб-бар компактен» без нового литерала.
+pub const MODAL_TABBAR_H: f32 = MODAL_NAV_ITEM_H;
 /// Высота заголовка раздела в правой панели.
 pub const MODAL_TITLE_HEIGHT: f32 = 30.0;
 /// Внутренние поля модалки и её панелей — токен
@@ -1089,7 +1103,14 @@ impl DropdownState {
 pub struct ModalLayout {
     /// Rect модалки `[x, y, w, h]` (логические px).
     pub rect: [f32; 4],
-    /// Ширина левой колонки навигации (кламп на узких окнах).
+    /// Режим раскладки по брейкпоинтам ширины (W-e): Desktop — навигация
+    /// слева; Compact/Mobile — одноколоночная с горизонтальным таб-баром
+    /// (Mobile — полноэкранный лист). Рисование ветвит по нему —
+    /// «ввод = тому, что видно»: hit-тесты работают от тех же rect'ов
+    /// ([`modal_nav_at`] не различает ориентацию — пункты в `nav_items`).
+    pub mode: ModalMode,
+    /// Ширина левой колонки навигации (кламп на узких окнах; 0 — колонки
+    /// нет: Compact/Mobile).
     pub nav_w: f32,
     /// Rect'ы пунктов навигации по индексу таба.
     pub nav_items: Vec<[f32; 4]>,
@@ -1204,12 +1225,53 @@ pub fn pill_knob_rect(track: [f32; 4], on: bool) -> [f32; 4] {
     [kit.knob.x, kit.knob.y, kit.knob.w, kit.knob.h]
 }
 
+/// Режим раскладки модалки по ширине вьюпорта (W-e, вариант «A», решение
+/// владельца 03.10.2026): брейкпоинты [`MODAL_BP_COMPACT`]/[
+/// `MODAL_BP_MOBILE`] — единственный источник ветвления, символьных
+/// эвристик ширины нет (запрет CR-015).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModalMode {
+    /// viewport ≥ [`MODAL_BP_COMPACT`] (1280): прежняя двухколоночная
+    /// раскладка — навигация слева, строки в правой панели.
+    Desktop,
+    /// [`MODAL_BP_MOBILE`] ≤ viewport < [`MODAL_BP_COMPACT`] (компакт):
+    /// одноколоночная композиция — строки на всю ширину, навигация —
+    /// горизонтальный таб-бар над заголовком; ширина модалки клампится к
+    /// вьюпорту минус поля (дизайн-формула и окно-кламп прежние).
+    Compact,
+    /// viewport < [`MODAL_BP_MOBILE`] (мобайл): полноэкранный лист —
+    /// модалка занимает вьюпорт минус внешние поля [`SETTINGS_MARGIN`]
+    /// (== токен `SPACING_LG`); скелет — как в компакт-режиме.
+    Mobile,
+}
+
+/// Режим раскладки по ширине вьюпорта (чистая функция; высота не участвует —
+/// обе контрольные точки заданы по ширине окна, FR-039 §2).
+pub fn modal_mode(viewport: [f32; 2]) -> ModalMode {
+    if viewport[0] < MODAL_BP_MOBILE {
+        ModalMode::Mobile
+    } else if viewport[0] < MODAL_BP_COMPACT {
+        ModalMode::Compact
+    } else {
+        ModalMode::Desktop
+    }
+}
+
 /// Адаптивный размер модалки — два яруса `constrain` (FR-054, примитивы U3):
-/// 1) желаемый (45%/60% вьюпорта) в дизайн-границах `[MODAL_MIN_*, MODAL_MAX_*]`;
-/// 2) итог — в пределах окна с полями [`SETTINGS_MARGIN`] (инвариант: модалка
-///    целиком в окне при любом viewport, 320×240 включительно; окно-кламп
-///    приоритетен над дизайн-минимумом).
+/// Desktop/Compact — 1) желаемый (45%/60% вьюпорта) в дизайн-границах
+/// `[MODAL_MIN_*, MODAL_MAX_*]`; 2) итог — в пределах окна с полями
+/// [`SETTINGS_MARGIN`] (инвариант: модалка целиком в окне при любом
+/// viewport, 320×240 включительно; окно-кламп приоритетен над
+/// дизайн-минимумом). Mobile (W-e) — полноэкранный лист: вьюпорт минус
+/// внешние поля [`SETTINGS_MARGIN`] (`SETTINGS_MARGIN` == токен
+/// `canvas_core::tokens::SPACING_LG`, значение 12 — новых литералов нет).
 fn modal_size(viewport: [f32; 2]) -> [f32; 2] {
+    if modal_mode(viewport) == ModalMode::Mobile {
+        return [
+            (viewport[0] - SETTINGS_MARGIN * 2.0).max(1.0),
+            (viewport[1] - SETTINGS_MARGIN * 2.0).max(1.0),
+        ];
+    }
     use canvas_ui::geometry::UiVec2;
     use canvas_ui::layout::constrain;
     let design = constrain(
@@ -1233,12 +1295,20 @@ fn modal_size(viewport: [f32; 2]) -> [f32; 2] {
 /// Раскладка — measured-семейством `canvas_ui` (FR-054 миграция U5; W3.2 —
 /// каталог `docs/plans/fr-068-w3-consumer-migration.md`): размер —
 /// `constrain`, центрирование — `stack`, скелет — `Row::lay_out_measured`
-/// [навигация | контент], пункты навигации и строки —
+/// [навигация | контент] (Desktop), пункты навигации и строки —
 /// `Column::lay_out_measured`, карточки тем — `Row::lay_out_measured`
 /// (зазор — токен `SPACING_MD`, значение прежнего литерала 10); дети
 /// выражаются [`MeasuredItem::Fixed`] (константы скелета, Text-детей нет —
 /// замерщик не участвует в геометрии). Числа — дословно прежние (тесты
 /// фиксируют структуру и клампы).
+///
+/// W-e (вариант «A», решение владельца 03.10.2026): режим по
+/// [`modal_mode`] — Compact/Mobile складывают двухколоночную композицию
+/// в одноколоночную: строки на всю ширину контента, навигация —
+/// горизонтальный таб-бар над заголовком (те же kit-метрики пункта и
+/// measured-примитивы; Mobile — лист вьюпорт минус поля). Скролл (W-a)
+/// работает во всех режимах — [`modal_layout_scrolled_with`] над той же
+/// базовой раскладкой.
 pub fn modal_layout(tab: usize, viewport: [f32; 2]) -> ModalLayout {
     // W3.2: замерщик — канонические shared-точки на вызов (прецедент
     // `ui_registry`/`template_panel_layout`); Fixed-дети его не читают.
@@ -1259,6 +1329,8 @@ pub fn modal_layout_with(
     use canvas_ui::layout::{stack, Column, HAlign, MeasuredItem, Row, VAlign};
 
     let tab_def = SETTINGS_TABS.get(tab).unwrap_or(&SETTINGS_TABS[0]);
+    let mode = modal_mode(viewport);
+    let single_column = mode != ModalMode::Desktop;
     let [w, h] = modal_size(viewport);
     // Панель — по центру вьюпорта.
     let panel = stack(
@@ -1268,131 +1340,198 @@ pub fn modal_layout_with(
         VAlign::Center,
     );
     let rect = [panel.x, panel.y, panel.w, panel.h];
-    // Левая колонка: на узких окнах сжимается (40% ширины модалки), но не
-    // исчезает — инвариант различимости навигации при клампе 320×240.
-    let nav_w = canvas_ui::layout::constrain(
-        UiVec2::new(0.0, 0.0),
-        UiVec2::new(panel.w * 0.4, f32::INFINITY),
-        UiVec2::new(MODAL_NAV_WIDTH, 1.0),
-    )
-    .x;
-    // Скелет: навигация | контент (Row gap 0 — колонки вплотную).
     let family = crate::admin_ui::FONT_FAMILY;
-    let columns = Row {
-        gap: 0.0,
-        ..Row::default()
-    }
-    .lay_out_measured(
-        panel,
-        &[
-            MeasuredItem::Fixed {
-                w: nav_w,
-                h: panel.h,
-            },
-            MeasuredItem::Fixed {
-                w: panel.w - nav_w,
-                h: panel.h,
-            },
-        ],
-        m,
-        fs,
-        family,
-        12.0,
-    );
-    let nav_area = columns[0];
-    let content_area = columns[1];
-    // Пункты навигации: колонка от верхнего паддинга (x — левый край
-    // панели, как прежде).
-    let nav_slot = nav_area.inset(&EdgeInsets {
-        left: 0.0,
-        top: MODAL_PADDING,
-        right: 0.0,
-        bottom: MODAL_PADDING,
-    });
-    let nav_items: Vec<[f32; 4]> = Column {
-        gap: 0.0,
-        ..Column::default()
-    }
-    .lay_out_measured(
-        nav_slot,
-        &SETTINGS_TABS
-            .iter()
-            .map(|_| MeasuredItem::Fixed {
-                w: nav_w,
-                h: MODAL_NAV_ITEM_H,
-            })
-            .collect::<Vec<_>>(),
-        m,
-        fs,
-        family,
-        12.0,
-    )
-    .iter()
-    .map(|r| [r.x, r.y, r.w, r.h])
-    .collect();
-    // Подсказка — к низу навигационной колонки (stack Start/End).
-    let hint_slot = nav_area.inset(&EdgeInsets {
-        left: MODAL_PADDING,
-        top: 0.0,
-        right: 0.0,
-        bottom: MODAL_PADDING,
-    });
-    let hint = stack(
-        hint_slot,
-        UiVec2::new(nav_w - MODAL_PADDING, MODAL_HINT_HEIGHT),
-        HAlign::Start,
-        VAlign::End,
-    );
-    let hint_rect = [hint.x, hint.y, hint.w, hint.h];
-    // Правая панель: заголовок раздела (с внутренним паддингом) + зона
-    // контента: колонка [паддинг, заголовок, зазор 4, контент].
+    // Скелет и навигация:
+    // — Desktop: [навигация | контент] (Row gap 0 — колонки вплотную);
+    //   левая колонка на узких окнах сжимается (40% ширины модалки), но не
+    //   исчезает — инвариант различимости навигации при клампе 320×240.
+    // — Compact/Mobile (W-e): одна колонка на всю панель, навигация —
+    //   горизонтальный таб-бар из равных слотов (зазор — токен SPACING_S);
+    //   слоты считаются от ширины панели — целиком видимы при любом
+    //   вьюпорте, переноса/скролла таб-бара нет.
+    let (nav_w, content_area, nav_items, hint_rect) = if single_column {
+        let tabbar_slot = panel.inset(&EdgeInsets {
+            left: MODAL_PADDING,
+            top: MODAL_PADDING,
+            right: MODAL_PADDING,
+            bottom: 0.0,
+        });
+        let gap = canvas_core::tokens::SPACING_S;
+        let count = SETTINGS_TABS.len().max(1);
+        let item_w = ((tabbar_slot.w - gap * SETTINGS_TABS.len().saturating_sub(1) as f32)
+            / count as f32)
+            .max(0.0);
+        let items: Vec<[f32; 4]> = Row {
+            gap,
+            ..Row::default()
+        }
+        .lay_out_measured(
+            tabbar_slot,
+            &SETTINGS_TABS
+                .iter()
+                .map(|_| MeasuredItem::Fixed {
+                    w: item_w,
+                    h: MODAL_TABBAR_H,
+                })
+                .collect::<Vec<_>>(),
+            m,
+            fs,
+            family,
+            12.0,
+        )
+        .iter()
+        .map(|r| [r.x, r.y, r.w, r.h])
+        .collect();
+        // Левой колонки нет — подсказка Ctrl+, (rect пуст: hit-тест молчит,
+        // рисование ветвится по [`ModalLayout::mode`]).
+        (0.0, panel, items, [0.0; 4])
+    } else {
+        let nav_w = canvas_ui::layout::constrain(
+            UiVec2::new(0.0, 0.0),
+            UiVec2::new(panel.w * 0.4, f32::INFINITY),
+            UiVec2::new(MODAL_NAV_WIDTH, 1.0),
+        )
+        .x;
+        let columns = Row {
+            gap: 0.0,
+            ..Row::default()
+        }
+        .lay_out_measured(
+            panel,
+            &[
+                MeasuredItem::Fixed {
+                    w: nav_w,
+                    h: panel.h,
+                },
+                MeasuredItem::Fixed {
+                    w: panel.w - nav_w,
+                    h: panel.h,
+                },
+            ],
+            m,
+            fs,
+            family,
+            12.0,
+        );
+        let nav_area = columns[0];
+        // Пункты навигации: колонка от верхнего паддинга (x — левый край
+        // панели, как прежде).
+        let nav_slot = nav_area.inset(&EdgeInsets {
+            left: 0.0,
+            top: MODAL_PADDING,
+            right: 0.0,
+            bottom: MODAL_PADDING,
+        });
+        let nav_items: Vec<[f32; 4]> = Column {
+            gap: 0.0,
+            ..Column::default()
+        }
+        .lay_out_measured(
+            nav_slot,
+            &SETTINGS_TABS
+                .iter()
+                .map(|_| MeasuredItem::Fixed {
+                    w: nav_w,
+                    h: MODAL_NAV_ITEM_H,
+                })
+                .collect::<Vec<_>>(),
+            m,
+            fs,
+            family,
+            12.0,
+        )
+        .iter()
+        .map(|r| [r.x, r.y, r.w, r.h])
+        .collect();
+        // Подсказка — к низу навигационной колонки (stack Start/End).
+        let hint_slot = nav_area.inset(&EdgeInsets {
+            left: MODAL_PADDING,
+            top: 0.0,
+            right: 0.0,
+            bottom: MODAL_PADDING,
+        });
+        let hint = stack(
+            hint_slot,
+            UiVec2::new(nav_w - MODAL_PADDING, MODAL_HINT_HEIGHT),
+            HAlign::Start,
+            VAlign::End,
+        );
+        let hint_rect = [hint.x, hint.y, hint.w, hint.h];
+        (nav_w, columns[1], nav_items, hint_rect)
+    };
+    // Правая панель: (Compact/Mobile (W-e) — сперва горизонтальный таб-бар
+    // и зазор SPACING_MD), затем заголовок раздела (с внутренним паддингом)
+    // и зона контента: колонка [паддинг, (таб-бар, зазор), заголовок,
+    // зазор 4, контент].
     let content_w = content_area.w;
-    let title_slot = content_area.inset(&EdgeInsets {
-        left: MODAL_PADDING,
-        top: MODAL_PADDING,
-        right: MODAL_PADDING,
-        bottom: 0.0,
+    let content_h = modal_content_h(panel.h, mode);
+    let mut panel_flow: Vec<MeasuredItem> = Vec::new();
+    panel_flow.push(MeasuredItem::Fixed {
+        w: 0.0,
+        h: MODAL_PADDING,
     });
-    let title = stack(
-        title_slot,
-        UiVec2::new(content_w - MODAL_PADDING * 2.0, MODAL_TITLE_HEIGHT),
-        HAlign::Start,
-        VAlign::Start,
-    );
-    let title_rect = [title.x, title.y, title.w, title.h];
-    let content_h = modal_content_h(panel.h);
+    if single_column {
+        // Таб-бар — элемент потока той же ширины, что контент (слоты уже
+        // разложены выше — rect'ы в nav_items, здесь занимает место).
+        panel_flow.push(MeasuredItem::Fixed {
+            w: content_w,
+            h: MODAL_TABBAR_H,
+        });
+        // Зазор таб-бар/заголовок — токен SPACING_MD (масштаб отступов).
+        panel_flow.push(MeasuredItem::Fixed {
+            w: 0.0,
+            h: canvas_core::tokens::SPACING_MD,
+        });
+    }
+    let title_index = panel_flow.len();
+    panel_flow.push(MeasuredItem::Fixed {
+        w: 0.0,
+        h: MODAL_TITLE_HEIGHT,
+    });
+    // Зазор заголовок/контент (вне spacing-scale): вертикальный зазор —
+    // именно Fixed{w: 0, h} (Spacer в колонке места не занимает — main-ось
+    // колонки высота, см. тест оракула
+    // measured_column_matches_manual_fixed_oracle).
+    panel_flow.push(MeasuredItem::Fixed { w: 0.0, h: 4.0 });
+    let content_index = panel_flow.len();
+    panel_flow.push(MeasuredItem::Fixed {
+        w: content_w,
+        h: content_h,
+    });
     let content_flow = Column {
         gap: 0.0,
         ..Column::default()
     }
-    .lay_out_measured(
-        content_area,
-        &[
-            MeasuredItem::Fixed {
-                w: 0.0,
-                h: MODAL_PADDING,
-            },
-            MeasuredItem::Fixed {
-                w: 0.0,
-                h: MODAL_TITLE_HEIGHT,
-            },
-            // Зазор заголовок/контент (вне spacing-scale): вертикальный
-            // зазор — именно Fixed{w: 0, h} (Spacer в колонке места
-            // не занимает — main-ось колонки высота, см. тест оракула
-            // measured_column_matches_manual_fixed_oracle).
-            MeasuredItem::Fixed { w: 0.0, h: 4.0 },
-            MeasuredItem::Fixed {
-                w: content_w,
-                h: content_h,
-            },
-        ],
-        m,
-        fs,
-        family,
-        12.0,
-    );
-    let content = content_flow[3];
+    .lay_out_measured(content_area, &panel_flow, m, fs, family, 12.0);
+    let content = content_flow[content_index];
     let content_rect = [content.x, content.y, content.w, content.h];
+    let title_rect = if single_column {
+        // Слот заголовка — элемент той же раскладки под таб-баром (один
+        // источник y-позиций); ширина — контент минус паддинги, как в
+        // Desktop (stack Start/Start от слота потока).
+        let title = stack(
+            content_flow[title_index],
+            UiVec2::new(content_w - MODAL_PADDING * 2.0, MODAL_TITLE_HEIGHT),
+            HAlign::Start,
+            VAlign::Start,
+        );
+        [title.x, title.y, title.w, title.h]
+    } else {
+        // Desktop — прежняя формула: слот от inset контент-зоны.
+        let title_slot = content_area.inset(&EdgeInsets {
+            left: MODAL_PADDING,
+            top: MODAL_PADDING,
+            right: MODAL_PADDING,
+            bottom: 0.0,
+        });
+        let title = stack(
+            title_slot,
+            UiVec2::new(content_w - MODAL_PADDING * 2.0, MODAL_TITLE_HEIGHT),
+            HAlign::Start,
+            VAlign::Start,
+        );
+        [title.x, title.y, title.w, title.h]
+    };
     // Строки и карточки тем — колонка от зоны контента (внутренний паддинг):
     // в табе с карточками темы строки начинаются ниже карточек (распорка —
     // MODAL_THEME_GAP).
@@ -1455,6 +1594,7 @@ pub fn modal_layout_with(
     .collect();
     ModalLayout {
         rect,
+        mode,
         nav_w,
         nav_items,
         title_rect,
@@ -1470,11 +1610,17 @@ pub fn modal_layout_with(
 }
 
 /// Высота зоны контента правой панели (content_rect) по высоте модалки:
-/// модалка минус паддинги, заголовок раздела и зазор под ним. Единый
-/// источник формулы для потока зоны в [`modal_layout_with`] и для предела
-/// прокрутки — расхождение двух копий формулы сломало бы кламп скролла.
-fn modal_content_h(modal_h: f32) -> f32 {
-    (modal_h - MODAL_PADDING * 2.0 - MODAL_TITLE_HEIGHT - 4.0).max(0.0)
+/// модалка минус паддинги, (Compact/Mobile — таб-бар и зазор SPACING_MD),
+/// заголовок раздела и зазор под ним. Единый источник формулы для потока
+/// зоны в [`modal_layout_with`] и для предела прокрутки — расхождение двух
+/// копий формулы сломало бы кламп скролла.
+fn modal_content_h(modal_h: f32, mode: ModalMode) -> f32 {
+    // Компакт/мобайл: таб-бар MODAL_TABBAR_H + зазор до заголовка SPACING_MD.
+    let tabbar = match mode {
+        ModalMode::Desktop => 0.0,
+        ModalMode::Compact | ModalMode::Mobile => MODAL_TABBAR_H + canvas_core::tokens::SPACING_MD,
+    };
+    (modal_h - MODAL_PADDING * 2.0 - tabbar - MODAL_TITLE_HEIGHT - 4.0).max(0.0)
 }
 
 /// Полная высота потока контента таба (карточки темы + зазор? + ряды).
@@ -1498,7 +1644,8 @@ fn modal_content_flow_h(tab_def: &SettingsTab) -> f32 {
 /// потребителя клампится именно в этот предел.
 pub fn modal_scroll_max(tab: usize, viewport: [f32; 2]) -> f32 {
     let tab_def = SETTINGS_TABS.get(tab).unwrap_or(&SETTINGS_TABS[0]);
-    let zone_h = (modal_content_h(modal_size(viewport)[1]) - MODAL_PADDING * 2.0).max(0.0);
+    let mode = modal_mode(viewport);
+    let zone_h = (modal_content_h(modal_size(viewport)[1], mode) - MODAL_PADDING * 2.0).max(0.0);
     (modal_content_flow_h(tab_def) - zone_h).max(0.0)
 }
 
@@ -2251,19 +2398,264 @@ mod tests {
         let layout = modal_layout(0, [1280.0, 720.0]);
         assert!(layout.rect[2] >= MODAL_MIN_W && layout.rect[2] <= MODAL_MAX_W);
         assert!(layout.rect[3] >= MODAL_MIN_H && layout.rect[3] <= MODAL_MAX_H);
-        // 320×240: целиком внутри окна
+        // 320×240: целиком внутри окна; W-e: это мобайл-режим — лист
+        // вьюпорт минус поля, навигация — горизонтальный таб-бар (все табы
+        // достижимы hit-тестом), левой колонки и подсказки нет.
         let layout = modal_layout(0, [320.0, 240.0]);
+        assert_eq!(layout.mode, ModalMode::Mobile);
         assert!(layout.rect[0] >= SETTINGS_MARGIN - 0.01);
         assert!(layout.rect[1] >= SETTINGS_MARGIN - 0.01);
         assert!(layout.rect[0] + layout.rect[2] <= 320.0 - SETTINGS_MARGIN + 0.01);
         assert!(layout.rect[1] + layout.rect[3] <= 240.0 - SETTINGS_MARGIN + 0.01);
-        assert!(
-            layout.nav_w > 0.0 && layout.nav_w < layout.rect[2],
-            "навигация различима"
-        );
+        assert_eq!(layout.nav_w, 0.0, "одноколоночный лист");
+        for (i, item) in layout.nav_items.iter().enumerate() {
+            assert!(item[2] > 0.0, "слот {i} различим на 320×240");
+            assert_eq!(
+                modal_nav_at(&layout, [item[0] + item[2] / 2.0, item[1] + item[3] / 2.0]),
+                Some(i),
+                "таб {i} достижим на 320×240"
+            );
+        }
         // Вне диапазона таб — первый таб
         let fallback = modal_layout(99, [1920.0, 1080.0]);
         assert_eq!(fallback.rows, modal_layout(0, [1920.0, 1080.0]).rows);
+    }
+
+    // --- W-e (вариант «A», решение владельца 03.10.2026): брейкпоинты ----
+
+    /// Пороги режима — ровно на контрольных точках, ветвление только по
+    /// ширине окна (обе точки заданы по ширине, FR-039 §2).
+    #[test]
+    fn modal_mode_thresholds() {
+        assert_eq!(modal_mode([1280.0, 800.0]), ModalMode::Desktop);
+        assert_eq!(modal_mode([1920.0, 1080.0]), ModalMode::Desktop);
+        assert_eq!(modal_mode([1279.0, 800.0]), ModalMode::Compact);
+        assert_eq!(modal_mode([1024.0, 640.0]), ModalMode::Compact);
+        assert_eq!(modal_mode([800.0, 560.0]), ModalMode::Compact);
+        assert_eq!(modal_mode([768.0, 600.0]), ModalMode::Compact);
+        assert_eq!(modal_mode([767.0, 600.0]), ModalMode::Mobile);
+        assert_eq!(modal_mode([320.0, 240.0]), ModalMode::Mobile);
+    }
+
+    /// Desktop ≥ [`MODAL_BP_COMPACT`]: на 1280×800 раскладка прежняя —
+    /// двухколоночная (вертикальная навигация слева, подсказка внизу
+    /// колонки, строки в правой панели без таб-бара в потоке).
+    #[test]
+    fn modal_layout_desktop_two_columns_at_1280() {
+        let viewport = [1280.0, 800.0];
+        let layout = modal_layout(0, viewport);
+        assert_eq!(layout.mode, ModalMode::Desktop);
+        assert_eq!(layout.nav_w, MODAL_NAV_WIDTH);
+        // Навигация вертикальна: один x, y растёт; подсказка на месте.
+        let xs: Vec<f32> = layout.nav_items.iter().map(|r| r[0]).collect();
+        assert!(xs.iter().all(|&x| (x - xs[0]).abs() < 0.01));
+        assert!(layout.nav_items.windows(2).all(|w| w[1][1] > w[0][1]));
+        assert!(layout.hint_rect[2] > 0.0, "подсказка Ctrl+, в колонке");
+        // Строки — в правой колонке: левый край правее навигации, ширина
+        // = колонка контента минус внутренние паддинги.
+        for (_, rect) in &layout.rows {
+            assert!(rect[0] > layout.rect[0] + layout.nav_w);
+            assert!((rect[2] - (layout.rect[2] - layout.nav_w - MODAL_PADDING * 2.0)).abs() < 0.01);
+        }
+        // Контент-зона — Desktop-формула (без таб-бара).
+        assert!(
+            (layout.content_rect[3]
+                - (layout.rect[3] - MODAL_PADDING * 2.0 - MODAL_TITLE_HEIGHT - 4.0))
+                .abs()
+                < 0.01
+        );
+    }
+
+    /// Компакт ([`MODAL_BP_MOBILE`]..[`MODAL_BP_COMPACT`]): одноколоночно —
+    /// строки на всю ширину контента, ширина модалки в клампе «вьюпорт
+    /// минус поля»; таб-бар горизонтален, целиком виден и все табы
+    /// достижимы hit-тестом (в т.ч. на минимальном контрольном окне
+    /// 800×560 и на пороге 768).
+    #[test]
+    fn modal_layout_compact_single_column() {
+        for viewport in [
+            [1279.0, 800.0],
+            [1024.0, 640.0],
+            [800.0, 560.0],
+            [768.0, 600.0],
+        ] {
+            let layout = modal_layout(0, viewport);
+            assert_eq!(layout.mode, ModalMode::Compact, "{viewport:?}");
+            // Одноколоночно: левой колонки нет.
+            assert_eq!(layout.nav_w, 0.0, "{viewport:?}");
+            assert_eq!(layout.hint_rect, [0.0; 4], "{viewport:?}");
+            // Ширина модалки — в клампе «вьюпорт минус внешние поля».
+            assert!(
+                layout.rect[2] <= viewport[0] - SETTINGS_MARGIN * 2.0 + 0.01
+                    && layout.rect[0] >= SETTINGS_MARGIN - 0.01,
+                "{viewport:?}: {:?}",
+                layout.rect
+            );
+            // Компакт — НЕ лист: на 800×560 сохраняется дизайн-минимум 560
+            // (кламп к вьюпорту — верхняя граница, а не растяжение).
+            if viewport[0] == 800.0 {
+                assert!((layout.rect[2] - MODAL_MIN_W).abs() < 0.01, "{viewport:?}");
+            }
+            // Строки на всю ширину контента и внутри модали/вьюпорта
+            // (допуск 0.6 ui px — round_layout нативного бэкенда, дробная
+            // ширина 0.45·1279 округляется на freeze, контракт F-13).
+            for (row, rect) in &layout.rows {
+                assert!(
+                    (rect[2] - (layout.rect[2] - MODAL_PADDING * 2.0)).abs() < 0.6,
+                    "{viewport:?}: {row:?} не на всю ширину {rect:?}"
+                );
+                assert!(
+                    rect[0] >= layout.rect[0] - 0.01
+                        && rect[0] + rect[2] <= layout.rect[0] + layout.rect[2] + 0.01,
+                    "{viewport:?}: {row:?} шире модалки"
+                );
+                assert!(
+                    rect[1] + rect[3] <= viewport[1] + 0.01,
+                    "{viewport:?}: {row:?} за низом вьюпорта"
+                );
+            }
+            // Таб-бар горизонтален: один y, x растёт; заголовок — под ним.
+            assert_eq!(layout.nav_items.len(), SETTINGS_TABS.len(), "{viewport:?}");
+            assert!(
+                layout
+                    .nav_items
+                    .windows(2)
+                    .all(|w| (w[1][1] - w[0][1]).abs() < 0.01 && w[1][0] > w[0][0]),
+                "{viewport:?}: не горизонталь"
+            );
+            assert!(
+                layout.title_rect[1] >= layout.rect[1] + MODAL_PADDING + MODAL_TABBAR_H,
+                "{viewport:?}: заголовок не под таб-баром"
+            );
+            // Целиком виден + достижим: слоты внутри модалки, hit-тест
+            // находит каждый (тот же modal_nav_at, что у ввода).
+            for (i, item) in layout.nav_items.iter().enumerate() {
+                assert!(
+                    item[0] >= layout.rect[0] - 0.01
+                        && item[0] + item[2] <= layout.rect[0] + layout.rect[2] + 0.01
+                        && item[1] >= layout.rect[1] - 0.01
+                        && item[1] + item[3] <= layout.rect[1] + layout.rect[3] + 0.01,
+                    "{viewport:?}: слот {i} за модалкой {item:?}"
+                );
+                assert!(item[2] > 0.0, "{viewport:?}: слот {i} нулевой");
+                assert_eq!(
+                    modal_nav_at(&layout, [item[0] + item[2] / 2.0, item[1] + item[3] / 2.0]),
+                    Some(i),
+                    "{viewport:?}: таб {i} недостижим"
+                );
+            }
+        }
+    }
+
+    /// Общий оракул скролла (W-a во всех режимах): при полном offset хвост
+    /// потока прижат к низу зоны рядов, каждая видимая строка (частичная —
+    /// тоже) внутри зоны, доводится до последнего ряда таба.
+    fn assert_full_scroll_tail(tab: usize, viewport: [f32; 2]) {
+        let base = modal_layout(tab, viewport);
+        let max = modal_scroll_max(tab, viewport);
+        assert!(
+            max > 0.0,
+            "{viewport:?}: таб {tab} влезает — оракул неприменим"
+        );
+        let scrolled = modal_layout_scrolled(tab, viewport, max);
+        assert_eq!(scrolled.mode, base.mode, "{viewport:?}");
+        assert!(
+            (scrolled.scroll - max).abs() < 0.01,
+            "{viewport:?}: офсет зажат в предел"
+        );
+        let zone = canvas_ui::geometry::UiRect::new(
+            base.content_rect[0],
+            base.content_rect[1],
+            base.content_rect[2],
+            base.content_rect[3],
+        )
+        .inset(&canvas_ui::geometry::EdgeInsets::uniform(MODAL_PADDING));
+        assert!(
+            !scrolled.rows.is_empty(),
+            "{viewport:?}: зона пуста при полном offset"
+        );
+        for (_, rect) in &scrolled.rows {
+            assert!(
+                rect[1] >= zone.y - 0.01 && rect[1] + rect[3] <= zone.y + zone.h + 0.01,
+                "{viewport:?}: видимая строка вне зоны рядов: {rect:?}"
+            );
+        }
+        let (last_row, last_rect) = scrolled.rows.last().expect("непусто");
+        assert_eq!(
+            Some(*last_row),
+            SETTINGS_TABS[tab].rows.last().copied(),
+            "{viewport:?}: скролл доводит до последнего ряда таба"
+        );
+        assert!(
+            (last_rect[1] + last_rect[3] - (zone.y + zone.h)).abs() < 0.01,
+            "{viewport:?}: хвост потока не прижат к низу зоны: {last_rect:?}"
+        );
+    }
+
+    /// Мобайл < [`MODAL_BP_MOBILE`]: полноэкранный лист — модалка занимает
+    /// вьюпорт минус внешние поля [`SETTINGS_MARGIN`]; одноколоночный скелет
+    /// компакта; все табы достижимы; скролл «Профиля» (12 рядов) достижим.
+    #[test]
+    fn modal_layout_mobile_sheet() {
+        let viewport = [767.0, 600.0];
+        let layout = modal_layout(6, viewport);
+        assert_eq!(layout.mode, ModalMode::Mobile);
+        // Лист: вьюпорт минус внешние поля (SETTINGS_MARGIN == токен
+        // SPACING_LG — внешние поля из шкалы, новых литералов нет).
+        assert_eq!(
+            layout.rect,
+            [
+                SETTINGS_MARGIN,
+                SETTINGS_MARGIN,
+                viewport[0] - SETTINGS_MARGIN * 2.0,
+                viewport[1] - SETTINGS_MARGIN * 2.0
+            ]
+        );
+        // Одноколоночно: левой колонки нет; строки внутри модали по ширине
+        // и не шире вьюпорта (по высоте — скролл, см. оракул ниже).
+        assert_eq!(layout.nav_w, 0.0);
+        assert_eq!(layout.hint_rect, [0.0; 4]);
+        for (row, rect) in &layout.rows {
+            assert!(
+                (rect[2] - (layout.rect[2] - MODAL_PADDING * 2.0)).abs() < 0.01,
+                "{row:?} не на всю ширину"
+            );
+            assert!(
+                rect[0] >= 0.0 && rect[0] + rect[2] <= viewport[0] + 0.01,
+                "{row:?} за вьюпортом по ширине"
+            );
+        }
+        // Все табы достижимы (горизонтальный таб-бар листа).
+        for (i, item) in layout.nav_items.iter().enumerate() {
+            assert!(
+                item[0] >= layout.rect[0] - 0.01
+                    && item[0] + item[2] <= layout.rect[0] + layout.rect[2] + 0.01
+                    && item[1] >= layout.rect[1] - 0.01
+                    && item[1] + item[3] <= layout.rect[1] + layout.rect[3] + 0.01,
+                "слот {i} за модалкой: {item:?}"
+            );
+            assert_eq!(
+                modal_nav_at(&layout, [item[0] + item[2] / 2.0, item[1] + item[3] / 2.0]),
+                Some(i),
+                "таб {i} недостижим"
+            );
+        }
+        // Скролл: 12 рядов «Профиля» не влезают в лист 767×600 — офсет
+        // достижим, хвост прижат к низу зоны рядов.
+        assert_full_scroll_tail(6, viewport);
+    }
+
+    /// Скролл в компакт-режиме: на 800×560 «Профиль» требует прокрутки —
+    /// офсет достижим, видимые строки внутри зоны (W-a без регресса).
+    #[test]
+    fn modal_layout_compact_scroll_reachable() {
+        assert_full_scroll_tail(6, [800.0, 560.0]);
+    }
+
+    /// Скролл в Desktop без регресса: на 1280×800 «Профиль» тоже прокручивается.
+    #[test]
+    fn modal_layout_desktop_scroll_reachable() {
+        assert_full_scroll_tail(6, [1280.0, 800.0]);
     }
 
     /// Структура модалки: 4 пункта навигации; строки — только активного
