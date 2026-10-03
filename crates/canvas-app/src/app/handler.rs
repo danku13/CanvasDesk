@@ -75,7 +75,7 @@ impl ApplicationHandler<AppEvent> for App {
             // («на мобильных работает только HTML-оверлей»). Гейт wasm32 —
             // поведение натива (тачскрины Windows) не меняется.
             #[cfg(target_arch = "wasm32")]
-            WindowEvent::Touch(touch) => self.on_touch(touch),
+            WindowEvent::Touch(touch) => self.on_touch(event_loop, touch),
             WindowEvent::RedrawRequested => {
                 // FR-049 (US-5): ?template=<id> — применить на первом кадре
                 // (вьюпорт известен — zoom-to-fit корректен); неизвестный
@@ -1333,6 +1333,21 @@ impl ApplicationHandler<AppEvent> for App {
             // Web-мост ввода кириллицы/IME (canvas-web beforeinput): тот же
             // маршрут приёмника, что у Ime::Commit (wasm-аудит 2026-09-25)
             AppEvent::ImeCommit(text) => self.insert_committed_text(&text),
+            // FR-095 (мобильный web): клавиатура изменила видимый вьюпорт —
+            // при активном редакторе пан камеры вверх (курсор виден).
+            // На нативе событие не приходит (источник — canvas-web).
+            AppEvent::VisualViewport { bottom_inset } => self.on_visual_viewport(bottom_inset),
+            // FR-096 (мобильный web): тик будильника long-press — валидность
+            // удержания решает машина жеста (poll защищён от ложных срабатыв)
+            #[cfg(target_arch = "wasm32")]
+            AppEvent::LongPressPoll => {
+                if let Some(pos) = self
+                    .touch_gesture
+                    .poll_long_press(super::gesture_clock_ms())
+                {
+                    self.on_touch_long_press(event_loop, pos);
+                }
+            }
             AppEvent::OpenScene {
                 path,
                 json,
