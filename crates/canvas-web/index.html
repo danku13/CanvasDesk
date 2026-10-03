@@ -56,6 +56,11 @@
         border: 1px solid #333a44; border-radius: 8px;
         font: 600 16px/1.4 system-ui, sans-serif;
         padding: 12px 24px; cursor: pointer; min-width: 140px;
+        /* W-e (дефект №14 аудита ui-kit): тач-цель ≥44×44 CSS px (WCAG 2.5.5
+         * / Apple HIG). border-box + min-height гарантируют размер и для
+         * оверрайдов паддинга ниже (#role-grid button, .secondary) — текст
+         * кнопки браузер центрирует по вертикали сам. */
+        box-sizing: border-box; min-height: 44px;
         transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
         -webkit-tap-highlight-color: transparent;
       }
@@ -118,6 +123,9 @@
         display: flex; align-items: flex-start; gap: 10px;
         cursor: pointer; color: #d5d9e0; font-size: 13px; line-height: 1.45;
         border-radius: 6px; padding: 4px 6px; margin: 0 -6px;
+        /* W-e (дефект №14): строка согласия — тач-цель (клик по лейблу
+         * переключает чекбокс), поэтому ≥44px по высоте. */
+        box-sizing: border-box; min-height: 44px;
         transition: background 150ms ease, color 150ms ease;
         -webkit-tap-highlight-color: transparent;
       }
@@ -860,9 +868,14 @@
         font: 12px/1.4 system-ui, sans-serif;
         padding: 4px 10px;
         cursor: pointer;
-        /* min-width: 0 — кнопка сжимается в flex-строке; переполнение
-         * текста — эллипсисом, не выездом панели за край экрана */
-        min-width: 0;
+        /* W-e (дефект №14): тач-цель ≥44×44 на ЛЮБОМ указателе (было ~27px
+         * на десктопе, ~44 только на coarse). border-box + min-height —
+         * ровно 44px высоты, текст центрируется браузером. */
+        box-sizing: border-box;
+        min-height: 44px;
+        /* min-width: 44 — горизонталь той же цели; эллипсису не мешает:
+         * #btn-recent по-прежнему сжимается (до 44px) внутри капа ниже. */
+        min-width: 44px;
         max-width: 100%;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -918,6 +931,7 @@
       }
       #author-bar a {
         display: flex;
+        position: relative; /* якорь ::after-расширения хит-зоны (W-e) */
         align-items: center;
         justify-content: center;
         width: 28px;
@@ -939,6 +953,14 @@
       #author-bar a:focus-visible {
         outline: 2px solid #8ab4ff;
         outline-offset: 1px;
+      }
+      /* W-e (дефект №14): визуал иконки не трогаем (28px, coarse 36px —
+      * дизайн), хит-зону расширяем невидимым ::after до ≥44×44 — клики
+      * по псевдоэлементу попадают в саму ссылку (WCAG 2.5.5 / Apple HIG). */
+      #author-bar a::after {
+        content: "";
+        position: absolute;
+        inset: -8px;
       }
       #author-bar svg {
         width: 16px;
@@ -996,6 +1018,14 @@
         border-radius: 6px; line-height: 1;
       }
       #about-overlay .close-btn:hover { color: #d5d9e0; background: #262c35; }
+      /* W-e (дефект №14): хит-зона крестика ≥44×44 (::after-расширение:
+      * −8px по вертикали, −10px по горизонтали — глиф × уже 44-й цели),
+      * визуальный размер кнопки не менялся. */
+      #about-overlay .close-btn::after {
+        content: "";
+        position: absolute;
+        inset: -8px -10px;
+      }
       @media (pointer: coarse) {
         #author-bar a { width: 36px; height: 36px; }
       }
@@ -1015,7 +1045,8 @@
        * Закрытие: клик мимо / Esc / выбор пункта. */
       #tour-menu {
         position: fixed;
-        top: 44px;
+        /* 8px отступ тулбара + 44px тач-цель кнопки (W-e) + 4px зазор */
+        top: 56px;
         right: 8px;
         background: #1d2128;
         border: 1px solid #333a44;
@@ -1066,7 +1097,8 @@
       @media (max-width: 1199px) {
         #tour-menu {
           top: auto;
-          bottom: 44px;
+          /* над тулбаром: 8px отступ + 44px тач-цель кнопки (W-e) + 4px */
+          bottom: 56px;
           right: 8px;
         }
       }
@@ -1316,7 +1348,8 @@
     "align-items:center;margin-top:12px;border-top:1px solid #2a3138;padding-top:8px;}",
     ".cd-tour-btn{appearance:none;font:inherit;padding:6px 12px;border-radius:6px;",
     "border:1px solid #333a44;background:#262c35;color:#d5d9e0;cursor:pointer;",
-    "min-height:28px;user-select:none;-webkit-tap-highlight-color:transparent;}",
+    "box-sizing:border-box;min-height:44px;min-width:44px;",
+    "user-select:none;-webkit-tap-highlight-color:transparent;}",
     ".cd-tour-btn:hover{background:#2e353f;}",
     ".cd-tour-btn:focus-visible{outline:2px solid #8ab4ff;outline-offset:1px;}",
     ".cd-tour-btn_primary{background:#2f6fda;border-color:#2f6fda;color:#fff;font-weight:600;}",
@@ -1338,7 +1371,7 @@
     ".cd-tour-dim{cursor:pointer;}",
     "@media (max-width:480px),(pointer:coarse){",
     ".cd-tour-tooltip{min-width:0;max-width:calc(100vw - 32px);padding:12px 14px 8px;}",
-    ".cd-tour-btn{padding:10px 14px;min-height:36px;}}"
+    ".cd-tour-btn{padding:10px 14px;min-height:44px;}}"
   ].join("");
 
   // ── positioning.ts ──────────────────────────────────────────────

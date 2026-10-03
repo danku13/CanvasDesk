@@ -32,7 +32,8 @@
     "align-items:center;margin-top:12px;border-top:1px solid #2a3138;padding-top:8px;}",
     ".cd-tour-btn{appearance:none;font:inherit;padding:6px 12px;border-radius:6px;",
     "border:1px solid #333a44;background:#262c35;color:#d5d9e0;cursor:pointer;",
-    "min-height:28px;user-select:none;-webkit-tap-highlight-color:transparent;}",
+    "box-sizing:border-box;min-height:44px;min-width:44px;",
+    "user-select:none;-webkit-tap-highlight-color:transparent;}",
     ".cd-tour-btn:hover{background:#2e353f;}",
     ".cd-tour-btn:focus-visible{outline:2px solid #8ab4ff;outline-offset:1px;}",
     ".cd-tour-btn_primary{background:#2f6fda;border-color:#2f6fda;color:#fff;font-weight:600;}",
@@ -54,7 +55,7 @@
     ".cd-tour-dim{cursor:pointer;}",
     "@media (max-width:480px),(pointer:coarse){",
     ".cd-tour-tooltip{min-width:0;max-width:calc(100vw - 32px);padding:12px 14px 8px;}",
-    ".cd-tour-btn{padding:10px 14px;min-height:36px;}}"
+    ".cd-tour-btn{padding:10px 14px;min-height:44px;}}"
   ].join("");
 
   // ── positioning.ts ──────────────────────────────────────────────
