@@ -209,10 +209,16 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
     //    Слой Modals (FR-054, дельта: было Panels — модалка рисовалась ПОД
     //    полосой палитры/пустой карточкой того же слоя; модаль выше панелей
     //    — гейт G4 «0 пересечений интерактивных rect'ов одного слоя»).
+    //    W-e (дефект №13 аудита): политика деградации объявлена ЯВНО —
+    //    Always: настройки не прячутся ни на одном вьюпорте, они
+    //    АДАПТИРУЮТСЯ брейкпоинтами ширины (settings_ui::modal_mode,
+    //    вариант «A» от 03.10.2026) — HideBelow противоречил бы смыслу
+    //    волны (модалка целиком в окне вплоть до 320×240).
     if app.settings_open {
         reg.add(
             SurfaceDecl::new(id::SETTINGS, UiLayer::Modals, CapturePolicy::Block)
-                .with_scope(id::SETTINGS),
+                .with_scope(id::SETTINGS)
+                .with_degradation(DegradationPolicy::Always),
         );
     }
     // 7. Контекстное меню канваса (Block: мимо — закрыть, клик глотается).
