@@ -28,15 +28,15 @@ pub use canvas_core::tokens::BROKEN_BORDER;
 
 // --- FR-016 (CP5): индикаторы узких мест ---
 
-/// Минимальный зум (мировой масштаб), при котором рисуется РАМКА
-/// серьёзности (LOD FR-016: ниже — только Overload).
-/// FR-046 (W-d): значение — из design-токенов (`dimensions.json#render`).
-pub use canvas_core::tokens::LOD_ANALYSIS_BORDER as ANALYSIS_BORDER_MIN_ZOOM;
 /// Минимальный ЭФФЕКТИВНЫЙ зум (zoom × scale_factor, физический масштаб),
 /// при котором рисуются БЕЙДЖИ метрик (LOD FR-016: ниже — только цветные
 /// рамки; мера физической читаемости, как `titles_visible`).
 /// FR-046 (W-d): значение — из design-токенов (`dimensions.json#render`).
 pub use canvas_core::tokens::LOD_ANALYSIS_BADGES as ANALYSIS_BADGES_MIN_ZOOM;
+/// Минимальный зум (мировой масштаб), при котором рисуется РАМКА
+/// серьёзности (LOD FR-016: ниже — только Overload).
+/// FR-046 (W-d): значение — из design-токенов (`dimensions.json#render`).
+pub use canvas_core::tokens::LOD_ANALYSIS_BORDER as ANALYSIS_BORDER_MIN_ZOOM;
 
 /// Рамка серьёзности узкого места (тёмная тема): жёлтый — Warn
 /// (#F5A623, документ FR-016), красный — Critical, ярко-красный —
@@ -880,15 +880,14 @@ pub use canvas_core::tokens::EDGE_ARROW_LEN as ARROW_LEN;
 /// из design-токенов (FR-046, W-d): токен хранит ГРАДУСЫ
 /// (`edge.arrow_angle_deg`), рендер конвертирует π/180 (при 30° —
 /// прежний FRAC_PI_6, ноль скачка).
-const ARROW_ANGLE: f32 =
-    canvas_core::tokens::EDGE_ARROW_ANGLE_DEG * (std::f32::consts::PI / 180.0);
+const ARROW_ANGLE: f32 = canvas_core::tokens::EDGE_ARROW_ANGLE_DEG * (std::f32::consts::PI / 180.0);
 /// Кружков на ус стрелки — из design-токенов (FR-046, W-d).
 pub use canvas_core::tokens::EDGE_ARROW_DOTS as ARROW_DOTS;
+/// Доля периода пунктира, занятая чертой — из design-токенов (FR-046, W-d).
+pub use canvas_core::tokens::EDGE_DASH_DUTY as DASH_DUTY;
 /// Период пунктира в единицах диаметра кружка (черта + пропуск) —
 /// из design-токенов (FR-046, W-d).
 pub use canvas_core::tokens::EDGE_DASH_PERIOD as DASH_PERIOD;
-/// Доля периода пунктира, занятая чертой — из design-токенов (FR-046, W-d).
-pub use canvas_core::tokens::EDGE_DASH_DUTY as DASH_DUTY;
 /// Шаг одиночных точек (стиль «точки») в единицах диаметра —
 /// из design-токенов (FR-046, W-d).
 pub use canvas_core::tokens::EDGE_DOT_SPACING as DOT_SPACING;
