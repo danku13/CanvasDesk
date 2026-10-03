@@ -695,6 +695,7 @@ python3 scripts/web_layout_audit.py
 | CR-014.8 | Регресс web-оболочки | `scripts/web_smoke.py` — SMOKE OK (ввод/кириллица/поиск/OPFS/W10/W11, 0 pageerror) |
 | CR-014.9 | Гейты репо | fmt ✓; clippy `--all-targets -D warnings` ✓; test --workspace ✓; wasm_gate.sh (canvas-web) ✓; mcp_wasm_gate.sh ✓ |
 | CR-014.10 | Известные ограничения | ≥1200px+длинное имя+открытый поиск: WARN (правый край поля ввода; ввод клавиатурный — см. CR-014 «Известные ограничения»); телефоны <400px — стопка 120px с эллипсисом (best effort, продукт — десктоп) |
+| CR-014.11 | Follow-up W-e (дефект №14 аудита ui-kit, 2026-09-25): тач-цели ≥44×44 на ЛЮБОМ указателе | тулбар W6: `border-box + min-height/min-width 44` (визуал ~44px, эллипсис `#btn-recent` сохранён); author-bar/крестик «Об авторе»: визуал без изменений, хит-зона `::after inset −8px` = 44×44+; кнопки пикера (вкл. `#role-grid`/`.secondary`) и строки согласия: `min-height 44` border-box; `.cd-tour-btn` (bundle+styles.ts): `min-height/min-width 44`; `#tour-menu` отступ 44→56px под новую высоту тулбара; пункты `#tour-menu` и `.link-row` — уже ≥44 (без правок) |
 
 ## 31. Чек-лист FR-039/FR-040 (2026-09-20): модалка настроек (Obsidian) + локализация
 
