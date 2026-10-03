@@ -424,9 +424,20 @@ backdrop/колесо, G4-линт-состояние `admin_panel`). Live-пе�
   квады: params.w вне PaintItem); G5-аудит трёх модулей чист;
   G4-линт: +3 состояния (autolink/explain/palette через `test_viewport`);
   финальный замер волны: +1 229 Б ≈ 1,2 КБ (≤ 100 КБ). Сознательно
-  осталось hand-rolled (world-декорации/вне скоупа): wheel/minimap/HUD/onboarding
-  (заморожен владельцем); explain_frame — отрисовка на screen_rect_quad
-  (эквивалент Painter-конверсии, без теней) — остаток волны.
+  осталось hand-rolled (world-декорации/вне скоупа): wheel/minimap/HUD;
+  explain_frame — отрисовка на screen_rect_quad (эквивалент
+  Painter-конверсии, без теней) — остаток волны.
+- Готово (W-e, 2026-10-03): онбординг — **разморожен решением владельца
+  03.10.2026** и мигрирован на кит (снят статус «заморожен владельцем» из
+  перечня hand-rolled остатков выше). Геометрия — `kit::modal` по слоту
+  вьюпорта с полями `SPACING_LG` (кламп карточки С полями — аудит §8 №12;
+  при клампе высоты тело ужимается скроллом `kit::ScrollState`/`list_rows`,
+  футер с CTA всегда видим); перенос тела — `TextMeasurer::wrap` (замена
+  эвристики `CHAR_W_FACTOR 0.62` — строка onboarding в §9 CR-015);
+  отрисовка — Painter + `WidgetState`/`button_style` (замена ад-хок
+  `hover_fill` ×1.3); цвета — только слоты темы (`stage_dim`, слоты
+  `button_style`, `panel_border`/`link` — бывшие 6 литералов draw);
+  hit-rect'ы карточки/кнопок — из тех же функций, что рисование.
 
 ## 10. Компонентный слой (FR-068 W3, ADR-0015)
 

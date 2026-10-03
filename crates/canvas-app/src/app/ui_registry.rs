@@ -1251,10 +1251,22 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
         }
         id::ONBOARDING => {
             if let Some(state) = &app.onboarding {
-                let card = onboarding_ui::card_rect(viewport, state.step, app.settings.language);
+                // W-e: раскладка измеренная (общая с отрисовкой/вводом —
+                // «ввод = тому, что видно»); скролл не нужен реестру
+                // (кнопки не двигаются — футер прибит к низу карточки).
+                let mut m = canvas_ui::measure::TextMeasurer::new();
+                let mut fs = canvas_render::text::measure_font_system();
+                let lay = onboarding_ui::card_layout(
+                    viewport,
+                    state.step,
+                    app.settings.language,
+                    &mut canvas_ui::kit::ScrollState::default(),
+                    &mut m,
+                    &mut fs,
+                );
                 surface
                     .hit_rects
-                    .push(HitRect::interactive(rect(card), "onboarding-card"));
+                    .push(HitRect::interactive(rect(lay.card), "onboarding-card"));
             }
         }
         id::EMPTY => {
