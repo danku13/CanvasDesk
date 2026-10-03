@@ -25,22 +25,24 @@
     <style>
       #lang-picker-overlay {
         position: fixed; inset: 0; z-index: 100000;
-        background: #14161a;
+        background: var(--cd-bg);
         display: flex; align-items: center; justify-content: center;
         flex-direction: column; gap: 16px;
-        color: #d5d9e0;
+        color: var(--cd-text);
         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
         padding: 16px; overflow-y: auto;
         /* Акценты владельца (FR-087 v2): основной — активная кнопка языка,
            вторичный — hover карточек ролей и вторичная кнопка. */
-        --accent: #d68a32;
-        --accent-2: #5baec4;
+        /* W-f: локальные алиасы → центральные слоты :root (значения
+           прежние — резолв через var()). */
+        --accent: var(--cd-accent);
+        --accent-2: var(--cd-accent-2);
       }
       #lang-picker-overlay[hidden] { display: none; }
       #lang-picker-overlay h1 {
-        font-size: 22px; color: #f3f5f8; font-weight: 600; margin: 0;
+        font-size: 22px; color: var(--cd-text-title); font-weight: 600; margin: 0;
       }
-      #lang-picker-overlay p { color: #8b95a3; margin: 0; }
+      #lang-picker-overlay p { color: var(--cd-text-muted); margin: 0; }
       #lang-picker-overlay .buttons { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
       /* Единая страница (FR-087 v2): язык + роль на одном экране —
          скрытых шагов нет. */
@@ -52,8 +54,8 @@
          правило гасит .step, если hidden когда-нибудь вернут. */
       #lang-picker-overlay .step[hidden] { display: none; }
       #lang-picker-overlay button {
-        background: #1d2128; color: #f3f5f8;
-        border: 1px solid #333a44; border-radius: 8px;
+        background: var(--cd-surface); color: var(--cd-text-title);
+        border: 1px solid var(--cd-border); border-radius: 8px;
         font: 600 16px/1.4 system-ui, sans-serif;
         padding: 12px 24px; cursor: pointer; min-width: 140px;
         /* W-e (дефект №14 аудита ui-kit): тач-цель ≥44×44 CSS px (WCAG 2.5.5
@@ -70,13 +72,13 @@
       /* Язык — переключатель: hover невыбранной кнопки — основной акцент;
          АКТИВНАЯ кнопка залита основным акцентом (тёмный текст, контраст ~6:1). */
       #lang-picker-overlay .buttons button[data-lang]:hover {
-        background: rgba(214, 138, 50, 0.14); border-color: var(--accent); color: #fff;
+        background: var(--cd-accent-tint); border-color: var(--accent); color: var(--cd-text-on-tint);
       }
       #lang-picker-overlay .buttons button[data-lang].active {
-        background: var(--accent); border-color: var(--accent); color: #14161a;
+        background: var(--accent); border-color: var(--accent); color: var(--cd-text-on-accent);
       }
       #lang-picker-overlay .buttons button[data-lang].active:hover {
-        background: #e39a45; border-color: #e39a45;
+        background: var(--cd-accent-hover); border-color: var(--cd-accent-hover);
       }
       /* Роли — карточки: hover/focus — вторичный акцент (превью выбора). */
       #lang-picker-overlay #role-grid {
@@ -88,21 +90,21 @@
       }
       #lang-picker-overlay #role-grid button:hover,
       #lang-picker-overlay #role-grid button:focus-visible {
-        background: rgba(91, 174, 196, 0.14); border-color: var(--accent-2); color: #fff;
+        background: var(--cd-accent-2-tint); border-color: var(--accent-2); color: var(--cd-text-on-tint);
       }
       #lang-picker-overlay #role-info {
         min-height: 40px; max-width: 520px; text-align: center;
-        color: #8b95a3; font-size: 13px; line-height: 1.5;
+        color: var(--cd-text-muted); font-size: 13px; line-height: 1.5;
         margin: 0;
       }
       /* «Продолжить без роли» — вторичная кнопка: hover вторичным акцентом. */
       #lang-picker-overlay .secondary {
-        background: transparent; color: #8b95a3; border: 1px solid #333a44;
+        background: transparent; color: var(--cd-text-muted); border: 1px solid var(--cd-border);
         font-weight: 400; font-size: 13px !important; min-width: 0 !important;
         padding: 8px 14px !important;
       }
       #lang-picker-overlay .secondary:hover {
-        background: rgba(91, 174, 196, 0.10); border-color: var(--accent-2); color: #d5d9e0;
+        background: var(--cd-accent-2-tint-weak); border-color: var(--accent-2); color: var(--cd-text);
       }
       /* FR-089: согласия телеметрии — два предвыбранных чекбокса внизу
          страницы первого запуска. Нативные чекбоксы с accent-color =
@@ -112,16 +114,16 @@
       #lang-picker-overlay .consent {
         display: flex; flex-direction: column; gap: 6px; align-items: stretch;
         margin-top: 6px; padding: 12px 14px; max-width: 560px;
-        border: 1px solid #2a313b; border-radius: 10px;
-        background: rgba(29, 33, 40, 0.55);
+        border: 1px solid var(--cd-border-soft); border-radius: 10px;
+        background: var(--cd-surface-veil);
       }
       #lang-picker-overlay .consent-title {
-        color: #8b95a3; font-size: 12px; font-weight: 600; margin: 0;
+        color: var(--cd-text-muted); font-size: 12px; font-weight: 600; margin: 0;
         text-transform: uppercase; letter-spacing: 0.4px;
       }
       #lang-picker-overlay .consent label {
         display: flex; align-items: flex-start; gap: 10px;
-        cursor: pointer; color: #d5d9e0; font-size: 13px; line-height: 1.45;
+        cursor: pointer; color: var(--cd-text); font-size: 13px; line-height: 1.45;
         border-radius: 6px; padding: 4px 6px; margin: 0 -6px;
         /* W-e (дефект №14): строка согласия — тач-цель (клик по лейблу
          * переключает чекбокс), поэтому ≥44px по высоте. */
@@ -130,7 +132,7 @@
         -webkit-tap-highlight-color: transparent;
       }
       #lang-picker-overlay .consent label:hover {
-        background: rgba(91, 174, 196, 0.10); color: #fff;
+        background: var(--cd-accent-2-tint-weak); color: var(--cd-text-on-tint);
       }
       #lang-picker-overlay .consent label:focus-within {
         outline: 2px solid var(--accent-2); outline-offset: 2px;
@@ -140,7 +142,7 @@
         margin: 2px 0 0 0; flex: none; cursor: pointer;
       }
       #lang-picker-overlay .consent .hint {
-        color: #6f7887; font-size: 11px; line-height: 1.45; margin: 0;
+        color: var(--cd-text-hint); font-size: 11px; line-height: 1.45; margin: 0;
       }
     </style>
     <script>
@@ -875,12 +877,86 @@
       * строка): 100vh выше видимой области, низ канваса уходил под бар;
       * dvh ставится ПОСЛЕ vh — старые браузеры берут vh, новые — dvh.
       * touch-action — тач-жесты не скроллят/зумят страницу поверх канваса. */
-      :root { color-scheme: dark; }
+      /* W-f (аудит ui-kit §6, консолидация shell-литералов): единые слоты
+      * палитры DOM-оболочки. Значения — байт-в-байт прежние литералы
+      * index.html и gpu_gate.rs (НИКАКИХ новых цветов); паритет сверяет
+      * scripts/web_shell_palette_parity.py (разбор CSS до/после по
+      * селекторам). Shell не читает Rust-токены через границу wasm —
+      * соответствие слотам ThemeColors фиксируется только комментариями.
+      * JS-потребители: инлайн-бандл тура (ниже в body) использует
+      * var(--cd-*, прежний-литерал) — fallback сохраняет переносимость
+      * бандла вне CanvasDesk; DIM_DEFAULTS тура читает --cd-dim через
+      * getComputedStyle, т.к. внутри SVG data-URI маски затемнения
+      * CSS-переменные не резолвятся. */
+      :root {
+        color-scheme: dark;
+        /* Фон окна/канваса до первого кадра, подложка оверлеев; тон
+        * оболочки — НЕ ThemeColors::background (там #1e1e22, канвас). */
+        --cd-bg: #14161a;
+        /* Поверхность панелей/кнопок (тулбар, автор-бар, about,
+        * тур-меню, пикер); по роли ≈ ThemeColors::menu_fill. */
+        --cd-surface: #1d2128;
+        /* Hover подложек кнопок/строк (кандидат на control_hover_fill). */
+        --cd-surface-hover: #262c35;
+        /* Hover приподнятых элементов (author-bar, link-row, тур-кнопки). */
+        --cd-surface-raised: #2e353f;
+        /* Полупрозрачная подложка модального оверлея «Об авторе». */
+        --cd-overlay: rgba(20, 22, 26, 0.92);
+        /* Заголовки/акцентные подписи. */
+        --cd-text-title: #f3f5f8;
+        /* Основной текст. */
+        --cd-text: #d5d9e0;
+        /* Тело тултипа тура (мягче основного). */
+        --cd-text-soft: #b9c0cb;
+        /* Вторичный текст и иконки. */
+        --cd-text-muted: #8b95a3;
+        /* Приглушённый текст (дескрипторы, прогресс тура). */
+        --cd-text-faint: #6b7480;
+        /* Hint под согласиями пикера. */
+        --cd-text-hint: #6f7887;
+        /* Тёмные «чернила» на залитом акценте (активная кнопка языка). */
+        --cd-text-on-accent: #14161a;
+        /* Светлый текст на цветной заливке (hover-тинты, primary тура). */
+        --cd-text-on-tint: #fff;
+        /* Волосяные рамки панелей/кнопок. */
+        --cd-border: #333a44;
+        /* Рамка consent-блока пикера. */
+        --cd-border-soft: #2a313b;
+        /* Разделитель футера тултипа тура. */
+        --cd-border-divider: #2a3138;
+        /* Focus-visible outline DOM-контролов (браузерный синий). */
+        --cd-focus-ring: #8ab4ff;
+        /* Акцент владельца FR-087 (активная кнопка языка, чекбоксы). */
+        --cd-accent: #d68a32;
+        /* Hover активной кнопки языка. */
+        --cd-accent-hover: #e39a45;
+        /* Вторичный акцент FR-087 (hover карточек ролей, secondary). */
+        --cd-accent-2: #5baec4;
+        /* Hover-тинт основного акцента (14%). */
+        --cd-accent-tint: rgba(214, 138, 50, 0.14);
+        /* Hover-тинт вторичного акцента на карточках ролей (14%). */
+        --cd-accent-2-tint: rgba(91, 174, 196, 0.14);
+        /* Слабый тинт вторичного акцента (10%, secondary/consent hover). */
+        --cd-accent-2-tint-weak: rgba(91, 174, 196, 0.10);
+        /* Полупрозрачная вуаль поверхности (фон consent-блока). */
+        --cd-surface-veil: rgba(29, 33, 40, 0.55);
+        /* Тень модальной панели (about). */
+        --cd-shadow-panel: rgba(0,0,0,0.5);
+        /* Тень всплывающих меню/тултипа тура. */
+        --cd-shadow-pop: rgba(0,0,0,0.45);
+        /* Затемнение сцены туром (spotlight); читается JS через
+        * getComputedStyle (SVG data-URI маска не резолвит var()). */
+        --cd-dim: rgba(0,0,0,0.55);
+        /* Primary-кнопка тура («Далее»); shell-локальный синий,
+        * вне ThemeColors. */
+        --cd-tour-primary: #2f6fda;
+        --cd-tour-primary-hover: #3a78e0;
+      }
       html, body {
         margin: 0;
         height: 100%;
         overflow: hidden;
-        background: #14161a;
+        background: var(--cd-bg);
       }
       body > canvas {
         display: block;
@@ -910,9 +986,9 @@
         max-width: calc(100vw - 16px);
       }
       #w6-toolbar button {
-        background: #1d2128;
-        color: #d5d9e0;
-        border: 1px solid #333a44;
+        background: var(--cd-surface);
+        color: var(--cd-text);
+        border: 1px solid var(--cd-border);
         border-radius: 6px;
         font: 12px/1.4 system-ui, sans-serif;
         padding: 4px 10px;
@@ -933,9 +1009,9 @@
         user-select: none;
         -webkit-tap-highlight-color: transparent;
       }
-      #w6-toolbar button:hover { background: #262c35; }
+      #w6-toolbar button:hover { background: var(--cd-surface-hover); }
       #w6-toolbar button:focus-visible {
-        outline: 2px solid #8ab4ff;
+        outline: 2px solid var(--cd-focus-ring);
         outline-offset: 1px;
       }
       /* Подпись «Недавние: <имя>» — единственная растяжимая кнопка.
@@ -987,8 +1063,8 @@
         justify-content: center;
         width: 28px;
         height: 28px;
-        background: #1d2128;
-        border: 1px solid #333a44;
+        background: var(--cd-surface);
+        border: 1px solid var(--cd-border);
         border-radius: 6px;
         cursor: pointer;
         text-decoration: none;
@@ -998,11 +1074,11 @@
         -webkit-tap-highlight-color: transparent;
       }
       #author-bar a:hover {
-        background: #2e353f;
+        background: var(--cd-surface-raised);
         transform: translateY(-1px);
       }
       #author-bar a:focus-visible {
-        outline: 2px solid #8ab4ff;
+        outline: 2px solid var(--cd-focus-ring);
         outline-offset: 1px;
       }
       /* W-e (дефект №14): визуал иконки не трогаем (28px, coarse 36px —
@@ -1016,59 +1092,59 @@
       #author-bar svg {
         width: 16px;
         height: 16px;
-        fill: #8b95a3;
+        fill: var(--cd-text-muted);
         transition: fill 150ms ease;
       }
-      #author-bar a:hover svg { fill: #d5d9e0; }
+      #author-bar a:hover svg { fill: var(--cd-text); }
       /* "Об авторе" overlay — модальный экран с подробными ссылками.
        * Открывается кликом по ℹ-иконке в #author-bar или через
        * CanvasMenuItem::About (window.__canvasdesk_openAbout()). */
       #about-overlay {
         position: fixed; inset: 0; z-index: 100001;
-        background: rgba(20, 22, 26, 0.92);
+        background: var(--cd-overlay);
         display: none;
         align-items: center; justify-content: center;
         font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-        color: #d5d9e0;
+        color: var(--cd-text);
       }
       #about-overlay[data-open="true"] { display: flex; }
       #about-overlay .panel {
-        background: #1d2128;
-        border: 1px solid #333a44;
+        background: var(--cd-surface);
+        border: 1px solid var(--cd-border);
         border-radius: 12px;
         padding: 28px 32px;
         max-width: 480px;
         width: calc(100vw - 32px);
-        box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+        box-shadow: 0 12px 40px var(--cd-shadow-panel);
       }
       #about-overlay h2 {
-        font-size: 18px; color: #f3f5f8; font-weight: 600;
+        font-size: 18px; color: var(--cd-text-title); font-weight: 600;
         margin: 0 0 4px;
       }
-      #about-overlay .author-name { color: #6b7480; font-size: 13px; margin: 0 0 20px; }
+      #about-overlay .author-name { color: var(--cd-text-faint); font-size: 13px; margin: 0 0 20px; }
       #about-overlay .links { display: flex; flex-direction: column; gap: 8px; }
       #about-overlay .link-row {
         display: flex; align-items: center; gap: 12px;
         padding: 10px 12px;
-        background: #262c35;
-        border: 1px solid #333a44;
+        background: var(--cd-surface-hover);
+        border: 1px solid var(--cd-border);
         border-radius: 8px;
         text-decoration: none;
-        color: #d5d9e0;
+        color: var(--cd-text);
         transition: background 150ms ease;
       }
-      #about-overlay .link-row:hover { background: #2e353f; }
-      #about-overlay .link-row svg { width: 18px; height: 18px; fill: #8b95a3; flex-shrink: 0; }
+      #about-overlay .link-row:hover { background: var(--cd-surface-raised); }
+      #about-overlay .link-row svg { width: 18px; height: 18px; fill: var(--cd-text-muted); flex-shrink: 0; }
       #about-overlay .link-text { display: flex; flex-direction: column; gap: 1px; }
-      #about-overlay .link-label { color: #f3f5f8; font-weight: 500; font-size: 13px; }
-      #about-overlay .link-desc { color: #6b7480; font-size: 11px; }
+      #about-overlay .link-label { color: var(--cd-text-title); font-weight: 500; font-size: 13px; }
+      #about-overlay .link-desc { color: var(--cd-text-faint); font-size: 11px; }
       #about-overlay .close-btn {
         position: absolute; top: 16px; right: 16px;
         background: transparent; border: none; cursor: pointer;
-        font-size: 20px; color: #6b7480; padding: 4px 8px;
+        font-size: 20px; color: var(--cd-text-faint); padding: 4px 8px;
         border-radius: 6px; line-height: 1;
       }
-      #about-overlay .close-btn:hover { color: #d5d9e0; background: #262c35; }
+      #about-overlay .close-btn:hover { color: var(--cd-text); background: var(--cd-surface-hover); }
       /* W-e (дефект №14): хит-зона крестика ≥44×44 (::after-расширение:
       * −8px по вертикали, −10px по горизонтали — глиф × уже 44-й цели),
       * визуальный размер кнопки не менялся. */
@@ -1092,22 +1168,22 @@
       /* FR-028 v2: dropdown-меню выбора сценария inline-тура
        * (sdk/web-onboarding/). Раньше был prompt() — NativeUI-блокер,
        * не стилизуем, не скрин-ридер-дружелюбный. Заменили на DOM-меню,
-       * стилизованное под W6-toolbar (та же палитра #1d2128/#333a44).
+       * стилизованное под W6-toolbar (та же палитра: --cd-surface/--cd-border).
        * Закрытие: клик мимо / Esc / выбор пункта. */
       #tour-menu {
         position: fixed;
         /* 8px отступ тулбара + 44px тач-цель кнопки (W-e) + 4px зазор */
         top: 56px;
         right: 8px;
-        background: #1d2128;
-        border: 1px solid #333a44;
+        background: var(--cd-surface);
+        border: 1px solid var(--cd-border);
         border-radius: 8px;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+        box-shadow: 0 8px 24px var(--cd-shadow-pop);
         z-index: 11;
         min-width: 240px;
         max-width: calc(100vw - 16px);
         font: 13px/1.4 system-ui, sans-serif;
-        color: #d5d9e0;
+        color: var(--cd-text);
         padding: 6px 0;
         display: none;
       }
@@ -1115,7 +1191,7 @@
       #tour-menu > div {
         padding: 8px 12px 4px;
         font-size: 11px;
-        color: #6b7480;
+        color: var(--cd-text-faint);
         text-transform: uppercase;
         letter-spacing: 0.04em;
       }
@@ -1124,7 +1200,7 @@
         width: 100%;
         text-align: left;
         background: transparent;
-        color: #d5d9e0;
+        color: var(--cd-text);
         border: none;
         font: inherit;
         padding: 8px 12px;
@@ -1133,16 +1209,16 @@
         user-select: none;
         -webkit-tap-highlight-color: transparent;
       }
-      #tour-menu button:hover { background: #262c35; }
+      #tour-menu button:hover { background: var(--cd-surface-hover); }
       #tour-menu button:focus-visible {
-        outline: 2px solid #8ab4ff;
+        outline: 2px solid var(--cd-focus-ring);
         outline-offset: -1px;
       }
-      #tour-menu button b { color: #f3f5f8; font-weight: 600; }
+      #tour-menu button b { color: var(--cd-text-title); font-weight: 600; }
       #tour-menu button small {
         display: block;
         font-size: 11px;
-        color: #6b7480;
+        color: var(--cd-text-faint);
         margin-top: 2px;
       }
       @media (max-width: 1199px) {
@@ -1385,30 +1461,36 @@
   "use strict";
 
   // ── styles.ts ───────────────────────────────────────────────────
+  /* W-f (аудит ui-kit §6): цвета — слоты :root (--cd-*) из <head>
+   * index.html, значение каждой переменной = прежний литерал этой
+   * строки (комментарий-синхронизация: меняешь --cd-* — меняешь
+   * fallback). Fallback сохраняет переносимость бандла вне CanvasDesk
+   * (standalone-интеграторы без :root): визуал не меняется ни там,
+   * ни в shell. Паритет — scripts/web_shell_palette_parity.py. */
   var DEFAULT_STYLES = [
-    ".cd-tour-tooltip{position:fixed;background:#1d2128;color:#d5d9e0;",
-    "border:1px solid #333a44;border-radius:8px;",
-    "box-shadow:0 8px 24px rgba(0,0,0,0.45);padding:14px 16px 10px;",
+    ".cd-tour-tooltip{position:fixed;background:var(--cd-surface,#1d2128);color:var(--cd-text,#d5d9e0);",
+    "border:1px solid var(--cd-border,#333a44);border-radius:8px;",
+    "box-shadow:0 8px 24px var(--cd-shadow-pop,rgba(0,0,0,0.45));padding:14px 16px 10px;",
     "font:13px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;",
     "max-width:420px;min-width:280px;pointer-events:auto;",
     "transition:opacity 180ms ease,transform 180ms ease;}",
-    ".cd-tour-tooltip__title{font-weight:600;font-size:14px;color:#f3f5f8;margin-bottom:4px;}",
-    ".cd-tour-tooltip__body{color:#b9c0cb;white-space:normal;word-wrap:break-word;}",
-    ".cd-tour-tooltip__progress{font-size:11px;color:#6b7480;margin-top:6px;}",
+    ".cd-tour-tooltip__title{font-weight:600;font-size:14px;color:var(--cd-text-title,#f3f5f8);margin-bottom:4px;}",
+    ".cd-tour-tooltip__body{color:var(--cd-text-soft,#b9c0cb);white-space:normal;word-wrap:break-word;}",
+    ".cd-tour-tooltip__progress{font-size:11px;color:var(--cd-text-faint,#6b7480);margin-top:6px;}",
     ".cd-tour-tooltip__footer{display:flex;gap:8px;justify-content:flex-end;",
-    "align-items:center;margin-top:12px;border-top:1px solid #2a3138;padding-top:8px;}",
+    "align-items:center;margin-top:12px;border-top:1px solid var(--cd-border-divider,#2a3138);padding-top:8px;}",
     ".cd-tour-btn{appearance:none;font:inherit;padding:6px 12px;border-radius:6px;",
-    "border:1px solid #333a44;background:#262c35;color:#d5d9e0;cursor:pointer;",
+    "border:1px solid var(--cd-border,#333a44);background:var(--cd-surface-hover,#262c35);color:var(--cd-text,#d5d9e0);cursor:pointer;",
     "box-sizing:border-box;min-height:44px;min-width:44px;",
     "user-select:none;-webkit-tap-highlight-color:transparent;}",
-    ".cd-tour-btn:hover{background:#2e353f;}",
-    ".cd-tour-btn:focus-visible{outline:2px solid #8ab4ff;outline-offset:1px;}",
-    ".cd-tour-btn_primary{background:#2f6fda;border-color:#2f6fda;color:#fff;font-weight:600;}",
-    ".cd-tour-btn_primary:hover{background:#3a78e0;}",
-    ".cd-tour-btn_skip{background:transparent;border-color:transparent;color:#6b7480;}",
+    ".cd-tour-btn:hover{background:var(--cd-surface-raised,#2e353f);}",
+    ".cd-tour-btn:focus-visible{outline:2px solid var(--cd-focus-ring,#8ab4ff);outline-offset:1px;}",
+    ".cd-tour-btn_primary{background:var(--cd-tour-primary,#2f6fda);border-color:var(--cd-tour-primary,#2f6fda);color:var(--cd-text-on-tint,#fff);font-weight:600;}",
+    ".cd-tour-btn_primary:hover{background:var(--cd-tour-primary-hover,#3a78e0);}",
+    ".cd-tour-btn_skip{background:transparent;border-color:transparent;color:var(--cd-text-faint,#6b7480);}",
     ".cd-tour-btn_back{background:transparent;}",
-    ".cd-tour-caret{position:absolute;width:12px;height:12px;background:#1d2128;",
-    "border:1px solid #333a44;transform:translate(-50%,-50%) rotate(45deg);",
+    ".cd-tour-caret{position:absolute;width:12px;height:12px;background:var(--cd-surface,#1d2128);",
+    "border:1px solid var(--cd-border,#333a44);transform:translate(-50%,-50%) rotate(45deg);",
     "pointer-events:none;opacity:0;transition:opacity 180ms ease;}",
     ".cd-tour-tooltip[data-caret-dir=up] .cd-tour-caret,",
     ".cd-tour-tooltip[data-caret-dir=down] .cd-tour-caret,",
@@ -1537,7 +1619,22 @@
   }
 
   // ── highlight.ts ────────────────────────────────────────────────
-  var DIM_DEFAULTS = { padding: 8, radius: 6, dim: true, dimColor: "rgba(0,0,0,0.55)", animate: true };
+  /* W-f (аудит ui-kit §6): дефолт затемнения — shell-цвет, единый слот
+   * --cd-dim (блок :root в <head> index.html; значение = прежний
+   * литерал). Резолвим ОДИН раз через getComputedStyle: внутри SVG
+   * data-URI маски затемнения CSS-переменные не работают, поэтому var()
+   * здесь нельзя. Fallback = тот же литерал (standalone-встраивание
+   * бандла без :root CanvasDesk). Комментарий-синхронизация: меняя
+   * --cd-dim, меняй fallback. */
+  function cssVar(name, fallback) {
+    try {
+      var v = getComputedStyle(global.document.documentElement)
+        .getPropertyValue(name).trim();
+      return v || fallback;
+    } catch (e) { return fallback; }
+  }
+  var DIM_DEFAULTS = { padding: 8, radius: 6, dim: true,
+    dimColor: cssVar("--cd-dim", "rgba(0,0,0,0.55)"), animate: true };
 
   function createHighlight(container, baseZIndex) {
     var overlay = document.createElement("div");

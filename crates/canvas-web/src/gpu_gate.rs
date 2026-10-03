@@ -77,7 +77,9 @@ fn probe_webgl2() -> bool {
 
 /// DOM-заглушка вместо молчаливого чёрного экрана: оба бэкенда недоступны.
 /// Стили инлайном (заглушка живёт до перезагрузки, CSS index.html её не
-/// знает); палитра — тон продукта (#14161a/#d5d9e0, SPEC §6).
+/// знает); цвета — слоты :root index.html (--cd-bg/--cd-text, W-f:
+/// консолидация shell-литералов аудита §6) с fallback'ом = прежний
+/// литерал (паритет; fallback на случай вне-страничного использования).
 fn show_fallback_overlay() {
     let Some(window) = web_sys::window() else {
         return;
@@ -94,7 +96,7 @@ fn show_fallback_overlay() {
     let _ = box_el.set_attribute(
         "style",
         "position:fixed;inset:0;z-index:100;display:flex;align-items:center;\
-         justify-content:center;background:#14161a;color:#d5d9e0;\
+         justify-content:center;background:var(--cd-bg,#14161a);color:var(--cd-text,#d5d9e0);\
          font:15px/1.6 system-ui,sans-serif;padding:24px;text-align:center;",
     );
     box_el.set_inner_html(
