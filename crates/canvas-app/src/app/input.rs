@@ -3835,7 +3835,9 @@ impl App {
         // FR-082: колесо над развёрнутым доком прокручивает список
         // шаблонов (паритет с flyout свёрнутой полосы — знакомый жест),
         // а не панорамирует канвас ПОД панелью. max_scroll — «приклейка
-        // хвоста» из panel_layout; шаг — PANEL_WHEEL_LINES строк.
+        // хвоста» из panel_layout (W-e: предел — измеренная высота окна
+        // строк, кэп MAX_VISIBLE_ROWS удалён); шаг — PANEL_WHEEL_LINES
+        // строк, кламп scroll_by держит окно в границах списка.
         if self.template_panel.open {
             let viewport = self.viewport_logical();
             let rows = template_panel_rows(
