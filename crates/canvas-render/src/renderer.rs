@@ -823,8 +823,9 @@ impl Renderer {
     }
 
     /// FR-038 (п.3 v2): пороги zoom-адаптивности сетки (настройки Snap,
-    /// T-038.4): zoom > sub_zoom — sub-линии полушага, zoom < coarse_zoom —
-    /// только major-шаг. Дефолты — `grid::DEFAULT_SUB_ZOOM`/`..._COARSE_ZOOM`.
+    /// T-038.4): zoom > sub_zoom — sub-линии полушага, zoom ниже coarse_zoom —
+    /// динамический шаг по ряду 1-2-5 (лестница укрупнения, муар исключён).
+    /// Дефолты — `grid::DEFAULT_SUB_ZOOM`/`..._COARSE_ZOOM`.
     pub fn set_grid_zoom_thresholds(&mut self, sub_zoom: f32, coarse_zoom: f32) {
         self.grid_sub_zoom = sub_zoom;
         self.grid_coarse_zoom = coarse_zoom;
@@ -1322,8 +1323,9 @@ impl Renderer {
 
         if self.grid_visible {
             // FR-038 (п.3 v2): zoom-адаптивные шаги — sub-линии полушага при
-            // сильном приближении, coarse (только major) при отдалении;
-            // пороги — настройки Snap (T-038.4), базовые шаги — GridDensity
+            // сильном приближении, динамический шаг 1-2-5 (лестница) при
+            // отдалении; пороги — настройки Snap (T-038.4), базовые шаги —
+            // GridDensity
             let (minor, major) = crate::grid::adaptive_grid_steps(
                 self.grid_steps.0,
                 self.grid_steps.1,

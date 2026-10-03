@@ -914,7 +914,7 @@ const RU: &[(&str, &str)] = &[
     (keys::ROW_SNAP_COARSE_ZOOM, "Порог coarse-сетки"),
     (
         keys::DESC_SNAP_COARSE_ZOOM,
-        "При зуме ниже порога линии укрупняются до major-шага для крупной компоновки.",
+        "При зуме ниже порога шаг сетки укрупняется по ряду 1-2-5 (как в CAD-системах и Figma), чтобы расстояние между линиями на экране не падало ниже комфортного — рябь и муар при отдалении исключены.",
     ),
     (
         keys::DESC_DRAG_PUSH_ENABLED,
@@ -1818,7 +1818,7 @@ const EN: &[(&str, &str)] = &[
     (keys::ROW_SNAP_COARSE_ZOOM, "Coarse-grid threshold"),
     (
         keys::DESC_SNAP_COARSE_ZOOM,
-        "Below this zoom, lines coarsen to the major step for large-scale composition.",
+        "Below this zoom, the grid step coarsens along the 1-2-5 series (like CAD tools and Figma), keeping on-screen line spacing comfortable — no shimmer or moir\u{e9} when zooming out.",
     ),
     (
         keys::DESC_DRAG_PUSH_ENABLED,

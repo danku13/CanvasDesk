@@ -3,8 +3,11 @@
 //! Толщина линий — в screen-space через производные (`fwidth`) в шейдере,
 //! поэтому линии не мерцают и не меняют толщину при зуме.
 //! Zoom-адаптивность (FR-038, п.3 v2): выше sub-порога — дополнительные
-//! sub-линии полушага, ниже coarse-порога — только major-шаг
-//! (`adaptive_grid_steps`; рендер передаёт результат в uniform как шаги).
+//! sub-линии полушага, ниже coarse-порога — динамический шаг по ряду 1-2-5
+//! (CAD/Figma-подход, `ladder_step`): screen-расстояние между линиями не
+//! опускается ниже комфортного пола (`coarse_zoom × шаг`), поэтому муар
+//! и рябь при отдалении исключены (`adaptive_grid_steps`; рендер передаёт
+//! результат в uniform как шаги).
 
 use crate::camera::Camera;
 
@@ -27,28 +30,78 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 /// дополнительные sub-линии полушага. Вынесен в настройки Snap (T-038.4).
 pub const DEFAULT_SUB_ZOOM: f32 = 1.5;
 
-/// Порог coarse-сетки по умолчанию (FR-038, п.3 v2, ~50%): ниже — вместо
-/// minor рисуется только major-шаг. Вынесен в настройки Snap (T-038.4).
+/// Порог coarse-сетки по умолчанию (FR-038, п.3 v2, ~50%): ниже — шаг
+/// укрупняется по ряду 1-2-5 (`ladder_step`), screen-шаг не опускается
+/// ниже порога × шаг. Вынесен в настройки Snap (T-038.4).
 pub const DEFAULT_COARSE_ZOOM: f32 = 0.5;
+
+/// Динамический шаг сетки по ряду 1-2-5 (CAD-системы, Figma, графики):
+/// наименьшее значение ряда `base × {1, 2, 5} × 10^n`, при котором
+/// экранное расстояние между линиями (`шаг × zoom`) не меньше
+/// `min_screen_px`.
+///
+/// Свойства:
+/// * при комфортном зуме (`base * zoom >= min_screen_px`) возвращается
+///   `base` — плотность из настроек не искажается (шаг НЕ мельчает ниже
+///   базового, в отличие от «голого» nice-ceiling);
+/// * после укрупнения screen-шаг остаётся в диапазоне
+///   `[min_screen_px, min_screen_px × 2.5)` — соседние члены ряда 1-2-5
+///   отличаются не более чем в 2.5 раза;
+/// * монотонность: при уменьшении зума шаг не уменьшается (сетка не
+///   дёргается при плавном отдалении);
+/// * вырожденные входы (не-числа, `<= 0`) возвращают `base` как есть —
+///   вырожденный шаг гасится альфой `grid_appearance`.
+pub fn ladder_step(base: f32, zoom: f32, min_screen_px: f32) -> f32 {
+    let valid = base.is_finite()
+        && base > 0.0
+        && zoom.is_finite()
+        && zoom > 0.0
+        && min_screen_px.is_finite()
+        && min_screen_px > 0.0;
+    if !valid {
+        return base;
+    }
+    // Минимально допустимый множитель ряда (вызовы ниже coarse-порога
+    // дают raw > 1; raw < 1 клампится — шаг не мельчает ниже базы)
+    let raw = min_screen_px / (zoom * base);
+    let decade = raw.max(1.0).log10().floor();
+    let pow = 10f32.powi(decade as i32);
+    for &m in &[1.0_f32, 2.0, 5.0, 10.0] {
+        let k = m * pow;
+        if k >= raw {
+            return base * k;
+        }
+    }
+    // Недостижимо при валидных входах (m=10 покрывает весь декадный
+    // диапазон raw < 10×pow), страховка от погрешностей плавающей точки.
+    base * 10.0 * pow
+}
 
 /// Zoom-адаптивные эффективные шаги сетки (FR-038, п.3 v2): (minor, major).
 ///
 /// * `zoom > sub_zoom` — дополнительные sub-линии полушага для точной
 ///   раскладки при приближении (эффективный minor = minor/2);
-/// * `zoom < coarse_zoom` — шаг укрупняется до major: minor-линии сливаются
-///   с major и остаётся только крупный шаг (coarse-grid при отдалении);
-/// * между порогами — шаги из настроек без изменений.
+/// * `zoom <= sub_zoom` — динамический шаг по ряду 1-2-5 (CAD/Figma):
+///   при отдалении шаги укрупняются (`ladder_step`) так, чтобы экранное
+///   расстояние между линиями не опускалось ниже `coarse_zoom × шаг`
+///   (дефолт 0.5: minor не плотнее ~10 screen-px, major — ~50 screen-px).
+///   Раньше ниже coarse-порога рисовался только major-шаг — при глубоком
+///   отдалении он сам сгущался до единиц экранных пикселей и рябел
+///   (муар); лестница 1-2-5 держит комфортную плотность на ЛЮБОМ зуме.
+///
+/// Отношение major/minor сохраняется при любом зуме: множитель ряда у
+/// обоих шагов одинаков (коэффициент `coarse_zoom/zoom` сокращается),
+/// для пресетов GridDensity (ratio 5) major всегда на каждой 5-й
+/// minor-линии — два ряда сетки не рассыпаются.
 ///
 /// Чистая функция без состояния: рендер каждый кадр передаёт БАЗОВЫЕ шаги
 /// из `GridDensity` (настройки), поэтому результат стабилен покадрово.
-/// Порядок веток (sub → coarse → база) и строгие неравенства ЗЕРКАЛЬНЫ
-/// `canvas-app::snap::effective_grid_step` (T-038.2): рендер не зависит от
-/// app (ADR-0012 — слои core → scene → render → app), поэтому семантика
-/// продублирована и закреплена тестами — шаг снапа и линии сетки на экране
-/// совпадают при ЛЮБЫХ порогах, включая вырожденные `sub_zoom <=
-/// coarse_zoom` (их валидация — забота приложения, T-038.4). Клампы:
-/// неположительные шаги возвращаются как есть (альфа `grid_appearance`
-/// погасит вырожденный шаг), нечисловой зум — без изменений.
+/// Порядок веток (sub → лестница) и строгие неравенства ЗЕРКАЛЬНЫ
+/// `canvas-app::snap::effective_grid_step` (T-038.2): шаг снапа и линии
+/// сетки на экране совпадают при ЛЮБЫХ порогах, включая вырожденные
+/// `sub_zoom <= coarse_zoom` (их валидация — забота приложения, T-038.4).
+/// Клампы: неположительные шаги возвращаются как есть (альфа
+/// `grid_appearance` погасит вырожденный шаг), нечисловой зум — без изменений.
 pub fn adaptive_grid_steps(
     minor: f32,
     major: f32,
@@ -61,13 +114,14 @@ pub fn adaptive_grid_steps(
     if !steps_valid || !zoom.is_finite() {
         return (minor, major);
     }
-    // Зеркало effective_grid_step снап-движка: sub первым, coarse вторым
+    // Зеркало effective_grid_step снап-движка: sub первым, ниже — лестница
     if zoom > sub_zoom {
         (minor / 2.0, major)
-    } else if zoom < coarse_zoom {
-        (major, major)
     } else {
-        (minor, major)
+        (
+            ladder_step(minor, zoom, coarse_zoom * minor),
+            ladder_step(major, zoom, coarse_zoom * major),
+        )
     }
 }
 
@@ -373,22 +427,131 @@ mod tests {
         );
     }
 
-    /// FR-038 п.3 v2: ниже coarse-порога — только major-шаг (minor = major);
-    /// на границе (zoom == coarse_zoom) — ещё базовые шаги.
+    /// FR-038 п.3 v2 (динамический шаг 1-2-5): ниже coarse-порога шаги
+    /// укрупняются по ряду так, чтобы screen-шаг не опускался ниже
+    /// `coarse_zoom × шаг`; на границе (zoom == coarse_zoom) — ещё базовые
+    /// шаги. Отношение major/minor сохраняется (множитель ряда общий).
     #[test]
     fn adaptive_steps_coarse_below_threshold() {
+        // Medium 20/100, coarse 0.5: при zoom 0.49 базовые шаги дают
+        // 9.8/49 screen-px — ниже полов (10/50): укрупнение ×2 → 40/200
         assert_eq!(
             adaptive_grid_steps(20.0, 100.0, 0.49, 1.5, 0.5),
-            (100.0, 100.0)
+            (40.0, 200.0)
         );
+        // Ровно на пороге — базовые шаги (лестница ещё не нужна)
         assert_eq!(
             adaptive_grid_steps(20.0, 100.0, 0.5, 1.5, 0.5),
             (20.0, 100.0)
         );
+        // Глубокое отдаление (MIN_ZOOM): ряд 20→40→100→200 (10 px) и
+        // 100→…→1000 (50 px) — комфортная плотность уровня границы coarse
         assert_eq!(
             adaptive_grid_steps(20.0, 100.0, MIN_ZOOM, 1.5, 0.5),
-            (100.0, 100.0)
+            (200.0, 1000.0)
         );
+    }
+
+    /// Ряд 1-2-5 (`ladder_step`): выбор члена ряда, база не мельчает,
+    /// кратность 2 и 5, вырожденные входы возвращают базу.
+    #[test]
+    fn ladder_step_picks_125_series() {
+        // Комфортный зум — база без изменений
+        assert_eq!(ladder_step(20.0, 1.0, 10.0), 20.0);
+        // Ровно на полу — база (шаг не мельчает ниже базового)
+        assert_eq!(ladder_step(20.0, 0.5, 10.0), 20.0);
+        // Ряд от базы 20: 20 → 40 → 100 → 200 (кратность 2 и 5)
+        assert_eq!(ladder_step(20.0, 0.49, 10.0), 40.0); // 9.8 px → 19.6
+        assert_eq!(ladder_step(20.0, 0.2, 10.0), 100.0); // 4 px → 20
+        assert_eq!(ladder_step(20.0, 0.1, 10.0), 100.0); // 2 px → 10 (k=5)
+        assert_eq!(ladder_step(20.0, 0.09, 10.0), 200.0); // 1.8 px → 18 (k=10)
+        assert_eq!(ladder_step(20.0, 0.05, 10.0), 200.0); // ровно 10 px (k=10)
+                                                          // База 100: ряд 100/200/500/1000
+        assert_eq!(ladder_step(100.0, 0.4, 50.0), 200.0);
+        assert_eq!(ladder_step(100.0, 0.15, 50.0), 500.0);
+        // Вырожденные входы — база как есть (гашение альфой)
+        assert_eq!(ladder_step(0.0, 1.0, 10.0), 0.0);
+        assert_eq!(ladder_step(-20.0, 1.0, 10.0), -20.0);
+        assert_eq!(ladder_step(20.0, 0.0, 10.0), 20.0);
+        assert_eq!(ladder_step(20.0, f32::NAN, 10.0), 20.0);
+        assert_eq!(ladder_step(20.0, 1.0, 0.0), 20.0);
+        assert_eq!(ladder_step(20.0, 1.0, f32::NAN), 20.0);
+    }
+
+    /// Свойство комфорта: ниже coarse-порога screen-шаг линий не опускается
+    /// ниже пола и не разрежается дальше ×2.5 (ряд 1-2-5) — муар/рябь при
+    /// любом отдалении исключены, для major и minor обоих уровней.
+    #[test]
+    fn ladder_keeps_screen_step_in_comfort_band() {
+        for (minor, major) in [(10.0, 50.0), (20.0, 100.0), (40.0, 200.0)] {
+            let mut zoom = MIN_ZOOM;
+            while zoom <= 0.5 {
+                let (m, mj) = adaptive_grid_steps(minor, major, zoom, 1.5, 0.5);
+                let (ms, mjs) = (m * zoom, mj * zoom);
+                assert!(
+                    ms >= 0.5 * minor - 1e-3,
+                    "minor screen {ms} ниже пола при zoom {zoom}"
+                );
+                assert!(
+                    ms < 0.5 * minor * 2.5 + 1e-3,
+                    "minor screen {ms} слишком разрежен при zoom {zoom}"
+                );
+                assert!(
+                    mjs >= 0.5 * major - 1e-3,
+                    "major screen {mjs} ниже пола при zoom {zoom}"
+                );
+                assert!(
+                    mjs < 0.5 * major * 2.5 + 1e-3,
+                    "major screen {mjs} слишком разрежен при zoom {zoom}"
+                );
+                zoom += 0.001;
+            }
+        }
+    }
+
+    /// Отношение major/minor сохраняется на всём диапазоне до sub-порога
+    /// (лестница даёт обоим шагам общий множитель ряда): для пресетов с
+    /// ratio 5 major всегда на каждой 5-й minor-линии.
+    #[test]
+    fn ladder_preserves_major_minor_ratio() {
+        for (minor, major) in [(10.0, 50.0), (20.0, 100.0), (40.0, 200.0), (20.0, 60.0)] {
+            let mut zoom = MIN_ZOOM;
+            while zoom <= 1.5 {
+                let (m, mj) = adaptive_grid_steps(minor, major, zoom, 1.5, 0.5);
+                let ratio = mj / m;
+                assert!(
+                    (ratio - major / minor).abs() < 1e-4,
+                    "ratio {ratio} ≠ {} при zoom {zoom} (пресет {minor}/{major})",
+                    major / minor
+                );
+                zoom += 0.003;
+            }
+        }
+    }
+
+    /// Монотонность лестницы: при уменьшении зума эффективный шаг не
+    /// уменьшается (сетка не дёргается при плавном отдалении).
+    #[test]
+    fn ladder_monotonic_as_zoom_decreases() {
+        for (minor, major) in [(10.0, 50.0), (20.0, 100.0), (40.0, 200.0)] {
+            let mut zoom = 0.5;
+            let mut prev_m = minor;
+            let mut prev_mj = major;
+            while zoom > MIN_ZOOM {
+                zoom -= 0.001;
+                let (m, mj) = adaptive_grid_steps(minor, major, zoom, 1.5, 0.5);
+                assert!(
+                    m >= prev_m - 1e-4,
+                    "minor сжался {prev_m} → {m} при zoom {zoom}"
+                );
+                assert!(
+                    mj >= prev_mj - 1e-4,
+                    "major сжался {prev_mj} → {mj} при zoom {zoom}"
+                );
+                prev_m = m;
+                prev_mj = mj;
+            }
+        }
     }
 
     /// Между порогами шаги из настроек без изменений; sub/coarse не
@@ -405,11 +568,11 @@ mod tests {
     }
 
     /// Клампы: неположительные шаги и нечисловой зум возвращаются как есть
-    /// (шейдерная альфа гасит вырожденный шаг); coarse-ветка — неподвижная
-    /// точка (повторный вызов с её выходом как входом не меняет результат),
-    /// функция детерминирована.
+    /// (шейдерная альфа гасит вырожденный шаг); лестница при том же зуме
+    /// продолжает укрупнение (нет «залипания» на одном шаге), функция
+    /// детерминирована.
     #[test]
-    fn adaptive_steps_clamps_and_fixed_point() {
+    fn adaptive_steps_clamps_and_ladder_growth() {
         assert_eq!(adaptive_grid_steps(0.0, 100.0, 2.0, 1.5, 0.5), (0.0, 100.0));
         assert_eq!(
             adaptive_grid_steps(-5.0, 100.0, 2.0, 1.5, 0.5),
@@ -420,11 +583,12 @@ mod tests {
             adaptive_grid_steps(20.0, 100.0, f32::NAN, 1.5, 0.5),
             (20.0, 100.0)
         );
-        // Coarse — fixed point: (major, major) при zoom < coarse стабильно
-        assert_eq!(
-            adaptive_grid_steps(100.0, 100.0, 0.4, 1.5, 0.5),
-            (100.0, 100.0)
-        );
+        // Лестница растёт: выход ветки при том же зуме снова ниже пола —
+        // следующий шаг ряда ещё крупнее (40/200 → 80/400 при zoom 0.4)
+        let once = adaptive_grid_steps(20.0, 100.0, 0.4, 1.5, 0.5);
+        assert_eq!(once, (40.0, 200.0));
+        let twice = adaptive_grid_steps(once.0, once.1, 0.4, 1.5, 0.5);
+        assert_eq!(twice, (80.0, 400.0));
         // Детерминизм: те же аргументы — тот же результат
         let first = adaptive_grid_steps(20.0, 100.0, 2.0, 1.5, 0.5);
         let second = adaptive_grid_steps(20.0, 100.0, 2.0, 1.5, 0.5);
@@ -448,10 +612,11 @@ mod tests {
             adaptive_grid_steps(20.0, 100.0, 0.6, 0.3, 0.5),
             (10.0, 100.0)
         );
-        // ... ниже sub_zoom (< coarse_zoom) — coarse-ветка
+        // ... ниже sub_zoom (< coarse_zoom) — лестница 1-2-5: пол
+        // coarse×шаг = 10/50, при zoom 0.25 это множитель ×2 → 40/200
         assert_eq!(
             adaptive_grid_steps(20.0, 100.0, 0.25, 0.3, 0.5),
-            (100.0, 100.0)
+            (40.0, 200.0)
         );
         // NaN-порог — сравнение ложно, обе ветки не срабатывают: базовые шаги
         assert_eq!(
@@ -469,10 +634,8 @@ mod tests {
         fn snap_oracle(minor: f32, major: f32, zoom: f32, sub: f32, coarse: f32) -> f32 {
             if zoom > sub {
                 minor / 2.0
-            } else if zoom < coarse {
-                major
             } else {
-                minor
+                ladder_step(minor, zoom, coarse * minor)
             }
         }
         // Все пресеты GridDensity (Dense 10/50, Medium 20/100, Sparse 40/200)
@@ -485,7 +648,20 @@ mod tests {
                     snap_oracle(minor, major, zoom, 1.5, 0.5),
                     "minor при zoom {zoom}"
                 );
-                assert_eq!(mj, major, "major не меняется: {zoom}");
+                // Отношение major/minor сохраняется на лестнице (major
+                // укрупняется тем же множителем ряда, что и minor); в
+                // sub-ветке minor делится пополам при неизменном major —
+                // там отношение удваивается по построению.
+                if zoom <= 1.5 {
+                    assert!(
+                        (mj / m - major / minor).abs() < 1e-4,
+                        "ratio {} ≠ {} при zoom {zoom}",
+                        mj / m,
+                        major / minor
+                    );
+                } else {
+                    assert_eq!(mj, major, "major в sub-ветке неизменен: {zoom}");
+                }
                 zoom += 0.01;
             }
         }
