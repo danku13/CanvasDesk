@@ -58,6 +58,11 @@ use crate::{preset_color, CardInstance, Vec2};
 pub const PAL_BUTTON: f32 = 30.0;
 /// Высота подписи под кнопкой группы.
 pub const PAL_CAPTION_H: f32 = 12.0;
+/// Кегль подписи под кнопкой группы — паритет отрисовке (overlays.rs,
+/// `Painter::label` для подписи группы). Единый источник для замера
+/// ширины кнопки и отрисовки (CR-015: раскладка и рисование — в одних
+/// единицах).
+pub const PAL_CAPTION_FONT: f32 = 10.0;
 /// Внутренний отступ бара (spacing-scale токен `SPACING_S`).
 pub const PAL_BAR_PAD: f32 = canvas_core::tokens::SPACING_S;
 /// Зазор между кнопками групп.
@@ -770,19 +775,45 @@ fn edge_groups(
 
 // --- Геометрия ---
 
+/// Горизонтальный запас подписи под кнопкой группы (сумма по обеим
+/// сторонам; подпись центрируется в кнопке — по 1 px на сторону).
+pub const PAL_CAPTION_PAD: f32 = 2.0;
+
 /// Ширина кнопки группы: минимум иконки, но НЕ УЖЕ подписи под ней —
 /// раньше «Раскладка/Действия/Ветвление» срезались слотом 30px
-/// (wasm-аудит 2026-09-25, скриншот 36_ctx_menu). Измерителя на входе нет
-/// (бар строится чистой геометрией в hit-тестах) — оценочная ширина
-/// 10px-подписи: ~0.55 em на глиф кириллицы (Noto) + 2px хвостовой запас.
-fn group_button_w(label: &str) -> f32 {
-    PAL_BUTTON.max(label.chars().count() as f32 * 5.5 + 2.0)
+/// (wasm-аудит 2026-09-25, скриншот 36_ctx_menu). Ширина подписи —
+/// ИЗМЕРЕННАЯ реальным шейпингом при фактическом кегле подписи
+/// ([`PAL_CAPTION_FONT`], CR-015: прежняя оценочная ширина
+/// `chars × 5.5 + 2.0` (~0.55 em на глиф) расходилась с реальными
+/// глифами Noto); замерщик и `FontSystem` — внешние, тот же пул
+/// шейпинга приложения (FR-094), что и у draw-путей.
+fn group_button_w(
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    label: &str,
+) -> f32 {
+    PAL_BUTTON.max(
+        m.width_of(
+            fs,
+            label,
+            canvas_render::text::SANS_FAMILY,
+            PAL_CAPTION_FONT,
+        ) + PAL_CAPTION_PAD,
+    )
 }
 
-/// Размер бара по числу групп: [ширина, высота].
-pub fn palette_bar_size(groups: &[PaletteGroup]) -> [f32; 2] {
+/// Размер бара по числу групп: [ширина, высота]. Ширины кнопок — по
+/// измеренным подписям (см. [`group_button_w`]).
+pub fn palette_bar_size(
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    groups: &[PaletteGroup],
+) -> [f32; 2] {
     let width = PAL_BAR_PAD * 2.0
-        + groups.iter().map(|g| group_button_w(&g.label)).sum::<f32>()
+        + groups
+            .iter()
+            .map(|g| group_button_w(m, fs, &g.label))
+            .sum::<f32>()
         + groups.len().saturating_sub(1) as f32 * PAL_GAP;
     let height = PAL_BAR_PAD * 2.0 + PAL_BUTTON + PAL_CAPTION_H;
     [width, height]
@@ -837,17 +868,19 @@ pub fn palette_origin(anchor: [f32; 2], bar: [f32; 2], viewport: [f32; 2]) -> [f
 /// `kit::list_rows` (однородный [`PAL_ROW_H`], зазор 0 — прежняя стопка
 /// дословно, инсет [`PAL_DROP_PAD`]).
 pub fn palette_layout(
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
     origin: [f32; 2],
     groups: &[PaletteGroup],
     viewport: [f32; 2],
 ) -> PaletteLayout {
-    let bar = palette_bar_size(groups);
+    let bar = palette_bar_size(m, fs, groups);
     let inset = margin_viewport(viewport);
     let mut bx = origin[0] + PAL_BAR_PAD;
     let layout_groups = groups
         .iter()
         .map(|group| {
-            let w = group_button_w(&group.label);
+            let w = group_button_w(m, fs, &group.label);
             let by = origin[1] + PAL_BAR_PAD;
             let button = [bx, by, w, PAL_BUTTON];
             let caption = [bx, by + PAL_BUTTON + 1.0];
@@ -1334,6 +1367,41 @@ mod tests {
     use super::*;
     use crate::{Canvas, Edge, Node};
 
+    /// CR-015: детерминированные замерщик/FontSystem для геометрии бара
+    /// (тот же пул шейпинга, что у приложения — FR-094).
+    ///
+    /// ⚠️ Возвращённый `MutexGuard` глобального пула нереентрантен: пока
+    /// он жив, НИКАКОЙ код этого потока не вправе снова звать
+    /// `measure_font_system()` (в т.ч. через `bar_size`/`measured_layout`)
+    /// — самодедлок. Держите guard только внутри ограниченного скоупа
+    /// замера или передавайте `&mut FontSystem` параметром (как делают
+    /// `palette_bar_size`/`palette_layout`).
+    fn measured() -> (
+        canvas_ui::measure::TextMeasurer,
+        std::sync::MutexGuard<'static, cosmic_text::FontSystem>,
+    ) {
+        (
+            canvas_ui::measure::TextMeasurer::new(),
+            canvas_render::text::measure_font_system(),
+        )
+    }
+
+    /// Замеренный размер бара (обёртка над [`palette_bar_size`]).
+    fn bar_size(groups: &[PaletteGroup]) -> [f32; 2] {
+        let (mut m, mut fs) = measured();
+        palette_bar_size(&mut m, &mut fs, groups)
+    }
+
+    /// Замеренный layout бара (обёртка над [`palette_layout`]).
+    fn measured_layout(
+        origin: [f32; 2],
+        groups: &[PaletteGroup],
+        viewport: [f32; 2],
+    ) -> PaletteLayout {
+        let (mut m, mut fs) = measured();
+        palette_layout(&mut m, &mut fs, origin, groups, viewport)
+    }
+
     fn text_scene() -> Canvas {
         let mut canvas = Canvas::default();
         canvas.nodes.push(Node::text("a", "a", 100.0, 100.0));
@@ -1361,8 +1429,8 @@ mod tests {
             Language::Ru,
         );
         let viewport = [1200.0, 800.0];
-        let origin = palette_origin([600.0, 300.0], palette_bar_size(&groups), viewport);
-        (canvas, palette_layout(origin, &groups, viewport))
+        let origin = palette_origin([600.0, 300.0], bar_size(&groups), viewport);
+        (canvas, measured_layout(origin, &groups, viewport))
     }
 
     /// Состав групп для text-ноды: Цвет, Раскладка, Действия, Ветвление —
@@ -1501,18 +1569,32 @@ mod tests {
                 }],
             },
         ];
-        let [w, h] = palette_bar_size(&groups);
-        let expected_w = PAL_BAR_PAD * 2.0 + PAL_BUTTON + (9.0 * 5.5 + 2.0) + PAL_GAP;
+        let [w, h] = bar_size(&groups);
+        // CR-015: ожидание — по ИЗМЕРЕННОЙ ширине подписи (кегль подписи),
+        // а не по символьной эвристике 9.0 × 5.5 + 2.0. Guard глобального
+        // пула шейпинга НЕ держим через measured_layout ниже: Mutex
+        // нереентрантен — второй `measure_font_system()` в том же потоке
+        // самодедлочится (урок этого теста: замер — в ограниченном скоупе).
+        let caption_w = {
+            let (mut m, mut fs) = measured();
+            m.width_of(
+                &mut fs,
+                "Раскладка",
+                canvas_render::text::SANS_FAMILY,
+                PAL_CAPTION_FONT,
+            )
+        };
+        let expected_w = PAL_BAR_PAD * 2.0 + PAL_BUTTON + (caption_w + PAL_CAPTION_PAD) + PAL_GAP;
         assert_eq!(w, expected_w, "бар шире за счёт длинной подписи");
         assert_eq!(h, PAL_BAR_PAD * 2.0 + PAL_BUTTON + PAL_CAPTION_H);
-        let lay = palette_layout(
+        let lay = measured_layout(
             palette_origin([400.0, 300.0], [w, h], [1280.0, 800.0]),
             &groups,
             [1280.0, 800.0],
         );
         assert_eq!(lay.groups[0].button[2], PAL_BUTTON, "«Цвет» — минимум");
         assert!(
-            lay.groups[1].button[2] >= 9.0 * 5.5 + 2.0,
+            lay.groups[1].button[2] >= caption_w + PAL_CAPTION_PAD,
             "кнопка «Раскладка» вмещает подпись"
         );
     }
@@ -1531,7 +1613,7 @@ mod tests {
                 current: false,
             }],
         }];
-        let [w, h] = palette_bar_size(&groups);
+        let [w, h] = bar_size(&groups);
         assert_eq!(
             w,
             PAL_BAR_PAD * 2.0 + PAL_BUTTON,
@@ -1575,8 +1657,8 @@ mod tests {
             Language::Ru,
         );
         let viewport = [1200.0, 800.0];
-        let origin = palette_origin([600.0, 300.0], palette_bar_size(&groups), viewport);
-        let lay = palette_layout(origin, &groups, viewport);
+        let origin = palette_origin([600.0, 300.0], bar_size(&groups), viewport);
+        let lay = measured_layout(origin, &groups, viewport);
         assert_eq!(lay.groups.len(), groups.len());
         // Кнопка 2-й группы правее 1-й на BUTTON + GAP
         assert!(
@@ -1778,8 +1860,8 @@ mod tests {
         );
         let viewport = [800.0, 400.0];
         // Бар у нижнего края
-        let origin = palette_origin([400.0, 390.0], palette_bar_size(&groups), viewport);
-        let lay = palette_layout(origin, &groups, viewport);
+        let origin = palette_origin([400.0, 390.0], bar_size(&groups), viewport);
+        let lay = measured_layout(origin, &groups, viewport);
         let drop_h = lay.groups[0].dropdown[3];
         assert!(
             lay.groups[0].dropdown[1] + drop_h <= viewport[1] - PAL_MARGIN + 0.01,

@@ -1489,10 +1489,16 @@ impl App {
             palette.accent,
             6.0,
         ));
-        // Каретка (мигающая полоса) — оценка ширины текста (0.62 кегля —
-        // синк whatif_ui::text_width); квад каретки — до текста (под ним,
-        // перекрытие с последним глифом — 1.5 px, не мешает чтению).
-        let caret_x = field[0] + 8.0 + edit.text.chars().count() as f32 * 12.0 * 0.62;
+        // Каретка (мигающая полоса) — ширина текста поля ИЗМЕРЕНА реальным
+        // шейпингом (CR-015: прежняя эвристика `chars × 12 × 0.62` давала
+        // caret не по глифам; замер — тем же кеглем, каким рисуется текст
+        // поля ниже, 12.0); квад каретки — до текста (под ним, перекрытие
+        // с последним глифом — 1.5 px, не мешает чтению).
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        let text_w = m.width_of(&mut fs, &edit.text, canvas_render::text::SANS_FAMILY, 12.0);
+        drop(fs);
+        let caret_x = field[0] + 8.0 + text_w;
         if (state.opened_at.elapsed().as_millis() / 530) % 2 == 0 {
             let caret = [
                 caret_x.min(field[0] + field[2] - 8.0),

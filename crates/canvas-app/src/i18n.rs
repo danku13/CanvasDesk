@@ -22,6 +22,9 @@ pub mod keys {
     // --- Модалка настроек (FR-039) ---
     pub const SETTINGS_TITLE: &str = "settings.title";
     pub const SETTINGS_HINT: &str = "settings.hint";
+    /// Индикатор продолжения описания строки настроек («ещё N»): строки
+    /// описания сверх лимита не теряются молча (дефект №15 аудита, W-f).
+    pub const SETTINGS_DESC_MORE: &str = "settings.desc.more";
     pub const TAB_GENERAL: &str = "settings.tab.general";
     pub const TAB_CANVAS: &str = "settings.tab.canvas";
     pub const TAB_EDGES: &str = "settings.tab.edges";
@@ -482,6 +485,9 @@ pub mod keys {
     pub const GALLERY_EMPTY_BODY: &str = "gallery.empty.body";
     pub const GALLERY_EMPTY_OPEN: &str = "gallery.empty.open";
     pub const GALLERY_EMPTY_DISMISS: &str = "gallery.empty.dismiss";
+    /// Индикатор продолжения описания empty-state («ещё N»): строки
+    /// описания сверх лимита не теряются молча (дефект №15 аудита, W-f).
+    pub const GALLERY_EMPTY_MORE: &str = "gallery.empty.more";
     pub const GALLERY_APPLIED: &str = "gallery.applied";
     pub const GALLERY_UNKNOWN: &str = "gallery.unknown";
     pub const HELP_SCHEMES: &str = "help.schemes";
@@ -787,6 +793,7 @@ const RU: &[(&str, &str)] = &[
     // --- Модалка настроек ---
     (keys::SETTINGS_TITLE, "Настройки"),
     (keys::SETTINGS_HINT, "Ctrl+, — открыть/закрыть"),
+    (keys::SETTINGS_DESC_MORE, "ещё {n}"),
     (keys::TAB_GENERAL, "Общие"),
     (keys::TAB_CANVAS, "Канвас"),
     (keys::TAB_DRAG, "Драг"),
@@ -1148,6 +1155,7 @@ const RU: &[(&str, &str)] = &[
     ),
     (keys::GALLERY_EMPTY_OPEN, "Открыть галерею"),
     (keys::GALLERY_EMPTY_DISMISS, "Пустой холст"),
+    (keys::GALLERY_EMPTY_MORE, "ещё {n}"),
     (
         keys::GALLERY_APPLIED,
         "Схема «{name}» добавлена — одно Ctrl+Z отменяет",
@@ -1697,6 +1705,7 @@ const EN: &[(&str, &str)] = &[
     // --- Settings modal ---
     (keys::SETTINGS_TITLE, "Settings"),
     (keys::SETTINGS_HINT, "Ctrl+, — open/close"),
+    (keys::SETTINGS_DESC_MORE, "{n} more"),
     (keys::TAB_GENERAL, "General"),
     (keys::TAB_CANVAS, "Canvas"),
     (keys::TAB_DRAG, "Drag"),
@@ -2052,6 +2061,7 @@ const EN: &[(&str, &str)] = &[
     ),
     (keys::GALLERY_EMPTY_OPEN, "Open gallery"),
     (keys::GALLERY_EMPTY_DISMISS, "Blank canvas"),
+    (keys::GALLERY_EMPTY_MORE, "{n} more"),
     (
         keys::GALLERY_APPLIED,
         "Scheme «{name}» added — one Ctrl+Z undoes it",

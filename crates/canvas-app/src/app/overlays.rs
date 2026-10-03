@@ -9,6 +9,58 @@
 
 use super::*;
 
+/// Дефект №15 аудита адаптива (закрыт W-f, 04.10.2026): перенос текста с
+/// индикатором продолжения. Строки сверх `max_lines` НЕ теряются молча —
+/// на последней показанной строке добавляется индикатор «ещё N» (i18n-фраза
+/// `more_key` с подставленным числом скрытых строк); если индикатор не
+/// влезает в `max_w`, строка усекается ellipsis'ом до бюджета «индикатор +
+/// пробел». Перенос — `TextMeasurer::wrap` (через `admin_ui::wrap_text`),
+/// семейство — screen-тексты рендера (SANS); замер — тот же пул шейпинга,
+/// что и отрисовка (FR-094), поэтому показанные строки совпадают с
+/// нарисованными (кегль и ширина слота — как у `OwnedScreenText`).
+#[allow(clippy::too_many_arguments)] // плоский контракт (замер + i18n + слот) — прецедент support.rs:728
+fn wrap_lines_with_more(
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    language: canvas_core::Language,
+    more_key: &'static str,
+    text: &str,
+    size: f32,
+    max_w: f32,
+    max_lines: usize,
+) -> Vec<String> {
+    let lines = crate::admin_ui::wrap_text(m, fs, text, max_w, size);
+    let extra = lines.len().saturating_sub(max_lines);
+    if extra == 0 {
+        return lines;
+    }
+    let more = i18n::trf(language, more_key, &[("n", &extra.to_string())]);
+    let suffix = format!(" {more}");
+    let mut shown: Vec<String> = lines.into_iter().take(max_lines).collect();
+    let Some(last) = shown.last_mut() else {
+        return shown;
+    };
+    let candidate = format!("{last}{suffix}");
+    if m.width_of(fs, &candidate, canvas_render::text::SANS_FAMILY, size) <= max_w {
+        *last = candidate;
+    } else {
+        let suffix_w = m.width_of(fs, &suffix, canvas_render::text::SANS_FAMILY, size);
+        let cut = m.ellipsis(
+            fs,
+            last,
+            canvas_render::text::SANS_FAMILY,
+            size,
+            (max_w - suffix_w).max(0.0),
+        );
+        *last = if cut.is_empty() {
+            more
+        } else {
+            format!("{cut}{suffix}")
+        };
+    }
+    shown
+}
+
 /// FR-CLIP: результат сборки `settings_overlay` — основная полоса
 /// (кнопки + модалка + строки) и отдельная полоса выпадающего меню
 /// (popup над модалкой, может выходить за её границы).
@@ -1835,16 +1887,26 @@ impl App {
         });
         // Фикс среза 2026-09-25 (wasm-аудит 01_idle): подзаголовок
         // «Готовые схемы со связями и расчётами: …» рвался кромкой
-        // карточки без переноса — теперь до 2 строк тем же кеглем.
+        // карточки без переноса — до 2 строк тем же кеглем. Дефект №15
+        // (закрыт W-f, 04.10.2026): строки сверх двух НЕ теряются молча —
+        // на последней показанной строке индикатор «ещё N» (i18n).
         {
             let body = self.tr(keys::GALLERY_EMPTY_BODY);
             let mut m = canvas_ui::measure::TextMeasurer::new();
             let mut fs = canvas_render::text::measure_font_system();
             let body_w = (card[2] - 40.0).max(10.0);
-            for (line_idx, line) in crate::admin_ui::wrap_text(&mut m, &mut fs, body, body_w, 12.0)
-                .into_iter()
-                .take(2)
-                .enumerate()
+            for (line_idx, line) in wrap_lines_with_more(
+                &mut m,
+                &mut fs,
+                self.settings.language,
+                keys::GALLERY_EMPTY_MORE,
+                body,
+                12.0,
+                body_w,
+                2,
+            )
+            .into_iter()
+            .enumerate()
             {
                 texts.push(OwnedScreenText {
                     text: line,
@@ -2858,6 +2920,11 @@ impl App {
         let geo =
             template_ui::wheel_geometry(menu.screen, vw, vh, categories.len(), templates.len());
         let hovered = geo.hit(self.cursor);
+        // CR-015: перенос подписи шаблона — по измеренной ширине слота
+        // ([`template_ui::WHEEL_TPL_TEXT_W`]) при кегле подписи; замер —
+        // тот же пул шейпинга, что у screen-текстов (FR-094)
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
         // Затемнение фона — диском-полным-кругом: первый инстанс секторного
         // прохода, под ним ничего рисовать не нужно; радиус — до дальнего
         // угла viewport (кламп центра гарантирует покрытие окна)
@@ -2894,8 +2961,10 @@ impl App {
                 fill,
             });
             // Иконка + подпись внутри сектора (как circular-menu: вертикально,
-            // иконка выше текста; подпись всегда рисуем — минимальная дуга
-            // сектора 60 px вмещает две строки 11px по ~10 символов)
+            // иконка выше текста; подпись всегда рисуем — слот
+            // template_ui::WHEEL_TPL_TEXT_W × 2 строки кегля
+            // template_ui::WHEEL_TPL_FONT; перенос — split_two_lines по
+            // измеренной ширине слота — CR-015)
             let [px, py] =
                 template_ui::sector_point(geo.center, sector.mid_angle(), sector.mid_radius());
             match sector.hit {
@@ -2919,14 +2988,16 @@ impl App {
                         icon_tint,
                     ));
                     let (line1, line2) = split_two_lines(
+                        &mut m,
+                        &mut fs,
                         manifest.display_name(self.settings.language),
-                        template_ui::WHEEL_TPL_TEXT_CHARS,
+                        template_ui::WHEEL_TPL_TEXT_W,
                     );
                     let push_line = |text: String, dy: f32| OwnedScreenText {
                         text,
-                        origin: [px - 32.0, py + dy],
-                        width: 64.0,
-                        font_size: 11.0,
+                        origin: [px - template_ui::WHEEL_TPL_TEXT_W / 2.0, py + dy],
+                        width: template_ui::WHEEL_TPL_TEXT_W,
+                        font_size: template_ui::WHEEL_TPL_FONT,
                         color: palette.title,
                         align: TextAlign::Center,
                     };
@@ -3681,7 +3752,8 @@ impl App {
                     PaintAlign::Center,
                 );
             }
-            // Подпись группы под кнопкой
+            // Подпись группы под кнопкой (кегль — единый источник с замером
+            // ширины кнопки: palette::PAL_CAPTION_FONT, CR-015)
             d.label(
                 canvas_ui::geometry::UiRect::new(
                     lay.groups[i].caption[0],
@@ -3691,7 +3763,7 @@ impl App {
                 ),
                 &group.label,
                 color_to_rgba(palette.body),
-                10.0,
+                PAL_CAPTION_FONT,
                 PaintAlign::Center,
             );
             // Открытая колонка (hover): фон + строки
@@ -4739,19 +4811,27 @@ impl App {
             });
             // Фикс среза описаний 2026-09-25 (wasm-аудит 15/15b/04): текст
             // «В каком углу экрана прижата лета|» рвался границей текст-арии
-            // у dropdown'а — теперь описание переносится (до 2 строк, тем же
-            // кеглем; высота строки MODAL_ROW_HEIGHT 52). Третья строка не
-            // влезает в строку настройки — хвост обрезается как прежде.
+            // у dropdown'а — описание переносится (до 2 строк, тем же
+            // кеглем; высота строки MODAL_ROW_HEIGHT 52 — третья строка не
+            // влезает). Дефект №15 (закрыт W-f, 04.10.2026): хвост больше
+            // не теряется молча — на второй строке индикатор «ещё N» (i18n).
             {
                 let desc = self.tr(row_desc_key(*row));
                 let mut m = canvas_ui::measure::TextMeasurer::new();
                 let mut fs = canvas_render::text::measure_font_system();
                 let desc_w = (rect[2] - MODAL_ROW_LABEL_W).max(10.0);
-                for (line_idx, line) in
-                    crate::admin_ui::wrap_text(&mut m, &mut fs, desc, desc_w, 11.0)
-                        .into_iter()
-                        .take(2)
-                        .enumerate()
+                for (line_idx, line) in wrap_lines_with_more(
+                    &mut m,
+                    &mut fs,
+                    self.settings.language,
+                    keys::SETTINGS_DESC_MORE,
+                    desc,
+                    11.0,
+                    desc_w,
+                    2,
+                )
+                .into_iter()
+                .enumerate()
                 {
                     texts.push(OwnedScreenText {
                         text: line,
