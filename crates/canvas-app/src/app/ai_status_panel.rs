@@ -531,7 +531,9 @@ mod tests {
     #[test]
     fn panel_size_matches_prototype() {
         assert_eq!(AI_STATUS_W, 302.0);
-        assert!(AI_STATUS_H >= 90.0 && AI_STATUS_H <= 100.0);
+        // const-блок: константный диапазон — ловится на компиляции
+        // (clippy::assertions_on_constants, CI 2026-10-04).
+        const { assert!(AI_STATUS_H >= 90.0 && AI_STATUS_H <= 100.0) }
     }
 
     /// Зазор над миникартой — 8px (по прототипу F-7.9).
