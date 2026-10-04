@@ -1,0 +1,844 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CanvasDesk — контраст: 5 вариаций</title><style>
+:root{color-scheme:dark}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Noto Sans Display','Segoe UI',system-ui,sans-serif;background:#0f1114;color:#e8eaf0;padding:32px 40px;max-width:1360px;margin:0 auto}
+h1{font-size:26px;margin-bottom:6px}
+.lead{color:#a8b0bf;font-size:14px;line-height:1.55;max-width:900px;margin-bottom:8px}
+.lead b{color:#e8eaf0}
+.mono{font-family:'Noto Sans Mono',ui-monospace,Consolas,monospace}
+.scale{display:flex;gap:14px;flex-wrap:wrap;margin:22px 0 8px}
+.scale-card{text-decoration:none;display:block;width:200px}
+.sc-node{border:1.5px solid;border-radius:10px;padding:10px 12px;height:96px}
+.sc-aa{font-size:30px;font-weight:700}
+.sc-line{font-size:12px;margin-top:3px}
+.sc-cap{font-size:12px;color:#a8b0bf;margin-top:6px;line-height:1.9}
+section{margin-top:34px;padding-top:18px;border-top:1px solid #23262e}
+h2{font-size:19px;margin-bottom:4px}
+.rec{font-size:12px;background:#1f8f80;color:#fff;border-radius:6px;padding:2px 8px;vertical-align:2px;margin-left:6px}
+.sec-desc{color:#a8b0bf;font-size:13px;line-height:1.55;max-width:980px;margin-bottom:14px}
+.cols{display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+.mock{flex:1 1 560px;min-width:520px}
+.tbl{flex:1 1 480px;min-width:440px}
+.canvas{position:relative;border-radius:14px;padding:26px;display:flex;align-items:center;gap:0;min-height:280px}
+.node{width:290px;border:1.5px solid;border-radius:11px;padding:12px 14px;box-shadow:0 8px 22px rgba(0,0,0,.35);z-index:1}
+.n-title{font-size:13.5px;font-weight:600;margin-bottom:5px}
+.n-body{font-size:13px;margin-bottom:4px;line-height:1.35}
+.n-quote{font-size:12.5px;border-left:2px solid currentColor;padding-left:8px;margin:5px 0;opacity:.95}
+.n-link{text-decoration:underline}
+.chips{display:flex;gap:6px;margin:9px 0 4px}
+.chip{font-size:9.5px;font-weight:700;letter-spacing:.4px;border-radius:5px;padding:2.5px 7px}
+.strip{display:flex;justify-content:space-between;align-items:baseline;border-top:1px solid;margin-top:9px;padding-top:7px}
+.s-label{font-size:10px;letter-spacing:.8px}
+.s-val{font-family:'Noto Sans Mono',ui-monospace,monospace;font-size:13.5px;font-weight:600}
+.code{font-family:'Noto Sans Mono',ui-monospace,monospace;font-size:12.5px;border-radius:7px;padding:8px 10px;margin:6px 0}
+.edge-wrap{position:relative;flex:1;min-width:170px}
+.edge-label{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:10.5px;border:1px solid rgba(128,128,128,.35);border-radius:6px;padding:2px 7px;white-space:nowrap}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;color:#8b93a3;font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;padding:6px 8px;border-bottom:1px solid #23262e}
+td{padding:6.5px 8px;border-bottom:1px solid #1b1e25;vertical-align:middle}
+.dim{color:#8b93a3;font-size:11px;line-height:1.5}
+.b{display:inline-block;font-size:10.5px;font-weight:700;border-radius:5px;padding:2px 7px;white-space:nowrap}
+.b-ok{background:#123c2c;color:#5ce0a9}
+.b-mid{background:#3d3315;color:#eec96a}
+.b-bad{background:#46191c;color:#ff8d8d}
+.b-info{background:#23262e;color:#9aa3b5}
+footer{margin-top:38px;border-top:1px solid #23262e;padding-top:16px;color:#a8b0bf;font-size:13px;line-height:1.65;max-width:1000px}
+footer b{color:#e8eaf0}
+code{background:#1a1d24;border:1px solid #262a33;border-radius:5px;padding:1px 6px;font-family:'Noto Sans Mono',ui-monospace,monospace;font-size:12px;color:#bcd3f5}
+</style></head><body><h1>CanvasDesk · контраст нод и шрифта — 5 вариаций для выбора</h1>
+<p class="lead">Аудит дефолтной тёмной темы показал: <b>15 из 18 проверенных пар «фон/текст» ниже порогов</b> best practices —
+худшие: операторы формул <span class="mono">#666a7c</span> на ноде <b>2.81:1</b> (норма AA 4.5:1) и нода, почти сливающаяся
+с канвасом (рамка <b>1.30:1</b> при норме 3:1 для не-текста, SC 1.4.11). Приглушённые тексты проходят WCAG, но перцептивно
+слабы: <b>APCA Lc 44–57</b> при ориентире 60–90 — отсюда ощущение «шрифту не хватает контраста».
+Ниже — 5 вариаций «фон + шрифт» на реальной анатомии нод; метрики каждой пары — справа. Текст нод ≈13 px →
+WCAG AA 4.5:1 / AAA 7:1; APCA Lc: 90 флюентно, 75 минимум тела, 60 приглушённые/крупные.</p>
+<div class="scale"><a class="scale-card" href="#base">
+      <div class="sc-node" style="background:#26262c;border-color:#30323c">
+        <div class="sc-aa" style="color:#e6e6e6">Aa</div>
+        <div class="sc-line" style="color:#d4d4d4">Тело ноды · 13 px</div>
+        <div class="sc-line" style="color:#9a9aa2">цитата <span style="color:#666a7c">=</span> оператор</div>
+      </div>
+      <div class="sc-cap">Baseline (текущая тема)<br>
+        <span class="b b-bad">мин. WCAG 2.81</span>
+        <span class="b b-bad">мин. Lc 22</span></div>
+    </a><a class="scale-card" href="#v1">
+      <div class="sc-node" style="background:#26262c;border-color:#6b6d74">
+        <div class="sc-aa" style="color:#e9e9e9">Aa</div>
+        <div class="sc-line" style="color:#d4d4d4">Тело ноды · 13 px</div>
+        <div class="sc-line" style="color:#9a9aa2">цитата <span style="color:#8c8f9d">=</span> оператор</div>
+      </div>
+      <div class="sc-cap">Точечный AA-фикс<br>
+        <span class="b b-ok">мин. WCAG 4.68</span>
+        <span class="b b-bad">мин. Lc 39</span></div>
+    </a><a class="scale-card" href="#v2">
+      <div class="sc-node" style="background:#2b2e38;border-color:#676c7a">
+        <div class="sc-aa" style="color:#ebebeb">Aa</div>
+        <div class="sc-line" style="color:#dbdbdb">Тело ноды · 13 px</div>
+        <div class="sc-line" style="color:#bbbbc0">цитата <span style="color:#b9bbc3">=</span> оператор</div>
+      </div>
+      <div class="sc-cap">Комфорт<br>
+        <span class="b b-ok">мин. WCAG 7.01</span>
+        <span class="b b-ok">мин. Lc 60</span></div>
+    </a><a class="scale-card" href="#v3">
+      <div class="sc-node" style="background:#31343f;border-color:#6a7184">
+        <div class="sc-aa" style="color:#eeeeee">Aa</div>
+        <div class="sc-line" style="color:#eeeeee">Тело ноды · 13 px</div>
+        <div class="sc-line" style="color:#d6d6d9">цитата <span style="color:#d6d6db">=</span> оператор</div>
+      </div>
+      <div class="sc-cap">Максимум<br>
+        <span class="b b-ok">мин. WCAG 7.31</span>
+        <span class="b b-ok">мин. Lc 71</span></div>
+    </a><a class="scale-card" href="#v4">
+      <div class="sc-node" style="background:#2a2a2a;border-color:#6c6c6c">
+        <div class="sc-aa" style="color:#efeeeb">Aa</div>
+        <div class="sc-line" style="color:#e0dedb">Тело ноды · 13 px</div>
+        <div class="sc-line" style="color:#bcb9b4">цитата <span style="color:#bcb9b5">=</span> оператор</div>
+      </div>
+      <div class="sc-cap">Тёплый графит<br>
+        <span class="b b-ok">мин. WCAG 7.23</span>
+        <span class="b b-ok">мин. Lc 60</span></div>
+    </a><a class="scale-card" href="#v5">
+      <div class="sc-node" style="background:#ffffff;border-color:#818795">
+        <div class="sc-aa" style="color:#17181c">Aa</div>
+        <div class="sc-line" style="color:#26282e">Тело ноды · 13 px</div>
+        <div class="sc-line" style="color:#535862">цитата <span style="color:#535862">=</span> оператор</div>
+      </div>
+      <div class="sc-cap">Светлая (контроль)<br>
+        <span class="b b-ok">мин. WCAG 7.14</span>
+        <span class="b b-ok">мин. Lc 62</span></div>
+    </a></div>
+<p class="lead" style="font-size:12.5px;margin-top:2px">Шкала: слева направо — от «как есть» к максимуму. Зелёный бейдж = порог выдержен, жёлтый = погранично, красный = ниже нормы.</p>
+    <section id="base">
+      <h2>V0 Baseline (текущая тема)</h2>
+      <p class="sec-desc">как есть — точка отсчёта. Операторы формул ниже AA, рамка ноды и заливка почти не видны на канвасе — главный источник ощущения слабого контраста.</p>
+      <div class="cols">
+        <div class="mock">
+    <div class="canvas" style="background:#1e1e22;
+         background-image:linear-gradient(#242429 1px,transparent 1px),linear-gradient(90deg,#242429 1px,transparent 1px),linear-gradient(#2b2b30 1px,transparent 1px),linear-gradient(90deg,#2b2b30 1px,transparent 1px);
+         background-size:12px 12px,12px 12px,60px 60px,60px 60px">
+      
+    <div class="node" style="background:#26262c;border-color:#30323c">
+      <div class="n-title" style="color:#e6e6e6">Юнит-экономика подписки</div>
+      <div class="n-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="n-quote" style="color:#9a9aa2">&gt; узкое место — онбординг</div>
+      <div class="n-body" style="color:#d4d4d4">итого <span style="color:#666a7c">=</span> <span style="color:#c792ea">vm</span> <span style="color:#666a7c">+</span> <span style="color:#c792ea">db</span> · <a class="n-link" style="color:#6cb6ff">дашборд метрик</a></div>
+      <div class="chips">
+        <span class="chip" style="background:#4da3ff;color:#14161c">РАСЧЁТ</span>
+        <span class="chip" style="background:#a78bfa;color:#14161c">ЗАМЕТКА</span>
+        <span class="chip" style="background:#d9a13c;color:#14161c">ФАЙЛ</span>
+      </div>
+      <div class="strip" style="border-color:#30323c">
+        <span class="s-label" style="color:#9aaabf">ИТОГ</span>
+        <span class="s-val" style="color:#31b8a6">Σ 240 000 ₽</span>
+      </div>
+    </div>
+      <div class="edge-wrap">
+        <svg width="100%" height="40" viewBox="0 0 220 40" preserveAspectRatio="none">
+          <line x1="0" y1="20" x2="220" y2="20" stroke="#8598ad" stroke-width="2"/>
+          <polygon points="220,20 210,15 210,25" fill="#8598ad"/>
+        </svg>
+        <span class="edge-label" style="background:#1c1c21;color:#cfd8e3">value ↓</span>
+      </div>
+      
+    <div class="node" style="background:#26262c;border-color:#30323c">
+      <div class="n-title" style="color:#e6e6e6">Проверка гипотезы</div>
+      <div class="code" style="background:#383b45;color:#a5d6ff">let x = 42;</div>
+      <div class="n-body" style="color:#d4d4d4">конверсия ≥ 3.2% <span style="color:#9aaabf">· 14 дн.</span></div>
+      <div class="strip" style="border-color:#30323c">
+        <span class="s-label" style="color:#9aaabf">ИТОГ</span>
+        <span class="s-val" style="color:#31b8a6">Σ 42</span>
+      </div>
+    </div>
+    </div></div>
+        <div class="tbl"><table><thead><tr><th>Пара</th><th>hex fg / bg</th><th>WCAG 2.1</th><th>APCA Lc</th></tr></thead><tbody><tr>
+          <td>Заголовок ноды</td>
+          <td class="mono dim">#e6e6e6<br>#26262c</td>
+          <td><span class="b b-ok">AAA 12.05</span></td>
+          <td><span class="b b-mid">Lc 88</span></td>
+        </tr><tr>
+          <td>Тело ноды</td>
+          <td class="mono dim">#d4d4d4<br>#26262c</td>
+          <td><span class="b b-ok">AAA 10.15</span></td>
+          <td><span class="b b-mid">Lc 77</span></td>
+        </tr><tr>
+          <td>Цитата</td>
+          <td class="mono dim">#9a9aa2<br>#26262c</td>
+          <td><span class="b b-mid">AA 5.39</span></td>
+          <td><span class="b b-bad">Lc 45</span></td>
+        </tr><tr>
+          <td>Иконки / вторичный</td>
+          <td class="mono dim">#9aaabf<br>#26262c</td>
+          <td><span class="b b-mid">AA 6.36</span></td>
+          <td><span class="b b-bad">Lc 52</span></td>
+        </tr><tr>
+          <td>Ссылка</td>
+          <td class="mono dim">#6cb6ff<br>#26262c</td>
+          <td><span class="b b-ok">AAA 7.00</span></td>
+          <td><span class="b b-bad">Lc 57</span></td>
+        </tr><tr>
+          <td>Функция в формуле</td>
+          <td class="mono dim">#c792ea<br>#26262c</td>
+          <td><span class="b b-mid">AA 6.25</span></td>
+          <td><span class="b b-bad">Lc 52</span></td>
+        </tr><tr>
+          <td>Оператор в формуле</td>
+          <td class="mono dim">#666a7c<br>#26262c</td>
+          <td><span class="b b-bad">2.81</span></td>
+          <td><span class="b b-bad">Lc 22</span></td>
+        </tr><tr>
+          <td>Значение «ИТОГ»</td>
+          <td class="mono dim">#31b8a6<br>#26262c</td>
+          <td><span class="b b-mid">AA 6.12</span></td>
+          <td><span class="b b-bad">Lc 51</span></td>
+        </tr><tr>
+          <td>Код на подложке</td>
+          <td class="mono dim">#a5d6ff<br>#383b45</td>
+          <td><span class="b b-ok">AAA 7.27</span></td>
+          <td><span class="b b-mid">Lc 70</span></td>
+        </tr><tr>
+          <td>Лейбл ребра</td>
+          <td class="mono dim">#cfd8e3<br>#1c1c21</td>
+          <td><span class="b b-ok">AAA 11.79</span></td>
+          <td><span class="b b-mid">Lc 81</span></td>
+        </tr><tr>
+          <td>Чип «РАСЧЁТ»</td>
+          <td class="mono dim">#14161c<br>#4da3ff</td>
+          <td><span class="b b-ok">AA 6.89</span></td>
+          <td><span class="b b-mid">Lc 52</span></td>
+        </tr><tr>
+          <td>Чип «ЗАМЕТКА»</td>
+          <td class="mono dim">#14161c<br>#a78bfa</td>
+          <td><span class="b b-ok">AA 6.64</span></td>
+          <td><span class="b b-mid">Lc 50</span></td>
+        </tr><tr>
+          <td>Чип «ФАЙЛ»</td>
+          <td class="mono dim">#14161c<br>#d9a13c</td>
+          <td><span class="b b-ok">AA 7.85</span></td>
+          <td><span class="b b-mid">Lc 58</span></td>
+        </tr><tr>
+          <td>Рамка ноды → канвас (не-текст)</td>
+          <td class="mono dim">#30323c<br>#1e1e22</td>
+          <td><span class="b b-bad">1.30:1</span></td>
+          <td><span class="b b-mid">Lc 0</span></td>
+        </tr><tr>
+          <td>Заливка ноды → канвас (справ.)</td>
+          <td class="mono dim">#26262c<br>#1e1e22</td>
+          <td><span class="b b-info">1.10:1</span></td>
+          <td><span class="b b-info">Lc 0</span></td>
+        </tr></tbody></table></div>
+      </div>
+    </section>
+    <section id="v1">
+      <h2>V1 Точечный AA-фикс</h2>
+      <p class="sec-desc">минимум изменений: чиним только WCAG-провалы. Изменения минимальны: подняты только операторы формул (4.5:1) и рамка (3:1). Перцептивная слабость приглушённых текстов сохраняется (жёлтые Lc).</p>
+      <div class="cols">
+        <div class="mock">
+    <div class="canvas" style="background:#1e1e22;
+         background-image:linear-gradient(#242429 1px,transparent 1px),linear-gradient(90deg,#242429 1px,transparent 1px),linear-gradient(#2b2b30 1px,transparent 1px),linear-gradient(90deg,#2b2b30 1px,transparent 1px);
+         background-size:12px 12px,12px 12px,60px 60px,60px 60px">
+      
+    <div class="node" style="background:#26262c;border-color:#6b6d74">
+      <div class="n-title" style="color:#e9e9e9">Юнит-экономика подписки</div>
+      <div class="n-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="n-quote" style="color:#9a9aa2">&gt; узкое место — онбординг</div>
+      <div class="n-body" style="color:#d4d4d4">итого <span style="color:#8c8f9d">=</span> <span style="color:#c792ea">vm</span> <span style="color:#8c8f9d">+</span> <span style="color:#c792ea">db</span> · <a class="n-link" style="color:#6cb6ff">дашборд метрик</a></div>
+      <div class="chips">
+        <span class="chip" style="background:#4da3ff;color:#14161c">РАСЧЁТ</span>
+        <span class="chip" style="background:#a78bfa;color:#14161c">ЗАМЕТКА</span>
+        <span class="chip" style="background:#d9a13c;color:#14161c">ФАЙЛ</span>
+      </div>
+      <div class="strip" style="border-color:#6b6d74">
+        <span class="s-label" style="color:#9aaabf">ИТОГ</span>
+        <span class="s-val" style="color:#31b8a6">Σ 240 000 ₽</span>
+      </div>
+    </div>
+      <div class="edge-wrap">
+        <svg width="100%" height="40" viewBox="0 0 220 40" preserveAspectRatio="none">
+          <line x1="0" y1="20" x2="220" y2="20" stroke="#8598ad" stroke-width="2"/>
+          <polygon points="220,20 210,15 210,25" fill="#8598ad"/>
+        </svg>
+        <span class="edge-label" style="background:#1c1c21;color:#cfd8e3">value ↓</span>
+      </div>
+      
+    <div class="node" style="background:#26262c;border-color:#6b6d74">
+      <div class="n-title" style="color:#e9e9e9">Проверка гипотезы</div>
+      <div class="code" style="background:#383b45;color:#a5d6ff">let x = 42;</div>
+      <div class="n-body" style="color:#d4d4d4">конверсия ≥ 3.2% <span style="color:#9aaabf">· 14 дн.</span></div>
+      <div class="strip" style="border-color:#6b6d74">
+        <span class="s-label" style="color:#9aaabf">ИТОГ</span>
+        <span class="s-val" style="color:#31b8a6">Σ 42</span>
+      </div>
+    </div>
+    </div></div>
+        <div class="tbl"><table><thead><tr><th>Пара</th><th>hex fg / bg</th><th>WCAG 2.1</th><th>APCA Lc</th></tr></thead><tbody><tr>
+          <td>Заголовок ноды</td>
+          <td class="mono dim">#e9e9e9<br>#26262c</td>
+          <td><span class="b b-ok">AAA 12.39</span></td>
+          <td><span class="b b-ok">Lc 90</span></td>
+        </tr><tr>
+          <td>Тело ноды</td>
+          <td class="mono dim">#d4d4d4<br>#26262c</td>
+          <td><span class="b b-ok">AAA 10.15</span></td>
+          <td><span class="b b-mid">Lc 77</span></td>
+        </tr><tr>
+          <td>Цитата</td>
+          <td class="mono dim">#9a9aa2<br>#26262c</td>
+          <td><span class="b b-mid">AA 5.39</span></td>
+          <td><span class="b b-bad">Lc 45</span></td>
+        </tr><tr>
+          <td>Иконки / вторичный</td>
+          <td class="mono dim">#9aaabf<br>#26262c</td>
+          <td><span class="b b-mid">AA 6.36</span></td>
+          <td><span class="b b-bad">Lc 52</span></td>
+        </tr><tr>
+          <td>Ссылка</td>
+          <td class="mono dim">#6cb6ff<br>#26262c</td>
+          <td><span class="b b-ok">AAA 7.00</span></td>
+          <td><span class="b b-bad">Lc 57</span></td>
+        </tr><tr>
+          <td>Функция в формуле</td>
+          <td class="mono dim">#c792ea<br>#26262c</td>
+          <td><span class="b b-mid">AA 6.25</span></td>
+          <td><span class="b b-bad">Lc 52</span></td>
+        </tr><tr>
+          <td>Оператор в формуле</td>
+          <td class="mono dim">#8c8f9d<br>#26262c</td>
+          <td><span class="b b-mid">AA 4.68</span></td>
+          <td><span class="b b-bad">Lc 39</span></td>
+        </tr><tr>
+          <td>Значение «ИТОГ»</td>
+          <td class="mono dim">#31b8a6<br>#26262c</td>
+          <td><span class="b b-mid">AA 6.12</span></td>
+          <td><span class="b b-bad">Lc 51</span></td>
+        </tr><tr>
+          <td>Код на подложке</td>
+          <td class="mono dim">#a5d6ff<br>#383b45</td>
+          <td><span class="b b-ok">AAA 7.27</span></td>
+          <td><span class="b b-mid">Lc 70</span></td>
+        </tr><tr>
+          <td>Лейбл ребра</td>
+          <td class="mono dim">#cfd8e3<br>#1c1c21</td>
+          <td><span class="b b-ok">AAA 11.79</span></td>
+          <td><span class="b b-mid">Lc 81</span></td>
+        </tr><tr>
+          <td>Чип «РАСЧЁТ»</td>
+          <td class="mono dim">#14161c<br>#4da3ff</td>
+          <td><span class="b b-ok">AA 6.89</span></td>
+          <td><span class="b b-mid">Lc 52</span></td>
+        </tr><tr>
+          <td>Чип «ЗАМЕТКА»</td>
+          <td class="mono dim">#14161c<br>#a78bfa</td>
+          <td><span class="b b-ok">AA 6.64</span></td>
+          <td><span class="b b-mid">Lc 50</span></td>
+        </tr><tr>
+          <td>Чип «ФАЙЛ»</td>
+          <td class="mono dim">#14161c<br>#d9a13c</td>
+          <td><span class="b b-ok">AA 7.85</span></td>
+          <td><span class="b b-mid">Lc 58</span></td>
+        </tr><tr>
+          <td>Рамка ноды → канвас (не-текст)</td>
+          <td class="mono dim">#6b6d74<br>#1e1e22</td>
+          <td><span class="b b-ok">3.22:1</span></td>
+          <td><span class="b b-mid">Lc 24</span></td>
+        </tr><tr>
+          <td>Заливка ноды → канвас (справ.)</td>
+          <td class="mono dim">#26262c<br>#1e1e22</td>
+          <td><span class="b b-info">1.10:1</span></td>
+          <td><span class="b b-info">Lc 0</span></td>
+        </tr></tbody></table></div>
+      </div>
+    </section>
+    <section id="v2">
+      <h2>V2 Комфорт <span class="rec">★ рекомендую</span></h2>
+      <p class="sec-desc">РЕКОМЕНДУЕМЫЙ: AA везде + перцептивный запас (APCA 60–90). Оптимум по лучшим практикам: весь текст ≥ AA, приглушённые и цветные ≥ Lc 60, тело ≥ Lc 80, заголовок ≥ Lc 90. Внешний вид остаётся «тем же CanvasDesk».</p>
+      <div class="cols">
+        <div class="mock">
+    <div class="canvas" style="background:#1d1f26;
+         background-image:linear-gradient(#262933 1px,transparent 1px),linear-gradient(90deg,#262933 1px,transparent 1px),linear-gradient(#31343f 1px,transparent 1px),linear-gradient(90deg,#31343f 1px,transparent 1px);
+         background-size:12px 12px,12px 12px,60px 60px,60px 60px">
+      
+    <div class="node" style="background:#2b2e38;border-color:#676c7a">
+      <div class="n-title" style="color:#ebebeb">Юнит-экономика подписки</div>
+      <div class="n-body" style="color:#dbdbdb">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="n-quote" style="color:#bbbbc0">&gt; узкое место — онбординг</div>
+      <div class="n-body" style="color:#dbdbdb">итого <span style="color:#b9bbc3">=</span> <span style="color:#d4acef">vm</span> <span style="color:#b9bbc3">+</span> <span style="color:#d4acef">db</span> · <a class="n-link" style="color:#80c0ff">дашборд метрик</a></div>
+      <div class="chips">
+        <span class="chip" style="background:#71b6ff;color:#14161c">РАСЧЁТ</span>
+        <span class="chip" style="background:#bba5fb;color:#14161c">ЗАМЕТКА</span>
+        <span class="chip" style="background:#dca84b;color:#14161c">ФАЙЛ</span>
+      </div>
+      <div class="strip" style="border-color:#676c7a">
+        <span class="s-label" style="color:#b0bccd">ИТОГ</span>
+        <span class="s-val" style="color:#68cbbe">Σ 240 000 ₽</span>
+      </div>
+    </div>
+      <div class="edge-wrap">
+        <svg width="100%" height="40" viewBox="0 0 220 40" preserveAspectRatio="none">
+          <line x1="0" y1="20" x2="220" y2="20" stroke="#8598ad" stroke-width="2"/>
+          <polygon points="220,20 210,15 210,25" fill="#8598ad"/>
+        </svg>
+        <span class="edge-label" style="background:#20222b;color:#d1d9e4">value ↓</span>
+      </div>
+      
+    <div class="node" style="background:#2b2e38;border-color:#676c7a">
+      <div class="n-title" style="color:#ebebeb">Проверка гипотезы</div>
+      <div class="code" style="background:#3b3f4c;color:#bce0ff">let x = 42;</div>
+      <div class="n-body" style="color:#dbdbdb">конверсия ≥ 3.2% <span style="color:#b0bccd">· 14 дн.</span></div>
+      <div class="strip" style="border-color:#676c7a">
+        <span class="s-label" style="color:#b0bccd">ИТОГ</span>
+        <span class="s-val" style="color:#68cbbe">Σ 42</span>
+      </div>
+    </div>
+    </div></div>
+        <div class="tbl"><table><thead><tr><th>Пара</th><th>hex fg / bg</th><th>WCAG 2.1</th><th>APCA Lc</th></tr></thead><tbody><tr>
+          <td>Заголовок ноды</td>
+          <td class="mono dim">#ebebeb<br>#2b2e38</td>
+          <td><span class="b b-ok">AAA 11.36</span></td>
+          <td><span class="b b-ok">Lc 90</span></td>
+        </tr><tr>
+          <td>Тело ноды</td>
+          <td class="mono dim">#dbdbdb<br>#2b2e38</td>
+          <td><span class="b b-ok">AAA 9.78</span></td>
+          <td><span class="b b-mid">Lc 80</span></td>
+        </tr><tr>
+          <td>Цитата</td>
+          <td class="mono dim">#bbbbc0<br>#2b2e38</td>
+          <td><span class="b b-ok">AAA 7.08</span></td>
+          <td><span class="b b-mid">Lc 61</span></td>
+        </tr><tr>
+          <td>Иконки / вторичный</td>
+          <td class="mono dim">#b0bccd<br>#2b2e38</td>
+          <td><span class="b b-ok">AAA 7.04</span></td>
+          <td><span class="b b-mid">Lc 61</span></td>
+        </tr><tr>
+          <td>Ссылка</td>
+          <td class="mono dim">#80c0ff<br>#2b2e38</td>
+          <td><span class="b b-ok">AAA 7.03</span></td>
+          <td><span class="b b-mid">Lc 61</span></td>
+        </tr><tr>
+          <td>Функция в формуле</td>
+          <td class="mono dim">#d4acef<br>#2b2e38</td>
+          <td><span class="b b-ok">AAA 7.06</span></td>
+          <td><span class="b b-mid">Lc 61</span></td>
+        </tr><tr>
+          <td>Оператор в формуле</td>
+          <td class="mono dim">#b9bbc3<br>#2b2e38</td>
+          <td><span class="b b-ok">AAA 7.07</span></td>
+          <td><span class="b b-mid">Lc 61</span></td>
+        </tr><tr>
+          <td>Значение «ИТОГ»</td>
+          <td class="mono dim">#68cbbe<br>#2b2e38</td>
+          <td><span class="b b-ok">AAA 7.01</span></td>
+          <td><span class="b b-mid">Lc 61</span></td>
+        </tr><tr>
+          <td>Код на подложке</td>
+          <td class="mono dim">#bce0ff<br>#3b3f4c</td>
+          <td><span class="b b-ok">AAA 7.62</span></td>
+          <td><span class="b b-mid">Lc 76</span></td>
+        </tr><tr>
+          <td>Лейбл ребра</td>
+          <td class="mono dim">#d1d9e4<br>#20222b</td>
+          <td><span class="b b-ok">AAA 11.14</span></td>
+          <td><span class="b b-mid">Lc 81</span></td>
+        </tr><tr>
+          <td>Чип «РАСЧЁТ»</td>
+          <td class="mono dim">#14161c<br>#71b6ff</td>
+          <td><span class="b b-ok">AA 8.47</span></td>
+          <td><span class="b b-ok">Lc 61</span></td>
+        </tr><tr>
+          <td>Чип «ЗАМЕТКА»</td>
+          <td class="mono dim">#14161c<br>#bba5fb</td>
+          <td><span class="b b-ok">AA 8.51</span></td>
+          <td><span class="b b-ok">Lc 61</span></td>
+        </tr><tr>
+          <td>Чип «ФАЙЛ»</td>
+          <td class="mono dim">#14161c<br>#dca84b</td>
+          <td><span class="b b-ok">AA 8.39</span></td>
+          <td><span class="b b-ok">Lc 60</span></td>
+        </tr><tr>
+          <td>Рамка ноды → канвас (не-текст)</td>
+          <td class="mono dim">#676c7a<br>#1d1f26</td>
+          <td><span class="b b-ok">3.14:1</span></td>
+          <td><span class="b b-mid">Lc 24</span></td>
+        </tr><tr>
+          <td>Заливка ноды → канвас (справ.)</td>
+          <td class="mono dim">#2b2e38<br>#1d1f26</td>
+          <td><span class="b b-info">1.22:1</span></td>
+          <td><span class="b b-info">Lc 0</span></td>
+        </tr></tbody></table></div>
+      </div>
+    </section>
+    <section id="v3">
+      <h2>V3 Максимум</h2>
+      <p class="sec-desc">AAA 7:1 на весь текст, APCA 75–90 — «библиотечная» читаемость. Библиотечная читаемость: AAA 7:1 на весь текст, Lc ≥ 75. Ноды заметно светлее — иерархия фон/нода усиливается.</p>
+      <div class="cols">
+        <div class="mock">
+    <div class="canvas" style="background:#191b20;
+         background-image:linear-gradient(#272a33 1px,transparent 1px),linear-gradient(90deg,#272a33 1px,transparent 1px),linear-gradient(#353845 1px,transparent 1px),linear-gradient(90deg,#353845 1px,transparent 1px);
+         background-size:12px 12px,12px 12px,60px 60px,60px 60px">
+      
+    <div class="node" style="background:#31343f;border-color:#6a7184">
+      <div class="n-title" style="color:#eeeeee">Юнит-экономика подписки</div>
+      <div class="n-body" style="color:#eeeeee">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="n-quote" style="color:#d6d6d9">&gt; узкое место — онбординг</div>
+      <div class="n-body" style="color:#eeeeee">итого <span style="color:#d6d6db">=</span> <span style="color:#e5cef5">vm</span> <span style="color:#d6d6db">+</span> <span style="color:#e5cef5">db</span> · <a class="n-link" style="color:#b5dbff">дашборд метрик</a></div>
+      <div class="chips">
+        <span class="chip" style="background:#95c8ff;color:#14161c">РАСЧЁТ</span>
+        <span class="chip" style="background:#cbbbfc;color:#14161c">ЗАМЕТКА</span>
+        <span class="chip" style="background:#e5be79;color:#14161c">ФАЙЛ</span>
+      </div>
+      <div class="strip" style="border-color:#6a7184">
+        <span class="s-label" style="color:#d0d7e1">ИТОГ</span>
+        <span class="s-val" style="color:#a9e1da">Σ 240 000 ₽</span>
+      </div>
+    </div>
+      <div class="edge-wrap">
+        <svg width="100%" height="40" viewBox="0 0 220 40" preserveAspectRatio="none">
+          <line x1="0" y1="20" x2="220" y2="20" stroke="#8598ad" stroke-width="2"/>
+          <polygon points="220,20 210,15 210,25" fill="#8598ad"/>
+        </svg>
+        <span class="edge-label" style="background:#23252e;color:#e4e9ef">value ↓</span>
+      </div>
+      
+    <div class="node" style="background:#31343f;border-color:#6a7184">
+      <div class="n-title" style="color:#eeeeee">Проверка гипотезы</div>
+      <div class="code" style="background:#3f4350;color:#c0e2ff">let x = 42;</div>
+      <div class="n-body" style="color:#eeeeee">конверсия ≥ 3.2% <span style="color:#d0d7e1">· 14 дн.</span></div>
+      <div class="strip" style="border-color:#6a7184">
+        <span class="s-label" style="color:#d0d7e1">ИТОГ</span>
+        <span class="s-val" style="color:#a9e1da">Σ 42</span>
+      </div>
+    </div>
+    </div></div>
+        <div class="tbl"><table><thead><tr><th>Пара</th><th>hex fg / bg</th><th>WCAG 2.1</th><th>APCA Lc</th></tr></thead><tbody><tr>
+          <td>Заголовок ноды</td>
+          <td class="mono dim">#eeeeee<br>#31343f</td>
+          <td><span class="b b-ok">AAA 10.69</span></td>
+          <td><span class="b b-ok">Lc 90</span></td>
+        </tr><tr>
+          <td>Тело ноды</td>
+          <td class="mono dim">#eeeeee<br>#31343f</td>
+          <td><span class="b b-ok">AAA 10.69</span></td>
+          <td><span class="b b-ok">Lc 90</span></td>
+        </tr><tr>
+          <td>Цитата</td>
+          <td class="mono dim">#d6d6d9<br>#31343f</td>
+          <td><span class="b b-ok">AAA 8.55</span></td>
+          <td><span class="b b-mid">Lc 76</span></td>
+        </tr><tr>
+          <td>Иконки / вторичный</td>
+          <td class="mono dim">#d0d7e1<br>#31343f</td>
+          <td><span class="b b-ok">AAA 8.56</span></td>
+          <td><span class="b b-mid">Lc 76</span></td>
+        </tr><tr>
+          <td>Ссылка</td>
+          <td class="mono dim">#b5dbff<br>#31343f</td>
+          <td><span class="b b-ok">AAA 8.59</span></td>
+          <td><span class="b b-mid">Lc 76</span></td>
+        </tr><tr>
+          <td>Функция в формуле</td>
+          <td class="mono dim">#e5cef5<br>#31343f</td>
+          <td><span class="b b-ok">AAA 8.55</span></td>
+          <td><span class="b b-mid">Lc 76</span></td>
+        </tr><tr>
+          <td>Оператор в формуле</td>
+          <td class="mono dim">#d6d6db<br>#31343f</td>
+          <td><span class="b b-ok">AAA 8.56</span></td>
+          <td><span class="b b-mid">Lc 76</span></td>
+        </tr><tr>
+          <td>Значение «ИТОГ»</td>
+          <td class="mono dim">#a9e1da<br>#31343f</td>
+          <td><span class="b b-ok">AAA 8.54</span></td>
+          <td><span class="b b-mid">Lc 76</span></td>
+        </tr><tr>
+          <td>Код на подложке</td>
+          <td class="mono dim">#c0e2ff<br>#3f4350</td>
+          <td><span class="b b-ok">AAA 7.31</span></td>
+          <td><span class="b b-mid">Lc 76</span></td>
+        </tr><tr>
+          <td>Лейбл ребра</td>
+          <td class="mono dim">#e4e9ef<br>#23252e</td>
+          <td><span class="b b-ok">AAA 12.50</span></td>
+          <td><span class="b b-ok">Lc 90</span></td>
+        </tr><tr>
+          <td>Чип «РАСЧЁТ»</td>
+          <td class="mono dim">#14161c<br>#95c8ff</td>
+          <td><span class="b b-ok">AA 10.32</span></td>
+          <td><span class="b b-ok">Lc 71</span></td>
+        </tr><tr>
+          <td>Чип «ЗАМЕТКА»</td>
+          <td class="mono dim">#14161c<br>#cbbbfc</td>
+          <td><span class="b b-ok">AA 10.38</span></td>
+          <td><span class="b b-ok">Lc 71</span></td>
+        </tr><tr>
+          <td>Чип «ФАЙЛ»</td>
+          <td class="mono dim">#14161c<br>#e5be79</td>
+          <td><span class="b b-ok">AA 10.31</span></td>
+          <td><span class="b b-ok">Lc 71</span></td>
+        </tr><tr>
+          <td>Рамка ноды → канвас (не-текст)</td>
+          <td class="mono dim">#6a7184<br>#191b20</td>
+          <td><span class="b b-ok">3.53:1</span></td>
+          <td><span class="b b-mid">Lc 26</span></td>
+        </tr><tr>
+          <td>Заливка ноды → канвас (справ.)</td>
+          <td class="mono dim">#31343f<br>#191b20</td>
+          <td><span class="b b-info">1.39:1</span></td>
+          <td><span class="b b-info">Lc 0</span></td>
+        </tr></tbody></table></div>
+      </div>
+    </section>
+    <section id="v4">
+      <h2>V4 Тёплый графит</h2>
+      <p class="sec-desc">уровень V2 в нейтральных тёплых серых, без синевы. Тот же уровень, что V2, но в тёплых нейтральных серых (без синего подтона) — для чувствительных к цветовой температуре.</p>
+      <div class="cols">
+        <div class="mock">
+    <div class="canvas" style="background:#1f1f1f;
+         background-image:linear-gradient(#262626 1px,transparent 1px),linear-gradient(90deg,#262626 1px,transparent 1px),linear-gradient(#303030 1px,transparent 1px),linear-gradient(90deg,#303030 1px,transparent 1px);
+         background-size:12px 12px,12px 12px,60px 60px,60px 60px">
+      
+    <div class="node" style="background:#2a2a2a;border-color:#6c6c6c">
+      <div class="n-title" style="color:#efeeeb">Юнит-экономика подписки</div>
+      <div class="n-body" style="color:#e0dedb">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="n-quote" style="color:#bcb9b4">&gt; узкое место — онбординг</div>
+      <div class="n-body" style="color:#e0dedb">итого <span style="color:#bcb9b5">=</span> <span style="color:#d2a8ee">vm</span> <span style="color:#bcb9b5">+</span> <span style="color:#d2a8ee">db</span> · <a class="n-link" style="color:#8ebeec">дашборд метрик</a></div>
+      <div class="chips">
+        <span class="chip" style="background:#7fb5f0;color:#17161a">РАСЧЁТ</span>
+        <span class="chip" style="background:#bfa5f2;color:#17161a">ЗАМЕТКА</span>
+        <span class="chip" style="background:#dead55;color:#17161a">ФАЙЛ</span>
+      </div>
+      <div class="strip" style="border-color:#6c6c6c">
+        <span class="s-label" style="color:#bcb9b3">ИТОГ</span>
+        <span class="s-val" style="color:#5acbbb">Σ 240 000 ₽</span>
+      </div>
+    </div>
+      <div class="edge-wrap">
+        <svg width="100%" height="40" viewBox="0 0 220 40" preserveAspectRatio="none">
+          <line x1="0" y1="20" x2="220" y2="20" stroke="#8598ad" stroke-width="2"/>
+          <polygon points="220,20 210,15 210,25" fill="#8598ad"/>
+        </svg>
+        <span class="edge-label" style="background:#232323;color:#dbd9d5">value ↓</span>
+      </div>
+      
+    <div class="node" style="background:#2a2a2a;border-color:#6c6c6c">
+      <div class="n-title" style="color:#efeeeb">Проверка гипотезы</div>
+      <div class="code" style="background:#3a3a3a;color:#bfddf4">let x = 42;</div>
+      <div class="n-body" style="color:#e0dedb">конверсия ≥ 3.2% <span style="color:#bcb9b3">· 14 дн.</span></div>
+      <div class="strip" style="border-color:#6c6c6c">
+        <span class="s-label" style="color:#bcb9b3">ИТОГ</span>
+        <span class="s-val" style="color:#5acbbb">Σ 42</span>
+      </div>
+    </div>
+    </div></div>
+        <div class="tbl"><table><thead><tr><th>Пара</th><th>hex fg / bg</th><th>WCAG 2.1</th><th>APCA Lc</th></tr></thead><tbody><tr>
+          <td>Заголовок ноды</td>
+          <td class="mono dim">#efeeeb<br>#2a2a2a</td>
+          <td><span class="b b-ok">AAA 12.37</span></td>
+          <td><span class="b b-ok">Lc 93</span></td>
+        </tr><tr>
+          <td>Тело ноды</td>
+          <td class="mono dim">#e0dedb<br>#2a2a2a</td>
+          <td><span class="b b-ok">AAA 10.69</span></td>
+          <td><span class="b b-mid">Lc 83</span></td>
+        </tr><tr>
+          <td>Цитата</td>
+          <td class="mono dim">#bcb9b4<br>#2a2a2a</td>
+          <td><span class="b b-ok">AAA 7.34</span></td>
+          <td><span class="b b-mid">Lc 61</span></td>
+        </tr><tr>
+          <td>Иконки / вторичный</td>
+          <td class="mono dim">#bcb9b3<br>#2a2a2a</td>
+          <td><span class="b b-ok">AAA 7.33</span></td>
+          <td><span class="b b-mid">Lc 61</span></td>
+        </tr><tr>
+          <td>Ссылка</td>
+          <td class="mono dim">#8ebeec<br>#2a2a2a</td>
+          <td><span class="b b-ok">AAA 7.33</span></td>
+          <td><span class="b b-mid">Lc 61</span></td>
+        </tr><tr>
+          <td>Функция в формуле</td>
+          <td class="mono dim">#d2a8ee<br>#2a2a2a</td>
+          <td><span class="b b-ok">AAA 7.23</span></td>
+          <td><span class="b b-mid">Lc 60</span></td>
+        </tr><tr>
+          <td>Оператор в формуле</td>
+          <td class="mono dim">#bcb9b5<br>#2a2a2a</td>
+          <td><span class="b b-ok">AAA 7.34</span></td>
+          <td><span class="b b-mid">Lc 61</span></td>
+        </tr><tr>
+          <td>Значение «ИТОГ»</td>
+          <td class="mono dim">#5acbbb<br>#2a2a2a</td>
+          <td><span class="b b-ok">AAA 7.31</span></td>
+          <td><span class="b b-mid">Lc 61</span></td>
+        </tr><tr>
+          <td>Код на подложке</td>
+          <td class="mono dim">#bfddf4<br>#3a3a3a</td>
+          <td><span class="b b-ok">AAA 8.05</span></td>
+          <td><span class="b b-mid">Lc 76</span></td>
+        </tr><tr>
+          <td>Лейбл ребра</td>
+          <td class="mono dim">#dbd9d5<br>#232323</td>
+          <td><span class="b b-ok">AAA 11.15</span></td>
+          <td><span class="b b-mid">Lc 81</span></td>
+        </tr><tr>
+          <td>Чип «РАСЧЁТ»</td>
+          <td class="mono dim">#17161a<br>#7fb5f0</td>
+          <td><span class="b b-ok">AA 8.38</span></td>
+          <td><span class="b b-ok">Lc 61</span></td>
+        </tr><tr>
+          <td>Чип «ЗАМЕТКА»</td>
+          <td class="mono dim">#17161a<br>#bfa5f2</td>
+          <td><span class="b b-ok">AA 8.47</span></td>
+          <td><span class="b b-ok">Lc 61</span></td>
+        </tr><tr>
+          <td>Чип «ФАЙЛ»</td>
+          <td class="mono dim">#17161a<br>#dead55</td>
+          <td><span class="b b-ok">AA 8.76</span></td>
+          <td><span class="b b-ok">Lc 63</span></td>
+        </tr><tr>
+          <td>Рамка ноды → канвас (не-текст)</td>
+          <td class="mono dim">#6c6c6c<br>#1f1f1f</td>
+          <td><span class="b b-ok">3.14:1</span></td>
+          <td><span class="b b-mid">Lc 24</span></td>
+        </tr><tr>
+          <td>Заливка ноды → канвас (справ.)</td>
+          <td class="mono dim">#2a2a2a<br>#1f1f1f</td>
+          <td><span class="b b-info">1.15:1</span></td>
+          <td><span class="b b-info">Lc 0</span></td>
+        </tr></tbody></table></div>
+      </div>
+    </section>
+    <section id="v5">
+      <h2>V5 Светлая (контроль)</h2>
+      <p class="sec-desc">светлый фон — верхняя граница шкалы для сравнения. Контрольная светлая вариация: верх шкалы (Lc 75–105) — для калибровки «потолка» контраста.</p>
+      <div class="cols">
+        <div class="mock">
+    <div class="canvas" style="background:#eef0f4;
+         background-image:linear-gradient(#e4e7ec 1px,transparent 1px),linear-gradient(90deg,#e4e7ec 1px,transparent 1px),linear-gradient(#d8dbe2 1px,transparent 1px),linear-gradient(90deg,#d8dbe2 1px,transparent 1px);
+         background-size:12px 12px,12px 12px,60px 60px,60px 60px">
+      
+    <div class="node" style="background:#ffffff;border-color:#818795">
+      <div class="n-title" style="color:#17181c">Юнит-экономика подписки</div>
+      <div class="n-body" style="color:#26282e">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="n-quote" style="color:#535862">&gt; узкое место — онбординг</div>
+      <div class="n-body" style="color:#26282e">итого <span style="color:#535862">=</span> <span style="color:#7a1fa8">vm</span> <span style="color:#535862">+</span> <span style="color:#7a1fa8">db</span> · <a class="n-link" style="color:#0a56ab">дашборд метрик</a></div>
+      <div class="chips">
+        <span class="chip" style="background:#b4b4b6;color:#14161c">РАСЧЁТ</span>
+        <span class="chip" style="background:#b4b4b6;color:#14161c">ЗАМЕТКА</span>
+        <span class="chip" style="background:#b4b4b6;color:#14161c">ФАЙЛ</span>
+      </div>
+      <div class="strip" style="border-color:#818795">
+        <span class="s-label" style="color:#515762">ИТОГ</span>
+        <span class="s-val" style="color:#0b6258">Σ 240 000 ₽</span>
+      </div>
+    </div>
+      <div class="edge-wrap">
+        <svg width="100%" height="40" viewBox="0 0 220 40" preserveAspectRatio="none">
+          <line x1="0" y1="20" x2="220" y2="20" stroke="#8598ad" stroke-width="2"/>
+          <polygon points="220,20 210,15 210,25" fill="#8598ad"/>
+        </svg>
+        <span class="edge-label" style="background:#ffffff;color:#1d2430">value ↓</span>
+      </div>
+      
+    <div class="node" style="background:#ffffff;border-color:#818795">
+      <div class="n-title" style="color:#17181c">Проверка гипотезы</div>
+      <div class="code" style="background:#e3e6ec;color:#09478e">let x = 42;</div>
+      <div class="n-body" style="color:#26282e">конверсия ≥ 3.2% <span style="color:#515762">· 14 дн.</span></div>
+      <div class="strip" style="border-color:#818795">
+        <span class="s-label" style="color:#515762">ИТОГ</span>
+        <span class="s-val" style="color:#0b6258">Σ 42</span>
+      </div>
+    </div>
+    </div></div>
+        <div class="tbl"><table><thead><tr><th>Пара</th><th>hex fg / bg</th><th>WCAG 2.1</th><th>APCA Lc</th></tr></thead><tbody><tr>
+          <td>Заголовок ноды</td>
+          <td class="mono dim">#17181c<br>#ffffff</td>
+          <td><span class="b b-ok">AAA 17.74</span></td>
+          <td><span class="b b-ok">Lc 104</span></td>
+        </tr><tr>
+          <td>Тело ноды</td>
+          <td class="mono dim">#26282e<br>#ffffff</td>
+          <td><span class="b b-ok">AAA 14.73</span></td>
+          <td><span class="b b-ok">Lc 102</span></td>
+        </tr><tr>
+          <td>Цитата</td>
+          <td class="mono dim">#535862<br>#ffffff</td>
+          <td><span class="b b-ok">AAA 7.14</span></td>
+          <td><span class="b b-mid">Lc 85</span></td>
+        </tr><tr>
+          <td>Иконки / вторичный</td>
+          <td class="mono dim">#515762<br>#ffffff</td>
+          <td><span class="b b-ok">AAA 7.27</span></td>
+          <td><span class="b b-mid">Lc 85</span></td>
+        </tr><tr>
+          <td>Ссылка</td>
+          <td class="mono dim">#0a56ab<br>#ffffff</td>
+          <td><span class="b b-ok">AAA 7.16</span></td>
+          <td><span class="b b-mid">Lc 84</span></td>
+        </tr><tr>
+          <td>Функция в формуле</td>
+          <td class="mono dim">#7a1fa8<br>#ffffff</td>
+          <td><span class="b b-ok">AAA 8.11</span></td>
+          <td><span class="b b-mid">Lc 87</span></td>
+        </tr><tr>
+          <td>Оператор в формуле</td>
+          <td class="mono dim">#535862<br>#ffffff</td>
+          <td><span class="b b-ok">AAA 7.14</span></td>
+          <td><span class="b b-mid">Lc 85</span></td>
+        </tr><tr>
+          <td>Значение «ИТОГ»</td>
+          <td class="mono dim">#0b6258<br>#ffffff</td>
+          <td><span class="b b-ok">AAA 7.24</span></td>
+          <td><span class="b b-mid">Lc 85</span></td>
+        </tr><tr>
+          <td>Код на подложке</td>
+          <td class="mono dim">#09478e<br>#e3e6ec</td>
+          <td><span class="b b-ok">AAA 7.29</span></td>
+          <td><span class="b b-mid">Lc 76</span></td>
+        </tr><tr>
+          <td>Лейбл ребра</td>
+          <td class="mono dim">#1d2430<br>#ffffff</td>
+          <td><span class="b b-ok">AAA 15.59</span></td>
+          <td><span class="b b-ok">Lc 102</span></td>
+        </tr><tr>
+          <td>Чип «РАСЧЁТ»</td>
+          <td class="mono dim">#14161c<br>#b4b4b6</td>
+          <td><span class="b b-ok">AA 8.74</span></td>
+          <td><span class="b b-ok">Lc 62</span></td>
+        </tr><tr>
+          <td>Чип «ЗАМЕТКА»</td>
+          <td class="mono dim">#14161c<br>#b4b4b6</td>
+          <td><span class="b b-ok">AA 8.74</span></td>
+          <td><span class="b b-ok">Lc 62</span></td>
+        </tr><tr>
+          <td>Чип «ФАЙЛ»</td>
+          <td class="mono dim">#14161c<br>#b4b4b6</td>
+          <td><span class="b b-ok">AA 8.74</span></td>
+          <td><span class="b b-ok">Lc 62</span></td>
+        </tr><tr>
+          <td>Рамка ноды → канвас (не-текст)</td>
+          <td class="mono dim">#818795<br>#eef0f4</td>
+          <td><span class="b b-ok">3.16:1</span></td>
+          <td><span class="b b-ok">Lc 55</span></td>
+        </tr><tr>
+          <td>Заливка ноды → канвас (справ.)</td>
+          <td class="mono dim">#ffffff<br>#eef0f4</td>
+          <td><span class="b b-info">1.14:1</span></td>
+          <td><span class="b b-info">Lc 8</span></td>
+        </tr></tbody></table></div>
+      </div>
+    </section><footer>
+<p><b>Методология.</b> WCAG 2.1 — относительная люминанс sRGB (SC 1.4.3 AA ≥ 4.5:1; SC 1.4.6 AAA ≥ 7:1; SC 1.4.11 не-текст ≥ 3:1).
+APCA 0.0.98G-4g — перцептивный контраст Lc, точнее WCAG на тёмных темах и цветном тексте: Lc ≥ 90 — флюентное чтение,
+≥ 75 — минимум для тела 16 px, ≥ 60 — крупный/приглушённый текст, ≥ 30 — не-текст. Чипы (10 px, тёмные чернила на цветной
+заливке) — категория «метка», целевой уровень Lc ≥ 60 достигается осветлением заливки без смены оттенка.</p>
+<p style="margin-top:10px"><b>Как применить выбранную вариацию.</b> Правки вносятся в слоты <code>ThemeColors::dark()</code>
+(<code>crates/canvas-render/src/theme.rs</code>) и зеркалятся в <code>design/tokens/colors.json</code> ↔
+<code>crates/canvas-core/src/tokens.rs</code> (тест паритета обязателен). Пороги уже покрыты тестами
+<code>presets_text_contrast_vs_card</code> / <code>presets_graphics_contrast_vs_background</code> — после правок их стоит
+ужесточить: приглушённые роли поднять с 3:1 до 4.5:1. Функция <code>ensure_contrast()</code> (canvas-render/contrast.rs)
+продолжает гарантировать читаемость на пользовательских hex-заливках — её менять не нужно.</p>
+<p style="margin-top:10px"><b>Рекомендация.</b> V2 «Комфорт»: минимальное изменение характера темы при полном
+соответствии AA и перцептивным ориентирам APCA. Если контраст нужен «с запасом» (доступность по 508/EN 301 549,
+яркие помещения, проекторы) — V3.</p>
+</footer></body></html>
