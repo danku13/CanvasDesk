@@ -12,10 +12,15 @@
 //! ~0.26 мс < 1 мс порога (KISS; порог §Гейты W2/§Контракт-8).
 
 pub mod button;
+pub mod chat_bubble;
+pub mod chip;
 pub mod dropdown;
+pub mod footer;
+pub mod icon;
 pub mod list;
 pub mod modal;
 pub mod panel;
+pub mod radio_card;
 pub mod row;
 pub mod table;
 #[cfg(test)]
@@ -138,6 +143,13 @@ pub struct KitPalette {
 pub const BUTTON_HEIGHT: f32 = 30.0;
 /// Горизонтальный пад кнопки: SPACING_LG (12) — прежний пад кнопок диалога.
 pub const BUTTON_PAD_H: f32 = 12.0;
+/// Ширина кнопки футера по умолчанию (FR-UI-FOOTER): 100 px — значение
+/// онбординга (`ONBOARDING_BUTTON_W`); `graph_builder_ui` использует 130
+/// (передаёт свою `widths` через `footer_buttons_measured`). Используется
+/// [`crate::component::footer::footer_buttons`] (простой вариант с
+/// фиксированной шириной); измеряемый вариант `footer_buttons_measured`
+/// принимает `widths: &[f32]` явно.
+pub const BUTTON_WIDTH: f32 = 100.0;
 /// Сторона квадратной icon-кнопки (угловые кнопки ⚙/?).
 pub const ICON_BUTTON_SIZE: f32 = 26.0;
 /// Высота чипа (категории палитры — прежняя высота чипов).

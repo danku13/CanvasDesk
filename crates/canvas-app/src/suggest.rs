@@ -545,46 +545,49 @@ pub struct SuggestCards {
 /// W-a (дефект аудита §8 п.5): кламп стопки по нижнему краю — БЕЗ наложений
 /// и детерминированно. Раньше каждая карточка клампилась индивидуально, все
 /// уехавшие получали один `y = vh−4−H` и налагались в полную стопку.
+///
+/// FR-UI-ANCHORED-STACK (audit §6.1): раскладка делегирована в
+/// [`canvas_ui::kit::anchored_stack`] — обобщение [`dropdown_menu`] для
+/// многоэлементных стеков с flip+clamp. Поля 4 px кодируются в `viewport`
+/// (потребительский контракт: viewport.x/y — внешние поля,
+/// viewport.right()/bottom() — внутренние края клампов). `gap` =
+/// `SUGGEST_CARD_GAP` (= `SUGGEST_CARD_OFFSET_X` — типовой UI-паттерн:
+/// единый spacing-scale для зазора от якоря И между карточками). Бит-в-бит
+/// паритет с прежней геометрией проверяется существующими тестами
+/// `card_rects_*`.
 pub fn card_rects(
     node_screen: [f32; 4],
     viewport: [f32; 2],
     count: usize,
 ) -> Vec<canvas_ui::geometry::UiRect> {
     use canvas_ui::geometry::UiRect;
-    let mut out = Vec::with_capacity(count);
+    use canvas_ui::kit::{anchored_stack, AnchoredSide};
     if count == 0 {
-        return out;
+        return Vec::new();
     }
-    let mut x = node_screen[0] + node_screen[2] + SUGGEST_CARD_OFFSET_X;
-    // Кламп по правому краю: не влезает — стопка слева от ноды
-    if x + SUGGEST_CARD_W > viewport[0] - 4.0 {
-        x = (node_screen[0] - SUGGEST_CARD_OFFSET_X - SUGGEST_CARD_W).max(4.0);
-    }
-    // Кламп по нижнему краю: шаг лесенки и порядок сохранены. Естественная
-    // стопка — y0 + i*(H+GAP); если хвост упирается в нижний предел
-    // (vh−4), вся стопка сдвигается вверх на МИНИМАЛЬНЫЙ перепуск — это
-    // в точности лесенка y_i = (vh−4−H) − (count−1−i)*(H+GAP): шаг GAP
-    // между карточками сохранён, хвост прижат к нижнему пределу, голова
-    // остаётся на месте, пока это геометрически возможно (иначе хвост
-    // наложился бы на голову — наложения недопустимы). Если стопка не
-    // влезает во вьюпорт даже так — прижимается к верхнему краю (низ
-    // может уходить за вьюпорт, но карточки не налагаются).
-    let step = SUGGEST_CARD_H + SUGGEST_CARD_GAP;
-    let total = (count as f32 - 1.0) * step + SUGGEST_CARD_H;
-    let bottom = viewport[1] - 4.0;
-    let top = 4.0;
-    let y0 = if node_screen[1] + total <= bottom {
-        node_screen[1]
-    } else if total <= bottom - top {
-        bottom - total
-    } else {
-        top
-    };
-    for i in 0..count {
-        let row_y = y0 + i as f32 * step;
-        out.push(UiRect::new(x, row_y, SUGGEST_CARD_W, SUGGEST_CARD_H));
-    }
-    out
+    // 4 px поля с каждой стороны — кодируются в viewport kit-функции
+    // (паритет прежнему `viewport[0] - 4.0` / `viewport[1] - 4.0` / `.max(4.0)`).
+    const VP_MARGIN: f32 = 4.0;
+    let vp = UiRect::new(
+        VP_MARGIN,
+        VP_MARGIN,
+        (viewport[0] - 2.0 * VP_MARGIN).max(0.0),
+        (viewport[1] - 2.0 * VP_MARGIN).max(0.0),
+    );
+    let anchor = UiRect::new(
+        node_screen[0],
+        node_screen[1],
+        node_screen[2],
+        node_screen[3],
+    );
+    let element_sizes = vec![(SUGGEST_CARD_W, SUGGEST_CARD_H); count];
+    anchored_stack(
+        anchor,
+        AnchoredSide::Right,
+        &element_sizes,
+        SUGGEST_CARD_GAP,
+        vp,
+    )
 }
 
 /// FR-079 follow-up: rect для empty-state тултипа «AI-дополнений нет».

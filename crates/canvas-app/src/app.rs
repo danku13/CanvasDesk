@@ -202,6 +202,7 @@ mod support;
 // в коротком скоупе (контракт «вложенный лок FontSystem запрещён»).
 mod tooltip;
 pub use support::measured_result_reserve_height;
+pub(crate) use support::paint_items_to_cards;
 use support::{
     bezier_samples, centered_box, dim_color4, dim_text_color, distribute_axis_for, drag_bbox,
     drag_collision_obstacles, drag_from_node, explain_chain_focus, expr_error_hit_at, hit_subtitle,

@@ -109,6 +109,145 @@ pub fn tooltip(
     })
 }
 
+// --- FR-UI-ANCHORED-STACK: многоэлементный стек с flip+clamp ---------------
+
+/// Сторона якоря, на которую раскрывается стек (FR-UI-ANCHORED-STACK).
+///
+/// Обобщение [`dropdown_menu`] (которая неявно использует «снизу от якоря»):
+/// стек из N элементов может открываться с любой из 4 сторон `anchor`, при
+/// нехватке места — флип на противоположную сторону, при нехватке и там —
+/// position-clamp в сторону viewport (с сохранением размеров).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchoredSide {
+    /// Стек справа от якоря (элементы стакаются сверху вниз).
+    Right,
+    /// Стек слева от якоря (элементы стакаются сверху вниз).
+    Left,
+    /// Стек снизу от якоря (элементы стакаются слева направо).
+    Bottom,
+    /// Стек сверху от якоря (элементы стакаются слева направо).
+    Top,
+}
+
+/// FR-UI-ANCHORED-STACK: anchored stack of N elements with flip+clamp.
+/// Generalizes [`dropdown_menu`] (1 элемент) на многоэлементные стеки
+/// (suggest-карточки, tooltip-стеки, flyout-меню).
+///
+/// `anchor` — rect, к которому привязан стек (например, правый край ноды).
+/// `side` — сторона якоря, в которую стек раскрывается естественным образом.
+/// `element_sizes` — `(w, h)` для каждого элемента стека (допускаются разные).
+/// `gap` — зазор между соседними элементами И от якоря до первого элемента
+///   (типовой UI-паттерн — единый spacing-scale: [`GAP_CONTROLS`] / SPACING_S;
+///   suggest-карточки используют `SUGGEST_CARD_GAP == SUGGEST_CARD_OFFSET_X`).
+/// `viewport` — видимый rect для flip+clamp (потребитель кодирует поля:
+///   viewport.x/y — внешние поля, viewport.right()/bottom() — внутренние
+///   края клампов).
+///
+/// Возвращает `Vec<UiRect>` — один rect на элемент, позиционированный и
+/// зажатый во вьюпорт. Если стек не помещается на `side`, флипает на
+/// противоположную сторону (с сохранением размера — position-clamp,
+/// семантика как у [`tooltip`]); если не помещается и там — прижимается к
+/// краю viewport с тем же размером (выход за viewport НЕ маскируется —
+/// класс детектируется G4-линтом). По поперечной оси (вертикаль для
+/// Right/Left, горизонталь для Top/Bottom) стек выравнивается по
+/// соответствующему краю якоря и прижимается к верхнему/левому краю viewport
+/// при переполнении (см. тесты `suggest::card_rects_*` — бит-в-бит паритет).
+pub fn anchored_stack(
+    anchor: UiRect,
+    side: AnchoredSide,
+    element_sizes: &[(f32, f32)],
+    gap: f32,
+    viewport: UiRect,
+) -> Vec<UiRect> {
+    let n = element_sizes.len();
+    let mut out = Vec::with_capacity(n);
+    if n == 0 {
+        return out;
+    }
+    match side {
+        AnchoredSide::Right | AnchoredSide::Left => {
+            let max_w = element_sizes.iter().map(|(w, _)| *w).fold(0.0f32, f32::max);
+            let total_h: f32 =
+                element_sizes.iter().map(|(_, h)| *h).sum::<f32>() + gap * (n - 1) as f32;
+            // Поперечная ось (X): side=Right → стек справа, флип на Left.
+            let x_natural_right = anchor.right() + gap;
+            let x_flipped_left = anchor.x - gap - max_w;
+            let x = match side {
+                AnchoredSide::Right => {
+                    if x_natural_right + max_w <= viewport.right() {
+                        x_natural_right
+                    } else {
+                        // Флип на левую сторону, position-clamp к viewport.x
+                        // (паритет suggest.rs `.max(viewport.x)`).
+                        x_flipped_left.max(viewport.x)
+                    }
+                }
+                AnchoredSide::Left => {
+                    if x_flipped_left >= viewport.x {
+                        x_flipped_left
+                    } else {
+                        // Флип на правую сторону, position-clamp к viewport.right()
+                        x_natural_right.min(viewport.right() - max_w)
+                    }
+                }
+                _ => unreachable!(),
+            };
+            // Продольная ось (Y): выравнивание по верху якоря, прижим к
+            // низу viewport если не помещается естественной стопкой, к верху
+            // viewport если не помещается никак (паритет suggest.rs::card_rects).
+            let y0 = if anchor.y + total_h <= viewport.bottom() {
+                anchor.y
+            } else if total_h <= viewport.h {
+                viewport.bottom() - total_h
+            } else {
+                viewport.y
+            };
+            let mut y = y0;
+            for &(w, h) in element_sizes {
+                out.push(UiRect::new(x, y, w, h));
+                y += h + gap;
+            }
+        }
+        AnchoredSide::Top | AnchoredSide::Bottom => {
+            let max_h = element_sizes.iter().map(|(_, h)| *h).fold(0.0f32, f32::max);
+            let total_w: f32 =
+                element_sizes.iter().map(|(w, _)| *w).sum::<f32>() + gap * (n - 1) as f32;
+            let y_natural_bottom = anchor.bottom() + gap;
+            let y_flipped_top = anchor.y - gap - max_h;
+            let y = match side {
+                AnchoredSide::Bottom => {
+                    if y_natural_bottom + max_h <= viewport.bottom() {
+                        y_natural_bottom
+                    } else {
+                        y_flipped_top.max(viewport.y)
+                    }
+                }
+                AnchoredSide::Top => {
+                    if y_flipped_top >= viewport.y {
+                        y_flipped_top
+                    } else {
+                        y_natural_bottom.min(viewport.bottom() - max_h)
+                    }
+                }
+                _ => unreachable!(),
+            };
+            let x0 = if anchor.x + total_w <= viewport.right() {
+                anchor.x
+            } else if total_w <= viewport.w {
+                viewport.right() - total_w
+            } else {
+                viewport.x
+            };
+            let mut x = x0;
+            for &(w, h) in element_sizes {
+                out.push(UiRect::new(x, y, w, h));
+                x += w + gap;
+            }
+        }
+    }
+    out
+}
+
 // --- Toast ------------------------------------------------------------------
 
 /// Область тоста: строка внизу по центру (T21: ширина [40, viewport−40],
@@ -338,6 +477,134 @@ mod tests {
         // Перенос влево/вверх упирается в край (0,0), размер сохранён
         assert_eq!(t.rect, UiRect::new(0.0, 0.0, 2000.0, 900.0));
         assert!(t.flipped);
+    }
+
+    // === FR-UI-ANCHORED-STACK: tests ========================================
+
+    /// Стек из 3 элементов на правой стороне якоря — помещается во вьюпорт
+    /// без флипа: первый элемент у правого края якоря + gap, последующие
+    /// стакаются вниз с тем же gap.
+    #[test]
+    fn anchored_stack_fits_on_right_side() {
+        let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        let anchor = UiRect::new(100.0, 100.0, 120.0, 60.0);
+        let sizes = [(80.0, 40.0), (80.0, 40.0), (80.0, 40.0)];
+        let rects = anchored_stack(anchor, AnchoredSide::Right, &sizes, 8.0, vp);
+        assert_eq!(rects.len(), 3);
+        // X единый для всей стопки (правее якоря на gap=8)
+        let x_expected = anchor.right() + 8.0; // 228
+        for r in &rects {
+            assert!((r.x - x_expected).abs() < 0.01);
+            assert!((r.w - 80.0).abs() < 0.01);
+            assert!((r.h - 40.0).abs() < 0.01);
+        }
+        // Y — лесенка с шагом h+gap=48, стартует на anchor.y=100
+        assert!((rects[0].y - 100.0).abs() < 0.01);
+        assert!((rects[1].y - 148.0).abs() < 0.01);
+        assert!((rects[2].y - 196.0).abs() < 0.01);
+        // Все элементы — во вьюпорте
+        for r in &rects {
+            assert!(r.x >= vp.x && r.right() <= vp.right() + 0.01);
+            assert!(r.y >= vp.y && r.bottom() <= vp.bottom() + 0.01);
+        }
+    }
+
+    /// Стек не помещается справа (правый край якоря у самого края viewport) —
+    /// флипает на левую сторону: X = anchor.x - gap - max_w, position-clamp
+    /// к viewport.x при выходе за край.
+    #[test]
+    fn anchored_stack_flips_to_left_when_right_full() {
+        let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        // Якорь у правого края вьюпорта: стек справа не помещается
+        let anchor = UiRect::new(700.0, 100.0, 80.0, 60.0);
+        let sizes = [(240.0, 80.0), (240.0, 80.0)];
+        let rects = anchored_stack(anchor, AnchoredSide::Right, &sizes, 12.0, vp);
+        assert_eq!(rects.len(), 2);
+        // Флип на левую сторону: x = anchor.x - gap - max_w = 700 - 12 - 240 = 448
+        assert!((rects[0].x - 448.0).abs() < 0.01);
+        assert!((rects[1].x - 448.0).abs() < 0.01, "стопка вертикальная");
+        // Y — лесенка с шагом 80+12=92, стартует на anchor.y=100 (помещается)
+        assert!((rects[0].y - 100.0).abs() < 0.01);
+        assert!((rects[1].y - 192.0).abs() < 0.01);
+        // Флипнутый стек не выходит за viewport
+        for r in &rects {
+            assert!(r.x >= vp.x && r.right() <= vp.right() + 0.01);
+        }
+        // Если флипнутая позиция уходит левее viewport.x — position-clamp
+        // к viewport.x (паритет suggest.rs `.max(viewport.x)`).
+        let vp = UiRect::new(4.0, 4.0, 100.0, 600.0); // узкий вьюпорт
+        let anchor = UiRect::new(50.0, 100.0, 40.0, 60.0);
+        let sizes = [(240.0, 80.0)];
+        let rects = anchored_stack(anchor, AnchoredSide::Right, &sizes, 12.0, vp);
+        // x_alt = 50 - 12 - 240 = -202; .max(viewport.x=4) = 4
+        assert!(
+            (rects[0].x - 4.0).abs() < 0.01,
+            "position-clamp к viewport.x"
+        );
+    }
+
+    /// Стек выше viewport — прижимается к верхнему краю viewport (y0 =
+    /// viewport.y), наложения между элементами сохранены (шаг h+gap).
+    #[test]
+    fn anchored_stack_taller_than_viewport_clamps_to_top() {
+        let vp = UiRect::new(0.0, 4.0, 800.0, 552.0); // viewport.bottom()=556
+                                                      // Якорь у нижнего края: естественная стопка уходит за низ.
+        let anchor = UiRect::new(300.0, 520.0, 120.0, 60.0);
+        // 8 карточек: total_h = 7*92 + 80 = 724 > viewport.h=552
+        let sizes = [(240.0, 80.0); 8];
+        let rects = anchored_stack(anchor, AnchoredSide::Right, &sizes, 12.0, vp);
+        assert_eq!(rects.len(), 8);
+        // Прижато к верхнему краю viewport (y0 = viewport.y = 4)
+        assert!((rects[0].y - 4.0).abs() < 0.01, "прижата к верху viewport");
+        // Шаг лесенки сохранён — наложений нет
+        for pair in rects.windows(2) {
+            assert!(
+                pair[1].y >= pair[0].y + pair[0].h,
+                "элементы не налагаются (шаг сохранён)"
+            );
+            assert!((pair[1].y - pair[0].y - 92.0).abs() < 0.01, "шаг h+gap");
+        }
+    }
+
+    /// Bottom-side стек (горизонтальная стопка снизу от якоря) — элементы
+    /// стакаются слева направо; при переполнении по ширине — position-clamp.
+    #[test]
+    fn anchored_stack_bottom_side_horizontal() {
+        let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        let anchor = UiRect::new(100.0, 100.0, 200.0, 40.0);
+        let sizes = [(80.0, 30.0), (80.0, 30.0), (80.0, 30.0)];
+        let rects = anchored_stack(anchor, AnchoredSide::Bottom, &sizes, 8.0, vp);
+        assert_eq!(rects.len(), 3);
+        // Y единый — ниже якоря на gap=8: anchor.bottom()+gap = 148
+        for r in &rects {
+            assert!((r.y - 148.0).abs() < 0.01);
+            assert!((r.h - 30.0).abs() < 0.01);
+        }
+        // X — лесенка слева направо, стартует на anchor.x=100, шаг w+gap=88
+        assert!((rects[0].x - 100.0).abs() < 0.01);
+        assert!((rects[1].x - 188.0).abs() < 0.01);
+        assert!((rects[2].x - 276.0).abs() < 0.01);
+    }
+
+    /// Пустой вход → пустой выход; один элемент — корректный rect.
+    #[test]
+    fn anchored_stack_empty_and_single() {
+        let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        let anchor = UiRect::new(100.0, 100.0, 120.0, 60.0);
+        assert!(anchored_stack(anchor, AnchoredSide::Right, &[], 8.0, vp).is_empty());
+        // Одиночная карточка у нижнего края — position-clamp к низу viewport
+        // (паритет suggest.rs::card_rects `single[0].y == vh-4-H`).
+        let vp = UiRect::new(0.0, 4.0, 800.0, 552.0); // bottom=556
+        let anchor = UiRect::new(300.0, 520.0, 120.0, 60.0);
+        let sizes = [(240.0, 80.0)];
+        let rects = anchored_stack(anchor, AnchoredSide::Right, &sizes, 12.0, vp);
+        assert_eq!(rects.len(), 1);
+        // total_h=80 > viewport.h-... нет: 520+80=600 > 556 (не помещается естест.);
+        // 80 <= 552 → y0 = 556-80 = 476
+        assert!(
+            (rects[0].y - 476.0).abs() < 0.01,
+            "одиночный кламп к низу viewport"
+        );
     }
 
     // === FR-068 W3: Component (Dropdown) ====================================

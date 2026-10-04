@@ -487,12 +487,22 @@ pub struct TableLayout {
 /// Геометрия таблицы сравнения: над баром по центру, кламп к окну.
 /// `columns` — подписи колонок (первая — «переменная»), `rows` — число
 /// строк сравнения. Таблица в v1 read-only — hit-тесты не нужны.
+///
+/// FR-UI-TABLE-IMMEDIATE (audit §6.2): сетка ячеек делегирована в
+/// [`canvas_ui::kit::table_layout_immediate`] — immediate-API для таблиц
+/// (без retained-state). Внешний rect (с клампом к бару/окну), расчёт
+/// `visible` (усечение строк по высоте) и слот индикатора «… ещё N»
+/// остаются у потребителя (whatif-специфика); сетка header+cells —
+/// kit-функция с бит-в-бит паритетом (проверяется существующими тестами
+/// `table_layout_*`).
 pub fn table_layout(
     columns: &[String],
     rows: usize,
     bar_rect: [f32; 4],
     viewport: [f32; 2],
 ) -> TableLayout {
+    use canvas_ui::geometry::UiRect;
+    use canvas_ui::kit::table_layout_immediate;
     let cols = columns.len().max(1);
     let width = (TABLE_COL_W * cols as f32 + TABLE_MARGIN * 2.0)
         .min((viewport[0] - BAR_MARGIN * 2.0).max(0.0));
@@ -524,29 +534,29 @@ pub fn table_layout(
     } else {
         None
     };
-    let header: Vec<[f32; 4]> = (0..cols)
-        .map(|c| {
-            [
-                x + TABLE_MARGIN + c as f32 * TABLE_COL_W,
-                y + TABLE_MARGIN,
-                TABLE_COL_W,
-                TABLE_HEAD_H,
-            ]
-        })
-        .collect();
-    let cells = (0..visible)
-        .map(|r| {
-            (0..cols)
-                .map(|c| {
-                    [
-                        x + TABLE_MARGIN + c as f32 * TABLE_COL_W,
-                        y + TABLE_MARGIN + TABLE_HEAD_H + r as f32 * TABLE_ROW_H,
-                        TABLE_COL_W,
-                        TABLE_ROW_H,
-                    ]
-                })
-                .collect()
-        })
+    // FR-UI-TABLE-IMMEDIATE: delegating cell grid to kit-function.
+    // Slot — внутренний прямоугольник таблицы (после TABLE_MARGIN со всех
+    // сторон); header — первой строкой, далее visible строк данных.
+    let slot = UiRect::new(
+        x + TABLE_MARGIN,
+        y + TABLE_MARGIN,
+        (width - TABLE_MARGIN * 2.0).max(0.0),
+        (height - TABLE_MARGIN * 2.0).max(0.0),
+    );
+    let col_widths: Vec<f32> = vec![TABLE_COL_W; cols];
+    let row_heights: Vec<f32> = vec![TABLE_ROW_H; visible];
+    let grid: Vec<Vec<UiRect>> =
+        table_layout_immediate(slot, &col_widths, &row_heights, Some(TABLE_HEAD_H));
+    // Адаптер UiRect → [f32;4]: первая строка — header, остальное — cells.
+    let to_arr = |r: &UiRect| [r.x, r.y, r.w, r.h];
+    let header: Vec<[f32; 4]> = grid
+        .first()
+        .map(|row| row.iter().map(to_arr).collect())
+        .unwrap_or_default();
+    let cells: Vec<Vec<[f32; 4]>> = grid
+        .iter()
+        .skip(if header.is_empty() { 0 } else { 1 })
+        .map(|row| row.iter().map(to_arr).collect())
         .collect();
     TableLayout {
         rect: [x, y, width, height],

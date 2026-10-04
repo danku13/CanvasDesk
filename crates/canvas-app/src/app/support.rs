@@ -120,6 +120,31 @@ pub(super) fn paint_items_to_band(
     }
 }
 
+/// FR-UI-ICON (Agent D, audit §6.1): конвертация items [`Painter`]
+/// (только `PaintItem::Rect`-примитивы — без текстов) в `Vec<CardInstance>`
+/// — для потребителей, у которых весь вывод иконок квадовый (напр.
+/// `palette.rs::icon_quads` через `kit::icon_composition`). Тексты здесь
+/// не появляются (иконки — чисто квадовые композиции), но `paint_items_to_band`
+/// ожидает оба выхода — передаём выброшенный `texts` ( остаётся пустым: ни
+/// `PaintItem::Text`, ни `Icon` не порождается `icon_composition`).
+///
+/// `pub(crate)` — переэкспорт через `app.rs::pub use support::paint_items_to_cards`
+/// для `palette.rs` (тот же крейт, не часть внешнего API приложения).
+pub(crate) fn paint_items_to_cards(items: Vec<PaintItem>) -> Vec<CardInstance> {
+    let mut quads = Vec::new();
+    let mut texts = Vec::new();
+    paint_items_to_band(items, &mut quads, &mut texts);
+    // Контракт `icon_composition`: ни одного PaintItem::Text (иконки —
+    // только Rect-квады). Если текст всё же появился — это баг в ките
+    // (молчаливо отбросить нельзя — потребитель не увидит надпись).
+    debug_assert!(
+        texts.is_empty(),
+        "icon_composition/paint_items_to_cards: тексты не ожидаются, но {n} получено",
+        n = texts.len()
+    );
+    quads
+}
+
 /// FR-059: вариант [`paint_items_to_band`] для модального прохода main
 /// stage (`stage_instances` — world-конвенция, как прежние ручные пушы):
 /// Rect → screen_to_world + деление на zoom (радиус тоже), Text —

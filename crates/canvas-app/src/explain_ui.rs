@@ -114,6 +114,14 @@ pub fn window_rect(viewport: [f32; 2]) -> [f32; 4] {
 }
 
 /// Кнопка ✕ — правый верхний угол шапки (паттерн main stage).
+///
+/// TODO(G/FR-070): migrate to `kit::stage_close_button(panel_slot)` —
+/// размер 30×30 (`CLOSE_SIZE`) против канонического `ICON_BUTTON_SIZE=26`
+/// даёт визуальный скачок 4px (уменьшение кнопки) + сдвиг позиции
+/// (inset 14 → `SPACING_SM=8`, `y=(HEADER_H-CLOSE_SIZE)/2=13` → `+8`);
+/// `HEADER_H=56` уже имеет TODO на `PANEL_HEADER_H_L=44` (W-d аудит §4) —
+/// миграция close_button связана с переносом всей шапки на новую шкалу
+/// (I-1: ноль скачка).
 pub fn close_rect(win: [f32; 4]) -> [f32; 4] {
     [
         win[0] + win[2] - CLOSE_SIZE - 14.0,

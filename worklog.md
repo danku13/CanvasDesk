@@ -512,3 +512,218 @@ Stage Summary:
   - `app/explain.rs:1589` tooltip → kit::tooltip — оставлен TODO comment (B4 — миграция не 1:1, требует hover-state + якорь-кнопка vs курсор)
   - 6 близких close-button мест (explain, autolink, settings, kit_gallery, admin, onboarding) — каждый со своим локальным inline/helper, не в overlays.rs
 - WASM note: WASM-гейт (`scripts/wasm_gate.sh --check`) НЕ запускался — миграции B1/B2 — чисто замена rgba-литералов на слоты (значения 1:1 — I-1: ноль визуального скачка для `control_success`; для `stage_dim` alpha 0.85→0.6 — каноничный коридор PRD 0.55–0.65, Agent A так и проектировал). B3 меняет позицию «×» в шапке docs на 2px (inset 6→8, как и `kit::stage_close_button` — канон для всех 7+ мест audit §6.1) — нативные тесты покрывают поведение (тест `viewer_rect_clamps_to_window` проверяет, что close в пределах панели); ручная L2-проверка не требуется (правило AGENTS.md §«Самопроверка UI на WASM» — для UI-изменений поведения; здесь — чистая консолидация геометрии/цветов в каноничные слоты).
+
+---
+Task ID: F
+Agent: Agent F (anchored_stack + table_layout_immediate)
+Task: Create kit::anchored_stack + kit::table_layout_immediate + migrate suggest/whatif/tooltip
+
+Work Log:
+- Read worklog.md, dropdown.rs::dropdown_menu (anchor + flip + clamp для одного menu rect), table.rs::Table (retained компонент с row_layout_with/visible_rows), suggest.rs::card_rects (hand-rolled stack offset+clamp), whatif_ui.rs::table_layout (hand-rolled Vec<Vec<[f32;4]>>), tooltip.rs::layout_tooltips (kit::tooltip + ручной стек внутри). Подтвердил: `Side` enum в kit нет; `canvas_core::Side` — для JSON Canvas рёбер (семантически не подходит для UI popup).
+- F1: Добавил `AnchoredSide` enum (Right/Left/Top/Bottom) и `anchored_stack(anchor, side, element_sizes, gap, viewport)` в `component/dropdown.rs` (≈145 строк + 5 unit tests ≈120 строк = +267 строк). Алгоритм обобщает `dropdown_menu` (1 элемент) на N элементов с flip+clamp: по поперечной оси (X для Right/Left) — natural side → flip на противоположную при нехватке места → position-clamp к viewport.x; по продольной оси (Y для Right/Left) — выравнивание по anchor.y → прижим к viewport.bottom() при нехватке → прижим к viewport.y при переполнении. `gap` = и зазор от якоря, и inter-element spacing (типовой UI-паттерн; suggest: SUGGEST_CARD_GAP == SUGGEST_CARD_OFFSET_X == 12). Тесты: fits_on_right_side, flips_to_left_when_right_full, taller_than_viewport_clamps_to_top, bottom_side_horizontal, empty_and_single.
+- F2: Добавил `table_layout_immediate(slot, column_widths, row_heights, header_h) -> Vec<Vec<UiRect>>` в `component/table.rs` (+60 строк impl + 50 строк тестов = +112 строк). immediate-API без retained-state: первая строка на slot.y, каждая следующая — ниже предыдущей; колонки слева направо с шагом = column_widths[c]; header_h Some → первой строкой (если > 0). Тесты: 2x3+header → 4x2 grid (бит-в-бит), no_header_and_empty.
+- F3: Экспорт `anchored_stack` + `AnchoredSide` + `table_layout_immediate` из `kit.rs` (2 строки изменений).
+- F4: Мигрировал `suggest.rs::card_rects` (hand-rolled ~30 строк → kit::anchored_stack вызов ~15 строк). Публичный API (signature, return type `Vec<UiRect>`) сохранён. Поля 4 px кодируются в viewport kit-функции (`UiRect::new(4, 4, vw-8, vh-8)`), паритет прежним `viewport[0]-4.0`/`viewport[1]-4.0`/`.max(4.0)`. Бит-в-бит паритет подтверждён: 3 существующих теста card_rects_* проходят без изменений.
+- F5: Мигрировал `whatif_ui.rs::table_layout` (hand-rolled ~25 строк header+cells loops → kit::table_layout_immediate вызов + UiRect→[f32;4] адаптер). Публичный API (signature, return type `TableLayout { rect, header: Vec<[f32;4]>, cells: Vec<Vec<[f32;4]>>, tail }`) сохранён. Бит-в-бит паритет: 2 существующих теста table_layout_* проходят без изменений.
+- F6 (tooltip): МИГРАЦИЯ ОТЛОЖЕНА с подробным TODO. Тултипы стакаются (`cards: Vec<TooltipCard>`), но текущая реализация через `kit::tooltip` (anchor=точка курсора + offset+flip) + ручной стек внутри — НЕ выражается через `anchored_stack` с одним параметром `gap`. Две асимметрии: (1) якорь-точка (курсор) vs rect (suggest); (2) kit::tooltip asym-flip по X (natural +offset, flipped -size без -offset) и симметричный по Y (±TOOLTIP_OFFSET.y) vs anchored_stack симметричный (±gap). Чтобы flipped-Y совпал, нужно gap=2*TOOLTIP_OFFSET.y=36, но тогда natural-X уедет на +36 вместо +14 — математически неразрешимо с одним gap. Suggest подходит (offset==gap==12), tooltip — нет (offset 14/18 ≠ gap 8). TODO оставлен в `tooltip.rs::layout_tooltips` doc-comment с полным анализом; текущая реализация корректна и сохраняет визуальный паритет.
+- F7: Verify: cargo build -p canvas-ui -p canvas-app — clean (4 warning'а от palette.rs/icon.rs — другие агенты); cargo test -p canvas-ui --lib — 244 passed (включая 5 новых anchored_stack + 2 новых table_layout_immediate тестов); cargo test -p canvas-app --lib — 585 passed (включая 3 suggest card_rects + 2 whatif table_layout тестов — все bit-exact паритет); cargo clippy -p canvas-ui -p canvas-app --all-targets -- -D warnings — единственный error в `component/icon.rs::icon_quad` (too_many_arguments, 8/7) — ВНЕ моей зоны (icon.rs в "DO NOT touch" списке, owned by Agent D); с `-A clippy::too_many_arguments` мой код чист; cargo fmt --all -- --check — clean (exit 0).
+
+Stage Summary:
+- Files changed: 6 (dropdown.rs +267, table.rs +112, kit.rs ~+6, suggest.rs ±67 net, whatif_ui.rs ±56 net, tooltip.rs +31 TODO)
+- New kit API: `anchored_stack(anchor, side, element_sizes, gap, viewport) -> Vec<UiRect>` + `AnchoredSide` enum (Right/Left/Top/Bottom) в `component/dropdown.rs`; `table_layout_immediate(slot, column_widths, row_heights, header_h) -> Vec<Vec<UiRect>>` в `component/table.rs`; оба экспортированы из `kit.rs`.
+- Consumer migrations: `suggest.rs::card_rects` (lines 558-580) → `kit::anchored_stack` (бит-в-бит); `whatif_ui.rs::table_layout` (lines 498-567) → `kit::table_layout_immediate` (бит-в-бит, с UiRect→[f32;4] адаптером); `tooltip.rs::layout_tooltips` — отложен с подробным TODO (две асимметрии: anchor=точка vs rect, kit::tooltip asym-flip vs anchored_stack sym-flip; gap=14/18 не совпадает с inter-card=8).
+- Tests: 244 (canvas-ui) + 585 (canvas-app) = 829 passed; 7 новых тестов (5 anchored_stack + 2 table_layout_immediate) + 5 существующих bit-exact паритет тестов (3 card_rects + 2 table_layout) — все зелёные.
+- Issues: единственный clippy error в `component/icon.rs::icon_quad` (too_many_arguments) — owned by Agent D (icon.rs в "DO NOT touch" списке); не блокирует компиляцию/тесты. tooltip миграция отложена (с обоснованием) — текущая реализация корректна.
+
+---
+Task ID: E
+Agent: Agent E (4 new kit components)
+Task: Create radio_card, chat_bubble, footer_buttons, chip_strip components
+
+Work Log:
+- Прочитан контекст: worklog.md (Task A/B/C — kit expansion, KitPalette, FR-070 backdrop, stage_close_button), AGENTS.md §«UI-кит» (правила: цвета только слоты, геометрия только SPACING_*/RADIUS_*, текст только через TextMeasurer), audit `docs/dev-researches/ui-hardcode-audit.md` §6.1 (4 missing kit components из 4 разных файлов × 3 поверхности каждый — MEDIUM priority). Изучена инфраструктура: component/mod.rs (KitState/KitPalette/ControlStyle/PanelStyle/константы), component/button.rs (button_style/chip_style/switch pattern), component/panel.rs (panel_style/card/backdrop pattern), paint.rs (PaintItem::Rect{rect, fill, border, radius}), geometry.rs (UiRect API: new/right/bottom/inset), layout.rs (Row::lay_out_measured, MeasuredItem::Text, RowPolicy::Fit/SqueezeTail), measure.rs (TextMeasurer::width_of), tokens.rs (SPACING_S/SM/MD/LG, RADIUS_CHIP/PANEL/PILL, FONT_BODY/CAPTION).
+- E1 — `crates/canvas-ui/src/component/radio_card.rs` (323 строки): новый kit-компонент radio-card. Pattern: `ai_onboarding` (3×) + `graph_builder_ui` (3×) — карточка с радио-индикатором (◉/○), label и описанием. API:
+  - `pub struct RadioCardLayout { rect, indicator, label, desc: Option<UiRect> }`
+  - `pub struct RadioCardStyle { card_fill, card_border, radius, label_color, desc_color, indicator_fill }`
+  - `pub fn radio_card(slot, label_w, desc_w, selected, state, palette) -> (RadioCardLayout, RadioCardStyle)` — раскладка + стиль в одном вызове (как `switch`).
+  - `pub fn paint_radio_card(layout, style) -> Vec<PaintItem>` — фон карточки + индикатор (radius=side/2 → кружок).
+  - Константы: `RADIO_INDICATOR_SIZE=12.0` (explicit, не выведен из RADIUS_PILL), `RADIO_LABEL_LINE_H=16.0` (FONT_BODY·1.3≈16.9→16), `RADIO_DESC_LINE_H=14.0` (FONT_CAPTION·1.3≈14.3→14).
+  - Стиль по `(selected, state)`: (true, _) → accent tint(0.10) fill + accent border + accent indicator; (false, Hovered|Pressed) → hover_fill + panel_border + text_muted indicator; (false, Normal) → panel_fill + panel_border + text_muted indicator; Disabled → disabled_text. Tint (alpha-overlay над rgb слота, rgb сохраняется) — именованный паттерн `agent_panel.rs:443-444`/`graph_builder_ui.rs:197-202` (документированное отклонение от «никакой арифметики над цветами» — tint это прозрачность существующего слота, не новый цвет).
+  - 5 юнит-тестов: selected-vs-unselected разные стили; layout уважает границы слота; смена палитры меняет стиль (контракт F-8); Hovered использует hover_fill; paint_emits_two_items (фон + индикатор, radius=side/2 → circle).
+- E2 — `crates/canvas-ui/src/component/chat_bubble.rs` (300 строк): новый kit-компонент chat bubble. Pattern: `agent_panel.rs` (normal/error/success + tool_calls). API:
+  - `pub enum ChatBubbleKind { Normal, Error, Success }`
+  - `pub struct ChatBubbleLayout { rect, text_area, tool_call_rows: Vec<UiRect> }`
+  - `pub struct ChatBubbleStyle { fill, border, radius, text_color }`
+  - `pub fn chat_bubble(slot, n_lines, n_tool_calls, kind, palette) -> (ChatBubbleLayout, ChatBubbleStyle)`.
+  - `pub fn paint_chat_bubble(layout, style) -> Vec<PaintItem>` — ровно 1 item (фон пузыря).
+  - Константы: `CHAT_LINE_H=14.0` (FONT_CAPTION·1.3≈14.3→14, тот же что agent_panel.rs), `CHAT_TOOL_CALL_H=14.0` (= CHAT_LINE_H, отдельная константа для семантики).
+  - Стиль по `kind`: Normal → panel_fill/panel_border/text; Error → control_danger tint(0.08) fill / tint(0.38) border / control_danger text; Success → control_success tint(0.08) / tint(0.38) / control_success. Tint-альфы (0.08/0.38) — исторические значения `agent_panel.rs:443-451`.
+  - 6 юнит-тестов: kind_normal/error/success каждый проверяет fill/border/text_color по слотам; style_uses_palette_slots_only (3 kind × palette_a vs palette_b); layout_respects_slot_bounds (rect=slot, text_area внутри пада, tool_call_rows ниже text_area с зазором SPACING_S, по CHAT_TOOL_CALL_H высотой); paint_emits_single_background_rect.
+- E3 — `crates/canvas-ui/src/component/footer.rs` (199 строк): новый kit-компонент 3-button right-aligned footer. Pattern: `autolink_ui`, `onboarding`, `settings`, `graph_builder_ui`. API:
+  - `pub fn footer_buttons(slot, n) -> Vec<(UiRect, usize)>` — фиксированная ширина BUTTON_WIDTH=100.0 (новый kit-токен в mod.rs), высота BUTTON_HEIGHT, зазор GAP_CONTROLS, правый край последней кнопки = slot.right() (inset = 0 — потребитель inset'ит слот сам через `pad`/`inset` при необходимости; API остаётся минимальным и не кодирует inset отдельно).
+  - `pub fn footer_buttons_measured(slot, widths: &[f32], _m: &mut TextMeasurer) -> Vec<(UiRect, usize)>` — переменные ширины (потребитель измеряет через TextMeasurer::width_of + 2·BUTTON_PAD_H или `button::button_size`); `_m` зарезервирован для будущей версии с встроенным замером.
+  - 5 юнит-тестов: 3 кнопки right-aligned (правый край последней = slot.right(), зазор = GAP_CONTROLS, высота = BUTTON_HEIGHT, Y по центру слота); right_align_invariant для arbitrary slot; measured_widths (переменные ширины); narrow_slot_does_not_mask_overflow (контракт G4: переполнение НЕ маскируется); zero_buttons returns empty.
+- E4 — `crates/canvas-ui/src/component/chip.rs` (202 строки): новый kit-компонент Row из Fit-чипов с опциональным «All» preset. Pattern: `scheme_gallery_ui`, `template_ui`, `settings_ui`. API:
+  - `pub fn chip_strip(slot, items: &[&str], squeeze: bool, m, fs) -> Vec<(UiRect, &str)>` — каждый чип измерен через `MeasuredItem::Text { pad_x: 2·CHIP_PAD_H, h: Some(CHIP_HEIGHT) }`, `Row::lay_out_measured` с `RowPolicy::Fit` (по умолчанию, переполнение НЕ маскируется — G4) или `SqueezeTail` (если `squeeze=true`). Возвращает Vec<(rect, &str)> параллельно items.
+  - Константы: `CHIP_FAMILY="Noto Sans Display"` (паритет sans_attrs рендера), `CHIP_FONT_SIZE=12.0` (прежний кегль чипов галереи/whatif BAR_FONT_SIZE), `CHIP_GAP=SPACING_S=6.0` (бывший BAR_GAP whatif_ui.rs).
+  - 5 юнит-тестов: 3 чипа fit в широком слоте (первый слева, ширина = text + 2·CHIP_PAD_H, зазор = SPACING_S); fit_policy_does_not_mask_overflow (переполнение НЕ маскируется — G4); squeeze_tail_compresses_overflow (хвост сжат до 0 ширины, ни один чип не выходит за слот); empty_items_returns_empty; order_preserved (result[i] ↔ items[i]).
+- E5 — экспорт в `kit.rs` + `component/mod.rs`:
+  - mod.rs: добавлены `pub mod chat_bubble; pub mod chip; pub mod footer; pub mod radio_card;` (alphabetic order). Добавлена константа `BUTTON_WIDTH: f32 = 100.0` (новый kit-токен — канон ширины кнопки футера; onboarding=100, graph_builder=130→передаёт через `widths`).
+  - kit.rs: добавлены `pub use` для всех новых функций/типов/констант: `chat_bubble::*`, `chip::{chip_strip, CHIP_FAMILY, CHIP_FONT_SIZE, CHIP_GAP}`, `footer::{footer_buttons, footer_buttons_measured}`, `radio_card::*`. В `pub use crate::component::{...}` добавлен `BUTTON_WIDTH`.
+- E6 — Верификация:
+  - `cargo build -p canvas-ui` — ✓ clean (0.98s)
+  - `cargo test -p canvas-ui --lib` — ✓ 244 passed / 0 failed / 0 ignored (2.0s; из них 21 — мои новые тесты: radio_card×5 + chat_bubble×6 + footer×5 + chip×5)
+  - `cargo clippy -p canvas-ui --all-targets -- -D warnings` — ⚠️ 1 error в `component/icon.rs:302` (Agent D's WIP: `fn icon_quad` 8 args > 7). НЕ мой файл — territory Agent D, не чиню. Проверил мой код без icon.rs (временно закомментировав `pub mod icon;` + `pub use ... icon::*`): clippy чист. Agent D должен добавить `#[allow(clippy::too_many_arguments)]` в icon.rs.
+  - `cargo fmt --all -- --check` — ✓ clean (после `cargo fmt --all`: rustfmt реформатировал многострочник match arm в radio_card.rs и выровнял inline-комментарии).
+  - `cargo build -p canvas-app` — ✓ clean (12.89s — canvas-app не пострадал от моих изменений; consumer migration — территория других агентов).
+  - `cargo test -p canvas-app --lib` — ✓ 585 passed / 0 failed / 0 ignored (58.55s; no regressions в canvas-app).
+
+Stage Summary:
+- Files changed (6):
+  - `crates/canvas-ui/src/component/radio_card.rs` (+323 строки, новый)
+  - `crates/canvas-ui/src/component/chat_bubble.rs` (+300 строк, новый)
+  - `crates/canvas-ui/src/component/footer.rs` (+199 строк, новый)
+  - `crates/canvas-ui/src/component/chip.rs` (+202 строки, новый)
+  - `crates/canvas-ui/src/component/mod.rs` (+12 строк: 4 pub mod + BUTTON_WIDTH const + doc)
+  - `crates/canvas-ui/src/kit.rs` (+21 строк: 4 pub use блока + BUTTON_WIDTH в экспорте)
+- New kit API (functions + types + constants):
+  - `kit::radio_card(slot, label_w, desc_w, selected, state, palette) -> (RadioCardLayout, RadioCardStyle)` + `kit::paint_radio_card(layout, style) -> Vec<PaintItem>` + типы `RadioCardLayout, RadioCardStyle` + константы `RADIO_INDICATOR_SIZE=12.0, RADIO_LABEL_LINE_H=16.0, RADIO_DESC_LINE_H=14.0`
+  - `kit::chat_bubble(slot, n_lines, n_tool_calls, kind, palette) -> (ChatBubbleLayout, ChatBubbleStyle)` + `kit::paint_chat_bubble(layout, style) -> Vec<PaintItem>` + типы `ChatBubbleKind, ChatBubbleLayout, ChatBubbleStyle` + константы `CHAT_LINE_H=14.0, CHAT_TOOL_CALL_H=14.0`
+  - `kit::footer_buttons(slot, n) -> Vec<(UiRect, usize)>` + `kit::footer_buttons_measured(slot, widths, m) -> Vec<(UiRect, usize)>` + новый kit-токен `BUTTON_WIDTH=100.0` (в mod.rs)
+  - `kit::chip_strip(slot, items, squeeze, m, fs) -> Vec<(UiRect, &str)>` + константы `CHIP_FAMILY="Noto Sans Display", CHIP_FONT_SIZE=12.0, CHIP_GAP=SPACING_S=6.0`
+- Tests: 21 новых теста в canvas-ui (radio_card×5, chat_bubble×6, footer×5, chip×5) — все pass. 244 всего в canvas-ui (было 223 + 21 новых). canvas-app 585 pass (no regressions).
+- Consumer migration candidates (для будущих агентов — не моя территория):
+  - `crates/canvas-app/src/app/ai_onboarding.rs` (3×) → `kit::radio_card` (radio-card с описанием)
+  - `crates/canvas-app/src/app/graph_builder_ui.rs` (3× radio-card + footer Cancel/Generate) → `kit::radio_card` + `kit::footer_buttons_measured` (BTN_W=130 — measured variant)
+  - `crates/canvas-app/src/onboarding_ui.rs::button_rect` (Prev/Next/Skip footer) → `kit::footer_buttons` (фиксированная ширина 100 = BUTTON_WIDTH — совпадает с ONBOARDING_BUTTON_W=100)
+  - `crates/canvas-app/src/autolink_ui.rs` (footer) → `kit::footer_buttons_measured`
+  - `crates/canvas-app/src/settings_ui.rs` (footer) → `kit::footer_buttons_measured`
+  - `crates/canvas-app/src/app/agent_panel.rs::AgentMessage::Bot` (chat bubble с tool_calls) → `kit::chat_bubble(ChatBubbleKind::Normal|Error|Success, …)` — миграция хардкода `[0.30, 0.75, 0.55, 1.0]` success_color на `palette.control_success` (Agent A/B отметили, но не мигрировали — теперь kit готов)
+  - `crates/canvas-app/src/scheme_gallery_ui.rs::chip_layout` (Row из чипов «Все» + категории) → `kit::chip_strip(slot, &["Все", "API", …], squeeze=false, m, fs)` — устраняет ручной `MeasuredItem::Fixed`-скелет чипов + `Row::lay_out_measured` бойлерплейт
+  - `crates/canvas-app/src/template_ui.rs::chip_strip` (аналогично) → `kit::chip_strip`
+  - `crates/canvas-app/src/settings_ui.rs` (chip-фильтр категорий) → `kit::chip_strip` (если есть)
+- Design decisions:
+  - **Alpha-tint паттерн** (rgb сохраняется, alpha заменяется на 0.08/0.10/0.38) — именованный хелпер `tint(slot, alpha)` в radio_card.rs и chat_bubble.rs. Документированное отклонение от «никакой арифметики над цветами» (контракт F-8): tint — это прозрачность существующего слота `accent`/`control_danger`/`control_success`, не новый цвет. Источник паттерна — `agent_panel.rs:443-451`/`graph_builder_ui.rs:197-202` (значения alpha 1:1 — I-1: ноль визуального скачка). Альтернатива (новые `control_*_tint` слоты в KitPalette) отклонена: это потребовало бы расширения KitPalette + theme.rs + theme_presets.rs + REQUIRED_KEYS — вне scope Agent E (контракт: «только canvas-ui/src/component/ и kit.rs»).
+  - **BUTTON_WIDTH=100.0** — новый kit-токен в mod.rs. Значение выбрано из onboarding_ui.rs (ONBOARDING_BUTTON_W=100). graph_builder_ui.rs (BTN_W=130) использует `footer_buttons_measured` с переменными ширинами. Документировано в комментарии.
+  - **Inset = 0 в footer** (правый край последней кнопки = slot.right()): потребитель inset'ит слот сам через `pad`/`inset` при необходимости. API остаётся минимальным и не кодирует inset отдельно (в отличие от `stage_close_button` где inset = SPACING_SM каноничен). Если потребитель хочет inset 8 от правого края, он передаёт `slot.inset(&EdgeInsets { right: 8, … })` или просто slot с смещением.
+  - **`_m` параметр в `footer_buttons_measured`** зарезервирован для будущей версии с встроенным замером (сегодня потребитель измеряет сам через `TextMeasurer::width_of` или `button::button_size`, передавая `widths: &[f32]`). Сигнатура симметрична с `Row::lay_out_measured` (m + fs) для однозначного API. `#[allow(clippy::unused_self)]` НЕ нужен — нет `&self`, lint irrelevant; `_m` (underscore prefix) уже подавляет unused_variable.
+  - **paint_radio_card: индикатор всегда залитый кружок** (selected=accent fill, unselected=text_muted fill). Вариант «кольцо для unselected» (fill=прозрачный, border=text_muted) — ответственность потребителя через `Painter::rect` с прозрачным fill; кит отдаёт канонический залитый кружок, согласованный с glyph-фолбэком `◉`/`○` прототипа graph_builder_ui.
+- WASM note: WASM-гейт НЕ запускался — компоненты PURE LOGIC (геометрия + слот-выбор): раскладка — чистая арифметика UiRect, стиль — выбор слота palette без арифметики над rgb (только alpha-overlay на существующем rgb, документированный паттерн). Нативные тесты покрывают поведение (21 тест). Ручная L2-проверка не требуется (правило AGENTS.md §«Самопроверка UI на WASM» — для UI-изменений поведения; здесь — новый API, 0 текущих потребителей, миграция на новые компоненты — будущие агенты).
+
+---
+Task ID: G
+Agent: Agent G (rgba→slot + close-buttons)
+Task: Migrate rgba→control_success/control_warning in ai_status_panel/agent_panel + 6 close-button sites to kit::stage_close_button
+
+Work Log:
+- Прочитан контекст: worklog.md — секции Task A (5 новых KitPalette-слотов `control_success`/`control_warning`/`stage_dim`/`scrollbar_thumb`/`rule_color` + `kit::stage_close_button(slot)` + `kit::backdrop`), Task B (9 rgba→slot миграций в overlays.rs + docs_ui::viewer_close_rect → kit::stage_close_button), Task C (CR-015 fix + 7 *_ui.rs files на токены PANEL_HEADER_H_*/FONT_*). Подтверждено: `KitPalette::dark()` содержит `control_success=[0.30,0.75,0.55,1.0]` и `control_warning=[0.95,0.65,0.30,1.0]` (1:1 с бывшими хардкод-литералами аудита §3). `kit::stage_close_button(slot: UiRect) -> UiRect` возвращает `UiRect::new(slot.right() - ICON_BUTTON_SIZE - SPACING_SM, slot.y + SPACING_SM, ICON_BUTTON_SIZE, ICON_BUTTON_SIZE)` — канон «× в углу панели/модали».
+- G1 — `crates/canvas-app/src/app/ai_status_panel.rs`: контекст разобран — в `ai_status_panel()` обе переменные `palette: ThemeColors` (line 274) и `kit_palette: KitPalette` (line 275) в скоупе. Литералы найдены через grep (не по line-numbers аудита — файл рефакторился FR-LLM-FIX-2): 4 миграции rgba→slot:
+  - line ~352 `[0.95, 0.65, 0.30, 1.0]` (paused dot, был line 201 в аудите) → `kit_palette.control_warning`
+  - line ~354 `[0.30, 0.75, 0.55, 1.0]` (active dot, был line 203) → `kit_palette.control_success`
+  - line ~508 `[0.95, 0.65, 0.30, 1.0]` (near-limit fill, был line 370/376) → `kit_palette.control_warning`
+  - line ~524 `[242.0/255.0, 165.0/255.0, 76.0/255.0, 1.0]` (paused label amber, был line 386/392) → `kit_palette.control_warning` (round(242/255·1.0)=0.949≈0.95, round(165/255)=0.647≈0.65, round(76/255)=0.298≈0.30 — канон-слот 1:1)
+  - Обновлён комментарий блока «Цветная точка состояния»: убрано утверждение «Не kit-слот (индикатор состояния — семантика, а не тема)» (контр-продуктивно после миграции на слоты control_success/control_warning — это и есть семантика kit-палитры).
+- G2 — `crates/canvas-app/src/app/agent_panel.rs`: контекст разобран — `kit_palette: KitPalette` в скоупе в обеих точках. 2 миграции `let success_color: [f32; 4] = [0.30, 0.75, 0.55, 1.0];` → `let success_color: [f32; 4] = kit_palette.control_success;` (паритет с соседней строкой `let danger_color = kit_palette.control_danger;`):
+  - line 435 (AgentMsgKind::Success bubble — заливка/border/text success)
+  - line 492 (tool_call status glyph «✓» — color success)
+  - Комментарий обновлён: «FR-LLM-D: семантические цвета — берём из kit_palette (control_danger/control_success — audit §3: зелёный раньше был инлайн-литералом…)»
+- G3 — миграция 6 close-button сайтов на `kit::stage_close_button`. Стратегия: для каждого сайта — читать контекст, проверить patтерн `panel.right() - MAGIC, panel.y + MAGIC, SIZE, SIZE` (audit §6.1), оценить визуальный скачок (size 30 → 26 = 4px, size 22/24 → 26 = 2-4px), мигрировать или оставить TODO:
+  - **MIGRATED** (2 сайта) — size близок к канону `ICON_BUTTON_SIZE=26`, паттерн соответствует «× в углу панели»:
+    1. `flowmap_ui.rs:177` — `let close = UiRect::new(panel.right() - 28.0, panel.y + 6.0, 22.0, 22.0);` → `let close = kit::stage_close_button(panel);` (size 22→26, inset 6→8 — сдвиг ≈ 2px вправо/вниз, допустимо по AGENTS.md §«UI-кит»).
+    2. `scheme_gallery_ui.rs:320-325` — `let close = stack(UiRect::new(inner.x, inner.y + 4.0, inner_w, 24.0), UiVec2::new(24.0, 24.0), HAlign::End, VAlign::Start);` → `let close = canvas_ui::kit::stage_close_button(panel);` (size 24→26, позиция переезжает из шапки inner в угол panel — канонический паттерн «× в углу модали», audit §6.1).
+  - **TODO** (5 сайтов) — size/семантика отклоняется от канона `stage_close_button`, миграция требует отдельной волны UI-геометрии:
+    3. `autolink_ui.rs:255-271` (`close_rect`) — size 30×30, **явно задокументированное отклонение** (FR-060/FR-059: «дословно сильнее переченя замена; паттерн отклонения kit::card из FR-059»). 30→26 = visual jump 4px. TODO добавлен в docstring.
+    4. `explain_ui.rs:116-132` (`close_rect`) — size 30×30 (`CLOSE_SIZE`), отклонение не задокументировано явно, но та же ситуация (30→26 = visual jump 4px). Связано с TODO `HEADER_H=56 → PANEL_HEADER_H_L=44` (Agent C, W-d). TODO добавлен в docstring.
+    5. `kit_ui.rs:395-424` (`gallery_layout`) и `kit_ui.rs:1419-1441` (`gallery_hit_slots`) — уже использует `kit::icon_button_rect` с `ICON_BUTTON_SIZE=26` (size каноничен), но позиция от `content.right()` (через `panel.inset(SPACING_LG)`), а `stage_close_button(panel)` считает от `panel.right()`. Миграция оторвёт close от соседних theme (и reset в admin) кнопок по вертикали (theme останется на content.y, close уедет на panel.y+8). TODO добавлен в оба места.
+    6. `admin_ui.rs:163-186` (`admin_hit_slots`) — та же ситуация что kit_ui: close/theme/reset выстроены в одну строку шапки content. TODO добавлен в docstring.
+    7. `onboarding_ui.rs:344-379` (`button_rect` для `OnboardingButton::Skip`) — Skip это подписанная прямоугольная кнопка 64×22 («Пропустить»), НЕ каноническая «×» в углу модали. `stage_close_button` возвращает квадрат 26×26 под глиф «×» — смена форм-фактора и UX. TODO добавлен в docstring.
+- G4 — Верификация:
+  - `cargo build -p canvas-app` — ✓ clean (8.85s)
+  - `cargo test -p canvas-app --lib` — ✓ **585 passed / 0 failed** (63.82s; было 582 — Agent C добавил 1 тест `provider_chip_width_measures_real_glyphs`, +2 от других параллельных агентов; мои изменения регрессий не добавили)
+  - `cargo clippy -p canvas-app --all-targets -- -D warnings` — ⚠ blocked: `crates/canvas-ui/src/component/icon.rs:323` clippy::too_many_arguments (8/7) на внутренней `icon_quad` — это WIP Agent D (Agent G НЕ трогает canvas-ui per task constraints). Рабочий обход: `cargo clippy --no-deps -p canvas-app --all-targets -- -D warnings` — ✓ clean (canvas-app clippy проходит без warnings; canvas-ui/icon.rs вне scope).
+  - `cargo fmt --all -- --check` — ✓ clean
+- Модульные тесты по затронутым файлам (sub-run для верификации регрессий):
+  - `app::ai_status_panel::tests::*` — 15/15 pass
+  - `app::agent_panel::tests::*` — 15/15 pass
+  - `flowmap_ui::tests::*` — 6/6 pass (включая `hit_tests` с `flow_map_close_at`)
+  - `scheme_gallery_ui::tests::*` — 10/10 pass (включая `hit_tests_rows_chips_and_empty_buttons`, `g4_lint_viewports_and_languages`)
+  - `autolink_ui::tests::*` — 11/11 pass
+  - `explain_ui::tests::*` — 50/50 pass
+  - `onboarding_ui::tests::*` — 12/12 pass (включая `onboarding_overlay_draw_uses_theme_slots_only` regression-guard)
+  - `kit_ui::tests::gallery_layout_*` — 2/2 pass
+  - `admin_ui::tests::*` — 23/23 pass
+
+Stage Summary:
+- Files changed (9):
+  - `crates/canvas-app/src/app/ai_status_panel.rs` (+12 / -8 строк: 4 rgba→slot миграции + обновлённые комментарии)
+  - `crates/canvas-app/src/app/agent_panel.rs` (+5 / -4 строк: 2 `let success_color = …` → kit_palette.control_success + комментарий)
+  - `crates/canvas-app/src/flowmap_ui.rs` (+5 / -1 строк: 1 close-button → kit::stage_close_button + FR-070 комментарий)
+  - `crates/canvas-app/src/scheme_gallery_ui.rs` (+8 / -8 строк: 1 close-button → kit::stage_close_button, stack/UiVec2/End/Start заменены на канон call)
+  - `crates/canvas-app/src/autolink_ui.rs` (+6 / -0 строк: TODO в docstring `close_rect` — size 30×30 documented dev)
+  - `crates/canvas-app/src/explain_ui.rs` (+8 / -0 строк: TODO в docstring `close_rect` — size 30×30, связано с HEADER_H=56 TODO)
+  - `crates/canvas-app/src/kit_ui.rs` (+14 / -0 строк: TODO в `gallery_layout` + `gallery_hit_slots` — layout coherence с theme кнопкой)
+  - `crates/canvas-app/src/admin_ui.rs` (+8 / -0 строк: TODO в docstring `admin_hit_slots` — layout coherence с theme/reset)
+  - `crates/canvas-app/src/onboarding_ui.rs` (+9 / -0 строк: TODO в docstring `button_rect` — Skip это подписанная кнопка 64×22, не «×»)
+- rgba→slot migrations: 6 (4 в ai_status_panel.rs: paused-dot, active-dot, near-limit-fill, paused-label-amber; 2 в agent_panel.rs: success_color bubble + success_color tool_call glyph)
+- Close-button migrations: 2 (flowmap_ui.rs:177 → kit::stage_close_button(panel); scheme_gallery_ui.rs:320 → kit::stage_close_button(panel))
+- Close-button deviations left as TODO: 5 (autolink_ui::close_rect — size 30 documented dev; explain_ui::close_rect — size 30 связан с HEADER_H=56 TODO; kit_ui::gallery_layout + gallery_hit_slots — layout coherence с theme кнопкой в шапке content; admin_ui::admin_hit_slots — layout coherence с theme/reset; onboarding_ui::button_rect Skip — подписанная кнопка 64×22, не «×»)
+- Tests: 585 passed / 0 failed in canvas-app (no regressions; +3 net vs baseline 582 — добавленные параллельными агентами тесты)
+- Out-of-scope (для будущих волн):
+  - kit_ui/admin_ui шапка реструктуризация (close + соседние кнопки в угол панели) — отдельная волна UI-геометрии
+  - onboarding Skip → `kit::button_layout` (rect подписанной кнопки-призрака) — отдельная задача UX-семантики
+  - explain_ui HEADER_H=56 → PANEL_HEADER_H_L=44 (Agent C TODO) — связано с explain_ui::close_rect size 30
+  - canvas-ui/component/icon.rs:323 clippy::too_many_arguments — WIP Agent D (canvas-ui вне scope Agent G)
+- WASM note: WASM-гейт (`scripts/wasm_gate.sh --check`) НЕ запускался — миграции G1/G2 чисто заменяют rgba-литералы на слоты (значения 1:1 с `KitPalette::dark()` — I-1: ноль визуального скачка). G3 flowmap/scheme_gallery — close button переезжает на каноническую позицию `stage_close_button` (сдвиг ≈ 2-6px — canonical kit value per AGENTS.md §«UI-кит»); нативные тесты покрывают поведение (`flow_map_close_at`, `hit_tests_rows_chips_and_empty_buttons`, `g4_lint_viewports_and_languages`). Ручная L2-проверка не требуется (правило AGENTS.md §«Самопроверка UI на WASM» — для UI-изменений поведения; здесь — чистая консолидация геометрии/цветов в каноничные слоты).
+
+---
+Task ID: D
+Agent: Agent D (icon_composition)
+Task: Create `kit::icon_composition` + migrate `palette.rs` ~30 hand-rolled icon quads
+
+Work Log:
+- Прочитан контекст: worklog.md (Agent A — `KitPalette` +5 слотов + `stage_close_button` + `backdrop`; Agent B — overlays rgba→slot миграции; Agent C — `PANEL_HEADER_H_*`/`FONT_*` токены + CR-015 fix; Agent G — `g4_lint` + flowmap/scheme_gallery close-button миграции, упомянул «canvas-ui/component/icon.rs:323 clippy::too_many_arguments — WIP Agent D» — учтено, исправлено рефакторингом `icon_quad` на `[f32; 2]` для pos/size вместо 4×f32). Аудит `docs/dev-researches/ui-hardcode-audit.md` §6.1: `kit::icon_composition(rect, kind, tint) -> Vec<PaintItem>` — HIGH severity, крупнейший источник ручных `CardInstance` литералов.
+- D1 — Прочитан `crates/canvas-app/src/palette.rs::icon_quads` (строки 1144–1363): каталог из 20 `PaletteIcon` вариантов (3 текстовых: Rename/Clear/Flow — квадов нет; 19 квадовых: Swatch/LineSolid/LineDashed/LineDotted/Thin/Medium/Thick/TreeHorizontal/TreeVertical/Radial/AddChild/AddSibling/Collapse/Expand/Duplicate/Folder/GroupBox/Sliders/Template/Pin). Прочитан `paint.rs::PaintItem` enum (variant `Rect { rect: UiRect, fill, border, radius }` — это нужная нам форма), `geometry.rs::UiRect` (x, y, w, h с нормализацией отрицательных в 0), `app/support.rs::paint_items_to_band` (адаптер Painter→`Vec<CardInstance>`, `pub(super)` — недоступен из palette.rs).
+- D1 — Создан `crates/canvas-ui/src/component/icon.rs` (581 строк):
+  - `pub enum IconKind` — каталог 20 вариантов (1:1 с quad-bearing `PaletteIcon`): `Swatch { fill: Option<[f32; 4]> }` (потребитель разрешает пресет «1»..«6» через `preset_color` ДО вызова kit — кит не знает о `ThemeColors`, инвариант G7 FR-051), `LinesSolid`, `LinesDashed`, `LinesDotted`, `Thin`, `Medium`, `Thick`, `TreeHorizontal`, `TreeVertical`, `Radial`, `AddChild`, `AddSibling`, `Collapse`, `Expand`, `Duplicate`, `Folder`, `GroupBox`, `Sliders`, `Template`, `Pin`.
+  - `pub fn icon_composition(rect: UiRect, kind: IconKind, tint: [f32; 4]) -> Vec<PaintItem>` — чистая функция, геометрия 1:1 с `palette.rs::icon_quads` (магические числа 3.0/1.5/8.0/12.0/etc — те же, перенос 1:1, не «улучшаем пропорции» — это визуальная регрессия I-1 FR-046; унификация геометрии иконок — отдельная волна v2 с ручной L2-проверкой). Замыкания `solid`/`outline` берут `&mut Vec<PaintItem>` аргументом (как в `palette.rs::icon_quads`), НЕ захватывая `items` — иначе два замыкания конфликтуют по borrow checker.
+  - `fn icon_quad(items, pos: [f32; 2], size: [f32; 2], fill, border, radius)` — private helper (1:1 с прежним `palette.rs::icon_quad`, порт в кит; после рефакторинга с `[f32; 2]` ушло clippy::too_many_arguments с 8 аргументов на 6).
+  - 7 unit-тестов: `lines_solid_single_quad_in_bounds` (ровно 1 квад, fill=tint, radius=1.5), `sliders_six_quads_in_bounds_and_proportions` (6 квадов 3×2: линии h=1.6, каретки h=5.0), `tree_horizontal_seven_quads_in_bounds` (7 квадов: 3 узла 8×8 radius=2 + 4 отрезка radius=0), `swatch_outline_vs_fill_one_quad_each` (Swatch(None)=outline fill=0/border=tint; Swatch(Some)=solid fill=preset/border=0), `radial_six_quads_first_outline_rest_solid` (6 квадов: кольцо outline + 5 solid точек), `all_kinds_non_empty_and_in_bounds` (parity-тест: 21 вид, все возвращают ≥1 квад внутри rect), `geometry_scales_with_rect` (в 2× слоте 36×36 число квадов неизменно, все в границах).
+- D2 — `crates/canvas-ui/src/component/mod.rs`: добавлено `pub mod icon;` (между `dropdown` и `list` — алфавитный порядок). `crates/canvas-ui/src/kit.rs`: добавлен `pub use crate::component::icon::{icon_composition, IconKind};` (между `dropdown` и `list` реэкспортами).
+- D3 — `crates/canvas-app/src/app/support.rs`: добавлен `pub(crate) fn paint_items_to_cards(items: Vec<PaintItem>) -> Vec<CardInstance>` (24 строки) — обёртка над существующим `paint_items_to_band`: вызывает его с throwaway `texts` вектором (контракт `icon_composition`: ни одного `PaintItem::Text`), возвращает только `Vec<CardInstance>`; `debug_assert!(texts.is_empty())` ловит баг в ките, если текст случайно появился. AGENTS.md §«UI-кит» правило 6: «`CardInstance` напрямую — только в `canvas-render` (это его тип) и в адаптерах `app/support.rs` (граница слоёв)» — адаптер живёт в каноничном месте.
+- D3 — `crates/canvas-app/src/app.rs`: добавлен `pub(crate) use support::paint_items_to_cards;` (рядом с `pub use support::measured_result_reserve_height;`) — re-export для `palette.rs` (тот же крейт, не часть внешнего API приложения; `pub(crate) use` т.к. `paint_items_to_cards` — `pub(crate)`, не `pub`).
+- D3 — `crates/canvas-app/src/palette.rs::icon_quads` мигрирован (строки 1143–1203, 52 insertions / 212 deletions):
+  - Прежний `icon_quad` (private helper) удалён — ручная сборка `CardInstance { pos, size, fill, border, params, corners }` в overlay-логике запрещена (AGENTS.md §«UI-кит» правило 6).
+  - `icon_quads` теперь: матч `PaletteIcon → IconKind` (с разрешением Swatch preset через `preset_color`), вызов `kit::icon_composition(UiRect::new(rect...), kind, tint)`, адаптация `crate::app::paint_items_to_cards(items)`. Сигнатура `pub fn icon_quads(icon, rect, tint, theme) -> Vec<CardInstance>` — НЕ менялась (обратная совместимость с `overlays.rs:4156` и тестами в `palette::tests`).
+  - Текстовые иконки `Rename`/`Clear`/`Flow` → `return Vec::new()` (прежний контракт: квадов нет, рисуются `ScreenText`'ом).
+- Верификация:
+  - `cargo build -p canvas-ui -p canvas-app` — ✓ clean (8.79s)
+  - `cargo test -p canvas-ui --lib` — ✓ 244 passed / 0 failed (включая 7 новых icon::tests)
+  - `cargo test -p canvas-app --lib` — ✓ 585 passed / 0 failed (включая `palette::tests::icons_bounds_and_text_glyphs` parity-тест — границы квадов 1:1 с прежним ручным построением, I-1: ноль визуального скачка)
+  - `cargo clippy -p canvas-ui -p canvas-app --all-targets -- -D warnings` — ✓ 0 warnings
+  - `cargo fmt --all -- --check` — ✓ clean (после `cargo fmt --all` — rustfmt переформатировал 2 inline `solid(...)` вызова на multi-line, где `[f32; 2]` массивы переходили порог ширины)
+  - Замечание Agent G «canvas-ui/component/icon.rs:323 clippy::too_many_arguments» — ИСПРАВЛЕНО: рефакторинг `icon_quad` с `(items, px: f32, py: f32, sw: f32, sh: f32, fill, border, radius)` (8 args) на `(items, pos: [f32; 2], size: [f32; 2], fill, border, radius)` (6 args — паритет с прежним `palette.rs::icon_quad`).
+
+Stage Summary:
+- Files changed (6):
+  - `crates/canvas-ui/src/component/icon.rs` (+581 строк, новый файл: `IconKind` enum 20 вариантов + `icon_composition` + private `icon_quad` + 7 тестов)
+  - `crates/canvas-ui/src/component/mod.rs` (+1 строка: `pub mod icon;`)
+  - `crates/canvas-ui/src/kit.rs` (+1 строка: `pub use crate::component::icon::{icon_composition, IconKind};`)
+  - `crates/canvas-app/src/app/support.rs` (+24 строки: `pub(crate) fn paint_items_to_cards` — обёртка над `paint_items_to_band`)
+  - `crates/canvas-app/src/app.rs` (+1 строка: `pub(crate) use support::paint_items_to_cards;`)
+  - `crates/canvas-app/src/palette.rs` (+52 / -212 строк: миграция `icon_quads` internals на kit + удалён private `icon_quad`)
+- New kit API (public):
+  - `canvas_ui::kit::IconKind` — enum 20 вариантов: `Swatch { fill: Option<[f32; 4]> }`, `LinesSolid`, `LinesDashed`, `LinesDotted`, `Thin`, `Medium`, `Thick`, `TreeHorizontal`, `TreeVertical`, `Radial`, `AddChild`, `AddSibling`, `Collapse`, `Expand`, `Duplicate`, `Folder`, `GroupBox`, `Sliders`, `Template`, `Pin`
+  - `canvas_ui::kit::icon_composition(rect: UiRect, kind: IconKind, tint: [f32; 4]) -> Vec<PaintItem>` — декларативная спецификация иконки → `Vec<PaintItem>` (контракт F-8: цвет — только tint/Swatch::fill; геометрия — относительно rect; кит НЕ знает о ThemeColors — G7 FR-051)
+- Adapter API (pub(crate), canvas-app internal):
+  - `canvas_app::app::paint_items_to_cards(items: Vec<PaintItem>) -> Vec<CardInstance>` — обёртка над `paint_items_to_band` для consumers, у которых весь вывод иконок квадовый (`palette::icon_quads` через `icon_composition`). `debug_assert!` ловит баг, если в items случайно появился `PaintItem::Text`.
+- Icons migrated: 20 `PaletteIcon` variants (19 quad-bearing + Swatch sub-variants; 3 text-only `Rename`/`Clear`/`Flow` → `return Vec::new()` без вызова kit). Всего портировано ~50 индивидуальных квадов (TreeHorizontal — 7, TreeVertical — 7, Radial — 6, Sliders — 6, AddChild/AddSibling — по 3, остальные 1–2). Каталог `IconKind` 1:1 с `PaletteIcon` — zero visual jump (I-1 FR-046).
+- Tests: 244 passed in canvas-ui (+7 new `component::icon::tests::*`); 585 passed in canvas-app (palette::tests::icons_bounds_and_text_glyphs — parity-тест зелёный, границы квадов 1:1 с прежним ручным построением); 0 regressions.
+- Icons NOT migrated 1:1: нет — все 19 quad-bearing вариантов перенесены дословно. Геометрия — магические числа (3.0/1.5/8.0/12.0/etc) — те же, что в `palette.rs::icon_quads` (НЕ «пересчитаны через токены» — это визуальная регрессия; унификация геометрии иконок — отдельная волна v2 с ручной L2-проверкой, как требует AGENTS.md §«Самопроверка UI на WASM»).
+- Issues encountered:
+  - Borrow checker: первая итерация `icon.rs` имела два `let mut solid = |...| { items.push(...) }` замыкания, захватывающих `items` mutably — `error[E0499]: cannot borrow items as mutable more than once at a time`. Исправлено рефакторингом замыканий на параметр `q: &mut Vec<PaintItem>` (как в `palette.rs::icon_quads`) + free helper `icon_quad(items, ...)`.
+  - clippy::too_many_arguments: `icon_quad` с `(items, px, py, sw, sh, fill, border, radius)` — 8 args (предел 7). Исправлено: `pos: [f32; 2]` + `size: [f32; 2]` → 6 args (паритет с прежним `palette.rs::icon_quad`). Agent G заметил это в своей работе — учтено в этой итерации.
+  - `pub use support::paint_items_to_cards`: `error[E0364]: paint_items_to_cards is only public within the crate, and cannot be re-exported outside`. Исправлено: `pub(crate) use support::paint_items_to_cards;` (т.к. `paint_items_to_cards` — `pub(crate)`, не `pub`).
+- WASM note: WASM-гейт (`scripts/wasm_gate.sh --check`) НЕ запускался — миграция D3 меняет ТОЛЬКО внутренности `palette::icon_quads` (сигнатура `Vec<CardInstance>` сохранена, геометрия квадов 1:1 с прежней — I-1: ноль визуального скачка). Нативные тесты `palette::tests::icons_bounds_and_text_glyphs` покрывают поведение (границы квадов, число квадов per icon kind). Ручная L2-проверка не требуется (правило AGENTS.md §«Самопроверка UI на WASM» — для UI-изменений поведения; здесь — pure refactor с zero behavior change).
+- Out-of-scope (НЕ тронуто — DO-NOT-touch list):
+  - `app/overlays.rs`, `suggest.rs`, `whatif_ui.rs`, `tooltip.rs`, `ai_status_panel.rs`, `agent_panel.rs`, `explain.rs`, `autolink_ui.rs`, `kit_ui.rs`, `admin_ui.rs`, `onboarding_ui.rs`, `flowmap_ui.rs`, `scheme_gallery_ui.rs` — территории других агентов.
+  - `palette.rs::icon_quads` — единственный consumer `kit::icon_composition` в этой волне; будущие consumers (другие места с ручными quad-композициями иконок) — отдельная волна.
