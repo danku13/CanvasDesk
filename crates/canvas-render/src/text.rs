@@ -320,6 +320,19 @@ pub struct LineErrorHit {
     pub message: String,
 }
 
+/// CR-018 волна v2: hit-зона строки таблицы ноды — hover-подсветка ряда +
+/// правка по клику (решение владельца 2026-10-04). rect — логические px
+/// окна (паттерн LineErrorHit); node — позиция ноды во фрейме; row_ix —
+/// индекс строки в кэше ноды (ключ hover-инстанса); line — строка исходного
+/// текста (Some — редактируемая строка данных, клик открывает правку).
+#[derive(Debug, Clone, Copy)]
+pub struct RowHit {
+    pub rect: [f32; 4],
+    pub node: usize,
+    pub row_ix: usize,
+    pub line: Option<usize>,
+}
+
 /// FR-050 Н9-2 (этап D): вид проливаемой строки для тултипа источника —
 /// данные (не текст): форматирование в приложении (i18n RU/EN FR-040).
 /// «Param» — строка параметра шаблонной ноды, запитанная `toParam`-ребром;
@@ -575,6 +588,33 @@ fn entry_body_block(entry: &CachedTitle, source_line: usize) -> Option<&BodyBloc
         .blocks
         .iter()
         .find(|block| block.source_line == Some(source_line))
+}
+
+/// CR-018 волна v2: вписать текст ячейки в ширину `max_w` (world-px) —
+/// посимвольное усечение с хвостовым «…» (инлайн-ошибка в зоне значения
+/// не должна наезжать на соседние колонки). Замер — тем же шейпингом,
+/// что у ячеек (width_of_weighted, вес — MEASURE_WEIGHT).
+fn fit_cell_text(
+    measurer: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut FontSystem,
+    text: &str,
+    family: &str,
+    size: f32,
+    weight: cosmic_text::Weight,
+    max_w: f32,
+) -> String {
+    if measurer.width_of_weighted(fs, text, family, size, weight) <= max_w {
+        return text.to_owned();
+    }
+    let mut fitted: String = text.to_owned();
+    while fitted.chars().count() > 1 {
+        fitted.pop();
+        let candidate = format!("{fitted}…");
+        if measurer.width_of_weighted(fs, &candidate, family, size, weight) <= max_w {
+            return candidate;
+        }
+    }
+    "…".to_owned()
 }
 
 /// FR-061 этап B (D-4): зашейпить ячейку строки таблицы (значение/юнит/
@@ -2675,6 +2715,10 @@ struct CachedRow {
     badge_tone: Option<row_grid::BadgeTone>,
     /// Полный текст ошибки (тултип «!», механика FR-013 пр.4).
     error_message: Option<String>,
+    /// CR-018 волна v2: зашейпленный инлайн-текст ошибки (красным в зоне
+    /// значение/юнит, усечённый по ширине колонок); строится только у
+    /// строк с пустыми ячейками результата (Err-исход без what-if).
+    error_cell: Option<CachedCell>,
     /// FR-061 коммит 3: полная формула усечённой строки (лестница §3.4,
     /// Q8) — тултип строки; None — строка без усечения.
     left_full: Option<String>,
@@ -2720,6 +2764,13 @@ pub struct TextSystem {
     /// (логические px) — пересобираются каждый кадр в prepare_titles;
     /// приложение вычитывает после рендера для тултипа.
     line_error_hits: Vec<LineErrorHit>,
+    /// CR-018 волна v2: зоны строк таблицы кадра (hover ряда + правка по
+    /// клику, логические px) — приложение вычитывает после рендера.
+    row_hits: Vec<RowHit>,
+    /// CR-018 волна v2: строка таблицы под hover — (node, row_ix),
+    /// состояние на следующий кадр (лаг в кадр незаметно — паттерн
+    /// expr_error_hits). None — подсветки нет.
+    hover_row: Option<(usize, usize)>,
     /// FR-050 Н9-2 (этап D): зоны наведения пролитых строк (параметр с
     /// toParam / авто-строка приёмника, логические px) — пересобираются
     /// каждый кадр; приложение вычитывает после рендера для тултипа
@@ -2772,6 +2823,8 @@ impl TextSystem {
             measurer: canvas_ui::measure::TextMeasurer::new(),
             label_cache: HashMap::new(),
             line_error_hits: Vec::new(),
+            row_hits: Vec::new(),
+            hover_row: None,
             spill_hits: Vec::new(),
             formula_ellipsis_hits: Vec::new(),
             body_hits: Vec::new(),
@@ -2893,6 +2946,33 @@ impl TextSystem {
         &self.body_hits
     }
 
+    /// CR-018 волна v2: зоны строк таблицы кадра — приложение вычитывает
+    /// после рендера (hover-подсветка ряда, правка по клику).
+    pub fn line_row_hits(&self) -> &[RowHit] {
+        &self.row_hits
+    }
+
+    /// CR-018 волна v2: строка таблицы под hover — (node, row_ix); None —
+    /// подсветки нет. Состояние прошлого кадра.
+    pub fn hover_row(&self) -> Option<(usize, usize)> {
+        self.hover_row
+    }
+
+    /// CR-018 волна v2: задать строку hover (приложение — между кадрами;
+    /// отставание в кадр незаметно — паттерн expr_error_hits).
+    pub fn set_hover_row(&mut self, hover: Option<(usize, usize)>) {
+        self.hover_row = hover;
+    }
+
+    /// CR-018 волна v2: геометрия полосы строки таблицы для hover-инстанса —
+    /// (zoom кэша, ширина тела в px кэша, row_top, высота строки; два
+    /// последних — world-px). None — кэша/строки нет.
+    pub fn row_band(&self, node_index: usize, row_ix: usize) -> Option<(f32, f32, f32, f32)> {
+        let entry = self.cache.get(&node_index)?;
+        let row = entry.rows.get(row_ix)?;
+        Some((entry.zoom_px, entry.width_px, row.row_top, row.row_line_h))
+    }
+
     /// FR-075: чип категории шапки — род и ширина метки в world px
     /// (кэш раскладки; нет кэша/чипа — None). Квад чипа строит рендер
     /// ([`crate::cards::header_chip_instance`], цвет — [`crate::cards::chip_fill`]).
@@ -3008,6 +3088,8 @@ impl TextSystem {
         let mut ellipsis_hits: Vec<LineErrorHit> = Vec::new();
         // FR-061 хвосты (D-7/D-8): кликабельные зоны тела (см. BodyHit).
         let mut body_hits: Vec<BodyHit> = Vec::new();
+        // CR-018 волна v2: зоны строк таблицы — hover ряда + клик-правка.
+        let mut row_hits: Vec<RowHit> = Vec::new();
         let viewport_physical = frame.viewport_physical;
         let scale_factor = frame.scale_factor;
         self.viewport.update(
@@ -3827,6 +3909,35 @@ impl TextSystem {
                                     zoom_px,
                                 ),
                                 badge,
+                                // CR-018 волна v2 (решение владельца): постоянный
+                                // инлайн-текст ошибки — красным в зоне значение/
+                                // юнит (усечение с «…» по ширине колонок); строится
+                                // только у Err-строк (ячейки результата пусты —
+                                // shape_row_cell на пустом тексте даёт None).
+                                error_cell: row.error_message.as_ref().and_then(|message| {
+                                    let guides = row_guides?;
+                                    let max_w = (guides.unit_right()
+                                        - guides.value_x
+                                        - row_grid::GUIDE_GAP)
+                                        .max(12.0);
+                                    let fitted = fit_cell_text(
+                                        &mut self.measurer,
+                                        &mut self.font_system,
+                                        message,
+                                        MONO_FAMILY,
+                                        RESULT_FONT_SIZE,
+                                        row_grid::MEASURE_WEIGHT,
+                                        max_w,
+                                    );
+                                    shape_row_cell(
+                                        &mut self.font_system,
+                                        &fitted,
+                                        attrs,
+                                        self.theme.error,
+                                        area_px,
+                                        zoom_px,
+                                    )
+                                }),
                                 error_message: row.error_message.clone(),
                                 left_full: pass
                                     .ellipsis
@@ -4549,7 +4660,7 @@ impl TextSystem {
                             } else {
                                 0.0
                             };
-                        for row in &entry.rows {
+                        for (row_ix, row) in entry.rows.iter().enumerate() {
                             let row_y = origin[1]
                                 + row.row_top
                                 + (row.row_line_h - RESULT_LINE_HEIGHT) / 2.0;
@@ -4559,6 +4670,23 @@ impl TextSystem {
                             if top_phys >= cells_bottom_phys {
                                 continue; // ряд ниже зоны ячеек — не рисуем вовсе
                             }
+                            // CR-018 волна v2: hit-зона строки (hover ряда +
+                            // правка по клику) — вся полоса ряда, логические px
+                            // окна (паттерн SpillHit/BodyHit).
+                            let band_left = to_physical([body_left, 0.0])[0] / scale_factor;
+                            let band_right = to_physical([node_right, 0.0])[0] / scale_factor;
+                            row_hits.push(RowHit {
+                                rect: [
+                                    band_left,
+                                    to_physical([origin[0], origin[1] + row.row_top])[1]
+                                        / scale_factor,
+                                    band_right - band_left,
+                                    row.row_line_h * zoom_px / scale_factor,
+                                ],
+                                node: index,
+                                row_ix,
+                                line: row.source_line,
+                            });
                             let bounds_left =
                                 (to_physical([body_left, row_y])[0].floor() as i32) - 1;
                             // FR-061 коммит 3: усечённая формула — зона наведения
@@ -4577,6 +4705,28 @@ impl TextSystem {
                                         (bottom_phys - top_phys) / scale_factor,
                                     ],
                                     message: full.clone(),
+                                });
+                            }
+                            // CR-018 волна v2: инлайн-ошибка — красный текст в
+                            // зоне значение/юнит, право на направляющую юнитов;
+                            // «!»-пилюля и тултип остаются якорями диагностики.
+                            if let Some(cell) = &row.error_cell {
+                                let right_phys =
+                                    to_physical([body_left + guides.unit_right(), row_y])[0];
+                                let left_phys = (right_phys - cell.width_px).round();
+                                areas.push(TextArea {
+                                    buffer: &cell.buffer,
+                                    left: left_phys,
+                                    top: top_phys,
+                                    scale: 1.0,
+                                    bounds: TextBounds {
+                                        left: bounds_left,
+                                        top: top_phys as i32,
+                                        right: (right_phys.round() as i32) + 1,
+                                        bottom: bottom_phys as i32,
+                                    },
+                                    default_color: dim_color(on_card(cell.color), text_factor),
+                                    custom_glyphs: &[],
                                 });
                             }
                             // Значение: право на направляющую чисел
@@ -5012,6 +5162,9 @@ impl TextSystem {
         // полной формулы в оверлее следующего кадра
         self.formula_ellipsis_hits = ellipsis_hits;
         self.body_hits = body_hits;
+        // CR-018 волна v2: зоны строк таблицы кадра собраны — hover/клик
+        // в приложении на следующем кадре (паттерн expr_error_hits)
+        self.row_hits = row_hits;
         // Screen-тексты ПОЛОС (FR-052 U2): отдельная группа на полосу —
         // рендерер рисует полосы по очереди (квады полосы → тексты полосы),
         // поэтому фон следующей полосы не закрывает строки предыдущей,
@@ -6144,6 +6297,7 @@ load = connections_per_sec / (servers * server_rate)\n";
             unit: None,
             badge: None,
             error_message: None,
+            error_cell: None,
             left_full: None,
         };
         let rows = vec![row(&mut fs, 0.0), row(&mut fs, 20.0)];
