@@ -25,7 +25,7 @@ use crate::cards::{
 use crate::config::{
     choose_present_mode, choose_surface_format, clamp_surface_extent, surface_size_valid,
 };
-use crate::edit::{session_area, EditTarget, EditingSession};
+use crate::edit::{session_area_offset, EditTarget, EditingSession};
 use crate::gpu::GpuContext;
 use crate::grid::{GridLook, GridPipeline};
 use crate::guides::{self, GuidePalette, GuidesFrame, GuidesPipeline};
@@ -1025,6 +1025,13 @@ impl Renderer {
         self.text.font_system_mut()
     }
 
+    /// CR-018 v1.1 (вариант B): Y-сдвиг начала текста тела (world-px) по
+    /// тёплому кэшу — фиксируется в `EditingSession::body_offset_px` в
+    /// момент входа в правку. Подробности — [`TextSystem::body_text_offset_px`].
+    pub fn body_text_offset_px(&self, index: usize) -> f32 {
+        self.text.body_text_offset_px(index)
+    }
+
     /// Оверлей-квад (каретка/выделение, T7): rect в пикселях буфера редактора
     /// → world-координаты относительно `origin` (левый верхний угол области).
     fn overlay_quad(
@@ -1203,7 +1210,8 @@ impl Renderer {
         // до вычисления каретки/выделения ниже
         let zoom_px = camera.zoom() * self.scale_factor;
         if let Some(session) = editing.as_deref_mut() {
-            if let Some((_, width, height)) = session_area(scene.canvas, session, scene.edges_avoid)
+            if let Some((_, width, height)) =
+                session_area_offset(scene.canvas, session, scene.edges_avoid)
             {
                 session.set_layout(
                     self.text.font_system_mut(),
@@ -1453,13 +1461,13 @@ impl Renderer {
         if let Some(session) = editing.as_deref_mut() {
             match session.target() {
                 EditTarget::Node(_) => {
-                    if let Some(node) = scene
-                        .canvas
-                        .nodes
-                        .get(session.node_index().unwrap_or(usize::MAX))
+                    // CR-018 v1.1 (вариант B): каретка/выделение — от
+                    // СМЕЩЁННОГО origin (ниже desc-зоны), как и сам буфер
+                    // (editing_buffer) — иначе каретка уезжает в desc.
+                    let zoom_px = camera.zoom() * self.scale_factor;
+                    if let Some((origin, _, _)) =
+                        session_area_offset(scene.canvas, session, scene.edges_avoid)
                     {
-                        let zoom_px = camera.zoom() * self.scale_factor;
-                        let (origin, _, _) = body_area(node);
                         for rect in session.selection_rects(self.text.font_system_mut()) {
                             editing_quads.push(Self::overlay_quad_snapped(
                                 origin,
@@ -1486,7 +1494,7 @@ impl Renderer {
                 }
                 EditTarget::Edge(_) => {
                     if let Some((origin, width, height)) =
-                        session_area(scene.canvas, session, scene.edges_avoid)
+                        session_area_offset(scene.canvas, session, scene.edges_avoid)
                     {
                         // У лейбла связи нет карточки — бокс-подложка с рамкой
                         edge_edit_quads.push(CardInstance {
@@ -1526,7 +1534,7 @@ impl Renderer {
                 // (origin title_edit_area), на z-позиции ноды (editing_node).
                 EditTarget::NodeTitle(_) => {
                     if let Some((origin, _, _)) =
-                        session_area(scene.canvas, session, scene.edges_avoid)
+                        session_area_offset(scene.canvas, session, scene.edges_avoid)
                     {
                         let zoom_px = camera.zoom() * self.scale_factor;
                         for rect in session.selection_rects(self.text.font_system_mut()) {
@@ -2080,7 +2088,7 @@ impl Renderer {
         let editing_buffer = editing_ref.and_then(|session| {
             // (origin, ширина, высота) — clip тексту редактора: тело ноды
             // или бокс лейбла связи (оба таргета, T7/T8)
-            session_area(scene.canvas, session, scene.edges_avoid)
+            session_area_offset(scene.canvas, session, scene.edges_avoid)
                 .map(|(origin, w, h)| (session.buffer(), origin, w, h))
         });
         if let Err(err) = self.text.prepare_titles(

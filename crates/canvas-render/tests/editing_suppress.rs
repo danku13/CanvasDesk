@@ -1,9 +1,11 @@
-//! Репро (волна 1, пункт 2): при редактировании тела остаётся ТОЛЬКО текст
-//! редактора — зона описания и хром таблицы (ячейки значений на
-//! направляющих) гаснут. Скрин 04 (Балансировщик L4, сессия 2026-09-30):
-//! desc-зона и строки таблицы рисовались поверх буфера редактора.
+//! Репро (волна 1, пункт 2; ревизия CR-018 v1.1 — вариант B): при
+//! редактировании тела зона описания ОСТАЁТСЯ видимой (буфер редактора
+//! стартует ниже неё — session.body_offset_px), а хром таблицы (ячейки
+//! значений на направляющих) гаснет. Прежний контракт D-8 (desc гаснет)
+//! заменён решением владельца 2026-10-04: вёрстка при правке — максимально
+//! стабильная, «формулы не улетают вверх».
 //!
-//! Два кадра: idle (тёплый кэш с хромом) → editing (буфер сессии).
+//! Два кадра: idle (тёплый кэш с хромом) → editing (буфер сессии ниже desc).
 
 use canvas_core::expr::{self, ExprOutcome, ExprResults};
 use canvas_core::templates::TemplateRef;
@@ -145,7 +147,7 @@ fn render_frame(
 }
 
 #[test]
-fn editing_hides_desc_zone_and_table_chrome() {
+fn editing_keeps_desc_zone_hides_table_chrome() {
     let text =
         "cache_hit = 0.8\nttl = 300 s\nlatency = (1 - cache_hit) * 200 ms + cache_hit * 20 ms";
     let mut canvas = Canvas::default();
@@ -218,11 +220,11 @@ fn editing_hides_desc_zone_and_table_chrome() {
         "editing-idle",
     );
 
-    // Кадр 2 — editing (буфер сессии; маркер не пересекается с контентом).
+    // Кадр 2 — editing (буфер сессии НИЖЕ desc-зоны; вариант B).
     let zoom_px = 1.0f32;
     let body_w = (380.0 - BODY_PADDING * 2.0).max(10.0);
     let body_h = 200.0;
-    let session = EditingSession::new(
+    let mut session = EditingSession::new(
         text_sys.font_system_mut(),
         EditTarget::Node(0),
         "XYZ editor marker",
@@ -230,6 +232,12 @@ fn editing_hides_desc_zone_and_table_chrome() {
         body_h * zoom_px,
         zoom_px,
     );
+    // Как в app::begin_editing: сдвиг фиксируется по тёплому кэшу idle-кадра.
+    let body_offset = text_sys.body_text_offset_px(0);
+    assert!(body_offset > 0.0, "санити: desc-зона даёт ненулевой сдвиг");
+    session.body_offset_px = body_offset;
+    let edit_origin = [body_origin.0[0], body_origin.0[1] + body_offset];
+    let edit_height = (body_origin.2 - body_offset).max(0.0);
     let (_row, edit_data) = render_frame(
         &gpu,
         &mut text_sys,
@@ -242,12 +250,7 @@ fn editing_hides_desc_zone_and_table_chrome() {
             hud: None,
             editing: Some(0),
             editing_title: None,
-            editing_buffer: Some((
-                session.buffer(),
-                body_origin.0,
-                body_origin.1,
-                body_origin.2,
-            )),
+            editing_buffer: Some((session.buffer(), edit_origin, body_origin.1, edit_height)),
             overlay_texts: &[],
             screen_bands: &[],
             zplan: &zplan,
@@ -306,14 +309,15 @@ fn editing_hides_desc_zone_and_table_chrome() {
         body_top as u32,
         (card_top + card_h - CARD_RESULT_STRIP_H - 2.0) as u32,
     );
-    // Редактирование: маркер виден; desc и хром — нет.
+    // Редактирование (вариант B): desc виден; маркер редактора — НИЖЕ desc
+    // (в полосе body_top + offset); хром значений — нет.
     let edit_marker = lit_in(
         &edit_data,
         padded_row,
         212,
         588,
-        body_top as u32,
-        body_top as u32 + 24,
+        (body_top + body_offset) as u32,
+        (body_top + body_offset + 24.0) as u32,
     );
     let edit_desc_band = lit_in(
         &edit_data,
@@ -328,18 +332,18 @@ fn editing_hides_desc_zone_and_table_chrome() {
         padded_row,
         480,
         588,
-        (body_top + 24.0) as u32,
+        (body_top + body_offset + 24.0) as u32,
         (card_top + card_h - CARD_RESULT_STRIP_H - 2.0) as u32,
     );
     eprintln!(
-        "idle_desc={idle_desc} idle_values={idle_values} | edit_marker={edit_marker} edit_desc_band={edit_desc_band} edit_values={edit_values} card_h={card_h:.1}"
+        "idle_desc={idle_desc} idle_values={idle_values} | offset={body_offset:.1} edit_marker={edit_marker} edit_desc_band={edit_desc_band} edit_values={edit_values} card_h={card_h:.1}"
     );
     assert!(idle_desc > 0, "санити idle: desc-зона видна");
     assert!(idle_values > 0, "санити idle: значения рядов видны");
-    assert!(edit_marker > 0, "санити: маркер редактора виден");
-    assert_eq!(
-        edit_desc_band, 0,
-        "при редактировании desc-зона скрыта (D-8): хвост строки desc светится"
+    assert!(edit_desc_band > 0, "вариант B: desc-зона видна при правке");
+    assert!(
+        edit_marker > 0,
+        "санити: маркер редактора виден ниже desc-зоны"
     );
     assert_eq!(
         edit_values, 0,

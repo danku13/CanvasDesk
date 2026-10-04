@@ -2779,12 +2779,17 @@ impl App {
                             (self.editing.as_mut(), self.renderer.as_mut())
                         {
                             if let Some((origin, _, _)) =
-                                session_area(&self.scene.canvas, session, avoid)
+                                session_area_offset(&self.scene.canvas, session, avoid)
                             {
                                 let x = ((world[0] - origin[0]) * zoom_px) as i32;
                                 let y = ((world[1] - origin[1]) * zoom_px) as i32;
-                                session.click(renderer.font_system_mut(), x, y);
-                                self.editor_dragging = true;
+                                // CR-018 v1.1 (вариант B): клик по стационарной
+                                // зоне (desc/метки — выше начала буфера) не
+                                // двигает каретку — редактор просто живёт.
+                                if y >= 0 {
+                                    session.click(renderer.font_system_mut(), x, y);
+                                    self.editor_dragging = true;
+                                }
                             }
                         }
                         self.request_redraw();
@@ -3026,7 +3031,7 @@ impl App {
                                     if let (Some(session), Some(renderer)) =
                                         (self.editing.as_mut(), self.renderer.as_mut())
                                     {
-                                        if let Some((origin, _, _)) = session_area(
+                                        if let Some((origin, _, _)) = session_area_offset(
                                             &self.scene.canvas,
                                             session,
                                             self.settings.edges_avoid_nodes,
@@ -3579,12 +3584,18 @@ impl App {
             let zoom_px = self.zoom_px();
             if let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut())
             {
-                if let Some((origin, _, _)) =
-                    session_area(&self.scene.canvas, session, self.settings.edges_avoid_nodes)
-                {
+                if let Some((origin, _, _)) = session_area_offset(
+                    &self.scene.canvas,
+                    session,
+                    self.settings.edges_avoid_nodes,
+                ) {
                     let x = ((world[0] - origin[0]) * zoom_px) as i32;
                     let y = ((world[1] - origin[1]) * zoom_px) as i32;
-                    session.drag(renderer.font_system_mut(), x, y);
+                    // CR-018 v1.1: драг выше начала буфера (desc-зона) —
+                    // выделение не трогаем.
+                    if y >= 0 {
+                        session.drag(renderer.font_system_mut(), x, y);
+                    }
                 }
             }
             self.request_redraw();

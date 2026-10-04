@@ -2084,7 +2084,7 @@ impl App {
         };
         if let (Some(session), Some(rect)) = (self.editing.as_ref(), caret_rect) {
             if let Some((origin, _, _)) =
-                session_area(&self.scene.canvas, session, self.settings.edges_avoid_nodes)
+                session_area_offset(&self.scene.canvas, session, self.settings.edges_avoid_nodes)
             {
                 let screen = self.camera.world_to_screen(origin, self.viewport_logical());
                 let scale = self.scale_factor();
@@ -5097,17 +5097,16 @@ impl App {
             }
         }
         // Строки единой сетки: лейбл (БЕЗ значения) + описание приглушённым
-        // кеглем, контрол справа — pill-тумблер или dropdown-кнопка
+        // кеглем, контрол справа — pill-тумблер или dropdown-кнопка.
+        // CR-018 v1.1 (репро владельца 2026-10-04): строки НЕ прячем при
+        // открытом dropdown-меню. Прежний скип («строки, перекрытые меню,
+        // не рисуем») остался от эпохи, когда меню рисовалось в той же
+        // полосе; с FR-CLIP меню живёт в ОТДЕЛЬНОЙ полосе Popups поверх
+        // модалки (UiLayer ascending → фон меню покрывает тексты строк
+        // под ним), а скип целиком прятал ЛЕЙБЛЫ строк, чей полноширинный
+        // rect задевал узкое меню справа — таб «Общие» выглядел пустым
+        // (2 строки × пересечение с меню = контент исчезал целиком).
         for (row, rect) in &layout.rows {
-            // Квады рисуются ДО всех screen-текстов (renderer.rs):
-            // строки, перекрытые меню, не рисуем — иначе их текст
-            // проступит сквозь фон меню
-            if menu
-                .as_ref()
-                .is_some_and(|(_, _, menu_rect)| rects_intersect(*menu_rect, *rect))
-            {
-                continue;
-            }
             // Hover-подсветка кликабельной строки (аффорданс)
             if point_in_rect(*rect, self.cursor) {
                 instances.push(CardInstance {

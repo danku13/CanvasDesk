@@ -114,7 +114,7 @@ use canvas_render::cards::{
     SELECTION_BORDER, UNMAPPED_EDGE_COLOR,
 };
 use canvas_render::edit::{
-    edge_edit_area, map_key, session_area, EditTarget, EditingSession, KeyCommand,
+    edge_edit_area, map_key, session_area_offset, EditTarget, EditingSession, KeyCommand,
 };
 // FR-038: кадр направляющих рендера — конвертация SnapOutcome (T-038.3)
 use canvas_render::guides::{GuideSource, GuidesFrame};
@@ -205,8 +205,8 @@ use support::{
     bezier_samples, centered_box, dim_color4, dim_text_color, distribute_axis_for, drag_bbox,
     drag_collision_obstacles, drag_from_node, explain_chain_focus, expr_error_hit_at, hit_subtitle,
     hover_fill, infer_param_type, node_display_label, node_subtitle, node_text, node_title,
-    nudge_step_world, paint_items_to_band, paint_items_to_stage, rect_xywh, rects_intersect,
-    screen_dot, screen_rect_quad, slugify, snap_candidates, snap_tolerance_world, snap_with_anchor,
+    nudge_step_world, paint_items_to_band, paint_items_to_stage, rect_xywh, screen_dot,
+    screen_rect_quad, slugify, snap_candidates, snap_tolerance_world, snap_with_anchor,
     spawn_lineage_build, spill_hit_at, spill_hit_target, spill_toast_key, stage_close_button_rect,
     template_card_row, token_color, unique_custom_id, BatchOp, PortLabelLine, PortTarget,
     SnapFrame,
@@ -2188,7 +2188,11 @@ impl App {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
-        let session = EditingSession::new(
+        // CR-018 v1.1 (вариант B): сдвиг буфера ниже стационарных зон
+        // (desc/метки/спиллы) — по тёплому кэшу ДО пересборки editing-кадра:
+        // первая строка редактора попадает ровно на место прежних строк.
+        let body_offset = renderer.body_text_offset_px(index);
+        let mut session = EditingSession::new(
             renderer.font_system_mut(),
             EditTarget::Node(index),
             &text,
@@ -2196,6 +2200,7 @@ impl App {
             height * zoom_px,
             zoom_px,
         );
+        session.body_offset_px = body_offset;
         self.editing = Some(session);
         // FR-021: popup подсказок — с чистого листа на каждую правку
         self.hints.reset();
@@ -2916,7 +2921,10 @@ impl App {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
-        let session = EditingSession::new(
+        // CR-018 v1.1 (вариант B): сдвиг буфера ниже стационарных зон —
+        // как в begin_editing (см. комментарий там).
+        let body_offset = renderer.body_text_offset_px(index);
+        let mut session = EditingSession::new(
             renderer.font_system_mut(),
             EditTarget::Node(index),
             &preset,
@@ -2924,6 +2932,7 @@ impl App {
             height * zoom_px,
             zoom_px,
         );
+        session.body_offset_px = body_offset;
         self.editing = Some(session);
         self.whatif_override_line = Some(line);
         self.hints.reset();

@@ -2228,8 +2228,14 @@ fn shape_body(
                 rect: [rect[0] + ox, rect[1] + oy, rect[2], rect[3]],
                 kind,
             }));
-            // Бар цитаты / фон фенса — на всю высоту блока
-            if item.color == theme.quote {
+            // Бар цитаты / фон фенса — на всю высоту блока.
+            // CR-018 v1.1 (репро владельца 2026-10-04): признак «цитаты» —
+            // не только цвет (desc-зона, метки зон «ПАРАМЕТРЫ/РАСЧЁТ» и
+            // превью ведомости тоже окрашены theme.quote как приглушённые),
+            // а цвет + отступ цитаты (10px — инвариант gfm::Block::Quote,
+            // закреплён тестом shape_body_quote). Иначе бар цитаты
+            // рисовался артефактом «|» перед каждой sans-строкой шаблона.
+            if item.color == theme.quote && item.indent >= 10.0 {
                 quads.push(BodyQuad {
                     rect: [0.0, oy, 3.0 * zoom_px, height_px],
                     kind: BodyQuadKind::QuoteBar,
@@ -3381,7 +3387,16 @@ impl TextSystem {
                 // при правке тела зона описания скрыта — рисует только буфер
                 // редактора. Раньше desc_ref не гейтился — desc светился под
                 // текстом редактора (скрин 04, репро editing_suppress).
-                let desc_ref = if body_hidden { None } else { desc_ref };
+                // CR-018 v1.1 (вариант B, решение владельца 2026-10-04):
+                // desc виден и при правке — буфер редактора стартует НИЖЕ
+                // desc-зоны (сдвиг session.body_offset_px, session_area_offset).
+                // Гашение остаётся только для LOD (тело вне вьюпорта):
+                // подложки/буфера редактора там всё равно нет.
+                let desc_ref = if !body_visible(node, zoom_px) {
+                    None
+                } else {
+                    desc_ref
+                };
                 // FR-061 хвосты (D-7/D-8 runtime v1): состояние тогглов ноды
                 // (дефолты — развёрнут/кламп; в ключе свежести — mode).
                 let block_expanded = !frame.block_collapsed.contains(&node.id);
@@ -3496,7 +3511,11 @@ impl TextSystem {
                     };
                     let strip_overrides: Vec<(usize, String)> =
                         row_grid::param_strip_overrides(&rows_data);
-                    let spill_prefix = if body_hidden {
+                    // CR-018 v1.1 (вариант B): пролитые строки остаются
+                    // видимыми и при правке (статичны — auto_rows приходят
+                    // из модели); буфер редактора стартует ниже них
+                    // (session.body_offset_px учитывает префикс).
+                    let spill_prefix = if !body_visible(node, zoom_px) {
                         Vec::new()
                     } else {
                         spill_row_items(
@@ -3533,7 +3552,16 @@ impl TextSystem {
                                 &body_text,
                                 body_width,
                                 zoom_px,
-                                &formula_lines,
+                                // CR-018 v1.1 (вариант B): при правке тела
+                                // formula_lines гасятся вместе с rows_data —
+                                // иначе сегментация по ПУСТОМУ тексту деградирует
+                                // (метка «ПАРАМЕТРЫ · N» превращалась в
+                                // «РАСЧЁТ · N»: все строки считались не-параметрами).
+                                &if body_hidden {
+                                    Vec::new()
+                                } else {
+                                    formula_lines.clone()
+                                },
                                 whatif_lines,
                                 spill_prefix,
                                 spill_views,
@@ -5359,6 +5387,39 @@ impl TextSystem {
         &mut self.font_system
     }
 
+    /// CR-018 v1.1 (вариант B, «полная стабильность»): Y-сдвиг начала текста
+    /// тела относительно верха body_area (world-px) — по кэшу ноды.
+    ///
+    /// Редактор тела правит ВЕСЬ текст ноды, но рисуется НИЖЕ стационарных
+    /// зон: desc (FR-061), меток секций («ПАРАМЕТРЫ · N»), пролитых строк
+    /// (FR-050 Р-4). Приложение фиксирует сдвиг в `EditingSession` в момент
+    /// входа в правку — кэш тогда ещё держит ПОЛНЫЙ стек (до desc-only
+    /// пересборки в editing-кадре), и первая строка редактора попадает
+    /// ровно на то место, где строки стояли до правки.
+    ///
+    /// Правило поиска первого текстового блока: цвет `theme.body` И без
+    /// спill-маркера (desc/метки зон — приглушённый `theme.quote`, спиллы
+    /// несут `spill: Some`). Нет текстового блока (тело пусто) — низ
+    /// последнего блока + межзонный зазор 6 (body_gap).
+    pub fn body_text_offset_px(&self, index: usize) -> f32 {
+        let Some(entry) = self.cache.get(&index) else {
+            return 0.0;
+        };
+        let Some(body) = entry.body.as_ref() else {
+            return 0.0;
+        };
+        body.blocks
+            .iter()
+            .find(|block| block.color == self.theme.body && block.spill.is_none())
+            .map(|block| block.offset[1])
+            .unwrap_or_else(|| {
+                body.blocks
+                    .last()
+                    .map(|block| block.offset[1] + block.height + 6.0)
+                    .unwrap_or(0.0)
+            })
+    }
+
     /// Декоративные квады тела ноды (GFM): (zoom_px записи кэша, квады в px
     /// виртуального буфера тела). None — квадов нет или тело не в кэше
     /// (промах — квады появятся со следующего кадра, после шейпинга в
@@ -6115,6 +6176,42 @@ load = connections_per_sec / (servers * server_rate)\n";
             None,
             &[],
         )
+    }
+
+    /// CR-018 v1.1 (репро владельца): desc-зона и метки зон окрашены
+    /// theme.quote, но бар цитаты им не положен — только gfm::Block::Quote
+    /// (indent 10). Артефакт «|» перед каждой sans-строкой шаблона.
+    #[test]
+    fn shape_body_desc_and_zone_labels_have_no_quote_bar() {
+        let mut fs = FontSystem::new();
+        let layout = shape_body(
+            &mut fs,
+            &ThemeColors::dark(),
+            "rps = 100 rps",
+            300.0,
+            1.0,
+            &[0],
+            &[],
+            Vec::new(),
+            &[],
+            canvas_core::Language::Ru,
+            Some("Описание шаблона, приглушённый тон."),
+            true,
+            false,
+            None,
+            &[],
+        );
+        let quote_bars = layout
+            .quads
+            .iter()
+            .filter(|quad| quad.kind == BodyQuadKind::QuoteBar)
+            .count();
+        assert_eq!(
+            quote_bars, 0,
+            "desc-зона и метки зон не рисуют бар цитаты (только gfm::Block::Quote)"
+        );
+        // Санити: desc-блок на месте (первый, приглушённый).
+        assert!(!layout.blocks.is_empty());
     }
 
     /// FR-013 (правка 2): формульная строка — самостоятельный блок с

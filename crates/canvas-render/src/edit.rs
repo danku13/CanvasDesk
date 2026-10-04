@@ -252,6 +252,23 @@ pub fn session_area(
     }
 }
 
+/// CR-018 v1.1 (вариант B): зона правки тела — НИЖЕ стационарных зон
+/// (desc/метки/спиллы): origin смещается на `session.body_offset_px`,
+/// высота уменьшается на ту же величину. У edge-лейблов и заголовков
+/// offset = 0 — поведение прежнее. ВСЕ потребители зоны правки (set_layout,
+/// editing_buffer, клик/драг, якорь подсказок) обязаны брать ЭТУ функцию —
+/// иначе каретка разъедется с буфером.
+pub fn session_area_offset(
+    canvas: &Canvas,
+    session: &EditingSession,
+    avoid: bool,
+) -> Option<([f32; 2], f32, f32)> {
+    session_area(canvas, session, avoid).map(|(origin, width, height)| {
+        let off = session.body_offset_px;
+        ([origin[0], origin[1] + off], width, (height - off).max(0.0))
+    })
+}
+
 /// Ширина каретки в пикселях буфера.
 const CARET_WIDTH: f32 = 2.0;
 /// Минимальная ширина прямоугольника выделения (визуализация пустого фрагмента).
@@ -378,6 +395,13 @@ pub struct EditingSession {
     /// Последние применённые размеры/зум — set_layout без изменений не
     /// перешейпывает буфер.
     layout: (f32, f32, f32),
+    /// CR-018 v1.1 (вариант B, «полная стабильность»): Y-сдвиг начала
+    /// буфера редактора ниже стационарных зон тела (desc, метки секций,
+    /// пролитые строки) в world-px. Фиксируется приложением в момент входа
+    /// в правку (TextSystem::body_text_offset_px по тёплому кэшу),
+    /// учитывается в [`session_area_offset`] — origin/высота зоны правки.
+    /// 0 — сдвига нет (заметки без desc, лейблы связей, заголовки).
+    pub body_offset_px: f32,
 }
 
 impl EditingSession {
@@ -436,6 +460,7 @@ impl EditingSession {
             line_height_px: line_height,
             metrics: (BODY_FONT_SIZE, BODY_LINE_HEIGHT),
             layout: (width_px, height_px, zoom_px),
+            body_offset_px: 0.0,
         }
     }
 
@@ -470,6 +495,7 @@ impl EditingSession {
             line_height_px: line_height,
             metrics: (TITLE_FONT_SIZE, TITLE_LINE_HEIGHT),
             layout: (width_px, height_px, zoom_px),
+            body_offset_px: 0.0,
         }
     }
 
