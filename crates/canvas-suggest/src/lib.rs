@@ -45,5 +45,12 @@ pub mod types;
 #[cfg(feature = "l1-laya")]
 pub mod laya;
 
+/// FR-LLM-C / PRD-0010 F-2.1-F-2.8: LLM mm-source для fusion (feature
+/// `l1-llm`, параллельно `l1-laya`). `LlmMmSource` — choice-ранжирование
+/// через `LlmProvider` (canvas-llm), с redact (Q1) и кэшем (Q2, TTL 5 мин).
+/// Дефолтная сборка крейта эту зависимость не тянет.
+#[cfg(feature = "l1-llm")]
+pub mod llm;
+
 pub use domain::Verdict;
 pub use types::{OptionDesc, ScoreSource, ScoredOption, SuggestContext, SuggestEngine};
