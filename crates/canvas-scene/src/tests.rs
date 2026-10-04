@@ -3906,10 +3906,12 @@ fn block_collapsed_toggle_is_runtime_state() {
     assert!(scene.block_collapsed.is_empty());
 }
 
-/// FR-061 хвосты (D-8, «Раскрыть+авто»): тоггл раскрытости описания и
-/// автосворачивание (клик вне ноды — collapse_descs_except(None)).
+/// FR-061 хвосты (D-8 runtime v1): тоггл раскрытости описания.
+/// CR-018 v1.2 (решение владельца 2026-10-05): раскрытие ручное и
+/// постоянное — автосворачивание «Раскрыть+авто» ретрировано, клик вне
+/// ноды состояние не меняет (проверяем персистентность HashSet).
 #[test]
-fn desc_expanded_toggle_and_auto_collapse() {
+fn desc_expanded_toggle_persists() {
     let canvas = Canvas::default();
     let mut scene = SceneState::new(canvas, PathBuf::from("target/tmp/fr061-desc.canvas"));
     scene.canvas.nodes.push(Node::text("n1", "текст", 0.0, 0.0));
@@ -3919,14 +3921,15 @@ fn desc_expanded_toggle_and_auto_collapse() {
     assert!(scene.toggle_desc_expanded("n2"));
     assert_eq!(scene.desc_expanded.len(), 2);
 
-    // Клик по телу n1 — сохраняется только n1
-    scene.collapse_descs_except(Some("n1"));
+    // Раскрытие переживает «клик мимо ноды»: код автосворачивания
+    // (collapse_descs_except) удалён — состояние не очищается ничем,
+    // кроме явного тоггла пользователем.
+    assert!(
+        !scene.toggle_desc_expanded("n1"),
+        "повторный тоггл — свёрнут"
+    );
     assert_eq!(scene.desc_expanded.len(), 1);
-    assert!(scene.desc_expanded.contains("n1"));
-
-    // Клик по фону — сворачиваются все
-    scene.collapse_descs_except(None);
-    assert!(scene.desc_expanded.is_empty());
+    assert!(scene.desc_expanded.contains("n2"), "n2 остаётся раскрытым");
 }
 
 /// FR-061 приёмка T9 (решение по фидбэку владельца 2026-09-24): prose-
