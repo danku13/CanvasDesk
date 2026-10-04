@@ -184,6 +184,11 @@ impl Default for TableProps {
                 text_muted: [0.0; 4],
                 disabled_text: [0.0; 4],
                 accent: [0.0; 4],
+                control_success: [0.0; 4],
+                control_warning: [0.0; 4],
+                stage_dim: [0.0; 4],
+                scrollbar_thumb: [0.0; 4],
+                rule_color: [0.0; 4],
             },
         }
     }

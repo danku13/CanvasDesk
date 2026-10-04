@@ -22,6 +22,13 @@ pub(crate) fn palette_a() -> KitPalette {
         text_muted: [0.92, 0.92, 0.92, 1.0],
         disabled_text: [0.93, 0.93, 0.93, 1.0],
         accent: [0.94, 0.94, 0.94, 1.0],
+        // FR-070: новые слоты success/warning/stage_dim/scrollbar_thumb/
+        // rule_color — продолжаем «два разных значения» (отличны от palette_b).
+        control_success: [0.31, 0.76, 0.56, 1.0],
+        control_warning: [0.96, 0.66, 0.31, 1.0],
+        stage_dim: [0.03, 0.03, 0.05, 0.85],
+        scrollbar_thumb: [0.36, 0.39, 0.47, 0.7],
+        rule_color: [0.31, 0.34, 0.41, 0.8],
     }
 }
 
@@ -42,6 +49,13 @@ pub(crate) fn palette_b() -> KitPalette {
         &mut p.text_muted,
         &mut p.disabled_text,
         &mut p.accent,
+        // FR-070: новые слоты участвуют в «мутаторе» palette_b 1:1 —
+        // тест «стиль выбирает слот, а не вычисляет цвет» покрывает и их.
+        &mut p.control_success,
+        &mut p.control_warning,
+        &mut p.stage_dim,
+        &mut p.scrollbar_thumb,
+        &mut p.rule_color,
     ] {
         *v = [0.05, 0.05, 0.05, 0.5];
     }

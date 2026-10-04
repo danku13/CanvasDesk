@@ -112,6 +112,24 @@ pub struct KitPalette {
     pub disabled_text: [f32; 4],
     /// Акцент (фокус-рамка, Ghost-hover).
     pub accent: [f32; 4],
+    /// Зелёный статус «успех» (бейдж done/completed) — слот `control_success`
+    /// (FR-070: был инлайн-литерал в `agent_panel.rs`/`ai_status_panel.rs`/
+    /// `overlays.rs`; проброшен в kit как семантический слот, не константа).
+    pub control_success: [f32; 4],
+    /// Янтарный статус «предупреждение» (paused, low-quota) — слот
+    /// `control_warning` (FR-070: два разных представления одного цвета —
+    /// drift risk, теперь один слот).
+    pub control_warning: [f32; 4],
+    /// Затемнение фона main stage под модалью (backdrop) — слот `stage_dim`
+    /// (FR-070: в `ThemeColors::stage_dim` уже был, но `KitPalette` не
+    /// пробрасывал — проброшен здесь).
+    pub stage_dim: [f32; 4],
+    /// Заливка бегунка скроллбара — слот `scrollbar_thumb` (FR-070: был
+    /// инлайн в `overlays.rs::docs_overlay`).
+    pub scrollbar_thumb: [f32; 4],
+    /// Заливка горизонтальной линии `---` markdown — слот `rule_color`
+    /// (FR-070: был инлайн в `overlays.rs::docs_overlay`).
+    pub rule_color: [f32; 4],
 }
 
 // --- Метрики кита (spacing/radius-scale; значения — прежние константы) ------

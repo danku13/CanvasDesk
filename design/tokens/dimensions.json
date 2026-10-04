@@ -24,6 +24,21 @@
     "result_strip": { "$type": "dimension", "$value": 32.0, "$desc": "RESULT_STRIP_H cards.rs (FR-075: полоса «ИТОГ» — M.STRIP=32 prototype-unified)" }
   },
 
+  "panel_header": {
+    "$note": "Высота шапки UI-панели/модали (FR-046 W-d аудит §4): 7 разных значений 30/36/38/40/44/56/58 в *_ui.rs стандартизованы в 3 варианта S/M/L. Это НЕ карточный хедер card.header_height (модель канваса), а шапки оверлеев/доков/модалей в screen px. Значения = прежним константам файлов-источников (I-1: ноль скачка).",
+    "s": { "$type": "dimension", "$value": 30.0, "$desc": "small: навигация настроек, панель шаблонов (template_ui::PANEL_HEADER_H), витрина кита (kit_ui); зеркало tokens::PANEL_HEADER_H_S" },
+    "m": { "$type": "dimension", "$value": 38.0, "$desc": "medium: док документации (docs_ui::DOCS_HEADER_H), галерея схем, карта проливаний; зеркало tokens::PANEL_HEADER_H_M (scheme_gallery 40 и flowmap 36 — TODO отклонения на 2px)" },
+    "l": { "$type": "dimension", "$value": 44.0, "$desc": "large: панель расчёта, агент-панель (44), what-if, explain/autolink (56/58 — TODO отклонения); зеркало tokens::PANEL_HEADER_H_L" }
+  },
+
+  "ui_typography": {
+    "$note": "Типографическая шкала UI-оверлеев (FR-046 W-d аудит §4): 10 разных кеглей 10–19 в onboarding/ai_status_panel/search_ui/hints_ui/explain_ui стандартизованы в 4-шаговую шкалу. Это НЕ typography.* (кегли рендера канвас-нод) — это кегли UI-оверлеев в screen px.",
+    "title_lg": { "$type": "dimension", "$value": 18.0, "$desc": "Крупные заголовки (онбординг, заголовки модалей); зеркало tokens::FONT_TITLE_LG (onboarding_ui 18/19)" },
+    "body": { "$type": "dimension", "$value": 13.0, "$desc": "Тело UI: подписи, строки списков, лейблы кнопок; зеркало tokens::FONT_BODY (search_ui/hints_ui 13)" },
+    "caption": { "$type": "dimension", "$value": 11.0, "$desc": "Подписи: саб-лейблы, подписи поиска, hint-caret; зеркало tokens::FONT_CAPTION (search_ui/scheme_gallery 11)" },
+    "hint": { "$type": "dimension", "$value": 10.0, "$desc": "Микро-подписи: hints, бейджи, feature-чипы ai_status, микро-лейблы; зеркало tokens::FONT_HINT (ai_status 10.5, badge 10)" }
+  },
+
   "edge": {
     "dot": { "$type": "dimension", "$value": 2.5, "$desc": "EDGE_DOT cards.rs — диаметр бусины; зеркало tokens::EDGE_DOT" },
     "arrow_len": { "$type": "dimension", "$value": 10.0, "$desc": "ARROW_LEN cards.rs; зеркало tokens::EDGE_ARROW_LEN" },

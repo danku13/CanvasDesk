@@ -3351,7 +3351,10 @@ impl App {
             instances.push(CardInstance {
                 pos: [0.0, 0.0],
                 size: [viewport[0], viewport[1]],
-                fill: [0.02, 0.02, 0.04, 0.85],
+                // FR-070 (W-d): слот `stage_dim` темы (бывший инлайн-литерал
+                // `[0.02, 0.02, 0.04, 0.85]` — alpha 0.6 канонич. коридора
+                // PRD 0.55–0.65, не переопределяем — single source of truth).
+                fill: palette.stage_dim,
                 border: [0.0; 4],
                 params: [0.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
@@ -3451,7 +3454,10 @@ impl App {
                 pos: [content[0] + quad.x, y],
                 size: [quad.width, quad.height.max(1.0)],
                 fill: match quad.kind {
-                    docs_ui::QuadKind::Rule => [0.30, 0.33, 0.40, 0.8],
+                    // FR-070 (W-d): слот `rule_color` (бывший инлайн-литерал
+                    // `[0.30, 0.33, 0.40, 0.8]` — ранее тот же RGB, что
+                    // `gfm_muted_fill`, но отличался по тону — теперь свой слот).
+                    docs_ui::QuadKind::Rule => palette.rule_color,
                     docs_ui::QuadKind::QuoteBar => color_to_rgba(palette.link),
                 },
                 border: [0.0; 4],
@@ -3486,7 +3492,9 @@ impl App {
                     thumb_y,
                 ],
                 size: [docs_ui::DOCS_SCROLLBAR_W, thumb_h],
-                fill: [0.35, 0.38, 0.46, 0.7],
+                // FR-070 (W-d): слот `scrollbar_thumb` (бывший инлайн-литерал
+                // `[0.35, 0.38, 0.46, 0.7]`).
+                fill: palette.scrollbar_thumb,
                 border: [0.0; 4],
                 params: [3.0, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
@@ -4914,7 +4922,10 @@ impl App {
         instances.push(CardInstance {
             pos: [0.0, 0.0],
             size: [viewport[0], viewport[1]],
-            fill: [0.02, 0.02, 0.04, 0.85],
+            // FR-070 (W-d): слот `stage_dim` темы (бывший инлайн-литерал
+            // `[0.02, 0.02, 0.04, 0.85]` — alpha 0.6 канонич. коридора
+            // PRD 0.55–0.65, не переопределяем — single source of truth).
+            fill: palette.stage_dim,
             border: [0.0; 4],
             params: [0.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
@@ -5418,6 +5429,12 @@ impl App {
                         params: [4.0, 0.0, 0.0, 1.0],
                         corners: [0.0; 4],
                     });
+                    // FR-070 (W-d): 5 бейджей success (AiApiKey, AiSelfhostUrl,
+                    // AiSelfhostKey — дважды: кнопка + текст-поле) — цвет
+                    // `palette.control_success` (бывший инлайн `Color::rgba(77,
+                    // 191, 140, 255)` — тождество: round(0.30·255)=77,
+                    // round(0.75·255)=191, round(0.55·255)=140, alpha 255 →
+                    // ноль визуального скачка I-1, но теперь через слот темы).
                     let (field_text, badge_text, badge_color) = match row {
                         SettingsRow::AiApiKey => {
                             // FR-LLM-FIX: masked ключ — «•» длиной как ключ
@@ -5436,7 +5453,7 @@ impl App {
                                 self.tr(keys::AI_KEY_NOT_CHECKED).to_owned()
                             };
                             let color: canvas_render::Color = if self.ai_key_ok {
-                                canvas_render::Color::rgba(77, 191, 140, 255)
+                                crate::kit_ui::color4(palette.control_success)
                             } else {
                                 palette.icon
                             };
@@ -5456,7 +5473,7 @@ impl App {
                                 self.tr(keys::AI_SH_NOT_CHECKED).to_owned()
                             };
                             let color: canvas_render::Color = if self.ai_selfhost_ok {
-                                canvas_render::Color::rgba(77, 191, 140, 255)
+                                crate::kit_ui::color4(palette.control_success)
                             } else {
                                 palette.icon
                             };
@@ -5478,7 +5495,7 @@ impl App {
                                 self.tr(keys::AI_SH_NOT_CHECKED).to_owned()
                             };
                             let color: canvas_render::Color = if self.ai_selfhost_ok {
-                                canvas_render::Color::rgba(77, 191, 140, 255)
+                                crate::kit_ui::color4(palette.control_success)
                             } else {
                                 palette.icon
                             };
@@ -5708,7 +5725,7 @@ impl App {
                                     self.tr(keys::AI_KEY_NOT_CHECKED).to_owned()
                                 };
                                 let color: canvas_render::Color = if self.ai_key_ok {
-                                    canvas_render::Color::rgba(77, 191, 140, 255)
+                                    crate::kit_ui::color4(palette.control_success)
                                 } else {
                                     palette.icon
                                 };
@@ -5721,7 +5738,7 @@ impl App {
                                     self.tr(keys::AI_SH_NOT_CHECKED).to_owned()
                                 };
                                 let color: canvas_render::Color = if self.ai_selfhost_ok {
-                                    canvas_render::Color::rgba(77, 191, 140, 255)
+                                    crate::kit_ui::color4(palette.control_success)
                                 } else {
                                     palette.icon
                                 };

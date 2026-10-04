@@ -175,6 +175,26 @@ pub struct ThemeColors {
     pub control_selected_fill: [f32; 4],
     /// Текст disabled-кнопок (бывшая локальная dim app.rs).
     pub control_disabled_text: Color,
+    /// FR-070 (W-b): зелёный статус «успех» (бейдж done/completed) — слот
+    /// `control_success`. Был инлайн-литерал `[0.30, 0.75, 0.55, 1.0]` в
+    /// `agent_panel.rs`/`ai_status_panel.rs`/`overlays.rs`; проброшен в
+    /// палитру как семантический слот (drift-risk → один источник). В
+    /// JSON-пресетах не хранится (как `tooltip_warn`/`whatif_accent`) —
+    /// выводится по знаку фона в `theme_presets::map_to_theme_colors`.
+    pub control_success: [f32; 4],
+    /// FR-070 (W-b): янтарный статус «предупреждение» (paused, low-quota) —
+    /// слот `control_warning`. Был инлайн в `ai_status_panel.rs` (причём в
+    /// двух разных представлениях: `[0.95, 0.65, 0.30, 1.0]` и
+    /// `[242/255, 165/255, 76/255, 1.0]` — один и тот же цвет).
+    pub control_warning: [f32; 4],
+    /// FR-070 (W-b): заливка бегунка скроллбара — слот `scrollbar_thumb`.
+    /// Был инлайн `[0.35, 0.38, 0.46, 0.7]` в `overlays.rs::docs_overlay`.
+    pub scrollbar_thumb: [f32; 4],
+    /// FR-070 (W-b): заливка горизонтальной линии `---` markdown — слот
+    /// `rule_color`. Был инлайн `[0.30, 0.33, 0.40, 0.8]` в
+    /// `overlays.rs::docs_overlay` (раньше переиспользовал `gfm_muted_fill`,
+    /// но отличался по тону — теперь собственный слот).
+    pub rule_color: [f32; 4],
 }
 
 impl ThemeColors {
@@ -328,6 +348,15 @@ impl ThemeColors {
                 canvas_core::tokens::CONTROL_DISABLED_TEXT[1],
                 canvas_core::tokens::CONTROL_DISABLED_TEXT[2],
             ),
+            // FR-070 (W-b): статусные слоты success/warning и хром-слоты
+            // scrollbar_thumb/rule_color — ранее инлайн-литералы в
+            // overlays.rs/agent_panel.rs/ai_status_panel.rs (audit §3).
+            // Тёмная тема: значения из аудита (бывшие хардкоды) — ноль
+            // визуального скачка (I-1 FR-046).
+            control_success: [0.30, 0.75, 0.55, 1.0],
+            control_warning: [0.95, 0.65, 0.30, 1.0],
+            scrollbar_thumb: [0.35, 0.38, 0.46, 0.7],
+            rule_color: [0.30, 0.33, 0.40, 0.8],
         }
     }
 
@@ -460,6 +489,14 @@ impl ThemeColors {
                 canvas_core::tokens::CONTROL_DISABLED_TEXT[1],
                 canvas_core::tokens::CONTROL_DISABLED_TEXT[2],
             ),
+            // FR-070 (W-b): статусные слоты для светлой темы — затемнённые
+            // эквиваленты тёмной (контраст к белому фону ≥ AA); scrollbar/rule
+            // — нейтральные полу-прозрачные хром-тона (как у тёмной, но
+            // альфа чуть ниже — на светлом фоне «тяжёлый» thumb виднее).
+            control_success: [0.18, 0.58, 0.42, 1.0],
+            control_warning: [0.78, 0.50, 0.20, 1.0],
+            scrollbar_thumb: [0.40, 0.42, 0.48, 0.5],
+            rule_color: [0.65, 0.66, 0.72, 0.6],
         }
     }
 
@@ -582,6 +619,13 @@ impl From<&ThemeColors> for canvas_ui::kit::KitPalette {
             text_muted: rgb3(canvas_core::tokens::DIALOG_TEXT_MUTED),
             disabled_text: c4(t.control_disabled_text),
             accent: t.accent,
+            // FR-070: проброс новых семантических слотов в kit (были инлайн-
+            // литералами в overlays/agent_panel/ai_status_panel — audit §3).
+            control_success: t.control_success,
+            control_warning: t.control_warning,
+            stage_dim: t.stage_dim,
+            scrollbar_thumb: t.scrollbar_thumb,
+            rule_color: t.rule_color,
         }
     }
 }

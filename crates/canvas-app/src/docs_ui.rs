@@ -410,7 +410,10 @@ pub fn help_submenu_item_at(origin: [f32; 2], point: [f32; 2]) -> Option<usize> 
 /// Ширина панели просмотрщика (правый док, логические px).
 pub const DOCS_PANEL_WIDTH: f32 = 480.0;
 /// Высота шапки просмотрщика (заголовок раздела + ×).
-pub const DOCS_HEADER_H: f32 = 38.0;
+// FR-046 W-d аудит §4: токен-источник `PANEL_HEADER_H_M` (38 — medium
+// вариант шкалы высот шапок панелей). Прежний локальный литерал 38.0
+// заменён реэкспортом токена — ноль визуального скачка (I-1).
+pub use canvas_core::tokens::PANEL_HEADER_H_M as DOCS_HEADER_H;
 /// Высота футера-подсказки просмотрщика.
 pub const DOCS_FOOTER_H: f32 = 26.0;
 /// Внутренние поля контента просмотрщика.
@@ -418,6 +421,14 @@ pub const DOCS_PADDING: f32 = 16.0;
 /// Ширина скроллбара-аффорданса у правого края панели.
 pub const DOCS_SCROLLBAR_W: f32 = 6.0;
 /// Сторона кнопки × в шапке.
+///
+/// FR-070 (W-d): больше НЕ используется — заменён на канон
+/// `canvas_ui::kit::ICON_BUTTON_SIZE` (= 26). Оставлен как `pub const`
+/// для обратной совместимости внешних потребителей (если есть).
+#[deprecated(
+    since = "0.2.0",
+    note = "FR-070 (W-d): use `canvas_ui::kit::ICON_BUTTON_SIZE` (canonical kit slot)"
+)]
 pub const DOCS_CLOSE_BUTTON: f32 = 26.0;
 
 /// Rect панели просмотрщика: правый док на всю высоту окна, ширина
@@ -436,10 +447,34 @@ pub fn viewer_rect(viewport: [f32; 2]) -> [f32; 4] {
 }
 
 /// Rect кнопки × (закрыть) в шапке панели.
+///
+/// FR-070 (W-d): каноническая «×»-кнопка — `kit::stage_close_button`
+/// (size = `ICON_BUTTON_SIZE` = 26, inset = `SPACING_SM` = 8). Прежняя
+/// локальная формула `pad = (DOCS_HEADER_H - DOCS_CLOSE_BUTTON) / 2.0`
+/// (6px inset — вертикально по центру 38px шапки) заменена на канон 8px
+/// (audit §6.1 — 7+ мест ручной формулы схлопнуты в kit). Tiny-panel
+/// fallback сохранён (кламп size по полу-диагонали панели — как прежде).
 pub fn viewer_close_rect(panel: [f32; 4]) -> [f32; 4] {
-    let size = DOCS_CLOSE_BUTTON.min(panel[3].min(panel[2]) * 0.5);
-    let pad = (DOCS_HEADER_H - size) / 2.0;
-    [panel[0] + panel[2] - pad - size, panel[1] + pad, size, size]
+    let panel_min = panel[2].min(panel[3]);
+    let kit_size = canvas_ui::kit::ICON_BUTTON_SIZE;
+    if panel_min >= kit_size * 2.0 {
+        // Нормальный случай — канон kit::stage_close_button (правый-верхний
+        // угол панели, ICON_BUTTON_SIZE × ICON_BUTTON_SIZE, inset SPACING_SM).
+        let slot = UiRect::new(panel[0], panel[1], panel[2], panel[3]);
+        let r = kit::stage_close_button(slot);
+        [r.x, r.y, r.w, r.h]
+    } else {
+        // Tiny-panel fallback — пропорциональный scale-down (как прежде:
+        // size = kit_size.min(panel_min/2), inset = (panel_min - size)/2).
+        let size = kit_size.min(panel_min * 0.5);
+        let inset = (panel_min - size) * 0.5;
+        [
+            panel[0] + panel[2] - size - inset,
+            panel[1] + inset,
+            size,
+            size,
+        ]
+    }
 }
 
 /// Rect зоны контента (между шапкой и футером), минус скроллбар.

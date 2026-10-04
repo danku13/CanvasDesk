@@ -7,7 +7,7 @@
 use super::{Component, ControlStyle, KitPalette, PanelStyle};
 use crate::geometry::{EdgeInsets, UiRect, UiVec2};
 use crate::layout::{constrain, stack, HAlign, LayoutBackend, VAlign};
-use crate::paint::Painter;
+use crate::paint::{PaintItem, Painter};
 
 // --- Panel ------------------------------------------------------------------
 
@@ -90,6 +90,28 @@ pub fn card(slot: UiRect, min: UiVec2, max: UiVec2, header_h: f32, p: &KitPalett
     let header = UiRect::new(inner.x, inner.y, inner.w, hh);
     let body = UiRect::new(inner.x, inner.y + hh, inner.w, (inner.h - hh).max(0.0));
     CardLayout { rect, header, body }
+}
+
+// --- Backdrop (FR-070) ------------------------------------------------------
+
+/// Затемнение main stage под модалью (FR-070, audit §6.1 — самый повторяющийся
+/// паттерн `overlays.rs`: 7+ мест с инлайн `[0.02, 0.02, 0.04, 0.85]`).
+///
+/// Возвращает [`PaintItem::Rect`] (готовый к `Painter::push`/`Vec::push` в
+/// items) — безрамочный прямоугольник на весь переданный `rect` (обычно —
+/// вьюпорт), залитый слотом `palette.stage_dim`. Контракт F-8: цвет — только
+/// слот (`palette.stage_dim` проброшен из `ThemeColors::stage_dim`); радиус 0
+/// (backdrop без скруглений — модаль лежит поверх, фон не «хромирует»).
+///
+/// Потребитель добавляет backdrop ПЕРЕД панелью модали в свой `Painter`/
+/// `Vec<CardInstance>` (draw-порядок = порядок вызовов — FR-057 §9.2).
+pub fn backdrop(rect: UiRect, palette: &KitPalette) -> PaintItem {
+    PaintItem::Rect {
+        rect,
+        fill: palette.stage_dim,
+        border: [0.0; 4],
+        radius: 0.0,
+    }
 }
 
 // === Component (FR-068 W3, агент 3-a) =======================================
@@ -390,5 +412,56 @@ mod tests {
         );
         let outside = UiPoint::new(rects[0].right() + 10.0, rects[0].y + 1.0);
         assert_eq!(panel.hit_test(&rects, outside), None);
+    }
+
+    // === FR-070: backdrop (затемнение main stage под модалью) =============
+
+    /// Контракт F-8: backdrop берёт цвет ТОЛЬКО из слота `palette.stage_dim`,
+    /// рамка прозрачная, радиус 0; rect = переданному (без трансформаций).
+    /// Смена палитры меняет заливку backdrop'а — инвариант «цвета — только
+    /// слоты» (как у `panel_style`/`button_style`).
+    #[test]
+    fn backdrop_paints_stage_dim_slot_with_no_border_no_radius() {
+        let viewport = UiRect::new(0.0, 0.0, 1280.0, 800.0);
+        let pal = palette_a();
+        let item = backdrop(viewport, &pal);
+        assert_eq!(
+            item,
+            PaintItem::Rect {
+                rect: viewport,
+                fill: pal.stage_dim,
+                border: [0.0; 4],
+                radius: 0.0,
+            }
+        );
+        // Контракт F-8: смена палитры → другой fill (другой слот).
+        let pal_b = {
+            let mut p = pal;
+            p.stage_dim = [0.0, 0.0, 0.0, 0.42];
+            p
+        };
+        let item_b = backdrop(viewport, &pal_b);
+        assert_eq!(
+            item_b,
+            PaintItem::Rect {
+                rect: viewport,
+                fill: pal_b.stage_dim,
+                border: [0.0; 4],
+                radius: 0.0,
+            }
+        );
+        assert_ne!(item, item_b, "fill — из слота, не литерал");
+        // Rect = входному (без трансформаций)
+        let vp2 = UiRect::new(10.0, 20.0, 1000.0, 600.0);
+        let item2 = backdrop(vp2, &pal);
+        assert_eq!(
+            item2,
+            PaintItem::Rect {
+                rect: vp2,
+                fill: pal.stage_dim,
+                border: [0.0; 4],
+                radius: 0.0,
+            }
+        );
     }
 }

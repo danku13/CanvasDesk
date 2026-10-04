@@ -38,6 +38,10 @@ const FAMILY: &str = canvas_render::text::SANS_FAMILY;
 /// минимальный G4-вьюпорт 800 (800 − SPACING_XL = 776).
 pub const PANEL_W: f32 = 660.0;
 /// Высота шапки.
+// TODO: migrate to PANEL_HEADER_H_M=38 (FR-046 W-d аудит §4) — текущее
+// значение 40 на 2px отличается от medium-варианта шкалы; оставлено как
+// отклонение до полного аудита геометрии (визуальный скачок при смене
+// 40→38 нежелателен в W-d-волне, I-1: ноль скачка).
 pub const HEADER_H: f32 = 40.0;
 /// Высота поля фильтра.
 pub const INPUT_H: f32 = 34.0;
@@ -58,9 +62,14 @@ pub const CHIP_W: f32 = 108.0;
 /// Ширина чипа «Все».
 pub const CHIP_ALL_W: f32 = 56.0;
 /// Кегль заголовка строки.
-pub const ROW_FONT: f32 = 13.0;
+// FR-046 W-d аудит §4: токен-источник `FONT_BODY` (13 — body вариант
+// типографической шкалы UI-оверлеев). Прежний локальный литерал 13.0
+// заменён реэкспортом токена — ноль визуального скачка (I-1).
+pub use canvas_core::tokens::FONT_BODY as ROW_FONT;
 /// Кегль описания строки.
-pub const ROW_DESC_FONT: f32 = 11.0;
+// FR-046 W-d аудит §4: токен-источник `FONT_CAPTION` (11 — caption
+// вариант типографической шкалы UI-оверлеев).
+pub use canvas_core::tokens::FONT_CAPTION as ROW_DESC_FONT;
 /// Поле текста внутри строки (spacing-scale).
 pub const ROW_TEXT_PAD: f32 = canvas_core::tokens::SPACING_MD;
 /// Высота кнопки empty-state.
