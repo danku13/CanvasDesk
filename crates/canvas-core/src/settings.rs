@@ -1110,6 +1110,10 @@ mod tests {
                 model_graph: "glm-5.3-flash".to_owned(),
                 model_agent: "glm-5.3-flash".to_owned(),
                 endpoint: "http://127.0.0.1:11434/v1".to_owned(),
+                // FR-LLM-FIX (task FIX-TEXT-INPUT): selfhost_key проходит
+                // round-trip как остальные ключи (пустая строка — проверяет
+                // сохранение «не задан»).
+                selfhost_key: String::new(),
                 data_residency: canvas_llm::DataResidency::SelfHosted,
                 cost_limit_daily: 2.5,
                 confidence_threshold: 0.4,
