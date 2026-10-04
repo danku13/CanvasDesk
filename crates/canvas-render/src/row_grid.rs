@@ -43,6 +43,32 @@ pub(crate) const GUIDE_GAP: f32 = canvas_core::tokens::TABLE_NODE_GUIDE_GAP;
 pub(crate) const LEADER_MIN: f32 = canvas_core::tokens::TABLE_LEADER_MIN;
 /// Зазор лидера до ячейки значения и от конца левого текста (world-px).
 pub(crate) const LEADER_PAD: f32 = canvas_core::tokens::TABLE_LEADER_PAD;
+/// CR-018 v2.1 (решение владельца 2026-10-04): зазор между концом лидера
+/// и ЛЕВЫМ краем цифр значения (world-px) — лидер больше не заезжает под
+/// число; 2 px — «до края цифры» без касания глифов.
+pub(crate) const LEADER_END_GAP: f32 = 2.0;
+
+/// Конец лидера по X (world-px) — левый край цифр значения строки
+/// (решение владельца 2026-10-04: наложение цифры и лидера убрано).
+/// Раньше лидер шёл до правого края ячейки значения минус пад
+/// (`value_right − LEADER_PAD`) — пунктир проходил под всем числом.
+///
+/// * `value_right` — направляющая чисел (`RowGuides::value_right`);
+/// * `value_cell_w` — фактическая ширина зашейпленной ячейки значения
+///   (world-px; `None`/0 — пустое значение: Err-строка — цифр нет);
+/// * `value_x` — левый край ячейки значения (нижний предел: у строки с
+///   самой широкой ячейкой ноды цифры начинаются ровно на направляющей).
+///
+/// Детерминизм: одинаковые входы → идентичный X (D-11).
+pub(crate) fn leader_end_x(value_right: f32, value_cell_w: Option<f32>, value_x: f32) -> f32 {
+    let digit_left = match value_cell_w {
+        Some(w) if w > 0.0 => (value_right - w).max(value_x),
+        // Пустое значение — до левого края колонки (под числом/ошибкой
+        // дорожка не нужна: pointing не на что).
+        _ => value_x,
+    };
+    digit_left - LEADER_END_GAP
+}
 
 /// Род строки данных — селектор хрома зоны (фон/начертание). Y-ряд не
 /// меняет (I-1): высота строки задаётся блоком тела, не родом.
@@ -1642,5 +1668,38 @@ mod tests {
             &[],
         );
         assert!(wide.ellipsis.iter().all(|e| e.is_none()));
+    }
+
+    /// CR-018 v2.1 (решение владельца 2026-10-04): конец лидера — левый
+    /// край цифр значения строки, наложение цифры и лидера исключено.
+    #[test]
+    fn leader_end_x_stops_at_digit_left_edge() {
+        // Ячейка значения 40 px на направляющей 218..258: цифры с 218,
+        // лидер кончается за LEADER_END_GAP до них.
+        assert_eq!(
+            leader_end_x(258.0, Some(40.0), 218.0),
+            258.0 - 40.0 - LEADER_END_GAP
+        );
+        // Короткое значение (12 px): конец правее — у цифр ЭТОЙ строки.
+        assert_eq!(
+            leader_end_x(258.0, Some(12.0), 218.0),
+            258.0 - 12.0 - LEADER_END_GAP
+        );
+        // Самая широкая ячейка ноды: цифры ровно на направляющей value_x.
+        assert_eq!(
+            leader_end_x(258.0, Some(40.0), 218.0),
+            218.0 - LEADER_END_GAP
+        );
+        // Пустое значение (Err-строка) — до левого края колонки.
+        assert_eq!(leader_end_x(258.0, None, 218.0), 218.0 - LEADER_END_GAP);
+        assert_eq!(
+            leader_end_x(258.0, Some(0.0), 218.0),
+            218.0 - LEADER_END_GAP
+        );
+        // Детерминизм (D-11): тот же вход — тот же X.
+        assert_eq!(
+            leader_end_x(258.0, Some(40.0), 218.0),
+            leader_end_x(258.0, Some(40.0), 218.0)
+        );
     }
 }

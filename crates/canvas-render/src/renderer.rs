@@ -15,8 +15,8 @@ use crate::camera::{Camera, Vec2};
 use crate::cards::{
     analysis_badges_visible, analysis_border_visible, analysis_ring_instance,
     build_draft_instances, build_edge_handle_instances, build_edge_instances_ctx,
-    build_line_port_instances, build_param_port_instances, build_port_instances, card_instance,
-    chip_fill, dim_instance, header_chip_instance, header_separator_instance,
+    build_line_port_instances, build_param_port_instances, build_port_instances, card_color,
+    card_instance, chip_fill, dim_instance, header_chip_instance, header_separator_instance,
     make_widget_transparent, result_strip_instance, result_strip_line_instance,
     selection_ring_instance, severity_border, severity_text, template_icon_rect, template_icon_uv,
     widget_header_hover_instance, BundleContext, CardInstance, CardsPipeline, FocusView,
@@ -169,6 +169,22 @@ pub fn body_quad_fill(kind: BodyQuadKind, theme: &ThemeColors) -> [f32; 4] {
         // тем (принцип debug_overlay.rs: отладочные цвета отличаются от
         // продуктовых), токен TABLE_GUIDE_DEBUG_COLOR.
         BodyQuadKind::GuideDebug => canvas_core::tokens::TABLE_GUIDE_DEBUG_COLOR,
+    }
+}
+
+/// CR-018 v2.1 (замер wasm 2026-10-04): адаптивная зебра — выбор заливки
+/// по яркости КАРТОЧКИ ноды. Белые прогонки (zebra_fill) читаемы на тёмных
+/// карточках (≈ +33/255), но невидимы на светлых/цветных: у янтарной
+/// шаблонной карточки r-канал насыщен (0.96) — белый даёт ≈ +2/255.
+/// На светлых карточках — тёмный тинт (zebra_on_light_fill, ≈ −17/255).
+/// Порог — WCAG-люминация raw-float цвета карточки (как is_light_bg
+/// в theme_presets). Чистая функция — тестируема без GPU.
+pub fn adaptive_zebra_fill(card_fill: [f32; 4], theme: &ThemeColors) -> [f32; 4] {
+    let luma = 0.2126 * card_fill[0] + 0.7152 * card_fill[1] + 0.0722 * card_fill[2];
+    if luma > 0.5 {
+        theme.zebra_on_light_fill
+    } else {
+        theme.zebra_fill
     }
 }
 
@@ -1818,9 +1834,15 @@ impl Renderer {
                 // T23: декоративные квады тела гаснут вместе с карточкой
                 if let Some((entry_zoom, body_quads)) = self.text.body_quads(index) {
                     let (origin, _, _) = body_area(node);
+                    // CR-018 v2.1: адаптивная зебра — заливка по люминации
+                    // карточки этой ноды (белый на цветных не виден).
+                    let card = card_color(node, &self.theme);
                     for quad in body_quads {
                         let mut instance =
                             body_quad_instance(origin, quad, entry_zoom, &self.theme);
+                        if quad.kind == BodyQuadKind::RowBg {
+                            instance.fill = adaptive_zebra_fill(card, &self.theme);
+                        }
                         if scene.focus.dim > 0.0 && !scene.focus.has_node(index) {
                             dim_instance(&mut instance, scene.focus.dim_factor());
                         }
@@ -2515,6 +2537,26 @@ mod tests {
             params: [8.0, 0.0, 0.0, 0.0],
             corners: [0.0; 4],
         }
+    }
+
+    /// CR-018 v2.1: адаптивная зебра — на тёмной карточке белые прогонки,
+    /// на светлой/цветной (янтарный шаблон) — тёмный тинт (белый на
+    /// насыщенном r-канале даёт ≈ +2/255 — замер wasm 2026-10-04).
+    #[test]
+    fn adaptive_zebra_picks_tint_on_light_cards() {
+        let dark = ThemeColors::dark();
+        // Тёмная карточка (default) — белые прогонки.
+        assert_eq!(adaptive_zebra_fill(dark.card_fill, &dark), dark.zebra_fill);
+        // Янтарная карточка шаблона #F5A623 — тёмный тинт.
+        let amber = [0.961, 0.651, 0.137, 1.0];
+        assert_eq!(adaptive_zebra_fill(amber, &dark), dark.zebra_on_light_fill);
+        assert_ne!(dark.zebra_on_light_fill, dark.zebra_fill);
+        // Светлая тема: карточки светлые — тинт и там, и там (слоты равны).
+        let light = ThemeColors::light();
+        assert_eq!(
+            adaptive_zebra_fill(light.card_fill, &light),
+            light.zebra_on_light_fill
+        );
     }
 
     /// Маппинг вида квада тела на заливку: чекбоксы/буллиты/страйк/линия —
