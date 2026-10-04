@@ -5172,7 +5172,10 @@ impl App {
             // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL / key)
             // описание НЕ рисуем — на его месте рисуем текстовое поле и
             // бейдж (см. ветку RowKind::Button ниже). Лейбл остаётся сверху.
-            if row_kind(*row) != RowKind::Button {
+            // FR-LLM-FIX (task FIX-TEXT-INPUT): TextInput-строки (модель /
+            // API-ключ / URL / self-hosted key) — тот же паттерн: на месте
+            // описания рисуем текстовое поле (+ бейдж для строк с кнопкой).
+            if !matches!(row_kind(*row), RowKind::Button | RowKind::TextInput) {
                 let desc = self.tr(row_desc_key(*row));
                 let mut m = canvas_ui::measure::TextMeasurer::new();
                 let mut fs = canvas_render::text::measure_font_system();
@@ -5501,6 +5504,202 @@ impl App {
                             color: badge_color,
                             align: TextAlign::Left,
                         });
+                    }
+                }
+                // FR-LLM-FIX (task FIX-TEXT-INPUT): TextInput-строки —
+                // редактируемое текстовое поле (имя модели / API-ключ / URL /
+                // self-hosted ключ). Для модель-строк — только поле на всю
+                // ширину (кнопки/бейджа нет); для AiApiKey/AiSelfhostUrl/
+                // AiSelfhostKey — поле + кнопка «Проверить» + бейдж (как
+                // RowKind::Button выше). При фокусе (settings_text_edit ==
+                // Some(row)) — рамка акцентом + каретка «|» в конце текста.
+                RowKind::TextInput => {
+                    let [field_x, field_y, field_w, field_h] = text_input_field_rect(*row, *rect);
+                    let editing_now = self.settings_text_edit == Some(*row);
+                    // Кнопка «Проверить» — только для строк с кнопкой (URL/
+                    // key/api_key). Модель-строки кнопки не имеют.
+                    if text_input_has_button(*row) {
+                        let button_label = match row {
+                            SettingsRow::AiApiKey => self.tr(keys::AI_BTN_CHECK_KEY).to_owned(),
+                            SettingsRow::AiSelfhostUrl | SettingsRow::AiSelfhostKey => {
+                                self.tr(keys::AI_BTN_CHECK).to_owned()
+                            }
+                            // FR-LLM-FIX (task FIX-TEXT-INPUT): другие
+                            // TextInput-строки с кнопкой (если появятся) —
+                            // единая подпись «Проверить»; match exhaustive.
+                            _ => self.tr(keys::AI_BTN_CHECK).to_owned(),
+                        };
+                        instances.push(CardInstance {
+                            pos: [control[0], control[1]],
+                            size: [control[2], control[3]],
+                            fill: if point_in_rect(control, self.cursor) {
+                                hover_fill(palette.palette_chip_fill)
+                            } else {
+                                palette.palette_chip_fill
+                            },
+                            border: palette.palette_border,
+                            params: [6.0, 0.0, 0.0, 1.0],
+                            corners: [0.0; 4],
+                        });
+                        texts.push(OwnedScreenText {
+                            text: button_label,
+                            origin: [control[0] + 6.0, control[1] + 4.0],
+                            width: control[2] - 12.0,
+                            font_size: 11.0,
+                            color: palette.title,
+                            align: TextAlign::Center,
+                        });
+                    }
+                    // FR-LLM-FIX (task FIX-TEXT-INPUT): фон поля — row_fill;
+                    // при фокусе — рамка акцентом (params.y = 1.0).
+                    instances.push(CardInstance {
+                        pos: [field_x, field_y],
+                        size: [field_w, field_h],
+                        fill: palette.palette_row_fill,
+                        border: if editing_now {
+                            color_to_rgba(palette.link)
+                        } else {
+                            palette.palette_border
+                        },
+                        params: [4.0, editing_now as u8 as f32, 0.0, 1.0],
+                        corners: [0.0; 4],
+                    });
+                    // FR-LLM-FIX (task FIX-TEXT-INPUT): отображаемое значение
+                    // поля — для API-ключа/URL/key маскируем «•» (как в прото-
+                    // типе), для модель-строк показываем как есть. Пустое поле
+                    // — плейсхолдер (приглушённым цветом).
+                    let (field_text, is_placeholder) = match row {
+                        SettingsRow::AiApiKey => {
+                            let key = &self.settings.llm.api_key;
+                            if key.is_empty() {
+                                ("sk-…".to_owned(), true)
+                            } else {
+                                ("•".repeat(key.chars().count().min(20)), false)
+                            }
+                        }
+                        SettingsRow::AiSelfhostUrl => {
+                            let url = &self.settings.llm.endpoint;
+                            if url.is_empty() {
+                                ("https://llm.corp.local/v1".to_owned(), true)
+                            } else {
+                                (url.clone(), false)
+                            }
+                        }
+                        SettingsRow::AiSelfhostKey => {
+                            let key = &self.settings.llm.selfhost_key;
+                            if key.is_empty() {
+                                ("API key endpoint'а".to_owned(), true)
+                            } else {
+                                ("•".repeat(key.chars().count().min(20)), false)
+                            }
+                        }
+                        SettingsRow::AiModelSuggest
+                        | SettingsRow::AiModelGraph
+                        | SettingsRow::AiModelAgent => {
+                            let model = match row {
+                                SettingsRow::AiModelSuggest => &self.settings.llm.model_suggest,
+                                SettingsRow::AiModelGraph => &self.settings.llm.model_graph,
+                                SettingsRow::AiModelAgent => &self.settings.llm.model_agent,
+                                _ => unreachable!("модель-строка вне match"),
+                            };
+                            if model.is_empty() {
+                                ("glm-5.3-flash".to_owned(), true)
+                            } else {
+                                (model.clone(), false)
+                            }
+                        }
+                        // FR-LLM-FIX (task FIX-TEXT-INPUT): другие
+                        // TextInput-строки (если появятся) — пустое поле;
+                        // match exhaustive.
+                        _ => (String::new(), false),
+                    };
+                    if !field_text.is_empty() {
+                        texts.push(OwnedScreenText {
+                            text: field_text,
+                            origin: [field_x + 8.0, field_y + 2.0],
+                            width: field_w - 12.0,
+                            font_size: 11.0,
+                            color: if is_placeholder {
+                                palette.icon
+                            } else {
+                                palette.body
+                            },
+                            align: TextAlign::Left,
+                        });
+                    }
+                    // FR-LLM-FIX (task FIX-TEXT-INPUT): каретка «|» в конце
+                    // текста при фокусе — квад 1.5×field_h (как explain edit),
+                    // позиция — измеренная ширина текста поля (CR-015: эвристика
+                    // chars×7 давала caret не по глифам; замер — тем же кеглем,
+                    // каким рисуется текст, 11.0). Кладётся ПОВЕРХ текста, как в
+                    // explain — перекрытие последнего глифа 1.5 px не мешает.
+                    if editing_now {
+                        let mut m = canvas_ui::measure::TextMeasurer::new();
+                        let mut fs = canvas_render::text::measure_font_system();
+                        let text_w = m.width_of(
+                            &mut fs,
+                            self.settings_text_edit_value(),
+                            canvas_render::text::SANS_FAMILY,
+                            11.0,
+                        );
+                        drop(fs);
+                        let caret_x = (field_x + 8.0 + text_w).min(field_x + field_w - 4.0);
+                        instances.push(CardInstance {
+                            pos: [caret_x, field_y + 2.0],
+                            size: [1.5, field_h - 4.0],
+                            fill: color_to_rgba(palette.link),
+                            border: [0.0; 4],
+                            params: [0.0, 0.0, 0.0, 1.0],
+                            corners: [0.0; 4],
+                        });
+                    }
+                    // FR-LLM-FIX (task FIX-TEXT-INPUT): бейдж справа от поля
+                    // (только для строк с кнопкой — модель-строки бейджа не
+                    // имеют, поле занимает всю доступную ширину).
+                    if text_input_has_button(*row) {
+                        let (badge_text, badge_color) = match row {
+                            SettingsRow::AiApiKey => {
+                                let badge = if self.ai_key_ok {
+                                    self.tr(keys::AI_KEY_VALID).replace("{n}", "0")
+                                } else {
+                                    self.tr(keys::AI_KEY_NOT_CHECKED).to_owned()
+                                };
+                                let color: canvas_render::Color = if self.ai_key_ok {
+                                    canvas_render::Color::rgba(77, 191, 140, 255)
+                                } else {
+                                    palette.icon
+                                };
+                                (badge, color)
+                            }
+                            SettingsRow::AiSelfhostUrl | SettingsRow::AiSelfhostKey => {
+                                let badge = if self.ai_selfhost_ok {
+                                    self.tr(keys::AI_SH_OK).to_owned()
+                                } else {
+                                    self.tr(keys::AI_SH_NOT_CHECKED).to_owned()
+                                };
+                                let color: canvas_render::Color = if self.ai_selfhost_ok {
+                                    canvas_render::Color::rgba(77, 191, 140, 255)
+                                } else {
+                                    palette.icon
+                                };
+                                (badge, color)
+                            }
+                            _ => (String::new(), palette.icon),
+                        };
+                        if !badge_text.is_empty() {
+                            // FR-LLM-FIX (task FIX-TEXT-INPUT): бейдж — справа
+                            // от поля (field_x + field_w + gap), ширина = 110.
+                            let badge_w = 110.0;
+                            let gap = 6.0;
+                            texts.push(OwnedScreenText {
+                                text: badge_text,
+                                origin: [field_x + field_w + gap, field_y + 2.0],
+                                width: badge_w,
+                                font_size: 10.5,
+                                color: badge_color,
+                                align: TextAlign::Left,
+                            });
+                        }
                     }
                 }
             }

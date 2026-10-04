@@ -93,13 +93,14 @@ pub struct LlmSettings {
     pub api_key: String,
     // FR-LLM-FIX: per-feature BYOK-модель (Q1 правки прототипа F-7.2). Раньше
     // было единое поле `model: String`; теперь каждое AI-свойство имеет свой
-    // идентификатор модели. По умолчанию — пустая строка: список моделей
-    // подгружается из `/v1/models` после health-check ключа. Для не-BYOK
-    // провайдеров поле игнорируется (ChatGPT → из /v1/models после OAuth,
-    // Ollama → из /v1/models после подключения, Laya → «laya-1.13»
-    // (single-model sidecar), Off → нет модели).
-    /// BYOK-модель для Suggest (id из `LlmProvider::models()`); пустая —
-    /// не выбрана (UI показывает плейсхолдер, статусная панель — «не выбрана»).
+    // идентификатор модели. FR-LLM-FIX (task FIX-TEXT-INPUT): дефолт —
+    // «glm-5.3-flash» (текстовый ввод позволяет править; пользователь видит
+    // осмысленное имя, а не пустое поле). Для не-BYOK провайдеров поле
+    // игнорируется (ChatGPT → из /v1/models после OAuth, Ollama → из
+    // /v1/models после подключения, Laya → «laya-1.13» (single-model
+    // sidecar), Off → нет модели).
+    /// BYOK-модель для Suggest (id из `LlmProvider::models()` или введённый
+    /// пользователем; default «glm-5.3-flash», FR-LLM-FIX task FIX-TEXT-INPUT).
     pub model_suggest: String,
     /// BYOK-модель для Graph Builder.
     pub model_graph: String,
@@ -108,6 +109,12 @@ pub struct LlmSettings {
     /// Self-hosted URL (для BYOK-cloud с кастомным endpoint).
     /// Пустая — default провайдера (api.openai.com / api.anthropic.com / ...).
     pub endpoint: String,
+    // FR-LLM-FIX (task FIX-TEXT-INPUT): отдельный API-ключ для self-hosted
+    // endpoint (раньше поле переиспользовало `api_key` — один ключ на всё).
+    // Поле редактируется текстовым вводом в строке AiSelfhostKey; до
+    // явного ввода — пустая строка.
+    /// API-ключ self-hosted endpoint (если endpoint требует авторизацию).
+    pub selfhost_key: String,
     /// Режим пребывания данных (Q1+Q5). Влияет на redact + доступные
     /// провайдеры. По умолчанию `Local` (самый приватный).
     pub data_residency: DataResidency,
@@ -132,22 +139,25 @@ impl Default for LlmSettings {
     /// - `cost_limit_daily: $1.00` (Q7 default).
     /// - `confidence_threshold: 0.5` (Q7 default).
     /// - `telemetry_opt_in: false` (Q7 default OFF).
-    /// - `api_key` / `model_*` / `endpoint` — пустые (не заданы).
-    /// - FR-LLM-FIX: `model_*` — пустые (список моделей подгружается из
-    ///   `/v1/models` после health-check ключа; до выбора — плейсхолдер).
+    /// - `api_key` / `selfhost_key` / `endpoint` — пустые (не заданы).
+    /// - FR-LLM-FIX (task FIX-TEXT-INPUT): `model_*` — «glm-5.3-flash»
+    ///   (текстовый ввод; пользователь видит осмысленный дефолт, может
+    ///   отредактировать под своего провайдера).
     fn default() -> Self {
         Self {
             provider_suggest: LlmProviderId::Off,
             provider_graph: LlmProviderId::Off,
             provider_agent: LlmProviderId::Off,
             api_key: String::new(),
-            // FR-LLM-FIX: per-feature дефолт-модель — пустая строка. Раньше
-            // был хардкод «glm-5.3-flash»; теперь список моделей берётся из
-            // `/v1/models` после health-check ключа (см. task FIX-APIKEY-MODELS).
-            model_suggest: String::new(),
-            model_graph: String::new(),
-            model_agent: String::new(),
+            // FR-LLM-FIX (task FIX-TEXT-INPUT): дефолт-модель — «glm-5.3-flash»
+            // (текстовый ввод, не dropdown); пользователь может заменить под
+            // своего провайдера. Раньше была пустая строка (FIX-APIKEY-MODELS),
+            // но это лишало UI видимого дефолта.
+            model_suggest: "glm-5.3-flash".to_owned(),
+            model_graph: "glm-5.3-flash".to_owned(),
+            model_agent: "glm-5.3-flash".to_owned(),
             endpoint: String::new(),
+            selfhost_key: String::new(),
             data_residency: DataResidency::Local,
             cost_limit_daily: 1.0,
             confidence_threshold: 0.5,
@@ -220,12 +230,14 @@ mod tests {
         assert_eq!(s.confidence_threshold, 0.5);
         assert!(!s.telemetry_opt_in);
         assert!(s.api_key.is_empty());
-        // FR-LLM-FIX: model_* — пустые по умолчанию (список подгружается
-        // из /v1/models после health-check ключа).
-        assert!(s.model_suggest.is_empty());
-        assert!(s.model_graph.is_empty());
-        assert!(s.model_agent.is_empty());
+        // FR-LLM-FIX (task FIX-TEXT-INPUT): model_* — «glm-5.3-flash»
+        // (текстовый ввод, не dropdown; пользователь видит осмысленный дефолт).
+        assert_eq!(s.model_suggest, "glm-5.3-flash");
+        assert_eq!(s.model_graph, "glm-5.3-flash");
+        assert_eq!(s.model_agent, "glm-5.3-flash");
         assert!(s.endpoint.is_empty());
+        // FR-LLM-FIX (task FIX-TEXT-INPUT): selfhost_key — пустой по умолчанию.
+        assert!(s.selfhost_key.is_empty());
         assert!(s.all_off());
     }
 

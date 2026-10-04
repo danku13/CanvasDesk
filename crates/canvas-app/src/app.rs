@@ -32,8 +32,9 @@ use crate::settings_ui::{
     apply_dropdown_value, control_rect, dropdown_item_at, dropdown_layout, dropdown_options,
     dropdown_value, modal_layout_scrolled_with_settings, modal_layout_with_settings, modal_nav_at,
     modal_row_at, modal_scroll_max_filtered, modal_theme_card_at, pill_knob_rect, row_desc_key,
-    row_kind, row_label_key, DropdownState, ModalMode, RowKind, SettingsRow, DROPDOWN_MARGIN,
-    DROPDOWN_ROW_H, MODAL_ROW_LABEL_W, SETTINGS_TABS,
+    row_kind, row_label_key, text_input_field_rect, text_input_has_button, DropdownState,
+    ModalMode, RowKind, SettingsRow, DROPDOWN_MARGIN, DROPDOWN_ROW_H, MODAL_ROW_LABEL_W,
+    SETTINGS_TABS,
 };
 use crate::suggest;
 // FR-038 (T-038.4): snap-движок (T-038.2) — чистая геометрия магнитной
@@ -1066,6 +1067,13 @@ pub struct App {
     /// Выпадающее меню строки настроек (FR-026): какая строка открыта;
     /// пункты вычисляются на кадр, состояние не устаревает.
     settings_dropdown: DropdownState,
+    /// FR-LLM-FIX (task FIX-TEXT-INPUT): редактируемое текстовое поле строки
+    /// настроек (имя BYOK-модели, API-ключ, URL endpoint'а, self-hosted ключ).
+    /// `Some(row)` — клавиатурный ввод уходит в эту строку (append + backspace,
+    /// как у inline-поля подмены `explain`); Enter/Esc/клик мимо — конец ввода.
+    /// Не переживает закрытие модалки (сбрасывается в on_left_button, когда
+    /// модалка закрывается, и в on_key при Enter/Esc).
+    settings_text_edit: Option<SettingsRow>,
     /// W-a: прокрутка контента правой панели настроек — сдвиг вверх (px),
     /// 0 — верх списка. Кламп в `[0, modal_scroll_max]` — на потребителе
     /// (settings_ui::modal_layout_scrolled); сброс — при смене таба и
@@ -1590,6 +1598,9 @@ impl App {
             settings_open: false,
             settings_tab: 0,
             settings_dropdown: DropdownState::default(),
+            // FR-LLM-FIX (task FIX-TEXT-INPUT): ни одна строка настроек не
+            // редактируется (фокус текстового поля появится по клику на поле).
+            settings_text_edit: None,
             settings_scroll_top: 0.0,
             // FR-027/FR-028: помощь/документация закрыты; тур при первом
             // запуске открывает should_show_onboarding (прецедент
@@ -4930,8 +4941,20 @@ impl App {
     /// Общий маршрут текста коммита (Ime::Commit + web-мост AppEvent::ImeCommit):
     /// 1) редактор заметки (EditingSession) — та же вставка, что Paste;
     /// 2) панель поиска; 3) inline-поле подмены окна проверки (FR-048 X3).
+    ///
+    /// FR-LLM-FIX (task FIX-TEXT-INPUT): 0) — текстовое поле строки настроек
+    /// (модалка настроек поверх канваса, фокус поля — приоритет над нижними
+    /// приёмниками; web-слой дёргает ImeCommit, когда `text_input_active()`
+    /// вернёт true из-за `settings_text_edit.is_some()`).
     pub fn insert_committed_text(&mut self, text: &str) {
         if text.is_empty() {
+            return;
+        }
+        // FR-LLM-FIX (task FIX-TEXT-INPUT): 0) текстовое поле строки настроек
+        // (модалка сверху — приоритет; IME-коммит append'ит к полю).
+        if self.settings_text_edit.is_some() {
+            self.settings_text_edit_value_mut().push_str(text);
+            self.request_redraw();
             return;
         }
         // 1) Редактор заметки (EditingSession)
@@ -4967,6 +4990,11 @@ impl App {
     /// дока), поле подмены окна проверки. Web-слой (canvas-web) опрашивает
     /// это состояние после каждого события цикла (TourAwareApp) — канал
     /// app→web без новых мостов: App остаётся платформенно-нейтральным.
+    ///
+    /// FR-LLM-FIX (task FIX-TEXT-INPUT): добавлен приёмник — редактируемое
+    /// текстовое поле строки настроек (имя модели / API-ключ / URL / self-
+    /// hosted ключ). Когда `settings_text_edit.is_some()` — web-слой держит
+    /// фокус input-шима, чтобы символы через `Ime::Commit` дошли до строки.
     pub fn text_input_active(&self) -> bool {
         self.editing.is_some()
             || self.search.is_open()
@@ -4975,6 +5003,41 @@ impl App {
                 .explain
                 .as_ref()
                 .is_some_and(|state| state.edit.is_some())
+            // FR-LLM-FIX (task FIX-TEXT-INPUT): поле строки настроек.
+            || self.settings_text_edit.is_some()
+    }
+
+    // FR-LLM-FIX (task FIX-TEXT-INPUT): helpers для доступа к редактируемой
+    // строке настроек. По `settings_text_edit` выбирают поле `LlmSettings` —
+    // модель-строки пишут в `model_*`, API-ключ — в `api_key`, URL endpoint'а
+    // — в `endpoint`, self-hosted ключ — в `selfhost_key`. Паника в mut-версии
+    // при `None` невозможна (вызывается только после проверки is_some в on_key).
+
+    /// Текущее значение редактируемой строки настроек (read-only slice).
+    fn settings_text_edit_value(&self) -> &str {
+        match self.settings_text_edit {
+            Some(SettingsRow::AiModelSuggest) => &self.settings.llm.model_suggest,
+            Some(SettingsRow::AiModelGraph) => &self.settings.llm.model_graph,
+            Some(SettingsRow::AiModelAgent) => &self.settings.llm.model_agent,
+            Some(SettingsRow::AiApiKey) => &self.settings.llm.api_key,
+            Some(SettingsRow::AiSelfhostUrl) => &self.settings.llm.endpoint,
+            Some(SettingsRow::AiSelfhostKey) => &self.settings.llm.selfhost_key,
+            _ => "",
+        }
+    }
+
+    /// Mutable-ссылка на редактируемую строку настроек. Вызывается только
+    /// когда `settings_text_edit.is_some()` (проверка в on_key/insert_text).
+    fn settings_text_edit_value_mut(&mut self) -> &mut String {
+        match self.settings_text_edit {
+            Some(SettingsRow::AiModelSuggest) => &mut self.settings.llm.model_suggest,
+            Some(SettingsRow::AiModelGraph) => &mut self.settings.llm.model_graph,
+            Some(SettingsRow::AiModelAgent) => &mut self.settings.llm.model_agent,
+            Some(SettingsRow::AiApiKey) => &mut self.settings.llm.api_key,
+            Some(SettingsRow::AiSelfhostUrl) => &mut self.settings.llm.endpoint,
+            Some(SettingsRow::AiSelfhostKey) => &mut self.settings.llm.selfhost_key,
+            _ => unreachable!("settings_text_edit_value_mut без активной строки"),
+        }
     }
 
     /// Клавиатура открытой панели поиска (T14): ввод, каретка, выбор, прыжок.

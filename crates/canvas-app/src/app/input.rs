@@ -743,6 +743,52 @@ impl App {
     }
 
     pub(super) fn on_key(&mut self, event: &KeyEvent) {
+        // FR-LLM-FIX (task FIX-TEXT-INPUT): редактируемое текстовое поле строки
+        // настроек (имя модели / API-ключ / URL / self-hosted ключ) — приоритет
+        // над роутером (как explain edit_open в `route_owner_key`). Символы
+        // идут в поле, Backspace — удаление последнего символа, Enter/Esc —
+        // конец ввода (с сохранением в config.toml/localStorage). Прочие
+        // клавиши (Ctrl+F/Ctrl+P/…) — пропускаются к роутеру (например, Ctrl+F
+        // откроет поиск, закрывая правку общим хвостом `finish_editing`).
+        if self.settings_open
+            && self.settings_text_edit.is_some()
+            && event.state == ElementState::Pressed
+        {
+            let handled = match &event.logical_key {
+                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Escape) => {
+                    // FR-LLM-FIX (task FIX-TEXT-INPUT): коммит поля — сохраняем
+                    // настройки (как `apply_dropdown_choice`), сбрасываем фокус.
+                    self.settings_text_edit = None;
+                    self.save_settings();
+                    true
+                }
+                Key::Named(NamedKey::Backspace) => {
+                    // FR-LLM-FIX (task FIX-TEXT-INPUT): Ctrl+Backspace — очистить
+                    // поле (как `edit_search_input(|i| i.clear())`); обычный
+                    // Backspace — удалить последний символ.
+                    if self.modifiers.control_key() {
+                        self.settings_text_edit_value_mut().clear();
+                    } else {
+                        self.settings_text_edit_value_mut().pop();
+                    }
+                    true
+                }
+                // FR-LLM-FIX (task FIX-TEXT-INPUT): символы без модификаторов
+                // — append к строке. С Ctrl/Alt — пропускаем к роутеру (Ctrl+F
+                // и т.п. должны работать, не вставляя «f» в поле).
+                Key::Character(text)
+                    if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
+                {
+                    self.settings_text_edit_value_mut().push_str(text);
+                    true
+                }
+                _ => false,
+            };
+            if handled {
+                self.request_redraw();
+                return;
+            }
+        }
         // FR-054 (Q4-a PRD-0009): весь on_key — доставка KeyboardRouter'ом
         // по скоуп-стеку из реестра (FR-051): верхний скоуп первым,
         // поглотивший гасит доставку; скоупы без обработчика
@@ -983,6 +1029,12 @@ impl App {
             self.settings_open = !self.settings_open;
             self.settings_dropdown.reset();
             self.settings_scroll_top = 0.0;
+            // FR-LLM-FIX (task FIX-TEXT-INPUT): закрытие модалки через Ctrl+,
+            // — сброс фокуса поля (как и закрытие кликом по затемнению).
+            if !self.settings_open && self.settings_text_edit.is_some() {
+                self.settings_text_edit = None;
+                self.save_settings();
+            }
             self.request_redraw();
             return;
         }
@@ -1906,6 +1958,12 @@ impl App {
             self.settings_open = !self.settings_open;
             self.settings_dropdown.reset();
             self.settings_scroll_top = 0.0;
+            // FR-LLM-FIX (task FIX-TEXT-INPUT): закрытие модалки кнопкой ⚙ —
+            // сброс фокуса поля (как и закрытие кликом по затемнению).
+            if !self.settings_open && self.settings_text_edit.is_some() {
+                self.settings_text_edit = None;
+                self.save_settings();
+            }
             self.request_redraw();
             return;
         }
@@ -1976,7 +2034,12 @@ impl App {
                 self.request_redraw();
                 return;
             }
+            // FR-LLM-FIX (task FIX-TEXT-INPUT): клик по строке модалки —
+            // split hit-test для TextInput (кнопка / текстовое поле),
+            // обычная обработка для Toggle/Dropdown; клик по ДРУГОЙ строке
+            // гасит фокус активного поля (правка закончена — сохраняем).
             if let Some(row) = modal_row_at(&layout, self.cursor) {
+                let prev_text_edit = self.settings_text_edit;
                 match row_kind(row) {
                     RowKind::Toggle => self.apply_toggle_row(row),
                     // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL /
@@ -1993,6 +2056,40 @@ impl App {
                             self.settings_dropdown.open(row, &self.settings);
                         }
                     }
+                    // FR-LLM-FIX (task FIX-TEXT-INPUT): split hit-test —
+                    // клик по кнопке действия (control_rect, только для строк
+                    // с кнопкой «Проверить») → apply_button_row; клик по
+                    // текстовому полю/лейблу (text_input_field_rect или остаток
+                    // строки) → фокус и ввод.
+                    RowKind::TextInput => {
+                        let Some(row_rect) = layout.row_rect(row) else {
+                            self.settings_text_edit = None;
+                            self.request_redraw();
+                            return;
+                        };
+                        let button_rect = control_rect(row_rect, RowKind::TextInput);
+                        if text_input_has_button(row) && point_in_rect(button_rect, self.cursor) {
+                            // FR-LLM-FIX (task FIX-TEXT-INPUT): клик по кнопке
+                            // «Проверить» — mock health-check (как раньше).
+                            // Активное поле НЕ закрывается (пользователь мог
+                            // нажать «Проверить», не закоммитив ключ — mock
+                            // всё равно читает `settings.llm.api_key`).
+                            self.apply_button_row(row);
+                        } else {
+                            // FR-LLM-FIX (task FIX-TEXT-INPUT): клик по
+                            // текстовому полю/лейблу — фокус и ввод (Enter/Esc/
+                            // клик мимо — конец; символы — append; Backspace —
+                            // pop). Для модель-строк кликабельна вся строка
+                            // (кнопки нет); для строк с кнопкой — лейбл и поле.
+                            self.settings_text_edit = Some(row);
+                        }
+                    }
+                }
+                // FR-LLM-FIX (task FIX-TEXT-INPUT): если кликнули НЕ TextInput
+                // при активном поле — правка закончена, сохраняем настройки.
+                if row_kind(row) != RowKind::TextInput && prev_text_edit.is_some() {
+                    self.settings_text_edit = None;
+                    self.save_settings();
                 }
             } else if !point_in_rect(layout.rect, self.cursor) {
                 // FR-039: клик по затемнению (вне rect модалки) —
@@ -2001,6 +2098,18 @@ impl App {
                 self.settings_open = false;
                 self.settings_dropdown.reset();
                 self.settings_scroll_top = 0.0;
+                // FR-LLM-FIX (task FIX-TEXT-INPUT): закрытие модалки —
+                // сброс фокуса поля (не переживает закрытие, как dropdown).
+                if self.settings_text_edit.is_some() {
+                    self.settings_text_edit = None;
+                    self.save_settings();
+                }
+            } else if self.settings_text_edit.is_some() {
+                // FR-LLM-FIX (task FIX-TEXT-INPUT): клик мимо строк, но в
+                // модалке (заголовок/навигация уже обработаны выше) — снимаем
+                // фокус поля и сохраняем введённое значение.
+                self.settings_text_edit = None;
+                self.save_settings();
             }
             self.request_redraw();
         }
