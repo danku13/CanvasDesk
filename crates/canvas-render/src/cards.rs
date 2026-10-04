@@ -245,7 +245,8 @@ pub fn named_color(color: Option<&str>, theme: &ThemeColors) -> Option<[f32; 4]>
 ///
 /// Возвращается НЕПРОЗРАЧНЫЙ цвет (a = 1.0): гарантия посчитана для
 /// сплошного цвета; полупрозрачная рисовка размешала бы рамку с заливкой.
-/// Шейдер рисует ширину 1.5·a ≈ 1.5 px (волосяная, как FR-075).
+/// Шейдер рисует полосу |sd| ≤ 1.0 (≈ 2 px с AA, волосяная FR-075;
+/// сужена с 1.5 после жалобы на «жирные» края светлой темы 2026-10-05).
 pub(crate) fn derived_card_edge(fill: [f32; 4], theme: &ThemeColors) -> [f32; 4] {
     let bg = [
         theme.background[0] as f32 / 255.0,
@@ -445,14 +446,15 @@ pub fn card_instance(node: &Node, selected: bool, theme: &ThemeColors) -> CardIn
         theme.group_border
     } else if colored_fill.is_some() {
         // P-A: производная рамка, непрозрачная (гарантия — для сплошного
-        // цвета; шейдерная ширина 1.5·a ≈ 1.5 px).
+        // цвета; шейдерная полоса |sd| ≤ 1.0 ≈ 2 px).
         derived_card_edge(colored_fill.unwrap(), theme)
     } else {
         // FR-075 (вёрстка prototype-unified): волосяной контур cardEdge на
         // КАЖДОЙ карточке. P-B: alpha 1.0 — документированные ≥ 3:1 к
         // заливке и канвасу считаются для сплошного цвета (полупрозрачная
-        // рисовка a=0.85 размешивала рамку до 2.25–2.7:1); шейдерная ширина
-        // 1.5·a = 1.5 px (было 1.28 при a = 0.85) — визуально та же волосяная.
+        // рисовка a=0.85 размешивала рамку до 2.25–2.7:1). Толщина —
+        // шейдерная полоса |sd| ≤ 1.0 ≈ 2 px (была 3 px — «жирная» на
+        // светлой теме, жалоба владельца 2026-10-05).
         theme.card_edge
     };
     CardInstance {
@@ -691,7 +693,7 @@ pub fn result_strip_line_instance(
 pub fn selection_ring_instance(node: &Node, accent: [f32; 4]) -> CardInstance {
     const GROW: f32 = 3.5;
     let mut border = accent;
-    border[3] = 0.8; // шейдер: ширина = 1.5 · a ≈ 1.2 px
+    border[3] = 0.8; // шейдер: полоса |sd| ≤ 1.0 ≈ 2 px · a ≈ 1.6 px
     CardInstance {
         pos: [node.x - GROW, node.y - GROW],
         size: [node.width + 2.0 * GROW, node.height + 2.0 * GROW],
@@ -2893,7 +2895,7 @@ mod tests {
         assert_eq!(ring.size, [node.width + 7.0, node.height + 7.0]);
         assert_eq!(ring.params, [CORNER_RADIUS + 3.5, 0.0, 0.0, 1.0]);
         assert_eq!(ring.fill, [0.0; 4]);
-        assert!((ring.border[3] - 0.8).abs() < 1e-3, "штрих ≈ 1.2 px");
+        assert!((ring.border[3] - 0.8).abs() < 1e-3, "полоса ≈ 1.6 px");
     }
 
     /// FR-075 (вёрстка prototype-unified drawRowPort): точки рядов/якоря —

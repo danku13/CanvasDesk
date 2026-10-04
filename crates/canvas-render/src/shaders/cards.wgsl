@@ -115,15 +115,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let shadow_sd = sd_rounded_box(p - shadow_offset, half_size, radius) - 1.0;
     let shadow_alpha = (1.0 - smoothstep(-5.0, 7.0, shadow_sd)) * 0.25 * (1.0 - in.params.w);
 
-    // Рамка: выделение (2px) или broken (1px серая) — как раньше; иначе —
-    // оверлейная рамка по border.a (зона дропа T9, пульс подсветки T14)
+    // Рамка: выделение (3px) или broken (1.5px серая) — как раньше; иначе —
+    // оверлейная рамка по border.a. Пост-гамма правка (жалоба владельца
+    // 2026-10-05 «края нод слишком жирные на светлой теме»): полоса сужена
+    // |sd| ≤ 1.5 → ≤ 1.0 (≈ 2 px с AA вместо 3) — волосяная FR-075 при
+    // непрозрачном тоне L1 (#878a90, ≥ 3:1); выделение осталось 3 px —
+    // иерархия «выделено заметнее обычного» сохранена.
     var border_alpha = 0.0;
     if in.params.y > 0.5 {
         border_alpha = 1.0 - smoothstep(-aa, aa, abs(sd) - 1.5);
     } else if in.params.z > 0.5 {
         border_alpha = 1.0 - smoothstep(-aa, aa, abs(sd) - 0.75);
     } else if in.border.a > 0.001 {
-        border_alpha = (1.0 - smoothstep(-aa, aa, abs(sd) - 1.5)) * in.border.a;
+        border_alpha = (1.0 - smoothstep(-aa, aa, abs(sd) - 1.0)) * in.border.a;
     }
 
     // Слои: тень -> заливка -> рамка
