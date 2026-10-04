@@ -876,6 +876,14 @@ pub mod keys {
     pub const AI_STATUS_SESSION: &str = "ai.status.session";
     pub const AI_STATUS_DAY: &str = "ai.status.day";
     pub const AI_STATUS_NO_MODEL: &str = "ai.status.no_model";
+    // FR-LLM-FIX-2: короткие подписи провайдеров для чипа статусной панели
+    // (паритет aiProvLabel() прототипа; полные подписи настроек —
+    // «(свой ключ)»/«(вход)» — в шапке панели не помещаются в строку).
+    pub const AI_PROV_SHORT_OFF: &str = "ai.status.prov.off";
+    pub const AI_PROV_SHORT_LAYA: &str = "ai.status.prov.laya";
+    pub const AI_PROV_SHORT_OLLAMA: &str = "ai.status.prov.ollama";
+    pub const AI_PROV_SHORT_BYOK: &str = "ai.status.prov.byok";
+    pub const AI_PROV_SHORT_CHATGPT: &str = "ai.status.prov.chatgpt";
     pub const AI_TOOLTIP_PAUSE: &str = "ai.tooltip.pause";
     pub const AI_TOOLTIP_SETTINGS: &str = "ai.tooltip.settings";
     pub const AI_TOOLTIP_SUGGEST: &str = "ai.tooltip.suggest";
@@ -1922,6 +1930,13 @@ const RU: &[(&str, &str)] = &[
     (keys::AI_MODEL_PH_EMPTY, "Выберите модель"),
     // FR-LLM-FIX: бейдж статусной панели — активный провайдер без модели.
     (keys::AI_STATUS_MODEL_NOT_CHOSEN, "не выбрана"),
+    // FR-LLM-FIX-2: короткие подписи провайдеров — чип статусной панели
+    // (как aiProvLabel() прототипа: BYOK / ChatGPT OAuth / Ollama / …).
+    (keys::AI_PROV_SHORT_OFF, "Выключено"),
+    (keys::AI_PROV_SHORT_LAYA, "Laya (local)"),
+    (keys::AI_PROV_SHORT_OLLAMA, "Ollama"),
+    (keys::AI_PROV_SHORT_BYOK, "BYOK"),
+    (keys::AI_PROV_SHORT_CHATGPT, "ChatGPT OAuth"),
     (keys::AI_OPT_OFF, "Выключено"),
     (keys::AI_OPT_LAYA, "Laya (локальная)"),
     (keys::AI_OPT_OLLAMA, "Ollama (локальная)"),
@@ -3045,6 +3060,12 @@ const EN: &[(&str, &str)] = &[
     (keys::AI_MODEL_PH_EMPTY, "Choose a model"),
     // FR-LLM-FIX: бейдж статусной панели — активный провайдер без модели.
     (keys::AI_STATUS_MODEL_NOT_CHOSEN, "not chosen"),
+    // FR-LLM-FIX-2: короткие подписи провайдеров — чип статусной панели.
+    (keys::AI_PROV_SHORT_OFF, "Off"),
+    (keys::AI_PROV_SHORT_LAYA, "Laya (local)"),
+    (keys::AI_PROV_SHORT_OLLAMA, "Ollama"),
+    (keys::AI_PROV_SHORT_BYOK, "BYOK"),
+    (keys::AI_PROV_SHORT_CHATGPT, "ChatGPT OAuth"),
     (keys::AI_OPT_OFF, "Off"),
     (keys::AI_OPT_LAYA, "Laya (local)"),
     (keys::AI_OPT_OLLAMA, "Ollama (local)"),
