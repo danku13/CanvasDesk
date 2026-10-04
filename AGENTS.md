@@ -189,6 +189,139 @@ docs/                      # SPEC.md, TASKS.md, RECIPES.md, adr/, change-request
   (задача = сессия = коммит, не давать несколько задач сразу).
 - Новые зависимости — только с обоснованием в описании коммита/PR.
 
+## UI-кит — обязательное правило при вёрстке на Rust
+
+**Любая вёрстка UI на Rust ведётся через существующий `canvas-ui` kit**
+(`crates/canvas-ui/src/`). Хардкод квадов/цветов/геометрии в обход кита
+запрещён — это ломает согласованность тем, переиспользование и делает
+визуальные регрессии невидимыми до ручного теста.
+
+### Что использовать из кита
+
+| Нужда | Канонический путь в kit |
+|---|---|
+| Цвета UI-элементов | `KitPalette` (слоты `ThemeColors` v2: `control_fill`, `control_danger`, `text`, `palette_border`, `menu_fill`, …) — НИКОГДА не инлайнить `[f32;4]` литералы rgba |
+| Отступы/радиусы/зазоры | `canvas_core::tokens` (`SPACING_*`, `RADIUS_*`) — НИКОГДА не дублировать `4.0/8.0/16.0` магическими константами |
+| Размеры контролов | `kit::BUTTON_HEIGHT`, `kit::ICON_BUTTON_SIZE`, `kit::LIST_ROW_H`, `kit::TEXT_FIELD_HEIGHT`, `kit::CHIP_HEIGHT`, `kit::SWITCH_W/H` — НИКОГДА не переобъявлять `HEADER_H=30.0`, `ROW_H=26.0`, `INPUT_H=32.0` локально |
+| Раскладка (позиционирование) | `kit::constrain`, `kit::stack`, `kit::pad`, `Column`/`Row`/`Child`/`MeasuredItem`/`RowPolicy` — НИКОГДА не считать `x = panel.right() - 28.0, y = panel.y + 6.0` магическими числами |
+| Текст (шейпинг + ширина + перенос) | `TextMeasurer` (`width_of`, `wrap`, `ellipsis`) — НИКОГДА не оценивать ширину как `len() * 5.5 + 14.0` (CR-015 запрещает это явно) и не строить `Buffer::new` + `set_text` вручную в overlay-логике |
+| Кнопки / чипы / иконки / свитчи / поля | `kit::button_layout/style/size`, `kit::chip_*`, `kit::icon_button`, `kit::switch`, `kit::text_field` |
+| Списки и скролл | `kit::list_rows` + `kit::ScrollState` + `kit::scroll_bar` |
+| Попапы / модали / тултипы | `kit::dropdown_menu`, `kit::modal`, `kit::tooltip` (anchor + flip + delay) |
+| Панели / карточки | `kit::panel_rect/style`, `kit::card` |
+| Таблицы | `kit::Table` (retained) или `kit::row_guides` + `kit::paint_row` |
+| Draw-слой (квады на экран) | `Painter::rect/panel/control/label` + `PaintItem` (НЕ ручной `CardInstance { pos, size, fill, border, params, corners }`) |
+
+Полный гайд — `docs/ui-kit.md`; архитектура — `docs/prd/prd-0009-ui-layering-uikit.md`,
+контракт поверхности — `docs/interface-objects/surface-registry.md`,
+токены — `crates/canvas-core/src/tokens.rs` и `docs/change-requests/fr-046-design-tokens.md`.
+
+### Что запрещено (ловится на ревью и в линтах)
+
+1. **Инлайн rgba литералы в UI-коде** — `[0.30, 0.75, 0.55, 1.0]`,
+   `Color::rgba(77, 191, 140, 255)` в overlay/panel логике. Даже
+   «единоразово» — это будущий дрейф цвета. Маршрутизируйте через
+   `KitPalette` (существующий или новый слот).
+2. **Магические числа геометрии** — `4.0, 6.0, 22.0, 28.0, 110.0` в
+   `UiRect::new(...)` и `pos: [...]`. Берите из `kit::*` констант или
+   `tokens::SPACING_*`.
+3. **Дублированные локальные константы** — `HEADER_H`, `ROW_H`,
+   `INPUT_H`, `FONT_*` в каждом `*_ui.rs`. Они обязаны либо `pub use`
+   из `kit`, либо быть новым `kit::CONST` (если значение уникально).
+4. **Ручной `Buffer::new` + `set_text` + `shape` в overlay-логике** —
+   только через `TextMeasurer` (или `Shaper` под trait boundary, FR-068 W2).
+   `set_text`+`shape_until_scroll` допустим только внутри kit/component
+   и в `canvas-render/src/text.rs` (там это сам рендер).
+5. **Эвристики ширины текста** — `len() as f32 * factor + pad`. Класс
+   дефекта CR-015: разные глифы дают разную ширину, кириллица шире
+   латиницы, эмодзи «съедают» место. Только `TextMeasurer::width_of`.
+6. **Ручной `CardInstance { pos, size, fill, border, params, corners }`**
+   в overlay-логике — маршрутизируйте через `Painter::rect/panel/control`
+   или `KitDraw` (адаптер Painter↔`Vec<CardInstance>`). `CardInstance`
+   напрямую — только в `canvas-render` (это его тип) и в адаптерах
+   `app/support.rs` (граница слоёв).
+
+### Если в kit чего-то не хватает
+
+**Агент ОБЯЗАН предложить доработку kit, а не обходить его хардкодом.**
+Порядок:
+
+1. **Идентифицировать пробел** — какой компонент/токен/слот отсутствует,
+   на каком паттерне повторяется в нескольких местах (≥ 2 файла →
+   кандидат в kit).
+2. **Предложить расширение kit** — в задаче/PR:
+   - **Новый компонент** → добавить в `crates/canvas-ui/src/component/`
+     (или расширить существующий) + экспорт через `kit.rs`. Контракт
+     F-8 PRD-0009: только слоты палитры, только шкала токенов, текст
+     только через `TextMeasurer`.
+   - **Новый цветовой слот `KitPalette`** → добавить поле в
+     `KitPalette` (`crates/canvas-ui/src/component/mod.rs`) +
+     маппинг в `ThemeColors` (`crates/canvas-render/src/theme.rs`) +
+     пресеты (`theme_presets.rs`) + ключ в `REQUIRED_KEYS` (тест
+     паритета семантики).
+   - **Новый токен геометрии** → `crates/canvas-core/src/tokens.rs`
+     (`SPACING_*`, `RADIUS_*`, высоты контролов) + зеркальный JSON
+     в `design/tokens/` (тест паритета JSON↔Rust).
+   - **Новый layout-паттерн** (radio_card, chat_bubble, crumbs,
+     tree_layout, anchored_stack, footer_buttons, chip_strip,
+     two_column, backdrop, banner) → компонент в
+     `crates/canvas-ui/src/component/` + экспорт `kit.rs`.
+3. **Оформить FR-документ** (если расширение значимое) по шаблону
+   `docs/change-requests/cr-template.md`: What/Impact/Changes/Tests.
+   Малые расширения (новый слот палитры) можно в коммите-задаче без FR.
+4. **Реализовать доработку kit ПЕРВЫМ** — только после этого верстать
+   поверхность через новый kit-компонент. Не наоборот.
+
+### Чек-лист ревью UI-задачи
+
+Перед сдачей задачи, затрагивающей UI (overlay/panel/dialog/контрол),
+агент проверяет:
+
+- [ ] Цвета берутся из `KitPalette`, нет инлайн rgba литералов
+  (grep `\[\s*0\.[0-9]+\s*,\s*0\.[0-9]+` в изменённых строках).
+- [ ] Геометрия из `kit::*` констант и `tokens::SPACING_*`/`RADIUS_*`,
+  нет новых `const HEADER_H: f32 = 30.0` в `*_ui.rs`.
+- [ ] Раскладка через `Column`/`Row`/`stack`/`constrain`/`pad`,
+  нет ручных `x = panel.right() - MAGIC` формул.
+- [ ] Текст через `TextMeasurer`, нет `Buffer::new` в overlay-логике
+  и нет `len() * factor` эвристик ширины.
+- [ ] Квады через `Painter::rect/panel/control` или `KitDraw`,
+  нет ручных `CardInstance { ... }` литералов в overlay-логике.
+- [ ] Если добавлен новый компонент/слот/токен — он в `canvas-ui`,
+  а не в `canvas-app` (по G7: kit не зависит от рендера/ОС; рендер
+  зависит от kit, не наоборот).
+- [ ] Если что-то отсутствовало — агент явно заявил это в задаче
+  (FR или коммит-заметка), не молча обойдя хардкодом.
+
+### Исключения (acceptable hardcoding)
+
+- **Тестовые фикстуры** — `KitPalette::default()` с `[0.0;4]` слотами
+  для проверки геометрии, `Color::rgba(...)` в тестах (`*_ui.rs::tests`,
+  `admin_ui.rs::test_palette`) — без UI-смысла, только asserts.
+- **Адаптеры слоёв** — `app/support.rs::paint_items_to_band`,
+  `app/overlays.rs::KitDraw` — граница Painter↔GPU-инстансы, `CardInstance`
+  строится здесь по праву (это и есть адаптер kit→renderer).
+- **Рендер** — `canvas-render/src/{cards.rs,renderer.rs,text.rs}` —
+  это бэкенд GPU, `CardInstance` его собственный тип; токены
+  (`tokens::EDGE_*`, `tokens::ACCENT`) уже каноничны.
+- **Diagnostic overlays** — `debug_overlay.rs` — цвета слоёв по
+  дизайну «диагностические, не тема»; документировано в шапке файла.
+- **Специализированные примитивы** (polar wheel в template_ui,
+  sector SDF в `canvas-render/src/sectors.rs`) — escape-hatch через
+  `Custom(rect)` с комментарием-обоснованием (G8 grep-аудит).
+
+### Ссылки
+
+- `docs/ui-kit.md` — гайд kit (3 шага добавить поверхность, layout-примитивы, измерение текста, линты).
+- `docs/prd/prd-0009-ui-layering-uikit.md` — архитектура слоя UI/kit.
+- `docs/prd/prd-0006-design-system-tokens.md` — design-токены (FR-046).
+- `docs/change-requests/fr-046-design-tokens.md` — токены в коде.
+- `docs/change-requests/fr-051-ui-layering-uikit.md` — слой UI (U1).
+- `docs/change-requests/fr-053-ui-layering-u3-pilots.md` — layout-примитивы (U3).
+- `docs/change-requests/fr-055-ui-layering-u4-kit.md` — kit v1 (U4).
+- `docs/change-requests/fr-057-ui-kit-painter-widget-state.md` — Painter + WidgetState.
+- `docs/dev-researches/ui-hardcode-audit.md` — аудит хардкода (пробелы kit, порядок миграции).
+
 ## Сборка и тесты
 
 После T0 в репозитории должны работать (CI на ubuntu/windows/macos — матрица
