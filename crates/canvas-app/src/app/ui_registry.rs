@@ -980,7 +980,13 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             // W-a: hit-rect'ы по той же scrolled-раскладке, что рисование
             // (overlays.rs) и pick (input.rs) — один offset, «ввод = тому,
             // что видно»; dropdown-якорь уезжает со строкой.
-            let layout = modal_layout_scrolled(app.settings_tab, viewport, app.settings_scroll_top);
+            // FR-LLM-FIX: настройки для фильтрации AI-таба (BYOK-модель).
+            let layout = modal_layout_scrolled_with_settings(
+                app.settings_tab,
+                viewport,
+                app.settings_scroll_top,
+                &app.settings,
+            );
             surface
                 .hit_rects
                 .push(HitRect::interactive(rect(layout.rect), "settings-modal"));

@@ -91,9 +91,17 @@ pub struct LlmSettings {
     /// BYOK API-ключ (keychain-managed в приложении, НЕ в config.toml).
     /// Пустая строка — ключ не задан, BYOK-провайдеры недоступны.
     pub api_key: String,
-    /// Активная модель (id из `LlmProvider::models()`). Пустая — default
-    /// провайдера (первая модель из списка).
-    pub model: String,
+    // FR-LLM-FIX: per-feature BYOK-модель (Q1 правки прототипа F-7.2). Раньше
+    // было единое поле `model: String`; теперь каждое AI-свойство имеет свой
+    // идентификатор модели (glm-5.3-flash по умолчанию). Для не-BYOK
+    // провайдеров поле игнорируется (ChatGPT → gpt-5.2, Ollama → llama3.1:8b,
+    // Laya → laya-1.13, Off → нет модели).
+    /// BYOK-модель для Suggest (id из `LlmProvider::models()`).
+    pub model_suggest: String,
+    /// BYOK-модель для Graph Builder.
+    pub model_graph: String,
+    /// BYOK-модель для Agent Panel.
+    pub model_agent: String,
     /// Self-hosted URL (для BYOK-cloud с кастомным endpoint).
     /// Пустая — default провайдера (api.openai.com / api.anthropic.com / ...).
     pub endpoint: String,
@@ -121,14 +129,18 @@ impl Default for LlmSettings {
     /// - `cost_limit_daily: $1.00` (Q7 default).
     /// - `confidence_threshold: 0.5` (Q7 default).
     /// - `telemetry_opt_in: false` (Q7 default OFF).
-    /// - `api_key` / `model` / `endpoint` — пустые (не заданы).
+    /// - `api_key` / `model_*` / `endpoint` — пустые (не заданы).
     fn default() -> Self {
         Self {
             provider_suggest: LlmProviderId::Off,
             provider_graph: LlmProviderId::Off,
             provider_agent: LlmProviderId::Off,
             api_key: String::new(),
-            model: String::new(),
+            // FR-LLM-FIX: per-feature дефолт-модель — glm-5.3-flash (Q1 правки
+            // прототипа F-7.2; лучшее p@1 на benchmark).
+            model_suggest: "glm-5.3-flash".to_owned(),
+            model_graph: "glm-5.3-flash".to_owned(),
+            model_agent: "glm-5.3-flash".to_owned(),
             endpoint: String::new(),
             data_residency: DataResidency::Local,
             cost_limit_daily: 1.0,
@@ -202,7 +214,9 @@ mod tests {
         assert_eq!(s.confidence_threshold, 0.5);
         assert!(!s.telemetry_opt_in);
         assert!(s.api_key.is_empty());
-        assert!(s.model.is_empty());
+        assert_eq!(s.model_suggest, "glm-5.3-flash");
+        assert_eq!(s.model_graph, "glm-5.3-flash");
+        assert_eq!(s.model_agent, "glm-5.3-flash");
         assert!(s.endpoint.is_empty());
         assert!(s.all_off());
     }

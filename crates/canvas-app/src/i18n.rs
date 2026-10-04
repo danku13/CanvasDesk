@@ -802,6 +802,10 @@ pub mod keys {
     pub const AI_ROW_PROV_GRAPH: &str = "ai.row.prov_graph";
     pub const AI_ROW_PROV_AGENT: &str = "ai.row.prov_agent";
     pub const AI_ROW_MODEL: &str = "ai.row.model";
+    // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а вместо одной).
+    pub const AI_ROW_MODEL_SUGGEST: &str = "ai.row.model_suggest";
+    pub const AI_ROW_MODEL_GRAPH: &str = "ai.row.model_graph";
+    pub const AI_ROW_MODEL_AGENT: &str = "ai.row.model_agent";
     pub const AI_ROW_KEY: &str = "ai.row.key";
     pub const AI_ROW_SH_URL: &str = "ai.row.sh_url";
     pub const AI_ROW_SH_KEY: &str = "ai.row.sh_key";
@@ -813,6 +817,10 @@ pub mod keys {
     pub const AI_DESC_FALLBACK: &str = "ai.desc.fallback";
     pub const AI_DESC_KEY: &str = "ai.desc.key";
     pub const AI_DESC_MODEL: &str = "ai.desc.model";
+    // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а вместо одной).
+    pub const AI_DESC_MODEL_SUGGEST: &str = "ai.desc.model_suggest";
+    pub const AI_DESC_MODEL_GRAPH: &str = "ai.desc.model_graph";
+    pub const AI_DESC_MODEL_AGENT: &str = "ai.desc.model_agent";
     pub const AI_DESC_RATE: &str = "ai.desc.rate";
     pub const AI_DESC_COST_LIMIT: &str = "ai.desc.cost_limit";
     pub const AI_DESC_CONF_THRESHOLD: &str = "ai.desc.conf_threshold";
@@ -1806,6 +1814,10 @@ const RU: &[(&str, &str)] = &[
     (keys::AI_ROW_PROV_GRAPH, "Graph Builder"),
     (keys::AI_ROW_PROV_AGENT, "Agent Panel"),
     (keys::AI_ROW_MODEL, "Модель"),
+    // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а).
+    (keys::AI_ROW_MODEL_SUGGEST, "Модель Suggest"),
+    (keys::AI_ROW_MODEL_GRAPH, "Модель Graph Builder"),
+    (keys::AI_ROW_MODEL_AGENT, "Модель Agent Panel"),
     (keys::AI_ROW_KEY, "API ключ"),
     (keys::AI_ROW_SH_URL, "Self-hosted endpoint"),
     (keys::AI_ROW_SH_KEY, "API ключ endpoint'а"),
@@ -1833,6 +1845,19 @@ const RU: &[(&str, &str)] = &[
     (
         keys::AI_DESC_MODEL,
         "Список /v1/models провайдера. По умолчанию — glm-5.3-flash (лучший p@1 на benchmark).",
+    ),
+    // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а).
+    (
+        keys::AI_DESC_MODEL_SUGGEST,
+        "BYOK-модель для Suggest. По умолчанию — glm-5.3-flash (лучший p@1 на benchmark).",
+    ),
+    (
+        keys::AI_DESC_MODEL_GRAPH,
+        "BYOK-модель для Graph Builder. По умолчанию — glm-5.3-flash.",
+    ),
+    (
+        keys::AI_DESC_MODEL_AGENT,
+        "BYOK-модель для Agent Panel. По умолчанию — glm-5.3-flash.",
     ),
     (
         keys::AI_DESC_RATE,
@@ -2895,6 +2920,10 @@ const EN: &[(&str, &str)] = &[
     (keys::AI_ROW_PROV_GRAPH, "Graph Builder"),
     (keys::AI_ROW_PROV_AGENT, "Agent Panel"),
     (keys::AI_ROW_MODEL, "Model"),
+    // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а).
+    (keys::AI_ROW_MODEL_SUGGEST, "Suggest model"),
+    (keys::AI_ROW_MODEL_GRAPH, "Graph Builder model"),
+    (keys::AI_ROW_MODEL_AGENT, "Agent Panel model"),
     (keys::AI_ROW_KEY, "API key"),
     (keys::AI_ROW_SH_URL, "Self-hosted endpoint"),
     (keys::AI_ROW_SH_KEY, "Endpoint API key"),
@@ -2913,6 +2942,19 @@ const EN: &[(&str, &str)] = &[
     (
         keys::AI_DESC_MODEL,
         "List from the provider's /v1/models. Default — glm-5.3-flash (best p@1 in benchmark).",
+    ),
+    // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а).
+    (
+        keys::AI_DESC_MODEL_SUGGEST,
+        "BYOK model for Suggest. Default — glm-5.3-flash (best p@1 in benchmark).",
+    ),
+    (
+        keys::AI_DESC_MODEL_GRAPH,
+        "BYOK model for Graph Builder. Default — glm-5.3-flash.",
+    ),
+    (
+        keys::AI_DESC_MODEL_AGENT,
+        "BYOK model for Agent Panel. Default — glm-5.3-flash.",
     ),
     (
         keys::AI_DESC_RATE,
