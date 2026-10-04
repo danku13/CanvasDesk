@@ -1467,6 +1467,15 @@ impl ApplicationHandler<AppEvent> for App {
         if self.scene.flow_worker_tick() {
             self.request_redraw();
         }
+        // FR-LLM-OAUTH-APP / PRD-0010 F-5.8: опрос OAuth-флоу «Вход ChatGPT»
+        // каждый кадр (результат воркера — Arc<Mutex<OAuthFlowState>>, winit-
+        // проки для него нет). Waiting держит цикл пробуждённым лёгкими
+        // redraw-кадрами (паттерн suggest.pending); переход в Connected
+        // синхронизирует персистентные флаги + save. Натив + l1-llm.
+        #[cfg(all(feature = "l1-llm", not(target_arch = "wasm32")))]
+        if self.oauth_poll() {
+            self.request_redraw();
+        }
         // FR-PERF-C: rAF-петля автосейва. Прежняя логика (M8/W6) звала
         // `request_redraw` КАЖДЫЙ кадр пока `scene.dirty_since.is_some()`
         // (2 с после правки) — на web это 2 с непрерывного 98мс-рендера

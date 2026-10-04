@@ -927,6 +927,29 @@ impl App {
             return;
         }
 
+        // FR-LLM-OAUTH-APP / PRD-0010 F-5.9: построение реального провайдера
+        // через фабрику (`llm_factory`) до отправки — валидация конфига
+        // (пустой BYOK-ключ / невыполненный OAuth-вход ChatGPT). При
+        // недоступности — сообщение в журнал и запрос не уходит; для
+        // ChatGptOAuth с заданным BYOK-ключом сообщение обещает fallback на
+        // BYOK (реальный вызов строит провайдер повторно с `Byok` — точка
+        // интеграции ниже). Mock-флоу без фичи l1-llm не меняется.
+        #[cfg(feature = "l1-llm")]
+        if let Some(message) = crate::llm_factory::provider_unavailable_message(
+            llm.provider_agent,
+            &llm.model_agent,
+            llm,
+            &self.oauth_assets(),
+        ) {
+            self.agent_panel.messages.push(AgentMessage::Bot {
+                text: message,
+                kind: AgentMsgKind::Error,
+                tool_calls: Vec::new(),
+            });
+            self.request_redraw();
+            return;
+        }
+
         // 2. User-сообщение в журнал.
         self.agent_panel
             .messages

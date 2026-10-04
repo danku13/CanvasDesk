@@ -75,6 +75,12 @@ l1-laya = ["canvas-suggest/l1-laya"]
 # сетевых зависимостей в дефолтном дереве нет (wasm-гейт ADR-0011);
 # подключается в нативной (desktop) сборке.
 l1-llm = ["canvas-graph-builder/l1-llm", "canvas-llm/l1-llm"]
+# FR-LLM-OAUTH-APP / PRD-0010 F-5.1–F-5.8: OAuth-эндпоинты Sign-in-with-
+# ChatGPT HTTPS (auth.openai.com / api.openai.com) — TLS нужен только в
+# нативной сборке (ureq/rustls); wasm не трогаем (ADR-0011: web-путь —
+# fetch + cloud-proxy, F-5.10). Включает l1-llm и тянет canvas-llm/
+# l1-llm-tls (там же автентификация OAuth-клиента).
+l1-llm-tls = ["l1-llm", "canvas-llm/l1-llm-tls"]
 
 # FR-040 v2 (web persist): на wasm32 настройки сохраняются в localStorage
 # браузера (натив — config.toml через `Settings::save(path)`). Трейты

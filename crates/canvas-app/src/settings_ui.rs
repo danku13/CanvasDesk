@@ -221,6 +221,12 @@ pub enum SettingsRow {
     AiModelGraph,
     /// BYOK-модель для Agent Panel.
     AiModelAgent,
+    // FR-LLM-OAUTH-APP / PRD-0010 F-5.8: строка «Вход ChatGPT» (OAuth-флоу).
+    // Видна только когда provider_graph или provider_agent == ChatGptOAuth;
+    // род — RowKind::Button (кнопка действия справа + бейдж состояния), клик
+    // по кнопке — apply_button_row → App::oauth_button_click (dispatch по
+    // состоянию OAuthUiState: Войти/Отменить/Выйти/Повторить).
+    AiOAuth,
     // FR-LLM-FIX: API-ключ BYOK + self-hosted endpoint (отдельные текстовые
     // строки-поля, не dropdown). Кнопка «Проверить» делает mock health-check
     // и переключает бейдж (реальный health-check — Stream C/D TODO).
@@ -246,7 +252,7 @@ pub enum SettingsRow {
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 56] = [
+pub const SETTINGS_ROWS: [SettingsRow; 57] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -300,6 +306,9 @@ pub const SETTINGS_ROWS: [SettingsRow; 56] = [
     SettingsRow::AiModelSuggest,
     SettingsRow::AiModelGraph,
     SettingsRow::AiModelAgent,
+    // FR-LLM-OAUTH-APP: строка «Вход ChatGPT» (видна при ChatGptOAuth в
+    // graph/agent — см. ai_tab_visible_rows).
+    SettingsRow::AiOAuth,
     // FR-LLM-FIX: API-ключ BYOK + self-hosted endpoint.
     SettingsRow::AiApiKey,
     SettingsRow::AiSelfhostUrl,
@@ -449,6 +458,10 @@ pub const SETTINGS_TABS: [SettingsTab; 9] = [
             SettingsRow::AiModelGraph,
             SettingsRow::AiProvAgent,
             SettingsRow::AiModelAgent,
+            // FR-LLM-OAUTH-APP: «Вход ChatGPT» — бейдж состояния + кнопка
+            // «Войти/Отменить/Выйти/Повторить» (видна при ChatGptOAuth в
+            // graph/agent — см. ai_tab_visible_rows).
+            SettingsRow::AiOAuth,
             // FR-LLM-FIX: §2 BYOK — API ключ и модель (видно при ANY BYOK)
             SettingsRow::AiApiKey,
             // §4 Лимиты и качество (Q7)
@@ -521,6 +534,8 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::AiModelSuggest => keys::AI_ROW_MODEL_SUGGEST,
         SettingsRow::AiModelGraph => keys::AI_ROW_MODEL_GRAPH,
         SettingsRow::AiModelAgent => keys::AI_ROW_MODEL_AGENT,
+        // FR-LLM-OAUTH-APP: строка «Вход ChatGPT».
+        SettingsRow::AiOAuth => keys::AI_OAUTH_ROW,
         // FR-LLM-FIX: API-ключ BYOK + self-hosted endpoint.
         SettingsRow::AiApiKey => keys::AI_ROW_API_KEY,
         SettingsRow::AiSelfhostUrl => keys::AI_ROW_SELFHOST_URL,
@@ -588,6 +603,8 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::AiModelSuggest => keys::AI_DESC_MODEL_SUGGEST,
         SettingsRow::AiModelGraph => keys::AI_DESC_MODEL_GRAPH,
         SettingsRow::AiModelAgent => keys::AI_DESC_MODEL_AGENT,
+        // FR-LLM-OAUTH-APP: описание строки «Вход ChatGPT».
+        SettingsRow::AiOAuth => keys::AI_OAUTH_DESC,
         // FR-LLM-FIX: API-ключ BYOK + self-hosted endpoint.
         SettingsRow::AiApiKey => keys::AI_DESC_API_KEY,
         SettingsRow::AiSelfhostUrl => keys::AI_DESC_SELFHOST_URL,
@@ -655,6 +672,10 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::AiResidency
         | SettingsRow::AiConfidenceThreshold
         | SettingsRow::AiCostLimit => RowKind::Dropdown,
+        // FR-LLM-OAUTH-APP: строка «Вход ChatGPT» — кнопка действия справа
+        // («Войти/Отменить/Выйти/Повторить» по состоянию) + бейдж состояния;
+        // текстового поля нет (рендер — спец-ветка в RowKind::Button).
+        SettingsRow::AiOAuth => RowKind::Button,
         // FR-LLM-FIX (task FIX-TEXT-INPUT): per-feature BYOK-модель —
         // редактируемое текстовое поле (пользователь вводит имя модели
         // вручную, а не выбирает из списка; дефолт «glm-5.3-flash»).
@@ -814,6 +835,9 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         | SettingsRow::DragPushRebase
         // FR-LLM-B: тумблер AI-телеметрии — состояние по pill-ручке
         | SettingsRow::AiTelemetry => None,
+        // FR-LLM-OAUTH-APP: строка «Вход ChatGPT» — статус показывает бейдж,
+        // dropdown-кнопки нет.
+        | SettingsRow::AiOAuth
         // FR-LLM-FIX (task FIX-TEXT-INPUT): TextInput-строки (API-ключ /
         // self-hosted URL / self-hosted key / per-feature BYOK-модель) —
         // значение показывает текстовое поле и бейдж, dropdown_value
@@ -1066,6 +1090,9 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         | SettingsRow::DragPushRebase
         // FR-LLM-B: тумблер телеметрии AI — dropdown не открывает (Toggle)
         | SettingsRow::AiTelemetry => Vec::new(),
+        // FR-LLM-OAUTH-APP: строка «Вход ChatGPT» — меню не открывает
+        // (RowKind::Button; клик по кнопке — apply_button_row).
+        | SettingsRow::AiOAuth
         // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL / self-hosted
         // key) — dropdown не открывает (RowKind::Button); клик триггерит
         // mock health-check (см. apply_button_row в overlays.rs).
@@ -1330,6 +1357,9 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         | SettingsRow::TelemetryAnalytics
         // FR-LLM-B: тумблер телеметрии AI — apply_toggle_row (App), не dropdown
         | SettingsRow::AiTelemetry => {}
+        // FR-LLM-OAUTH-APP: строка «Вход ChatGPT» — apply_button_row (App),
+        // не dropdown; no-op здесь.
+        | SettingsRow::AiOAuth
         // FR-LLM-FIX (task FIX-TEXT-INPUT): TextInput-строки (API-ключ /
         // self-hosted URL / self-hosted key / per-feature BYOK-модель) —
         // apply_button_row/apply_text_input (App), не dropdown; no-op здесь.
@@ -1782,6 +1812,8 @@ pub fn modal_layout_with_settings(
 /// (AiModelSuggest/Graph/Agent) показывается только когда соответствующий
 /// провайдер = BYOK. AiApiKey — когда ANY per-feature провайдер = BYOK.
 /// AiSelfhostUrl/AiSelfhostKey — когда data_residency = SelfHosted.
+/// FR-LLM-OAUTH-APP: AiOAuth («Вход ChatGPT») — когда provider_graph или
+/// provider_agent == ChatGptOAuth (для suggest OAuth недоступен, Q2).
 /// Для не-BYOK провайдеров модель подгружается из /v1/models после
 /// подключения (ChatGPT/Ollama) или фиксирована (Laya = laya-1.13), пользователь
 /// не может её выбрать — строка скрыта. Для других табов возвращаем
@@ -1797,6 +1829,9 @@ pub fn ai_tab_visible_rows(settings: &Settings) -> Vec<SettingsRow> {
         || settings.llm.provider_agent == canvas_llm::LlmProviderId::Byok;
     // FR-LLM-FIX: data_residency = SelfHosted → self-hosted endpoint виден.
     let selfhosted = settings.llm.data_residency == canvas_llm::DataResidency::SelfHosted;
+    // FR-LLM-OAUTH-APP: ChatGptOAuth в graph/agent → блок «Вход ChatGPT».
+    let any_chatgpt = settings.llm.provider_graph == canvas_llm::LlmProviderId::ChatGptOAuth
+        || settings.llm.provider_agent == canvas_llm::LlmProviderId::ChatGptOAuth;
     let mut out = Vec::new();
     for &row in SETTINGS_TABS[8].rows {
         let visible = match row {
@@ -1810,6 +1845,9 @@ pub fn ai_tab_visible_rows(settings: &Settings) -> Vec<SettingsRow> {
             SettingsRow::AiModelAgent => {
                 settings.llm.provider_agent == canvas_llm::LlmProviderId::Byok
             }
+            // FR-LLM-OAUTH-APP: блок «Вход ChatGPT» — при ChatGptOAuth в
+            // graph/agent (F-5.8; прототип aiAuthBlock).
+            SettingsRow::AiOAuth => any_chatgpt,
             // FR-LLM-FIX: API-ключ BYOK виден когда ANY per-feature провайдер = BYOK.
             SettingsRow::AiApiKey => any_byok,
             // FR-LLM-FIX: self-hosted endpoint виден только при SelfHosted.
@@ -1821,6 +1859,25 @@ pub fn ai_tab_visible_rows(settings: &Settings) -> Vec<SettingsRow> {
         }
     }
     out
+}
+
+/// FR-LLM-OAUTH-APP / PRD-0010 F-5.8: UI-состояние блока «Вход ChatGPT»
+/// (строка `SettingsRow::AiOAuth`). Снимок состояния OAuth-флоу для рендера
+/// и ввода (`App::oauth_ui_state`): натив + feature `l1-llm` — из
+/// `app::oauth_flow`; wasm/без фичи — только Idle/Connected (по
+/// персистентному флагу), кнопка при этом недоступна.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum OAuthUiState {
+    /// Не выполнен вход: кнопка «Войти через ChatGPT» + hint «откроется браузер».
+    #[default]
+    Idle,
+    /// Ожидание подтверждения в браузере: бейдж + кнопка «Отменить».
+    Waiting,
+    /// Вход выполнен: бейдж ok «вход выполнен · email» (пустая строка —
+    /// claim email не выдан, UI показывает «аккаунт») + кнопка «Выйти».
+    Connected(String),
+    /// Ошибка флоу: бейдж err с текстом + кнопка «Повторить».
+    Failed(String),
 }
 
 /// [`modal_layout_with`] с ЯВНЫМ замерщиком (для потребителей, уже держащих
@@ -2492,11 +2549,12 @@ mod tests {
                 SettingsRow::Language
             ]
         );
-        // FR-LLM-B / PRD-0010 F-7: 9-й таб «AI и модели» — 13 строк (3
-        // провайдера + 3 per-feature BYOK-модели + API-ключ + 2 лимита +
-        // residency + 2 self-hosted + телеметрия). FR-LLM-FIX: было 10
-        // (без API-ключа и self-hosted), стало 13 (с API-ключом BYOK и
-        // self-hosted endpoint — видны по фильтру).
+        // FR-LLM-B / PRD-0010 F-7: 9-й таб «AI и модели» — 14 строк (3
+        // провайдера + 3 per-feature BYOK-модели + вход ChatGPT + API-ключ +
+        // 2 лимита + residency + 2 self-hosted + телеметрия). FR-LLM-FIX:
+        // было 10 (без API-ключа и self-hosted), стало 13 (с API-ключом BYOK
+        // и self-hosted endpoint — видны по фильтру); FR-LLM-OAUTH-APP:
+        // +1 — строка «Вход ChatGPT» (видна при ChatGptOAuth в graph/agent).
         assert_eq!(
             SETTINGS_TABS[8].rows,
             &[
@@ -2506,6 +2564,8 @@ mod tests {
                 SettingsRow::AiModelGraph,
                 SettingsRow::AiProvAgent,
                 SettingsRow::AiModelAgent,
+                // FR-LLM-OAUTH-APP: «Вход ChatGPT» (видно при ChatGptOAuth).
+                SettingsRow::AiOAuth,
                 // FR-LLM-FIX: API-ключ BYOK (видно при ANY BYOK).
                 SettingsRow::AiApiKey,
                 SettingsRow::AiCostLimit,
@@ -2517,6 +2577,41 @@ mod tests {
                 SettingsRow::AiTelemetry,
             ]
         );
+    }
+
+    /// FR-LLM-OAUTH-APP / PRD-0010 F-5.8: фильтр AI-таба — строка «Вход
+    /// ChatGPT» видна только при ChatGptOAuth в provider_graph/provider_agent
+    /// (для suggest OAuth недоступен — Q2). Модель-строки по-прежнему
+    /// привязаны к BYOK, API-ключ — к ANY BYOK; комбинации независимы.
+    #[test]
+    fn ai_tab_shows_oauth_row_only_for_chatgpt_provider() {
+        // ChatGptOAuth для agent — строка видна (модель-строка agent скрыта:
+        // модель подписки не текстовым вводом).
+        let mut settings = Settings::default();
+        settings.llm.provider_agent = canvas_llm::LlmProviderId::ChatGptOAuth;
+        let rows = ai_tab_visible_rows(&settings);
+        assert!(rows.contains(&SettingsRow::AiOAuth));
+        assert!(!rows.contains(&SettingsRow::AiModelAgent));
+        assert!(!rows.contains(&SettingsRow::AiApiKey));
+        // ChatGptOAuth для graph — тоже видна.
+        let mut settings = Settings::default();
+        settings.llm.provider_graph = canvas_llm::LlmProviderId::ChatGptOAuth;
+        assert!(ai_tab_visible_rows(&settings).contains(&SettingsRow::AiOAuth));
+        // ChatGptOAuth для suggest НЕ открывает строку (OAuth недоступен
+        // для suggest, Q2).
+        let mut settings = Settings::default();
+        settings.llm.provider_suggest = canvas_llm::LlmProviderId::ChatGptOAuth;
+        assert!(!ai_tab_visible_rows(&settings).contains(&SettingsRow::AiOAuth));
+        // Без ChatGPT-провайдеров строки нет.
+        assert!(!ai_tab_visible_rows(&Settings::default()).contains(&SettingsRow::AiOAuth));
+        // Совместно с BYOK: и OAuth-строка, и API-ключ, и модель agent.
+        let mut settings = Settings::default();
+        settings.llm.provider_agent = canvas_llm::LlmProviderId::ChatGptOAuth;
+        settings.llm.provider_graph = canvas_llm::LlmProviderId::Byok;
+        let rows = ai_tab_visible_rows(&settings);
+        assert!(rows.contains(&SettingsRow::AiOAuth));
+        assert!(rows.contains(&SettingsRow::AiApiKey));
+        assert!(rows.contains(&SettingsRow::AiModelGraph));
     }
 
     /// Инвариант локализации (FR-039 §5): у каждой строки есть ключи
@@ -2643,6 +2738,11 @@ mod tests {
                 SettingsRow::AiTelemetry => {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                     let _ = defaults.llm.telemetry_opt_in;
+                }
+                // FR-LLM-OAUTH-APP: строка «Вход ChatGPT» — Button (кнопка
+                // действия + бейдж состояния, без текстового поля).
+                SettingsRow::AiOAuth => {
+                    assert_eq!(row_kind(row), RowKind::Button);
                 }
                 SettingsRow::ButtonCorner
                 | SettingsRow::GridStyle
