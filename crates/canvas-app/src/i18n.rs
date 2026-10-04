@@ -786,6 +786,102 @@ pub mod keys {
     pub const TOAST_ROLE_CHANGED: &str = "toast.role_changed";
     pub const GROUP_DEFAULT_LABEL: &str = "group.default_label";
     pub const FILE_NEW_NOTE: &str = "file.new_note";
+
+    // --- FR-LLM-B / PRD-0010 F-7: таб настроек «AI and Models» (9-й) ---
+    /// Заголовок 9-го таба.
+    pub const TAB_AI: &str = "settings.tab.ai";
+    /// Секции таба AI (asgrp — group label).
+    pub const AI_GRP_PROVIDER: &str = "ai.grp.provider";
+    pub const AI_GRP_BYOK: &str = "ai.grp.byok";
+    pub const AI_GRP_RATE: &str = "ai.grp.rate";
+    pub const AI_GRP_LIMITS: &str = "ai.grp.limits";
+    pub const AI_GRP_RESIDENCY: &str = "ai.grp.residency";
+    pub const AI_GRP_TELEMETRY: &str = "ai.grp.telemetry";
+    /// Лейблы строк (провайдеры per-feature).
+    pub const AI_ROW_PROV_SUGGEST: &str = "ai.row.prov_suggest";
+    pub const AI_ROW_PROV_GRAPH: &str = "ai.row.prov_graph";
+    pub const AI_ROW_PROV_AGENT: &str = "ai.row.prov_agent";
+    pub const AI_ROW_MODEL: &str = "ai.row.model";
+    pub const AI_ROW_KEY: &str = "ai.row.key";
+    pub const AI_ROW_SH_URL: &str = "ai.row.sh_url";
+    pub const AI_ROW_SH_KEY: &str = "ai.row.sh_key";
+    pub const AI_ROW_TELEMETRY: &str = "ai.row.telemetry";
+    /// Описания строк.
+    pub const AI_DESC_PROV_SUGGEST: &str = "ai.desc.prov_suggest";
+    pub const AI_DESC_PROV_GRAPH: &str = "ai.desc.prov_graph";
+    pub const AI_DESC_PROV_AGENT: &str = "ai.desc.prov_agent";
+    pub const AI_DESC_FALLBACK: &str = "ai.desc.fallback";
+    pub const AI_DESC_KEY: &str = "ai.desc.key";
+    pub const AI_DESC_MODEL: &str = "ai.desc.model";
+    pub const AI_DESC_RATE: &str = "ai.desc.rate";
+    pub const AI_DESC_COST_LIMIT: &str = "ai.desc.cost_limit";
+    pub const AI_DESC_CONF_THRESHOLD: &str = "ai.desc.conf_threshold";
+    pub const AI_DESC_RESIDENCY: &str = "ai.desc.residency";
+    pub const AI_DESC_TELEMETRY: &str = "ai.desc.telemetry";
+    /// Опции dropdown (значения провайдеров + модели).
+    pub const AI_OPT_OFF: &str = "ai.opt.off";
+    pub const AI_OPT_LAYA: &str = "ai.opt.laya";
+    pub const AI_OPT_OLLAMA: &str = "ai.opt.ollama";
+    pub const AI_OPT_BYOK: &str = "ai.opt.byok";
+    pub const AI_OPT_CHATGPT: &str = "ai.opt.chatgpt";
+    pub const AI_OPT_CHATGPT_DISABLED: &str = "ai.opt.chatgpt_disabled";
+    /// Опции data residency.
+    pub const AI_RESIDENCY_LOCAL: &str = "ai.residency.local";
+    pub const AI_RESIDENCY_CLOUD: &str = "ai.residency.cloud";
+    pub const AI_RESIDENCY_SELFHOST: &str = "ai.residency.selfhost";
+    pub const AI_RESIDENCY_LOCAL_DESC: &str = "ai.residency.local_desc";
+    pub const AI_RESIDENCY_CLOUD_DESC: &str = "ai.residency.cloud_desc";
+    pub const AI_RESIDENCY_SELFHOST_DESC: &str = "ai.residency.selfhost_desc";
+    /// Кнопки/бейджи.
+    pub const AI_BTN_CHECK_KEY: &str = "ai.btn.check_key";
+    pub const AI_BTN_CHECK: &str = "ai.btn.check";
+    pub const AI_KEY_VALID: &str = "ai.key_valid";
+    pub const AI_KEY_NOT_CHECKED: &str = "ai.key_not_checked";
+    pub const AI_KEY_EMPTY: &str = "ai.key_empty";
+    pub const AI_SH_NOT_CHECKED: &str = "ai.sh_not_checked";
+    pub const AI_SH_OK: &str = "ai.sh_ok";
+    pub const AI_SH_BAD_URL: &str = "ai.sh_bad_url";
+    pub const AI_COST_LIMIT_LABEL: &str = "ai.cost_limit_label";
+    pub const AI_CONF_THR_LABEL: &str = "ai.conf_thr_label";
+    pub const AI_FOOT_HINT: &str = "ai.foot_hint";
+    pub const AI_RATE_BADGE: &str = "ai.rate_badge";
+
+    // --- FR-LLM-B / PRD-0010 F-7.9: AI status panel ---
+    pub const AI_STATUS_PAUSED: &str = "ai.status.paused";
+    pub const AI_STATUS_SESSION: &str = "ai.status.session";
+    pub const AI_STATUS_DAY: &str = "ai.status.day";
+    pub const AI_STATUS_NO_MODEL: &str = "ai.status.no_model";
+    pub const AI_TOOLTIP_PAUSE: &str = "ai.tooltip.pause";
+    pub const AI_TOOLTIP_SETTINGS: &str = "ai.tooltip.settings";
+    pub const AI_TOOLTIP_SUGGEST: &str = "ai.tooltip.suggest";
+    pub const AI_TOOLTIP_GRAPH: &str = "ai.tooltip.graph";
+    pub const AI_TOOLTIP_AGENT: &str = "ai.tooltip.agent";
+
+    // --- FR-LLM-B / PRD-0010 F-8: AI onboarding screen ---
+    pub const AI_ONB_STEP: &str = "ai.onb.step";
+    pub const AI_ONB_TITLE: &str = "ai.onb.title";
+    pub const AI_ONB_SUB: &str = "ai.onb.sub";
+    pub const AI_ONB_LOCAL_TITLE: &str = "ai.onb.local_title";
+    pub const AI_ONB_CLOUD_TITLE: &str = "ai.onb.cloud_title";
+    pub const AI_ONB_SELFHOST_TITLE: &str = "ai.onb.selfhost_title";
+    pub const AI_ONB_LOCAL_DESC: &str = "ai.onb.local_desc";
+    pub const AI_ONB_CLOUD_DESC: &str = "ai.onb.cloud_desc";
+    pub const AI_ONB_SELFHOST_DESC: &str = "ai.onb.selfhost_desc";
+    pub const AI_ONB_TAG_OFFLINE: &str = "ai.onb.tag_offline";
+    pub const AI_ONB_TAG_QUALITY: &str = "ai.onb.tag_quality";
+    pub const AI_ONB_TAG_CONTOUR: &str = "ai.onb.tag_contour";
+    pub const AI_ONB_PRIV: &str = "ai.onb.priv";
+    pub const AI_ONB_CONTINUE: &str = "ai.onb.continue";
+    pub const AI_ONB_PRIV_TITLE: &str = "ai.onb.priv_title";
+    pub const AI_ONB_PRIV_BODY: &str = "ai.onb.priv_body";
+    pub const AI_ONB_PRIV_KEYS: &str = "ai.onb.priv_keys";
+    pub const AI_ONB_PRIV_KEYS_BODY: &str = "ai.onb.priv_keys_body";
+    pub const AI_ONB_PRIV_TELEMETRY: &str = "ai.onb.priv_telemetry";
+    pub const AI_ONB_PRIV_TELEMETRY_BODY: &str = "ai.onb.priv_telemetry_body";
+    pub const AI_ONB_PRIV_DOCS: &str = "ai.onb.priv_docs";
+    pub const AI_ONB_TOAST_LOCAL: &str = "ai.onb.toast_local";
+    pub const AI_ONB_TOAST_CLOUD: &str = "ai.onb.toast_cloud";
+    pub const AI_ONB_TOAST_SELFHOST: &str = "ai.onb.toast_selfhost";
 }
 
 /// Русская таблица (эталон — порядок и полнота проверяются тестом).
@@ -1698,6 +1794,212 @@ const RU: &[(&str, &str)] = &[
         "Связи пачки подсвечены на канвасе. Откат — один undo-шаг.",
     ),
     (keys::AUTOLINK_UNDO_YES, "Откатить"),
+    // --- FR-LLM-B / PRD-0010 F-7: таб настроек «AI and Models» (RU) ---
+    (keys::TAB_AI, "AI и модели"),
+    (keys::AI_GRP_PROVIDER, "Per-feature провайдер (Q2)"),
+    (keys::AI_GRP_BYOK, "BYOK — API ключ и модель"),
+    (keys::AI_GRP_RATE, "Rate limit подписки ChatGPT (F-7.3)"),
+    (keys::AI_GRP_LIMITS, "Лимиты и качество"),
+    (keys::AI_GRP_RESIDENCY, "Data residency (Q5)"),
+    (keys::AI_GRP_TELEMETRY, "Телеметрия (opt-in)"),
+    (keys::AI_ROW_PROV_SUGGEST, "Suggest"),
+    (keys::AI_ROW_PROV_GRAPH, "Graph Builder"),
+    (keys::AI_ROW_PROV_AGENT, "Agent Panel"),
+    (keys::AI_ROW_MODEL, "Модель"),
+    (keys::AI_ROW_KEY, "API ключ"),
+    (keys::AI_ROW_SH_URL, "Self-hosted endpoint"),
+    (keys::AI_ROW_SH_KEY, "API ключ endpoint'а"),
+    (keys::AI_ROW_TELEMETRY, "Анонимные события использования"),
+    (
+        keys::AI_DESC_PROV_SUGGEST,
+        "подсказки шаблонов и custom-ноды",
+    ),
+    (
+        keys::AI_DESC_PROV_GRAPH,
+        "генерация графов из текста",
+    ),
+    (
+        keys::AI_DESC_PROV_AGENT,
+        "агентные операции через MCP",
+    ),
+    (
+        keys::AI_DESC_FALLBACK,
+        "Fallback-цепочка при ошибке/429: ChatGPT OAuth → BYOK → lex (suggest) / отказ (graph, agent). Ключи хранятся в OS keychain (desktop) / OPFS encrypted (web) — не в config.",
+    ),
+    (
+        keys::AI_DESC_KEY,
+        "BYOK-ключ провайдера (OpenAI/Anthropic/z.ai/Moonshot/OpenRouter). Хранится в OS keychain (desktop) / OPFS encrypted (web).",
+    ),
+    (
+        keys::AI_DESC_MODEL,
+        "Список /v1/models провайдера. По умолчанию — glm-5.3-flash (лучший p@1 на benchmark).",
+    ),
+    (
+        keys::AI_DESC_RATE,
+        "локальный счётчик; при 0 — fallback на BYOK, тост «ChatGPT недоступен»",
+    ),
+    (
+        keys::AI_DESC_COST_LIMIT,
+        "80% лимита — диалог расширения; 100% — LLM-запросы отклоняются, работает lex (F-7.4, Q7)",
+    ),
+    (
+        keys::AI_DESC_CONF_THRESHOLD,
+        "варианты с confidence ниже порога скрываются (F-2.11); влияет на ghost-ноды suggest",
+    ),
+    (
+        keys::AI_DESC_RESIDENCY,
+        "Определяет, какие провайдеры доступны и применяется ли redact контекста (Q1+Q5).",
+    ),
+    (
+        keys::AI_DESC_TELEMETRY,
+        "default OFF (Q7): события показов/принятий подсказок и cost — только после явного согласия; без PII. Полный гайд: user-docs/ai-features.md",
+    ),
+    (keys::AI_OPT_OFF, "Выключено"),
+    (keys::AI_OPT_LAYA, "Laya (локальная)"),
+    (keys::AI_OPT_OLLAMA, "Ollama (локальная)"),
+    (keys::AI_OPT_BYOK, "BYOK (свой ключ)"),
+    (keys::AI_OPT_CHATGPT, "ChatGPT (вход)"),
+    (
+        keys::AI_OPT_CHATGPT_DISABLED,
+        "ChatGPT OAuth — недоступен для Suggest (Q2)",
+    ),
+    (
+        keys::AI_RESIDENCY_LOCAL,
+        "Local only (Laya / Ollama)",
+    ),
+    (
+        keys::AI_RESIDENCY_CLOUD,
+        "Cloud (ChatGPT / BYOK)",
+    ),
+    (
+        keys::AI_RESIDENCY_SELFHOST,
+        "Self-hosted (ваш GPU-сервер)",
+    ),
+    (
+        keys::AI_RESIDENCY_LOCAL_DESC,
+        "Работает offline · данные не покидают машину · качество ниже cloud",
+    ),
+    (
+        keys::AI_RESIDENCY_CLOUD_DESC,
+        "Лучшее качество · контекст уходит провайдеру (redact: price=<redacted>) · дневной лимит cost",
+    ),
+    (
+        keys::AI_RESIDENCY_SELFHOST_DESC,
+        "Cloud-качество · данные остаются в вашем контуре · нужен endpoint (ответственность пользователя)",
+    ),
+    (keys::AI_BTN_CHECK_KEY, "Проверить ключ"),
+    (keys::AI_BTN_CHECK, "Проверить"),
+    (
+        keys::AI_KEY_VALID,
+        "ключ валиден · {n} моделей",
+    ),
+    (keys::AI_KEY_NOT_CHECKED, "ключ не проверен"),
+    (keys::AI_KEY_EMPTY, "ключ пустой — введите ключ"),
+    (keys::AI_SH_NOT_CHECKED, "не проверен"),
+    (
+        keys::AI_SH_OK,
+        "endpoint отвечает · OpenAI-compatible",
+    ),
+    (keys::AI_SH_BAD_URL, "неверный URL"),
+    (
+        keys::AI_COST_LIMIT_LABEL,
+        "$ {v} / день",
+    ),
+    (keys::AI_CONF_THR_LABEL, "{v}"),
+    (
+        keys::AI_FOOT_HINT,
+        "Изменения применяются сразу · Esc — закрыть",
+    ),
+    (
+        keys::AI_RATE_BADGE,
+        "ChatGPT: {left}/{total} сообщений осталось",
+    ),
+    // --- FR-LLM-B / PRD-0010 F-7.9: AI status panel (RU) ---
+    (keys::AI_STATUS_PAUSED, "AI на паузе — нажмите ▶, чтобы возобновить"),
+    (keys::AI_STATUS_SESSION, "Session: {v}"),
+    (keys::AI_STATUS_DAY, "Day: {v} / {lim}"),
+    (keys::AI_STATUS_NO_MODEL, "AI выключен"),
+    (keys::AI_TOOLTIP_PAUSE, "Пауза всех AI-функций (⏸/▶)"),
+    (
+        keys::AI_TOOLTIP_SETTINGS,
+        "Открыть настройки AI (9-й таб «AI и модели»)",
+    ),
+    (
+        keys::AI_TOOLTIP_SUGGEST,
+        "Suggest: LLM-подсказки шаблонов и custom-ноды. Клик — вкл/выкл",
+    ),
+    (
+        keys::AI_TOOLTIP_GRAPH,
+        "Graph Builder: генерация графов из текста. Клик — вкл/выкл",
+    ),
+    (
+        keys::AI_TOOLTIP_AGENT,
+        "Agent Panel: агентные операции через MCP. Клик — вкл/выкл",
+    ),
+    // --- FR-LLM-B / PRD-0010 F-8: AI onboarding screen (RU) ---
+    (keys::AI_ONB_STEP, "Шаг 3 из 3 · AI-режим"),
+    (keys::AI_ONB_TITLE, "Выберите режим AI"),
+    (
+        keys::AI_ONB_SUB,
+        "CanvasDesk работает с любым режимом — поменять можно позже в настройках (9-й таб «AI и модели»).",
+    ),
+    (keys::AI_ONB_LOCAL_TITLE, "Local only (Laya / Ollama)"),
+    (keys::AI_ONB_CLOUD_TITLE, "Cloud (ChatGPT / BYOK)"),
+    (keys::AI_ONB_SELFHOST_TITLE, "Self-hosted (ваш GPU-сервер)"),
+    (
+        keys::AI_ONB_LOCAL_DESC,
+        "Работает offline · данные не уходят с машины · подсказки ниже cloud-качества, graph/agent — через Ollama на вашей машине.",
+    ),
+    (
+        keys::AI_ONB_CLOUD_DESC,
+        "Лучшее качество · контекст уходит провайдеру (числа маскируются: price=<redacted>) · дневной лимит $1.00 по умолчанию.",
+    ),
+    (
+        keys::AI_ONB_SELFHOST_DESC,
+        "Cloud-качество · данные остаются в вашем контуре · нужен OpenAI-compatible endpoint (Настройки → AI и модели).",
+    ),
+    (keys::AI_ONB_TAG_OFFLINE, "offline"),
+    (keys::AI_ONB_TAG_QUALITY, "лучшее качество"),
+    (keys::AI_ONB_TAG_CONTOUR, "в контуре"),
+    (keys::AI_ONB_PRIV, "Подробнее о privacy"),
+    (keys::AI_ONB_CONTINUE, "Продолжить"),
+    (
+        keys::AI_ONB_PRIV_TITLE,
+        "Что отправляется.",
+    ),
+    (
+        keys::AI_ONB_PRIV_BODY,
+        "Только контекст редактируемой ноды и её соседей; числа маскируются явным маркером (price=<redacted> руб — единица сохраняется, Q1). Сами канвасы, файлы и ключи — не отправляются никогда.",
+    ),
+    (
+        keys::AI_ONB_PRIV_KEYS,
+        "Где живут ключи.",
+    ),
+    (
+        keys::AI_ONB_PRIV_KEYS_BODY,
+        "BYOK-ключи — в OS keychain (desktop) / OPFS encrypted (web); OAuth-токены ChatGPT — тоже локально, бэкенд не участвует.",
+    ),
+    (
+        keys::AI_ONB_PRIV_TELEMETRY,
+        "Телеметрия.",
+    ),
+    (
+        keys::AI_ONB_PRIV_TELEMETRY_BODY,
+        "Отключена по умолчанию; включается только явным opt-in в настройках.",
+    ),
+    (
+        keys::AI_ONB_PRIV_DOCS,
+        "Полный гайд — user-docs/ai-features.md (в продукте открывается из этого экрана).",
+    ),
+    (keys::AI_ONB_TOAST_LOCAL, "AI-режим: Local only — offline, данные не уходят"),
+    (
+        keys::AI_ONB_TOAST_CLOUD,
+        "AI-режим: Cloud — качество выше, данные у провайдеру (redact)",
+    ),
+    (
+        keys::AI_ONB_TOAST_SELFHOST,
+        "AI-режим: Self-hosted — cloud-качество в вашем контуре",
+    ),
 ];
 
 /// Английская таблица — полный перевод каждого ключа (инвариант полноты).
@@ -2581,6 +2883,152 @@ const EN: &[(&str, &str)] = &[
         "The batch links are highlighted on the canvas. Rollback is a single undo step.",
     ),
     (keys::AUTOLINK_UNDO_YES, "Roll back"),
+    // --- FR-LLM-B / PRD-0010 F-7: «AI and Models» settings tab (EN) ---
+    (keys::TAB_AI, "AI & Models"),
+    (keys::AI_GRP_PROVIDER, "Per-feature provider (Q2)"),
+    (keys::AI_GRP_BYOK, "BYOK — API key and model"),
+    (keys::AI_GRP_RATE, "ChatGPT subscription rate limit (F-7.3)"),
+    (keys::AI_GRP_LIMITS, "Limits & quality"),
+    (keys::AI_GRP_RESIDENCY, "Data residency (Q5)"),
+    (keys::AI_GRP_TELEMETRY, "Telemetry (opt-in)"),
+    (keys::AI_ROW_PROV_SUGGEST, "Suggest"),
+    (keys::AI_ROW_PROV_GRAPH, "Graph Builder"),
+    (keys::AI_ROW_PROV_AGENT, "Agent Panel"),
+    (keys::AI_ROW_MODEL, "Model"),
+    (keys::AI_ROW_KEY, "API key"),
+    (keys::AI_ROW_SH_URL, "Self-hosted endpoint"),
+    (keys::AI_ROW_SH_KEY, "Endpoint API key"),
+    (keys::AI_ROW_TELEMETRY, "Anonymous usage events"),
+    (keys::AI_DESC_PROV_SUGGEST, "template hints and custom nodes"),
+    (keys::AI_DESC_PROV_GRAPH, "graph generation from text"),
+    (keys::AI_DESC_PROV_AGENT, "agent operations via MCP"),
+    (
+        keys::AI_DESC_FALLBACK,
+        "Fallback chain on error/429: ChatGPT OAuth → BYOK → lex (suggest) / refuse (graph, agent). Keys are stored in OS keychain (desktop) / OPFS encrypted (web) — not in config.",
+    ),
+    (
+        keys::AI_DESC_KEY,
+        "Provider BYOK key (OpenAI/Anthropic/z.ai/Moonshot/OpenRouter). Stored in OS keychain (desktop) / OPFS encrypted (web).",
+    ),
+    (
+        keys::AI_DESC_MODEL,
+        "List from the provider's /v1/models. Default — glm-5.3-flash (best p@1 in benchmark).",
+    ),
+    (
+        keys::AI_DESC_RATE,
+        "local counter; at 0 — fallback to BYOK, toast «ChatGPT unavailable»",
+    ),
+    (
+        keys::AI_DESC_COST_LIMIT,
+        "80% of the limit — extension dialog; 100% — LLM requests are rejected, lex kicks in (F-7.4, Q7)",
+    ),
+    (
+        keys::AI_DESC_CONF_THRESHOLD,
+        "variants with confidence below the threshold are hidden (F-2.11); affects suggest ghost-nodes",
+    ),
+    (
+        keys::AI_DESC_RESIDENCY,
+        "Determines which providers are available and whether context redact is applied (Q1+Q5).",
+    ),
+    (
+        keys::AI_DESC_TELEMETRY,
+        "default OFF (Q7): events of hint impressions/acceptances and cost — only after explicit consent; no PII. Full guide: user-docs/ai-features.md",
+    ),
+    (keys::AI_OPT_OFF, "Off"),
+    (keys::AI_OPT_LAYA, "Laya (local)"),
+    (keys::AI_OPT_OLLAMA, "Ollama (local)"),
+    (keys::AI_OPT_BYOK, "BYOK (own key)"),
+    (keys::AI_OPT_CHATGPT, "ChatGPT (sign-in)"),
+    (
+        keys::AI_OPT_CHATGPT_DISABLED,
+        "ChatGPT OAuth — not available for Suggest (Q2)",
+    ),
+    (keys::AI_RESIDENCY_LOCAL, "Local only (Laya / Ollama)"),
+    (keys::AI_RESIDENCY_CLOUD, "Cloud (ChatGPT / BYOK)"),
+    (keys::AI_RESIDENCY_SELFHOST, "Self-hosted (your GPU server)"),
+    (
+        keys::AI_RESIDENCY_LOCAL_DESC,
+        "Works offline · data never leaves the machine · quality below cloud",
+    ),
+    (
+        keys::AI_RESIDENCY_CLOUD_DESC,
+        "Best quality · context goes to the provider (redact: price=<redacted>) · daily cost limit",
+    ),
+    (
+        keys::AI_RESIDENCY_SELFHOST_DESC,
+        "Cloud-quality · data stays in your contour · an endpoint is required (user responsibility)",
+    ),
+    (keys::AI_BTN_CHECK_KEY, "Check key"),
+    (keys::AI_BTN_CHECK, "Check"),
+    (keys::AI_KEY_VALID, "key is valid · {n} models"),
+    (keys::AI_KEY_NOT_CHECKED, "key not verified"),
+    (keys::AI_KEY_EMPTY, "key is empty — enter a key"),
+    (keys::AI_SH_NOT_CHECKED, "not verified"),
+    (keys::AI_SH_OK, "endpoint responds · OpenAI-compatible"),
+    (keys::AI_SH_BAD_URL, "invalid URL"),
+    (keys::AI_COST_LIMIT_LABEL, "$ {v} / day"),
+    (keys::AI_CONF_THR_LABEL, "{v}"),
+    (keys::AI_FOOT_HINT, "Changes apply immediately · Esc — close"),
+    (keys::AI_RATE_BADGE, "ChatGPT: {left}/{total} messages left"),
+    // --- FR-LLM-B / PRD-0010 F-7.9: AI status panel (EN) ---
+    (keys::AI_STATUS_PAUSED, "AI is paused — press ▶ to resume"),
+    (keys::AI_STATUS_SESSION, "Session: {v}"),
+    (keys::AI_STATUS_DAY, "Day: {v} / {lim}"),
+    (keys::AI_STATUS_NO_MODEL, "AI is off"),
+    (keys::AI_TOOLTIP_PAUSE, "Pause all AI features (⏸/▶)"),
+    (keys::AI_TOOLTIP_SETTINGS, "Open AI settings (9th tab «AI & Models»)"),
+    (keys::AI_TOOLTIP_SUGGEST, "Suggest: LLM template hints and custom nodes. Click — on/off"),
+    (keys::AI_TOOLTIP_GRAPH, "Graph Builder: generate graphs from text. Click — on/off"),
+    (keys::AI_TOOLTIP_AGENT, "Agent Panel: agent operations via MCP. Click — on/off"),
+    // --- FR-LLM-B / PRD-0010 F-8: AI onboarding screen (EN) ---
+    (keys::AI_ONB_STEP, "Step 3 of 3 · AI mode"),
+    (keys::AI_ONB_TITLE, "Choose AI mode"),
+    (
+        keys::AI_ONB_SUB,
+        "CanvasDesk works with any mode — you can change it later in settings (9th tab «AI & Models»).",
+    ),
+    (keys::AI_ONB_LOCAL_TITLE, "Local only (Laya / Ollama)"),
+    (keys::AI_ONB_CLOUD_TITLE, "Cloud (ChatGPT / BYOK)"),
+    (keys::AI_ONB_SELFHOST_TITLE, "Self-hosted (your GPU server)"),
+    (
+        keys::AI_ONB_LOCAL_DESC,
+        "Works offline · data never leaves the machine · hints are below cloud-quality, graph/agent — via Ollama on your machine.",
+    ),
+    (
+        keys::AI_ONB_CLOUD_DESC,
+        "Best quality · context goes to the provider (numbers are masked: price=<redacted>) · daily limit $1.00 by default.",
+    ),
+    (
+        keys::AI_ONB_SELFHOST_DESC,
+        "Cloud-quality · data stays in your contour · an OpenAI-compatible endpoint is required (Settings → AI & Models).",
+    ),
+    (keys::AI_ONB_TAG_OFFLINE, "offline"),
+    (keys::AI_ONB_TAG_QUALITY, "best quality"),
+    (keys::AI_ONB_TAG_CONTOUR, "in contour"),
+    (keys::AI_ONB_PRIV, "More about privacy"),
+    (keys::AI_ONB_CONTINUE, "Continue"),
+    (keys::AI_ONB_PRIV_TITLE, "What is sent."),
+    (
+        keys::AI_ONB_PRIV_BODY,
+        "Only the context of the node being edited and its neighbors; numbers are masked with an explicit marker (price=<redacted> — the unit is preserved, Q1). The canvases, files, and keys themselves are never sent.",
+    ),
+    (keys::AI_ONB_PRIV_KEYS, "Where keys live."),
+    (
+        keys::AI_ONB_PRIV_KEYS_BODY,
+        "BYOK keys — in OS keychain (desktop) / OPFS encrypted (web); ChatGPT OAuth tokens — also locally, no backend involved.",
+    ),
+    (keys::AI_ONB_PRIV_TELEMETRY, "Telemetry."),
+    (
+        keys::AI_ONB_PRIV_TELEMETRY_BODY,
+        "Off by default; enabled only by explicit opt-in in settings.",
+    ),
+    (
+        keys::AI_ONB_PRIV_DOCS,
+        "Full guide — user-docs/ai-features.md (in the product, opens from this screen).",
+    ),
+    (keys::AI_ONB_TOAST_LOCAL, "AI mode: Local only — offline, data stays"),
+    (keys::AI_ONB_TOAST_CLOUD, "AI mode: Cloud — better quality, data goes to provider (redact)"),
+    (keys::AI_ONB_TOAST_SELFHOST, "AI mode: Self-hosted — cloud-quality in your contour"),
 ];
 
 /// Поиск по таблице (линейный — таблицы статические, чтение раз в кадр).
@@ -2814,6 +3262,8 @@ mod tests {
             keys::TAB_EDGES,
             keys::TAB_APPEARANCE,
             keys::TAB_SNAP,
+            // FR-LLM-B: 9-й таб «AI и модели» — ключи должны быть в обеих таблицах.
+            keys::TAB_AI,
         ];
         for key in row_keys.into_iter().chain(desc_keys).chain(tab_keys) {
             assert!(!tr(Language::Ru, key).is_empty(), "RU пуст: {key}");

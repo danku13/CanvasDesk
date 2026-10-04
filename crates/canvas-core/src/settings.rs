@@ -566,6 +566,17 @@ pub struct Settings {
     /// без секции грузятся дефолтом (serde default).
     #[serde(default)]
     pub suggest: SuggestSettings,
+    /// FR-LLM-B / PRD-0010 F-7 (Q1+Q2+Q5+Q7): настройки LLM-слоя —
+    /// per-feature провайдеры (Suggest/Graph/Agent), BYOK-модель, data
+    /// residency, дневной лимит cost, confidence threshold, телеметрия
+    /// opt-in. Stream B `settings_ui.rs` отображает 9-м табом «AI and
+    /// Models», `ai_status_panel.rs` — статусной панелью справа над
+    /// миникартой. API-ключ хранится отдельно (OS keychain / OPFS), НЕ в
+    /// config.toml — здесь только управляемые пользователем параметры.
+    /// Старые конфиги без секции грузятся дефолтом (`all_off`, `Local`,
+    /// `$1.00`, `0.5`, `telemetry=false`).
+    #[serde(default)]
+    pub llm: canvas_llm::LlmSettings,
 }
 
 /// FR-028: лимит откладываний онбординга — после третьего «Пропустить» подряд
@@ -675,6 +686,9 @@ impl Default for Settings {
             telemetry_analytics: true,
             // FR-079: ИИ-подсказки — OFF до гейта S5 (продуктовое решение 1).
             suggest: SuggestSettings::default(),
+            // FR-LLM-B: LLM-слой — дефолт `all_off`/`Local`/`$1.00`/`0.5`/
+            // `telemetry=false` (самый приватный режим до онбординга AI).
+            llm: canvas_llm::LlmSettings::default(),
         }
     }
 }
@@ -936,6 +950,29 @@ impl Settings {
         self.role = self.role.trim().to_owned();
         if self.role.is_empty() {
             self.role = crate::roles::DEFAULT_ROLE.to_owned();
+        }
+        // FR-LLM-B: клампы LLM-настроек (ручные правки config.toml).
+        // `provider_*`/`data_residency` — enum, невалидные значения не
+        // проходят десериализацию (старый конфиг грузится дефолтом). Cost
+        // limit — неотрицательный (нулевой минимум = «без лимита» для
+        // тестирования, дельты ≤ 0 → LLM-запросы отклоняются по `validate`).
+        if !self.llm.cost_limit_daily.is_finite() || self.llm.cost_limit_daily < 0.0 {
+            self.llm.cost_limit_daily = 1.0;
+        }
+        if !self.llm.confidence_threshold.is_finite() {
+            self.llm.confidence_threshold = 0.5;
+        }
+        self.llm.confidence_threshold = self.llm.confidence_threshold.clamp(0.0, 1.0);
+        // Q2 invariant: ChatGPT OAuth недоступен для suggest — мягкая
+        // правка (не ронять конфиг, переключить на Off).
+        if !self.llm.provider_suggest.allowed_for_suggest() {
+            self.llm.provider_suggest = canvas_llm::LlmProviderId::Off;
+        }
+        if !self.llm.provider_graph.allowed_for_graph_or_agent() {
+            self.llm.provider_graph = canvas_llm::LlmProviderId::Off;
+        }
+        if !self.llm.provider_agent.allowed_for_graph_or_agent() {
+            self.llm.provider_agent = canvas_llm::LlmProviderId::Off;
         }
     }
 

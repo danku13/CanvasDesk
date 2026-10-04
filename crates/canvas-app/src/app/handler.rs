@@ -285,6 +285,26 @@ impl ApplicationHandler<AppEvent> for App {
                     let (onb_instances, onb_texts) = self.onboarding_overlay();
                     screen_bands.push(UiLayer::Modals, band_vp_clip, onb_instances, onb_texts);
                 }
+                // FR-LLM-B / PRD-0010 F-8: AI-онбординг — модальный оверлей
+                // выбора режима (Local / Cloud / Self-hosted). Открывается
+                // пунктом «Онбординг AI» из меню «?» либо триггером продукта.
+                if self.ai_onboarding.is_some() {
+                    let (aionb_instances, aionb_texts) = self.ai_onboarding_overlay();
+                    screen_bands.push(UiLayer::Modals, band_vp_clip, aionb_instances, aionb_texts);
+                }
+                // FR-LLM-B / PRD-0010 F-7.9 (Q4): AI status panel — правый
+                // нижний угол, над миникартой. Скрыта на узких окнах (< 900px)
+                // и когда AI выключен (`LlmSettings::all_off`). Полоса Panels
+                // (не модальна — клик мимо кнопок проваливается под канвас,
+                // но `ai_status_panel_hit` глотает ввод в пределах rect).
+                {
+                    let (ai_instances, ai_texts) = self.ai_status_panel();
+                    let ai_clip = match self.ai_status_panel_rect() {
+                        Some(rect) => canvas_ui::UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                        None => band_vp_clip,
+                    };
+                    screen_bands.push(UiLayer::Panels, ai_clip, ai_instances, ai_texts);
+                }
                 // Палитра выделения (FR-009/FR-010): тулбар под выделением;
                 // rect'ы запоминаются для airspace виджетов
                 let palette_view = self.palette_view();

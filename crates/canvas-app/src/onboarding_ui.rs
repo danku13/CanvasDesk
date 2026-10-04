@@ -416,6 +416,295 @@ pub fn point_in_card(card: [f32; 4], point: [f32; 2]) -> bool {
         && point[1] <= card[1] + card[3]
 }
 
+// =============================================================================
+// FR-LLM-B / PRD-0010 F-8: AI-онбординг — экран выбора режима (Local / Cloud /
+// Self-hosted). Не часть карусели [`ONBOARDING_STEPS`] — отдельный модальный
+// оверлей, открываемый пунктом «Онбординг AI» из меню «?» либо триггером
+// продукта при первом включении AI-функции. Сохраняет выбор в
+// `Settings::llm::data_residency` (плюс per-feature провайдеры по режиму).
+// =============================================================================
+
+/// Ширина карточки AI-онбординга (логические px, прототип F-8: 600px).
+pub const AI_ONB_CARD_W: f32 = 600.0;
+/// Внутренние поля карточки (прототип F-8: 26px top / 30px sides / 22px bottom).
+pub const AI_ONB_PAD_X: f32 = 30.0;
+pub const AI_ONB_PAD_TOP: f32 = 26.0;
+pub const AI_ONB_PAD_BOTTOM: f32 = 22.0;
+/// Кегль заголовка/подзаголовка/режимов/кнопок.
+pub const AI_ONB_STEP_FONT: f32 = 10.0;
+pub const AI_ONB_TITLE_FONT: f32 = 19.0;
+pub const AI_ONB_SUB_FONT: f32 = 12.5;
+pub const AI_ONB_MODE_TITLE_FONT: f32 = 13.5;
+pub const AI_ONB_MODE_DESC_FONT: f32 = 11.5;
+pub const AI_ONB_BTN_FONT: f32 = 13.0;
+/// Высоты строк: step / title / sub / mode card / privacy block.
+pub const AI_ONB_STEP_H: f32 = 18.0;
+pub const AI_ONB_TITLE_H: f32 = 26.0;
+pub const AI_ONB_SUB_H: f32 = 38.0;
+pub const AI_ONB_MODE_H: f32 = 64.0;
+pub const AI_ONB_MODE_GAP: f32 = 8.0;
+pub const AI_ONB_ACTIONS_H: f32 = 36.0;
+pub const AI_ONB_PRIV_H: f32 = 180.0;
+/// Поля клампа карточки к вьюпорту (паттерн ONBOARDING_VIEWPORT_MARGIN).
+pub const AI_ONB_VIEWPORT_MARGIN: f32 = canvas_core::tokens::SPACING_LG;
+/// Размер кнопок «Подробнее о privacy» / «Продолжить» (прототип F-8).
+pub const AI_ONB_BTN_H: f32 = 30.0;
+pub const AI_ONB_BTN_PRIV_W: f32 = 168.0;
+pub const AI_ONB_BTN_CONTINUE_W: f32 = 132.0;
+
+/// Режим AI (F-8.2): выбор пользователя сохраняется в
+/// `Settings::llm::data_residency`. Per-feature провайдеры переопределяются
+/// по режиму (Local → Laya/Ollama, Cloud → BYOK/ChatGPT, Self-hosted →
+/// self-hosted endpoint).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AiOnboardingChoice {
+    /// Local only (Laya / Ollama) — offline, данные не покидают машину.
+    /// `data_residency: Local`, suggest=Laya, graph=Ollama, agent=Ollama.
+    Local,
+    /// Cloud (ChatGPT / BYOK) — лучшее качество, redact context (Q1).
+    /// `data_residency: Cloud`, suggest=BYOK, graph=ChatGPT, agent=ChatGPT.
+    #[default]
+    Cloud,
+    /// Self-hosted (ваш GPU-сервер) — данные в контуре, нужен endpoint.
+    /// `data_residency: SelfHosted`, per-feature провайдеры остаются Off
+    /// до ввода endpoint'а (настройки → AI и модели).
+    SelfHosted,
+}
+
+impl AiOnboardingChoice {
+    /// Соответствующий режим `DataResidency` (сохраняется в Settings.llm).
+    pub fn data_residency(self) -> canvas_llm::DataResidency {
+        match self {
+            AiOnboardingChoice::Local => canvas_llm::DataResidency::Local,
+            AiOnboardingChoice::Cloud => canvas_llm::DataResidency::Cloud,
+            AiOnboardingChoice::SelfHosted => canvas_llm::DataResidency::SelfHosted,
+        }
+    }
+
+    /// Per-feature провайдеры по умолчанию для режима (прототип F-8 JS:
+    /// `aiOnbGo` применяет `AI.prov.{suggest,graph,agent}` по `c`).
+    /// `SelfHosted` не задаёт провайдеров автоматически — пользователь
+    /// вводит endpoint в настройках и THEN выбирает BYOK/self-hosted.
+    pub fn default_providers(self) -> [canvas_llm::LlmProviderId; 3] {
+        match self {
+            AiOnboardingChoice::Local => [
+                canvas_llm::LlmProviderId::Laya,
+                canvas_llm::LlmProviderId::Ollama,
+                canvas_llm::LlmProviderId::Ollama,
+            ],
+            AiOnboardingChoice::Cloud => [
+                canvas_llm::LlmProviderId::Byok,
+                canvas_llm::LlmProviderId::ChatGptOAuth,
+                canvas_llm::LlmProviderId::ChatGptOAuth,
+            ],
+            AiOnboardingChoice::SelfHosted => [
+                canvas_llm::LlmProviderId::Off,
+                canvas_llm::LlmProviderId::Off,
+                canvas_llm::LlmProviderId::Off,
+            ],
+        }
+    }
+
+    /// i18n-ключ заголовка режима (подпись в карточке-радио F-8).
+    pub fn title_key(self) -> &'static str {
+        match self {
+            AiOnboardingChoice::Local => keys::AI_ONB_LOCAL_TITLE,
+            AiOnboardingChoice::Cloud => keys::AI_ONB_CLOUD_TITLE,
+            AiOnboardingChoice::SelfHosted => keys::AI_ONB_SELFHOST_TITLE,
+        }
+    }
+
+    /// i18n-ключ описания режима (строка под заголовком в карточке-радио).
+    pub fn desc_key(self) -> &'static str {
+        match self {
+            AiOnboardingChoice::Local => keys::AI_ONB_LOCAL_DESC,
+            AiOnboardingChoice::Cloud => keys::AI_ONB_CLOUD_DESC,
+            AiOnboardingChoice::SelfHosted => keys::AI_ONB_SELFHOST_DESC,
+        }
+    }
+
+    /// i18n-ключ тега режима (правый верхний угол карточки-радио —
+    /// «offline» / «лучшее качество» / «в контуре»).
+    pub fn tag_key(self) -> &'static str {
+        match self {
+            AiOnboardingChoice::Local => keys::AI_ONB_TAG_OFFLINE,
+            AiOnboardingChoice::Cloud => keys::AI_ONB_TAG_QUALITY,
+            AiOnboardingChoice::SelfHosted => keys::AI_ONB_TAG_CONTOUR,
+        }
+    }
+
+    /// i18n-ключ тоста после подтверждения выбора («AI-режим: Local only…»).
+    pub fn toast_key(self) -> &'static str {
+        match self {
+            AiOnboardingChoice::Local => keys::AI_ONB_TOAST_LOCAL,
+            AiOnboardingChoice::Cloud => keys::AI_ONB_TOAST_CLOUD,
+            AiOnboardingChoice::SelfHosted => keys::AI_ONB_TOAST_SELFHOST,
+        }
+    }
+}
+
+/// Состояние экрана AI-онбординга. `selected = None` — ничего не выбрано,
+/// кнопка «Продолжить» отключена (прототип F-8: `disabled` пока `onbChoice`
+/// null). `privacy_open` — раскрытый блок «Подробнее о privacy».
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AiOnboardingState {
+    /// Выбранный режим (Local / Cloud / SelfHosted). `None` до клика по
+    /// карточке-радио — кнопка «Продолжить» отключена.
+    pub selected: Option<AiOnboardingChoice>,
+    /// Раскрыт ли блок «Подробнее о privacy» (toggle кнопкой «Подробнее»).
+    pub privacy_open: bool,
+}
+
+/// Кнопка экрана AI-онбординга (hit-тест/рендер).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiOnboardingButton {
+    /// Карточка-радио режима (Local / Cloud / SelfHosted).
+    Mode(AiOnboardingChoice),
+    /// «Подробнее о privacy» — toggle раскрытия блока.
+    Privacy,
+    /// «Продолжить» — применить выбор и закрыть экран. Отключена, пока
+    /// `selected = None`.
+    Continue,
+}
+
+/// Раскладка экрана AI-онбординга: rect карточки + высота (зависит от
+/// `privacy_open` — раскрытый блок добавляет `AI_ONB_PRIV_H`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AiOnboardingLayout {
+    /// Rect карточки `[x, y, w, h]` (центр вьюпорта, кламп с полями).
+    pub card: [f32; 4],
+    /// Rect каждой карточки-режима (Local / Cloud / SelfHosted) — порядок
+    /// [`AiOnboardingChoice`]: Local, Cloud, SelfHosted.
+    pub mode_cards: [[f32; 4]; 3],
+    /// Rect кнопок «Подробнее о privacy» и «Продолжить».
+    pub btn_privacy: [f32; 4],
+    pub btn_continue: [f32; 4],
+    /// Rect блока «Подробнее о privacy» (когда `privacy_open = true`).
+    pub privacy_block: [f32; 4],
+}
+
+/// Вычислить раскладку экрана AI-онбординга (чистая функция, без замерщика —
+/// высоты строк фиксированы по прототипу F-8). Карточка центрируется во
+/// вьюпорте с полями `AI_ONB_VIEWPORT_MARGIN`; высота зависит от
+/// `state.privacy_open`.
+pub fn ai_onboarding_layout(viewport: [f32; 2], state: &AiOnboardingState) -> AiOnboardingLayout {
+    use canvas_ui::geometry::{UiRect, UiVec2};
+    use canvas_ui::kit;
+    let margin = AI_ONB_VIEWPORT_MARGIN;
+    let slot = UiRect::new(
+        margin,
+        margin,
+        (viewport[0] - margin * 2.0).max(0.0),
+        (viewport[1] - margin * 2.0).max(0.0),
+    );
+    let w = AI_ONB_CARD_W.min(slot.w);
+    // Высота: step + title + sub + 3 mode cards (с зазорами) + actions +
+    // опционально privacy block. Поля — top/bottom.
+    let modes_h = 3.0 * AI_ONB_MODE_H + 2.0 * AI_ONB_MODE_GAP;
+    let mut h = AI_ONB_PAD_TOP
+        + AI_ONB_STEP_H
+        + AI_ONB_TITLE_H
+        + AI_ONB_SUB_H
+        + modes_h
+        + 18.0 // зазор от режимов до actions (прототип: margin-top: 18px)
+        + AI_ONB_ACTIONS_H
+        + AI_ONB_PAD_BOTTOM;
+    if state.privacy_open {
+        h += 15.0 + AI_ONB_PRIV_H; // зазор + блок
+    }
+    let h = h.min(slot.h);
+    let panel = kit::modal(
+        slot,
+        UiVec2::new(w, h),
+        UiVec2::new(w, h),
+        UiVec2::new(w, h),
+    )
+    .panel;
+    let card = [panel.x, panel.y, panel.w, panel.h];
+    // Y-positions: шаг → заголовок → подзаголовок → 3 карточки → actions → privacy.
+    let x = card[0] + AI_ONB_PAD_X;
+    let inner_w = (card[2] - AI_ONB_PAD_X * 2.0).max(0.0);
+    let mut y = card[1] + AI_ONB_PAD_TOP;
+    y += AI_ONB_STEP_H + AI_ONB_TITLE_H + AI_ONB_SUB_H;
+    // 3 карточки-режима (Local / Cloud / SelfHosted — порядок AiOnboardingChoice).
+    let mut mode_cards = [[0.0f32; 4]; 3];
+    for (i, rect) in mode_cards.iter_mut().enumerate() {
+        *rect = [
+            x,
+            y + i as f32 * (AI_ONB_MODE_H + AI_ONB_MODE_GAP),
+            inner_w,
+            AI_ONB_MODE_H,
+        ];
+    }
+    let actions_y = y + 3.0 * AI_ONB_MODE_H + 2.0 * AI_ONB_MODE_GAP + 18.0;
+    let btn_privacy = [x, actions_y, AI_ONB_BTN_PRIV_W, AI_ONB_BTN_H];
+    let btn_continue = [
+        x + inner_w - AI_ONB_BTN_CONTINUE_W,
+        actions_y,
+        AI_ONB_BTN_CONTINUE_W,
+        AI_ONB_BTN_H,
+    ];
+    let privacy_block = if state.privacy_open {
+        [
+            x,
+            actions_y + AI_ONB_ACTIONS_H + 15.0,
+            inner_w,
+            AI_ONB_PRIV_H,
+        ]
+    } else {
+        [0.0; 4]
+    };
+    AiOnboardingLayout {
+        card,
+        mode_cards,
+        btn_privacy,
+        btn_continue,
+        privacy_block,
+    }
+}
+
+/// Hit-test кнопки экрана AI-онбординга (карточки-режимы — всегда доступны;
+/// «Подробнее» — всегда; «Продолжить» — только если `selected` не None).
+pub fn ai_onboarding_button_at(
+    layout: &AiOnboardingLayout,
+    state: &AiOnboardingState,
+    point: [f32; 2],
+) -> Option<AiOnboardingButton> {
+    use canvas_ui::geometry::UiRect;
+    let hit = |rect: [f32; 4]| -> bool {
+        let r = UiRect::new(rect[0], rect[1], rect[2], rect[3]);
+        point[0] >= r.x && point[0] <= r.x + r.w && point[1] >= r.y && point[1] <= r.y + r.h
+    };
+    // Карточки-режимы (Local / Cloud / SelfHosted — порядок AiOnboardingChoice).
+    let choices = [
+        AiOnboardingChoice::Local,
+        AiOnboardingChoice::Cloud,
+        AiOnboardingChoice::SelfHosted,
+    ];
+    for (i, &choice) in choices.iter().enumerate() {
+        if hit(layout.mode_cards[i]) {
+            return Some(AiOnboardingButton::Mode(choice));
+        }
+    }
+    if hit(layout.btn_privacy) {
+        return Some(AiOnboardingButton::Privacy);
+    }
+    // «Продолжить» — только если режим выбран (иначе кнопка disabled).
+    if state.selected.is_some() && hit(layout.btn_continue) {
+        return Some(AiOnboardingButton::Continue);
+    }
+    None
+}
+
+/// Клик внутри карточки AI-онбординга (но не по кнопкам)? Ввод канваса
+/// глотается всей карточкой — клик мимо кнопок не проваливается под оверлей.
+pub fn ai_onboarding_point_in_card(card: [f32; 4], point: [f32; 2]) -> bool {
+    point[0] >= card[0]
+        && point[0] <= card[0] + card[2]
+        && point[1] >= card[1]
+        && point[1] <= card[1] + card[3]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
