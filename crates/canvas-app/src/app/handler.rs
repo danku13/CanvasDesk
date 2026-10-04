@@ -1277,6 +1277,30 @@ impl ApplicationHandler<AppEvent> for App {
                     // FR-061 хвосты (D-7/D-8): кликабельные зоны тела кадра —
                     // тогглы свёрнутости блока/раскрытости описания
                     self.body_hits = renderer.body_hits().to_vec();
+                    // CR-018 волна v2: зоны строк таблицы кадра + hover-подсветка
+                    // ряда под курсором (состояние — на следующий кадр; лаг в
+                    // кадр незаметно — паттерн expr_error_hits). В режимах
+                    // правки/драга/ресайза подсветка глушится.
+                    let row_hits = renderer.line_row_hits().to_vec();
+                    let hover = if self.editing.is_none()
+                        && self.dragging.is_none()
+                        && self.resizing.is_none()
+                    {
+                        row_hits
+                            .iter()
+                            .find(|hit| {
+                                let [x, y, w, h] = hit.rect;
+                                self.cursor[0] >= x
+                                    && self.cursor[0] <= x + w
+                                    && self.cursor[1] >= y
+                                    && self.cursor[1] <= y + h
+                            })
+                            .map(|hit| (hit.node, hit.row_ix))
+                    } else {
+                        None
+                    };
+                    self.row_hits = row_hits;
+                    renderer.set_hover_row(hover);
                 }
                 // Тамбнейлы видимых нод (T6): заказ после кадра, когда камера
                 // уже установилась; ответы придут через AppEvent::ThumbsReady

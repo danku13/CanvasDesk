@@ -132,8 +132,8 @@ use crate::search_ui::{
 use canvas_render::renderer_init::{RendererLaunch, RendererLauncher, RendererSlot};
 use canvas_render::sectors::SectorInstance;
 use canvas_render::text::{
-    body_area, measure_body_height, BodyHit, BodyHitKind, LineErrorHit, OverlayText, ScreenText,
-    SpillHit, SpillHitKind, TextAlign, BODY_LINE_HEIGHT, BODY_PADDING, BODY_TOP_GAP,
+    body_area, measure_body_height, BodyHit, BodyHitKind, LineErrorHit, OverlayText, RowHit,
+    ScreenText, SpillHit, SpillHitKind, TextAlign, BODY_LINE_HEIGHT, BODY_PADDING, BODY_TOP_GAP,
     RESULT_LINE_HEIGHT,
 };
 use canvas_render::ThemeColors;
@@ -1004,6 +1004,9 @@ pub struct App {
     /// экспандер описания; логические px) — с прошлого кадра (паттерн
     /// spill_hits; отставание в кадр незаметно).
     body_hits: Vec<BodyHit>,
+    /// CR-018 волна v2: зоны строк таблицы с прошлого кадра (логические px) —
+    /// hover-подсветка ряда и правка по клику (паттерн body_hits).
+    row_hits: Vec<RowHit>,
     /// Drag резиновой линии новой связи (T8): от порта до отпускания ЛКМ.
     edge_drag: Option<EdgeDrag>,
     /// FR-050 Н2 (этап C): цель value-drag — шаблонная нода под курсором +
@@ -1489,6 +1492,7 @@ impl App {
             spill_hits: Vec::new(),
             ellipsis_hits: Vec::new(),
             body_hits: Vec::new(),
+            row_hits: Vec::new(),
             edge_drag: None,
             param_drop: None,
             choice_menu: None,
@@ -4530,6 +4534,16 @@ impl App {
     /// Зоны — с прошлого кадра (`body_hits`); отставание в кадр незаметно.
     fn body_hit_at(&self, cursor: [f32; 2]) -> Option<&BodyHit> {
         self.body_hits.iter().find(|hit| {
+            let [x, y, w, h] = hit.rect;
+            cursor[0] >= x && cursor[0] <= x + w && cursor[1] >= y && cursor[1] <= y + h
+        })
+    }
+
+    /// CR-018 волна v2: зона строки таблицы под курсором (hover ряда /
+    /// правка по клику), None — мимо. Зоны — с прошлого кадра (`row_hits`);
+    /// отставание в кадр незаметно (паттерн body_hits).
+    fn row_hit_at(&self, cursor: [f32; 2]) -> Option<&RowHit> {
+        self.row_hits.iter().find(|hit| {
             let [x, y, w, h] = hit.rect;
             cursor[0] >= x && cursor[0] <= x + w && cursor[1] >= y && cursor[1] <= y + h
         })

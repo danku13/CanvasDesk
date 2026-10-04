@@ -1089,6 +1089,18 @@ impl Renderer {
         self.text.line_error_hits()
     }
 
+    /// CR-018 волна v2: зоны строк таблицы кадра (hover ряда + правка по
+    /// клику) — делегация в текстовый рендер.
+    pub fn line_row_hits(&self) -> &[crate::text::RowHit] {
+        self.text.line_row_hits()
+    }
+
+    /// CR-018 волна v2: задать строку таблицы под hover (состояние на
+    /// следующий кадр) — делегация в текстовый рендер.
+    pub fn set_hover_row(&mut self, hover: Option<(usize, usize)>) {
+        self.text.set_hover_row(hover);
+    }
+
     /// FR-050 Н9-2 (этап D): зоны наведения пролитых строк кадра —
     /// приложение кэширует после рендера для тултипа источника.
     pub fn spill_hits(&self) -> &[crate::text::SpillHit] {
@@ -1813,6 +1825,34 @@ impl Renderer {
                             dim_instance(&mut instance, scene.focus.dim_factor());
                         }
                         instances.push(instance);
+                    }
+                    // CR-018 волна v2 (решение владельца): hover-подсветка
+                    // строки таблицы — инстанс поверх хрома (зебра/сепараторы),
+                    // под текстом; состояние прошлого кадра (лаг в кадр
+                    // незаметно — паттерн expr_error_hits). У редактируемой
+                    // ноды тело заменено редактором — подсветки нет.
+                    if editing_node != Some(index) {
+                        if let Some((hover_node, hover_row)) = self.text.hover_row() {
+                            if hover_node == index {
+                                if let Some((row_zoom, width_px, row_top, row_line_h)) =
+                                    self.text.row_band(index, hover_row)
+                                {
+                                    let [r, g, b, a] = color_rgba(self.theme.link);
+                                    let mut instance = CardInstance {
+                                        pos: [origin[0], origin[1] + row_top],
+                                        size: [width_px / row_zoom, row_line_h],
+                                        fill: [r, g, b, a * 0.07],
+                                        border: [0.0; 4],
+                                        params: [0.0, 0.0, 0.0, 1.0],
+                                        corners: [0.0; 4],
+                                    };
+                                    if scene.focus.dim > 0.0 && !scene.focus.has_node(index) {
+                                        dim_instance(&mut instance, scene.focus.dim_factor());
+                                    }
+                                    instances.push(instance);
+                                }
+                            }
+                        }
                     }
                 }
                 // Выделение/каретка редактора (T7) — на z-позиции редактируемой ноды

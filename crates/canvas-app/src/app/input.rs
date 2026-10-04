@@ -2997,6 +2997,37 @@ impl App {
                             self.request_redraw();
                             return;
                         }
+                        // CR-018 волна v2 (решение владельца «подсветка и правка
+                        // по клику»): клик по строке данных таблицы — правка
+                        // ноды с кареткой в точке клика (та же конверсия
+                        // координат, что при кликах в активную сессию). what-if
+                        // остаётся на двойном клике (override), модификаторы —
+                        // на выделении выше.
+                        if !self.scene.whatif_active
+                            && self.scene.canvas.nodes[index].kind() == NodeKind::Text
+                        {
+                            if let Some(row_hit) = self.row_hit_at(self.cursor) {
+                                if row_hit.node == index && row_hit.line.is_some() {
+                                    self.begin_editing(index);
+                                    let zoom_px = self.zoom_px();
+                                    if let (Some(session), Some(renderer)) =
+                                        (self.editing.as_mut(), self.renderer.as_mut())
+                                    {
+                                        if let Some((origin, _, _)) = session_area(
+                                            &self.scene.canvas,
+                                            session,
+                                            self.settings.edges_avoid_nodes,
+                                        ) {
+                                            let x = ((world[0] - origin[0]) * zoom_px) as i32;
+                                            let y = ((world[1] - origin[1]) * zoom_px) as i32;
+                                            session.click(renderer.font_system_mut(), x, y);
+                                        }
+                                    }
+                                    self.request_redraw();
+                                    return;
+                                }
+                            }
+                        }
                         // Обычный клик: нода вне набора — набор сбрасывается
                         // (одиночное выделение); нода В наборе — тянем набор
                         let in_set = self.selected_nodes.contains(&index);
