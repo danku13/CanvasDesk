@@ -1,0 +1,39 @@
+[package]
+publish = false # внутренний крейт закрытого продукта; не публикуется на crates.io (CP0, ADR-0008)
+name = "canvas-graph-builder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "PRD-0010 F-3: генерация графов из текста через LLM (.byok → .canvas)"
+
+# FR-LLM-D / ADR-0016: чистый слой генерации графов без сети в дефолтной сборке
+# (правило ADR-0011 wasm-гейт, AGENTS.md «без сети в хосте»). LLM-адаптер
+# (`canvas-llm` с feature `l1-llm`) и serde-деривы подключаются только за
+# явным feature-флагом `l1-llm` — как в `canvas-llm`/`canvas-suggest`.
+# Дефолтная сборка компилируется под wasm32-unknown-unknown без оговорок.
+[dependencies]
+canvas-core.workspace = true
+canvas-llm = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[features]
+default = []
+# FR-LLM-D: сетевой слой генератора графов — `LlmProvider::chat()` с
+# `response_format=JsonObject`, разбор ответа, валидация. Включает
+# `canvas-llm/l1-llm` (async-трейт + адаптеры) и serde-деривы типов
+# (`GraphBuilderInput`/`GraphBuilderOutput`/`GeneratedNode`/`GeneratedEdge`
+# — для логов и тестов).
+l1-llm = [
+    "dep:canvas-llm",
+    "dep:serde",
+    "dep:serde_json",
+    "canvas-llm/l1-llm",
+]
+
+[dev-dependencies]
+# FR-LLM-D: mock-провайдер (impl LlmProvider) для тестов генератора.
+async-trait = "0.1"
+# FR-LLM-D: block_on в тестах без tokio (как в canvas-suggest llm-tests).
+pollster = "0.3"

@@ -41,6 +41,11 @@ canvas-suggest = { path = "crates/canvas-suggest", version = "0.5.0" }
 # OAuth и Laya — отдельные адаптеры потоков D и C). Feature-gated: дефолтная
 # сборка без сети (ADR-0011 wasm-гейт, AGENTS.md «без сети в хосте»).
 canvas-llm = { path = "crates/canvas-llm", version = "0.5.0" }
+# FR-LLM-D / PRD-0010 F-3: генератор графов из текста через LLM
+# (.byok → .canvas JSON). Feature-gated: дефолт без сети (wasm-гейт),
+# l1-llm подключает canvas-llm::LlmProvider. Потребитель — canvas-app
+# (graph_builder_ui.rs) за feature `l1-llm`.
+canvas-graph-builder = { path = "crates/canvas-graph-builder", version = "0.5.0" }
 # модель и сериализация
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
