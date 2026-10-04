@@ -607,6 +607,12 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
 /// (API-ключ BYOK, self-hosted endpoint). Клик по строке триггерит
 /// mock health-check и переключает бейдж; реальный health-check —
 /// Stream C/D TODO.
+///
+/// FR-LLM-FIX (task FIX-TEXT-INPUT): `TextInput` — редактируемое текстовое
+/// поле (имя модели BYOK, API-ключ, URL endpoint'а, self-hosted ключ).
+/// Клик по текстовому полю — фокус и начало редактирования (append +
+/// backspace, как у inline-поля подмены `explain`); клик по кнопке
+/// (опциональной, для строк с проверкой) — `apply_button_row`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowKind {
     /// Булева настройка: клик — переключить (kit-switch, меню избыточно).
@@ -616,6 +622,11 @@ pub enum RowKind {
     // FR-LLM-FIX: текстовое поле + кнопка действия (health-check mock).
     /// Клик — вызвать кнопку строки (mock health-check, переключить бейдж).
     Button,
+    // FR-LLM-FIX (task FIX-TEXT-INPUT): редактируемое текстовое поле (имя
+    // модели / API-ключ / URL / self-hosted ключ). Клик по полю — фокус и
+    // ввод; клик по кнопке (если есть) — `apply_button_row`.
+    /// Редактируемое текстовое поле (имя модели, API-ключ, URL).
+    TextInput,
 }
 
 /// Род строки панели.
@@ -641,17 +652,21 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::AiProvSuggest
         | SettingsRow::AiProvGraph
         | SettingsRow::AiProvAgent
-        // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а)
-        | SettingsRow::AiModelSuggest
-        | SettingsRow::AiModelGraph
-        | SettingsRow::AiModelAgent
         | SettingsRow::AiResidency
         | SettingsRow::AiConfidenceThreshold
         | SettingsRow::AiCostLimit => RowKind::Dropdown,
-        // FR-LLM-FIX: API-ключ BYOK + self-hosted endpoint — кнопка действия.
+        // FR-LLM-FIX (task FIX-TEXT-INPUT): per-feature BYOK-модель —
+        // редактируемое текстовое поле (пользователь вводит имя модели
+        // вручную, а не выбирает из списка; дефолт «glm-5.3-flash»).
+        SettingsRow::AiModelSuggest
+        | SettingsRow::AiModelGraph
+        | SettingsRow::AiModelAgent => RowKind::TextInput,
+        // FR-LLM-FIX (task FIX-TEXT-INPUT): API-ключ BYOK + self-hosted
+        // endpoint — текстовое поле + кнопка «Проверить» (split hit-test:
+        // клик по текстовому полю — фокус/ввод, по кнопке — health-check).
         | SettingsRow::AiApiKey
         | SettingsRow::AiSelfhostUrl
-        | SettingsRow::AiSelfhostKey => RowKind::Button,
+        | SettingsRow::AiSelfhostKey => RowKind::TextInput,
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
@@ -799,8 +814,9 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         | SettingsRow::DragPushRebase
         // FR-LLM-B: тумблер AI-телеметрии — состояние по pill-ручке
         | SettingsRow::AiTelemetry => None,
-        // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL / self-hosted
-        // key) — значение показывает текстовое поле и бейдж, dropdown_value
+        // FR-LLM-FIX (task FIX-TEXT-INPUT): TextInput-строки (API-ключ /
+        // self-hosted URL / self-hosted key / per-feature BYOK-модель) —
+        // значение показывает текстовое поле и бейдж, dropdown_value
         // не нужен (нет dropdown-кнопки).
         | SettingsRow::AiApiKey
         | SettingsRow::AiSelfhostUrl
@@ -812,10 +828,10 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         SettingsRow::AiProvSuggest => Some(ai_provider_label(language, settings.llm.provider_suggest)),
         SettingsRow::AiProvGraph => Some(ai_provider_label(language, settings.llm.provider_graph)),
         SettingsRow::AiProvAgent => Some(ai_provider_label(language, settings.llm.provider_agent)),
-        // FR-LLM-FIX: per-feature модель — показывается только когда
-        // провайдер = BYOK (иначе рендер строки скрывает поле). Значение —
-        // идентификатор выбранной модели (id из /v1/models); пустая строка
-        // означает «не выбрана» (UI показывает плейсхолдер).
+        // FR-LLM-FIX (task FIX-TEXT-INPUT): per-feature BYOK-модель теперь —
+        // редактируемое текстовое поле (RowKind::TextInput), не dropdown;
+        // dropdown_value не вызывается. Сохраняем arm для полноты match
+        // (возвращает сам model_id, как раньше).
         SettingsRow::AiModelSuggest => {
             Some(ai_model_current_label(&settings.llm.model_suggest))
         }
@@ -1097,12 +1113,11 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         .into_iter()
         .map(|p| (ai_provider_label(language, p), settings.llm.provider_agent == p))
         .collect(),
-        // FR-LLM-FIX: per-feature BYOK-модель. Список моделей подгружается
-        // из `/v1/models` после health-check ключа (см. AI_ROW_API_KEY).
-        // До проверки ключа список пуст — dropdown_options возвращает пустой
-        // Vec, рендер показывает плейсхолдер (AI_MODEL_PH_NO_KEY /
-        // AI_MODEL_PH_NO_HC). Инвариант apply_dropdown_value: при пустом
-        // списке выбора нет (no-op).
+        // FR-LLM-FIX (task FIX-TEXT-INPUT): per-feature BYOK-модель —
+        // теперь редактируемое текстовое поле (RowKind::TextInput), не
+        // dropdown. Список опций пуст (меню не открывается). Раньше список
+        // подгружался из `/v1/models` после health-check ключа — теперь
+        // пользователь вводит имя модели вручную (дефолт «glm-5.3-flash»).
         SettingsRow::AiModelSuggest => Vec::new(),
         SettingsRow::AiModelGraph => Vec::new(),
         SettingsRow::AiModelAgent => Vec::new(),
@@ -1315,8 +1330,9 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         | SettingsRow::TelemetryAnalytics
         // FR-LLM-B: тумблер телеметрии AI — apply_toggle_row (App), не dropdown
         | SettingsRow::AiTelemetry => {}
-        // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL / self-hosted
-        // key) — apply_button_row (App), не dropdown; no-op здесь.
+        // FR-LLM-FIX (task FIX-TEXT-INPUT): TextInput-строки (API-ключ /
+        // self-hosted URL / self-hosted key / per-feature BYOK-модель) —
+        // apply_button_row/apply_text_input (App), не dropdown; no-op здесь.
         | SettingsRow::AiApiKey
         | SettingsRow::AiSelfhostUrl
         | SettingsRow::AiSelfhostKey => {}
@@ -1373,10 +1389,11 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
                 settings.llm.provider_agent = p;
             }
         }
-        // FR-LLM-FIX: per-feature BYOK-модель. Список моделей берётся из
-        // `/v1/models` после health-check ключа — до проверки список пуст,
-        // выбора нет (no-op). Реальный health-check — Stream C/D TODO
-        // (`// FR-LLM-FIX-TODO:`).
+        // FR-LLM-FIX (task FIX-TEXT-INPUT): per-feature BYOK-модель — теперь
+        // редактируемое текстовое поле (RowKind::TextInput), не dropdown.
+        // Применение — через текстовый ввод (settings_text_edit), не через
+        // выбор пункта. no-op здесь (инвариант apply_dropdown_value: при
+        // пустом списке выбора нет).
         SettingsRow::AiModelSuggest => {}
         SettingsRow::AiModelGraph => {}
         SettingsRow::AiModelAgent => {}
@@ -1576,6 +1593,17 @@ pub fn control_rect(row_rect: [f32; 4], kind: RowKind) -> [f32; 4] {
             DROPDOWN_BTN_W,
             DROPDOWN_BTN_H,
         ],
+        // FR-LLM-FIX (task FIX-TEXT-INPUT): контрол справа — кнопка действия
+        // «Проверить» (для строк AiApiKey/AiSelfhostUrl/AiSelfhostKey); для
+        // модель-строк кнопок нет, но control_rect не вызывается в их
+        // hit-test (клик по всему полю текстового ввода). Геометрия та же,
+        // что у Button/Dropdown — единый визуальный ритм контрола справа.
+        RowKind::TextInput => [
+            row_rect[0] + row_rect[2] - MODAL_PADDING - DROPDOWN_BTN_W,
+            row_rect[1] + (row_rect[3] - DROPDOWN_BTN_H) / 2.0,
+            DROPDOWN_BTN_W,
+            DROPDOWN_BTN_H,
+        ],
     }
 }
 
@@ -1589,6 +1617,40 @@ pub fn pill_knob_rect(track: [f32; 4], on: bool) -> [f32; 4] {
         on,
     );
     [kit.knob.x, kit.knob.y, kit.knob.w, kit.knob.h]
+}
+
+/// FR-LLM-FIX (task FIX-TEXT-INPUT): есть ли у TextInput-строки кнопка
+/// действия справа («Проверить ключ»/«Проверить»). У модель-строк кнопки
+/// нет — всё поле текстового ввода; у API-ключа/URL/self-hosted ключа —
+/// есть (mock health-check). Решает hit-test: клик в `control_rect` строки
+/// с кнопкой → `apply_button_row`, клик в `text_input_field_rect` → фокус.
+pub fn text_input_has_button(row: SettingsRow) -> bool {
+    matches!(
+        row,
+        SettingsRow::AiApiKey | SettingsRow::AiSelfhostUrl | SettingsRow::AiSelfhostKey
+    )
+}
+
+/// FR-LLM-FIX (task FIX-TEXT-INPUT): rect текстового поля TextInput-строки
+/// (под лейблом, слева; ширина = всё доступное место минус кнопка+бейдж для
+/// строк с кнопкой). Геометрия — та же, что в overlays.rs (RowKind::Button),
+/// перенесена в функцию-источник: hit-test и рисование читают одно значение
+/// (детерминизм pick'а и кадра, паттерн `control_rect`/`pill_knob_rect`).
+pub fn text_input_field_rect(row: SettingsRow, row_rect: [f32; 4]) -> [f32; 4] {
+    let field_y = row_rect[1] + 22.0;
+    let field_h = 16.0;
+    let avail_w = (row_rect[2] - MODAL_ROW_LABEL_W).max(40.0);
+    let field_x = row_rect[0] + 2.0;
+    let field_w = if text_input_has_button(row) {
+        // Кнопка «Проверить» справа + бейдж (110 px) + зазор 6 px.
+        let badge_w = 110.0;
+        let gap = 6.0;
+        (avail_w - badge_w - gap).max(40.0)
+    } else {
+        // Модель-строки: всё доступное место под текст (кнопки/бейджа нет).
+        avail_w
+    };
+    [field_x, field_y, field_w, field_h]
 }
 
 /// Режим раскладки модалки по ширине вьюпорта (W-e, вариант «A», решение
@@ -2587,21 +2649,21 @@ mod tests {
                 | SettingsRow::AiProvSuggest
                 | SettingsRow::AiProvGraph
                 | SettingsRow::AiProvAgent
-                // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а)
-                | SettingsRow::AiModelSuggest
-                | SettingsRow::AiModelGraph
-                | SettingsRow::AiModelAgent
                 | SettingsRow::AiResidency
                 | SettingsRow::AiConfidenceThreshold
                 | SettingsRow::AiCostLimit => {
                     assert_eq!(row_kind(row), RowKind::Dropdown);
                 }
-                // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL /
-                // self-hosted key) — RowKind::Button (клик = mock health-check).
-                SettingsRow::AiApiKey
+                // FR-LLM-FIX (task FIX-TEXT-INPUT): per-feature BYOK-модель
+                // и API-ключ/self-hosted URL/self-hosted key — редактируемые
+                // текстовые поля (RowKind::TextInput), не dropdown/button.
+                SettingsRow::AiModelSuggest
+                | SettingsRow::AiModelGraph
+                | SettingsRow::AiModelAgent
+                | SettingsRow::AiApiKey
                 | SettingsRow::AiSelfhostUrl
                 | SettingsRow::AiSelfhostKey => {
-                    assert_eq!(row_kind(row), RowKind::Button);
+                    assert_eq!(row_kind(row), RowKind::TextInput);
                 }
             }
         }
@@ -3346,6 +3408,10 @@ mod tests {
                 // FR-LLM-FIX: Button-строки — кнопка действия справа (та же
                 // ширина DROPDOWN_BTN_W, что у dropdown — единый ритм контрола).
                 RowKind::Button => assert_eq!(control[2], DROPDOWN_BTN_W),
+                // FR-LLM-FIX (task FIX-TEXT-INPUT): TextInput-строки — кнопка
+                // действия справа (для строк с проверкой) или пустой слот
+                // (для модель-строк); геометрия та же, что у Button/Dropdown.
+                RowKind::TextInput => assert_eq!(control[2], DROPDOWN_BTN_W),
             }
         }
         // W-c: трек тумблера — kit-геометрия (SWITCH_W×SWITCH_H по центру
