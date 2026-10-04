@@ -309,9 +309,11 @@ pub struct SceneState {
     /// блоком-ведомостью (дефолт — развёрнут; тоггл — клик по заголовку).
     /// Очищается при загрузке схемы (сброс к дефолту), в .canvas не пишется.
     pub block_collapsed: std::collections::HashSet<String>,
-    /// FR-061 хвосты (D-8 runtime v1, «Раскрыть+авто»): id нод с РАСКРЫТЫМ
-    /// описанием («⋯ целиком ▾»). Автосворачивание — клик вне ноды /
-    /// начало правки (метод collapse_descs_except); очистка при загрузке.
+    /// FR-061 хвосты (D-8 runtime v1): id нод с РАСКРЫТЫМ описанием
+    /// («⋯ целиком ▾»). CR-018 v1.2 (решение владельца 2026-10-05):
+    /// раскрытие — РУЧНОЕ и постоянное до обратного тоггла; автосворачивание
+    /// «Раскрыть+авто» (клик вне ноды / начало правки) ретрировано вместе с
+    /// методом collapse_descs_except. Очистка при загрузке схемы.
     pub desc_expanded: std::collections::HashSet<String>,
     /// ADR-0012: viewport-зеркало MCP (см. [`Viewport`]).
     pub viewport: Viewport,
@@ -1481,16 +1483,6 @@ impl SceneState {
             true
         } else {
             false
-        }
-    }
-
-    /// FR-061 хвосты (D-8, «Раскрыть+авто»): автосворачивание раскрытых
-    /// описаний — клик вне ноды `keep` / начало правки. `keep: Some(id)` —
-    /// описание ноды `id` сохраняется (клик по её телу).
-    pub fn collapse_descs_except(&mut self, keep: Option<&str>) {
-        match keep {
-            Some(id) => self.desc_expanded.retain(|x| x == id),
-            None => self.desc_expanded.clear(),
         }
     }
 

@@ -22,7 +22,7 @@ use winit::keyboard::{Key, NamedKey};
 
 use crate::markdown::{self, StyleFlag, StyleSpan};
 use crate::text::{
-    body_area, mono_attrs, rich_spans, sans_attrs, BODY_FONT_SIZE, BODY_LINE_HEIGHT,
+    body_area, mono_attrs, rich_spans, sans_attrs, BODY_FONT_SIZE, BODY_LINE_HEIGHT, BODY_PARA_GAP,
 };
 use canvas_core::tokens::{TYPE_TITLE as TITLE_FONT_SIZE, TYPE_TITLE_LINE as TITLE_LINE_HEIGHT};
 
@@ -76,6 +76,18 @@ fn formula_line_indices(plain: &str) -> Vec<usize> {
         .collect()
 }
 
+/// CR-018 v1.2: Y-пад начала буфера редактора (world-px) — половина зазора
+/// абзаца вверх, когда ПЕРВАЯ строка текста — Numi-ряд: её бокс выше
+/// базового на BODY_PARA_GAP (спан-метрики в editor_rich), глифы центрируются
+/// в боксе — пад возвращает чернила первой строки на место ряда таблицы.
+fn first_row_pad(formula_lines: &[usize]) -> f32 {
+    if formula_lines.contains(&0) {
+        -BODY_PARA_GAP / 2.0
+    } else {
+        0.0
+    }
+}
+
 /// CR-009: rich-спаны буфера редактора с посемейственным базисом:
 /// Numi-строка (есть в `formula_lines`) — Noto Sans Mono, прочие строки —
 /// Noto Sans Display Medium; жирный/курсив внутри строки наследуют
@@ -87,13 +99,24 @@ fn editor_rich<'a>(
     plain: &'a str,
     spans: &[StyleSpan],
     formula_lines: &[usize],
+    zoom_px: f32,
 ) -> Vec<(&'a str, Attrs<'static>)> {
     let lines: Vec<&str> = plain.split('\n').collect();
     let mut out: Vec<(&'a str, Attrs<'static>)> = Vec::new();
     let mut offset = 0usize;
     for (i, line) in lines.iter().enumerate() {
         let base = if formula_lines.binary_search(&i).is_ok() {
-            mono_attrs()
+            // CR-018 v1.2 (калибровка шага строк правки): Numi-строка несёт
+            // спан-метрики табличного ряда — BODY_LINE_HEIGHT + зазор абзаца
+            // (body_gap). cosmic-text берёт max line_height по спанам строки
+            // и центрирует глифы в боксе: ряд буфера встаёт на место ряда
+            // таблицы обычного кадра (шаг 20+6), проза остаётся на базовых
+            // метриках буфера (20). Метрики физические (× zoom) — как у
+            // метрик буфера в set_layout; обновляются там же при смене зума.
+            mono_attrs().metrics(Metrics::new(
+                BODY_FONT_SIZE * zoom_px,
+                (BODY_LINE_HEIGHT + BODY_PARA_GAP) * zoom_px,
+            ))
         } else {
             sans_attrs()
         };
@@ -264,7 +287,9 @@ pub fn session_area_offset(
     avoid: bool,
 ) -> Option<([f32; 2], f32, f32)> {
     session_area(canvas, session, avoid).map(|(origin, width, height)| {
-        let off = session.body_offset_px;
+        // CR-018 v1.2: origin_pad_px — половина зазора абзаца вверх, когда
+        // первая строка буфера — Numi-ряд (чернила 1:1 с рядом таблицы)
+        let off = session.body_offset_px + session.origin_pad_px;
         ([origin[0], origin[1] + off], width, (height - off).max(0.0))
     })
 }
@@ -402,6 +427,18 @@ pub struct EditingSession {
     /// учитывается в [`session_area_offset`] — origin/высота зоны правки.
     /// 0 — сдвига нет (заметки без desc, лейблы связей, заголовки).
     pub body_offset_px: f32,
+    /// CR-018 v1.2 (калибровка шага): индексы Numi-строк текущего plain-текста
+    /// (пересчитываются при каждой правке в [`Self::refresh_styles`]) — для
+    /// высоты каретки по шагу строки ряда.
+    formula_lines: Vec<usize>,
+    /// CR-018 v1.2 (калибровка шага): Y-пад начала буфера в world-px —
+    /// `-BODY_PARA_GAP / 2`, когда ПЕРВАЯ строка буфера — Numi-ряд. Первый
+    /// бокс ряда выше базового на зазор абзаца, глифы центрируются в боксе:
+    /// пад возвращает чернила первой строки на место ряда таблицы обычного
+    /// кадра (шаг и чернила всех Numi-рядов совпадают 1:1). 0 — первая
+    /// строка не ряд (проза/заголовок/лейбл связи). Учитывается в
+    /// [`session_area_offset`].
+    pub origin_pad_px: f32,
 }
 
 impl EditingSession {
@@ -427,6 +464,7 @@ impl EditingSession {
         buffer.set_size(font_system, Some(width_px), Some(height_px));
         // CR-009: базис посемейственно — Numi-строки моноширинные (для
         // лейблов связей mono не применяется), прочее — sans medium.
+        // CR-018 v1.2: Numi-строки также несут шаг табличного ряда.
         let formula_lines = if matches!(target, EditTarget::Node(_)) {
             formula_line_indices(&plain)
         } else {
@@ -434,7 +472,7 @@ impl EditingSession {
         };
         buffer.set_rich_text(
             font_system,
-            editor_rich(&plain, &spans, &formula_lines),
+            editor_rich(&plain, &spans, &formula_lines, zoom_px),
             sans_attrs(),
             Shaping::Advanced,
         );
@@ -448,6 +486,9 @@ impl EditingSession {
         // линия) — восстановить до числа строк plain, иначе курсор
         // (последняя линия, 0) сразу невалиден
         pad_trailing_lines(&mut buffer, &plain);
+        // CR-018 v1.2: пад первой строки — половина зазора вверх, если
+        // первая строка — Numi-ряд (глифы центрируются в повышенном боксе)
+        let origin_pad_px = first_row_pad(formula_lines.as_slice());
         Self {
             buffer,
             cursor: Cursor::new(last_line, last_len),
@@ -461,6 +502,8 @@ impl EditingSession {
             metrics: (BODY_FONT_SIZE, BODY_LINE_HEIGHT),
             layout: (width_px, height_px, zoom_px),
             body_offset_px: 0.0,
+            formula_lines,
+            origin_pad_px,
         }
     }
 
@@ -496,6 +539,9 @@ impl EditingSession {
             metrics: (TITLE_FONT_SIZE, TITLE_LINE_HEIGHT),
             layout: (width_px, height_px, zoom_px),
             body_offset_px: 0.0,
+            // CR-018 v1.2: у заголовка Numi-семантики нет — рядов нет, пад 0
+            formula_lines: Vec::new(),
+            origin_pad_px: 0.0,
         }
     }
 
@@ -600,6 +646,9 @@ impl EditingSession {
             .set_metrics(font_system, Metrics::new(font * zoom_px, line_height));
         self.buffer
             .set_size(font_system, Some(width_px), Some(height_px));
+        // CR-018 v1.2: спан-метрики Numi-рядов физические (× зум) — при
+        // смене зума/размера пере-apply атрибутов (шаг ряда следует зуму)
+        self.refresh_styles(font_system);
     }
 
     /// Текст буфера как чистая строка (строки через '\n').
@@ -629,16 +678,23 @@ impl EditingSession {
     /// Обновить rich-атрибуты буфера по текущим спанам (текст не меняется —
     /// курсор (строка, индекс) остаётся валидным). CR-009: Numi-строки —
     /// моноширинное семейство, прочие — sans medium; пересчёт по каждой
-    /// правке (eval_lines дешёв, тексты нод малы).
+    /// правке (eval_lines дешёв, тексты нод малы). CR-018 v1.2: Numi-строки
+    /// несут шаг табличного ряда (спан-метрики × зум — физические); цель —
+    /// только Node (у заголовка/лейбла связи Numi-семантики нет). Вызывается
+    /// также из `set_layout` при смене зума — спан-метрики физические.
     fn refresh_styles(&mut self, font_system: &mut FontSystem) {
-        let formula_lines = if self.node_index().is_some() {
+        let is_node = matches!(self.target, EditTarget::Node(_));
+        let formula_lines = if is_node {
             formula_line_indices(&self.plain)
         } else {
             Vec::new()
         };
+        self.formula_lines = formula_lines.clone();
+        self.origin_pad_px = first_row_pad(&formula_lines);
+        let zoom_px = self.layout.2;
         self.buffer.set_rich_text(
             font_system,
-            editor_rich(&self.plain, &self.spans, &formula_lines),
+            editor_rich(&self.plain, &self.spans, &formula_lines, zoom_px),
             sans_attrs(),
             Shaping::Advanced,
         );
@@ -827,8 +883,14 @@ impl EditingSession {
     }
 
     /// Прямоугольник каретки в координатах буфера: [x, y, ширина, высота].
+    /// CR-018 v1.2: высота — шаг строки, на которой стоит курсор (Numi-ряд —
+    /// BODY_LINE_HEIGHT + BODY_PARA_GAP; проза/заголовок/лейбл — базовый).
     pub fn caret_rect(&mut self, font_system: &mut FontSystem) -> Option<[f32; 4]> {
-        let line_height = self.line_height_px;
+        let line_height = if self.formula_lines.binary_search(&self.cursor.line).is_ok() {
+            (BODY_LINE_HEIGHT + BODY_PARA_GAP) * self.layout.2
+        } else {
+            self.line_height_px
+        };
         self.buffer.shape_until_scroll(font_system, false);
         self.with_editor(|editor| {
             editor
@@ -915,11 +977,22 @@ impl EditingSession {
         self.buffer.shape_until_scroll(font_system, false);
         let mut lines = 0usize;
         let mut max_width = 0.0f32;
+        // CR-018 v1.2: высота — сумма ФАКТИЧЕСКИХ шагов рядов (Numi-строка
+        // выше базовой на зазор абзаца — спан-метрики), не счёт × базой
+        let mut total_h = 0.0f32;
         for run in self.buffer.layout_runs() {
             lines += 1;
             max_width = max_width.max(run.line_w);
+            total_h += run.line_height;
         }
-        let size = (max_width, lines.max(1) as f32 * self.line_height_px);
+        let size = (
+            max_width,
+            if lines == 0 {
+                self.line_height_px
+            } else {
+                total_h
+            },
+        );
         self.buffer.set_size(font_system, Some(width), Some(height));
         size
     }
@@ -1051,7 +1124,7 @@ mod tests {
     #[test]
     fn editor_rich_covers_text() {
         let (plain, spans) = markdown::parse("просто\n**x = 2**\nещё");
-        let rich = editor_rich(&plain, &spans, &[1]);
+        let rich = editor_rich(&plain, &spans, &[1], 1.0);
         let joined: String = rich.iter().map(|(s, _)| *s).collect();
         assert_eq!(joined, plain);
     }
@@ -1093,6 +1166,72 @@ mod tests {
         let a0 = session.buffer.lines[0].attrs_list().get_span(0);
         assert_eq!(a0.family, Family::Name(SANS_FAMILY), "лейбл связи — sans");
         assert_eq!(a0.weight, Weight::MEDIUM);
+    }
+
+    /// CR-018 v1.2 (калибровка шага строк правки): Numi-строка буфера несёт
+    /// шаг табличного ряда (BODY_LINE_HEIGHT + BODY_PARA_GAP — спан-метрики),
+    /// проза — базовый шаг. Высота каретки и размер контента следуют
+    /// фактическим рядам; пад первой строки — половина зазора вверх
+    /// (чернила рядов редактора 1:1 с рядом таблицы обычного кадра).
+    #[test]
+    fn numi_row_pitch_calibrated() {
+        // Numi-строка первой строкой: каретка/контент — шаг ряда, пад < 0
+        let (mut fs, mut s) = session("rps = 200 rps");
+        let caret = s.caret_rect(&mut fs).expect("каретка есть");
+        assert_eq!(
+            caret[3],
+            BODY_LINE_HEIGHT + BODY_PARA_GAP,
+            "каретка на Numi-ряде — шаг ряда"
+        );
+        let (_, h) = s.content_size_px(&mut fs);
+        assert_eq!(h, BODY_LINE_HEIGHT + BODY_PARA_GAP, "контент — шаг ряда");
+        assert_eq!(s.origin_pad_px, -BODY_PARA_GAP / 2.0, "первая строка — ряд");
+
+        // Проза: базовый шаг, пада нет
+        let (mut fs, mut s) = session("просто текст");
+        let caret = s.caret_rect(&mut fs).expect("каретка есть");
+        assert_eq!(caret[3], BODY_LINE_HEIGHT, "каретка на прозе — база");
+        assert_eq!(s.origin_pad_px, 0.0, "первая строка — проза");
+
+        // Смешанный текст: контент — сумма фактических шагов (ряд + проза)
+        let (mut fs, mut s) = session("rps = 200 rps\nпросто текст");
+        let (_, h) = s.content_size_px(&mut fs);
+        assert_eq!(
+            h,
+            BODY_LINE_HEIGHT + BODY_PARA_GAP + BODY_LINE_HEIGHT,
+            "ряд и проза — разные шаги"
+        );
+    }
+
+    /// CR-018 v1.2: зона правки с Numi-первой строкой поднята на половину
+    /// зазора абзаца (origin_pad_px в session_area_offset) — чернила первой
+    /// строки редактора попадают на место ряда таблицы обычного кадра.
+    #[test]
+    fn session_area_offset_pads_numi_first_row() {
+        let mut canvas = Canvas::default();
+        let mut node = Node::text("n", "rps = 200 rps", 10.0, 20.0);
+        node.height = 220.0;
+        canvas.nodes.push(node);
+        let mut fs = FontSystem::new();
+        let mut s = EditingSession::new(
+            &mut fs,
+            EditTarget::Node(0),
+            "rps = 200 rps",
+            300.0,
+            150.0,
+            1.0,
+        );
+        s.body_offset_px = 22.0;
+        let (origin, _, height) = session_area_offset(&canvas, &s, false).expect("зона есть");
+        let base = body_area(canvas.nodes.first().unwrap());
+        assert!(
+            (origin[1] - (base.0[1] + 22.0 - BODY_PARA_GAP / 2.0)).abs() < 1e-5,
+            "origin поднят на половину зазора: {origin:?}"
+        );
+        assert!(
+            (height - (base.2 - 22.0 + BODY_PARA_GAP / 2.0)).abs() < 1e-5,
+            "высота следует сдвигу origin: {height}"
+        );
     }
 
     /// formula_line_indices: расчёты распознаны, проза и пустые строки — нет.
@@ -1326,12 +1465,14 @@ mod tests {
             s.content_size_px(&mut fs2).1 > BODY_LINE_HEIGHT,
             "wrap должен дать больше одной строки"
         );
-        // Контент выше буфера: высота измеряется полностью, без clip
+        // Контент выше буфера: высота измеряется полностью, без clip.
+        // CR-018 v1.2: текст прозой (без Numi-строк) — базовый шаг каждой
+        // строки; сумма фактических шагов ранов == счёт строк × база
         let mut fs3 = FontSystem::new();
         let mut s = EditingSession::new(
             &mut fs3,
             EditTarget::Node(0),
-            "1\n2\n3\n4\n5\n6\n7\n8",
+            "раз\nдва\nтри\nчетыре\nпять\nшесть\nсемь\nвосемь",
             200.0,
             40.0,
             1.0,
@@ -1340,6 +1481,21 @@ mod tests {
             s.content_size_px(&mut fs3).1,
             BODY_LINE_HEIGHT * 8.0,
             "переполнение должно измеряться целиком"
+        );
+        // Numi-строки в переполнении: каждая несёт шаг ряда (20 + зазор 6)
+        let mut fs5 = FontSystem::new();
+        let mut s = EditingSession::new(
+            &mut fs5,
+            EditTarget::Node(0),
+            "1\n2\n3\n4\n5\n6\n7\n8",
+            200.0,
+            40.0,
+            1.0,
+        );
+        assert_eq!(
+            s.content_size_px(&mut fs5).1,
+            (BODY_LINE_HEIGHT + BODY_PARA_GAP) * 8.0,
+            "Numi-строки переполнения — шаг табличного ряда"
         );
         // Ширина — самая длинная строка layout
         let mut fs4 = FontSystem::new();
