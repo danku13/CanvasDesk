@@ -357,10 +357,13 @@ name = "canvas-llm"
 version = "0.5.0"
 dependencies = [
  "async-trait",
+ "getrandom 0.3.4",
+ "pollster",
  "serde",
  "serde_json",
  "sha2",
  "ureq",
+ "web-time",
 ]
 
 [[package]]

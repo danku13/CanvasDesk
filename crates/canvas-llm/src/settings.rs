@@ -127,6 +127,23 @@ pub struct LlmSettings {
     /// Telemetry opt-in (Q7, default OFF). Отправка предложенных нод
     /// для улучшения каталога (через GitHub issue, не backend).
     pub telemetry_opt_in: bool,
+    // FR-LLM-OAUTH-APP (PRD-0010 F-5.8): персистентное состояние
+    // Sign-in-with-ChatGPT. Токены хранятся ОТДЕЛЬНО (oauth_tokens.json /
+    // keychain, НЕ в config.toml — дизайн-док §4.4), здесь — только
+    // отображаемые флаги и persistent device id.
+    /// Выполнен ли OAuth-вход ChatGPT (флаг синхронизируется canvas-app с
+    /// фактическим содержимым token store при старте/поллинге — если файл
+    /// токенов удалён вручную, флаг сбрасывается, F-5.9).
+    pub chatgpt_connected: bool,
+    /// E-mail аккаунта ChatGPT (для бейджа «вход выполнен · email» в
+    /// Settings). Пустая строка — claim `email` не выдан (UI показывает
+    /// «аккаунт»).
+    pub chatgpt_email: String,
+    /// Persistent device id (`ext_agent_host_id`, один на установку —
+    /// уходит в login URL, дизайн-док §4.3). Генерируется canvas-app один
+    /// раз из CSPRNG (`chatgpt_oauth::pkce::generate_verifier`) при первом
+    /// входе; пустая строка — ещё не генерировался.
+    pub ext_agent_host_id: String,
 }
 
 impl Default for LlmSettings {
@@ -143,6 +160,9 @@ impl Default for LlmSettings {
     /// - FR-LLM-FIX (task FIX-TEXT-INPUT): `model_*` — «glm-5.3-flash»
     ///   (текстовый ввод; пользователь видит осмысленный дефолт, может
     ///   отредактировать под своего провайдера).
+    /// - FR-LLM-OAUTH-APP: `chatgpt_connected` — false (вход не выполнен),
+    ///   `chatgpt_email` пуст, `ext_agent_host_id` пуст (генерируется при
+    ///   первом «Войти через ChatGPT»).
     fn default() -> Self {
         Self {
             provider_suggest: LlmProviderId::Off,
@@ -162,6 +182,9 @@ impl Default for LlmSettings {
             cost_limit_daily: 1.0,
             confidence_threshold: 0.5,
             telemetry_opt_in: false,
+            chatgpt_connected: false,
+            chatgpt_email: String::new(),
+            ext_agent_host_id: String::new(),
         }
     }
 }
@@ -238,7 +261,43 @@ mod tests {
         assert!(s.endpoint.is_empty());
         // FR-LLM-FIX (task FIX-TEXT-INPUT): selfhost_key — пустой по умолчанию.
         assert!(s.selfhost_key.is_empty());
+        // FR-LLM-OAUTH-APP: OAuth-флаги — вход не выполнен, device id не
+        // сгенерирован.
+        assert!(!s.chatgpt_connected);
+        assert!(s.chatgpt_email.is_empty());
+        assert!(s.ext_agent_host_id.is_empty());
         assert!(s.all_off());
+    }
+
+    /// FR-LLM-OAUTH-APP: OAuth-поля `LlmSettings` проходят serde round-trip
+    /// (конфиг сохраняет флаг входа/email/device id без потерь; в продукте
+    /// формат TOML через `canvas-core::Settings` — здесь JSON, т.к. `toml`
+    /// не в dev-deps крейта). Запускается только за feature `serde`.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_round_trip_chatgpt_fields() {
+        let s = LlmSettings {
+            chatgpt_connected: true,
+            chatgpt_email: "user@example.com".to_owned(),
+            ext_agent_host_id: "host-id-abc-43chars___________".to_owned(),
+            ..LlmSettings::default()
+        };
+        let text = serde_json::to_string(&s).expect("сериализация LlmSettings");
+        let back: LlmSettings = serde_json::from_str(&text).expect("разбор LlmSettings");
+        assert_eq!(back, s);
+    }
+
+    /// FR-LLM-OAUTH-APP: старый конфиг БЕЗ новых OAuth-полей грузится
+    /// дефолтами (container `#[serde(default)]`) — обратная совместимость.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_legacy_config_without_oauth_fields_loads_defaults() {
+        let s: LlmSettings =
+            serde_json::from_str(r#"{"cost_limit_daily": 2.5}"#).expect("разбор legacy");
+        assert!(!s.chatgpt_connected);
+        assert!(s.chatgpt_email.is_empty());
+        assert!(s.ext_agent_host_id.is_empty());
+        assert_eq!(s.cost_limit_daily, 2.5);
     }
 
     #[test]
