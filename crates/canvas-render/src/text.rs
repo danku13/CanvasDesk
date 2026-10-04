@@ -4003,7 +4003,17 @@ impl TextSystem {
                                     row_grid::RowKind::Total | row_grid::RowKind::Preview
                                 ) {
                                     let x0 = (row.left_end + row_grid::LEADER_PAD) * z;
-                                    let x1 = (g.value_right() - row_grid::LEADER_PAD) * z;
+                                    // CR-018 v2.1 (решение владельца 2026-10-04):
+                                    // конец лидера — ЛЕВЫЙ край цифр значения ЭТОЙ
+                                    // строки (наложение цифры и лидера убрано).
+                                    // Ширина — фактическая зашейпленная ячейка
+                                    // (width_px в z-px → world /z); пустое значение
+                                    // (Err-строка) — до левого края колонки.
+                                    let x1 = row_grid::leader_end_x(
+                                        g.value_right(),
+                                        row.value.as_ref().map(|cell| cell.width_px / z),
+                                        g.value_x,
+                                    ) * z;
                                     let y = (row.row_top + row.row_line_h * LEADER_Y_FRAC) * z;
                                     // FR-061 этап E (D-15): штрихи — ЕДИНАЯ геометрия
                                     // кита (kit::leader_dash_rects); токены и арифметика
@@ -4056,10 +4066,12 @@ impl TextSystem {
                             }
                         }
                         // CR-018 волна v2 (решение владельца): ненавязчивые
-                        // колоночные сепараторы — вертикали 1px слева от колонок
+                        // колоночные сепараторы — вертикали слева от колонок
                         // «значение» и «юнит» (x = направляющая − пол-зазора),
                         // на высоту зоны строк таблицы. Рисуются ПОСЛЕ зебры —
                         // поверх её фонов, под текстом.
+                        // CR-018 v2.1 (решение владельца 2026-10-04): толщина
+                        // 2 px (1 px был неразличим) — ширина квада 2·z.
                         if let Some(g) = row_guides {
                             if let (Some(first), Some(last)) = (rows.first(), rows.last()) {
                                 let top = first.row_top * zoom_px;
@@ -4072,7 +4084,7 @@ impl TextSystem {
                                     ] {
                                         if x > 0.0 {
                                             table_quads.push(BodyQuad {
-                                                rect: [x * zoom_px, top, zoom_px, h],
+                                                rect: [x * zoom_px, top, 2.0 * zoom_px, h],
                                                 kind: BodyQuadKind::ColSep,
                                             });
                                         }
