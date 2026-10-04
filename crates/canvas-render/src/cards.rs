@@ -1642,7 +1642,10 @@ pub const LINE_PORT_DOT: f32 = 7.0;
 /// ([`row_port_dot`], точки рядов прототипа; финальность строки остаётся
 /// в данных `LinePort::is_final` для семантики связей). `hovered` — нода
 /// под курсором: все её порты растут до узлового размера и подсвечиваются
-/// акцентом (аффорданс drag, как T8).
+/// цветом потока значений [`FLOW_EDGE_COLOR`] (правка 2026-10-05: прежде —
+/// [`SELECTION_BORDER`] синий, что делало data-порты неотличимыми от
+/// смысловых портов сторон на hover; теперь data-порты всегда бирюзовые,
+/// смысловые порты сторон — всегда синие — различимы в любом состоянии).
 pub fn build_line_port_instances(
     ports: &[canvas_core::LinePort],
     zone_px: f32,
@@ -1657,7 +1660,11 @@ pub fn build_line_port_instances(
         .iter()
         .map(|port| {
             if hovered {
-                dot(port.point, dot_d, SELECTION_BORDER)
+                // Правка 2026-10-05: data-порт на hover — акцент потока
+                // значений (бирюзовый), НЕ синий SELECTION_BORDER (как у
+                // смысловых портов сторон). Размер растёт — аффорданс drag
+                // сохраняется; цвет отличает data от semantic.
+                dot(port.point, dot_d, FLOW_EDGE_COLOR)
             } else {
                 // FR-075 (вёрстка prototype-unified drawRowPort): точки
                 // рядов — бирюзовый кружок α0.5 с тёмным кольцом 1 px
@@ -1691,7 +1698,11 @@ fn row_port_dot(center: [f32; 2], d: f32) -> CardInstance {
 /// FR-050 Н2 (этап C): входные якоря параметров шаблонной ноды — кружки на
 /// ЛЕВОМ краю у ряда каждой строки-параметра (зеркало построчных выходов
 /// FR-025). `hovered` — нода под курсором: якоря растут до узлового
-/// размера. `drop_compat` — параллельный порту признак совместимости
+/// размера и подсвечиваются цветом потока значений [`FLOW_EDGE_COLOR`]
+/// (правка 2026-10-05: прежде — [`SELECTION_BORDER`] синий, что делало
+/// data-якоря неотличимыми от смысловых портов сторон на hover; теперь
+/// data-якоря всегда бирюзовые — как data-выходы, смысловые порты сторон
+/// — всегда синие). `drop_compat` — параллельный порту признак совместимости
 /// единиц источника активного value-drag (Н5/E-UNIT): Some(true) — ярче и
 /// крупнее (допустимая цель), Some(false) — приглушён (несовместимая),
 /// None — drag не активен (обычный аффорданс).
@@ -1714,7 +1725,12 @@ pub fn build_param_port_instances(
                 Some(false) => dot(port.point, LINE_PORT_DOT, EDGE_COLOR),
                 None => {
                     if hovered {
-                        dot(port.point, port_dot_diameter(zone_px), SELECTION_BORDER)
+                        // Правка 2026-10-05: data-якорь на hover — акцент
+                        // потока значений (бирюзовый), НЕ синий
+                        // SELECTION_BORDER (как у смысловых портов сторон).
+                        // Размер растёт — аффорданс drag сохраняется; цвет
+                        // отличает data от semantic.
+                        dot(port.point, port_dot_diameter(zone_px), FLOW_EDGE_COLOR)
                     } else {
                         // FR-075: бирюзовый кружок с кольцом — как точки
                         // рядов прототипа (зеркало build_line_port_instances)
@@ -2899,7 +2915,9 @@ mod tests {
     }
 
     /// FR-075 (вёрстка prototype-unified drawRowPort): точки рядов/якоря —
-    /// бирюзовый кружок α0.5 с тёмным кольцом; hover — акцент выделения.
+    /// бирюзовый кружок α0.5 с тёмным кольцом; hover — акцент ПОТОКА
+    /// значений (бирюзовый FLOW_EDGE_COLOR, правка 2026-10-05: data-порты
+    /// отличимы от смысловых портов сторон, которые на hover — синие).
     #[test]
     fn row_ports_use_prototype_style() {
         let ports = vec![canvas_core::LinePort {
@@ -2913,7 +2931,14 @@ mod tests {
         assert_eq!(inst[0].border, ROW_PORT_RING);
         assert_eq!(inst[0].params[0], LINE_PORT_DOT / 2.0);
         let hovered = build_line_port_instances(&ports, 26.0, true);
-        assert_eq!(hovered[0].fill, SELECTION_BORDER, "hover — акцент");
+        assert_eq!(
+            hovered[0].fill, FLOW_EDGE_COLOR,
+            "hover — акцент потока (бирюза)"
+        );
+        assert_ne!(
+            hovered[0].fill, SELECTION_BORDER,
+            "data-порт ≠ смысловой порт (синий)"
+        );
     }
 
     /// FR-075 W0: Rust-оракул `corner_radius_at` зеркалит шейдерную
@@ -3278,7 +3303,9 @@ mod fr050_stage_c_tests {
 
     /// Н2: якоря без drag — бирюзовые кружки с тёмным кольцом по вёрстке
     /// прототипа (FR-075 drawRowPort); hover ноды — рост до узлового
-    /// размера + акцент выделения (аффорданс портов T8).
+    /// размера + акцент ПОТОКА значений (бирюзовый FLOW_EDGE_COLOR,
+    /// правка 2026-10-05: data-якоря отличимы от смысловых портов сторон,
+    /// которые на hover — синие SELECTION_BORDER).
     #[test]
     fn param_port_instances_plain_and_hovered() {
         let ports = ports();
@@ -3289,7 +3316,14 @@ mod fr050_stage_c_tests {
         assert_eq!(plain[0].border, ROW_PORT_RING);
         let hovered = build_param_port_instances(&ports, 20.0, true, None);
         assert!((hovered[0].size[0] - port_dot_diameter(20.0)).abs() < 1e-4);
-        assert_eq!(hovered[0].fill, SELECTION_BORDER);
+        assert_eq!(
+            hovered[0].fill, FLOW_EDGE_COLOR,
+            "hover — акцент потока (бирюза)"
+        );
+        assert_ne!(
+            hovered[0].fill, SELECTION_BORDER,
+            "data-якорь ≠ смысловой порт (синий)"
+        );
     }
 
     /// Н2/Н5: во время value-drag совместимый параметр — акцент потока и

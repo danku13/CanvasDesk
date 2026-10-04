@@ -575,19 +575,29 @@ pub fn title_edit_area(node: &Node) -> ([f32; 2], f32, f32) {
 /// расчёт для бейджа результата (FR-013) и построчного порта: инвариант
 /// вертикали (порт и бейдж не разъезжаются ни при каком зуме/ширине).
 /// `block_offset_y` — смещение блока тела с `source_line` этой строки.
+///
+/// Возвращает TOP ячейки результата (высота `RESULT_LINE_HEIGHT`):
+/// используется как `top` TextArea ячеек значение/юнит/бейдж.
 pub fn result_row_y(node: &Node, block_offset_y: f32) -> f32 {
     body_area(node).0[1] + block_offset_y + (BODY_LINE_HEIGHT - RESULT_LINE_HEIGHT) / 2.0
 }
 
-/// FR-061 этап B: блок тела по исходной строке — общий поиск для портов/
-/// якорей (строки таблицы ссылаются на ту же геометрию блоков, I-1).
-fn entry_body_block(entry: &CachedTitle, source_line: usize) -> Option<&BodyBlock> {
-    entry
-        .body
-        .as_ref()?
-        .blocks
-        .iter()
-        .find(|block| block.source_line == Some(source_line))
+/// Фикс выравнивания портов с полосами строк (правка 2026-10-05):
+/// world-вертикаль ЦЕНТРА полосы (зебры) строки — ЕДИНЫЙ расчёт для
+/// построчного порта (`LinePort.point[1]`) и якоря параметра
+/// (`ParamPort.point[1]`). До этого порты использовали `result_row_y`
+/// (TOP ячейки результата), что давало дрейф `RESULT_LINE_HEIGHT / 2`
+/// (8 world-px при текущих токенах) ВЫШЕ центра полосы — порт «съезжал»
+/// относительно своей полосы. Финальный порт футера использует
+/// [`result_footer_y`] (центр полосы «ИТОГ») — там выравнивание было
+/// корректным и осталось без изменений.
+///
+/// `row_top` — верх строки (world-px, body-local, как `CachedRow::row_top`
+/// или `BodyBlock::offset[1]`); `row_line_h` — высота строки (world-px,
+/// как `CachedRow::row_line_h`; `BODY_LINE_HEIGHT` у Param/Calc,
+/// `AUTO_ROW_LINE_HEIGHT` у авто-строк).
+pub fn result_row_center_y(node: &Node, row_top: f32, row_line_h: f32) -> f32 {
+    body_area(node).0[1] + row_top + row_line_h / 2.0
 }
 
 /// CR-018 волна v2: вписать текст ячейки в ширину `max_w` (world-px) —
@@ -2998,7 +3008,8 @@ impl TextSystem {
 
     /// FR-025: построчные точки выхода ноды из кэша раскладки: для каждой
     /// строки с бейджем результата — [`LinePort`] на правом краю ноды
-    /// (вертикаль — [`result_row_y`] ряда бейджа — инвариант вертикали).
+    /// (вертикаль — ЦЕНТР полосы строки [`result_row_center_y`] — инвариант
+    /// выравнивания порта с зеброй/хромом строки; фикс 2026-10-05).
     /// FR-025 (правка 2, по проверке владельца): шаблонная нода — порты у
     /// каждой строки листа параметров ПЛЮС порт футера результата
     /// ([`result_footer_y`], `line = None` — узловое значение, формула
@@ -3025,10 +3036,16 @@ impl TextSystem {
             .enumerate()
             .filter_map(|(i, row)| {
                 let source_line = row.source_line?;
-                let block = entry_body_block(self.cache.get(&index)?, source_line)?;
+                // Фикс 2026-10-05: геометрия из самой строки (row_top,
+                // row_line_h) — ЦЕНТР полосы, без lookup'а блока; порт
+                // выровнен с зеброй/хромом строки (прежде — TOP ячейки
+                // результата, дрейф RESULT_LINE_HEIGHT/2 вверх).
                 Some(canvas_core::LinePort {
                     line: Some(source_line),
-                    point: [right, result_row_y(node, block.offset[1])],
+                    point: [
+                        right,
+                        result_row_center_y(node, row.row_top, row.row_line_h),
+                    ],
                     // У шаблонной ноды «финальный» порт один — футер;
                     // строки листа параметров всегда промежуточные
                     is_final: i + 1 == total && !is_template,
@@ -3049,8 +3066,9 @@ impl TextSystem {
     /// раскладки: для каждой строки-присваивания, чьё имя входит в снапшот
     /// параметров шаблона (`TemplateRef::params` — канонический адрес
     /// `toParam`, тот же источник истины, что у валидации E-PORT-UNKNOWN),
-    /// — [`ParamPort`] на ЛЕВОМ краю ноды (вертикаль — [`result_row_y`]
-    /// ряда строки, зеркально построчным выходам FR-025; hit-тест — допуск
+    /// — [`ParamPort`] на ЛЕВОМ краю ноды (вертикаль — ЦЕНТР полосы строки
+    /// [`result_row_center_y`], зеркально построчным выходам FR-025; фикс
+    /// 2026-10-05 — выравнивание с зеброй/хромом строки; hit-тест — допуск
     /// CR-003). Текстовая нода якорей не имеет (toParam к ней не адресуется).
     /// Нет кэша/строк (нода вне экрана, виджет) — якорей нет.
     pub fn param_ports(&self, index: usize, node: &Node) -> Vec<canvas_core::ParamPort> {
@@ -3066,14 +3084,19 @@ impl TextSystem {
             .filter_map(|row| {
                 // FR-061 этап B: имя — из строки таблицы (тот же line_kind,
                 // что и при сборке D-2 — дубля разбора нет).
-                let source_line = row.source_line?;
+                // Авто-строки (source_line = None) — якорей не дают.
+                row.source_line?;
                 if !template.params.contains_key(&row.name) {
                     return None;
                 }
-                let block = entry_body_block(entry, source_line)?;
+                // Фикс 2026-10-05: ЦЕНТР полосы (прежде — TOP ячейки,
+                // дрейф RESULT_LINE_HEIGHT/2 вверх от центра полосы).
                 Some(canvas_core::ParamPort {
                     param: row.name.clone(),
-                    point: [node.x, result_row_y(node, block.offset[1])],
+                    point: [
+                        node.x,
+                        result_row_center_y(node, row.row_top, row.row_line_h),
+                    ],
                 })
             })
             .collect()
@@ -6035,6 +6058,80 @@ load = connections_per_sec / (servers * server_rate)\n";
         });
         assert_eq!(width, 0.0);
         assert_eq!(height, 0.0);
+    }
+
+    /// Фикс 2026-10-05: result_row_center_y — ЦЕНТР полосы строки
+    /// (зебры), а result_row_y — TOP ячейки результата. До фикса порты
+    /// использовали result_row_y как центр, что давало дрейф
+    /// RESULT_LINE_HEIGHT/2 вверх от центра полосы.
+    #[test]
+    fn result_row_center_y_is_strip_center() {
+        let mut note = Node::text("n", "t", 100.0, 50.0);
+        note.width = 300.0;
+        note.height = 200.0;
+        let (origin, _, _) = body_area(&note);
+
+        // Типичная Param/Calc строка: row_line_h = BODY_LINE_HEIGHT = 20
+        let row_top = 12.0;
+        let row_line_h = BODY_LINE_HEIGHT;
+        let center = result_row_center_y(&note, row_top, row_line_h);
+        // Центр полосы = body_origin_y + row_top + row_line_h/2
+        assert_eq!(
+            center,
+            origin[1] + row_top + row_line_h / 2.0,
+            "центр полосы строки"
+        );
+
+        // result_row_y (прежний расчёт) — TOP ячейки результата,
+        // что на RESULT_LINE_HEIGHT/2 выше центра полосы (баг фикса).
+        let top = result_row_y(&note, row_top);
+        let drift = center - top;
+        assert_eq!(
+            drift,
+            RESULT_LINE_HEIGHT / 2.0,
+            "дрейф старого расчёта от центра полосы = RESULT_LINE_HEIGHT/2"
+        );
+        // Токены фиксируем: при изменении падёж теста — пересмотреть фикс
+        assert_eq!(BODY_LINE_HEIGHT, 20.0, "токен не изменился");
+        assert_eq!(RESULT_LINE_HEIGHT, 16.0, "токен не изменился");
+        assert_eq!(drift, 8.0, "8 world-px дрейфа вверх до фикса");
+
+        // Авто-строка имеет другую высоту (AUTO_ROW_LINE_HEIGHT) —
+        // центр всё равно корректен (формула берёт row_line_h, не константу)
+        let auto_h = AUTO_ROW_LINE_HEIGHT;
+        let auto_center = result_row_center_y(&note, 0.0, auto_h);
+        assert_eq!(
+            auto_center,
+            origin[1] + auto_h / 2.0,
+            "центр авто-строки корректен при любой row_line_h"
+        );
+    }
+
+    /// Фикс 2026-10-05: result_row_center_y — ЦЕНТР полосы, не зависит
+    /// от позиции ноды (только от body_origin + row_top + row_line_h/2).
+    /// Инвариант: порт и полоса (зебра) на одной горизонтали.
+    #[test]
+    fn result_row_center_y_invariant_with_zebra_strip() {
+        let mut note = Node::text("n", "t", 250.0, 130.0);
+        note.width = 380.0;
+        note.height = 260.0;
+        let (origin, _, _) = body_area(&note);
+        // Зебра-полоса: pos.y = origin.y + row_top, size.h = row_line_h
+        // (BodyQuadKind::RowBg в prepare_titles). Центр полосы:
+        //   origin.y + row_top + row_line_h/2
+        // Порт: point.y = result_row_center_y(...) — тот же расчёт.
+        for (row_top, row_line_h) in [
+            (0.0, BODY_LINE_HEIGHT),
+            (20.0, BODY_LINE_HEIGHT),
+            (40.0, BODY_LINE_HEIGHT),
+        ] {
+            let strip_center = origin[1] + row_top + row_line_h / 2.0;
+            let port_y = result_row_center_y(&note, row_top, row_line_h);
+            assert_eq!(
+                port_y, strip_center,
+                "порт на центре полосы (row_top={row_top})"
+            );
+        }
     }
 
     /// offset_to_cursor: байтовый offset → (строка, индекс в строке),

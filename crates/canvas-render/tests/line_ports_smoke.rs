@@ -10,7 +10,7 @@ use canvas_core::expr::{self, Env as ExprEnv, ExprLineResults, ExprOutcome, Expr
 use canvas_core::templates::{TemplateParam, TemplateRef};
 use canvas_core::{Canvas, Node};
 use canvas_render::gpu::GpuContext;
-use canvas_render::text::{result_footer_y, TextSystem, TitleFrame};
+use canvas_render::text::{body_area, result_footer_y, TextSystem, TitleFrame};
 use canvas_render::zorder;
 use canvas_render::Camera;
 
@@ -165,5 +165,29 @@ fn line_ports_template_and_note() {
             port.point[1] < tpl_ports[2].point[1],
             "строки листа выше футера"
         );
+    }
+
+    // Фикс 2026-10-05: инвариант выравнивания порта с полосой (зеброй)
+    // строки. Порт должен быть на ЦЕНТРЕ полосы строки, а не на TOP
+    // ячейки результата (прежде — дрейф RESULT_LINE_HEIGHT/2 = 8px вверх).
+    // Источник вертикали полосы — `row_band` (та же геометрия, что у
+    // BodyQuadKind::RowBg зебры): row_top, row_line_h в world-px.
+    // Проверяем для обеих нод: note (2 формульные строки), tpl (2 строки
+    // листа параметров; футер-порт проверен выше через result_footer_y).
+    for (node_index, ports) in [(0, note_ports.as_slice()), (1, &tpl_ports[..2])] {
+        let node = &canvas.nodes[node_index];
+        for (row_ix, port) in ports.iter().enumerate() {
+            let (_, _, row_top, row_line_h) = text
+                .row_band(node_index, row_ix)
+                .expect("row_band для строки с портом");
+            let strip_center_y = body_area(node).0[1] + row_top + row_line_h / 2.0;
+            assert!(
+                (port.point[1] - strip_center_y).abs() < 1e-3,
+                "порт node={node_index} row={row_ix}: Y={} должен совпадать \
+                 с центром полосы Y={strip_center_y} (row_top={row_top}, \
+                 row_line_h={row_line_h}) — фикс выравнивания 2026-10-05",
+                port.point[1]
+            );
+        }
     }
 }
