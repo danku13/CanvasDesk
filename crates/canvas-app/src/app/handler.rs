@@ -305,6 +305,26 @@ impl ApplicationHandler<AppEvent> for App {
                     };
                     screen_bands.push(UiLayer::Panels, ai_clip, ai_instances, ai_texts);
                 }
+                // FR-LLM-D / PRD-0010 F-4: Agent panel — правая боковая
+                // панель чат-UI (tool-calling через LLM). Скрыта если закрыта
+                // (`Ctrl+I` toggle) или вьюпорт < 600px. Полоса Panels (как
+                // status panel — не модальна, клики мимо активных элементов
+                // глотаются `agent_panel_hit`).
+                {
+                    let (ag_instances, ag_texts) = self.agent_panel_overlay();
+                    let ag_clip = match self.agent_panel_rect() {
+                        Some(rect) => canvas_ui::UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                        None => band_vp_clip,
+                    };
+                    screen_bands.push(UiLayer::Panels, ag_clip, ag_instances, ag_texts);
+                }
+                // FR-LLM-D / PRD-0010 F-3: Graph builder dialog — модальный
+                // оверлей генерации графа из текста. Полоса Modals (как
+                // ai_onboarding — затемняет канвас, блокирует ввод под ним).
+                if self.graph_builder.open {
+                    let (gb_instances, gb_texts) = self.graph_builder_overlay();
+                    screen_bands.push(UiLayer::Modals, band_vp_clip, gb_instances, gb_texts);
+                }
                 // Палитра выделения (FR-009/FR-010): тулбар под выделением;
                 // rect'ы запоминаются для airspace виджетов
                 let palette_view = self.palette_view();

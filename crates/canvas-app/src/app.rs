@@ -165,6 +165,13 @@ pub mod ui_registry;
 /// над миникартой. Владелец: Stream B. Не трогают другие потоки.
 mod ai_status_panel;
 
+// FR-LLM-D / PRD-0010 F-4: Agent panel — чат-UI tool-calling. Владелец:
+// Stream D. UI + state + validation (LLM-вызов через worker, TODO).
+mod agent_panel;
+// FR-LLM-D / PRD-0010 F-3: Graph builder dialog — модальная генерация графа
+// из текста. Владелец: Stream D. UI + state (LLM-вызов через worker, TODO).
+mod graph_builder_ui;
+
 mod explain;
 /// FR-076: экспорт самодостаточного HTML («артефакт защиты», GAP-01) —
 /// команда приложения: сборка ядром + запись рядом с канвасом.
@@ -1103,6 +1110,14 @@ pub struct App {
     /// Stream D после каждого ChatGPT-запроса; 0 → fallback на BYOK.
     /// Здесь — read-only отображение в табе настроек AI.
     ai_chatgpt_rate_used: u32,
+    /// FR-LLM-D / PRD-0010 F-4: состояние агент-панели (правая боковая
+    /// панель чат-UI для tool-calling через LLM). Владелец: Stream D.
+    /// UI-only state — сам LLM-вызов идёт через worker (TODO).
+    agent_panel: agent_panel::AgentState,
+    /// FR-LLM-D / PRD-0010 F-3: состояние диалога генерации графа из текста
+    /// (модальный оверлей, `.byok` → `.canvas` JSON через LLM). Владелец:
+    /// Stream D. UI-only state — LLM-вызов через worker (TODO).
+    graph_builder: graph_builder_ui::GraphBuilderState,
     /// Превью зоны дропа (T9): план вставки на время DragOver.
     drop_preview: Option<DropPreview>,
     /// Модальный диалог T21 (установка/удаление пакета): глушит ввод канваса.
@@ -1574,6 +1589,11 @@ impl App {
             ai_cost_session: 0.0,
             ai_cost_day: 0.0,
             ai_chatgpt_rate_used: 0,
+            // FR-LLM-D: агент-панель и генератор графа стартуют закрытыми
+            // (открываются Ctrl+I / пунктом меню соответственно; LLM-вызов
+            // через worker — TODO, здесь только UI state).
+            agent_panel: agent_panel::AgentState::default(),
+            graph_builder: graph_builder_ui::GraphBuilderState::default(),
             drop_preview: None,
             dialog: None,
             toast: None,

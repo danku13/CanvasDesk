@@ -298,6 +298,7 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "canvas-core",
+ "canvas-graph-builder",
  "canvas-llm",
  "canvas-mcp",
  "canvas-render",
@@ -337,6 +338,18 @@ dependencies = [
  "toml",
  "tracing",
  "web-time",
+]
+
+[[package]]
+name = "canvas-graph-builder"
+version = "0.5.0"
+dependencies = [
+ "async-trait",
+ "canvas-core",
+ "canvas-llm",
+ "pollster",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

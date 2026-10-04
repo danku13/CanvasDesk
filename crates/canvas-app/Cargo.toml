@@ -37,6 +37,12 @@ canvas-suggest.workspace = true
 # деривы включаются за feature `serde` — нужно для персиста `LlmSettings`
 # в `config.toml` через `Settings::save`.
 canvas-llm = { workspace = true, features = ["serde"] }
+# FR-LLM-D / PRD-0010 F-3: генератор графов из текста через LLM
+# (.byok → .canvas JSON). Дефолтная сборка без сети (wasm-гейт); feature
+# `l1-llm` (ниже в [features]) подключает canvas-llm/l1-llm — для
+# нативной (desktop) сборки. UI (`graph_builder_ui.rs`) использует только
+# `GraphBuilderMode` enum (доступен без фичи).
+canvas-graph-builder = { workspace = true }
 anyhow.workspace = true
 # FR-053 (U3 PRD-0009 F-6): тип FontSystem в сигнатурах раскладки пилотов
 # (TextMeasurer canvas-ui принимает &mut FontSystem — владелец инстанса
@@ -64,6 +70,11 @@ canvas-shell.workspace = true
 # нет (правило AGENTS.md «без сети в хосте»; sidecar — отдельный процесс).
 default = []
 l1-laya = ["canvas-suggest/l1-laya"]
+# FR-LLM-D / PRD-0010 F-3: L1-транспорт для генератора графов (через
+# canvas-graph-builder/l1-llm → canvas-llm/l1-llm). OFF по умолчанию —
+# сетевых зависимостей в дефолтном дереве нет (wasm-гейт ADR-0011);
+# подключается в нативной (desktop) сборке.
+l1-llm = ["canvas-graph-builder/l1-llm", "canvas-llm/l1-llm"]
 
 # FR-040 v2 (web persist): на wasm32 настройки сохраняются в localStorage
 # браузера (натив — config.toml через `Settings::save(path)`). Трейты
