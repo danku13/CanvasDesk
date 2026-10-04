@@ -31,6 +31,21 @@ use canvas_ui::geometry::UiRect;
 
 // FR-LLM-FIX: геометрия из прототипа F-7.9 (строки 450-481). Раньше панель
 // была 220×90 (как миникарта) — элементы наезжали. Теперь 1:1 по CSS.
+//
+// FR-LLM-FIX-2 (фикс «вёрстка всё ещё кривая», скриншот владельца):
+// головная строка переведена на flex-семантику CSS прототипа с ЗАМЕРОМ
+// шрифта (TextMeasurer) вместо эвристики `len*5.5`:
+// - `.ais-head { display:flex; gap:6px }` — порядок dot | model | prov |
+//   spacer | ⏸ | ⚙, а НЕ «модель фиксированной ширины 146px» (чип
+//   «BYOK (свой ключ)» уезжал в середину строки и наезжал на ⏸/⚙);
+// - `.ais-prov { flex:none; padding:1px 7px }` — чип контент-ширины по
+//   замеру (кириллица в 9.5px шире эвристики → текст вылезал за чип);
+// - `.ais-model { overflow:hidden; text-overflow:ellipsis }` — модель
+//   сжимается первой и обрезается «…» по фактической ширине;
+// - короткая подпись провайдера (как `aiProvLabel()` прототипа:
+//   «BYOK», а не «BYOK (свой ключ)» — полные подписи остаются в настройках);
+// - feature-чипы и их клик-зоны считаются ОДНОЙ функцией замера (раньше
+//   hit-test расходился с отрисованным кадром).
 
 /// Ширина панели (прототип: `width:302px`).
 pub const AI_STATUS_W: f32 = 302.0;
@@ -92,6 +107,140 @@ const FEAT_GAP: f32 = 5.0;
 /// из шкалы токенов (FR-055: единый источник радиусов) — визуально идентичен
 /// 99px для чипов такой высоты, но не ломает хит-тест вёрстки.
 const FEAT_RADIUS: f32 = canvas_core::tokens::RADIUS_PILL;
+
+// FR-LLM-FIX-2: геометрия головной строки — flex-параметры CSS прототипа.
+/// Зазор flex-строки шапки (`gap:6px` в `.ais-head`).
+const HEAD_GAP: f32 = 6.0;
+/// Горизонтальный паддинг чипа провайдера (`padding:1px 7px` → 7px слева/справа).
+const PROV_CHIP_PAD_X: f32 = 7.0;
+/// Высота чипа провайдера (`padding:1px` + font 9.5 ≈ 14px).
+const PROV_CHIP_H: f32 = 14.0;
+/// Клампы ширины чипа провайдера: минимум — «Off», максимум — защита от
+/// длинных локалей (при превышении чип обрезается через ellipsis).
+const PROV_CHIP_MIN_W: f32 = 36.0;
+const PROV_CHIP_MAX_W: f32 = 120.0;
+
+/// FR-LLM-FIX-2: результат flex-раскладки головной строки (координаты
+/// относительно панели; y — уже с `head_y`).
+struct HeadRow {
+    /// Область текста модели — от точки+gap до чипа провайдера; текст
+    /// кладётся с ellipsis по фактической ширине (`text-overflow:ellipsis`).
+    model_area: UiRect,
+    /// Чип провайдера — контент-ширина по замеру (`flex:none`).
+    prov_chip: UiRect,
+    /// x кнопки ⏸/▶ (24×24 от `head_y`).
+    pause_x: f32,
+    /// x кнопки ⚙.
+    gear_x: f32,
+}
+
+/// FR-LLM-FIX-2: flex-раскладка головной строки ПО ЗАМЕРУ шрифта — единая
+/// для рендера и hit-теста (клик-зоны идентичны кадру отрисовки).
+///
+/// Порядок и семантика — 1:1 с CSS прототипа (`.ais-head`): точка-индикатор
+/// → модель (сжимается, ellipsis) → чип провайдера (контент-ширина) →
+/// распорка → ⏸ → ⚙; `gap:6px` между соседями. Кнопки прибиты к правому
+/// краю контента (как `.ais-sp { flex:1 }` + `.ais-btn { flex:none }`).
+///
+/// Оба текста обрезаются по фактическим областям (модель — всегда; чип —
+/// только при клампе `PROV_CHIP_MAX_W`, защита от длинных локалей).
+///
+/// Замер — `TextMeasurer` под guard'ом `measure_font_system` в коротком
+/// скоупе вызывающего (контракт «вложенный лок FontSystem запрещён»). Возвращает
+/// `(раскладка, текст модели, текст чипа)` — обрезанные варианты для отрисовки.
+fn head_row_layout(
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    content_x: f32,
+    content_w: f32,
+    head_y: f32,
+    model_text: &str,
+    prov_text: &str,
+) -> (HeadRow, String, String) {
+    // Кнопки ⏸/⚙ — правый край контента (как раньше: 24 + gap + 24).
+    let gear_x = content_x + content_w - HEAD_BTN_SIZE;
+    let pause_x = gear_x - HEAD_GAP - HEAD_BTN_SIZE;
+    // Чип провайдера: контент-ширина (замер + padding 7×2), клампы.
+    let prov_text_w = crate::kit_ui::measured_width(m, fs, prov_text, 9.5);
+    let prov_chip_w = (prov_text_w + PROV_CHIP_PAD_X * 2.0).clamp(PROV_CHIP_MIN_W, PROV_CHIP_MAX_W);
+    let prov_chip = UiRect::new(
+        pause_x - HEAD_GAP - prov_chip_w,
+        head_y + (HEAD_ROW_H - PROV_CHIP_H) * 0.5,
+        prov_chip_w,
+        PROV_CHIP_H,
+    );
+    // Текст чипа: длинные локали обрезаем «…» до ширины чипа минус паддинг
+    // (кириллица в 9.5px шире эвристики — текст не должен вылезать за чип).
+    let prov_fitted = if prov_text_w + PROV_CHIP_PAD_X * 2.0 > PROV_CHIP_MAX_W {
+        m.ellipsis(
+            fs,
+            prov_text,
+            crate::kit_ui::FONT_FAMILY,
+            9.5,
+            (prov_chip_w - PROV_CHIP_PAD_X * 2.0).max(0.0),
+        )
+    } else {
+        prov_text.to_owned()
+    };
+    // Модель: от точки (dot 8px + gap) до чипа (gap); ellipsis по факту.
+    let model_x = content_x + DOT_SIZE + HEAD_GAP;
+    let model_avail = (prov_chip.x - HEAD_GAP - model_x).max(0.0);
+    let model_fitted = m.ellipsis(
+        fs,
+        model_text,
+        crate::kit_ui::FONT_FAMILY,
+        12.5,
+        model_avail,
+    );
+    let model_area = UiRect::new(
+        model_x,
+        head_y + (HEAD_ROW_H - 12.5) * 0.5,
+        model_avail,
+        14.0,
+    );
+    (
+        HeadRow {
+            model_area,
+            prov_chip,
+            pause_x,
+            gear_x,
+        },
+        model_fitted,
+        prov_fitted,
+    )
+}
+
+/// FR-LLM-FIX-2: подписи и ширины feature-чипов (Suggest/Graph/Agent) по
+/// замеру шрифта — ЕДИНЫЙ источник для рендера и hit-теста. Раньше ширина
+/// была `len*5.5` (эвристика) — клик-зона расходилась с отрисованным кадром.
+/// Активный чип подписывается « ✓» (как `aiSyncFeats()` прототипа); на паузе
+/// все чипы рисуются выключенными.
+fn feat_chips_measured(
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    suggest_on: bool,
+    graph_on: bool,
+    agent_on: bool,
+    paused: bool,
+) -> [(String, f32); 3] {
+    let defs = [
+        ("Suggest", suggest_on),
+        ("Graph", graph_on),
+        ("Agent", agent_on),
+    ];
+    let mut out: [(String, f32); 3] = std::array::from_fn(|_| (String::new(), 0.0f32));
+    for (i, (label, enabled)) in defs.iter().enumerate() {
+        let on = *enabled && !paused;
+        let text = if on {
+            format!("{} ✓", label)
+        } else {
+            (*label).to_string()
+        };
+        let w = FEAT_PAD_X * 2.0 + crate::kit_ui::measured_width(m, fs, &text, FEAT_FONT);
+        out[i] = (text, w);
+    }
+    out
+}
 
 impl App {
     /// FR-LLM-FIX / PRD-0010 F-7.9 (Q4): статусная панель AI — квады + тексты.
@@ -186,8 +335,10 @@ impl App {
         } else {
             model_name.to_owned()
         };
-        let provider_label =
-            crate::settings_ui::ai_provider_label(self.settings.language, active_provider);
+        // FR-LLM-FIX-2: короткая подпись провайдера для чипа статусной
+        // панели — как `aiProvLabel()` прототипа («BYOK», «ChatGPT OAuth»…).
+        // Полные подписи («BYOK (свой ключ)») остаются в настройках.
+        let provider_label = self.ai_status_prov_label(active_provider);
 
         // === Строка 1: head — точка + модель + провайдер + ⏸ + ⚙ ===========
         // head_y — верх строки; вертикально центрируем элементы внутри 24px.
@@ -210,36 +361,35 @@ impl App {
             [0.0; 4],
             DOT_SIZE / 2.0, // circle
         );
-        // Имя модели (font 12.5px, `font-weight:600`). Подпись провайдера
-        // — pill-чип правее; оставляем под модель ~ половину ширины строки
-        // минус место под кнопки (24+6+24=54) и под провайдер-чип (~60).
-        let model_max_w = content_w - DOT_SIZE - 6.0 - 60.0 - 6.0 - 54.0;
-        let model_x = content_x + DOT_SIZE + 6.0;
-        // Baseline-выравнивание: центрируем 12.5px-шрифт по 24px-строке.
-        let model_y = head_y + (HEAD_ROW_H - 12.5) * 0.5;
-        d.label_left(
-            UiRect::new(model_x, model_y, model_max_w.max(40.0), 14.0),
+        // FR-LLM-FIX-2: flex-раскладка шапки по замеру шрифта (короткий
+        // скоуп — контракт «вложенный лок FontSystem запрещён»; замер —
+        // тем же семейством/весом, что и отрисовка painter'а).
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let (head, model_fitted, prov_fitted) = head_row_layout(
+            &mut m,
+            &mut fs,
+            content_x,
+            content_w,
+            head_y,
             &model_name,
-            kit_palette.text_title,
-            12.5,
+            &provider_label,
         );
-        // Подпись провайдера (BYOK / ChatGPT / Ollama / Laya) — pill-чип
-        // (border-radius:99px, padding:1px 7px, font 9.5px).
-        let prov_chip_x = model_x + model_max_w.max(40.0) + 6.0;
-        let prov_chip_h = 14.0;
-        let prov_chip_y = head_y + (HEAD_ROW_H - prov_chip_h) * 0.5;
-        // Ширина чипа — по подписи (грубо: len*5.5 + 14 padding); clamp.
-        let prov_chip_w = (provider_label.len() as f32 * 5.5 + 14.0).clamp(48.0, 96.0);
-        let prov_chip_rect = UiRect::new(prov_chip_x, prov_chip_y, prov_chip_w, prov_chip_h);
+        // Имя модели (font 12.5px, `font-weight:600` в прототипе) —
+        // сжимается первой, ellipsis по фактической ширине области.
+        d.label_left(head.model_area, &model_fitted, kit_palette.text_title, 12.5);
+        // Подпись провайдера — pill-чип контент-ширины
+        // (border-radius:99px, padding:1px 7px, font 9.5px), flex:none.
+        let prov_chip_rect = head.prov_chip;
         let prov_chip_style =
             canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &kit_palette);
         d.control(prov_chip_rect, &prov_chip_style);
-        d.label_center(prov_chip_rect, &provider_label, prov_chip_style.text, 9.5);
+        d.label_center(prov_chip_rect, &prov_fitted, prov_chip_style.text, 9.5);
 
         // FR-LLM-FIX: кнопки ⏸/⚙ — 24×24, border-radius 6px (RADIUS_CHIP).
-        // Позиция: у правого края контента, с зазором 6px между ними.
-        let gear_x = panel[0] + panel[2] - PAD_X - HEAD_BTN_SIZE;
-        let pause_x = gear_x - 6.0 - HEAD_BTN_SIZE;
+        // Позиция — из раскладки (правый край контента, зазор 6px).
+        let gear_x = head.gear_x;
+        let pause_x = head.pause_x;
         let pause_glyph = if self.ai_paused { "▶" } else { "⏸" };
         let pause_hovered =
             point_in_rect([pause_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE], self.cursor);
@@ -276,40 +426,28 @@ impl App {
         // padding 2.5×9px, gap 5px, flex-wrap (на узких панелях чипы
         // переносятся на следующую строку — но ширины 302px хватает на 3).
         let feats_y = head_y + HEAD_ROW_H + GAP_HEAD_FEATS;
-        let feats: [(AiStatusPanelHit, &str, bool, &'static str); 3] = [
-            (
-                AiStatusPanelHit::ToggleSuggest,
-                "Suggest",
-                self.ai_suggest_enabled,
-                keys::AI_TOOLTIP_SUGGEST,
-            ),
-            (
-                AiStatusPanelHit::ToggleGraph,
-                "Graph",
-                self.ai_graph_enabled,
-                keys::AI_TOOLTIP_GRAPH,
-            ),
-            (
-                AiStatusPanelHit::ToggleAgent,
-                "Agent",
-                self.ai_agent_enabled,
-                keys::AI_TOOLTIP_AGENT,
-            ),
+        // FR-LLM-FIX-2: подписи+ширины чипов — тот же замер, что и в
+        // hit-тесте (единая функция `feat_chips_measured`).
+        let feats = feat_chips_measured(
+            &mut m,
+            &mut fs,
+            self.ai_suggest_enabled,
+            self.ai_graph_enabled,
+            self.ai_agent_enabled,
+            self.ai_paused,
+        );
+        let feats_on = [
+            self.ai_suggest_enabled,
+            self.ai_graph_enabled,
+            self.ai_agent_enabled,
         ];
         let mut chip_cursor_x = content_x;
-        for (kind, label, enabled, _tip_key) in feats.iter() {
+        for (i, (label_text, chip_w)) in feats.iter().enumerate() {
             // «on» = фича включена И не на паузе (как aiSyncFeats() прототипа).
-            let on = *enabled && !self.ai_paused;
-            // Ширина чипа — по тексту: padding 9*2 + len*5.5 (~10.5px font).
-            let label_text = if on {
-                format!("{} ✓", label)
-            } else {
-                label.to_string()
-            };
-            let chip_w = FEAT_PAD_X * 2.0 + label_text.len() as f32 * 5.5;
+            let on = feats_on[i] && !self.ai_paused;
             let chip_h = FEAT_FONT + FEAT_PAD_Y * 2.0;
-            let chip_rect = UiRect::new(chip_cursor_x, feats_y, chip_w, chip_h);
-            let hovered = point_in_rect([chip_cursor_x, feats_y, chip_w, chip_h], self.cursor);
+            let chip_rect = UiRect::new(chip_cursor_x, feats_y, *chip_w, chip_h);
+            let hovered = point_in_rect([chip_cursor_x, feats_y, *chip_w, chip_h], self.cursor);
             // FR-LLM-C: on → Selected (слот selected_fill), hovered → Hovered,
             // off → Normal. chip_style — слот заливки/рамки/текста, radius=RADIUS_PILL.
             let chip_state = if on {
@@ -323,10 +461,10 @@ impl App {
             // FR-LLM-FIX: pill-радиус переопределяем (chip_style даёт RADIUS_CHIP=6;
             // прототип — 99px). Рисуем вручную через d.rect с нужным радиусом.
             d.rect(chip_rect, chip_style.fill, chip_style.border, FEAT_RADIUS);
-            d.label_center(chip_rect, &label_text, chip_style.text, FEAT_FONT);
-            chip_cursor_x += chip_w + FEAT_GAP;
-            let _ = kind; // hit-test использует свои координаты — `kind` здесь
-                          // только для порядка перечисления (см. `ai_status_panel_hit`).
+            d.label_center(chip_rect, label_text, chip_style.text, FEAT_FONT);
+            chip_cursor_x += *chip_w + FEAT_GAP;
+            // hit-тест — та же геометрия (см. `ai_status_panel_hit`);
+            // порядок чипов = порядок ToggleSuggest/Graph/Agent в hit-enum.
         }
 
         // === Строка 3: costs — «Session: $X.XX · Day: $X.XX / $L.LL» =====
@@ -409,6 +547,22 @@ impl App {
         (quads, texts)
     }
 
+    /// FR-LLM-FIX-2: короткая подпись провайдера для чипа статусной панели —
+    /// паритет с `aiProvLabel()` прототипа ({byok:'BYOK', chatgpt:'ChatGPT
+    /// OAuth', ollama:'Ollama', laya:'Laya (local)', off:'Off'}). Полные
+    /// подписи настроек («BYOK (свой ключ)», «ChatGPT (вход)») — только в
+    /// 9-м табе; в шапке панели они раздували чип и наезжали на кнопки.
+    fn ai_status_prov_label(&self, p: canvas_llm::LlmProviderId) -> String {
+        let key = match p {
+            canvas_llm::LlmProviderId::Off => keys::AI_PROV_SHORT_OFF,
+            canvas_llm::LlmProviderId::Laya => keys::AI_PROV_SHORT_LAYA,
+            canvas_llm::LlmProviderId::Ollama => keys::AI_PROV_SHORT_OLLAMA,
+            canvas_llm::LlmProviderId::Byok => keys::AI_PROV_SHORT_BYOK,
+            canvas_llm::LlmProviderId::ChatGptOAuth => keys::AI_PROV_SHORT_CHATGPT,
+        };
+        self.tr(key).to_owned()
+    }
+
     /// FR-LLM-FIX / PRD-0010 F-7.9: rect панели AI-статуса (для hit-тестов
     /// и клип-области рендера). Учитывает paused-state (панель выше на
     /// `AI_STATUS_PAUSED_EXTRA` когда ai_paused). Возвращает `None`, если
@@ -447,9 +601,10 @@ impl App {
         let content_x = panel[0] + PAD_X;
         let head_y = panel[1] + PAD_TOP;
 
-        // FR-LLM-FIX: кнопки ⏸/⚙ в шапке — 24×24, правый край контента.
+        // FR-LLM-FIX: кнопки ⏸/⚙ в шапке — 24×24, правый край контента
+        // (та же математика, что в `head_row_layout`).
         let gear_x = panel[0] + panel[2] - PAD_X - HEAD_BTN_SIZE;
-        let pause_x = gear_x - 6.0 - HEAD_BTN_SIZE;
+        let pause_x = gear_x - HEAD_GAP - HEAD_BTN_SIZE;
         if point_in_rect([pause_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE], point) {
             return Some(AiStatusPanelHit::PauseToggle);
         }
@@ -457,32 +612,30 @@ impl App {
             return Some(AiStatusPanelHit::OpenSettings);
         }
 
-        // FR-LLM-FIX: чипы Suggest/Graph/Agent — pill-форма, ширина по
-        // тексту + padding. Перебираем в том же порядке, что и в рендере.
+        // FR-LLM-FIX-2: чипы Suggest/Graph/Agent — тот же замер шрифта, что
+        // и в рендере (`feat_chips_measured`): клик-зона = отрисованный кадр.
         let feats_y = head_y + HEAD_ROW_H + GAP_HEAD_FEATS;
-        let feats: [(&str, bool); 3] = [
-            ("Suggest", self.ai_suggest_enabled),
-            ("Graph", self.ai_graph_enabled),
-            ("Agent", self.ai_agent_enabled),
-        ];
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let feats = feat_chips_measured(
+            &mut m,
+            &mut fs,
+            self.ai_suggest_enabled,
+            self.ai_graph_enabled,
+            self.ai_agent_enabled,
+            self.ai_paused,
+        );
         let mut chip_cursor_x = content_x;
-        for (i, (label, enabled)) in feats.iter().enumerate() {
-            let on = *enabled && !self.ai_paused;
-            let label_text = if on {
-                format!("{} ✓", label)
-            } else {
-                label.to_string()
-            };
-            let chip_w = FEAT_PAD_X * 2.0 + label_text.len() as f32 * 5.5;
+        for (i, (_label_text, chip_w)) in feats.iter().enumerate() {
             let chip_h = FEAT_FONT + FEAT_PAD_Y * 2.0;
-            if point_in_rect([chip_cursor_x, feats_y, chip_w, chip_h], point) {
+            if point_in_rect([chip_cursor_x, feats_y, *chip_w, chip_h], point) {
                 return Some(match i {
                     0 => AiStatusPanelHit::ToggleSuggest,
                     1 => AiStatusPanelHit::ToggleGraph,
                     _ => AiStatusPanelHit::ToggleAgent,
                 });
             }
-            chip_cursor_x += chip_w + FEAT_GAP;
+            chip_cursor_x += *chip_w + FEAT_GAP;
         }
 
         // Клик мимо кнопок — клик по телу панели (не проваливается под
@@ -637,5 +790,122 @@ mod tests {
     #[test]
     fn feature_chip_radius_uses_token() {
         assert_eq!(FEAT_RADIUS, canvas_core::tokens::RADIUS_PILL);
+    }
+
+    /// FR-LLM-FIX-2: flex-раскладка шапки — элементы НЕ пересекаются на
+    /// самых широких комбинациях (кириллица + длинная модель + длинный чип).
+    /// Регрессия на скриншот владельца: чип «BYOK (свой ключ)» (ширина по
+    /// эвристике len*5.5) наезжал на ⏸/⚙, модель стояла фиксированной
+    /// шириной в середине строки. Замер — реальным шрифтом кита.
+    #[test]
+    fn head_row_no_overlap_with_long_labels() {
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let content_w = AI_STATUS_W - 2.0 * PAD_X; // 280
+        let cases = [
+            ("не выбрана", "BYOK"),
+            ("glm-5.3-flash", "ChatGPT OAuth"),
+            // Длинная модель — обязана сжаться ellipsis'ом, не вытеснить чип.
+            ("nemotron-super:free — $0", "ChatGPT OAuth"),
+            ("laya-1.13", "Laya (local)"),
+            ("qwen2.5-72b", "Self-hosted"),
+        ];
+        for (model, prov) in cases {
+            let (head, fitted, prov_fitted) =
+                head_row_layout(&mut m, &mut fs, 0.0, content_w, 0.0, model, prov);
+            // Кнопки ⏸/⚙ — внутри контента.
+            assert!(head.gear_x + HEAD_BTN_SIZE <= content_w + 0.01, "gear out");
+            assert!(head.pause_x > head.gear_x - HEAD_GAP - HEAD_BTN_SIZE - 0.01);
+            // Чип левее кнопок (gap), модель левее чипа (gap) — нет наездов.
+            assert!(
+                head.prov_chip.x + head.prov_chip.w <= head.pause_x + 0.01,
+                "prov chip {prov} overlaps pause btn"
+            );
+            assert!(
+                head.model_area.x + head.model_area.w <= head.prov_chip.x + 0.01,
+                "model area overlaps prov chip ({model} / {prov})"
+            );
+            // Обрезанный текст модели помещается в свою область.
+            let fitted_w = m.width_of(&mut fs, &fitted, crate::kit_ui::FONT_FAMILY, 12.5);
+            assert!(
+                fitted_w <= head.model_area.w + 1.0,
+                "model '{fitted}' wider than area"
+            );
+            // ОТРИСОВАННЫЙ текст чипа (с ellipsis при клампе) помещается В чип
+            // — кириллица не вылезает за границы чипа.
+            let prov_fitted_w = m.width_of(&mut fs, &prov_fitted, crate::kit_ui::FONT_FAMILY, 9.5);
+            assert!(
+                prov_fitted_w + 2.0 <= head.prov_chip.w,
+                "prov '{prov_fitted}' wider than chip"
+            );
+        }
+    }
+
+    /// FR-LLM-FIX-2: длинная локаль чипа (кламп 120px) — текст обрезается
+    /// «…» и остаётся внутри чипа (защита от будущих переводов).
+    #[test]
+    fn head_row_prov_chip_ellipsizes_overlong_label() {
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let content_w = AI_STATUS_W - 2.0 * PAD_X;
+        let long = "очень длинная подпись провайдера в локали";
+        let (head, _, prov_fitted) =
+            head_row_layout(&mut m, &mut fs, 0.0, content_w, 0.0, "glm-5.3-flash", long);
+        // Чип сжат до максимума, текст — внутри (с «…»).
+        assert_eq!(head.prov_chip.w, PROV_CHIP_MAX_W);
+        assert!(prov_fitted != long, "overlong label must be ellipsized");
+        assert!(prov_fitted.ends_with('\u{2026}'));
+        let fitted_w = m.width_of(&mut fs, &prov_fitted, crate::kit_ui::FONT_FAMILY, 9.5);
+        assert!(fitted_w + 2.0 <= head.prov_chip.w);
+    }
+
+    /// FR-LLM-FIX-2: короткая модель не съедает строку — при коротких
+    /// текстах распорка остаётся (чип+кнопки не растягиваются на всю ширину).
+    #[test]
+    fn head_row_keeps_spacer_for_short_labels() {
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let content_w = AI_STATUS_W - 2.0 * PAD_X;
+        let (head, _, _) = head_row_layout(
+            &mut m,
+            &mut fs,
+            0.0,
+            content_w,
+            0.0,
+            "glm-5.3-flash",
+            "BYOK",
+        );
+        // model_area меньше доступного (нет растяжения) — CSS: модель
+        // content-width, распорка `.ais-sp` занимает остаток.
+        let model_w = m.width_of(&mut fs, "glm-5.3-flash", crate::kit_ui::FONT_FAMILY, 12.5);
+        assert!(head.model_area.w < content_w - HEAD_BTN_SIZE * 2.0 - 40.0);
+        assert!(model_w <= head.model_area.w + 1.0);
+    }
+
+    /// FR-LLM-FIX-2: feature-чипы — замер вместо эвристики len*5.5; три чипа
+    /// (все активны, с « ✓») помещаются в строку контента с зазорами.
+    #[test]
+    fn feat_chips_fit_content_row() {
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let content_w = AI_STATUS_W - 2.0 * PAD_X;
+        let chips = feat_chips_measured(&mut m, &mut fs, true, true, true, false);
+        let total: f32 = chips.iter().map(|(_, w)| *w).sum::<f32>() + FEAT_GAP * 2.0;
+        assert!(
+            total <= content_w,
+            "chips row {total} exceeds content {content_w}"
+        );
+        // Активные чипы подписаны « ✓» (как aiSyncFeats() прототипа).
+        assert_eq!(chips[0].0, "Suggest ✓");
+        assert_eq!(chips[2].0, "Agent ✓");
+        // Пауза — все чипы выключенные (без галочки).
+        let paused = feat_chips_measured(&mut m, &mut fs, true, true, true, true);
+        assert_eq!(paused[0].0, "Suggest");
+        assert_eq!(paused[2].0, "Agent");
+        // Замер не уже эвристики для кириллических глифов « ✓» — ширины
+        // положительны и разумны (чип не схлопнулся, не распух).
+        for (_, w) in chips.iter() {
+            assert!(*w > FEAT_PAD_X * 2.0 && *w < content_w);
+        }
     }
 }
