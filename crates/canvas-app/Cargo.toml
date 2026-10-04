@@ -31,6 +31,12 @@ canvas-widgets.workspace = true
 # ядро без ML/сетевых зависимостей; транспорт L1 включается feature-флагом
 # ниже (не входит в дефолт и в wasm-гейт)
 canvas-suggest.workspace = true
+# FR-LLM-B / PRD-0010 F-7: LLM-слой — типы `LlmSettings`/`LlmProviderId`/
+# `DataResidency` читаются из `Settings` для отрисовки 9-го таба настроек и
+# статусной панели. Дефолтная сборка без сети (ADR-0011 wasm-гейт); serde-
+# деривы включаются за feature `serde` — нужно для персиста `LlmSettings`
+# в `config.toml` через `Settings::save`.
+canvas-llm = { workspace = true, features = ["serde"] }
 anyhow.workspace = true
 # FR-053 (U3 PRD-0009 F-6): тип FontSystem в сигнатурах раскладки пилотов
 # (TextMeasurer canvas-ui принимает &mut FontSystem — владелец инстанса

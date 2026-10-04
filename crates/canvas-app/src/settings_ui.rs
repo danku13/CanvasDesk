@@ -202,12 +202,32 @@ pub enum SettingsRow {
     SchemeCatFramework,
     SchemeCatPlanning,
     SchemeCatOnboarding,
+
+    // FR-LLM-B / PRD-0010 F-7 (Q2): per-feature провайдеры для 9-го таба
+    // «AI и модели». Dropdown-строки (RowKind::Dropdown), опции —
+    // LlmProviderId для соответствующей фичи (Suggest без ChatGPT OAuth).
+    /// Suggest — LLM-подсказки шаблонов и custom-ноды.
+    AiProvSuggest,
+    /// Graph Builder — генерация графов из текста.
+    AiProvGraph,
+    /// Agent Panel — агентные операции через MCP.
+    AiProvAgent,
+    /// BYOK-модель (dropdown из хардкод-списка).
+    AiModel,
+    /// Data residency — radio Local/Cloud/SelfHosted (dropdown-цикл).
+    AiResidency,
+    /// Confidence threshold (dropdown-цикл по пресетам 0..1).
+    AiConfidenceThreshold,
+    /// Cost limit (dropdown-цикл по пресетам $0.25..$5.00).
+    AiCostLimit,
+    /// Telemetry opt-in (тумблер).
+    AiTelemetry,
 }
 
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 43] = [
+pub const SETTINGS_ROWS: [SettingsRow; 51] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -254,6 +274,15 @@ pub const SETTINGS_ROWS: [SettingsRow; 43] = [
     SettingsRow::SchemeCatFramework,
     SettingsRow::SchemeCatPlanning,
     SettingsRow::SchemeCatOnboarding,
+    // FR-LLM-B / PRD-0010 F-7: 9-й таб «AI и модели»
+    SettingsRow::AiProvSuggest,
+    SettingsRow::AiProvGraph,
+    SettingsRow::AiProvAgent,
+    SettingsRow::AiModel,
+    SettingsRow::AiResidency,
+    SettingsRow::AiConfidenceThreshold,
+    SettingsRow::AiCostLimit,
+    SettingsRow::AiTelemetry,
 ];
 
 /// Таб модалки (FR-039): иконка + ключ заголовка + строки. Тема —
@@ -274,7 +303,7 @@ pub struct SettingsTab {
 /// «Канвас» — сетка и оверлей узких мест; «Связи и порты» — связи/порты/
 /// фокус + построчные точки выхода FR-025; «Внешний вид» — карточки темы
 /// и язык FR-040. FR-038 дополнит модель пятым табом «Snap».
-pub const SETTINGS_TABS: [SettingsTab; 8] = [
+pub const SETTINGS_TABS: [SettingsTab; 9] = [
     SettingsTab {
         title_key: keys::TAB_GENERAL,
         icon: "◎",
@@ -377,6 +406,31 @@ pub const SETTINGS_TABS: [SettingsTab; 8] = [
             SettingsRow::Language,
         ],
     },
+    SettingsTab {
+        // FR-LLM-B / PRD-0010 F-7: 9-й таб «AI и модели» — per-feature
+        // провайдеры, BYOK-модель, лимиты, data residency, телеметрия.
+        // BYOK-ключ и self-hosted endpoint — отдельные поля рисуются в
+        // `ai_settings_extra_overlay` (не dropdown-строки). Строки ниже —
+        // упорядочены по секциям прототипа (Q2 → Q4/Q7 → Q5 → Q7 telemetry).
+        title_key: keys::TAB_AI,
+        icon: "✦",
+        theme_cards: false,
+        rows: &[
+            // §1 Per-feature провайдер (Q2)
+            SettingsRow::AiProvSuggest,
+            SettingsRow::AiProvGraph,
+            SettingsRow::AiProvAgent,
+            // §2 BYOK — модель (API-ключ рисуется отдельно — не строка)
+            SettingsRow::AiModel,
+            // §4 Лимиты и качество (Q7)
+            SettingsRow::AiCostLimit,
+            SettingsRow::AiConfidenceThreshold,
+            // §5 Data residency (Q5)
+            SettingsRow::AiResidency,
+            // §6 Телеметрия (opt-in, Q7)
+            SettingsRow::AiTelemetry,
+        ],
+    },
 ];
 
 /// Ключ лейбла строки (значение показывает контрол — лейбл без «: вкл»,
@@ -428,6 +482,15 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::SchemeCatFramework => keys::ROW_SCHEMECAT_FRAMEWORK,
         SettingsRow::SchemeCatPlanning => keys::ROW_SCHEMECAT_PLANNING,
         SettingsRow::SchemeCatOnboarding => keys::ROW_SCHEMECAT_ONBOARDING,
+        // FR-LLM-B / PRD-0010 F-7: таб «AI и модели» (Q2+Q5+Q7)
+        SettingsRow::AiProvSuggest => keys::AI_ROW_PROV_SUGGEST,
+        SettingsRow::AiProvGraph => keys::AI_ROW_PROV_GRAPH,
+        SettingsRow::AiProvAgent => keys::AI_ROW_PROV_AGENT,
+        SettingsRow::AiModel => keys::AI_ROW_MODEL,
+        SettingsRow::AiResidency => keys::AI_GRP_RESIDENCY,
+        SettingsRow::AiConfidenceThreshold => keys::AI_CONF_THR_LABEL,
+        SettingsRow::AiCostLimit => keys::AI_COST_LIMIT_LABEL,
+        SettingsRow::AiTelemetry => keys::AI_ROW_TELEMETRY,
     }
 }
 
@@ -480,6 +543,15 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         | SettingsRow::SchemeCatFramework
         | SettingsRow::SchemeCatPlanning
         | SettingsRow::SchemeCatOnboarding => keys::DESC_SCHEMECAT,
+        // FR-LLM-B / PRD-0010 F-7: описания строк таба «AI и модели»
+        SettingsRow::AiProvSuggest => keys::AI_DESC_PROV_SUGGEST,
+        SettingsRow::AiProvGraph => keys::AI_DESC_PROV_GRAPH,
+        SettingsRow::AiProvAgent => keys::AI_DESC_PROV_AGENT,
+        SettingsRow::AiModel => keys::AI_DESC_MODEL,
+        SettingsRow::AiResidency => keys::AI_DESC_RESIDENCY,
+        SettingsRow::AiConfidenceThreshold => keys::AI_DESC_CONF_THRESHOLD,
+        SettingsRow::AiCostLimit => keys::AI_DESC_COST_LIMIT,
+        SettingsRow::AiTelemetry => keys::AI_DESC_TELEMETRY,
     }
 }
 
@@ -512,7 +584,15 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::IconStyle
         // FR-087: роль — dropdown реестра ролей
         | SettingsRow::Role
-        | SettingsRow::SuggestEngine => RowKind::Dropdown,
+        | SettingsRow::SuggestEngine
+        // FR-LLM-B: dropdown-строки таба «AI и модели»
+        | SettingsRow::AiProvSuggest
+        | SettingsRow::AiProvGraph
+        | SettingsRow::AiProvAgent
+        | SettingsRow::AiModel
+        | SettingsRow::AiResidency
+        | SettingsRow::AiConfidenceThreshold
+        | SettingsRow::AiCostLimit => RowKind::Dropdown,
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
@@ -542,7 +622,9 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         // FR-089: согласия телеметрии — bool-поля Settings
         | SettingsRow::TelemetryCounter
         | SettingsRow::TelemetryAnalytics
-        | SettingsRow::DragPushRebase => RowKind::Toggle,
+        | SettingsRow::DragPushRebase
+        // FR-LLM-B: тумблер телеметрии AI (bool-поле LlmSettings)
+        | SettingsRow::AiTelemetry => RowKind::Toggle,
     }
 }
 
@@ -655,9 +737,22 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         // FR-089: согласия — состояние видно по pill-ручке
         | SettingsRow::TelemetryCounter
         | SettingsRow::TelemetryAnalytics
-        | SettingsRow::DragPushRebase => None,
+        | SettingsRow::DragPushRebase
+        // FR-LLM-B: тумблер AI-телеметрии — состояние по pill-ручке
+        | SettingsRow::AiTelemetry => None,
         // FR-ICONS: текущий набор — локализованное имя варианта.
         SettingsRow::IconStyle => Some(i18n::tr(language, icon_style_key(settings.icon_style)).to_owned()),
+        // FR-LLM-B / PRD-0010 F-7: значения dropdown-строк таба «AI и модели».
+        // Локализованные имена провайдеров / моделей / режимов residency.
+        SettingsRow::AiProvSuggest => Some(ai_provider_label(language, settings.llm.provider_suggest)),
+        SettingsRow::AiProvGraph => Some(ai_provider_label(language, settings.llm.provider_graph)),
+        SettingsRow::AiProvAgent => Some(ai_provider_label(language, settings.llm.provider_agent)),
+        SettingsRow::AiModel => Some(ai_model_current_label(&settings.llm)),
+        SettingsRow::AiResidency => Some(ai_residency_label(language, settings.llm.data_residency)),
+        SettingsRow::AiConfidenceThreshold => {
+            Some(format!("{:.2}", settings.llm.confidence_threshold))
+        }
+        SettingsRow::AiCostLimit => Some(format!("${:.2} / день", settings.llm.cost_limit_daily)),
     }
 }
 
@@ -875,7 +970,9 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         // FR-089: согласия — dropdown не открывает (Toggle)
         | SettingsRow::TelemetryCounter
         | SettingsRow::TelemetryAnalytics
-        | SettingsRow::DragPushRebase => Vec::new(),
+        | SettingsRow::DragPushRebase
+        // FR-LLM-B: тумблер телеметрии AI — dropdown не открывает (Toggle)
+        | SettingsRow::AiTelemetry => Vec::new(),
         // FR-ICONS: порядок опций = порядок IconStyle::ALL (инвариант, тест) =
         // порядку apply_dropdown_value (тест). Локализованные имена наборов.
         SettingsRow::IconStyle => IconStyle::ALL
@@ -887,7 +984,142 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
                 )
             })
             .collect(),
+        // FR-LLM-B / PRD-0010 F-7: опции dropdown-строк таба «AI и модели».
+        // Порядок = apply_dropdown_value (инвариант, тест). Suggest без
+        // ChatGPT (Q2); graph/agent без Laya (LlmProviderId constraint).
+        SettingsRow::AiProvSuggest => [
+            canvas_llm::LlmProviderId::Byok,
+            canvas_llm::LlmProviderId::Ollama,
+            canvas_llm::LlmProviderId::Laya,
+            canvas_llm::LlmProviderId::Off,
+        ]
+        .into_iter()
+        .map(|p| (ai_provider_label(language, p), settings.llm.provider_suggest == p))
+        .collect(),
+        SettingsRow::AiProvGraph => [
+            canvas_llm::LlmProviderId::ChatGptOAuth,
+            canvas_llm::LlmProviderId::Byok,
+            canvas_llm::LlmProviderId::Ollama,
+            canvas_llm::LlmProviderId::Off,
+        ]
+        .into_iter()
+        .map(|p| (ai_provider_label(language, p), settings.llm.provider_graph == p))
+        .collect(),
+        SettingsRow::AiProvAgent => [
+            canvas_llm::LlmProviderId::ChatGptOAuth,
+            canvas_llm::LlmProviderId::Byok,
+            canvas_llm::LlmProviderId::Ollama,
+            canvas_llm::LlmProviderId::Off,
+        ]
+        .into_iter()
+        .map(|p| (ai_provider_label(language, p), settings.llm.provider_agent == p))
+        .collect(),
+        SettingsRow::AiModel => AI_BYOK_MODELS
+            .iter()
+            .map(|m| (m.display_name.to_owned(), settings.llm.model == m.id))
+            .collect(),
+        SettingsRow::AiResidency => [
+            canvas_llm::DataResidency::Local,
+            canvas_llm::DataResidency::Cloud,
+            canvas_llm::DataResidency::SelfHosted,
+        ]
+        .into_iter()
+        .map(|r| (ai_residency_label(language, r), settings.llm.data_residency == r))
+        .collect(),
+        SettingsRow::AiConfidenceThreshold => AI_CONF_PRESETS
+            .iter()
+            .map(|&v| (format!("{:.2}", v), (settings.llm.confidence_threshold - v).abs() < 1e-6))
+            .collect(),
+        SettingsRow::AiCostLimit => AI_COST_LIMIT_PRESETS
+            .iter()
+            .map(|&v| (format!("${:.2} / день", v), (settings.llm.cost_limit_daily - v).abs() < 1e-6))
+            .collect(),
     }
+}
+
+// FR-LLM-B / PRD-0010 F-7: вспомогательные типы/функции для таба «AI и модели».
+
+/// BYOK-модель: id + отображаемое имя (хардкод-список из прототипа F-7.2 —
+/// `glm-5.3-flash`, `glm-5.2`, `deepseek-v3.2`, `kimi-k2.5`,
+/// `nemotron-super:free`). В продукте список берётся из `/v1/models` после
+/// health-check; до проверки ключа — этот эталон.
+#[derive(Debug, Clone, Copy)]
+pub struct AiByokModel {
+    /// Идентификатор модели (`LlmProvider::models()[].id`).
+    pub id: &'static str,
+    /// Отображаемое имя (в dropdown кнопке).
+    pub display_name: &'static str,
+}
+
+/// Хардкод-список BYOK-моделей (F-7.2 прототипа). Порядок = dropdown_options
+/// (инвариант, тест) = apply_dropdown_value.
+pub const AI_BYOK_MODELS: [AiByokModel; 5] = [
+    AiByokModel {
+        id: "glm-5.3-flash",
+        display_name: "glm-5.3-flash",
+    },
+    AiByokModel {
+        id: "glm-5.2",
+        display_name: "glm-5.2",
+    },
+    AiByokModel {
+        id: "deepseek-v3.2",
+        display_name: "deepseek-v3.2",
+    },
+    AiByokModel {
+        id: "kimi-k2.5",
+        display_name: "kimi-k2.5",
+    },
+    AiByokModel {
+        id: "nemotron-super:free",
+        display_name: "nemotron-super:free",
+    },
+];
+
+/// Пресеты confidence threshold (F-7.5): 0.0 / 0.25 / 0.5 / 0.75 / 1.0.
+/// Шаг слайдера прототипа — 0.05, но пресеты в dropdown выбраны по краям и
+/// середине, чтобы давать понятные «режимы» (показывать всё / только
+/// уверенные / только очень уверенные). Порядок = apply_dropdown_value.
+pub const AI_CONF_PRESETS: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
+
+/// Пресеты дневного лимита cost (F-7.4): $0.25 / $0.50 / $1.00 / $2.00 /
+/// $5.00. Шаг слайдера прототипа — $0.25; пресеты выбраны как опорные точки
+/// «минимум / экономно / по умолчанию / активно / без ограничений по сути».
+pub const AI_COST_LIMIT_PRESETS: [f64; 5] = [0.25, 0.50, 1.00, 2.00, 5.00];
+
+/// Локализованное имя провайдера (LlmProviderId → i18n-ключ → таблица).
+/// Используется в dropdown_value и dropdown_options (инвариант: та же
+/// функция для кнопки и пунктов меню — «ввод = тому, что видно»).
+pub fn ai_provider_label(language: Language, provider: canvas_llm::LlmProviderId) -> String {
+    let key = match provider {
+        canvas_llm::LlmProviderId::Off => keys::AI_OPT_OFF,
+        canvas_llm::LlmProviderId::Laya => keys::AI_OPT_LAYA,
+        canvas_llm::LlmProviderId::Ollama => keys::AI_OPT_OLLAMA,
+        canvas_llm::LlmProviderId::Byok => keys::AI_OPT_BYOK,
+        canvas_llm::LlmProviderId::ChatGptOAuth => keys::AI_OPT_CHATGPT,
+    };
+    i18n::tr(language, key).to_owned()
+}
+
+/// Локализованное имя режима data residency.
+pub fn ai_residency_label(language: Language, residency: canvas_llm::DataResidency) -> String {
+    let key = match residency {
+        canvas_llm::DataResidency::Local => keys::AI_RESIDENCY_LOCAL,
+        canvas_llm::DataResidency::Cloud => keys::AI_RESIDENCY_CLOUD,
+        canvas_llm::DataResidency::SelfHosted => keys::AI_RESIDENCY_SELFHOST,
+    };
+    i18n::tr(language, key).to_owned()
+}
+
+/// Отображаемое имя текущей BYOK-модели. Если `settings.llm.model` пустой
+/// или не сопоставлен ни с одной моделью из [`AI_BYOK_MODELS`] — «по
+/// умолчанию» (первая модель списка, glm-5.3-flash).
+fn ai_model_current_label(llm: &canvas_llm::LlmSettings) -> String {
+    AI_BYOK_MODELS
+        .iter()
+        .find(|m| m.id == llm.model)
+        .map(|m| m.display_name.to_owned())
+        .unwrap_or_else(|| AI_BYOK_MODELS[0].display_name.to_owned())
 }
 
 /// FR-ICONS: i18n-ключ локализованного имени варианта `IconStyle`.
@@ -1025,7 +1257,9 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         | SettingsRow::SchemeCatOnboarding
         // FR-089: согласия — apply_toggle_row (App), не dropdown
         | SettingsRow::TelemetryCounter
-        | SettingsRow::TelemetryAnalytics => {}
+        | SettingsRow::TelemetryAnalytics
+        // FR-LLM-B: тумблер телеметрии AI — apply_toggle_row (App), не dropdown
+        | SettingsRow::AiTelemetry => {}
         // FR-ICONS: индекс в `IconStyle::ALL` (порядок = dropdown_options,
         // инвариант теста). Вне диапазона — без изменений (как остальные).
         SettingsRow::IconStyle => {
@@ -1042,6 +1276,66 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
                 settings.role = role.id.to_string();
                 settings.template_categories = None;
                 settings.scheme_categories = None;
+            }
+        }
+        // FR-LLM-B / PRD-0010 F-7: применение выбора в табе «AI и модели».
+        // Порядок индексов = dropdown_options (инвариант, тест).
+        SettingsRow::AiProvSuggest => {
+            let order = [
+                canvas_llm::LlmProviderId::Byok,
+                canvas_llm::LlmProviderId::Ollama,
+                canvas_llm::LlmProviderId::Laya,
+                canvas_llm::LlmProviderId::Off,
+            ];
+            if let Some(&p) = order.get(index) {
+                settings.llm.provider_suggest = p;
+            }
+        }
+        SettingsRow::AiProvGraph => {
+            let order = [
+                canvas_llm::LlmProviderId::ChatGptOAuth,
+                canvas_llm::LlmProviderId::Byok,
+                canvas_llm::LlmProviderId::Ollama,
+                canvas_llm::LlmProviderId::Off,
+            ];
+            if let Some(&p) = order.get(index) {
+                settings.llm.provider_graph = p;
+            }
+        }
+        SettingsRow::AiProvAgent => {
+            let order = [
+                canvas_llm::LlmProviderId::ChatGptOAuth,
+                canvas_llm::LlmProviderId::Byok,
+                canvas_llm::LlmProviderId::Ollama,
+                canvas_llm::LlmProviderId::Off,
+            ];
+            if let Some(&p) = order.get(index) {
+                settings.llm.provider_agent = p;
+            }
+        }
+        SettingsRow::AiModel => {
+            if let Some(m) = AI_BYOK_MODELS.get(index) {
+                settings.llm.model = m.id.to_string();
+            }
+        }
+        SettingsRow::AiResidency => {
+            let order = [
+                canvas_llm::DataResidency::Local,
+                canvas_llm::DataResidency::Cloud,
+                canvas_llm::DataResidency::SelfHosted,
+            ];
+            if let Some(&r) = order.get(index) {
+                settings.llm.data_residency = r;
+            }
+        }
+        SettingsRow::AiConfidenceThreshold => {
+            if let Some(&v) = AI_CONF_PRESETS.get(index) {
+                settings.llm.confidence_threshold = v;
+            }
+        }
+        SettingsRow::AiCostLimit => {
+            if let Some(&v) = AI_COST_LIMIT_PRESETS.get(index) {
+                settings.llm.cost_limit_daily = v;
             }
         }
     }
@@ -1919,6 +2213,21 @@ mod tests {
                 SettingsRow::Language
             ]
         );
+        // FR-LLM-B / PRD-0010 F-7: 9-й таб «AI и модели» — 8 строк (3
+        // провайдера + модель + 2 лимита + residency + телеметрия).
+        assert_eq!(
+            SETTINGS_TABS[8].rows,
+            &[
+                SettingsRow::AiProvSuggest,
+                SettingsRow::AiProvGraph,
+                SettingsRow::AiProvAgent,
+                SettingsRow::AiModel,
+                SettingsRow::AiCostLimit,
+                SettingsRow::AiConfidenceThreshold,
+                SettingsRow::AiResidency,
+                SettingsRow::AiTelemetry,
+            ]
+        );
     }
 
     /// Инвариант локализации (FR-039 §5): у каждой строки есть ключи
@@ -2039,6 +2348,13 @@ mod tests {
                     let _ = defaults.telemetry_counter;
                     let _ = defaults.telemetry_analytics;
                 }
+                // FR-LLM-B: AI-телеметрия — bool-поле LlmSettings (Toggle);
+                // остальные строки таба «AI и модели» — Dropdown (проверка
+                // ниже в отдельном тесте `ai_tab_dropdowns_roundtrip`).
+                SettingsRow::AiTelemetry => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.llm.telemetry_opt_in;
+                }
                 SettingsRow::ButtonCorner
                 | SettingsRow::GridStyle
                 | SettingsRow::GridDensity
@@ -2055,7 +2371,15 @@ mod tests {
                 // FR-079 (S3): dropdown «Движок подсказок»
                 | SettingsRow::SuggestEngine
                 // FR-087: dropdown «Роль» (реестр canvas_core::roles)
-                | SettingsRow::Role => {
+                | SettingsRow::Role
+                // FR-LLM-B: dropdown-строки таба «AI и модели»
+                | SettingsRow::AiProvSuggest
+                | SettingsRow::AiProvGraph
+                | SettingsRow::AiProvAgent
+                | SettingsRow::AiModel
+                | SettingsRow::AiResidency
+                | SettingsRow::AiConfidenceThreshold
+                | SettingsRow::AiCostLimit => {
                     assert_eq!(row_kind(row), RowKind::Dropdown);
                 }
             }

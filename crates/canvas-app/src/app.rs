@@ -19,7 +19,9 @@ use std::time::Duration;
 use crate::docs_ui;
 use crate::hints_ui;
 use crate::i18n::{self, keys};
-use crate::onboarding_ui::{self, OnboardingButton, OnboardingState};
+use crate::onboarding_ui::{
+    self, AiOnboardingChoice, AiOnboardingState, OnboardingButton, OnboardingState,
+};
 use crate::palette::{
     color_to_rgba, icon_quads, icon_text, palette_bar_size, palette_groups, palette_hit,
     palette_layout, palette_origin, template_update_group, PaletteAction, PaletteHit, PaletteHover,
@@ -149,15 +151,19 @@ use canvas_scene::{
 /// (index.html, `__cdTelemetry.track`) + `surface_opened` по дифу реестра
 /// поверхностей. `pub` — вызовы из canvas-web (события экспорта).
 pub mod telemetry;
+/// FR-052 (этап U2 PRD-0009, F-11): сквозной layout-линт полного кадра — CI-гейт G4.
+#[cfg(test)]
+mod ui_layout_lint;
 /// FR-052 (этап U2 PRD-0009): реестр поверхностей экрана — единый диспетчер.
 /// Дочерний модуль `app`: доступ к приватным полям `App` (снимок состояния
 /// на кадр). Декларации поверхностей (слой/capture/scope/деградация),
 /// сборка `UiFrame` (hit-rect'ы из тех же layout-функций, что у ввода и
 /// отрисовки), владелец клавиатуры из `esc_stack`, draw-полосы.
 pub mod ui_registry;
-// FR-054 (U5 PRD-0009, F-11): сквозной layout-линт полного кадра — CI-гейт G4.
-#[cfg(test)]
-mod ui_layout_lint;
+
+/// FR-LLM-B / PRD-0010 F-7.9 (Q4): AI status panel — правый нижний угол,
+/// над миникартой. Владелец: Stream B. Не трогают другие потоки.
+mod ai_status_panel;
 
 mod explain;
 /// FR-076: экспорт самодостаточного HTML («артефакт защиты», GAP-01) —
@@ -1070,6 +1076,33 @@ pub struct App {
     /// при клампе высоты карточки к окну контент ужимается прокруткой
     /// (футер с CTA всегда видим). Сброс — при смене шага/открытии тура.
     onboarding_scroll: canvas_ui::kit::ScrollState,
+    /// FR-LLM-B / PRD-0010 F-8: экран онбординга AI-режима (Local/Cloud/
+    /// Self-hosted) — модальный оверлей первого запуска ИИ-функций.
+    /// Открывается пунктом «Онбординг AI» из меню «?» либо триггером
+    /// продукта после `onboarding_done`. `None` — экран закрыт.
+    ai_onboarding: Option<AiOnboardingState>,
+    /// FR-LLM-B / PRD-0010 F-7.9 (Q4): AI status panel — toggle pause всех
+    /// AI-функций (спас-кнопка ⏸). `true` — ИИ-запросы отклоняются без
+    /// диалога; панель показывает «AI на паузе». Переключается кликом по
+    /// кнопке ⏸/▶ в шапке панели. Persists in-memory only (между запусками
+    /// сбрасывается — экстренная остановка, не настройка).
+    ai_paused: bool,
+    /// FR-LLM-B / PRD-0010 F-7.4 (Q4): накопительный cost за сессию (USD).
+    /// Инкрементируется Stream C/D после каждого LLM-запроса через
+    /// `actual_cost()`. Сбрасывается при закрытии канваса. Здесь —
+    /// read-only отображение в статусной панели (`ai_status_panel.rs`).
+    ai_cost_session: f64,
+    /// FR-LLM-B / PRD-0010 F-7.4 (Q7): накопительный cost за день (USD).
+    /// Инкрементируется Stream C/D; сбрасывается при смене даты. При
+    /// достижении 80% лимита — диалог расширения, 100% — LLM-запросы
+    /// отклоняются. Здесь — read-only отображение.
+    ai_cost_day: f64,
+    #[allow(dead_code)] // FR-LLM-B: used by Stream D (ChatGPT OAuth), read-only here
+    /// FR-LLM-B / PRD-0010 F-7.3 (Q2): локальный счётчик rate-limit подписки
+    /// ChatGPT (used/total за скользящее окно 3 часа). Инкрементируется
+    /// Stream D после каждого ChatGPT-запроса; 0 → fallback на BYOK.
+    /// Здесь — read-only отображение в табе настроек AI.
+    ai_chatgpt_rate_used: u32,
     /// Превью зоны дропа (T9): план вставки на время DragOver.
     drop_preview: Option<DropPreview>,
     /// Модальный диалог T21 (установка/удаление пакета): глушит ввод канваса.
@@ -1533,6 +1566,14 @@ impl App {
             docs: None,
             onboarding: show_onboarding.then(OnboardingState::default),
             onboarding_scroll: canvas_ui::kit::ScrollState::default(),
+            // FR-LLM-B: AI-онбординг/пауза/cost — стартуют выключенными
+            // (онбординг открывается пунктом меню «?» или триггером продукта;
+            // cost инкрементируется Stream C/D после запросов).
+            ai_onboarding: None,
+            ai_paused: false,
+            ai_cost_session: 0.0,
+            ai_cost_day: 0.0,
+            ai_chatgpt_rate_used: 0,
             drop_preview: None,
             dialog: None,
             toast: None,

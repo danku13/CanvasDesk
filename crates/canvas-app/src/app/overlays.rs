@@ -3683,6 +3683,298 @@ impl App {
         (quads, texts)
     }
 
+    /// FR-LLM-B / PRD-0010 F-8: AI-онбординг — модальный оверлей выбора
+    /// режима (Local / Cloud / Self-hosted). Карточка по центру вьюпорта,
+    /// 3 радио-карточки, кнопки «Подробнее о privacy» и «Продолжить» (disabled
+    /// пока режим не выбран). Раскрытый блок privacy — под кнопками. Рендер
+    /// — квады + screen-текст (как все оверлеи); полоса Modals (блокирует
+    /// ввод канваса через `ai_onboarding_point_in_card`).
+    pub(super) fn ai_onboarding_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut quads = Vec::new();
+        let mut texts = Vec::new();
+        let Some(state) = &self.ai_onboarding else {
+            return (quads, texts);
+        };
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return (quads, texts);
+        }
+        let palette = self.effective_palette();
+        let kit_palette = palette.kit_palette();
+        let lay = onboarding_ui::ai_onboarding_layout(viewport, state);
+        let card = lay.card;
+        // Затемнение канваса (паттерн FR-022/FR-028) — фокус на карточке.
+        quads.push(CardInstance {
+            pos: [0.0, 0.0],
+            size: [viewport[0], viewport[1]],
+            fill: palette.stage_dim,
+            border: [0.0; 4],
+            params: [0.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
+        });
+        // Карточка — kit-панель модали (слоты panel_fill/panel_border).
+        quads.push(CardInstance {
+            pos: [card[0], card[1]],
+            size: [card[2], card[3]],
+            fill: palette.menu_fill,
+            border: palette.palette_border,
+            params: [10.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
+        });
+        let inner_x = card[0] + onboarding_ui::AI_ONB_PAD_X;
+        let inner_w = (card[2] - onboarding_ui::AI_ONB_PAD_X * 2.0).max(0.0);
+        let mut y = card[1] + onboarding_ui::AI_ONB_PAD_TOP;
+        // Шаг «Шаг 3 из 3 · AI-режим» (акцентный цвет, маленький кегль).
+        texts.push(OwnedScreenText {
+            text: self.tr(keys::AI_ONB_STEP).to_owned(),
+            origin: [inner_x, y],
+            width: inner_w,
+            font_size: onboarding_ui::AI_ONB_STEP_FONT,
+            color: palette.link,
+            align: TextAlign::Left,
+        });
+        y += onboarding_ui::AI_ONB_STEP_H;
+        // Заголовок «Выберите режим AI».
+        texts.push(OwnedScreenText {
+            text: self.tr(keys::AI_ONB_TITLE).to_owned(),
+            origin: [inner_x, y],
+            width: inner_w,
+            font_size: onboarding_ui::AI_ONB_TITLE_FONT,
+            color: palette.title,
+            align: TextAlign::Left,
+        });
+        y += onboarding_ui::AI_ONB_TITLE_H;
+        // Подзаголовок (приглушённый, перенос — на стороне рендера).
+        texts.push(OwnedScreenText {
+            text: self.tr(keys::AI_ONB_SUB).to_owned(),
+            origin: [inner_x, y],
+            width: inner_w,
+            font_size: onboarding_ui::AI_ONB_SUB_FONT,
+            color: palette.icon,
+            align: TextAlign::Left,
+        });
+        // FR-LLM-B: y не используется дальше — радио-карточки позиционируются
+        // через lay.mode_cards[i], не через y (clippy unused_assignments).
+        // 3 радио-карточки режимов (Local / Cloud / SelfHosted).
+        let choices = [
+            AiOnboardingChoice::Local,
+            AiOnboardingChoice::Cloud,
+            AiOnboardingChoice::SelfHosted,
+        ];
+        for (i, &choice) in choices.iter().enumerate() {
+            let mode_rect = lay.mode_cards[i];
+            let selected = state.selected == Some(choice);
+            let hovered = point_in_rect(mode_rect, self.cursor);
+            // Радио-карточка: selected — акцентная рамка + полупрозрачная
+            // заливка; hovered — нейтральная подсветка; иначе — chip-заливка.
+            quads.push(CardInstance {
+                pos: [mode_rect[0], mode_rect[1]],
+                size: [mode_rect[2], mode_rect[3]],
+                fill: if selected {
+                    [
+                        kit_palette.accent[0],
+                        kit_palette.accent[1],
+                        kit_palette.accent[2],
+                        0.10,
+                    ]
+                } else if hovered {
+                    palette.palette_hover_fill
+                } else {
+                    palette.palette_row_fill
+                },
+                border: if selected {
+                    kit_palette.accent
+                } else {
+                    palette.palette_border
+                },
+                params: [8.0, selected as u8 as f32, 0.0, 1.0],
+                corners: [0.0; 4],
+            });
+            // Радио-кружок слева (selected — залитый, иначе — контурный).
+            let dot_r = 6.0;
+            let dot_cx = mode_rect[0] + 14.0;
+            let dot_cy = mode_rect[1] + 18.0;
+            quads.push(CardInstance {
+                pos: [dot_cx - dot_r, dot_cy - dot_r],
+                size: [dot_r * 2.0, dot_r * 2.0],
+                fill: if selected {
+                    kit_palette.accent
+                } else {
+                    [0.0; 4]
+                },
+                border: if selected {
+                    kit_palette.accent
+                } else {
+                    palette.palette_border
+                },
+                params: [dot_r, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
+            });
+            // Заголовок режима (Local only / Cloud / Self-hosted).
+            texts.push(OwnedScreenText {
+                text: self.tr(choice.title_key()).to_owned(),
+                origin: [mode_rect[0] + 30.0, mode_rect[1] + 4.0],
+                width: mode_rect[2] - 30.0 - 80.0,
+                font_size: onboarding_ui::AI_ONB_MODE_TITLE_FONT,
+                color: palette.title,
+                align: TextAlign::Left,
+            });
+            // Тег режима (правый верхний угол — «offline» / «лучшее качество» / «в контуре»).
+            let tag_w = 80.0;
+            quads.push(CardInstance {
+                pos: [
+                    mode_rect[0] + mode_rect[2] - tag_w - 8.0,
+                    mode_rect[1] + 6.0,
+                ],
+                size: [tag_w, 14.0],
+                fill: [
+                    kit_palette.accent[0],
+                    kit_palette.accent[1],
+                    kit_palette.accent[2],
+                    0.13,
+                ],
+                border: [
+                    kit_palette.accent[0],
+                    kit_palette.accent[1],
+                    kit_palette.accent[2],
+                    0.30,
+                ],
+                params: [7.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
+            });
+            texts.push(OwnedScreenText {
+                text: self.tr(choice.tag_key()).to_owned(),
+                origin: [
+                    mode_rect[0] + mode_rect[2] - tag_w - 8.0,
+                    mode_rect[1] + 7.0,
+                ],
+                width: tag_w,
+                font_size: 9.0,
+                color: palette.link,
+                align: TextAlign::Center,
+            });
+            // Описание режима (приглушённый, под заголовком).
+            texts.push(OwnedScreenText {
+                text: self.tr(choice.desc_key()).to_owned(),
+                origin: [mode_rect[0] + 30.0, mode_rect[1] + 24.0],
+                width: mode_rect[2] - 30.0 - 12.0,
+                font_size: onboarding_ui::AI_ONB_MODE_DESC_FONT,
+                color: palette.icon,
+                align: TextAlign::Left,
+            });
+        }
+        // Кнопка «Подробнее о privacy» (secondary).
+        let btn_priv = lay.btn_privacy;
+        let priv_hovered = point_in_rect(btn_priv, self.cursor);
+        quads.push(CardInstance {
+            pos: [btn_priv[0], btn_priv[1]],
+            size: [btn_priv[2], btn_priv[3]],
+            fill: if priv_hovered {
+                palette.palette_hover_fill
+            } else {
+                palette.palette_chip_fill
+            },
+            border: palette.palette_border,
+            params: [6.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
+        });
+        texts.push(OwnedScreenText {
+            text: self.tr(keys::AI_ONB_PRIV).to_owned(),
+            origin: [btn_priv[0], btn_priv[1] + 8.0],
+            width: btn_priv[2],
+            font_size: onboarding_ui::AI_ONB_BTN_FONT,
+            color: palette.body,
+            align: TextAlign::Center,
+        });
+        // Кнопка «Продолжить» (primary, disabled если selected = None).
+        let btn_cont = lay.btn_continue;
+        let cont_enabled = state.selected.is_some();
+        let cont_hovered = cont_enabled && point_in_rect(btn_cont, self.cursor);
+        quads.push(CardInstance {
+            pos: [btn_cont[0], btn_cont[1]],
+            size: [btn_cont[2], btn_cont[3]],
+            fill: if !cont_enabled {
+                palette.palette_chip_fill
+            } else if cont_hovered {
+                palette.palette_hover_fill
+            } else {
+                kit_palette.control_primary
+            },
+            border: if cont_enabled {
+                kit_palette.control_primary
+            } else {
+                palette.palette_border
+            },
+            params: [6.0, 0.0, 0.0, 1.0],
+            corners: [0.0; 4],
+        });
+        texts.push(OwnedScreenText {
+            text: self.tr(keys::AI_ONB_CONTINUE).to_owned(),
+            origin: [btn_cont[0], btn_cont[1] + 8.0],
+            width: btn_cont[2],
+            font_size: onboarding_ui::AI_ONB_BTN_FONT,
+            color: if cont_enabled {
+                palette.title
+            } else {
+                palette.icon
+            },
+            align: TextAlign::Center,
+        });
+        // Раскрытый блок «Подробнее о privacy» — под кнопками.
+        if state.privacy_open && lay.privacy_block[3] > 0.0 {
+            let pb = lay.privacy_block;
+            quads.push(CardInstance {
+                pos: [pb[0], pb[1]],
+                size: [pb[2], pb[3]],
+                fill: palette.palette_row_fill,
+                border: palette.palette_border,
+                params: [8.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
+            });
+            // 4 параграфа: title + body + title + body + title + body + docs.
+            let paras: [(&'static str, &'static str); 7] = [
+                (keys::AI_ONB_PRIV_TITLE, keys::AI_ONB_PRIV_BODY),
+                (keys::AI_ONB_PRIV_KEYS, keys::AI_ONB_PRIV_KEYS_BODY),
+                (
+                    keys::AI_ONB_PRIV_TELEMETRY,
+                    keys::AI_ONB_PRIV_TELEMETRY_BODY,
+                ),
+                (keys::AI_ONB_PRIV_DOCS, ""),
+                ("", ""),
+                ("", ""),
+                ("", ""),
+            ];
+            let mut py = pb[1] + 8.0;
+            for (idx, (title_key, body_key)) in paras.iter().enumerate() {
+                if title_key.is_empty() {
+                    continue;
+                }
+                texts.push(OwnedScreenText {
+                    text: self.tr(title_key).to_owned(),
+                    origin: [pb[0] + 10.0, py],
+                    width: pb[2] - 20.0,
+                    font_size: 11.5,
+                    color: palette.title,
+                    align: TextAlign::Left,
+                });
+                py += 14.0;
+                if !body_key.is_empty() {
+                    texts.push(OwnedScreenText {
+                        text: self.tr(body_key).to_owned(),
+                        origin: [pb[0] + 10.0, py],
+                        width: pb[2] - 20.0,
+                        font_size: 11.0,
+                        color: palette.icon,
+                        align: TextAlign::Left,
+                    });
+                    py += 30.0;
+                }
+                let _ = idx;
+            }
+        }
+        (quads, texts)
+    }
+
     /// Оверлей палитры выделения: бар с кнопками групп (иконка + подпись),
     /// открытая hover'ом колонка (строки с иконками и подписями).
     /// Screen-space: константный размер при любом зуме.
@@ -4254,6 +4546,13 @@ impl App {
             SettingsRow::SchemeCatFramework => self.toggle_scheme_category("framework"),
             SettingsRow::SchemeCatPlanning => self.toggle_scheme_category("planning"),
             SettingsRow::SchemeCatOnboarding => self.toggle_scheme_category("onboarding"),
+            // FR-LLM-B / PRD-0010 F-7: тумблер AI-телеметрии (Q7, default OFF).
+            // `LlmSettings.telemetry_opt_in` — персист в config.toml, отправки
+            // на стороне Stream C/D (posthog track из canvas_app::app::telemetry
+            // гейтится этим флагом).
+            SettingsRow::AiTelemetry => {
+                self.settings.llm.telemetry_opt_in = !self.settings.llm.telemetry_opt_in;
+            }
             // FR-087: Role — dropdown, применяется apply_dropdown_choice
             SettingsRow::Role
             | SettingsRow::ButtonCorner
@@ -4276,7 +4575,16 @@ impl App {
             | SettingsRow::SuggestEngine
             // FR-ICONS: dropdown «Набор иконок» — применяется в
             // apply_dropdown_choice, тумблером не является
-            | SettingsRow::IconStyle => {
+            | SettingsRow::IconStyle
+            // FR-LLM-B: dropdown-строки таба «AI и модели» — применяются в
+            // apply_dropdown_choice (apply_dropdown_value), не тумблеры
+            | SettingsRow::AiProvSuggest
+            | SettingsRow::AiProvGraph
+            | SettingsRow::AiProvAgent
+            | SettingsRow::AiModel
+            | SettingsRow::AiResidency
+            | SettingsRow::AiConfidenceThreshold
+            | SettingsRow::AiCostLimit => {
                 debug_assert!(false, "dropdown-строка не тумблер: {row:?}");
                 return;
             }
@@ -4901,6 +5209,9 @@ impl App {
                         SettingsRow::SchemeCatOnboarding => {
                             self.settings.scheme_category_visible("onboarding")
                         }
+                        // FR-LLM-B / PRD-0010 F-7: тумблер AI-телеметрии —
+                        // читаем `LlmSettings.telemetry_opt_in` (default OFF).
+                        SettingsRow::AiTelemetry => self.settings.llm.telemetry_opt_in,
                         SettingsRow::ButtonCorner
                         | SettingsRow::GridStyle
                         | SettingsRow::GridDensity
@@ -4920,6 +5231,16 @@ impl App {
                         // FR-079 (S3): dropdown-строка (row_kind = Dropdown)
                         // FR-087: Role — тоже dropdown (в ветку не попадает)
                         | SettingsRow::SuggestEngine
+                        // FR-LLM-B: dropdown-строки таба «AI и модели» —
+                        // в ветку Toggle не попадают (row_kind = Dropdown),
+                        // arm — для полноты match
+                        | SettingsRow::AiProvSuggest
+                        | SettingsRow::AiProvGraph
+                        | SettingsRow::AiProvAgent
+                        | SettingsRow::AiModel
+                        | SettingsRow::AiResidency
+                        | SettingsRow::AiConfidenceThreshold
+                        | SettingsRow::AiCostLimit
                         | SettingsRow::Role => false,
                     };
                     // Pill-тумблер: трек (включён — акцент) + ручка-квад,
