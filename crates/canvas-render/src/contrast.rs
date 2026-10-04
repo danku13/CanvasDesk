@@ -45,8 +45,69 @@ pub fn contrast_text_vs_fill(text: Color, fill: [f32; 4]) -> f32 {
     contrast_ratio(rgb, [fill[0], fill[1], fill[2]])
 }
 
+/// APCA 0.0.98G-4g: перцептивный контраст Lc (Myndex apca-w3, срез G-4g).
+///
+/// WCAG систематически переоценивает контраст цветного текста на тёмном
+/// фоне — пары, формально проходящие AA, визуально слабы (урок аудита
+/// контраста 2026-10: ссылка 7.0:1, но Lc 57 при ориентире 60–90). Lc
+/// используется тестами порогов темы (V2/P-B) как вторая, перцептивная
+/// метрика рядом с WCAG.
+///
+/// Знак результата несёт направление: положительный — тёмный текст на
+/// светлом фоне (BoW), отрицательный — светлый на тёмном (WoB); в
+/// порогах используется модуль. Вход — sRGB 0..1 (каналы заливок темы),
+/// внутри приведение к «экранной» люминанс APCA (экспонента 2.4,
+/// мягкий кламп снизу 0.022) — НЕ WCAG-люминанс.
+///
+/// Пороги (аудит 2026-10, §2): основной текст ≥ 90, тело ≥ 75,
+/// приглушённые/крупные ≥ 60, чипы-метки ≥ 60, не-текст ≥ 30.
+pub fn apca_lc(text: Color, bg: [f32; 4]) -> f32 {
+    // Экранная люминанс APCA: простое возведение sRGB-канала в 2.4
+    // (без линейзации WCAG), мягкий кламп снизу.
+    let screen_y = |rgb: [f32; 3]| -> f64 {
+        let y = |c: f32| (c.clamp(0.0, 1.0) as f64).powf(2.4);
+        0.2126729 * y(rgb[0]) + 0.7151522 * y(rgb[1]) + 0.0721750 * y(rgb[2])
+    };
+    let soft = |y: f64| -> f64 {
+        if y >= 0.022 {
+            y
+        } else {
+            y + (0.022 - y).powf(1.414)
+        }
+    };
+    let txt = [
+        text.r() as f32 / 255.0,
+        text.g() as f32 / 255.0,
+        text.b() as f32 / 255.0,
+    ];
+    let ytxt = soft(screen_y(txt));
+    let ybg = soft(screen_y([bg[0], bg[1], bg[2]]));
+    if (ybg - ytxt).abs() < 0.0005 {
+        return 0.0;
+    }
+    let lc = if ybg > ytxt {
+        // Тёмный текст на светлом фоне (BoW)
+        let sapc = (ybg.powf(0.56) - ytxt.powf(0.57)) * 1.14;
+        if sapc < 0.1 {
+            0.0
+        } else {
+            sapc - 0.027
+        }
+    } else {
+        // Светлый текст на тёмном фоне (WoB)
+        let sapc = (ybg.powf(0.65) - ytxt.powf(0.62)) * 1.14;
+        if sapc > -0.1 {
+            0.0
+        } else {
+            sapc + 0.027
+        }
+    };
+    (lc * 100.0) as f32
+}
+
 /// Линейная смесь sRGB-каналов: t=0 → fg, t=1 → to.
-fn mix(fg: [f32; 3], to: [f32; 3], t: f32) -> [f32; 3] {
+/// Публично — для производной рамки окрашенных нод (`cards::derived_card_edge`).
+pub fn mix_to(fg: [f32; 3], to: [f32; 3], t: f32) -> [f32; 3] {
     [
         fg[0] + (to[0] - fg[0]) * t,
         fg[1] + (to[1] - fg[1]) * t,
@@ -102,7 +163,7 @@ pub fn ensure_contrast(fg: Color, bg: [f32; 4], target: f32, ink_a: Color, ink_b
     // ищем на target. Запас +0.05 покрывает квантование каналов в u8.
     let comfortable = target + 0.05 + 1.5;
     let (extreme_ratio, hard_target) = (
-        contrast_ratio(mix(fg_rgb, extreme, 1.0), bg_rgb),
+        contrast_ratio(mix_to(fg_rgb, extreme, 1.0), bg_rgb),
         target + 0.05,
     );
     let goal = if extreme_ratio >= comfortable {
@@ -117,13 +178,13 @@ pub fn ensure_contrast(fg: Color, bg: [f32; 4], target: f32, ink_a: Color, ink_b
     let mut hi = 1.0f32;
     for _ in 0..12 {
         let mid = (lo + hi) / 2.0;
-        if contrast_ratio(mix(fg_rgb, extreme, mid), bg_rgb) >= goal {
+        if contrast_ratio(mix_to(fg_rgb, extreme, mid), bg_rgb) >= goal {
             hi = mid;
         } else {
             lo = mid;
         }
     }
-    to_color(mix(fg_rgb, extreme, hi), fg.a())
+    to_color(mix_to(fg_rgb, extreme, hi), fg.a())
 }
 
 #[cfg(test)]
@@ -218,5 +279,27 @@ mod tests {
             (best - max_possible).abs() < 0.5 || best >= 4.5,
             "best={best}"
         );
+    }
+
+    /// Эталоны APCA 0.0.98G-4g (сверка с пайплайном аудита 2026-10):
+    /// белый на #1e1e22 (базлайн-канвас) и чёрный на белом — известные
+    /// значения; WoB/BoW знаки согласованы. Эталонный расчёт —
+    /// scripts/contrast_audit.py (тот же срез G-4g).
+    #[test]
+    fn apca_reference_values() {
+        let white = Color::rgb(255, 255, 255);
+        let black = Color::rgb(0, 0, 0);
+        // Белый на тёмном канвасе #1e1e22 (WoB → отрицательный Lc)
+        let dark_canvas = [0.118, 0.118, 0.133, 1.0]; // #1e1e22
+        let lc = apca_lc(white, dark_canvas);
+        assert!(lc < 0.0, "WoB — знак отрицательный: {lc}");
+        assert!((lc.abs() - 106.0).abs() < 0.5, "белый на #1e1e22: {lc}");
+        // Чёрный на белом (BoW → положительный)
+        let lc = apca_lc(black, [1.0, 1.0, 1.0, 1.0]);
+        assert!(lc > 0.0, "BoW — знак положительный: {lc}");
+        assert!((lc - 106.0).abs() < 0.5, "чёрный на белом: {lc}");
+        // Одинаковые цвета — ноль (мёртвая зона различимости)
+        let grey = [0.467, 0.467, 0.467, 1.0];
+        assert_eq!(apca_lc(Color::rgb(119, 119, 119), grey), 0.0);
     }
 }
