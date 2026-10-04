@@ -773,6 +773,23 @@ impl App {
                     }
                     true
                 }
+                // FR-LLM-FIX (task FIX-TEXTINPUT-KIT): Ctrl+V — вставка из
+                // буфера обмена в активное поле строки настроек (паритет с
+                // EditingSession::Paste: те же клавиши, что `map_key` →
+                // `KeyCommand::Paste` — латиница, кириллическая раскладка,
+                // control-код \u{16}). Без этой ветки Ctrl+V уходил в
+                // `KeyOwner::Editor`, где `editing.is_none()` при активном
+                // поле настроек → вставка терялась (Regression FIX-TEXTINPUT-KIT).
+                Key::Character(text)
+                    if self.modifiers.control_key()
+                        && !self.modifiers.alt_key()
+                        && matches!(text.as_str(), "v" | "V" | "м" | "М" | "\u{16}") =>
+                {
+                    if let Some(clip) = self.clipboard.get_text() {
+                        self.settings_text_edit_value_mut().push_str(&clip);
+                    }
+                    true
+                }
                 // FR-LLM-FIX (task FIX-TEXT-INPUT): символы без модификаторов
                 // — append к строке. С Ctrl/Alt — пропускаем к роутеру (Ctrl+F
                 // и т.п. должны работать, не вставляя «f» в поле).

@@ -5400,8 +5400,11 @@ impl App {
                     // FR-LLM-FIX: текстовое поле + бейдж на месте описания
                     // (y = rect[1] + 22, ширина = rect[2] - MODAL_ROW_LABEL_W).
                     // Поле — слева, бейдж — правее; между ними зазор gap.
+                    // FR-LLM-FIX (task FIX-TEXTINPUT-KIT): высота поля —
+                    // `kit::TEXT_FIELD_HEIGHT` (30.0) вместо литерала 16.0
+                    // (единая метрика кита, паритет с кнопками/dropdown'ами).
                     let field_y = rect[1] + 22.0;
-                    let field_h = 16.0;
+                    let field_h = canvas_ui::kit::TEXT_FIELD_HEIGHT;
                     let avail_w = (rect[2] - MODAL_ROW_LABEL_W).max(40.0);
                     let badge_w = 110.0;
                     let gap = 6.0;
@@ -5513,8 +5516,17 @@ impl App {
                 // AiSelfhostKey — поле + кнопка «Проверить» + бейдж (как
                 // RowKind::Button выше). При фокусе (settings_text_edit ==
                 // Some(row)) — рамка акцентом + каретка «|» в конце текста.
+                //
+                // FR-LLM-FIX (task FIX-TEXTINPUT-KIT): вёрстка поля —
+                // `kit::text_field()` (FR-055): `layout.rect` — контейнер
+                // (CardInstance), `layout.text_area` — слот текста/плейсхолдера,
+                // `layout.caret_x` — позиция каретки (замер префикса тем же
+                // кеглем 11.0, что и у текста; CR-015 — без эвристики chars×7).
+                // `text_shown` из layout НЕ используем: отображаемый текст
+                // маскируется отдельно (для API-key/selfhost-key — «•»),
+                // контракт кита «цвет/текст — отдельно от геометрии» (§F-8).
                 RowKind::TextInput => {
-                    let [field_x, field_y, field_w, field_h] = text_input_field_rect(*row, *rect);
+                    let [field_x, field_y, field_w, _] = text_input_field_rect(*row, *rect);
                     let editing_now = self.settings_text_edit == Some(*row);
                     // Кнопка «Проверить» — только для строк с кнопкой (URL/
                     // key/api_key). Модель-строки кнопки не имеют.
@@ -5550,11 +5562,52 @@ impl App {
                             align: TextAlign::Center,
                         });
                     }
-                    // FR-LLM-FIX (task FIX-TEXT-INPUT): фон поля — row_fill;
-                    // при фокусе — рамка акцентом (params.y = 1.0).
+                    // FR-LLM-FIX (task FIX-TEXTINPUT-KIT): вёрстка поля —
+                    // `kit::text_field()`. Модель — сырое значение (caret_x
+                    // измеряется по нему); placeholder — статическая подсказка
+                    // строки. min/max — kit-метрики (TEXT_FIELD_MIN_W/H).
+                    let value = self.settings_text_value_for_row(*row);
+                    let placeholder = self.settings_text_placeholder_for_row(*row);
+                    let model = canvas_ui::kit::TextFieldModel {
+                        text: value.to_owned(),
+                        caret: value.chars().count(),
+                        sel: None,
+                    };
+                    let slot = canvas_ui::UiRect::new(
+                        field_x,
+                        field_y,
+                        field_w,
+                        canvas_ui::kit::TEXT_FIELD_HEIGHT,
+                    );
+                    let min = canvas_ui::UiVec2::new(
+                        canvas_ui::kit::TEXT_FIELD_MIN_W,
+                        canvas_ui::kit::TEXT_FIELD_HEIGHT,
+                    );
+                    let max = canvas_ui::UiVec2::new(field_w, canvas_ui::kit::TEXT_FIELD_HEIGHT);
+                    let kit_palette = palette.kit_palette();
+                    let mut m = canvas_ui::measure::TextMeasurer::new();
+                    let mut fs = canvas_render::text::measure_font_system();
+                    let layout = canvas_ui::kit::text_field(
+                        slot,
+                        min,
+                        max,
+                        &model,
+                        placeholder,
+                        editing_now,
+                        canvas_ui::kit::KitState::Normal,
+                        &kit_palette,
+                        &mut m,
+                        &mut fs,
+                        canvas_render::text::SANS_FAMILY,
+                        11.0,
+                    );
+                    drop(fs);
+                    // FR-LLM-FIX (task FIX-TEXTINPUT-KIT): фон поля — row_fill;
+                    // при фокусе — рамка акцентом (params.y = 1.0). Rect —
+                    // `layout.rect` (constrain+stack в слоте).
                     instances.push(CardInstance {
-                        pos: [field_x, field_y],
-                        size: [field_w, field_h],
+                        pos: [layout.rect.x, layout.rect.y],
+                        size: [layout.rect.w, layout.rect.h],
                         fill: palette.palette_row_fill,
                         border: if editing_now {
                             color_to_rgba(palette.link)
@@ -5565,9 +5618,10 @@ impl App {
                         corners: [0.0; 4],
                     });
                     // FR-LLM-FIX (task FIX-TEXT-INPUT): отображаемое значение
-                    // поля — для API-ключа/URL/key маскируем «•» (как в прото-
-                    // типе), для модель-строк показываем как есть. Пустое поле
-                    // — плейсхолдер (приглушённым цветом).
+                    // поля — для API-ключа/key маскируем «•» (как в прототипе),
+                    // для модель-строк/URL показываем как есть. Пустое поле —
+                    // плейсхолдер (приглушённым цветом). Текст рисуется по
+                    // `layout.text_area` (min kit-пада TEXT_FIELD_PAD_H=8).
                     let (field_text, is_placeholder) = match row {
                         SettingsRow::AiApiKey => {
                             let key = &self.settings.llm.api_key;
@@ -5616,8 +5670,8 @@ impl App {
                     if !field_text.is_empty() {
                         texts.push(OwnedScreenText {
                             text: field_text,
-                            origin: [field_x + 8.0, field_y + 2.0],
-                            width: field_w - 12.0,
+                            origin: [layout.text_area.x, layout.text_area.y + 2.0],
+                            width: layout.text_area.w,
                             font_size: 11.0,
                             color: if is_placeholder {
                                 palette.icon
@@ -5627,26 +5681,15 @@ impl App {
                             align: TextAlign::Left,
                         });
                     }
-                    // FR-LLM-FIX (task FIX-TEXT-INPUT): каретка «|» в конце
-                    // текста при фокусе — квад 1.5×field_h (как explain edit),
-                    // позиция — измеренная ширина текста поля (CR-015: эвристика
-                    // chars×7 давала caret не по глифам; замер — тем же кеглем,
-                    // каким рисуется текст, 11.0). Кладётся ПОВЕРХ текста, как в
-                    // explain — перекрытие последнего глифа 1.5 px не мешает.
-                    if editing_now {
-                        let mut m = canvas_ui::measure::TextMeasurer::new();
-                        let mut fs = canvas_render::text::measure_font_system();
-                        let text_w = m.width_of(
-                            &mut fs,
-                            self.settings_text_edit_value(),
-                            canvas_render::text::SANS_FAMILY,
-                            11.0,
-                        );
-                        drop(fs);
-                        let caret_x = (field_x + 8.0 + text_w).min(field_x + field_w - 4.0);
+                    // FR-LLM-FIX (task FIX-TEXTINPUT-KIT): каретка «|» —
+                    // позиция из `layout.caret_x` (kit::text_field замеряет
+                    // префикс до каретки тем же кеглем 11.0; -1.0 — не в
+                    // фокусе). Кладётся ПОВЕРХ текста, как в explain —
+                    // перекрытие последнего глифа 1.5 px не мешает.
+                    if editing_now && layout.caret_x >= 0.0 {
                         instances.push(CardInstance {
-                            pos: [caret_x, field_y + 2.0],
-                            size: [1.5, field_h - 4.0],
+                            pos: [layout.caret_x, layout.text_area.y + 2.0],
+                            size: [1.5, layout.text_area.h - 4.0],
                             fill: color_to_rgba(palette.link),
                             border: [0.0; 4],
                             params: [0.0, 0.0, 0.0, 1.0],
