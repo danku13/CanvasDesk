@@ -89,8 +89,10 @@ pub fn grid_appearance(zoom: f32, minor_step: f32, major_step: f32) -> GridAppea
     }
 }
 
-/// Uniform камеры для шейдера сетки (80 байт, layout по правилам WGSL):
-/// позиция/зум/альфы + шаги линий (плотность), режим (линии/точки) и цвета.
+/// Uniform камеры для шейдера сетки (64 байта, layout по правилам WGSL):
+/// позиция/зум/альфы + шаги линий (плотность) и режим (линии/точки).
+/// Цвета — НЕ здесь: на WebGL2 хвост uniform-блока терялся (см. grid.wgsl),
+/// они идут через текстуру 1×2 RGBA8Unorm (`update_camera`).
 #[derive(Debug, Clone, Copy)]
 struct GridUniform {
     position: [f32; 2],
@@ -102,14 +104,11 @@ struct GridUniform {
     major_step: f32,
     /// 0 — линии, 1 — точки.
     mode: f32,
-    _pad: [f32; 2],
-    /// Цвета сетки (sRGB 0..1, w — не используется).
-    minor_color: [f32; 4],
-    major_color: [f32; 4],
+    _pad: [f32; 6],
 }
 
 impl GridUniform {
-    fn to_bytes(self) -> [u8; 80] {
+    fn to_bytes(self) -> [u8; 64] {
         let floats = [
             self.position[0],
             self.position[1],
@@ -123,16 +122,12 @@ impl GridUniform {
             self.mode,
             0.0,
             0.0,
-            self.minor_color[0],
-            self.minor_color[1],
-            self.minor_color[2],
-            self.minor_color[3],
-            self.major_color[0],
-            self.major_color[1],
-            self.major_color[2],
-            self.major_color[3],
+            0.0,
+            0.0,
+            0.0,
+            0.0,
         ];
-        let mut bytes = [0u8; 80];
+        let mut bytes = [0u8; 64];
         for (i, value) in floats.iter().enumerate() {
             bytes[i * 4..i * 4 + 4].copy_from_slice(&value.to_ne_bytes());
         }
@@ -152,9 +147,16 @@ pub struct GridLook {
 }
 
 /// Пайплайн сетки: fullscreen-треугольник, линии считаются во фрагментном шейдере.
+/// Цвета — текстура 1×2 RGBA8Unorm: texel (0,0) — minor, (1,0) — major.
+/// Текстура выбрана вместо полей в uniform: на WebGL2 (wgpu 22 GL) хвост
+/// uniform-блока сетки не доходил до шейдера — линии/точки рисовались почти
+/// чёрным при верной геометрии и альфах (жалобы владельца 2026-10-05:
+/// «точки не видны», «сетка с доп. цветами»). Texel-загрузка идёт тем же
+/// путём, что атласы текста/иконок — байты доходят 1:1 на всех бэкендах.
 pub struct GridPipeline {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
+    colors_texture: wgpu::Texture,
     bind_group: wgpu::BindGroup,
 }
 
@@ -168,16 +170,28 @@ impl GridPipeline {
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("grid"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -214,23 +228,48 @@ impl GridPipeline {
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("grid camera"),
-            size: 80,
+            size: 64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
+        // Цвета сетки: 1×2 RGBA8Unorm — texel (0,0) minor, (1,0) major.
+        // Обновляется каждый кадр из update_camera (8 байт — дешевле некуда).
+        let colors_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("grid colors"),
+            size: wgpu::Extent3d {
+                width: 2,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let colors_view = colors_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("grid"),
             layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&colors_view),
+                },
+            ],
         });
 
         Self {
             pipeline,
             uniform_buffer,
+            colors_texture,
             bind_group,
         }
     }
@@ -240,6 +279,8 @@ impl GridPipeline {
     /// `viewport` — в физических пикселях (шейдер работает в frag coord);
     /// камера хранит логические координаты, поэтому зум домножается на scale_factor.
     /// `look` — внешний вид сетки (шаги/плотность, режим точек, цвета темы).
+    /// Цвета пишутся в текстуру 1×2 (см. [`GridPipeline`]): bytes → texels,
+    /// RGBA8Unorm = байт/255 без гамма-кривой (raw passthrough).
     pub fn update_camera(
         &self,
         queue: &wgpu::Queue,
@@ -258,11 +299,38 @@ impl GridPipeline {
             minor_step: look.steps.0,
             major_step: look.steps.1,
             mode: if look.dots { 1.0 } else { 0.0 },
-            _pad: [0.0; 2],
-            minor_color: [look.colors.0[0], look.colors.0[1], look.colors.0[2], 1.0],
-            major_color: [look.colors.1[0], look.colors.1[1], look.colors.1[2], 1.0],
+            _pad: [0.0; 6],
         };
         queue.write_buffer(&self.uniform_buffer, 0, &uniform.to_bytes());
+        // texel (0,0) = minor RGBA, texel (1,0) = major RGBA (байты темы 1:1)
+        let mut texels = [0u8; 8];
+        for (channel, value) in look.colors.0.iter().enumerate() {
+            texels[channel] = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+        texels[3] = 255;
+        for (channel, value) in look.colors.1.iter().enumerate() {
+            texels[4 + channel] = (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+        texels[7] = 255;
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &self.colors_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &texels,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(8),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: 2,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Нарисовать сетку в активном render pass (3 вершины, без буферов).
@@ -277,6 +345,7 @@ impl GridPipeline {
 mod tests {
     use super::*;
     use crate::camera::{MAX_ZOOM, MIN_ZOOM};
+    use crate::ThemeColors;
 
     /// Базовые шаги (средняя плотность, SPEC T2).
     const MINOR: f32 = 20.0;
@@ -491,10 +560,12 @@ mod tests {
         }
     }
 
-    /// Uniform сериализуется в 80 байт — layout WGSL-структуры
-    /// (позиция, viewport, зум, альфы, шаги, режим, выравнивание, цвета).
+    /// Uniform сериализуется в 64 байта — layout WGSL-структуры
+    /// (позиция, viewport, зум, альфы, шаги, режим, выравнивание).
+    /// Цветов в uniform больше нет — они идут через текстуру 1×2
+    /// (WebGL2-фикс 2026-10-05, см. шейдер).
     #[test]
-    fn uniform_layout_is_80_bytes() {
+    fn uniform_layout_is_64_bytes() {
         let uniform = GridUniform {
             position: [1.5, -2.5],
             viewport: [1920.0, 1080.0],
@@ -504,12 +575,10 @@ mod tests {
             minor_step: 20.0,
             major_step: 100.0,
             mode: 1.0,
-            _pad: [0.0; 2],
-            minor_color: [0.1, 0.2, 0.3, 1.0],
-            major_color: [0.4, 0.5, 0.6, 1.0],
+            _pad: [0.0; 6],
         };
         let bytes = uniform.to_bytes();
-        assert_eq!(bytes.len(), 80);
+        assert_eq!(bytes.len(), 64);
         assert_eq!(&bytes[0..4], &1.5f32.to_ne_bytes());
         assert_eq!(&bytes[16..20], &2.0f32.to_ne_bytes());
         assert_eq!(&bytes[24..28], &1.0f32.to_ne_bytes());
@@ -517,8 +586,38 @@ mod tests {
         assert_eq!(&bytes[28..32], &20.0f32.to_ne_bytes());
         assert_eq!(&bytes[32..36], &100.0f32.to_ne_bytes());
         assert_eq!(&bytes[36..40], &1.0f32.to_ne_bytes());
-        // Цвета: minor 48..64, major 64..80
-        assert_eq!(&bytes[48..52], &0.1f32.to_ne_bytes());
-        assert_eq!(&bytes[64..68], &0.4f32.to_ne_bytes());
+        // Выравнивание до 64 — нули
+        assert!(bytes[40..].iter().all(|&b| b == 0));
+    }
+
+    /// Цвета сетки кодируются в texels 1×2 RGBA8Unorm байт-в-байт темы:
+    /// texel (0,0) — minor, (1,0) — major, альфа-канал = 255 (WebGL2-фикс).
+    #[test]
+    fn color_texels_match_theme_bytes() {
+        let theme = ThemeColors::dark();
+        let expected_minor = [
+            (theme.grid_minor[0] * 255.0).round() as u8,
+            (theme.grid_minor[1] * 255.0).round() as u8,
+            (theme.grid_minor[2] * 255.0).round() as u8,
+        ];
+        assert_eq!(expected_minor, [0x6c, 0x70, 0x7c], "тёмный minor — #6c707c");
+        let to_texel = |c: [f32; 3]| {
+            let mut t = [0u8; 4];
+            for (i, v) in c.iter().enumerate() {
+                t[i] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+            t[3] = 255;
+            t
+        };
+        assert_eq!(
+            to_texel(theme.grid_minor),
+            [0x6c, 0x70, 0x7c, 0xff],
+            "minor-тексель — байты темы + непрозрачность"
+        );
+        assert_eq!(
+            to_texel(theme.grid_major)[0] as i32,
+            (theme.grid_major[0] * 255.0).round() as i32,
+            "major-тексель — тот же расчёт"
+        );
     }
 }

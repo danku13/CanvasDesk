@@ -1,8 +1,13 @@
 // Бесконечная сетка в world-space (T2).
 // Линии рисуются во фрагментном шейдере через fwidth — толщина ~1 физический px
 // независимо от зума, без мерцания при масштабировании. Шаги, режим
-// (линии/точки) и цвета приходят из uniform — плотность, вид и тема
-// настраиваются. Контраст цветов — ~50% к фону канваса.
+// (линии/точки) и альфы приходят из uniform — плотность, вид настраиваются.
+// ЦВЕТА — через текстуру 1×2 RGBA8Unorm (binding 1): texel (0,0) — minor,
+// (1,0) — major. Почему не в uniform: на WebGL2 (wgpu 22 GL-бэкенд) цветовые
+// поля в хвосте uniform-блока до шейдера не доезжают (точки/линии рисовались
+// почти чёрным при верной геометрии/альфах — замер 2026-10-05); texel-загрузка
+// идёт тем же путём, что атласы текста/иконок — там байты доходят 1:1.
+// RGBA8Unorm: sample = байт/255 без гамма-кривой (raw passthrough).
 
 struct GridUniform {
     position: vec2<f32>,        // мировая точка в центре viewport
@@ -10,15 +15,15 @@ struct GridUniform {
     effective_zoom: f32,        // zoom * scale_factor (world -> физические px)
     minor_alpha: f32,
     major_alpha: f32,
-    minor_step: f32,            // шаг мелной сетки, world px
+    minor_step: f32,            // шаг мелкой сетки, world px
     major_step: f32,            // шаг крупной сетки, world px
     mode: f32,                  // 0 — линии, 1 — точки
-    _pad: vec2<f32>,
-    minor_color: vec4<f32>,     // sRGB 0..1
-    major_color: vec4<f32>,
+    _pad0: vec2<f32>,           // выравнивание до 64 байт
+    _pad1: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> grid: GridUniform;
+@group(0) @binding(1) var grid_colors: texture_2d<f32>;
 
 /// Радиус точки в физических px (режим «точки»).
 const DOT_RADIUS: f32 = 1.5;
@@ -59,6 +64,10 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let world = grid.position
         + (frag.xy - grid.viewport * 0.5) / grid.effective_zoom;
 
+    // Цвета из текстуры: texel (0,0) — minor, (1,0) — major (RGBA8Unorm).
+    let minor_color = textureLoad(grid_colors, vec2<i32>(0, 0), 0).rgb;
+    let major_color = textureLoad(grid_colors, vec2<i32>(1, 0), 0).rgb;
+
     var minor: f32;
     var major: f32;
     if (grid.mode > 0.5) {
@@ -80,7 +89,7 @@ fn fs_main(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     }
 
     // Крупная линия перекрывает мелкую в точках совпадения
-    let color = grid.minor_color.rgb * minor + grid.major_color.rgb * major * (1.0 - minor);
+    let color = minor_color * minor + major_color * major * (1.0 - minor);
     let alpha = max(minor, major);
     return vec4<f32>(color, alpha);
 }
