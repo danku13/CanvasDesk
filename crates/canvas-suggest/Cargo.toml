@@ -9,7 +9,8 @@ description = "FR-079: suggest-движок — гибрид lex+Laya (чист�
 
 # S1 (FR-079): чистое ядро без зависимостей — BM25/char3/синонимы/гейты.
 # Сетевых и ML-зависимостей в дефолтном дереве нет (правило AGENTS.md:
-# «не добавлять сетевые вызовы в хост»). L1-транспорт — feature `l1-laya` (S2).
+# «не добавлять сетевые вызовы в хост»). L1-транспорт — feature `l1-laya` (S2)
+# или `l1-llm` (FR-LLM-C, PRD-0010 F-2 — LLM mm-source через canvas-llm).
 [dependencies]
 # только за feature `l1-laya` (off by default): дефолтное дерево остаётся
 # без сетевых/ML-зависимостей (правило AGENTS.md «без сети в хосте»;
@@ -18,14 +19,32 @@ ureq = { version = "2", default-features = false, features = ["json"], optional 
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 sha2 = { version = "0.10", optional = true }
+# FR-LLM-C / PRD-0010 F-2.1: LLM mm-source (feature `l1-llm`). Подключает
+# canvas-llm (LlmProvider trait + redact + ChoiceAnswer). Сетевой слой
+# canvas-llm активируется внутри canvas-llm за её собственный флаг `l1-llm`;
+# здесь мы только тянем зависимость (без сети, если canvas-llm собран без
+# своего l1-llm флага). Для реальных HTTP-запросов App включает
+# `canvas-llm/l1-llm` отдельно.
+canvas-llm = { workspace = true, optional = true }
 
 [dev-dependencies]
 # только для golden-тестов: разбор JSONL-фикстур PoC
 serde.workspace = true
 serde_json.workspace = true
+# FR-LLM-C: тесты LlmMmSource (mock-провайдер impl LlmProvider через
+# async_trait). pollster — блокирующий запуск async-фьючерса в тестах
+# (mock без сети — pollster::block_on достаточно, tokio не тянем).
+async-trait = "0.1"
+pollster = "0.3"
 
 [features]
 default = []
 # S2: HTTP-клиент /v1/systemone (ureq no-TLS, только localhost) +
 # менеджер sidecar + sha256-манифест весов.
 l1-laya = ["dep:ureq", "dep:serde", "dep:serde_json", "dep:sha2"]
+# FR-LLM-C / PRD-0010 F-2.1-F-2.8: LLM mm-source для fusion. LlmMmSource
+# + ContextCache. Параллельно `l1-laya` (не исключает — App может
+# использовать оба: Laya как sidecar, LLM как cloud fallback).
+# Включает canvas-llm/l1-llm — без этого LlmProvider остаётся stub'ом
+# без async-методов (canvas-llm gate'ит трейт по своему флагу).
+l1-llm = ["dep:canvas-llm", "canvas-llm/l1-llm", "dep:serde", "dep:serde_json"]

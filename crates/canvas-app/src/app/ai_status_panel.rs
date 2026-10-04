@@ -11,13 +11,22 @@
 //! **Расположение** (прототип строки 900-930): правый край, над миникартой
 //! (миникарта — 220×140, 16px отступ; панель — 220×90, 8px зазор над
 //! миникартой). Ширина = ширина миникарты (220), выравнивание по правому
-//! краю. Рендер — CardInstance + OwnedScreenText (как все оверлеи canvas-app);
-//! полоса — `UiLayer::Panels`.
+//! краю.
+//!
+//! FR-LLM-C / FR-055: рендер через `KitDraw` + kit-компоненты
+//! (`kit::panel_style`, `kit::chip_style`, `kit::icon_button_style`).
+//! Никаких сырых `CardInstance` — все квады/тексты идут через адаптер
+//! `KitDraw` (как в `admin_ui.rs`/`overlays.rs`). Полоса — `UiLayer::Panels`.
 
 use super::*;
+// FR-LLM-C: UiRect — геометрия kit-компонентов (panel_style/chip_style
+// принимают UiRect, не сырой [f32; 4]). Импорт локально — app.rs не
+// использует UiRect (только UiPoint), несем через короткий алиас.
+use canvas_ui::geometry::UiRect;
 
 // FR-LLM-B: маркер для поиска (grep) — все новые файлы/добавления помечены
 // `// FR-LLM-B:` в комментариях.
+// FR-LLM-C: маркер Stream C — рефакторинг рендера панели на kit-компоненты.
 
 /// Ширина панели = ширина миникарты (220px) — выравнивание по правому краю.
 pub const AI_STATUS_W: f32 = 220.0;
@@ -38,15 +47,20 @@ const MINIMAP_MARGIN: f32 = 16.0;
 const ROW_H: f32 = 22.0;
 /// Размер иконок-кнопок ⏸/⚙ в шапке.
 const HEAD_BTN_SIZE: f32 = 18.0;
-/// Радиус карточки-фона панели.
-const PANEL_RADIUS: f32 = 8.0;
-/// Радиус маленьких кнопок-чипов (features / ⏸/⚙).
-const CHIP_RADIUS: f32 = 4.0;
+/// Радиус маленьких кнопок-чипов (features / ⏸/⚙). Совпадает с
+/// `RADIUS_CHIP` из canvas_core::tokens — раньше дублировали константу;
+/// теперь берём напрямую из токенов (FR-055: шкала токенов — единый
+/// источник радиусов).
+const CHIP_RADIUS: f32 = canvas_core::tokens::RADIUS_CHIP;
 /// Высота прогресс-бара дневного лимита.
 const PROGRESS_H: f32 = 4.0;
 
 impl App {
     /// FR-LLM-B / PRD-0010 F-7.9 (Q4): статусная панель AI — квады + тексты.
+    ///
+    /// FR-LLM-C: рендер через `KitDraw` + kit-компоненты. Возвращает
+    /// `(Vec<CardInstance>, Vec<OwnedScreenText>)`, дёргая `KitDraw::quads`
+    /// и конвертируя `OwnedText` → `OwnedScreenText` (как `overlays.rs`).
     ///
     /// Возвращает пустые `Vec`, если:
     /// - вьюпорт слишком узкий (< 900px, F-7.9);
@@ -71,6 +85,13 @@ impl App {
         }
         let palette = self.effective_palette();
         let kit_palette = palette.kit_palette();
+        // FR-LLM-C: KitDraw-адаптер (как overlays.rs/admin_ui.rs). Все квады
+        // и тексты собираются в `d`, в конце дрейним в возвращаемые Vec'и.
+        let mut d = crate::kit_ui::KitDraw::new();
+        // FR-ICONS: активный набор (None = Glyph fallback; ⚙ может попасть
+        // в SVG-атлас, ⏸/▶ идут глифом).
+        d.set_icon_set(self.icon_set_active());
+
         // Позиция панели: правый край, над миникартой (если миникарта есть)
         // или просто в правом нижнем углу.
         let has_minimap = self.minimap_rect().is_some();
@@ -83,15 +104,16 @@ impl App {
             viewport[1] - AI_STATUS_MARGIN - AI_STATUS_H
         };
         let panel = [panel_x, panel_y, AI_STATUS_W, AI_STATUS_H];
-        // Фон панели — слот panel_fill (как у всех модалей/панелей).
-        quads.push(CardInstance {
-            pos: [panel[0], panel[1]],
-            size: [panel[2], panel[3]],
-            fill: palette.menu_fill,
-            border: palette.palette_border,
-            params: [PANEL_RADIUS, 0.0, 0.0, 1.0],
-            corners: [0.0; 4],
-        });
+
+        // === Фон панели — kit::panel_style (FR-055: слоты panel_*) ======
+        let panel_style = canvas_ui::kit::panel_style(&kit_palette);
+        d.rect(
+            UiRect::new(panel[0], panel[1], panel[2], panel[3]),
+            panel_style.fill,
+            panel_style.border,
+            panel_style.radius,
+        );
+
         // Активная модель + провайдер: приоритет suggest > graph > agent
         // (как в прототипе — `aiSetActive('suggest')` по умолчанию).
         let (active_provider, active_label_key) = [
@@ -110,97 +132,79 @@ impl App {
         };
         let provider_label =
             crate::settings_ui::ai_provider_label(self.settings.language, active_provider);
-        // === Строка 1: head — точка + модель + провайдер + ⏸ + ⚙ ===
+
+        // === Строка 1: head — точка + модель + провайдер + ⏸ + ⚙ ===========
         let head_y = panel[1] + 6.0;
         // Цветная точка состояния: green = активно, yellow = пауза, gray = Off.
+        // Не kit-слот (индикатор состояния — семантика, а не тема); рисуем
+        // через d.rect (FR-LLM-C: KitDraw-адаптер, не сырой CardInstance).
         let dot_color = if self.ai_paused {
             [0.95, 0.65, 0.30, 1.0] // янтарный — пауза
         } else {
             [0.30, 0.75, 0.55, 1.0] // зелёный — активно
         };
-        quads.push(CardInstance {
-            pos: [panel[0] + 10.0, head_y + 6.0],
-            size: [6.0, 6.0],
-            fill: dot_color,
-            border: [0.0; 4],
-            params: [3.0, 0.0, 0.0, 1.0],
-            corners: [0.0; 4],
-        });
+        d.rect(
+            UiRect::new(panel[0] + 10.0, head_y + 6.0, 6.0, 6.0),
+            dot_color,
+            [0.0; 4],
+            3.0,
+        );
         // Имя модели (max ~120px, чтобы не наезжать на кнопки).
-        texts.push(OwnedScreenText {
-            text: model_name.clone(),
-            origin: [panel[0] + 22.0, head_y + 1.0],
-            width: 120.0,
-            font_size: 11.0,
-            color: palette.title,
-            align: TextAlign::Left,
-        });
-        // Подпись провайдера (BYOK / ChatGPT / Ollama / Laya) — компактный
-        // чип справа от модели.
+        d.label_left(
+            UiRect::new(panel[0] + 22.0, head_y + 1.0, 120.0, 14.0),
+            &model_name,
+            kit_palette.text_title,
+            11.0,
+        );
+        // Подпись провайдера (BYOK / ChatGPT / Ollama / Laya) — kit-чип.
         let prov_chip_w = 60.0;
         let prov_chip_x = panel[0] + 22.0 + 120.0 + 4.0;
-        quads.push(CardInstance {
-            pos: [prov_chip_x, head_y + 2.0],
-            size: [prov_chip_w, 14.0],
-            fill: palette.palette_chip_fill,
-            border: palette.palette_border,
-            params: [CHIP_RADIUS, 0.0, 0.0, 1.0],
-            corners: [0.0; 4],
-        });
-        texts.push(OwnedScreenText {
-            text: provider_label,
-            origin: [prov_chip_x, head_y + 1.0],
-            width: prov_chip_w,
-            font_size: 10.0,
-            color: palette.body,
-            align: TextAlign::Center,
-        });
-        // Кнопки ⏸/⚙ — правый край шапки (2 квадрата с глифом).
+        let prov_chip_rect = UiRect::new(prov_chip_x, head_y + 2.0, prov_chip_w, 14.0);
+        let prov_chip_style =
+            canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &kit_palette);
+        d.control(prov_chip_rect, &prov_chip_style);
+        d.label_center(prov_chip_rect, &provider_label, prov_chip_style.text, 10.0);
+
+        // Кнопки ⏸/⚙ — kit::icon_button_style (Ghost-вариант). Позиция
+        // остаётся как в прототипе (HEAD_BTN_SIZE=18); kit::icon_button_rect
+        // не используем, т.к. он уозвращает квадрат ICON_BUTTON_SIZE=26
+        // (FR-LLM-C: SAME layout — приоритет над унификацией размера).
         let gear_x = panel[0] + panel[2] - 10.0 - HEAD_BTN_SIZE;
         let pause_x = gear_x - 4.0 - HEAD_BTN_SIZE;
-        for (btn_x, glyph, hovered) in [
-            (
-                pause_x,
-                if self.ai_paused { "▶" } else { "⏸" },
-                point_in_rect(
-                    [pause_x, head_y + 2.0, HEAD_BTN_SIZE, HEAD_BTN_SIZE],
-                    self.cursor,
-                ),
-            ),
-            (
-                gear_x,
-                "⚙",
-                point_in_rect(
-                    [gear_x, head_y + 2.0, HEAD_BTN_SIZE, HEAD_BTN_SIZE],
-                    self.cursor,
-                ),
-            ),
+        let pause_glyph = if self.ai_paused { "▶" } else { "⏸" };
+        let pause_hovered = point_in_rect(
+            [pause_x, head_y + 2.0, HEAD_BTN_SIZE, HEAD_BTN_SIZE],
+            self.cursor,
+        );
+        let gear_hovered = point_in_rect(
+            [gear_x, head_y + 2.0, HEAD_BTN_SIZE, HEAD_BTN_SIZE],
+            self.cursor,
+        );
+        // (btn_x, glyph, hovered, icon_name) — icon_name="" → глиф через
+        // label_center; иначе — d.icon (SVG-атлас + glyph fallback).
+        for (btn_x, glyph, hovered, icon_name) in [
+            (pause_x, pause_glyph, pause_hovered, ""),
+            (gear_x, "⚙", gear_hovered, "gear"),
         ] {
-            quads.push(CardInstance {
-                pos: [btn_x, head_y + 2.0],
-                size: [HEAD_BTN_SIZE, HEAD_BTN_SIZE],
-                fill: if hovered {
-                    palette.palette_hover_fill
-                } else {
-                    [0.0; 4] // прозрачный — фон панели просвечивает
-                },
-                border: [0.0; 4],
-                params: [CHIP_RADIUS, 0.0, 0.0, 1.0],
-                corners: [0.0; 4],
-            });
-            texts.push(OwnedScreenText {
-                text: glyph.to_owned(),
-                origin: [btn_x, head_y + 4.0],
-                width: HEAD_BTN_SIZE,
-                font_size: 12.0,
-                color: palette.body,
-                align: TextAlign::Center,
-            });
+            let btn_rect = UiRect::new(btn_x, head_y + 2.0, HEAD_BTN_SIZE, HEAD_BTN_SIZE);
+            let btn_state = if hovered {
+                canvas_ui::kit::KitState::Hovered
+            } else {
+                canvas_ui::kit::KitState::Normal
+            };
+            let btn_style = canvas_ui::kit::icon_button_style(btn_state, &kit_palette);
+            d.control(btn_rect, &btn_style);
+            if icon_name.is_empty() {
+                // FR-ICONS: иконки нет в атласе — глиф шрифтом через label_center.
+                d.label_center(btn_rect, glyph, btn_style.text, 12.0);
+            } else {
+                // FR-ICONS: иконка может быть в SVG-атласе; glyph — fallback.
+                d.icon(btn_rect, icon_name, glyph, btn_style.text, 12.0);
+            }
         }
-        // Курсор-над-кнопкой тултип — отдельная полоса Popups (не рисуем здесь,
-        // чтобы не дублировать логику тултипов; hint-строка ниже в шапке).
         let _ = active_label_key; // маркер — для будущей подписи активности.
-                                  // === Строка 2: features — 3 чипа-тумблера Suggest/Graph/Agent ===
+
+        // === Строка 2: features — 3 чипа-тумблера Suggest/Graph/Agent =====
         let feats_y = panel[1] + ROW_H + 8.0;
         let feat_w = (panel[2] - 16.0 - 8.0) / 3.0; // 3 чипа с зазорами 4px
         let feat_gap = 4.0;
@@ -211,79 +215,58 @@ impl App {
         ];
         for (i, (prov, label, _tip_key)) in feats.iter().enumerate() {
             let chip_x = panel[0] + 8.0 + i as f32 * (feat_w + feat_gap);
+            let chip_rect = UiRect::new(chip_x, feats_y, feat_w, 16.0);
             let on = *prov != canvas_llm::LlmProviderId::Off;
             let hovered = point_in_rect([chip_x, feats_y, feat_w, 16.0], self.cursor);
-            // Чип: активный — слот accent (полупрозрачный), неактивный — chip.
-            quads.push(CardInstance {
-                pos: [chip_x, feats_y],
-                size: [feat_w, 16.0],
-                fill: if on {
-                    [
-                        kit_palette.accent[0],
-                        kit_palette.accent[1],
-                        kit_palette.accent[2],
-                        0.18,
-                    ]
-                } else if hovered {
-                    palette.palette_hover_fill
-                } else {
-                    palette.palette_chip_fill
-                },
-                border: if on {
-                    kit_palette.accent
-                } else {
-                    palette.palette_border
-                },
-                params: [CHIP_RADIUS, 0.0, 0.0, 1.0],
-                corners: [0.0; 4],
-            });
+            // FR-LLM-C: on → Selected (слот selected_fill), hovered → Hovered,
+            // off → Normal. chip_style — слот заливки/рамки/текста, radius=RADIUS_CHIP.
+            let chip_state = if on {
+                canvas_ui::kit::KitState::Selected
+            } else if hovered {
+                canvas_ui::kit::KitState::Hovered
+            } else {
+                canvas_ui::kit::KitState::Normal
+            };
+            let chip_style = canvas_ui::kit::chip_style(chip_state, &kit_palette);
+            d.control(chip_rect, &chip_style);
             // Лейбл «Suggest ✓» / «Suggest» (✓ — признак включённого).
             let label_text = if on {
                 format!("{} ✓", label)
             } else {
                 label.to_string()
             };
-            texts.push(OwnedScreenText {
-                text: label_text,
-                origin: [chip_x, feats_y + 2.0],
-                width: feat_w,
-                font_size: 10.0,
-                color: if on { palette.title } else { palette.icon },
-                align: TextAlign::Center,
-            });
+            d.label_center(chip_rect, &label_text, chip_style.text, 10.0);
         }
-        // === Строка 3: costs — «Session: $X.XX · Day: $X.XX / $L.LL» ===
+
+        // === Строка 3: costs — «Session: $X.XX · Day: $X.XX / $L.LL» =====
         let costs_y = panel[1] + ROW_H * 2.0 + 10.0;
         let session_str = format!("${:.2}", self.ai_cost_session);
         let day_str = format!("${:.2}", self.ai_cost_day);
         let limit_str = format!("${:.2}", llm.cost_limit_daily);
         let costs_text = self.trf(keys::AI_STATUS_DAY, &[("v", &day_str), ("lim", &limit_str)]);
         let session_text = self.trf(keys::AI_STATUS_SESSION, &[("v", &session_str)]);
-        texts.push(OwnedScreenText {
-            text: format!("{} · {}", session_text, costs_text),
-            origin: [panel[0] + 10.0, costs_y],
-            width: panel[2] - 20.0,
-            font_size: 10.0,
-            color: palette.body,
-            align: TextAlign::Left,
-        });
-        // === Строка 4: progress bar — day cost / limit ===
+        d.label_left(
+            UiRect::new(panel[0] + 10.0, costs_y, panel[2] - 20.0, 14.0),
+            &format!("{} · {}", session_text, costs_text),
+            kit_palette.text,
+            10.0,
+        );
+
+        // === Строка 4: progress bar — day cost / limit =====================
         let progress_y = panel[1] + ROW_H * 3.0 + 12.0;
         let progress_w = panel[2] - 20.0;
         // Фон прогресс-бара (слот palette_border, прозрачный).
-        quads.push(CardInstance {
-            pos: [panel[0] + 10.0, progress_y],
-            size: [progress_w, PROGRESS_H],
-            fill: [
+        d.rect(
+            UiRect::new(panel[0] + 10.0, progress_y, progress_w, PROGRESS_H),
+            [
                 palette.palette_border[0],
                 palette.palette_border[1],
                 palette.palette_border[2],
                 0.5,
             ],
-            border: [0.0; 4],
-            params: [PROGRESS_H / 2.0, 0.0, 0.0, 1.0],
-            corners: [0.0; 4],
-        });
+            [0.0; 4],
+            PROGRESS_H / 2.0,
+        );
         // Заполнение: доля day/limit, кламп 0..1; > 0.8 — янтарный (warning).
         let pct = if llm.cost_limit_daily > 0.0 {
             (self.ai_cost_day / llm.cost_limit_daily).clamp(0.0, 1.0) as f32
@@ -296,26 +279,49 @@ impl App {
             } else {
                 kit_palette.accent
             };
-            quads.push(CardInstance {
-                pos: [panel[0] + 10.0, progress_y],
-                size: [(progress_w * pct).max(2.0), PROGRESS_H],
-                fill: fill_color,
-                border: [0.0; 4],
-                params: [PROGRESS_H / 2.0, 0.0, 0.0, 1.0],
-                corners: [0.0; 4],
-            });
+            d.rect(
+                UiRect::new(
+                    panel[0] + 10.0,
+                    progress_y,
+                    (progress_w * pct).max(2.0),
+                    PROGRESS_H,
+                ),
+                fill_color,
+                [0.0; 4],
+                PROGRESS_H / 2.0,
+            );
         }
         // Подпись «AI на паузе» под шапкой — если пауза активна.
         if self.ai_paused {
-            texts.push(OwnedScreenText {
-                text: self.tr(keys::AI_STATUS_PAUSED).to_owned(),
-                origin: [panel[0] + 10.0, panel[1] + ROW_H + 4.0],
-                width: panel[2] - 20.0,
-                font_size: 10.0,
-                color: Color::rgba(242, 165, 76, 255),
-                align: TextAlign::Left,
-            });
+            // FR-LLM-C: янтарный #F2A54C → [f32; 4] (sRGBA, для KitDraw).
+            let amber = [242.0 / 255.0, 165.0 / 255.0, 76.0 / 255.0, 1.0];
+            d.label_left(
+                UiRect::new(
+                    panel[0] + 10.0,
+                    panel[1] + ROW_H + 4.0,
+                    panel[2] - 20.0,
+                    14.0,
+                ),
+                self.tr(keys::AI_STATUS_PAUSED),
+                amber,
+                10.0,
+            );
         }
+
+        // FR-LLM-C: дрейн KitDraw → возвращаемые Vec'и (как overlays.rs).
+        quads = d.quads;
+        texts = d
+            .texts
+            .into_iter()
+            .map(|t| OwnedScreenText {
+                text: t.text,
+                origin: t.origin,
+                width: t.width,
+                font_size: t.font_size,
+                color: t.color,
+                align: t.align,
+            })
+            .collect();
         (quads, texts)
     }
 
@@ -426,5 +432,13 @@ mod tests {
     #[test]
     fn panel_width_equals_minimap_width() {
         assert_eq!(AI_STATUS_W, MINIMAP_W);
+    }
+
+    /// FR-LLM-C: радиус чипов берётся из шкалы токенов (FR-055: единый
+    /// источник радиусов; раньше дублировали PANEL_RADIUS=8 / CHIP_RADIUS=4).
+    /// Теперь CHIP_RADIUS = canvas_core::tokens::RADIUS_CHIP = 6.0.
+    #[test]
+    fn chip_radius_uses_token() {
+        assert_eq!(CHIP_RADIUS, canvas_core::tokens::RADIUS_CHIP);
     }
 }
