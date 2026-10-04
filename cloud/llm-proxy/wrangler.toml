@@ -1,0 +1,23 @@
+# canvasdesk-llm-proxy — Cloudflare Worker (FR-LLM-PROXY).
+# Stateless прокси для wasm-сборки CanvasDesk: OAuth-callback redirect (F-5.10),
+# pass-through token exchange, CORS-прокси к api.openai.com.
+# См. README.md и docs/prd/prd-0010-llm-integration-byok-chatgpt.md (F-5.10, Q6).
+
+name = "canvasdesk-llm-proxy"
+main = "worker.js"
+# Дата актуальности рантайма Workers. Если установленный wrangler/workerd старше
+# этой даты — понизьте до поддерживаемой (wrangler подскажет).
+compatibility_date = "2026-10-04"
+
+[vars]
+# CORS- origin wasm-приложения. В проде заменить «*» на конкретный домен,
+# например "https://canvasdesk.dev" (NF-1: минимум доверия).
+ALLOWED_ORIGIN = "*"
+# Рейт-лимит: запросов в минуту на IP (best-effort, per-isolate — см. README «Безопасность»).
+RATE_LIMIT_PER_MIN = "120"
+# Deep-link схема/путь для OAuth-callback в wasm (F-5.2/F-5.10).
+OAUTH_DEEP_LINK_BASE = "canvasdesk://oauth/callback"
+
+# Секреты в toml НЕ задаются. Опциональный режим BYOK-through-proxy:
+#   wrangler secret put PROXY_BYOK_KEY
+# (если Authorization не пришёл от клиента — воркер подставит Bearer PROXY_BYOK_KEY).

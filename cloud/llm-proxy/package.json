@@ -1,0 +1,13 @@
+{
+  "name": "canvasdesk-llm-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Stateless Cloudflare Worker для wasm-сборки CanvasDesk: OAuth-callback redirect (F-5.10/Q6) + CORS-прокси к api.openai.com (FR-LLM-PROXY)",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
