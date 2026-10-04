@@ -1095,6 +1095,21 @@ mod tests {
                     platt_b: -0.9,
                 },
             },
+            // Stream C (F-2.1): LLM-настройки проходят round-trip (значения
+            // не дефолтные — проверяют сохранение выбора пользователя в
+            // config.toml; fix после мерджа Stream C в main, E0063).
+            llm: canvas_llm::LlmSettings {
+                provider_suggest: canvas_llm::LlmProviderId::Ollama,
+                provider_graph: canvas_llm::LlmProviderId::Off,
+                provider_agent: canvas_llm::LlmProviderId::Byok,
+                api_key: String::new(),
+                model: "llama3.1:8b".to_owned(),
+                endpoint: "http://127.0.0.1:11434/v1".to_owned(),
+                data_residency: canvas_llm::DataResidency::SelfHosted,
+                cost_limit_daily: 2.5,
+                confidence_threshold: 0.4,
+                telemetry_opt_in: false,
+            },
         };
         let dir = crate::test_scratch_root().join("canvasdesk-settings-test"); // FR-036: wasm-совместимая песочница
         let path = dir.join("config.toml");
