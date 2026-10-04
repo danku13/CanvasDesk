@@ -194,7 +194,10 @@ fn worker_panic_falls_back_to_sync() {
     set_text(&mut scene, "A", "a = 7");
     scene.recompute_flow();
     // Фолбэк идёт синхронно в первом же complete (паника поймана воркером).
-    let applied = complete_within(&mut scene, 8);
+    // Бюджет 40 кадров (1 c): путь включает спавн потока, unwind паники и
+    // JoinError-детект — на загруженном windows-раннере 8×25мс не хватало
+    // (флаки 2026-10-05); семантика «фолбэк завершает пересчёт» та же.
+    let applied = complete_within(&mut scene, 40);
     assert!(applied, "фолбэк завершает пересчёт");
     assert_eq!(result_of(&scene, "B"), "14", "значения как в sync-пути");
     assert_eq!(result_of(&scene, "C"), "15", "значения как в sync-пути");
