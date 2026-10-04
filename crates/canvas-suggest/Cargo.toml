@@ -26,6 +26,11 @@ sha2 = { version = "0.10", optional = true }
 # своего l1-llm флага). Для реальных HTTP-запросов App включает
 # `canvas-llm/l1-llm` отдельно.
 canvas-llm = { workspace = true, optional = true }
+# W1 (wasm-порт §2 п.7): web-безопасные часы для llm-кэша (TTL, cache.rs).
+# web-time — та же обёртка, что alias'ит canvas_core::time; на нативе
+# прозрачна над std. Optional + только за l1-llm: canvas-suggest
+# сознательно не тянет зависимости в дефолтном дереве (см. шапку).
+web-time = { workspace = true, optional = true }
 
 [dev-dependencies]
 # только для golden-тестов: разбор JSONL-фикстур PoC
@@ -47,4 +52,4 @@ l1-laya = ["dep:ureq", "dep:serde", "dep:serde_json", "dep:sha2"]
 # использовать оба: Laya как sidecar, LLM как cloud fallback).
 # Включает canvas-llm/l1-llm — без этого LlmProvider остаётся stub'ом
 # без async-методов (canvas-llm gate'ит трейт по своему флагу).
-l1-llm = ["dep:canvas-llm", "canvas-llm/l1-llm", "dep:serde", "dep:serde_json"]
+l1-llm = ["dep:canvas-llm", "canvas-llm/l1-llm", "dep:web-time", "dep:serde", "dep:serde_json"]

@@ -30,7 +30,11 @@ use crate::types::OptionDesc;
 use canvas_llm::ChoiceAnswer;
 use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// W1 (wasm-порт §2 п.7): std::time::Instant паникует на
+// wasm32-unknown-unknown; web-time на нативе — прозрачная обёртка над
+// std, на wasm32 читает performance.now().
+use web_time::Instant;
 
 /// In-memory кэш ответов LLM по хешу контекста (Q2 prefetch, F-2.8).
 ///
