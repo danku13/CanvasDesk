@@ -424,6 +424,9 @@ dependencies = [
 name = "canvas-suggest"
 version = "0.5.0"
 dependencies = [
+ "async-trait",
+ "canvas-llm",
+ "pollster",
  "serde",
  "serde_json",
  "sha2",
