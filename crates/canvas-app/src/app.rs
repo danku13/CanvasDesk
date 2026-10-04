@@ -1103,6 +1103,14 @@ pub struct App {
     ai_suggest_enabled: bool,
     ai_graph_enabled: bool,
     ai_agent_enabled: bool,
+    // FR-LLM-FIX: бейджи Button-строк таба «AI и модели» (mock health-check).
+    // `ai_key_ok` — результат проверки BYOK API-ключа (переключается кликом
+    // по кнопке «Проверить ключ» в строке AiApiKey). `ai_selfhost_ok` —
+    // результат проверки self-hosted endpoint (клик «Проверить» в строках
+    // AiSelfhostUrl/AiSelfhostKey). Persists in-memory only — реальный
+    // health-check (/v1/models) — Stream C/D TODO (`// FR-LLM-FIX-TODO:`).
+    ai_key_ok: bool,
+    ai_selfhost_ok: bool,
     /// FR-LLM-B / PRD-0010 F-7.4 (Q4): накопительный cost за сессию (USD).
     /// Инкрементируется Stream C/D после каждого LLM-запроса через
     /// `actual_cost()`. Сбрасывается при закрытии канваса. Здесь —
@@ -1600,6 +1608,10 @@ impl App {
             ai_suggest_enabled: true,
             ai_graph_enabled: true,
             ai_agent_enabled: true,
+            // FR-LLM-FIX: бейджи Button-строк стартуют «не проверено»
+            // (mock health-check переключает по клику; реальный — Stream C/D).
+            ai_key_ok: false,
+            ai_selfhost_ok: false,
             ai_cost_session: 0.0,
             ai_cost_day: 0.0,
             ai_chatgpt_rate_used: 0,

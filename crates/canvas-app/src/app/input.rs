@@ -1979,6 +1979,10 @@ impl App {
             if let Some(row) = modal_row_at(&layout, self.cursor) {
                 match row_kind(row) {
                     RowKind::Toggle => self.apply_toggle_row(row),
+                    // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL /
+                    // key) — клик по кнопке триггерит mock health-check
+                    // (переключает бейдж). Реальный health-check — Stream C/D.
+                    RowKind::Button => self.apply_button_row(row),
                     RowKind::Dropdown => {
                         // Клик по dropdown-строке открывает меню
                         // значений (НЕ меняет значение); повторный

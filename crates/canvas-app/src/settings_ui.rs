@@ -215,12 +215,24 @@ pub enum SettingsRow {
     // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а вместо одного).
     // Каждый показывается только когда соответствующий провайдер = BYOK
     // (см. `ai_settings_extra_overlay` / рендер таба «AI и модели»).
-    /// BYOK-модель для Suggest (dropdown из хардкод-списка).
+    /// BYOK-модель для Suggest (dropdown из списка /v1/models после health-check).
     AiModelSuggest,
     /// BYOK-модель для Graph Builder.
     AiModelGraph,
     /// BYOK-модель для Agent Panel.
     AiModelAgent,
+    // FR-LLM-FIX: API-ключ BYOK + self-hosted endpoint (отдельные текстовые
+    // строки-поля, не dropdown). Кнопка «Проверить» делает mock health-check
+    // и переключает бейдж (реальный health-check — Stream C/D TODO).
+    /// BYOK API-ключ (password-поле + кнопка «Проверить ключ» + бейдж).
+    /// Видна только когда ANY per-feature провайдер = BYOK.
+    AiApiKey,
+    /// URL self-hosted endpoint (текстовое поле + кнопка «Проверить» + бейдж).
+    /// Видна только когда data_residency = SelfHosted.
+    AiSelfhostUrl,
+    /// API-ключ self-hosted endpoint (текстовое поле). Видна только когда
+    /// data_residency = SelfHosted.
+    AiSelfhostKey,
     /// Data residency — radio Local/Cloud/SelfHosted (dropdown-цикл).
     AiResidency,
     /// Confidence threshold (dropdown-цикл по пресетам 0..1).
@@ -234,7 +246,7 @@ pub enum SettingsRow {
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 53] = [
+pub const SETTINGS_ROWS: [SettingsRow; 56] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -288,6 +300,10 @@ pub const SETTINGS_ROWS: [SettingsRow; 53] = [
     SettingsRow::AiModelSuggest,
     SettingsRow::AiModelGraph,
     SettingsRow::AiModelAgent,
+    // FR-LLM-FIX: API-ключ BYOK + self-hosted endpoint.
+    SettingsRow::AiApiKey,
+    SettingsRow::AiSelfhostUrl,
+    SettingsRow::AiSelfhostKey,
     SettingsRow::AiResidency,
     SettingsRow::AiConfidenceThreshold,
     SettingsRow::AiCostLimit,
@@ -418,10 +434,10 @@ pub const SETTINGS_TABS: [SettingsTab; 9] = [
     SettingsTab {
         // FR-LLM-B / PRD-0010 F-7: 9-й таб «AI и модели» — per-feature
         // провайдеры, BYOK-модель (per-feature), лимиты, data residency,
-        // телеметрия. BYOK-ключ и self-hosted endpoint — отдельные поля
-        // рисуются в `ai_settings_extra_overlay` (не dropdown-строки). Строки
-        // ниже — упорядочены по секциям прототипа (Q2 → Q4/Q7 → Q5 → Q7
-        // telemetry). FR-LLM-FIX: 3 модели (per-feature) вместо одной.
+        // телеметрия. FR-LLM-FIX: 3 модели (per-feature) вместо одной;
+        // + строка API-ключа BYOK (видна при ANY BYOK) + self-hosted
+        // endpoint (виден при SelfHosted). Строки ниже — упорядочены по
+        // секциям прототипа (Q2 → Q4/Q7 → Q5 → Q7 telemetry).
         title_key: keys::TAB_AI,
         icon: "✦",
         theme_cards: false,
@@ -433,11 +449,16 @@ pub const SETTINGS_TABS: [SettingsTab; 9] = [
             SettingsRow::AiModelGraph,
             SettingsRow::AiProvAgent,
             SettingsRow::AiModelAgent,
+            // FR-LLM-FIX: §2 BYOK — API ключ и модель (видно при ANY BYOK)
+            SettingsRow::AiApiKey,
             // §4 Лимиты и качество (Q7)
             SettingsRow::AiCostLimit,
             SettingsRow::AiConfidenceThreshold,
             // §5 Data residency (Q5)
             SettingsRow::AiResidency,
+            // FR-LLM-FIX: §5a Self-hosted endpoint (видно при SelfHosted)
+            SettingsRow::AiSelfhostUrl,
+            SettingsRow::AiSelfhostKey,
             // §6 Телеметрия (opt-in, Q7)
             SettingsRow::AiTelemetry,
         ],
@@ -500,6 +521,10 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::AiModelSuggest => keys::AI_ROW_MODEL_SUGGEST,
         SettingsRow::AiModelGraph => keys::AI_ROW_MODEL_GRAPH,
         SettingsRow::AiModelAgent => keys::AI_ROW_MODEL_AGENT,
+        // FR-LLM-FIX: API-ключ BYOK + self-hosted endpoint.
+        SettingsRow::AiApiKey => keys::AI_ROW_API_KEY,
+        SettingsRow::AiSelfhostUrl => keys::AI_ROW_SELFHOST_URL,
+        SettingsRow::AiSelfhostKey => keys::AI_ROW_SELFHOST_KEY,
         SettingsRow::AiResidency => keys::AI_GRP_RESIDENCY,
         SettingsRow::AiConfidenceThreshold => keys::AI_CONF_THR_LABEL,
         SettingsRow::AiCostLimit => keys::AI_COST_LIMIT_LABEL,
@@ -563,6 +588,10 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::AiModelSuggest => keys::AI_DESC_MODEL_SUGGEST,
         SettingsRow::AiModelGraph => keys::AI_DESC_MODEL_GRAPH,
         SettingsRow::AiModelAgent => keys::AI_DESC_MODEL_AGENT,
+        // FR-LLM-FIX: API-ключ BYOK + self-hosted endpoint.
+        SettingsRow::AiApiKey => keys::AI_DESC_API_KEY,
+        SettingsRow::AiSelfhostUrl => keys::AI_DESC_SELFHOST_URL,
+        SettingsRow::AiSelfhostKey => keys::AI_DESC_SELFHOST_KEY,
         SettingsRow::AiResidency => keys::AI_DESC_RESIDENCY,
         SettingsRow::AiConfidenceThreshold => keys::AI_DESC_CONF_THRESHOLD,
         SettingsRow::AiCostLimit => keys::AI_DESC_COST_LIMIT,
@@ -573,12 +602,20 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
 /// Род строки: тумблер (kit-switch, клик переключает) или dropdown
 /// (клик открывает меню значений). Инвариант (юнит-тест): `Toggle` — ровно
 /// для `bool`-полей `Settings`, `Dropdown` — для остальных.
+///
+/// FR-LLM-FIX: `Button` — текстовое поле + кнопка «Проверить» + бейдж
+/// (API-ключ BYOK, self-hosted endpoint). Клик по строке триггерит
+/// mock health-check и переключает бейдж; реальный health-check —
+/// Stream C/D TODO.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowKind {
     /// Булева настройка: клик — переключить (kit-switch, меню избыточно).
     Toggle,
     /// Многозначная настройка: клик — открыть выпадающее меню.
     Dropdown,
+    // FR-LLM-FIX: текстовое поле + кнопка действия (health-check mock).
+    /// Клик — вызвать кнопку строки (mock health-check, переключить бейдж).
+    Button,
 }
 
 /// Род строки панели.
@@ -611,6 +648,10 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::AiResidency
         | SettingsRow::AiConfidenceThreshold
         | SettingsRow::AiCostLimit => RowKind::Dropdown,
+        // FR-LLM-FIX: API-ключ BYOK + self-hosted endpoint — кнопка действия.
+        | SettingsRow::AiApiKey
+        | SettingsRow::AiSelfhostUrl
+        | SettingsRow::AiSelfhostKey => RowKind::Button,
         SettingsRow::Grid
         | SettingsRow::EdgesAvoid
         | SettingsRow::LinePorts
@@ -758,6 +799,12 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         | SettingsRow::DragPushRebase
         // FR-LLM-B: тумблер AI-телеметрии — состояние по pill-ручке
         | SettingsRow::AiTelemetry => None,
+        // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL / self-hosted
+        // key) — значение показывает текстовое поле и бейдж, dropdown_value
+        // не нужен (нет dropdown-кнопки).
+        | SettingsRow::AiApiKey
+        | SettingsRow::AiSelfhostUrl
+        | SettingsRow::AiSelfhostKey => None,
         // FR-ICONS: текущий набор — локализованное имя варианта.
         SettingsRow::IconStyle => Some(i18n::tr(language, icon_style_key(settings.icon_style)).to_owned()),
         // FR-LLM-B / PRD-0010 F-7: значения dropdown-строк таба «AI и модели».
@@ -767,7 +814,8 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         SettingsRow::AiProvAgent => Some(ai_provider_label(language, settings.llm.provider_agent)),
         // FR-LLM-FIX: per-feature модель — показывается только когда
         // провайдер = BYOK (иначе рендер строки скрывает поле). Значение —
-        // отображаемое имя текущей модели из `AI_BYOK_MODELS`.
+        // идентификатор выбранной модели (id из /v1/models); пустая строка
+        // означает «не выбрана» (UI показывает плейсхолдер).
         SettingsRow::AiModelSuggest => {
             Some(ai_model_current_label(&settings.llm.model_suggest))
         }
@@ -1002,6 +1050,12 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         | SettingsRow::DragPushRebase
         // FR-LLM-B: тумблер телеметрии AI — dropdown не открывает (Toggle)
         | SettingsRow::AiTelemetry => Vec::new(),
+        // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL / self-hosted
+        // key) — dropdown не открывает (RowKind::Button); клик триггерит
+        // mock health-check (см. apply_button_row в overlays.rs).
+        | SettingsRow::AiApiKey
+        | SettingsRow::AiSelfhostUrl
+        | SettingsRow::AiSelfhostKey => Vec::new(),
         // FR-ICONS: порядок опций = порядок IconStyle::ALL (инвариант, тест) =
         // порядку apply_dropdown_value (тест). Локализованные имена наборов.
         SettingsRow::IconStyle => IconStyle::ALL
@@ -1043,18 +1097,15 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         .into_iter()
         .map(|p| (ai_provider_label(language, p), settings.llm.provider_agent == p))
         .collect(),
-        SettingsRow::AiModelSuggest => AI_BYOK_MODELS
-            .iter()
-            .map(|m| (m.display_name.to_owned(), settings.llm.model_suggest == m.id))
-            .collect(),
-        SettingsRow::AiModelGraph => AI_BYOK_MODELS
-            .iter()
-            .map(|m| (m.display_name.to_owned(), settings.llm.model_graph == m.id))
-            .collect(),
-        SettingsRow::AiModelAgent => AI_BYOK_MODELS
-            .iter()
-            .map(|m| (m.display_name.to_owned(), settings.llm.model_agent == m.id))
-            .collect(),
+        // FR-LLM-FIX: per-feature BYOK-модель. Список моделей подгружается
+        // из `/v1/models` после health-check ключа (см. AI_ROW_API_KEY).
+        // До проверки ключа список пуст — dropdown_options возвращает пустой
+        // Vec, рендер показывает плейсхолдер (AI_MODEL_PH_NO_KEY /
+        // AI_MODEL_PH_NO_HC). Инвариант apply_dropdown_value: при пустом
+        // списке выбора нет (no-op).
+        SettingsRow::AiModelSuggest => Vec::new(),
+        SettingsRow::AiModelGraph => Vec::new(),
+        SettingsRow::AiModelAgent => Vec::new(),
         SettingsRow::AiResidency => [
             canvas_llm::DataResidency::Local,
             canvas_llm::DataResidency::Cloud,
@@ -1076,42 +1127,11 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
 
 // FR-LLM-B / PRD-0010 F-7: вспомогательные типы/функции для таба «AI и модели».
 
-/// BYOK-модель: id + отображаемое имя (хардкод-список из прототипа F-7.2 —
-/// `glm-5.3-flash`, `glm-5.2`, `deepseek-v3.2`, `kimi-k2.5`,
-/// `nemotron-super:free`). В продукте список берётся из `/v1/models` после
-/// health-check; до проверки ключа — этот эталон.
-#[derive(Debug, Clone, Copy)]
-pub struct AiByokModel {
-    /// Идентификатор модели (`LlmProvider::models()[].id`).
-    pub id: &'static str,
-    /// Отображаемое имя (в dropdown кнопке).
-    pub display_name: &'static str,
-}
-
-/// Хардкод-список BYOK-моделей (F-7.2 прототипа). Порядок = dropdown_options
-/// (инвариант, тест) = apply_dropdown_value.
-pub const AI_BYOK_MODELS: [AiByokModel; 5] = [
-    AiByokModel {
-        id: "glm-5.3-flash",
-        display_name: "glm-5.3-flash",
-    },
-    AiByokModel {
-        id: "glm-5.2",
-        display_name: "glm-5.2",
-    },
-    AiByokModel {
-        id: "deepseek-v3.2",
-        display_name: "deepseek-v3.2",
-    },
-    AiByokModel {
-        id: "kimi-k2.5",
-        display_name: "kimi-k2.5",
-    },
-    AiByokModel {
-        id: "nemotron-super:free",
-        display_name: "nemotron-super:free",
-    },
-];
+// FR-LLM-FIX: хардкод-список BYOK-моделей (AiByokModel/AI_BYOK_MODELS) удалён —
+// список моделей подгружается из `/v1/models` после health-check ключа.
+// До проверки ключа список пуст (Vec::new()), dropdown_options для
+// AiModelSuggest/Graph/Agent возвращает пустой Vec, apply_dropdown_value —
+// no-op. Реальный health-check — Stream C/D TODO (`// FR-LLM-FIX-TODO:`).
 
 /// Пресеты confidence threshold (F-7.5): 0.0 / 0.25 / 0.5 / 0.75 / 1.0.
 /// Шаг слайдера прототипа — 0.05, но пресеты в dropdown выбраны по краям и
@@ -1148,15 +1168,13 @@ pub fn ai_residency_label(language: Language, residency: canvas_llm::DataResiden
     i18n::tr(language, key).to_owned()
 }
 
-/// FR-LLM-FIX: отображаемое имя текущей BYOK-модели (per-feature). Если
-/// переданная строка пустая или не сопоставлена ни с одной моделью из
-/// [`AI_BYOK_MODELS`] — «по умолчанию» (первая модель списка, glm-5.3-flash).
+/// FR-LLM-FIX: отображаемое имя текущей BYOK-модели (per-feature). Раньше
+/// искала модель в хардкод-списке `AI_BYOK_MODELS` и падала на первую модель
+/// (glm-5.3-flash); теперь возвращает сам `model_id` (это идентификатор из
+/// `/v1/models`, в UI отображается как есть). Пустая строка — «не выбрана»
+/// (UI показывает плейсхолдер `AI_MODEL_PH_EMPTY`/`AI_MODEL_PH_NO_KEY`).
 fn ai_model_current_label(model_id: &str) -> String {
-    AI_BYOK_MODELS
-        .iter()
-        .find(|m| m.id == model_id)
-        .map(|m| m.display_name.to_owned())
-        .unwrap_or_else(|| AI_BYOK_MODELS[0].display_name.to_owned())
+    model_id.to_owned()
 }
 
 /// FR-ICONS: i18n-ключ локализованного имени варианта `IconStyle`.
@@ -1297,6 +1315,11 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         | SettingsRow::TelemetryAnalytics
         // FR-LLM-B: тумблер телеметрии AI — apply_toggle_row (App), не dropdown
         | SettingsRow::AiTelemetry => {}
+        // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL / self-hosted
+        // key) — apply_button_row (App), не dropdown; no-op здесь.
+        | SettingsRow::AiApiKey
+        | SettingsRow::AiSelfhostUrl
+        | SettingsRow::AiSelfhostKey => {}
         // FR-ICONS: индекс в `IconStyle::ALL` (порядок = dropdown_options,
         // инвариант теста). Вне диапазона — без изменений (как остальные).
         SettingsRow::IconStyle => {
@@ -1350,21 +1373,13 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
                 settings.llm.provider_agent = p;
             }
         }
-        SettingsRow::AiModelSuggest => {
-            if let Some(m) = AI_BYOK_MODELS.get(index) {
-                settings.llm.model_suggest = m.id.to_string();
-            }
-        }
-        SettingsRow::AiModelGraph => {
-            if let Some(m) = AI_BYOK_MODELS.get(index) {
-                settings.llm.model_graph = m.id.to_string();
-            }
-        }
-        SettingsRow::AiModelAgent => {
-            if let Some(m) = AI_BYOK_MODELS.get(index) {
-                settings.llm.model_agent = m.id.to_string();
-            }
-        }
+        // FR-LLM-FIX: per-feature BYOK-модель. Список моделей берётся из
+        // `/v1/models` после health-check ключа — до проверки список пуст,
+        // выбора нет (no-op). Реальный health-check — Stream C/D TODO
+        // (`// FR-LLM-FIX-TODO:`).
+        SettingsRow::AiModelSuggest => {}
+        SettingsRow::AiModelGraph => {}
+        SettingsRow::AiModelAgent => {}
         SettingsRow::AiResidency => {
             let order = [
                 canvas_llm::DataResidency::Local,
@@ -1551,6 +1566,16 @@ pub fn control_rect(row_rect: [f32; 4], kind: RowKind) -> [f32; 4] {
             DROPDOWN_BTN_W,
             DROPDOWN_BTN_H,
         ],
+        // FR-LLM-FIX: кнопка действия в Button-строке (API-ключ / self-hosted
+        // URL / self-hosted key) — справа, как dropdown; ширина/высота — те
+        // же DROPDOWN_BTN_W/H (единый визуальный ритм контрола справа).
+        // Текстовое поле и бейдж рисуются отдельно (см. overlays.rs).
+        RowKind::Button => [
+            row_rect[0] + row_rect[2] - MODAL_PADDING - DROPDOWN_BTN_W,
+            row_rect[1] + (row_rect[3] - DROPDOWN_BTN_H) / 2.0,
+            DROPDOWN_BTN_W,
+            DROPDOWN_BTN_H,
+        ],
     }
 }
 
@@ -1675,16 +1700,25 @@ pub fn modal_layout_with_settings(
 }
 
 /// FR-LLM-FIX: видимые строки таба «AI и модели» (индекс 8) с учётом
-/// настроек провайдеров. Модель-строка (AiModelSuggest/Graph/Agent)
-/// показывается только когда соответствующий провайдер = BYOK. Для не-BYOK
-/// провайдеров модель фиксирована (gpt-5.2 / llama3.1:8b / laya-1.13),
-/// пользователь не может её выбрать — строка скрыта. Для других табов
-/// возвращаем статический `tab_def.rows` без фильтрации (как раньше).
+/// настроек провайдеров и data residency. Модель-строка
+/// (AiModelSuggest/Graph/Agent) показывается только когда соответствующий
+/// провайдер = BYOK. AiApiKey — когда ANY per-feature провайдер = BYOK.
+/// AiSelfhostUrl/AiSelfhostKey — когда data_residency = SelfHosted.
+/// Для не-BYOK провайдеров модель подгружается из /v1/models после
+/// подключения (ChatGPT/Ollama) или фиксирована (Laya = laya-1.13), пользователь
+/// не может её выбрать — строка скрыта. Для других табов возвращаем
+/// статический `tab_def.rows` без фильтрации (как раньше).
 ///
 /// **Контракт**: вызывается `modal_layout_with` когда передан `Some(&Settings)`;
 /// тесты и legacy-вызовы (`modal_layout(tab, viewport)`) передают `None`
 /// и получают все строки (для проверок `tabs_cover_all_rows` и т.п.).
 pub fn ai_tab_visible_rows(settings: &Settings) -> Vec<SettingsRow> {
+    // FR-LLM-FIX: ANY per-feature провайдер = BYOK → API-ключ виден.
+    let any_byok = settings.llm.provider_suggest == canvas_llm::LlmProviderId::Byok
+        || settings.llm.provider_graph == canvas_llm::LlmProviderId::Byok
+        || settings.llm.provider_agent == canvas_llm::LlmProviderId::Byok;
+    // FR-LLM-FIX: data_residency = SelfHosted → self-hosted endpoint виден.
+    let selfhosted = settings.llm.data_residency == canvas_llm::DataResidency::SelfHosted;
     let mut out = Vec::new();
     for &row in SETTINGS_TABS[8].rows {
         let visible = match row {
@@ -1698,6 +1732,10 @@ pub fn ai_tab_visible_rows(settings: &Settings) -> Vec<SettingsRow> {
             SettingsRow::AiModelAgent => {
                 settings.llm.provider_agent == canvas_llm::LlmProviderId::Byok
             }
+            // FR-LLM-FIX: API-ключ BYOK виден когда ANY per-feature провайдер = BYOK.
+            SettingsRow::AiApiKey => any_byok,
+            // FR-LLM-FIX: self-hosted endpoint виден только при SelfHosted.
+            SettingsRow::AiSelfhostUrl | SettingsRow::AiSelfhostKey => selfhosted,
             _ => true,
         };
         if visible {
@@ -2376,9 +2414,11 @@ mod tests {
                 SettingsRow::Language
             ]
         );
-        // FR-LLM-B / PRD-0010 F-7: 9-й таб «AI и модели» — 10 строк (3
-        // провайдера + 3 per-feature BYOK-модели + 2 лимита + residency +
-        // телеметрия). FR-LLM-FIX: было 8 (одна модель), стало 10 (3 модели).
+        // FR-LLM-B / PRD-0010 F-7: 9-й таб «AI и модели» — 13 строк (3
+        // провайдера + 3 per-feature BYOK-модели + API-ключ + 2 лимита +
+        // residency + 2 self-hosted + телеметрия). FR-LLM-FIX: было 10
+        // (без API-ключа и self-hosted), стало 13 (с API-ключом BYOK и
+        // self-hosted endpoint — видны по фильтру).
         assert_eq!(
             SETTINGS_TABS[8].rows,
             &[
@@ -2388,9 +2428,14 @@ mod tests {
                 SettingsRow::AiModelGraph,
                 SettingsRow::AiProvAgent,
                 SettingsRow::AiModelAgent,
+                // FR-LLM-FIX: API-ключ BYOK (видно при ANY BYOK).
+                SettingsRow::AiApiKey,
                 SettingsRow::AiCostLimit,
                 SettingsRow::AiConfidenceThreshold,
                 SettingsRow::AiResidency,
+                // FR-LLM-FIX: self-hosted endpoint (видно при SelfHosted).
+                SettingsRow::AiSelfhostUrl,
+                SettingsRow::AiSelfhostKey,
                 SettingsRow::AiTelemetry,
             ]
         );
@@ -2550,6 +2595,13 @@ mod tests {
                 | SettingsRow::AiConfidenceThreshold
                 | SettingsRow::AiCostLimit => {
                     assert_eq!(row_kind(row), RowKind::Dropdown);
+                }
+                // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL /
+                // self-hosted key) — RowKind::Button (клик = mock health-check).
+                SettingsRow::AiApiKey
+                | SettingsRow::AiSelfhostUrl
+                | SettingsRow::AiSelfhostKey => {
+                    assert_eq!(row_kind(row), RowKind::Button);
                 }
             }
         }
@@ -3291,6 +3343,9 @@ mod tests {
             match row_kind(row) {
                 RowKind::Toggle => assert_eq!(control[2], canvas_ui::kit::SWITCH_W),
                 RowKind::Dropdown => assert_eq!(control[2], DROPDOWN_BTN_W),
+                // FR-LLM-FIX: Button-строки — кнопка действия справа (та же
+                // ширина DROPDOWN_BTN_W, что у dropdown — единый ритм контрола).
+                RowKind::Button => assert_eq!(control[2], DROPDOWN_BTN_W),
             }
         }
         // W-c: трек тумблера — kit-геометрия (SWITCH_W×SWITCH_H по центру

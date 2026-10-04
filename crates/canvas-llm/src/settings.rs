@@ -93,10 +93,13 @@ pub struct LlmSettings {
     pub api_key: String,
     // FR-LLM-FIX: per-feature BYOK-модель (Q1 правки прототипа F-7.2). Раньше
     // было единое поле `model: String`; теперь каждое AI-свойство имеет свой
-    // идентификатор модели (glm-5.3-flash по умолчанию). Для не-BYOK
-    // провайдеров поле игнорируется (ChatGPT → gpt-5.2, Ollama → llama3.1:8b,
-    // Laya → laya-1.13, Off → нет модели).
-    /// BYOK-модель для Suggest (id из `LlmProvider::models()`).
+    // идентификатор модели. По умолчанию — пустая строка: список моделей
+    // подгружается из `/v1/models` после health-check ключа. Для не-BYOK
+    // провайдеров поле игнорируется (ChatGPT → из /v1/models после OAuth,
+    // Ollama → из /v1/models после подключения, Laya → «laya-1.13»
+    // (single-model sidecar), Off → нет модели).
+    /// BYOK-модель для Suggest (id из `LlmProvider::models()`); пустая —
+    /// не выбрана (UI показывает плейсхолдер, статусная панель — «не выбрана»).
     pub model_suggest: String,
     /// BYOK-модель для Graph Builder.
     pub model_graph: String,
@@ -130,17 +133,20 @@ impl Default for LlmSettings {
     /// - `confidence_threshold: 0.5` (Q7 default).
     /// - `telemetry_opt_in: false` (Q7 default OFF).
     /// - `api_key` / `model_*` / `endpoint` — пустые (не заданы).
+    /// - FR-LLM-FIX: `model_*` — пустые (список моделей подгружается из
+    ///   `/v1/models` после health-check ключа; до выбора — плейсхолдер).
     fn default() -> Self {
         Self {
             provider_suggest: LlmProviderId::Off,
             provider_graph: LlmProviderId::Off,
             provider_agent: LlmProviderId::Off,
             api_key: String::new(),
-            // FR-LLM-FIX: per-feature дефолт-модель — glm-5.3-flash (Q1 правки
-            // прототипа F-7.2; лучшее p@1 на benchmark).
-            model_suggest: "glm-5.3-flash".to_owned(),
-            model_graph: "glm-5.3-flash".to_owned(),
-            model_agent: "glm-5.3-flash".to_owned(),
+            // FR-LLM-FIX: per-feature дефолт-модель — пустая строка. Раньше
+            // был хардкод «glm-5.3-flash»; теперь список моделей берётся из
+            // `/v1/models` после health-check ключа (см. task FIX-APIKEY-MODELS).
+            model_suggest: String::new(),
+            model_graph: String::new(),
+            model_agent: String::new(),
             endpoint: String::new(),
             data_residency: DataResidency::Local,
             cost_limit_daily: 1.0,
@@ -214,9 +220,11 @@ mod tests {
         assert_eq!(s.confidence_threshold, 0.5);
         assert!(!s.telemetry_opt_in);
         assert!(s.api_key.is_empty());
-        assert_eq!(s.model_suggest, "glm-5.3-flash");
-        assert_eq!(s.model_graph, "glm-5.3-flash");
-        assert_eq!(s.model_agent, "glm-5.3-flash");
+        // FR-LLM-FIX: model_* — пустые по умолчанию (список подгружается
+        // из /v1/models после health-check ключа).
+        assert!(s.model_suggest.is_empty());
+        assert!(s.model_graph.is_empty());
+        assert!(s.model_agent.is_empty());
         assert!(s.endpoint.is_empty());
         assert!(s.all_off());
     }

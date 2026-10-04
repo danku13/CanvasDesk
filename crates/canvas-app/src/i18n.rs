@@ -810,6 +810,12 @@ pub mod keys {
     pub const AI_ROW_SH_URL: &str = "ai.row.sh_url";
     pub const AI_ROW_SH_KEY: &str = "ai.row.sh_key";
     pub const AI_ROW_TELEMETRY: &str = "ai.row.telemetry";
+    // FR-LLM-FIX: лейблы/описания строк API-ключа BYOK и self-hosted endpoint
+    // (видны при BYOK / SelfHosted). Существующие AI_ROW_KEY/AI_ROW_SH_URL/
+    // AI_ROW_SH_KEY — legacy-ключи; новые — отдельный неймспейс FR-LLM-FIX.
+    pub const AI_ROW_API_KEY: &str = "ai.row.api_key";
+    pub const AI_ROW_SELFHOST_URL: &str = "ai.row.selfhost_url";
+    pub const AI_ROW_SELFHOST_KEY: &str = "ai.row.selfhost_key";
     /// Описания строк.
     pub const AI_DESC_PROV_SUGGEST: &str = "ai.desc.prov_suggest";
     pub const AI_DESC_PROV_GRAPH: &str = "ai.desc.prov_graph";
@@ -826,6 +832,17 @@ pub mod keys {
     pub const AI_DESC_CONF_THRESHOLD: &str = "ai.desc.conf_threshold";
     pub const AI_DESC_RESIDENCY: &str = "ai.desc.residency";
     pub const AI_DESC_TELEMETRY: &str = "ai.desc.telemetry";
+    // FR-LLM-FIX: описания строк API-ключа и self-hosted endpoint.
+    pub const AI_DESC_API_KEY: &str = "ai.desc.api_key";
+    pub const AI_DESC_SELFHOST_URL: &str = "ai.desc.selfhost_url";
+    pub const AI_DESC_SELFHOST_KEY: &str = "ai.desc.selfhost_key";
+    /// FR-LLM-FIX: плейсхолдеры dropdown'а BYOK-модели (когда список пуст).
+    pub const AI_MODEL_PH_NO_KEY: &str = "ai.model.ph_no_key";
+    pub const AI_MODEL_PH_NO_HC: &str = "ai.model.ph_no_hc";
+    pub const AI_MODEL_PH_EMPTY: &str = "ai.model.ph_empty";
+    /// FR-LLM-FIX: бейдж «не выбрана» в статусной панели (активный провайдер
+    /// без модели — ChatGPT/Ollama без подключения, BYOK без выбора модели).
+    pub const AI_STATUS_MODEL_NOT_CHOSEN: &str = "ai.status.model_not_chosen";
     /// Опции dropdown (значения провайдеров + модели).
     pub const AI_OPT_OFF: &str = "ai.opt.off";
     pub const AI_OPT_LAYA: &str = "ai.opt.laya";
@@ -1822,6 +1839,10 @@ const RU: &[(&str, &str)] = &[
     (keys::AI_ROW_SH_URL, "Self-hosted endpoint"),
     (keys::AI_ROW_SH_KEY, "API ключ endpoint'а"),
     (keys::AI_ROW_TELEMETRY, "Анонимные события использования"),
+    // FR-LLM-FIX: лейблы новых строк (API-ключ BYOK + self-hosted endpoint).
+    (keys::AI_ROW_API_KEY, "BYOK — API ключ и модель"),
+    (keys::AI_ROW_SELFHOST_URL, "Self-hosted endpoint"),
+    (keys::AI_ROW_SELFHOST_KEY, "API ключ endpoint'а"),
     (
         keys::AI_DESC_PROV_SUGGEST,
         "подсказки шаблонов и custom-ноды",
@@ -1844,20 +1865,20 @@ const RU: &[(&str, &str)] = &[
     ),
     (
         keys::AI_DESC_MODEL,
-        "Список /v1/models провайдера. По умолчанию — glm-5.3-flash (лучший p@1 на benchmark).",
+        "Список /v1/models провайдера. Загружается после health-check ключа — до проверки список пуст, выберите «Проверить ключ» выше.",
     ),
     // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а).
     (
         keys::AI_DESC_MODEL_SUGGEST,
-        "BYOK-модель для Suggest. По умолчанию — glm-5.3-flash (лучший p@1 на benchmark).",
+        "BYOK-модель для Suggest. Список подгружается из /v1/models после health-check ключа — до проверки выберите «Проверить ключ» выше.",
     ),
     (
         keys::AI_DESC_MODEL_GRAPH,
-        "BYOK-модель для Graph Builder. По умолчанию — glm-5.3-flash.",
+        "BYOK-модель для Graph Builder. Список подгружается из /v1/models после health-check ключа.",
     ),
     (
         keys::AI_DESC_MODEL_AGENT,
-        "BYOK-модель для Agent Panel. По умолчанию — glm-5.3-flash.",
+        "BYOK-модель для Agent Panel. Список подгружается из /v1/models после health-check ключа.",
     ),
     (
         keys::AI_DESC_RATE,
@@ -1879,6 +1900,28 @@ const RU: &[(&str, &str)] = &[
         keys::AI_DESC_TELEMETRY,
         "default OFF (Q7): события показов/принятий подсказок и cost — только после явного согласия; без PII. Полный гайд: user-docs/ai-features.md",
     ),
+    // FR-LLM-FIX: описания новых строк (API-ключ BYOK + self-hosted endpoint).
+    (
+        keys::AI_DESC_API_KEY,
+        "BYOK-ключ провайдера (OpenAI/Anthropic/z.ai/Moonshot/OpenRouter). Хранится в OS keychain (desktop) / OPFS encrypted (web). Нажмите «Проверить ключ» — после проверки подгрузится список моделей из /v1/models.",
+    ),
+    (
+        keys::AI_DESC_SELFHOST_URL,
+        "URL OpenAI-compatible endpoint'а вашего GPU-сервера (например, https://llm.corp.local/v1). Проверка — кнопка «Проверить» в строке ключа ниже.",
+    ),
+    (
+        keys::AI_DESC_SELFHOST_KEY,
+        "API-ключ self-hosted endpoint'а (если endpoint требует авторизацию). Кнопка «Проверить» делает health-check /v1/models и фиксирует бейдж.",
+    ),
+    // FR-LLM-FIX: плейсхолдеры dropdown'а BYOK-модели (когда список пуст).
+    (keys::AI_MODEL_PH_NO_KEY, "Введите API ключ"),
+    (
+        keys::AI_MODEL_PH_NO_HC,
+        "Нажмите «Проверить ключ» для загрузки списка",
+    ),
+    (keys::AI_MODEL_PH_EMPTY, "Выберите модель"),
+    // FR-LLM-FIX: бейдж статусной панели — активный провайдер без модели.
+    (keys::AI_STATUS_MODEL_NOT_CHOSEN, "не выбрана"),
     (keys::AI_OPT_OFF, "Выключено"),
     (keys::AI_OPT_LAYA, "Laya (локальная)"),
     (keys::AI_OPT_OLLAMA, "Ollama (локальная)"),
@@ -2928,6 +2971,10 @@ const EN: &[(&str, &str)] = &[
     (keys::AI_ROW_SH_URL, "Self-hosted endpoint"),
     (keys::AI_ROW_SH_KEY, "Endpoint API key"),
     (keys::AI_ROW_TELEMETRY, "Anonymous usage events"),
+    // FR-LLM-FIX: лейблы новых строк (API-ключ BYOK + self-hosted endpoint).
+    (keys::AI_ROW_API_KEY, "BYOK — API key and model"),
+    (keys::AI_ROW_SELFHOST_URL, "Self-hosted endpoint"),
+    (keys::AI_ROW_SELFHOST_KEY, "Endpoint API key"),
     (keys::AI_DESC_PROV_SUGGEST, "template hints and custom nodes"),
     (keys::AI_DESC_PROV_GRAPH, "graph generation from text"),
     (keys::AI_DESC_PROV_AGENT, "agent operations via MCP"),
@@ -2941,20 +2988,20 @@ const EN: &[(&str, &str)] = &[
     ),
     (
         keys::AI_DESC_MODEL,
-        "List from the provider's /v1/models. Default — glm-5.3-flash (best p@1 in benchmark).",
+        "List from the provider's /v1/models. Loaded after a key health-check — before the check the list is empty, click «Check key» above.",
     ),
     // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а).
     (
         keys::AI_DESC_MODEL_SUGGEST,
-        "BYOK model for Suggest. Default — glm-5.3-flash (best p@1 in benchmark).",
+        "BYOK model for Suggest. List is loaded from /v1/models after a key health-check — before the check, click «Check key» above.",
     ),
     (
         keys::AI_DESC_MODEL_GRAPH,
-        "BYOK model for Graph Builder. Default — glm-5.3-flash.",
+        "BYOK model for Graph Builder. List is loaded from /v1/models after a key health-check.",
     ),
     (
         keys::AI_DESC_MODEL_AGENT,
-        "BYOK model for Agent Panel. Default — glm-5.3-flash.",
+        "BYOK model for Agent Panel. List is loaded from /v1/models after a key health-check.",
     ),
     (
         keys::AI_DESC_RATE,
@@ -2976,6 +3023,28 @@ const EN: &[(&str, &str)] = &[
         keys::AI_DESC_TELEMETRY,
         "default OFF (Q7): events of hint impressions/acceptances and cost — only after explicit consent; no PII. Full guide: user-docs/ai-features.md",
     ),
+    // FR-LLM-FIX: описания новых строк (API-ключ BYOK + self-hosted endpoint).
+    (
+        keys::AI_DESC_API_KEY,
+        "BYOK provider key (OpenAI/Anthropic/z.ai/Moonshot/OpenRouter). Stored in OS keychain (desktop) / OPFS encrypted (web). Click «Check key» — after the check, the model list is loaded from /v1/models.",
+    ),
+    (
+        keys::AI_DESC_SELFHOST_URL,
+        "OpenAI-compatible endpoint URL of your GPU server (e.g. https://llm.corp.local/v1). Verification — «Check» button in the key row below.",
+    ),
+    (
+        keys::AI_DESC_SELFHOST_KEY,
+        "Self-hosted endpoint API key (if the endpoint requires authorization). «Check» runs a /v1/models health-check and pins the badge.",
+    ),
+    // FR-LLM-FIX: плейсхолдеры dropdown'а BYOK-модели (когда список пуст).
+    (keys::AI_MODEL_PH_NO_KEY, "Enter API key"),
+    (
+        keys::AI_MODEL_PH_NO_HC,
+        "Click «Check key» to load the list",
+    ),
+    (keys::AI_MODEL_PH_EMPTY, "Choose a model"),
+    // FR-LLM-FIX: бейдж статусной панели — активный провайдер без модели.
+    (keys::AI_STATUS_MODEL_NOT_CHOSEN, "not chosen"),
     (keys::AI_OPT_OFF, "Off"),
     (keys::AI_OPT_LAYA, "Laya (local)"),
     (keys::AI_OPT_OLLAMA, "Ollama (local)"),

@@ -173,8 +173,16 @@ impl App {
         .find(|(p, _, _)| *p != canvas_llm::LlmProviderId::Off)
         .unwrap_or((canvas_llm::LlmProviderId::Off, "", "AI"));
         let model_name = provider_fixed_model(active_provider, active_model);
+        // FR-LLM-FIX: пустое имя модели — «не выбрана» для активного
+        // провайдера (ChatGPT/Ollama без подключения, BYOK без выбора
+        // модели из /v1/models), «AI выключен» — только когда все Off.
         let model_name = if model_name.is_empty() {
-            self.tr(keys::AI_STATUS_NO_MODEL).to_owned()
+            if active_provider == canvas_llm::LlmProviderId::Off {
+                self.tr(keys::AI_STATUS_NO_MODEL).to_owned()
+            } else {
+                // FR-LLM-FIX: активный провайдер без модели — «не выбрана».
+                self.tr(keys::AI_STATUS_MODEL_NOT_CHOSEN).to_owned()
+            }
         } else {
             model_name.to_owned()
         };
@@ -486,12 +494,19 @@ impl App {
 /// FR-LLM-FIX: модель провайдера для отображения в шапке панели. Для BYOK —
 /// переданный `byok_model` (model_suggest/graph/agent); для не-BYOK —
 /// фиксированное имя модели провайдера (как `aiProvModel()` прототипа).
-/// Возвращает пустую строку для Off (вызывающий показывает fallback-текст).
+/// Возвращает пустую строку для Off и для не-BYOK провайдеров без хардкода
+/// (ChatGPT/Ollama — список моделей подгружается из `/v1/models` после
+/// OAuth/подключения; Laya — single-model sidecar «laya-1.13»).
 fn provider_fixed_model(provider: canvas_llm::LlmProviderId, byok_model: &str) -> String {
     match provider {
         canvas_llm::LlmProviderId::Byok => byok_model.to_owned(),
-        canvas_llm::LlmProviderId::ChatGptOAuth => "gpt-5.2".to_owned(),
-        canvas_llm::LlmProviderId::Ollama => "llama3.1:8b".to_owned(),
+        // FR-LLM-FIX: хардкоды «gpt-5.2» и «llama3.1:8b» удалены — модель
+        // подгружается из `/v1/models` после OAuth/подключения. До подключения
+        // — пустая строка (статусная панель показывает «не выбрана»).
+        canvas_llm::LlmProviderId::ChatGptOAuth => String::new(),
+        canvas_llm::LlmProviderId::Ollama => String::new(),
+        // Laya — single-model sidecar; «laya-1.13» не хардкод, а идентификатор
+        // единственной модели этого провайдера.
         canvas_llm::LlmProviderId::Laya => "laya-1.13".to_owned(),
         canvas_llm::LlmProviderId::Off => String::new(),
     }
@@ -588,22 +603,28 @@ mod tests {
         assert_eq!(FEAT_GAP, 5.0);
     }
 
-    /// FR-LLM-FIX: provider_fixed_model — фиксированные модели для не-BYOK
-    /// провайдеров (как `aiProvModel()` прототипа); BYOK — переданное имя.
+    /// FR-LLM-FIX: provider_fixed_model — модель провайдера для шапки панели.
+    /// Раньше возвращала хардкоды «gpt-5.2»/«llama3.1:8b» для ChatGPT/Ollama;
+    /// теперь возвращает пустую строку (модель подгружается из /v1/models).
+    /// Laya — single-model sidecar «laya-1.13»; BYOK — переданное имя; Off — пусто.
     #[test]
     fn provider_fixed_model_matches_prototype() {
+        // FR-LLM-FIX: хардкоды gpt-5.2/llama3.1:8b удалены.
         assert_eq!(
             provider_fixed_model(canvas_llm::LlmProviderId::ChatGptOAuth, ""),
-            "gpt-5.2"
+            ""
         );
         assert_eq!(
             provider_fixed_model(canvas_llm::LlmProviderId::Ollama, ""),
-            "llama3.1:8b"
+            ""
         );
+        // Laya — single-model sidecar; «laya-1.13» не хардкод, а
+        // идентификатор единственной модели этого провайдера.
         assert_eq!(
             provider_fixed_model(canvas_llm::LlmProviderId::Laya, ""),
             "laya-1.13"
         );
+        // BYOK — переданное имя модели (model_suggest/graph/agent).
         assert_eq!(
             provider_fixed_model(canvas_llm::LlmProviderId::Byok, "deepseek-v3.2"),
             "deepseek-v3.2"
