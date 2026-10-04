@@ -4581,7 +4581,10 @@ impl App {
             | SettingsRow::AiProvSuggest
             | SettingsRow::AiProvGraph
             | SettingsRow::AiProvAgent
-            | SettingsRow::AiModel
+            // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а)
+            | SettingsRow::AiModelSuggest
+            | SettingsRow::AiModelGraph
+            | SettingsRow::AiModelAgent
             | SettingsRow::AiResidency
             | SettingsRow::AiConfidenceThreshold
             | SettingsRow::AiCostLimit => {
@@ -4885,7 +4888,14 @@ impl App {
         // W-a: контент правой панели — со скроллом (тот же offset, что
         // у hit-тестов ui_registry и pick input.rs — «ввод = тому, что
         // видно»); навигация/заголовок/карточки тем неподвижны.
-        let layout = modal_layout_scrolled(self.settings_tab, viewport, self.settings_scroll_top);
+        // FR-LLM-FIX: передаём настройки для фильтрации AI-таба (BYOK-
+        // модель видна только когда провайдер = BYOK).
+        let layout = modal_layout_scrolled_with_settings(
+            self.settings_tab,
+            viewport,
+            self.settings_scroll_top,
+            &self.settings,
+        );
         let modal = layout.rect;
         instances.push(CardInstance {
             pos: [modal[0], modal[1]],
@@ -5237,7 +5247,10 @@ impl App {
                         | SettingsRow::AiProvSuggest
                         | SettingsRow::AiProvGraph
                         | SettingsRow::AiProvAgent
-                        | SettingsRow::AiModel
+                        // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а)
+                        | SettingsRow::AiModelSuggest
+                        | SettingsRow::AiModelGraph
+                        | SettingsRow::AiModelAgent
                         | SettingsRow::AiResidency
                         | SettingsRow::AiConfidenceThreshold
                         | SettingsRow::AiCostLimit

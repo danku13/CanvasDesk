@@ -1103,7 +1103,12 @@ mod tests {
                 provider_graph: canvas_llm::LlmProviderId::Off,
                 provider_agent: canvas_llm::LlmProviderId::Byok,
                 api_key: String::new(),
-                model: "llama3.1:8b".to_owned(),
+                // FR-LLM-FIX: per-feature BYOK-модели (вместо единого `model`).
+                // Suggest — llama3.1:8b (т.к. provider_suggest=Ollama),
+                // Agent — glm-5.3-flash (т.к. provider_agent=Byok).
+                model_suggest: "llama3.1:8b".to_owned(),
+                model_graph: "glm-5.3-flash".to_owned(),
+                model_agent: "glm-5.3-flash".to_owned(),
                 endpoint: "http://127.0.0.1:11434/v1".to_owned(),
                 data_residency: canvas_llm::DataResidency::SelfHosted,
                 cost_limit_daily: 2.5,

@@ -1914,8 +1914,13 @@ impl App {
             // строкам и карточкам темы. W-a: scrolled-раскладка — тот же
             // offset, что у рисования (overlays.rs) и hit-rect'ов
             // (ui_registry.rs) — «ввод = тому, что видно».
-            let layout =
-                modal_layout_scrolled(self.settings_tab, viewport, self.settings_scroll_top);
+            // FR-LLM-FIX: настройки для фильтрации AI-таба (BYOK-модель).
+            let layout = modal_layout_scrolled_with_settings(
+                self.settings_tab,
+                viewport,
+                self.settings_scroll_top,
+                &self.settings,
+            );
             // Открытое выпадающее меню — первый приоритет: клик по
             // пункту применяет значение; клик мимо меню закрывает
             // ТОЛЬКО меню (модалка остаётся открытой — двухэтапный
@@ -2653,6 +2658,14 @@ impl App {
                 // стопка транзиентна (паттерн тултипа, не реестр FR-052);
                 // клик по карточке глотается, мимо — закрывает и проходит
                 if self.suggest_card_click() {
+                    return;
+                }
+                // FR-LLM-FIX / PRD-0010 F-7.9 (Q4): AI status panel —
+                // hit-test активных элементов (⏸/⚙ + 3 чипа Suggest/Graph/
+                // Agent). Панель НЕ в реестре FR-052 (транзиентна, как
+                // suggest-карточки) — глотаем ввод в пределах rect, мимо —
+                // проходит в обычный canvas-pick ниже.
+                if self.ai_status_panel_click() {
                     return;
                 }
                 // FR-052 (U2 PRD-0009): единый диспетчер поверхностей —
@@ -3931,9 +3944,12 @@ impl App {
         // (y < 0) увеличивает offset.
         if self.settings_open {
             let viewport = self.viewport_logical();
-            let content = modal_layout(self.settings_tab, viewport).content_rect;
+            // FR-LLM-FIX: настройки для фильтрации AI-таба (BYOK-модель).
+            let content = modal_layout_with_settings(self.settings_tab, viewport, &self.settings)
+                .content_rect;
             if point_in_rect(content, self.cursor) {
-                let max = modal_scroll_max(self.settings_tab, viewport);
+                // FR-LLM-FIX: предел прокрутки с учётом фильтрации AI-таба.
+                let max = modal_scroll_max_filtered(self.settings_tab, viewport, &self.settings);
                 let dy = match delta {
                     MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
                     MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),

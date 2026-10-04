@@ -212,8 +212,15 @@ pub enum SettingsRow {
     AiProvGraph,
     /// Agent Panel — агентные операции через MCP.
     AiProvAgent,
-    /// BYOK-модель (dropdown из хардкод-списка).
-    AiModel,
+    // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а вместо одного).
+    // Каждый показывается только когда соответствующий провайдер = BYOK
+    // (см. `ai_settings_extra_overlay` / рендер таба «AI и модели»).
+    /// BYOK-модель для Suggest (dropdown из хардкод-списка).
+    AiModelSuggest,
+    /// BYOK-модель для Graph Builder.
+    AiModelGraph,
+    /// BYOK-модель для Agent Panel.
+    AiModelAgent,
     /// Data residency — radio Local/Cloud/SelfHosted (dropdown-цикл).
     AiResidency,
     /// Confidence threshold (dropdown-цикл по пресетам 0..1).
@@ -227,7 +234,7 @@ pub enum SettingsRow {
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 51] = [
+pub const SETTINGS_ROWS: [SettingsRow; 53] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -278,7 +285,9 @@ pub const SETTINGS_ROWS: [SettingsRow; 51] = [
     SettingsRow::AiProvSuggest,
     SettingsRow::AiProvGraph,
     SettingsRow::AiProvAgent,
-    SettingsRow::AiModel,
+    SettingsRow::AiModelSuggest,
+    SettingsRow::AiModelGraph,
+    SettingsRow::AiModelAgent,
     SettingsRow::AiResidency,
     SettingsRow::AiConfidenceThreshold,
     SettingsRow::AiCostLimit,
@@ -408,20 +417,22 @@ pub const SETTINGS_TABS: [SettingsTab; 9] = [
     },
     SettingsTab {
         // FR-LLM-B / PRD-0010 F-7: 9-й таб «AI и модели» — per-feature
-        // провайдеры, BYOK-модель, лимиты, data residency, телеметрия.
-        // BYOK-ключ и self-hosted endpoint — отдельные поля рисуются в
-        // `ai_settings_extra_overlay` (не dropdown-строки). Строки ниже —
-        // упорядочены по секциям прототипа (Q2 → Q4/Q7 → Q5 → Q7 telemetry).
+        // провайдеры, BYOK-модель (per-feature), лимиты, data residency,
+        // телеметрия. BYOK-ключ и self-hosted endpoint — отдельные поля
+        // рисуются в `ai_settings_extra_overlay` (не dropdown-строки). Строки
+        // ниже — упорядочены по секциям прототипа (Q2 → Q4/Q7 → Q5 → Q7
+        // telemetry). FR-LLM-FIX: 3 модели (per-feature) вместо одной.
         title_key: keys::TAB_AI,
         icon: "✦",
         theme_cards: false,
         rows: &[
-            // §1 Per-feature провайдер (Q2)
+            // §1 Per-feature провайдер (Q2) + BYOK-модель (per-feature)
             SettingsRow::AiProvSuggest,
+            SettingsRow::AiModelSuggest,
             SettingsRow::AiProvGraph,
+            SettingsRow::AiModelGraph,
             SettingsRow::AiProvAgent,
-            // §2 BYOK — модель (API-ключ рисуется отдельно — не строка)
-            SettingsRow::AiModel,
+            SettingsRow::AiModelAgent,
             // §4 Лимиты и качество (Q7)
             SettingsRow::AiCostLimit,
             SettingsRow::AiConfidenceThreshold,
@@ -486,7 +497,9 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::AiProvSuggest => keys::AI_ROW_PROV_SUGGEST,
         SettingsRow::AiProvGraph => keys::AI_ROW_PROV_GRAPH,
         SettingsRow::AiProvAgent => keys::AI_ROW_PROV_AGENT,
-        SettingsRow::AiModel => keys::AI_ROW_MODEL,
+        SettingsRow::AiModelSuggest => keys::AI_ROW_MODEL_SUGGEST,
+        SettingsRow::AiModelGraph => keys::AI_ROW_MODEL_GRAPH,
+        SettingsRow::AiModelAgent => keys::AI_ROW_MODEL_AGENT,
         SettingsRow::AiResidency => keys::AI_GRP_RESIDENCY,
         SettingsRow::AiConfidenceThreshold => keys::AI_CONF_THR_LABEL,
         SettingsRow::AiCostLimit => keys::AI_COST_LIMIT_LABEL,
@@ -547,7 +560,9 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::AiProvSuggest => keys::AI_DESC_PROV_SUGGEST,
         SettingsRow::AiProvGraph => keys::AI_DESC_PROV_GRAPH,
         SettingsRow::AiProvAgent => keys::AI_DESC_PROV_AGENT,
-        SettingsRow::AiModel => keys::AI_DESC_MODEL,
+        SettingsRow::AiModelSuggest => keys::AI_DESC_MODEL_SUGGEST,
+        SettingsRow::AiModelGraph => keys::AI_DESC_MODEL_GRAPH,
+        SettingsRow::AiModelAgent => keys::AI_DESC_MODEL_AGENT,
         SettingsRow::AiResidency => keys::AI_DESC_RESIDENCY,
         SettingsRow::AiConfidenceThreshold => keys::AI_DESC_CONF_THRESHOLD,
         SettingsRow::AiCostLimit => keys::AI_DESC_COST_LIMIT,
@@ -589,7 +604,10 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::AiProvSuggest
         | SettingsRow::AiProvGraph
         | SettingsRow::AiProvAgent
-        | SettingsRow::AiModel
+        // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а)
+        | SettingsRow::AiModelSuggest
+        | SettingsRow::AiModelGraph
+        | SettingsRow::AiModelAgent
         | SettingsRow::AiResidency
         | SettingsRow::AiConfidenceThreshold
         | SettingsRow::AiCostLimit => RowKind::Dropdown,
@@ -747,7 +765,18 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         SettingsRow::AiProvSuggest => Some(ai_provider_label(language, settings.llm.provider_suggest)),
         SettingsRow::AiProvGraph => Some(ai_provider_label(language, settings.llm.provider_graph)),
         SettingsRow::AiProvAgent => Some(ai_provider_label(language, settings.llm.provider_agent)),
-        SettingsRow::AiModel => Some(ai_model_current_label(&settings.llm)),
+        // FR-LLM-FIX: per-feature модель — показывается только когда
+        // провайдер = BYOK (иначе рендер строки скрывает поле). Значение —
+        // отображаемое имя текущей модели из `AI_BYOK_MODELS`.
+        SettingsRow::AiModelSuggest => {
+            Some(ai_model_current_label(&settings.llm.model_suggest))
+        }
+        SettingsRow::AiModelGraph => {
+            Some(ai_model_current_label(&settings.llm.model_graph))
+        }
+        SettingsRow::AiModelAgent => {
+            Some(ai_model_current_label(&settings.llm.model_agent))
+        }
         SettingsRow::AiResidency => Some(ai_residency_label(language, settings.llm.data_residency)),
         SettingsRow::AiConfidenceThreshold => {
             Some(format!("{:.2}", settings.llm.confidence_threshold))
@@ -1014,9 +1043,17 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         .into_iter()
         .map(|p| (ai_provider_label(language, p), settings.llm.provider_agent == p))
         .collect(),
-        SettingsRow::AiModel => AI_BYOK_MODELS
+        SettingsRow::AiModelSuggest => AI_BYOK_MODELS
             .iter()
-            .map(|m| (m.display_name.to_owned(), settings.llm.model == m.id))
+            .map(|m| (m.display_name.to_owned(), settings.llm.model_suggest == m.id))
+            .collect(),
+        SettingsRow::AiModelGraph => AI_BYOK_MODELS
+            .iter()
+            .map(|m| (m.display_name.to_owned(), settings.llm.model_graph == m.id))
+            .collect(),
+        SettingsRow::AiModelAgent => AI_BYOK_MODELS
+            .iter()
+            .map(|m| (m.display_name.to_owned(), settings.llm.model_agent == m.id))
             .collect(),
         SettingsRow::AiResidency => [
             canvas_llm::DataResidency::Local,
@@ -1111,13 +1148,13 @@ pub fn ai_residency_label(language: Language, residency: canvas_llm::DataResiden
     i18n::tr(language, key).to_owned()
 }
 
-/// Отображаемое имя текущей BYOK-модели. Если `settings.llm.model` пустой
-/// или не сопоставлен ни с одной моделью из [`AI_BYOK_MODELS`] — «по
-/// умолчанию» (первая модель списка, glm-5.3-flash).
-fn ai_model_current_label(llm: &canvas_llm::LlmSettings) -> String {
+/// FR-LLM-FIX: отображаемое имя текущей BYOK-модели (per-feature). Если
+/// переданная строка пустая или не сопоставлена ни с одной моделью из
+/// [`AI_BYOK_MODELS`] — «по умолчанию» (первая модель списка, glm-5.3-flash).
+fn ai_model_current_label(model_id: &str) -> String {
     AI_BYOK_MODELS
         .iter()
-        .find(|m| m.id == llm.model)
+        .find(|m| m.id == model_id)
         .map(|m| m.display_name.to_owned())
         .unwrap_or_else(|| AI_BYOK_MODELS[0].display_name.to_owned())
 }
@@ -1313,9 +1350,19 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
                 settings.llm.provider_agent = p;
             }
         }
-        SettingsRow::AiModel => {
+        SettingsRow::AiModelSuggest => {
             if let Some(m) = AI_BYOK_MODELS.get(index) {
-                settings.llm.model = m.id.to_string();
+                settings.llm.model_suggest = m.id.to_string();
+            }
+        }
+        SettingsRow::AiModelGraph => {
+            if let Some(m) = AI_BYOK_MODELS.get(index) {
+                settings.llm.model_graph = m.id.to_string();
+            }
+        }
+        SettingsRow::AiModelAgent => {
+            if let Some(m) = AI_BYOK_MODELS.get(index) {
+                settings.llm.model_agent = m.id.to_string();
             }
         }
         SettingsRow::AiResidency => {
@@ -1608,21 +1655,88 @@ pub fn modal_layout(tab: usize, viewport: [f32; 2]) -> ModalLayout {
     // `ui_registry`/`template_panel_layout`); Fixed-дети его не читают.
     let mut m = canvas_ui::measure::TextMeasurer::new();
     let mut fs = canvas_render::text::measure_font_system();
-    modal_layout_with(tab, viewport, &mut m, &mut fs)
+    // FR-LLM-FIX: None → без фильтрации (тесты / legacy / floating-button
+    // rect не зависит от фильтра — берёт только `.rect`).
+    modal_layout_with(tab, viewport, &mut m, &mut fs, None)
 }
 
-/// То же с ЯВНЫМ замерщиком (для потребителей, уже держащих
+/// FR-LLM-FIX: App-side обёртка с настройками для фильтрации AI-таба.
+/// Семантика та же, что у [`modal_layout`], но AI-таб фильтрует BYOK-модель
+/// (строка видна только когда провайдер = BYOK). Для остальных табов
+/// `settings` игнорируется (фильтрации нет — все строки таба видны).
+pub fn modal_layout_with_settings(
+    tab: usize,
+    viewport: [f32; 2],
+    settings: &Settings,
+) -> ModalLayout {
+    let mut m = canvas_ui::measure::TextMeasurer::new();
+    let mut fs = canvas_render::text::measure_font_system();
+    modal_layout_with(tab, viewport, &mut m, &mut fs, Some(settings))
+}
+
+/// FR-LLM-FIX: видимые строки таба «AI и модели» (индекс 8) с учётом
+/// настроек провайдеров. Модель-строка (AiModelSuggest/Graph/Agent)
+/// показывается только когда соответствующий провайдер = BYOK. Для не-BYOK
+/// провайдеров модель фиксирована (gpt-5.2 / llama3.1:8b / laya-1.13),
+/// пользователь не может её выбрать — строка скрыта. Для других табов
+/// возвращаем статический `tab_def.rows` без фильтрации (как раньше).
+///
+/// **Контракт**: вызывается `modal_layout_with` когда передан `Some(&Settings)`;
+/// тесты и legacy-вызовы (`modal_layout(tab, viewport)`) передают `None`
+/// и получают все строки (для проверок `tabs_cover_all_rows` и т.п.).
+pub fn ai_tab_visible_rows(settings: &Settings) -> Vec<SettingsRow> {
+    let mut out = Vec::new();
+    for &row in SETTINGS_TABS[8].rows {
+        let visible = match row {
+            // FR-LLM-FIX: BYOK-модель видна только когда провайдер = BYOK.
+            SettingsRow::AiModelSuggest => {
+                settings.llm.provider_suggest == canvas_llm::LlmProviderId::Byok
+            }
+            SettingsRow::AiModelGraph => {
+                settings.llm.provider_graph == canvas_llm::LlmProviderId::Byok
+            }
+            SettingsRow::AiModelAgent => {
+                settings.llm.provider_agent == canvas_llm::LlmProviderId::Byok
+            }
+            _ => true,
+        };
+        if visible {
+            out.push(row);
+        }
+    }
+    out
+}
+
+/// [`modal_layout_with`] с ЯВНЫМ замерщиком (для потребителей, уже держащих
 /// `measure_font_system` — двойной лок глобального FontSystem невозможен).
+///
+/// FR-LLM-FIX: `settings_filter` — необязательные настройки для фильтрации
+/// строк AI-таба (BYOK-модель показывается только когда провайдер = BYOK).
+/// `None` → все строки (тесты / legacy). Возвращает тот же `ModalLayout`.
 pub fn modal_layout_with(
     tab: usize,
     viewport: [f32; 2],
     m: &mut canvas_ui::measure::TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
+    settings_filter: Option<&Settings>,
 ) -> ModalLayout {
     use canvas_ui::geometry::{EdgeInsets, UiRect, UiVec2};
     use canvas_ui::layout::{stack, Column, HAlign, MeasuredItem, Row, VAlign};
 
     let tab_def = SETTINGS_TABS.get(tab).unwrap_or(&SETTINGS_TABS[0]);
+    // FR-LLM-FIX: видимые строки (для AI-таба — с фильтром BYOK-модели).
+    // Храним в Vec, чтобы пережить borrow cycle (tab_def.rows живёт в
+    // статике; vec — на стеке, итерируем безопасно).
+    let filtered_rows: Vec<SettingsRow> = if tab == 8 {
+        if let Some(s) = settings_filter {
+            ai_tab_visible_rows(s)
+        } else {
+            tab_def.rows.to_vec()
+        }
+    } else {
+        tab_def.rows.to_vec()
+    };
+    let effective_rows: &[SettingsRow] = &filtered_rows;
     let mode = modal_mode(viewport);
     let single_column = mode != ModalMode::Desktop;
     let [w, h] = modal_size(viewport);
@@ -1872,7 +1986,7 @@ pub fn modal_layout_with(
             h: MODAL_THEME_GAP,
         });
     }
-    flow.extend(tab_def.rows.iter().map(|_| MeasuredItem::Fixed {
+    flow.extend(effective_rows.iter().map(|_| MeasuredItem::Fixed {
         w: row_w,
         h: MODAL_ROW_HEIGHT,
     }));
@@ -1884,7 +1998,7 @@ pub fn modal_layout_with(
     .iter()
     .skip(if tab_def.theme_cards { 2 } else { 0 })
     .enumerate()
-    .map(|(i, r)| (tab_def.rows[i], [r.x, r.y, r.w, r.h]))
+    .map(|(i, r)| (effective_rows[i], [r.x, r.y, r.w, r.h]))
     .collect();
     ModalLayout {
         rect,
@@ -1930,6 +2044,29 @@ fn modal_content_flow_h(tab_def: &SettingsTab) -> f32 {
     prefix + tab_def.rows.len() as f32 * MODAL_ROW_HEIGHT
 }
 
+/// FR-LLM-FIX: полная высота потока контента AI-таба с учётом фильтрации
+/// BYOK-моделей (строка скрыта → высота 0). Используется в
+/// [`modal_layout_scrolled_with`] для клампа скролла, чтобы зона рядов
+/// точно отражала видимые строки.
+fn modal_content_flow_h_filtered(tab: usize, settings_filter: Option<&Settings>) -> f32 {
+    let tab_def = SETTINGS_TABS.get(tab).unwrap_or(&SETTINGS_TABS[0]);
+    let prefix = if tab_def.theme_cards {
+        MODAL_THEME_CARD_H + MODAL_THEME_GAP
+    } else {
+        0.0
+    };
+    let count = if tab == 8 {
+        if let Some(s) = settings_filter {
+            ai_tab_visible_rows(s).len()
+        } else {
+            tab_def.rows.len()
+        }
+    } else {
+        tab_def.rows.len()
+    };
+    prefix + count as f32 * MODAL_ROW_HEIGHT
+}
+
 /// Предел вертикальной прокрутки контента правой панели (W-a, дефект
 /// адаптива №2: на 800×560 таб «Профиль» переливается за низ модалки):
 /// полная высота потока минус высота зоны рядов (content_rect минус
@@ -1941,6 +2078,14 @@ pub fn modal_scroll_max(tab: usize, viewport: [f32; 2]) -> f32 {
     let mode = modal_mode(viewport);
     let zone_h = (modal_content_h(modal_size(viewport)[1], mode) - MODAL_PADDING * 2.0).max(0.0);
     (modal_content_flow_h(tab_def) - zone_h).max(0.0)
+}
+
+/// FR-LLM-FIX: предел прокрутки с учётом фильтрации строк AI-таба
+/// (видимые BYOK-модели). App-side обёртка над [`modal_scroll_max`].
+pub fn modal_scroll_max_filtered(tab: usize, viewport: [f32; 2], settings: &Settings) -> f32 {
+    let mode = modal_mode(viewport);
+    let zone_h = (modal_content_h(modal_size(viewport)[1], mode) - MODAL_PADDING * 2.0).max(0.0);
+    (modal_content_flow_h_filtered(tab, Some(settings)) - zone_h).max(0.0)
 }
 
 /// [`modal_layout_with`] с вертикальной прокруткой контента правой панели
@@ -1966,6 +2111,7 @@ pub fn modal_layout_scrolled_with(
     scroll_top: f32,
     m: &mut canvas_ui::measure::TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
+    settings_filter: Option<&Settings>,
 ) -> ModalLayout {
     use canvas_ui::geometry::{EdgeInsets, UiRect};
     use canvas_ui::kit::ScrollState;
@@ -1973,7 +2119,7 @@ pub fn modal_layout_scrolled_with(
     // База — та же раскладка скелета (навигация/заголовок/зона) без
     // прокрутки: сдвигается и клипается только поток контента правой
     // панели, навигация и заголовок остаются на месте.
-    let base = modal_layout_with(tab, viewport, m, fs);
+    let base = modal_layout_with(tab, viewport, m, fs, settings_filter);
     // Зона рядов: контент-зона минус внутренний паддинг (те же поля, что
     // у потока строк в modal_layout_with).
     let rows_viewport = UiRect::new(
@@ -1983,9 +2129,11 @@ pub fn modal_layout_scrolled_with(
         base.content_rect[3],
     )
     .inset(&EdgeInsets::uniform(MODAL_PADDING));
+    // FR-LLM-FIX: высота контента — с учётом фильтрации AI-таба.
+    let content_h = modal_content_flow_h_filtered(tab, settings_filter);
     let mut scroll = ScrollState {
         offset: scroll_top,
-        content_h: modal_content_flow_h(SETTINGS_TABS.get(tab).unwrap_or(&SETTINGS_TABS[0])),
+        content_h,
         viewport_h: rows_viewport.h,
     };
     scroll.clamp();
@@ -2024,7 +2172,22 @@ pub fn modal_layout_scrolled_with(
 pub fn modal_layout_scrolled(tab: usize, viewport: [f32; 2], scroll_top: f32) -> ModalLayout {
     let mut m = canvas_ui::measure::TextMeasurer::new();
     let mut fs = canvas_render::text::measure_font_system();
-    modal_layout_scrolled_with(tab, viewport, scroll_top, &mut m, &mut fs)
+    // FR-LLM-FIX: None → без фильтрации (тесты / legacy-вызовы).
+    modal_layout_scrolled_with(tab, viewport, scroll_top, &mut m, &mut fs, None)
+}
+
+/// FR-LLM-FIX: App-side обёртка со скроллом + настройками для фильтрации
+/// AI-таба. Семантика та же, что у [`modal_layout_scrolled`], но AI-таб
+/// фильтрует BYOK-модель (строка видна только когда провайдер = BYOK).
+pub fn modal_layout_scrolled_with_settings(
+    tab: usize,
+    viewport: [f32; 2],
+    scroll_top: f32,
+    settings: &Settings,
+) -> ModalLayout {
+    let mut m = canvas_ui::measure::TextMeasurer::new();
+    let mut fs = canvas_render::text::measure_font_system();
+    modal_layout_scrolled_with(tab, viewport, scroll_top, &mut m, &mut fs, Some(settings))
 }
 
 /// Hit-test пункта левой навигации: индекс таба под точкой или `None`
@@ -2213,15 +2376,18 @@ mod tests {
                 SettingsRow::Language
             ]
         );
-        // FR-LLM-B / PRD-0010 F-7: 9-й таб «AI и модели» — 8 строк (3
-        // провайдера + модель + 2 лимита + residency + телеметрия).
+        // FR-LLM-B / PRD-0010 F-7: 9-й таб «AI и модели» — 10 строк (3
+        // провайдера + 3 per-feature BYOK-модели + 2 лимита + residency +
+        // телеметрия). FR-LLM-FIX: было 8 (одна модель), стало 10 (3 модели).
         assert_eq!(
             SETTINGS_TABS[8].rows,
             &[
                 SettingsRow::AiProvSuggest,
+                SettingsRow::AiModelSuggest,
                 SettingsRow::AiProvGraph,
+                SettingsRow::AiModelGraph,
                 SettingsRow::AiProvAgent,
-                SettingsRow::AiModel,
+                SettingsRow::AiModelAgent,
                 SettingsRow::AiCostLimit,
                 SettingsRow::AiConfidenceThreshold,
                 SettingsRow::AiResidency,
@@ -2376,7 +2542,10 @@ mod tests {
                 | SettingsRow::AiProvSuggest
                 | SettingsRow::AiProvGraph
                 | SettingsRow::AiProvAgent
-                | SettingsRow::AiModel
+                // FR-LLM-FIX: per-feature BYOK-модель (3 dropdown'а)
+                | SettingsRow::AiModelSuggest
+                | SettingsRow::AiModelGraph
+                | SettingsRow::AiModelAgent
                 | SettingsRow::AiResidency
                 | SettingsRow::AiConfidenceThreshold
                 | SettingsRow::AiCostLimit => {

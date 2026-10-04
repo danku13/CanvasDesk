@@ -30,10 +30,10 @@ use crate::palette::{
 use crate::scheme_gallery_ui;
 use crate::settings_ui::{
     apply_dropdown_value, control_rect, dropdown_item_at, dropdown_layout, dropdown_options,
-    dropdown_value, modal_layout, modal_layout_scrolled, modal_nav_at, modal_row_at,
-    modal_scroll_max, modal_theme_card_at, pill_knob_rect, row_desc_key, row_kind, row_label_key,
-    DropdownState, ModalMode, RowKind, SettingsRow, DROPDOWN_MARGIN, DROPDOWN_ROW_H,
-    MODAL_ROW_LABEL_W, SETTINGS_TABS,
+    dropdown_value, modal_layout_scrolled_with_settings, modal_layout_with_settings, modal_nav_at,
+    modal_row_at, modal_scroll_max_filtered, modal_theme_card_at, pill_knob_rect, row_desc_key,
+    row_kind, row_label_key, DropdownState, ModalMode, RowKind, SettingsRow, DROPDOWN_MARGIN,
+    DROPDOWN_ROW_H, MODAL_ROW_LABEL_W, SETTINGS_TABS,
 };
 use crate::suggest;
 // FR-038 (T-038.4): snap-движок (T-038.2) — чистая геометрия магнитной
@@ -164,6 +164,8 @@ pub mod ui_registry;
 /// FR-LLM-B / PRD-0010 F-7.9 (Q4): AI status panel — правый нижний угол,
 /// над миникартой. Владелец: Stream B. Не трогают другие потоки.
 mod ai_status_panel;
+// FR-LLM-FIX: re-export hit-enum для обработчика ввода (app.rs).
+pub(crate) use ai_status_panel::AiStatusPanelHit;
 
 // FR-LLM-D / PRD-0010 F-4: Agent panel — чат-UI tool-calling. Владелец:
 // Stream D. UI + state + validation (LLM-вызов через worker, TODO).
@@ -1094,6 +1096,13 @@ pub struct App {
     /// кнопке ⏸/▶ в шапке панели. Persists in-memory only (между запусками
     /// сбрасывается — экстренная остановка, не настройка).
     ai_paused: bool,
+    // FR-LLM-FIX / PRD-0010 F-7.9 (Q4): per-feature тумблеры активности AI
+    // (Suggest / Graph / Agent) — переключаются кликом по чипам в статусной
+    // панели. `false` — фича выключена (LLM-запросы не идут, fallback на lex
+    // в suggest / отказ в graph/agent). Persists in-memory only (как и пауза).
+    ai_suggest_enabled: bool,
+    ai_graph_enabled: bool,
+    ai_agent_enabled: bool,
     /// FR-LLM-B / PRD-0010 F-7.4 (Q4): накопительный cost за сессию (USD).
     /// Инкрементируется Stream C/D после каждого LLM-запроса через
     /// `actual_cost()`. Сбрасывается при закрытии канваса. Здесь —
@@ -1586,6 +1595,11 @@ impl App {
             // cost инкрементируется Stream C/D после запросов).
             ai_onboarding: None,
             ai_paused: false,
+            // FR-LLM-FIX: per-feature тумблеры стартуют включёнными (как в
+            // прототипе — все чипы `on` по умолчанию, см. aiSyncFeats()).
+            ai_suggest_enabled: true,
+            ai_graph_enabled: true,
+            ai_agent_enabled: true,
             ai_cost_session: 0.0,
             ai_cost_day: 0.0,
             ai_chatgpt_rate_used: 0,
@@ -6032,6 +6046,74 @@ impl App {
         // Мимо карточек — закрыть стопку, клик продолжает путь
         self.close_suggest_cards();
         false
+    }
+
+    // FR-LLM-FIX / PRD-0010 F-7.9 (Q4): AI status panel — hit-test активных
+    // элементов панели. Вызывается из `on_left_button` до диспетчера
+    // поверхностей FR-052 (панель — транзиентный оверлей, как suggest-карточки;
+    // клик по телу панели глотается, мимо — проходит в canvas-pick).
+    // Возвращает true — ввод обработан (caller гасит клик).
+    fn ai_status_panel_click(&mut self) -> bool {
+        let Some(hit) = self.ai_status_panel_hit(self.cursor) else {
+            return false;
+        };
+        match hit {
+            AiStatusPanelHit::NoOp => {
+                // Клик по телу панели — глотаем без действия.
+                true
+            }
+            AiStatusPanelHit::PauseToggle => {
+                self.ai_paused = !self.ai_paused;
+                tracing::info!(
+                    target: "canvas_app",
+                    paused = self.ai_paused,
+                    "AI: пауза toggled из статусной панели"
+                );
+                self.request_redraw();
+                true
+            }
+            AiStatusPanelHit::OpenSettings => {
+                // FR-LLM-FIX: открываем модалку настроек на 9-м табе
+                // «AI и модели» (индекс 8 в SETTINGS_TABS — 0-based).
+                self.close_main_stage();
+                self.settings_open = true;
+                self.settings_tab = 8;
+                self.settings_dropdown.reset();
+                self.settings_scroll_top = 0.0;
+                self.request_redraw();
+                true
+            }
+            AiStatusPanelHit::ToggleSuggest => {
+                self.ai_suggest_enabled = !self.ai_suggest_enabled;
+                tracing::info!(
+                    target: "canvas_app",
+                    enabled = self.ai_suggest_enabled,
+                    "AI: Suggest toggled из статусной панели"
+                );
+                self.request_redraw();
+                true
+            }
+            AiStatusPanelHit::ToggleGraph => {
+                self.ai_graph_enabled = !self.ai_graph_enabled;
+                tracing::info!(
+                    target: "canvas_app",
+                    enabled = self.ai_graph_enabled,
+                    "AI: Graph toggled из статусной панели"
+                );
+                self.request_redraw();
+                true
+            }
+            AiStatusPanelHit::ToggleAgent => {
+                self.ai_agent_enabled = !self.ai_agent_enabled;
+                tracing::info!(
+                    target: "canvas_app",
+                    enabled = self.ai_agent_enabled,
+                    "AI: Agent toggled из статусной панели"
+                );
+                self.request_redraw();
+                true
+            }
+        }
     }
 
     /// C3: закрыть стопку карточек (dismissed в журнал, если показаны).
