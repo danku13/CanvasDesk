@@ -95,9 +95,10 @@ fn map_to_theme_colors(parsed: &ParsedPreset) -> ThemeColors {
         // dark()/light() theme.rs.
         chip_text: Color::rgb(0x14, 0x16, 0x1c),
         zebra_fill: if is_light_bg {
-            [0.078, 0.094, 0.157, 0.03]
+            // CR-018 волна v2 (решение владельца): альфа 0.08 в обеих темах
+            [0.078, 0.094, 0.157, 0.08]
         } else {
-            [1.0, 1.0, 1.0, 0.04]
+            [1.0, 1.0, 1.0, 0.08]
         },
         edge_edit_fill: rgba("edge_edit_fill"),
         edge_label_fill: rgba("edge_label_fill"),

@@ -294,8 +294,6 @@ pub const ZONE_LABEL_LINE_HEIGHT: f32 = 16.0;
 // FR-061 этап B (D-5): длина штриха/зазора и толщина линии лидера —
 // с этапа E единая геометрия с китом (`canvas_ui::kit::leader_dash_rects`,
 // токены TABLE_LEADER_*; локальные константы удалены — D-15).
-/// FR-061 этап B (D-5): зебра — фон через строку в прогонах ≥ 4 строк данных.
-const ZEBRA_RUN_MIN: usize = canvas_core::tokens::TABLE_ZEBRA_RUN_MIN;
 /// FR-061 этап B (D-5): вертикаль лидера в строке (доля высоты строки —
 /// базовая линия прототипа).
 const LEADER_Y_FRAC: f32 = canvas_core::tokens::TABLE_LEADER_Y_FRAC;
@@ -2193,7 +2191,17 @@ fn shape_body(
                     kind: BodyQuadKind::QuoteBar,
                 });
             }
-            if item.mono {
+            // CR-018 волна v2 (решение владельца 2026-10-04, вариант C):
+            // CodeBg остаётся только у GFM-блоков кода. Строки таблицы ноды
+            // (формульные — source_line, Σ, заголовок ведомости, авто-строки)
+            // фон кода больше не получают: непрозрачный банд накрывал хром
+            // таблицы (зебру/лидеров) и делал его гарантированно невидимым.
+            if item.mono
+                && !item.header
+                && !item.sigma
+                && !item.oblique
+                && item.source_line.is_none()
+            {
                 quads.push(BodyQuad {
                     rect: [0.0, oy, body_width * zoom_px, height_px],
                     kind: BodyQuadKind::CodeBg,
@@ -3722,14 +3730,8 @@ impl TextSystem {
                             );
                         }
                         row_guides = pass.guides;
-                        // Зебра (D-5): прогоны ПОДРЯД идущих строк данных —
-                        // соседство по индексам блоков (проза между строками
-                        // рвёт прогон), чётные позиции внутри прогона ≥ 4.
-                        // FR-061 аудит выравнивания (2026-09-26): правило
-                        // прогонов — ЕДИНОЕ с китом (canvas_ui::kit::
-                        // zebra_run_flags; перенос 1:1, байт-паритет с прежним
-                        // inline-циклом — тест zebra_run_matches_inline_oracle);
-                        // цвет зебры остаётся здесь (слот темы, F-8).
+                        // Хром-строки (заголовок блока/превью/Σ) — маркер для
+                        // зебры v2 (цвет зебры остаётся здесь — слот темы, F-8).
                         let chrome: Vec<bool> = rows_data
                             .iter()
                             .map(|row| {
@@ -3741,9 +3743,14 @@ impl TextSystem {
                                 )
                             })
                             .collect();
-                        let block_pos: Vec<usize> = geo.iter().map(|g| g.3).collect();
-                        let zebra =
-                            canvas_ui::kit::zebra_run_flags(&block_pos, &chrome, ZEBRA_RUN_MIN);
+                        // CR-018 волна v2 (решение владельца 2026-10-04): зебра —
+                        // каждая 2-я строка данных (0-based индекс данных % 2 == 1,
+                        // прототип O-7), активация от 2 строк данных. Хром
+                        // (Total/Preview/Σ) в нумерацию не входит и фона не
+                        // получает. Прежний гейт прогонов run≥4 снят (типичная
+                        // нода с 2–3 формулами зебры не имела вовсе); китовый
+                        // zebra_run_flags остаётся экранному киту.
+                        let zebra = row_grid::zebra_flags_v2(&chrome);
                         // Шейп ячеек (D-4): значение/юнит — по частям D-1,
                         // бейдж — по режиму лестницы (D-6). Пролитые/авто —
                         // наклонное моно Р-2 (метрики те же — I-1).
@@ -5361,63 +5368,30 @@ load = connections_per_sec / (servers * server_rate)\n";
         }
     }
 
-    /// FR-061 аудит выравнивания с китом (2026-09-26, D-5): зебра-маска
-    /// прогонов — `canvas_ui::kit::zebra_run_flags` бит-в-бит с прежним
-    /// inline-циклом text.rs (оракул — дословная копия прежнего алгоритма,
-    /// прецедент kit `leader_dashes_match_node_arithmetic`). Корпус —
-    /// реальные прогоны тела ноды: сплошная таблица, проза-разрыв, хром
-    /// (Total/Preview/Sigma) в начале/середине, пороговые длины 3/4.
+    /// CR-018 волна v2: узловая зебра — новая правило `zebra_flags_v2`
+    /// (каждая 2-я строка данных от 2 строк, хром без фона); маска из
+    /// вызова рендера совпадает с чистой функцией (оракул).
     #[test]
-    fn zebra_run_matches_inline_oracle() {
-        // Оракул: прежний inline-цикл prepare_titles (до переноса в кит).
-        let oracle = |block_pos: &[usize], chrome: &[bool], run_min: usize| -> Vec<bool> {
-            let mut zebra: Vec<bool> = vec![false; block_pos.len()];
-            let mut j = 0;
-            while j < block_pos.len() {
-                let mut k = j + 1;
-                while k < block_pos.len() && block_pos[k] == block_pos[k - 1] + 1 && !chrome[k] {
-                    k += 1;
-                }
-                if k - j >= run_min {
-                    for (pos, z) in zebra[j..k].iter_mut().enumerate() {
-                        *z = pos % 2 == 1 && !chrome[j + pos];
-                    }
-                }
-                j = k;
-            }
-            zebra
-        };
-        let run_min = ZEBRA_RUN_MIN;
-        let corpus: Vec<(Vec<usize>, Vec<bool>)> = vec![
-            (vec![0, 1, 2, 3], vec![false; 4]),       // порог ровно 4
-            (vec![0, 1, 2], vec![false; 3]),          // короче порога
-            ((0..9).collect(), vec![false; 9]),       // сплошная таблица
-            (vec![0, 1, 4, 5, 6, 7], vec![false; 6]), // проза-разрыв
-            (
-                (0..8).collect(),
-                vec![true, false, false, false, false, false, false, false],
-            ), // Total открывает прогон
-            (
-                (0..8).collect(),
-                vec![false, false, false, false, true, false, false, false],
-            ), // Total в середине
-            (
-                (0..8).collect(),
-                vec![false, false, false, false, false, true, false, false],
-            ), // Preview ближе к концу
-            (
-                (0..7).collect(),
-                vec![false, false, false, false, false, false, true],
-            ), // Sigma замыкает
-            (vec![3, 4, 5, 6, 10], vec![false; 5]),   // блоки не с нуля + хвост
-        ];
-        for (blocks, chrome) in corpus {
-            assert_eq!(
-                canvas_ui::kit::zebra_run_flags(&blocks, &chrome, run_min),
-                oracle(&blocks, &chrome, run_min),
-                "маска кита ≠ прежний inline-цикл на {blocks:?}/{chrome:?}"
-            );
-        }
+    fn zebra_v2_matches_data_alternation() {
+        // 2 строки данных: вторая (индекс 1) зебрится
+        assert_eq!(row_grid::zebra_flags_v2(&[false, false]), vec![false, true]);
+        // 5 данных: 2-я и 4-я
+        assert_eq!(
+            row_grid::zebra_flags_v2(&[false; 5]),
+            vec![false, true, false, true, false]
+        );
+        // 1 строка — зебры нет (порог активации)
+        assert_eq!(row_grid::zebra_flags_v2(&[false]), vec![false]);
+        // Хром не входит в нумерацию и не зебрится; чётность данных течёт
+        // сквозь хром
+        assert_eq!(
+            row_grid::zebra_flags_v2(&[false, false, true, false]),
+            vec![false, true, false, false]
+        );
+        // Только хром — фона нет
+        assert_eq!(row_grid::zebra_flags_v2(&[true, true]), vec![false, false]);
+        // Пустая таблица
+        assert!(row_grid::zebra_flags_v2(&[]).is_empty());
     }
 
     // FR-056 (F-5): клип текстов полосы — TextBounds = пересечение
@@ -5964,7 +5938,8 @@ load = connections_per_sec / (servers * server_rate)\n";
     fn shape_body_whatif_line_quad() {
         let mut fs = FontSystem::new();
         let text = "Gateway\nrps = 1000";
-        // Без подмен: только фон CodeBg формульной строки.
+        // CR-018 волна v2: без подмен квада подмены нет; фон CodeBg у
+        // формульной строки больше не рисуется (решение владельца — вариант C).
         let layout = shape_body(
             &mut fs,
             &ThemeColors::dark(),
@@ -5990,7 +5965,15 @@ load = connections_per_sec / (servers * server_rate)\n";
             "без whatif_lines квада подмены нет: {:?}",
             layout.quads
         );
-        // Подмена строки 1 → квад WhatIfBg поверх CodeBg.
+        assert!(
+            !layout
+                .quads
+                .iter()
+                .any(|quad| quad.kind == BodyQuadKind::CodeBg),
+            "у формульной строки нет CodeBg (CR-018 v2): {:?}",
+            layout.quads
+        );
+        // Подмена строки 1 → квад WhatIfBg на блоке формульной строки.
         let layout = shape_body(
             &mut fs,
             &ThemeColors::dark(),
@@ -6015,13 +5998,8 @@ load = connections_per_sec / (servers * server_rate)\n";
             .expect("квад what-if подмены есть");
         assert_eq!(whatif.rect[0], 0.0);
         assert_eq!(whatif.rect[2], 300.0, "квад на всю ширину тела");
-        let code_bg = layout
-            .quads
-            .iter()
-            .find(|quad| quad.kind == BodyQuadKind::CodeBg)
-            .expect("фон формульной строки рядом");
         assert_eq!(
-            whatif.rect[3], code_bg.rect[3],
+            whatif.rect[3], BODY_LINE_HEIGHT,
             "квад подмены — на высоту блока формульной строки"
         );
     }

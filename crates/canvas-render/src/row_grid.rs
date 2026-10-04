@@ -612,6 +612,30 @@ fn cell_widths(
     }
 }
 
+/// Зебра-маска строк таблицы ноды, волна v2 (CR-018, решение владельца
+/// 2026-10-04): каждая 2-я строка ДАННЫХ — 0-based индекс среди не-хромовых
+/// строк `% 2 == 1` (прототип O-7: i%2), активация от 2 строк данных.
+/// Хром (Total/Preview/Σ) в нумерацию не входит и фона не получает; чётность
+/// данных течёт сквозь хром. Прежний гейт прогонов «run ≥
+/// TABLE_ZEBRA_RUN_MIN» снят: типичная нода с 2–3 формулами зебры не имела
+/// вовсе. Детерминизм: одинаковый вход → идентичная маска.
+pub(crate) fn zebra_flags_v2(is_chrome_row: &[bool]) -> Vec<bool> {
+    let data_count = is_chrome_row.iter().filter(|ch| !**ch).count();
+    let mut data_ix = 0usize;
+    is_chrome_row
+        .iter()
+        .map(|ch| {
+            if *ch {
+                false
+            } else {
+                let zebra = data_count >= 2 && data_ix % 2 == 1;
+                data_ix += 1;
+                zebra
+            }
+        })
+        .collect()
+}
+
 /// Проход A (§3.2 + лестница §3.4): замер ячеек по всем строкам →
 /// направляющие ноды ([`RowGuides::measure`] + [`RowGuides::with_right_edge`]);
 /// детект переполнения — точная арифметика ширин против `body_width`,
