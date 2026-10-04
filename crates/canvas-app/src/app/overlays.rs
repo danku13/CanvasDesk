@@ -4587,13 +4587,49 @@ impl App {
             | SettingsRow::AiModelAgent
             | SettingsRow::AiResidency
             | SettingsRow::AiConfidenceThreshold
-            | SettingsRow::AiCostLimit => {
-                debug_assert!(false, "dropdown-строка не тумблер: {row:?}");
+            | SettingsRow::AiCostLimit
+            // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL / key) —
+            // применяются в apply_button_row (mock health-check), не тумблеры.
+            | SettingsRow::AiApiKey
+            | SettingsRow::AiSelfhostUrl
+            | SettingsRow::AiSelfhostKey => {
+                debug_assert!(false, "не тумблер: {row:?}");
                 return;
             }
         }
         self.sync_settings_row(row);
         self.save_settings();
+    }
+
+    // FR-LLM-FIX: применить клик по Button-строке (API-ключ BYOK /
+    // self-hosted URL / self-hosted key) — mock health-check, переключает
+    // бейдж. Реальный health-check (/v1/models) — Stream C/D TODO,
+    // помечен `// FR-LLM-FIX-TODO:`. Сохранение конфига не нужно (флаги
+    // in-memory only, как и ai_paused).
+    pub(super) fn apply_button_row(&mut self, row: SettingsRow) {
+        match row {
+            // FR-LLM-FIX: mock health-check BYOK-ключа — toggle ai_key_ok.
+            // FR-LLM-FIX-TODO: реальный health-check — GET /v1/models с
+            // api_key, при 200 заполнить список моделей (модель-строки
+            // получат dropdown_options не пустой), при 4xx — бейдж «ключ
+            // невалиден». Stream C/D.
+            SettingsRow::AiApiKey => {
+                self.ai_key_ok = !self.ai_key_ok;
+            }
+            // FR-LLM-FIX: mock health-check self-hosted endpoint — toggle
+            // ai_selfhost_ok. FR-LLM-FIX-TODO: реальный health-check —
+            // GET {endpoint}/v1/models с api_key, при 200 — бейдж «endpoint
+            // отвечает», при ошибке — «неверный URL»/«endpoint не отвечает».
+            // Stream C/D.
+            SettingsRow::AiSelfhostUrl | SettingsRow::AiSelfhostKey => {
+                self.ai_selfhost_ok = !self.ai_selfhost_ok;
+            }
+            _ => {
+                debug_assert!(false, "не Button-строка: {row:?}");
+                return;
+            }
+        }
+        self.request_redraw();
     }
 
     /// Screen-space оверлей настроек: летающая кнопка всегда, панель — когда
@@ -5132,7 +5168,11 @@ impl App {
             // кеглем; высота строки MODAL_ROW_HEIGHT 52 — третья строка не
             // влезает). Дефект №15 (закрыт W-f, 04.10.2026): хвост больше
             // не теряется молча — на второй строке индикатор «ещё N» (i18n).
-            {
+            //
+            // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL / key)
+            // описание НЕ рисуем — на его месте рисуем текстовое поле и
+            // бейдж (см. ветку RowKind::Button ниже). Лейбл остаётся сверху.
+            if row_kind(*row) != RowKind::Button {
                 let desc = self.tr(row_desc_key(*row));
                 let mut m = canvas_ui::measure::TextMeasurer::new();
                 let mut fs = canvas_render::text::measure_font_system();
@@ -5253,6 +5293,11 @@ impl App {
                         | SettingsRow::AiResidency
                         | SettingsRow::AiConfidenceThreshold
                         | SettingsRow::AiCostLimit
+                        // FR-LLM-FIX: Button-строки (row_kind = Button) — в
+                        // ветку Toggle не попадают, arm — для полноты match.
+                        | SettingsRow::AiApiKey
+                        | SettingsRow::AiSelfhostUrl
+                        | SettingsRow::AiSelfhostKey
                         | SettingsRow::Role => false,
                     };
                     // Pill-тумблер: трек (включён — акцент) + ручка-квад,
@@ -5311,6 +5356,152 @@ impl App {
                         color: palette.icon,
                         align: TextAlign::Left,
                     });
+                }
+                // FR-LLM-FIX: Button-строка (API-ключ BYOK / self-hosted
+                // URL / self-hosted key) — текстовое поле + бейдж на месте
+                // описания (под лейблом), кнопка «Проверить ключ»/«Проверить»
+                // справа как dropdown-контрол. Клик по кнопке триггерит mock
+                // health-check и переключает бейдж (реальный health-check —
+                // Stream C/D TODO, помечен `// FR-LLM-FIX-TODO:`).
+                RowKind::Button => {
+                    // Контрол справа — кнопка «Проверить ключ»/«Проверить».
+                    let button_label = match row {
+                        SettingsRow::AiApiKey => self.tr(keys::AI_BTN_CHECK_KEY).to_owned(),
+                        SettingsRow::AiSelfhostUrl | SettingsRow::AiSelfhostKey => {
+                            self.tr(keys::AI_BTN_CHECK).to_owned()
+                        }
+                        // FR-LLM-FIX: другие Button-строки (если появятся) —
+                        // единая подпись «Проверить»; match exhaustive.
+                        _ => self.tr(keys::AI_BTN_CHECK).to_owned(),
+                    };
+                    instances.push(CardInstance {
+                        pos: [control[0], control[1]],
+                        size: [control[2], control[3]],
+                        fill: if point_in_rect(control, self.cursor) {
+                            hover_fill(palette.palette_chip_fill)
+                        } else {
+                            palette.palette_chip_fill
+                        },
+                        border: palette.palette_border,
+                        params: [6.0, 0.0, 0.0, 1.0],
+                        corners: [0.0; 4],
+                    });
+                    texts.push(OwnedScreenText {
+                        text: button_label,
+                        origin: [control[0] + 6.0, control[1] + 4.0],
+                        width: control[2] - 12.0,
+                        font_size: 11.0,
+                        color: palette.title,
+                        align: TextAlign::Center,
+                    });
+                    // FR-LLM-FIX: текстовое поле + бейдж на месте описания
+                    // (y = rect[1] + 22, ширина = rect[2] - MODAL_ROW_LABEL_W).
+                    // Поле — слева, бейдж — правее; между ними зазор gap.
+                    let field_y = rect[1] + 22.0;
+                    let field_h = 16.0;
+                    let avail_w = (rect[2] - MODAL_ROW_LABEL_W).max(40.0);
+                    let badge_w = 110.0;
+                    let gap = 6.0;
+                    let field_x = rect[0] + 2.0;
+                    let field_w = (avail_w - badge_w - gap).max(40.0);
+                    instances.push(CardInstance {
+                        pos: [field_x, field_y],
+                        size: [field_w, field_h],
+                        fill: palette.palette_row_fill,
+                        border: palette.palette_border,
+                        params: [4.0, 0.0, 0.0, 1.0],
+                        corners: [0.0; 4],
+                    });
+                    let (field_text, badge_text, badge_color) = match row {
+                        SettingsRow::AiApiKey => {
+                            // FR-LLM-FIX: masked ключ — «•» длиной как ключ
+                            // (или плейсхолдер «sk-…» если ключ пустой).
+                            let key = &self.settings.llm.api_key;
+                            let shown = if key.is_empty() {
+                                "sk-…".to_owned()
+                            } else {
+                                "•".repeat(key.chars().count().min(20))
+                            };
+                            let badge = if self.ai_key_ok {
+                                // FR-LLM-FIX-TODO: реальный health-check заменит
+                                // «0» на число моделей из /v1/models (Stream C/D).
+                                self.tr(keys::AI_KEY_VALID).replace("{n}", "0")
+                            } else {
+                                self.tr(keys::AI_KEY_NOT_CHECKED).to_owned()
+                            };
+                            let color: canvas_render::Color = if self.ai_key_ok {
+                                canvas_render::Color::rgba(77, 191, 140, 255)
+                            } else {
+                                palette.icon
+                            };
+                            (shown, badge, color)
+                        }
+                        SettingsRow::AiSelfhostUrl => {
+                            // FR-LLM-FIX: URL endpoint'а или плейсхолдер.
+                            let url = &self.settings.llm.endpoint;
+                            let shown = if url.is_empty() {
+                                "https://llm.corp.local/v1".to_owned()
+                            } else {
+                                url.clone()
+                            };
+                            let badge = if self.ai_selfhost_ok {
+                                self.tr(keys::AI_SH_OK).to_owned()
+                            } else {
+                                self.tr(keys::AI_SH_NOT_CHECKED).to_owned()
+                            };
+                            let color: canvas_render::Color = if self.ai_selfhost_ok {
+                                canvas_render::Color::rgba(77, 191, 140, 255)
+                            } else {
+                                palette.icon
+                            };
+                            (shown, badge, color)
+                        }
+                        SettingsRow::AiSelfhostKey => {
+                            // FR-LLM-FIX: masked ключ endpoint'а (поле
+                            // переиспользует api_key, как в прототипе — один
+                            // ключ на endpoint); плейсхолдер если пустой.
+                            let key = &self.settings.llm.api_key;
+                            let shown = if key.is_empty() {
+                                "API key endpoint'а".to_owned()
+                            } else {
+                                "•".repeat(key.chars().count().min(20))
+                            };
+                            let badge = if self.ai_selfhost_ok {
+                                self.tr(keys::AI_SH_OK).to_owned()
+                            } else {
+                                self.tr(keys::AI_SH_NOT_CHECKED).to_owned()
+                            };
+                            let color: canvas_render::Color = if self.ai_selfhost_ok {
+                                canvas_render::Color::rgba(77, 191, 140, 255)
+                            } else {
+                                palette.icon
+                            };
+                            (shown, badge, color)
+                        }
+                        // FR-LLM-FIX: другие Button-строки (если появятся) —
+                        // пустое поле/бейдж; match exhaustive.
+                        _ => (String::new(), String::new(), palette.icon),
+                    };
+                    if !field_text.is_empty() {
+                        texts.push(OwnedScreenText {
+                            text: field_text,
+                            origin: [field_x + 8.0, field_y + 2.0],
+                            width: field_w - 12.0,
+                            font_size: 11.0,
+                            color: palette.body,
+                            align: TextAlign::Left,
+                        });
+                    }
+                    if !badge_text.is_empty() {
+                        texts.push(OwnedScreenText {
+                            text: badge_text,
+                            origin: [field_x + field_w + gap, field_y + 2.0],
+                            width: badge_w,
+                            font_size: 10.5,
+                            color: badge_color,
+                            align: TextAlign::Left,
+                        });
+                    }
                 }
             }
         }
