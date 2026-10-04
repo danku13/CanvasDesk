@@ -866,6 +866,22 @@ pub mod keys {
     pub const AI_SH_NOT_CHECKED: &str = "ai.sh_not_checked";
     pub const AI_SH_OK: &str = "ai.sh_ok";
     pub const AI_SH_BAD_URL: &str = "ai.sh_bad_url";
+    // FR-LLM-OAUTH-APP / PRD-0010 F-5.8: блок «Вход ChatGPT» (строка
+    // SettingsRow::AiOAuth: бейдж состояния + кнопка Войти/Отменить/
+    // Выйти/Повторить).
+    pub const AI_OAUTH_ROW: &str = "ai.oauth.row";
+    pub const AI_OAUTH_DESC: &str = "ai.oauth.desc";
+    pub const AI_OAUTH_BTN_LOGIN: &str = "ai.oauth.btn_login";
+    pub const AI_OAUTH_HINT_BROWSER: &str = "ai.oauth.hint_browser";
+    pub const AI_OAUTH_BTN_CANCEL: &str = "ai.oauth.btn_cancel";
+    pub const AI_OAUTH_WAITING: &str = "ai.oauth.waiting";
+    pub const AI_OAUTH_CONNECTED: &str = "ai.oauth.connected";
+    pub const AI_OAUTH_ACCOUNT: &str = "ai.oauth.account";
+    pub const AI_OAUTH_BTN_LOGOUT: &str = "ai.oauth.btn_logout";
+    pub const AI_OAUTH_ERR: &str = "ai.oauth.err";
+    pub const AI_OAUTH_BTN_RETRY: &str = "ai.oauth.btn_retry";
+    pub const AI_OAUTH_UNAVAILABLE: &str = "ai.oauth.unavailable";
+    pub const AI_OAUTH_TOAST_LOGOUT: &str = "ai.oauth.toast_logout";
     pub const AI_COST_LIMIT_LABEL: &str = "ai.cost_limit_label";
     pub const AI_CONF_THR_LABEL: &str = "ai.conf_thr_label";
     pub const AI_FOOT_HINT: &str = "ai.foot_hint";
@@ -1997,6 +2013,32 @@ const RU: &[(&str, &str)] = &[
         keys::AI_RATE_BADGE,
         "ChatGPT: {left}/{total} сообщений осталось",
     ),
+    // --- FR-LLM-OAUTH-APP / PRD-0010 F-5.8: блок «Вход ChatGPT» (RU) ---
+    (keys::AI_OAUTH_ROW, "Вход ChatGPT"),
+    (
+        keys::AI_OAUTH_DESC,
+        "OAuth-вход по подписке ChatGPT — для Graph Builder и Agent Panel. Токены хранятся локально (0600), не в config.toml.",
+    ),
+    (keys::AI_OAUTH_BTN_LOGIN, "Войти через ChatGPT"),
+    (
+        keys::AI_OAUTH_HINT_BROWSER,
+        "откроется браузер для подтверждения входа",
+    ),
+    (keys::AI_OAUTH_BTN_CANCEL, "Отменить"),
+    (
+        keys::AI_OAUTH_WAITING,
+        "Ожидаю подтверждение в браузере…",
+    ),
+    (keys::AI_OAUTH_CONNECTED, "вход выполнен · {email}"),
+    (keys::AI_OAUTH_ACCOUNT, "аккаунт"),
+    (keys::AI_OAUTH_BTN_LOGOUT, "Выйти"),
+    (keys::AI_OAUTH_ERR, "ошибка входа: {error}"),
+    (keys::AI_OAUTH_BTN_RETRY, "Повторить"),
+    (
+        keys::AI_OAUTH_UNAVAILABLE,
+        "OAuth-вход доступен только в нативной сборке с feature l1-llm-tls",
+    ),
+    (keys::AI_OAUTH_TOAST_LOGOUT, "Выход выполнен — токены удалены"),
     // --- FR-LLM-B / PRD-0010 F-7.9: AI status panel (RU) ---
     (keys::AI_STATUS_PAUSED, "AI на паузе — нажмите ▶, чтобы возобновить"),
     (keys::AI_STATUS_SESSION, "Session: {v}"),
@@ -3102,6 +3144,29 @@ const EN: &[(&str, &str)] = &[
     (keys::AI_CONF_THR_LABEL, "{v}"),
     (keys::AI_FOOT_HINT, "Changes apply immediately · Esc — close"),
     (keys::AI_RATE_BADGE, "ChatGPT: {left}/{total} messages left"),
+    // --- FR-LLM-OAUTH-APP / PRD-0010 F-5.8: Sign-in-with-ChatGPT block (EN) ---
+    (keys::AI_OAUTH_ROW, "Sign in with ChatGPT"),
+    (
+        keys::AI_OAUTH_DESC,
+        "OAuth sign-in with a ChatGPT subscription — for Graph Builder and Agent Panel. Tokens are stored locally (0600), never in config.toml.",
+    ),
+    (keys::AI_OAUTH_BTN_LOGIN, "Sign in with ChatGPT"),
+    (
+        keys::AI_OAUTH_HINT_BROWSER,
+        "a browser window will open to confirm the sign-in",
+    ),
+    (keys::AI_OAUTH_BTN_CANCEL, "Cancel"),
+    (keys::AI_OAUTH_WAITING, "Waiting for confirmation in the browser…"),
+    (keys::AI_OAUTH_CONNECTED, "signed in · {email}"),
+    (keys::AI_OAUTH_ACCOUNT, "account"),
+    (keys::AI_OAUTH_BTN_LOGOUT, "Sign out"),
+    (keys::AI_OAUTH_ERR, "sign-in failed: {error}"),
+    (keys::AI_OAUTH_BTN_RETRY, "Retry"),
+    (
+        keys::AI_OAUTH_UNAVAILABLE,
+        "OAuth sign-in requires the native build with the l1-llm-tls feature",
+    ),
+    (keys::AI_OAUTH_TOAST_LOGOUT, "Signed out — tokens removed"),
     // --- FR-LLM-B / PRD-0010 F-7.9: AI status panel (EN) ---
     (keys::AI_STATUS_PAUSED, "AI is paused — press ▶ to resume"),
     (keys::AI_STATUS_SESSION, "Session: {v}"),
@@ -3406,6 +3471,49 @@ mod tests {
             assert_ne!(tr(Language::Ru, key), key, "RU = сырой ключ: {key}");
             assert_ne!(tr(Language::En, key), key, "EN = сырой ключ: {key}");
         }
+    }
+
+    /// FR-LLM-OAUTH-APP / PRD-0010 F-5.8: ключи блока «Вход ChatGPT»
+    /// (строка SettingsRow::AiOAuth) присутствуют в обоих языках и не
+    /// откатываются на сырой ключ; плейсхолдеры {email}/{error} подставляются.
+    #[test]
+    fn ai_oauth_keys_present_in_both_tables() {
+        for key in [
+            keys::AI_OAUTH_ROW,
+            keys::AI_OAUTH_DESC,
+            keys::AI_OAUTH_BTN_LOGIN,
+            keys::AI_OAUTH_HINT_BROWSER,
+            keys::AI_OAUTH_BTN_CANCEL,
+            keys::AI_OAUTH_WAITING,
+            keys::AI_OAUTH_CONNECTED,
+            keys::AI_OAUTH_ACCOUNT,
+            keys::AI_OAUTH_BTN_LOGOUT,
+            keys::AI_OAUTH_ERR,
+            keys::AI_OAUTH_BTN_RETRY,
+            keys::AI_OAUTH_UNAVAILABLE,
+            keys::AI_OAUTH_TOAST_LOGOUT,
+        ] {
+            for lang in [Language::Ru, Language::En] {
+                assert!(!tr(lang, key).is_empty(), "{lang:?} пуст: {key}");
+                assert_ne!(tr(lang, key), key, "{lang:?} = сырой ключ: {key}");
+            }
+        }
+        assert_eq!(
+            trf(
+                Language::Ru,
+                keys::AI_OAUTH_CONNECTED,
+                &[("email", "a@b.c")]
+            ),
+            "вход выполнен · a@b.c"
+        );
+        assert_eq!(
+            trf(Language::En, keys::AI_OAUTH_CONNECTED, &[("email", "")]),
+            "signed in · "
+        );
+        assert_eq!(
+            trf(Language::Ru, keys::AI_OAUTH_ERR, &[("error", "таймаут")]),
+            "ошибка входа: таймаут"
+        );
     }
 
     /// Ключи пунктов batch-выравнивания (FR-038 п.16, T-038.5) присутствуют

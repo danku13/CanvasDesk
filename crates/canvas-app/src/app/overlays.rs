@@ -4598,6 +4598,9 @@ impl App {
             | SettingsRow::AiCostLimit
             // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL / key) —
             // применяются в apply_button_row (mock health-check), не тумблеры.
+            // FR-LLM-OAUTH-APP: строка «Вход ChatGPT» — тоже Button
+            // (oauth_button_click), не тумблер.
+            | SettingsRow::AiOAuth
             | SettingsRow::AiApiKey
             | SettingsRow::AiSelfhostUrl
             | SettingsRow::AiSelfhostKey => {
@@ -4616,6 +4619,14 @@ impl App {
     // in-memory only, как и ai_paused).
     pub(super) fn apply_button_row(&mut self, row: SettingsRow) {
         match row {
+            // FR-LLM-OAUTH-APP / PRD-0010 F-5.8: строка «Вход ChatGPT» —
+            // dispatch по состоянию флоу (Войти/Отменить/Выйти/Повторить;
+            // в wasm/без l1-llm — тост о недоступности). Store/флаги/сейв —
+            // внутри oauth_*-методов App (app.rs).
+            SettingsRow::AiOAuth => {
+                self.oauth_button_click();
+                return;
+            }
             // FR-LLM-FIX: mock health-check BYOK-ключа — toggle ai_key_ok.
             // FR-LLM-FIX-TODO: реальный health-check — GET /v1/models с
             // api_key, при 200 заполнить список моделей (модель-строки
@@ -5309,6 +5320,8 @@ impl App {
                         | SettingsRow::AiCostLimit
                         // FR-LLM-FIX: Button-строки (row_kind = Button) — в
                         // ветку Toggle не попадают, arm — для полноты match.
+                        // FR-LLM-OAUTH-APP: «Вход ChatGPT» — тоже Button.
+                        | SettingsRow::AiOAuth
                         | SettingsRow::AiApiKey
                         | SettingsRow::AiSelfhostUrl
                         | SettingsRow::AiSelfhostKey
@@ -5368,6 +5381,105 @@ impl App {
                         width: 14.0,
                         font_size: 12.0,
                         color: palette.icon,
+                        align: TextAlign::Left,
+                    });
+                }
+                // FR-LLM-OAUTH-APP / PRD-0010 F-5.8: строка «Вход ChatGPT» —
+                // спец-ветка Button: бейдж состояния на месте описания/поля
+                // (на всю ширину строки) + кнопка действия справа, подпись
+                // которой меняется по состоянию флоу (Idle «Войти через
+                // ChatGPT» / Waiting «Отменить» / Connected «Выйти» / Failed
+                // «Повторить»). В wasm/без feature l1-llm — задизейблена:
+                // приглушённая подпись + бейдж-подсказка (тултип-замена).
+                RowKind::Button if *row == SettingsRow::AiOAuth => {
+                    // Доступен ли OAuth-рантайм (натив + feature l1-llm).
+                    let oauth_available =
+                        cfg!(all(feature = "l1-llm", not(target_arch = "wasm32")));
+                    let state = self.oauth_ui_state();
+                    let (button_label, badge_text, badge_color) = match &state {
+                        crate::settings_ui::OAuthUiState::Idle => {
+                            let badge = if oauth_available {
+                                self.tr(keys::AI_OAUTH_HINT_BROWSER).to_owned()
+                            } else {
+                                self.tr(keys::AI_OAUTH_UNAVAILABLE).to_owned()
+                            };
+                            (
+                                self.tr(keys::AI_OAUTH_BTN_LOGIN).to_owned(),
+                                badge,
+                                palette.icon,
+                            )
+                        }
+                        crate::settings_ui::OAuthUiState::Waiting => (
+                            self.tr(keys::AI_OAUTH_BTN_CANCEL).to_owned(),
+                            self.tr(keys::AI_OAUTH_WAITING).to_owned(),
+                            palette.icon,
+                        ),
+                        crate::settings_ui::OAuthUiState::Connected(email) => {
+                            // FR-LLM-FIX: тот же ok-цвет бейджа, что у
+                            // «ключ валиден» (строка AiApiKey ниже; TODO:
+                            // слот палитры кита вместо литерала — G4).
+                            let ok = canvas_render::Color::rgba(77, 191, 140, 255);
+                            let email_shown = if email.is_empty() {
+                                self.tr(keys::AI_OAUTH_ACCOUNT)
+                            } else {
+                                email.as_str()
+                            };
+                            (
+                                self.tr(keys::AI_OAUTH_BTN_LOGOUT).to_owned(),
+                                crate::i18n::trf(
+                                    self.settings.language,
+                                    keys::AI_OAUTH_CONNECTED,
+                                    &[("email", email_shown)],
+                                ),
+                                ok,
+                            )
+                        }
+                        crate::settings_ui::OAuthUiState::Failed(error) => (
+                            self.tr(keys::AI_OAUTH_BTN_RETRY).to_owned(),
+                            crate::i18n::trf(
+                                self.settings.language,
+                                keys::AI_OAUTH_ERR,
+                                &[("error", error.as_str())],
+                            ),
+                            palette.error,
+                        ),
+                    };
+                    // Кнопка действия справа — та же геометрия, что у
+                    // dropdown/кнопок строк (control_rect, единый ритм).
+                    // Задизейбленный вид — приглушённый цвет подписи.
+                    instances.push(CardInstance {
+                        pos: [control[0], control[1]],
+                        size: [control[2], control[3]],
+                        fill: if point_in_rect(control, self.cursor) && oauth_available {
+                            hover_fill(palette.palette_chip_fill)
+                        } else {
+                            palette.palette_chip_fill
+                        },
+                        border: palette.palette_border,
+                        params: [6.0, 0.0, 0.0, 1.0],
+                        corners: [0.0; 4],
+                    });
+                    texts.push(OwnedScreenText {
+                        text: button_label,
+                        origin: [control[0] + 6.0, control[1] + 4.0],
+                        width: control[2] - 12.0,
+                        font_size: 11.0,
+                        color: if oauth_available {
+                            palette.title
+                        } else {
+                            palette.icon
+                        },
+                        align: TextAlign::Center,
+                    });
+                    // Бейдж состояния — на месте описания (y = rect[1] + 22,
+                    // на всю ширину строки минус контрол): у строки нет
+                    // текстового поля.
+                    texts.push(OwnedScreenText {
+                        text: badge_text,
+                        origin: [rect[0] + 2.0, rect[1] + 24.0],
+                        width: (rect[2] - MODAL_ROW_LABEL_W).max(10.0),
+                        font_size: 10.5,
+                        color: badge_color,
                         align: TextAlign::Left,
                     });
                 }

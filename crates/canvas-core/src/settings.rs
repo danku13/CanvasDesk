@@ -1118,6 +1118,12 @@ mod tests {
                 cost_limit_daily: 2.5,
                 confidence_threshold: 0.4,
                 telemetry_opt_in: false,
+                // FR-LLM-OAUTH-APP: OAuth-поля проходят round-trip (вход
+                // выполнен — не дефолт; device id непустой, как генерирует
+                // canvas-app из CSPRNG при первом входе).
+                chatgpt_connected: true,
+                chatgpt_email: "user@example.com".to_owned(),
+                ext_agent_host_id: "ext-agent-host-id-43chars_________".to_owned(),
             },
         };
         let dir = crate::test_scratch_root().join("canvasdesk-settings-test"); // FR-036: wasm-совместимая песочница

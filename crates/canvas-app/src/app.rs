@@ -175,6 +175,13 @@ mod agent_panel;
 // из текста. Владелец: Stream D. UI + state (LLM-вызов через worker, TODO).
 mod graph_builder_ui;
 
+// FR-LLM-OAUTH-APP / PRD-0010 F-5.2+F-5.3+F-5.8: OAuth-флоу «Вход ChatGPT» —
+// состояние (Idle/Waiting/Connected/Failed), FileTokenStore (oauth_tokens.json
+// 0600) и воркер desktop-login. Натив + feature l1-llm (wasm — deep-link +
+// cloud-proxy F-5.10, вне этого модуля; ADR-0011).
+#[cfg(all(feature = "l1-llm", not(target_arch = "wasm32")))]
+pub(crate) mod oauth_flow;
+
 mod explain;
 /// FR-076: экспорт самодостаточного HTML («артефакт защиты», GAP-01) —
 /// команда приложения: сборка ядром + запись рядом с канвасом.
@@ -1120,6 +1127,15 @@ pub struct App {
     // health-check (/v1/models) — Stream C/D TODO (`// FR-LLM-FIX-TODO:`).
     ai_key_ok: bool,
     ai_selfhost_ok: bool,
+    /// FR-LLM-OAUTH-APP / PRD-0010 F-5.8: OAuth-флоу «Вход ChatGPT» —
+    /// состояние (Idle/Waiting/Connected/Failed), token store
+    /// (oauth_tokens.json 0600 рядом с config.toml) и воркер desktop-login.
+    /// Опрашивается каждый кадр в `about_to_wait` (`oauth_poll`, паттерн
+    /// suggest.pending); клики по строке `AiOAuth` — `apply_button_row` →
+    /// `oauth_button_click`. Только натив + feature `l1-llm` (wasm/без фичи —
+    /// UI показывает кнопку недоступной, см. `oauth_ui_state`).
+    #[cfg(all(feature = "l1-llm", not(target_arch = "wasm32")))]
+    oauth_flow: oauth_flow::OAuthFlowHandle,
     /// FR-LLM-B / PRD-0010 F-7.4 (Q4): накопительный cost за сессию (USD).
     /// Инкрементируется Stream C/D после каждого LLM-запроса через
     /// `actual_cost()`. Сбрасывается при закрытии канваса. Здесь —
@@ -1478,6 +1494,14 @@ impl App {
             .as_deref()
             .and_then(|p| p.parent())
             .map(std::path::Path::to_path_buf);
+        // FR-LLM-OAUTH-APP: каталог конфига для oauth_tokens.json — снимок
+        // ДО переноса config_path в Self (как suggest_log_dir). Читается
+        // только в нативной сборке с feature l1-llm (поле oauth_flow).
+        #[cfg(all(feature = "l1-llm", not(target_arch = "wasm32")))]
+        let oauth_config_dir: Option<PathBuf> = config_path
+            .as_deref()
+            .and_then(|p| p.parent())
+            .map(std::path::Path::to_path_buf);
         let widgets = crate::widgets::WidgetManager::new(
             widgets_registry,
             // FR-047: виджетам флаг темности ЭФФЕКТИВНОЙ темы (пресет из
@@ -1624,6 +1648,13 @@ impl App {
             // (mock health-check переключает по клику; реальный — Stream C/D).
             ai_key_ok: false,
             ai_selfhost_ok: false,
+            // FR-LLM-OAUTH-APP: OAuth-флоу — store читает oauth_tokens.json
+            // из каталога конфига (None — memory-фолбэк); если токены на
+            // месте, старт в Connected (флаги синхронизирует oauth_poll в
+            // хвосте). Каталог — снимок до переноса config_path в Self
+            // (паттерн suggest_log_dir выше).
+            #[cfg(all(feature = "l1-llm", not(target_arch = "wasm32")))]
+            oauth_flow: oauth_flow::OAuthFlowHandle::new(oauth_config_dir.as_deref()),
             ai_cost_session: 0.0,
             ai_cost_day: 0.0,
             ai_chatgpt_rate_used: 0,
@@ -1744,6 +1775,13 @@ impl App {
         // только у нод, у которых мера изменилась с появлением описания).
         app.sync_template_descs();
         app.scene.refit_after_template_descs();
+        // FR-LLM-OAUTH-APP: стартовая синхронизация персистентных флагов
+        // ChatGPT-входа с фактическим содержимым token store (файл мог быть
+        // удалён вручную / токены есть, а флага нет) — идемпотентно.
+        #[cfg(all(feature = "l1-llm", not(target_arch = "wasm32")))]
+        {
+            let _ = app.oauth_poll();
+        }
         app
     }
 
@@ -8803,6 +8841,160 @@ impl App {
     fn show_toast(&mut self, text: impl Into<String>) {
         self.toast = Some((text.into(), Instant::now()));
         self.request_redraw();
+    }
+
+    // --- FR-LLM-OAUTH-APP: «Вход ChatGPT» (PRD-0010 F-5.2/F-5.3/F-5.8/F-5.9) ---
+
+    /// UI-состояние строки «Вход ChatGPT» (для рендера/ввода строки
+    /// `SettingsRow::AiOAuth` в settings_ui/overlays). Натив + feature
+    /// `l1-llm` — из OAuth-флоу (`app/oauth_flow.rs`); wasm/без фичи — из
+    /// персистентного флага `LlmSettings.chatgpt_connected` (кнопка при этом
+    /// недоступна — см. `oauth_button_click`).
+    #[cfg(all(feature = "l1-llm", not(target_arch = "wasm32")))]
+    pub(crate) fn oauth_ui_state(&self) -> crate::settings_ui::OAuthUiState {
+        match self.oauth_flow.state() {
+            oauth_flow::OAuthFlowState::Idle => crate::settings_ui::OAuthUiState::Idle,
+            oauth_flow::OAuthFlowState::Waiting { .. } => crate::settings_ui::OAuthUiState::Waiting,
+            oauth_flow::OAuthFlowState::Connected { email } => {
+                crate::settings_ui::OAuthUiState::Connected(email)
+            }
+            oauth_flow::OAuthFlowState::Failed { error } => {
+                crate::settings_ui::OAuthUiState::Failed(error)
+            }
+        }
+    }
+
+    /// Stub-вариант для wasm/сборок без `l1-llm`: OAuth-флоу нет, показываем
+    /// персистентный флаг (Connected мог сохраниться в config.toml с
+    /// desktop-сборки — бейдж честный, кнопка недоступна).
+    #[cfg(any(not(feature = "l1-llm"), target_arch = "wasm32"))]
+    pub(crate) fn oauth_ui_state(&self) -> crate::settings_ui::OAuthUiState {
+        if self.settings.llm.chatgpt_connected {
+            crate::settings_ui::OAuthUiState::Connected(self.settings.llm.chatgpt_email.clone())
+        } else {
+            crate::settings_ui::OAuthUiState::Idle
+        }
+    }
+
+    /// OAuth-артефакты для фабрики провайдеров (`crate::llm_factory`) —
+    /// token store флоу + persistent device id из настроек.
+    #[cfg(feature = "l1-llm")]
+    pub(crate) fn oauth_assets(&self) -> crate::llm_factory::OAuthAssets {
+        #[cfg(all(feature = "l1-llm", not(target_arch = "wasm32")))]
+        {
+            crate::llm_factory::OAuthAssets {
+                token_store: Some(self.oauth_flow.token_store()),
+                ext_agent_host_id: self.settings.llm.ext_agent_host_id.clone(),
+            }
+        }
+        // wasm + l1-llm (web-сборка с сетью): файлового store нет (OPFS —
+        // TODO дизайн-дока §4.4) → провайдер с memory-store вернёт Auth при
+        // первом запросе → F-5.9 (fallback на BYOK).
+        #[cfg(all(feature = "l1-llm", target_arch = "wasm32"))]
+        {
+            crate::llm_factory::OAuthAssets {
+                token_store: None,
+                ext_agent_host_id: self.settings.llm.ext_agent_host_id.clone(),
+            }
+        }
+    }
+
+    /// Поллинг OAuth-флоу каждый кадр (вызов из `about_to_wait`, натив +
+    /// feature `l1-llm`). Возвращает true, когда нужен redraw/продолжение
+    /// опроса (Waiting — держим цикл пробуждённым лёгкими кадрами, паттерн
+    /// `suggest.pending`). Переход Waiting→Connected синхронизирует
+    /// персистентные флаги `LlmSettings.chatgpt_connected/email` + save;
+    /// Idle при «зависшем» флаге Connected (файл токенов удалён вручную) —
+    /// сброс (ground truth — store, F-5.9).
+    #[cfg(all(feature = "l1-llm", not(target_arch = "wasm32")))]
+    fn oauth_poll(&mut self) -> bool {
+        match self.oauth_flow.state() {
+            oauth_flow::OAuthFlowState::Waiting { .. } => true,
+            oauth_flow::OAuthFlowState::Connected { email } => {
+                if !self.settings.llm.chatgpt_connected || self.settings.llm.chatgpt_email != email
+                {
+                    self.settings.llm.chatgpt_connected = true;
+                    self.settings.llm.chatgpt_email = email;
+                    self.save_settings();
+                    true
+                } else {
+                    false
+                }
+            }
+            oauth_flow::OAuthFlowState::Idle | oauth_flow::OAuthFlowState::Failed { .. } => {
+                if self.settings.llm.chatgpt_connected {
+                    self.settings.llm.chatgpt_connected = false;
+                    self.settings.llm.chatgpt_email.clear();
+                    self.save_settings();
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    /// Клик по кнопке строки «Вход ChatGPT» (вызов из `apply_button_row`,
+    /// строка `SettingsRow::AiOAuth`): dispatch по состоянию флоу —
+    /// Idle/Failed → «Войти»/«Повторить», Waiting → «Отменить»,
+    /// Connected → «Выйти» (чистит store + флаги).
+    pub(crate) fn oauth_button_click(&mut self) {
+        #[cfg(all(feature = "l1-llm", not(target_arch = "wasm32")))]
+        {
+            match self.oauth_ui_state() {
+                crate::settings_ui::OAuthUiState::Idle
+                | crate::settings_ui::OAuthUiState::Failed(_) => self.oauth_start_login(),
+                crate::settings_ui::OAuthUiState::Waiting => self.oauth_flow.cancel(),
+                crate::settings_ui::OAuthUiState::Connected(_) => self.oauth_sign_out(),
+            }
+            self.request_redraw();
+        }
+        #[cfg(any(not(feature = "l1-llm"), target_arch = "wasm32"))]
+        {
+            // FR-LLM-OAUTH-APP: кнопка задизейблена (рендер — приглушённый
+            // цвет + бейдж-подсказка); у строк настроек hover-тултипов нет —
+            // объясняем тостом (механика тостов панелей).
+            self.show_toast(crate::i18n::tr(
+                self.settings.language,
+                crate::i18n::keys::AI_OAUTH_UNAVAILABLE,
+            ));
+        }
+    }
+
+    /// Запустить вход: сгенерировать persistent device id один раз (CSPRNG,
+    /// дизайн-док §4.3 — хранится в `LlmSettings.ext_agent_host_id`) и
+    /// стартовать флоу (bind листенера + браузер на UI-треде, ожидание
+    /// callback — в воркере).
+    #[cfg(all(feature = "l1-llm", not(target_arch = "wasm32")))]
+    fn oauth_start_login(&mut self) {
+        if self.settings.llm.ext_agent_host_id.trim().is_empty() {
+            match oauth_flow::OAuthFlowHandle::generate_ext_agent_host_id() {
+                Ok(id) => {
+                    self.settings.llm.ext_agent_host_id = id;
+                    self.save_settings();
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "CSPRNG недоступен — device id не сгенерирован");
+                    self.show_toast(format!("OAuth: {err}"));
+                    return;
+                }
+            }
+        }
+        self.oauth_flow
+            .start_login(&self.settings.llm.ext_agent_host_id);
+    }
+
+    /// Выйти (Connected → Idle): очистить token store и персистентные флаги.
+    #[cfg(all(feature = "l1-llm", not(target_arch = "wasm32")))]
+    fn oauth_sign_out(&mut self) {
+        self.oauth_flow.sign_out();
+        self.settings.llm.chatgpt_connected = false;
+        self.settings.llm.chatgpt_email.clear();
+        self.save_settings();
+        self.show_toast(crate::i18n::tr(
+            self.settings.language,
+            crate::i18n::keys::AI_OAUTH_TOAST_LOGOUT,
+        ));
     }
 
     /// Rect модального диалога (screen-space, логические px): центр окна.

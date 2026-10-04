@@ -75,6 +75,13 @@ pub mod search_ui;
 /// Рендер и ввод — в main.rs; `ui::panel_rect` переиспользует высоту.
 pub mod settings_ui;
 
+/// FR-LLM-OAUTH-APP / PRD-0010 F-5.6+F-5.9: фабрика `LlmProvider` по
+/// `LlmProviderId` (Byok → OpenRouter/selfhost, ChatGptOAuth → OAuth-
+/// провайдер, Ollama → localhost) + `provider_unavailable_message` для
+/// graceful degradation панелей. За feature `l1-llm` — реальная сборка,
+/// без неё — stub (всегда `None`, wasm-гейт ADR-0011).
+pub mod llm_factory;
+
 /// FR-027: доступ к документации — меню помощи кнопки «?» и встроенный
 /// просмотрщик — чистая модель (вшитые страницы `user-docs/`, раскладка
 /// GFM с таблицами, скролл, hit-тесты ссылок). Рендер и ввод — в main.rs.
