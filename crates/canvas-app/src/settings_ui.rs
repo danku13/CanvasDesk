@@ -1636,9 +1636,15 @@ pub fn text_input_has_button(row: SettingsRow) -> bool {
 /// строк с кнопкой). Геометрия — та же, что в overlays.rs (RowKind::Button),
 /// перенесена в функцию-источник: hit-test и рисование читают одно значение
 /// (детерминизм pick'а и кадра, паттерн `control_rect`/`pill_knob_rect`).
+///
+/// FR-LLM-FIX (task FIX-TEXTINPUT-KIT): высота поля — `kit::TEXT_FIELD_HEIGHT`
+/// (30.0) — единый источник метрики кита (FR-055), прежний литерал 16.0
+/// делал поле визуально меньше кнопок/dropdown'ов строки (нарушение rhythm
+/// controls). Поле (y=22, h=30) занимает остаток `MODAL_ROW_HEIGHT` (52)
+/// целиком — лейбл сверху, поле снизу, без пустого нижнего поля.
 pub fn text_input_field_rect(row: SettingsRow, row_rect: [f32; 4]) -> [f32; 4] {
     let field_y = row_rect[1] + 22.0;
-    let field_h = 16.0;
+    let field_h = canvas_ui::kit::TEXT_FIELD_HEIGHT;
     let avail_w = (row_rect[2] - MODAL_ROW_LABEL_W).max(40.0);
     let field_x = row_rect[0] + 2.0;
     let field_w = if text_input_has_button(row) {

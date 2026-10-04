@@ -5014,18 +5014,12 @@ impl App {
     // — в `endpoint`, self-hosted ключ — в `selfhost_key`. Паника в mut-версии
     // при `None` невозможна (вызывается только после проверки is_some в on_key).
 
-    /// Текущее значение редактируемой строки настроек (read-only slice).
-    fn settings_text_edit_value(&self) -> &str {
-        match self.settings_text_edit {
-            Some(SettingsRow::AiModelSuggest) => &self.settings.llm.model_suggest,
-            Some(SettingsRow::AiModelGraph) => &self.settings.llm.model_graph,
-            Some(SettingsRow::AiModelAgent) => &self.settings.llm.model_agent,
-            Some(SettingsRow::AiApiKey) => &self.settings.llm.api_key,
-            Some(SettingsRow::AiSelfhostUrl) => &self.settings.llm.endpoint,
-            Some(SettingsRow::AiSelfhostKey) => &self.settings.llm.selfhost_key,
-            _ => "",
-        }
-    }
+    // FR-LLM-FIX (task FIX-TEXTINPUT-KIT): прежняя `settings_text_edit_value`
+    // (read-only slice при активной правке) удалена — после перехода на
+    // `kit::text_field()` каретка считается внутри layout-функции кита (по
+    // `model.text`/`model.caret`), ручной замер ширины сырого текста больше
+    // не нужен. Для рендера поля используйте `settings_text_value_for_row`
+    // (работает для любой строки, не только при активной правке).
 
     /// Mutable-ссылка на редактируемую строку настроек. Вызывается только
     /// когда `settings_text_edit.is_some()` (проверка в on_key/insert_text).
@@ -5038,6 +5032,44 @@ impl App {
             Some(SettingsRow::AiSelfhostUrl) => &mut self.settings.llm.endpoint,
             Some(SettingsRow::AiSelfhostKey) => &mut self.settings.llm.selfhost_key,
             _ => unreachable!("settings_text_edit_value_mut без активной строки"),
+        }
+    }
+
+    // FR-LLM-FIX (task FIX-TEXTINPUT-KIT): helpers для рендера текстового поля
+    // строки настроек через `kit::text_field()` (FR-055). В отличие от прежнего
+    // `settings_text_edit_value` (только при активной правке и удалённого),
+    // работают для ЛЮБОЙ строки настроек — нужны на кадре ОТРИСОВКИ, когда поле
+    // может быть и без фокуса (показываем текущее значение/плейсхолдер).
+
+    /// Сырое значение строки настроек для `kit::text_field()` (модель текста
+    /// поля). Для API-key/selfhost-key это сам ключ — `kit::text_field()`
+    /// считает по нему `caret_x` (замер префикса), но `text_shown` потребитель
+    /// НЕ использует: отображаемый текст маскируется отдельно в overlays.rs
+    /// (контракт кита «цвет/текст — отдельно от геометрии», FR-055 §F-8).
+    fn settings_text_value_for_row(&self, row: SettingsRow) -> &str {
+        match row {
+            SettingsRow::AiModelSuggest => &self.settings.llm.model_suggest,
+            SettingsRow::AiModelGraph => &self.settings.llm.model_graph,
+            SettingsRow::AiModelAgent => &self.settings.llm.model_agent,
+            SettingsRow::AiApiKey => &self.settings.llm.api_key,
+            SettingsRow::AiSelfhostUrl => &self.settings.llm.endpoint,
+            SettingsRow::AiSelfhostKey => &self.settings.llm.selfhost_key,
+            _ => "",
+        }
+    }
+
+    /// Плейсхолдер пустого поля строки настроек (статические подсказки —
+    /// те же, что в overlays.rs ранее литералами; единый источник для
+    /// `kit::text_field(placeholder=…)` и будущих тестов).
+    fn settings_text_placeholder_for_row(&self, row: SettingsRow) -> &'static str {
+        match row {
+            SettingsRow::AiApiKey => "sk-…",
+            SettingsRow::AiSelfhostUrl => "https://llm.corp.local/v1",
+            SettingsRow::AiSelfhostKey => "API key endpoint'а",
+            SettingsRow::AiModelSuggest | SettingsRow::AiModelGraph | SettingsRow::AiModelAgent => {
+                "glm-5.3-flash"
+            }
+            _ => "",
         }
     }
 
@@ -12228,6 +12260,127 @@ mod tests {
         assert!(!app.align_menu_visible(), "N=2 — скрыты");
         app.selected_nodes = vec![0, 1, 2];
         assert!(app.align_menu_visible(), "N=3 — видны");
+    }
+
+    // --- FR-LLM-FIX (task FIX-TEXTINPUT-KIT): тесты фикса текстовых полей ---
+
+    /// Хелпер: App на заглушках с предзаполненными LlmSettings (для проверки
+    /// `settings_text_value_for_row` / `settings_text_placeholder_for_row`).
+    fn app_with_llm_settings() -> App {
+        let mut app = stub_app_with_canvas(Canvas::default());
+        app.settings.llm.model_suggest = "glm-5.3-flash".to_owned();
+        app.settings.llm.model_graph = "glm-5.3-graph".to_owned();
+        app.settings.llm.model_agent = "glm-5.3-agent".to_owned();
+        app.settings.llm.api_key = "sk-test-123".to_owned();
+        app.settings.llm.endpoint = "https://api.example.com/v1".to_owned();
+        app.settings.llm.selfhost_key = "shkey-abc".to_owned();
+        app
+    }
+
+    /// `settings_text_value_for_row` возвращает сырое значение поля для
+    /// каждой TextInput-строки (model-строки, api_key, endpoint, selfhost_key).
+    /// Контракт: kit::text_field() считает caret_x по этому значению.
+    #[test]
+    fn settings_text_value_for_row_returns_raw_field_value() {
+        let app = app_with_llm_settings();
+        assert_eq!(
+            app.settings_text_value_for_row(SettingsRow::AiModelSuggest),
+            "glm-5.3-flash"
+        );
+        assert_eq!(
+            app.settings_text_value_for_row(SettingsRow::AiModelGraph),
+            "glm-5.3-graph"
+        );
+        assert_eq!(
+            app.settings_text_value_for_row(SettingsRow::AiModelAgent),
+            "glm-5.3-agent"
+        );
+        assert_eq!(
+            app.settings_text_value_for_row(SettingsRow::AiApiKey),
+            "sk-test-123"
+        );
+        assert_eq!(
+            app.settings_text_value_for_row(SettingsRow::AiSelfhostUrl),
+            "https://api.example.com/v1"
+        );
+        assert_eq!(
+            app.settings_text_value_for_row(SettingsRow::AiSelfhostKey),
+            "shkey-abc"
+        );
+    }
+
+    /// `settings_text_placeholder_for_row` возвращает плейсхолдер для пустого
+    /// поля каждой TextInput-строки (те же значения, что в overlays.rs ранее
+    /// литералами — единый источник для kit::text_field(placeholder=…)).
+    #[test]
+    fn settings_text_placeholder_for_row_returns_static_hint() {
+        let app = app_with_llm_settings();
+        assert_eq!(
+            app.settings_text_placeholder_for_row(SettingsRow::AiApiKey),
+            "sk-…"
+        );
+        assert_eq!(
+            app.settings_text_placeholder_for_row(SettingsRow::AiSelfhostUrl),
+            "https://llm.corp.local/v1"
+        );
+        assert_eq!(
+            app.settings_text_placeholder_for_row(SettingsRow::AiSelfhostKey),
+            "API key endpoint'а"
+        );
+        assert_eq!(
+            app.settings_text_placeholder_for_row(SettingsRow::AiModelSuggest),
+            "glm-5.3-flash"
+        );
+        assert_eq!(
+            app.settings_text_placeholder_for_row(SettingsRow::AiModelGraph),
+            "glm-5.3-flash"
+        );
+        assert_eq!(
+            app.settings_text_placeholder_for_row(SettingsRow::AiModelAgent),
+            "glm-5.3-flash"
+        );
+    }
+
+    /// `text_input_field_rect` возвращает высоту = `kit::TEXT_FIELD_HEIGHT`
+    /// (30.0) — единая метрика кита (Fix 1). Прежний литерал 16.0 делал поле
+    /// визуально меньше кнопок/dropdown'ов строки. Поле (y=22, h=30) занимает
+    /// остаток MODAL_ROW_HEIGHT (52) целиком — лейбл сверху, поле снизу.
+    #[test]
+    fn text_input_field_rect_uses_kit_text_field_height() {
+        let row_rect = [10.0, 20.0, 400.0, crate::settings_ui::MODAL_ROW_HEIGHT];
+        // Модель-строка (без кнопки) — поле на всю доступную ширину.
+        let model =
+            crate::settings_ui::text_input_field_rect(SettingsRow::AiModelSuggest, row_rect);
+        assert_eq!(model[1], row_rect[1] + 22.0);
+        assert_eq!(model[3], canvas_ui::kit::TEXT_FIELD_HEIGHT);
+        assert_eq!(model[3], 30.0);
+        // Поле укладывается в MODAL_ROW_HEIGHT (22 + 30 = 52).
+        assert!(
+            model[1] - row_rect[1] + model[3] <= crate::settings_ui::MODAL_ROW_HEIGHT + 0.01,
+            "поле укладывается в высоту строки"
+        );
+        // Строка с кнопкой — поле у́же (минус бейдж 110 + gap 6).
+        let with_btn = crate::settings_ui::text_input_field_rect(SettingsRow::AiApiKey, row_rect);
+        assert_eq!(with_btn[3], canvas_ui::kit::TEXT_FIELD_HEIGHT);
+        assert!(with_btn[2] < model[2], "поле с кнопкой у́же модель-строки");
+    }
+
+    /// `insert_committed_text` (IME-коммит) append'ит текст к активному полю
+    /// строки настроек — паритет с EditingSession::Paste. Это та же ветка,
+    /// что и Ctrl+V в on_key (Fix 2), но через IME-мост web-слоя.
+    #[test]
+    fn insert_committed_text_appends_to_settings_text_field() {
+        let mut app = app_with_llm_settings();
+        app.settings_open = true;
+        app.settings_text_edit = Some(SettingsRow::AiApiKey);
+        // Исходное значение — "sk-test-123"
+        assert_eq!(app.settings.llm.api_key, "sk-test-123");
+        // IME-коммит append'ит к полю
+        app.insert_committed_text("xyz");
+        assert_eq!(app.settings.llm.api_key, "sk-test-123xyz");
+        // Повторный коммит — ещё append
+        app.insert_committed_text("-paste");
+        assert_eq!(app.settings.llm.api_key, "sk-test-123xyz-paste");
     }
 }
 
