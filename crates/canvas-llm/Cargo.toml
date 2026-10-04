@@ -21,11 +21,23 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 sha2 = { version = "0.10", optional = true }
 async-trait = { version = "0.1", optional = true }
+# FR-LLM-OAUTH (Stream D): PKCE/state/nonce — ОС-энтропия через getrandom
+# (минимальный стандартный источник CSPRNG; time/address-хаки запрещены).
+# На нативе — getentropy/BCryptGenRandom/urandom; версия 0.3 уже в дереве
+# (транзитивно). Включается только за `l1-llm` — дефолтное дерево не растёт.
+getrandom = { version = "0.3", optional = true }
+# FR-LLM-OAUTH (Stream D): unix-время для expires_at — web-time вместо
+# std::time::SystemTime (M8/W1: wasm32-безопасный alias через JS Date;
+# wasm-гейт времени FR-079 S3-fix). Уже в дереве через winit.
+web-time = { workspace = true, optional = true }
 
 [dev-dependencies]
 # только для тестовых фикстур: разбор JSON-ответов провайдеров
 serde.workspace = true
 serde_json.workspace = true
+# FR-LLM-OAUTH: исполнение async-методов трейта в тестах без tokio
+# (embed → NotSupported и т.п.). Не входит в сборку крейта — только тесты.
+pollster = { workspace = true }
 
 [features]
 default = []
@@ -42,6 +54,9 @@ l1-llm = [
     "dep:ureq",
     "dep:sha2",
     "dep:async-trait",
+    # FR-LLM-OAUTH (Stream D): CSPRNG для PKCE/state/nonce + wasm-безопасное время.
+    "dep:getrandom",
+    "dep:web-time",
 ]
 # FR-LLM-A: TLS для HTTPS-эндпоинтов (desktop). Подключает `ureq/tls`,
 # который тянет rustls/webpki-roots. wasm-сборка TLS не использует

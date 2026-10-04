@@ -21,11 +21,22 @@
 //! - [`openai_compat`] — `OpenAiCompatibleProvider` (5 endpoint'ов, feature
 //!   `l1-llm`).
 //! - [`anthropic`] — `AnthropicClaudeProvider` (feature `l1-llm`).
+//! - [`chatgpt_oauth`] — Sign-in-with-ChatGPT: OAuth-клиент (PKCE, localhost
+//!   listener/deep-link, token exchange/refresh), `TokenStore`, `id_token`
+//!   валидация и `ChatGptOAuthProvider` (Responses API) — feature `l1-llm`
+//!   (FR-LLM-OAUTH, PRD-0010 F-5.1…F-5.7).
 //!
-//! ## Stream D (не трогать)
+//! ## Stream D
 //!
 //! - `crates/canvas-llm/src/chatgpt_oauth/` — OAuth-клиент (PKCE, JWKS,
 //!   refresh, Responses API). Stream D владеет этой директорией.
+//!   Статус: **реализовано** (FR-LLM-OAUTH, Stream D 2-a): PKCE S256
+//!   (RFC 7636, Appendix B-вектор), desktop localhost-listener + web
+//!   deep-link `canvasdesk://oauth/callback` (F-5.2), token exchange /
+//!   refresh (F-5.7), `TokenStore` (F-5.3 — keychain/OPFS поверх трейта),
+//!   `id_token` iss/aud/nonce/exp (F-5.4; подпись RS256 — v1 no-op стаб,
+//!   см. SECURITY-блок `chatgpt_oauth/jwt.rs`), Responses API `/v1/responses`
+//!   (F-5.6), discovery `/v1/models` (F-5.5), proxy_url для wasm (F-5.10).
 //!
 //! ## Wasm-гейт (ADR-0011)
 //!
@@ -61,6 +72,11 @@ pub mod openai_compat;
 #[cfg(feature = "l1-llm")]
 pub mod anthropic;
 
+/// FR-LLM-OAUTH (Stream D): Sign-in-with-ChatGPT — OAuth-клиент, TokenStore,
+/// id_token-валидация и ChatGptOAuthProvider (feature `l1-llm` only).
+#[cfg(feature = "l1-llm")]
+pub mod chatgpt_oauth;
+
 // Re-export публичного API.
 pub use compliance::{DataResidency, PrivacyMode};
 pub use cost::{actual_cost, estimate_cost, estimate_tokens};
@@ -78,3 +94,12 @@ pub use types::{
 pub use anthropic::AnthropicClaudeProvider;
 #[cfg(feature = "l1-llm")]
 pub use openai_compat::OpenAiCompatibleProvider;
+
+// FR-LLM-OAUTH (Stream D): re-export рядом с OpenAiCompatibleProvider.
+// pkce публичных типов не имеет (только функции) — доступ через
+// `chatgpt_oauth::pkce`.
+#[cfg(feature = "l1-llm")]
+pub use chatgpt_oauth::{
+    CallbackParams, ChatGptOAuthProvider, IdClaims, JwksKey, LoginSession, MemoryTokenStore,
+    NoopVerifier, OAuthClient, OAuthTokens, SignatureVerifier, TokenStore,
+};
