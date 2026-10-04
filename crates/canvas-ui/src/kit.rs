@@ -27,8 +27,8 @@
 
 pub use crate::component::button::{
     button_layout, button_size, button_style, chip_layout, chip_size, chip_style, icon_button,
-    icon_button_rect, icon_button_style, icon_glyph, icon_name, switch, ChipLayout, Icon,
-    SwitchLayout,
+    icon_button_rect, icon_button_style, icon_glyph, icon_name, stage_close_button, switch,
+    ChipLayout, Icon, SwitchLayout,
 };
 pub use crate::component::dropdown::{
     dropdown_menu, toast_area, tooltip, viewport_clamp, DropdownLayout, TooltipLayout,
@@ -36,7 +36,8 @@ pub use crate::component::dropdown::{
 pub use crate::component::list::{list_rows, scroll_bar, ScrollState};
 pub use crate::component::modal::{focus_order, modal, modal_style, ModalLayout};
 pub use crate::component::panel::{
-    card, control_style_of, panel_content, panel_rect, panel_style, panel_style_of, CardLayout,
+    backdrop, card, control_style_of, panel_content, panel_rect, panel_style, panel_style_of,
+    CardLayout,
 };
 pub use crate::component::row::{
     leader_dash_rects, paint_row, row_guides, row_layout, row_style, RowLayout, RowMarker, RowOpts,

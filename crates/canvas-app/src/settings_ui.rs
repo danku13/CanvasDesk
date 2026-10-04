@@ -1545,6 +1545,16 @@ const SWITCH_GEOMETRY_PALETTE: canvas_ui::kit::KitPalette = canvas_ui::kit::KitP
     text_muted: [0.0; 4],
     disabled_text: [0.0; 4],
     accent: [0.0; 4],
+    // FR-070 (волна W-d): новые семантические слоты `control_success`/
+    // `control_warning`/`stage_dim`/`scrollbar_thumb`/`rule_color` не
+    // читаются геометрическим вызовом `kit::switch`, но значения берём из
+    // `KitPalette::dark()` (Agent B) — чтобы test fixture не расходился с
+    // production-коридором (single source of truth — AGENTS.md §UI-кит).
+    control_success: [0.30, 0.75, 0.55, 1.0],
+    control_warning: [0.95, 0.65, 0.30, 1.0],
+    stage_dim: [0.02, 0.02, 0.04, 0.6],
+    scrollbar_thumb: [0.35, 0.38, 0.46, 0.7],
+    rule_color: [0.30, 0.33, 0.40, 0.8],
 };
 
 /// Kit-раскладка тумблера строки настроек — единственный источник геометрии

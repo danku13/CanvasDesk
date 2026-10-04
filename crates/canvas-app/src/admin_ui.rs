@@ -3431,6 +3431,15 @@ mod tests {
             text_muted: [0.7, 0.7, 0.75, 1.0],
             disabled_text: [0.5, 0.5, 0.55, 1.0],
             accent: [0.396, 0.612, 0.969, 1.0],
+            // FR-070 (волна W-d): новые слоты — не используются в тестах
+            // admin_ui (геометрия галереи), но значения берём из
+            // `KitPalette::dark()` (Agent B) — чтобы test fixture не расходился
+            // с production-коридором (single source of truth).
+            control_success: [0.30, 0.75, 0.55, 1.0],
+            control_warning: [0.95, 0.65, 0.30, 1.0],
+            stage_dim: [0.02, 0.02, 0.04, 0.6],
+            scrollbar_thumb: [0.35, 0.38, 0.46, 0.7],
+            rule_color: [0.30, 0.33, 0.40, 0.8],
         }
     }
 }

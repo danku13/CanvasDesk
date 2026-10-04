@@ -197,6 +197,32 @@ fn map_to_theme_colors(parsed: &ParsedPreset) -> ThemeColors {
             canvas_core::tokens::CONTROL_DISABLED_TEXT[1],
             canvas_core::tokens::CONTROL_DISABLED_TEXT[2],
         ),
+        // FR-070 (W-b): статусные слоты success/warning и хром-слоты
+        // scrollbar_thumb/rule_color в JSON-пресетах не хранятся (как
+        // `tooltip_warn`/`whatif_accent`) — выводятся по знаку фона схемы
+        // (is_light_bg): светлые — затемнённые эквиваленты для контраста
+        // к белому, тёмные — значения из аудита (бывшие инлайн-литералы).
+        // Паритет с `ThemeColors::dark()`/`light()` в theme.rs.
+        control_success: if is_light_bg {
+            [0.18, 0.58, 0.42, 1.0]
+        } else {
+            [0.30, 0.75, 0.55, 1.0]
+        },
+        control_warning: if is_light_bg {
+            [0.78, 0.50, 0.20, 1.0]
+        } else {
+            [0.95, 0.65, 0.30, 1.0]
+        },
+        scrollbar_thumb: if is_light_bg {
+            [0.40, 0.42, 0.48, 0.5]
+        } else {
+            [0.35, 0.38, 0.46, 0.7]
+        },
+        rule_color: if is_light_bg {
+            [0.65, 0.66, 0.72, 0.6]
+        } else {
+            [0.30, 0.33, 0.40, 0.8]
+        },
     }
 }
 

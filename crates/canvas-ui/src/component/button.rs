@@ -339,6 +339,29 @@ pub fn icon_button(slot: UiRect, _icon: Icon, align: (HAlign, VAlign)) -> UiRect
     icon_button_rect(slot, align)
 }
 
+// --- StageCloseButton (FR-070) ----------------------------------------------
+
+/// Кнопка «×» в правом-верхнем углу панели/модали (FR-070, audit §6.1 —
+/// самый повторяющийся паттерн: 7+ файлов дублировали ручную формулу
+/// `x = panel.right() - 28.0, y = panel.y + 6.0` с дрейфом inset/size
+/// между 22/24/26/28/30 — канонический размер [`ICON_BUTTON_SIZE`],
+/// inset — [`canvas_core::tokens::SPACING_SM`] = 8).
+///
+/// Возвращает `UiRect` угловой кнопки в слоте `slot` (panel/modal rect);
+/// позиция — «прижата к правому-верхнему углу слота» минус inset, размер —
+/// квадрат `ICON_BUTTON_SIZE × ICON_BUTTON_SIZE` (та же метрика, что у
+/// [`icon_button_rect`] с `HAlign::End, VAlign::Start`, но с явным inset —
+/// не вплотную к углу).
+///
+/// Контракт F-8: цвет/стиль кнопки — забота потребителя
+/// ([`icon_button_style`] с `KitState`/`KitPalette`); здесь — только
+/// геометрия (как у [`icon_button_rect`]).
+pub fn stage_close_button(slot: UiRect) -> UiRect {
+    let s = ICON_BUTTON_SIZE;
+    let inset = canvas_core::tokens::SPACING_SM;
+    UiRect::new(slot.right() - s - inset, slot.y + inset, s, s)
+}
+
 // === Component (FR-068 W3, агент 3-a) =======================================
 
 /// Семейство подписи по умолчанию для [`Component::layout`] кнопки — то же
@@ -574,6 +597,58 @@ mod tests {
         assert_eq!(r.h, ICON_BUTTON_SIZE);
         assert!((r.right() - slot.right()).abs() < 0.01);
         assert!((r.y - slot.y).abs() < 0.01);
+    }
+
+    // === FR-070: stage_close_button (кнопка «×» в углу панели) =============
+
+    /// Геометрия канонической угловой кнопки закрытия: квадрат
+    /// `ICON_BUTTON_SIZE × ICON_BUTTON_SIZE`, прижата к правому-верхнему
+    /// углу слота с отступом `SPACING_SM` (= 8); `right == slot.right() -
+    /// inset - size`, `top == slot.y + inset`. Контракт F-8: цвет/стиль —
+    /// отдельно (через [`icon_button_style`]); здесь — геометрия.
+    #[test]
+    fn stage_close_button_is_inset_in_top_right_corner() {
+        let slot = UiRect::new(0.0, 0.0, 400.0, 300.0);
+        let r = stage_close_button(slot);
+        let inset = canvas_core::tokens::SPACING_SM;
+        assert_eq!(r.w, ICON_BUTTON_SIZE);
+        assert_eq!(r.h, ICON_BUTTON_SIZE);
+        assert!(
+            (r.right() - (slot.right() - inset)).abs() < 0.01,
+            "правый край кнопки = slot.right() - inset"
+        );
+        assert!(
+            (r.y - (slot.y + inset)).abs() < 0.01,
+            "верх = slot.y + inset"
+        );
+        // Кнопка внутри слота (не вылезает за границы)
+        assert!(r.x >= slot.x && r.right() <= slot.right() + 0.01);
+        assert!(r.y >= slot.y && r.bottom() <= slot.bottom() + 0.01);
+        // Положение квадрата = правый-верхний угол с inset (формула из аудита
+        // §6.1: канон `ICON_BUTTON_SIZE`=26 + `SPACING_SM`=8).
+        assert_eq!(
+            r,
+            UiRect::new(
+                slot.right() - ICON_BUTTON_SIZE - inset,
+                slot.y + inset,
+                ICON_BUTTON_SIZE,
+                ICON_BUTTON_SIZE,
+            )
+        );
+    }
+
+    /// Каноническая формула не зависит от позиции/размера слота — invariant
+    /// «прижата к правому-верхнему углу»: для слота со смещением и другой
+    /// геометрией формула та же.
+    #[test]
+    fn stage_close_button_inset_invariant_for_arbitrary_slot() {
+        let slot = UiRect::new(120.0, 80.0, 500.0, 400.0);
+        let r = stage_close_button(slot);
+        let inset = canvas_core::tokens::SPACING_SM;
+        assert!((r.right() - (slot.right() - inset)).abs() < 0.01);
+        assert!((r.y - (slot.y + inset)).abs() < 0.01);
+        assert_eq!(r.w, ICON_BUTTON_SIZE);
+        assert_eq!(r.h, ICON_BUTTON_SIZE);
     }
 
     // === FR-058: тесты компонентов v2 =======================================

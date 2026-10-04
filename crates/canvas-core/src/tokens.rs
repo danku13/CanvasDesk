@@ -168,6 +168,54 @@ pub const CARD_HEADER_HEIGHT: f32 = 34.0;
 pub const CARD_RESULT_STRIP_H: f32 = 32.0;
 
 // ---------------------------------------------------------------------------
+// Высота шапки UI-панели/модали (аудит ui-kit §4: 7 разных значений
+// 30/36/38/40/44/56/58 в *_ui.rs — стандартизованы в 3 варианта S/M/L,
+// design/tokens/dimensions.json#panel_header). Это НЕ карточный хедер
+// `CARD_HEADER_HEIGHT` (модель канваса) — это шапки оверлеев/доков/модалей
+// в screen px. Аудит ui-hardcode §4 (FR-046 W-d): пробел — 7 файлов с
+// локальными `HEADER_H` => унификация в токены (значения = прежним
+// константам файлов-источников; I-1: ноль визуального скачка).
+// ---------------------------------------------------------------------------
+
+/// Высота шапки small: навигация настроек, панель шаблонов, витрина кита
+/// (`kit_ui`). Источник: `template_ui.rs::PANEL_HEADER_H = 30.0` (FR-046
+/// W-d аудит: 7 разных значений 30/36/38/40/44/56/58 стандартизованы в 3
+/// варианта — small=30). Не совпадает со `BUTTON_HEIGHT` кита (30) —
+/// шапка панели — отдельная размерность, не контроль.
+pub const PANEL_HEADER_H_S: f32 = 30.0;
+/// Высота шапки medium: док документации, галерея схем, карта проливаний
+/// (близко к medium 38 — у flowmap/docs/scheme_gallery). Источник:
+/// `docs_ui.rs::DOCS_HEADER_H = 38.0` (FR-046 W-d; `HEADER_H` у scheme
+/// gallery 40 и flowmap 36 — оставлены как TODO: отклонения на 2px от M).
+pub const PANEL_HEADER_H_M: f32 = 38.0;
+/// Высота шапки large: панель расчёта, агент-панель, what-if, explain/autolink
+/// (близко к large 44/56/58). Источник: `agent_panel.rs` 44 (FR-046 W-d;
+/// explain/autolink 56/58 — оставлены как TODO: отклонения).
+pub const PANEL_HEADER_H_L: f32 = 44.0;
+
+// ---------------------------------------------------------------------------
+// Типографическая шкала UI-текста (аудит ui-kit §4: 10 разных кеглей
+// 10–19 в onboarding/ai_status_panel/search_ui/hints_ui/explain_ui —
+// стандартизованы в 4-шаговую шкалу, design/tokens/dimensions.json#typography).
+// Это НЕ `TYPE_*` (кегли рендера канвас-нод) — это кегли UI-оверлеев.
+// ---------------------------------------------------------------------------
+
+/// Кегль крупных заголовков (онбординг, заголовки модалей). Источник:
+/// `onboarding_ui.rs` 18/19 (FR-046 W-d аудит: 10 размеров 10–19 →
+/// 4-шаговая шкала title/body/caption/hint).
+pub const FONT_TITLE_LG: f32 = 18.0;
+/// Кегль тела UI: большинство подписей, строки списков, лейблы кнопок.
+/// Источник: `search_ui`/`hints_ui` 13 (FR-046 W-d).
+pub const FONT_BODY: f32 = 13.0;
+/// Кегль подписей: саб-лейблы, подписи поиска, hint-caret. Источник:
+/// `search_ui` 11, `scheme_gallery_ui::ROW_DESC_FONT` 11 (FR-046 W-d).
+pub const FONT_CAPTION: f32 = 11.0;
+/// Кегль микро-подписей: hints, бейджи, feature-чипы ai_status, микро-лейблы.
+/// Источник: `ai_status_panel` 10.5, `template_ui::WHEEL_TPL_FONT` 11 (FR-046
+/// W-d: 10.5 и 10 округлены до 10 — единый микро-кегль).
+pub const FONT_HINT: f32 = 10.0;
+
+// ---------------------------------------------------------------------------
 // Spacing/radius-scale UI-оверлеев (design/tokens/dimensions.json — FR-053
 // U3 PRD-0009 F-9): значения = текущим константам пилотов (галерея схем,
 // what-if бар — I-1 ноль скачка); потребители берут из scale.
@@ -652,6 +700,15 @@ mod parity_tests {
         assert_eq!(dim("card.corner_radius.$value"), CARD_CORNER_RADIUS);
         assert_eq!(dim("card.header_height.$value"), CARD_HEADER_HEIGHT);
         assert_eq!(dim("card.result_strip.$value"), CARD_RESULT_STRIP_H);
+        // FR-046 (W-d аудит §4): высота шапки UI-панели/модали — 3 варианта.
+        assert_eq!(dim("panel_header.s.$value"), PANEL_HEADER_H_S);
+        assert_eq!(dim("panel_header.m.$value"), PANEL_HEADER_H_M);
+        assert_eq!(dim("panel_header.l.$value"), PANEL_HEADER_H_L);
+        // FR-046 (W-d аудит §4): типографическая шкала UI-оверлеев — 4 кегля.
+        assert_eq!(dim("ui_typography.title_lg.$value"), FONT_TITLE_LG);
+        assert_eq!(dim("ui_typography.body.$value"), FONT_BODY);
+        assert_eq!(dim("ui_typography.caption.$value"), FONT_CAPTION);
+        assert_eq!(dim("ui_typography.hint.$value"), FONT_HINT);
         assert_eq!(dim("edge.dot.$value"), EDGE_DOT);
         assert_eq!(dim("edge.arrow_len.$value"), EDGE_ARROW_LEN);
         // W-d (§7): добор зеркала — 5 edge-токенов стрелки/пунктира.

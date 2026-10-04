@@ -98,7 +98,10 @@ pub const PANEL_TOP_MARGIN: f32 = 12.0;
 /// Внутренний отступ содержимого.
 pub const PANEL_PADDING: f32 = 10.0;
 /// Высота шапки панели («Шаблоны» + счётчик).
-pub const PANEL_HEADER_H: f32 = 30.0;
+// FR-046 W-d аудит §4: токен-источник `PANEL_HEADER_H_S` (30 — small
+// вариант шкалы высот шапок панелей). Прежний локальный литерал 30.0
+// заменён реэкспортом токена — ноль визуального скачка (I-1).
+pub use canvas_core::tokens::PANEL_HEADER_H_S as PANEL_HEADER_H;
 /// Высота поля поиска.
 pub const INPUT_HEIGHT: f32 = 32.0;
 /// Высота строки категории (чипы-фильтры).
@@ -1492,6 +1495,14 @@ mod tests {
             text_muted: [0.92; 4],
             disabled_text: [0.93; 4],
             accent: [0.94; 4],
+            // FR-070 (волна W-d): новые слоты — для геометрического теста
+            // scroll_bar не читаются, но значения берём из `KitPalette::dark()`
+            // (Agent B) — чтобы test fixture не расходился с production-коридором.
+            control_success: [0.30, 0.75, 0.55, 1.0],
+            control_warning: [0.95, 0.65, 0.30, 1.0],
+            stage_dim: [0.02, 0.02, 0.04, 0.6],
+            scrollbar_thumb: [0.35, 0.38, 0.46, 0.7],
+            rule_color: [0.30, 0.33, 0.40, 0.8],
         }
     }
 

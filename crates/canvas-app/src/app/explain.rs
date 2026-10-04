@@ -1586,6 +1586,13 @@ impl App {
             .max(4.0)
             .min((viewport[0] - w - 4.0).max(4.0));
         let y = (anchor[1] - h - 6.0).max(4.0);
+        // TODO: migrate to kit::tooltip + Painter::panel (audit §6.1).
+        // app/tooltip.rs уже использует `kit::tooltip` (якорь-курсор + flip +
+        // клампы — FR-068 W0), но здесь якорь — правый-край кнопки, а не
+        // курсор, и hover-state не хранится (`hovered_ms` семантика kit'а
+        // не ложится 1:1). Ручная сборка CardInstance с `palette.menu_fill`/
+        // `palette.palette_border` (слоты ThemeColors, не KitPalette) и
+        // радиусом 6 — пока оставлена; будущая W-e волна унифицирует.
         quads.push(CardInstance {
             pos: [x, y],
             size: [w, h],
