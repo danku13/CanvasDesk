@@ -1,9 +1,9 @@
 //! Палитра темы интерфейса (тёмная/светлая): все тема-зависимые цвета
-//! рендера в одной структуре. Значения — в sRGB 0..1 (так же, как
-//! прежние константы в cards.rs/text.rs: GPU-пайплайны пишут их как есть
-//! в sRGB-surface). Clear-color конвертируется в linear (`clear_color`).
+//! рендера в одной структуре. Значения — в sRGB 0..1 (байт/255); GPU-пайплайны
+//! пишут их как есть, surface выбирается НЕ-sRGB (passthrough,
+//! config::choose_surface_format) — «байт на экране = авторский байт».
+//! Clear-color фона — тоже raw sRGB (`clear_color`).
 
-use crate::config::srgb_to_linear;
 use crate::Color;
 
 /// Палитра темы: фон, сетка, карточки, текст, UI-оверлеи.
@@ -503,9 +503,12 @@ impl ThemeColors {
         ]
     }
 
-    /// Clear-color фона канваса (linear space для wgpu).
+    /// Clear-color фона канваса — RAW sRGB (0..=1).
+    /// Surface выбирается НЕ-sRGB (config::choose_surface_format): passthrough,
+    /// «байт на экране = авторский байт»; линейная конверсия здесь давала
+    /// дважды перекодированный (выцветший) фон на фоне raw-контента.
     pub fn clear_color(&self) -> wgpu::Color {
-        let channel = |i: usize| srgb_to_linear(self.background[i] as f64 / 255.0);
+        let channel = |i: usize| self.background[i] as f64 / 255.0;
         wgpu::Color {
             r: channel(0),
             g: channel(1),
@@ -632,15 +635,16 @@ mod tests {
         );
     }
 
-    /// Clear-color: sRGB-байты → linear (0x1d ≈ 0.01132 в linear).
+    /// Clear-color — RAW sRGB: байты фона / 255 без конверсии
+    /// (surface НЕ-sRGB, passthrough; см. config::choose_surface_format).
     #[test]
-    fn clear_color_is_linear() {
+    fn clear_color_is_raw_srgb() {
         let dark = ThemeColors::dark();
         let clear = dark.clear_color();
-        assert!((clear.r - srgb_to_linear(0x1d as f64 / 255.0)).abs() < 1e-9);
-        assert!((clear.b - srgb_to_linear(0x26 as f64 / 255.0)).abs() < 1e-9);
+        assert!((clear.r - 0x1d as f64 / 255.0).abs() < 1e-9);
+        assert!((clear.b - 0x26 as f64 / 255.0).abs() < 1e-9);
         assert_eq!(clear.a, 1.0);
-        // Светлый фон в linear ярче тёмного
+        // Светлый фон в raw sRGB ярче тёмного
         let light = ThemeColors::light().clear_color();
         assert!(light.r > clear.r);
     }

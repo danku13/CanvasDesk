@@ -22,25 +22,37 @@ pub fn linear_to_srgb_byte(v: f64) -> u8 {
     (srgb * 255.0).round() as u8
 }
 
-/// Фон канваса — #1e1e22 (T1) как clear-color в linear space.
+/// Фон канваса — #1e1e22 (T1) как RAW sRGB (0..=1).
+/// История: раньше возвращал linear (под Srgb-surface), но со сменой
+/// политики формата (см. `choose_surface_format`) clear-значения
+/// авторятся в raw sRGB — как и все остальные цвета пайплайна.
 pub fn background_color() -> wgpu::Color {
-    let gray = srgb_to_linear(0x1e as f64 / 255.0);
     wgpu::Color {
-        r: gray,
-        g: gray,
-        b: srgb_to_linear(0x22 as f64 / 255.0),
+        r: 0x1e as f64 / 255.0,
+        g: 0x1e as f64 / 255.0,
+        b: 0x22 as f64 / 255.0,
         a: 1.0,
     }
 }
 
-/// Формат surface: предпочитаем sRGB, иначе — первый доступный.
+/// Формат surface: предпочитаем НЕ-sRGB (raw), иначе — первый доступный.
+///
+/// Почему НЕ sRGB: все цвета пайплайна (тема, пресеты нод, тинты текста/иконок,
+/// превью) авторятся в raw sRGB ([f32; 4] = байт/255) и попадают в инстансы
+/// БЕЗ конверсии. Srgb-surface кодирует их железом второй раз — «выцветание»:
+/// замер wasm 2026-10-05, #673b3b на экране #aa8484 (= srgb_encode(0.4039)).
+/// Clear-color фона при Srgb-схеме конвертировался в linear (единственный
+/// корректный элемент), всё остальное — нет.
+/// Raw-surface даёт сквозной passthrough «байт на экране = авторский байт»,
+/// как в браузере/Figma; offscreen-проходы уже так работают (minimap_pass:
+/// Rgba8Unorm «значения проходят в кадр без перекодировки»).
 pub fn choose_surface_format(formats: &[wgpu::TextureFormat]) -> wgpu::TextureFormat {
     formats
         .iter()
         .copied()
-        .find(wgpu::TextureFormat::is_srgb)
+        .find(|f| !f.is_srgb())
         .or_else(|| formats.first().copied())
-        .unwrap_or(wgpu::TextureFormat::Bgra8UnormSrgb)
+        .unwrap_or(wgpu::TextureFormat::Bgra8Unorm)
 }
 
 /// Present mode: vsync (Fifo), иначе — первый доступный.
