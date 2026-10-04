@@ -6,13 +6,25 @@ use canvas_render::config::{
     srgb_to_linear, surface_size_valid,
 };
 
-/// Формат surface: предпочитаем sRGB (SPEC §6.5 — корректный цвет текста и карточек).
+/// Формат surface: предпочитаем НЕ-sRGB (raw passthrough): цвета пайплайна
+/// авторятся в raw sRGB без конверсии; Srgb-surface кодировала бы их второй
+/// раз («выцветание», замер wasm 2026-10-05: #673b3b на экране #aa8484).
 #[test]
-fn choose_surface_format_prefers_srgb() {
+fn choose_surface_format_prefers_non_srgb() {
     let formats = [
         wgpu::TextureFormat::Bgra8Unorm,
         wgpu::TextureFormat::Bgra8UnormSrgb,
     ];
+    assert_eq!(
+        choose_surface_format(&formats),
+        wgpu::TextureFormat::Bgra8Unorm
+    );
+}
+
+/// Только sRGB-варианты — берём sRGB (лучше, чем паника/отказ surface).
+#[test]
+fn choose_surface_format_fallback_to_srgb_when_only() {
+    let formats = [wgpu::TextureFormat::Bgra8UnormSrgb];
     assert_eq!(
         choose_surface_format(&formats),
         wgpu::TextureFormat::Bgra8UnormSrgb
@@ -46,15 +58,13 @@ fn present_mode_fallback_to_first() {
     assert_eq!(choose_present_mode(&modes), wgpu::PresentMode::Immediate);
 }
 
-/// Фон канваса — #1e1e22 (T1), конвертированный в linear для clear-значения.
+/// Фон канваса — #1e1e22 (T1), raw sRGB (без конверсии — surface НЕ-sRGB).
 #[test]
 fn background_color_matches_spec() {
     let color = background_color();
-    let channel_1e = srgb_to_linear(0x1e as f64 / 255.0);
-    let channel_22 = srgb_to_linear(0x22 as f64 / 255.0);
-    assert!((color.r - channel_1e).abs() < 1e-9);
-    assert!((color.g - channel_1e).abs() < 1e-9);
-    assert!((color.b - channel_22).abs() < 1e-9);
+    assert!((color.r - 0x1e as f64 / 255.0).abs() < 1e-9);
+    assert!((color.g - 0x1e as f64 / 255.0).abs() < 1e-9);
+    assert!((color.b - 0x22 as f64 / 255.0).abs() < 1e-9);
     assert_eq!(color.a, 1.0);
 }
 
