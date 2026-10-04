@@ -37,6 +37,11 @@ allow = [
     "Unlicense",
     "BSL-1.0",
     "0BSD",
+    # webpki-roots 0.26/1.0 (TLS-корневые сертификаты для ureq/canvas-llm,
+    # CI-red 2026-10-04) — CDLA-Permissive-2.0: пермиссивное Community
+    # Data License Agreement для открытых данных; редистрибуция и
+    # использование разрешены, copyleft-обязательств нет.
+    "CDLA-Permissive-2.0",
 ]
 
 # Дублирующие лицензии (dual MIT/Apache) не требуют текста каждой:
