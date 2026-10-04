@@ -2402,10 +2402,15 @@ struct CacheKey<'a> {
     /// Тоггл меняет стек (свёрнутость режет блоки, экспандер добавляет
     /// строку) — запись кэша обязана перешейпиться.
     mode: u8,
+    /// Fix-1 (P-B): цвет ноды (`node.color`, пусто — неокрашенная).
+    /// Формульные раны fn/op запекаются в буфер шейп-временной темой
+    /// (`ThemeColors::shaping_theme_for_card`) — смена цвета ноды обязана
+    /// перешейпить запись, иначе формулы остаются в старых цветах.
+    color: &'a str,
 }
 
-/// Запись кэша свежа, если зум, ширина, заголовок, тело и результаты
-/// формул не изменились.
+/// Запись кэша свежа, если зум, ширина, заголовок, тело, результаты
+/// формул, описание, тогглы и цвет ноды не изменились.
 fn cache_fresh(entry: CacheKey, current: CacheKey) -> bool {
     (entry.zoom - current.zoom).abs() < 1e-3
         && (entry.width - current.width).abs() < 0.5
@@ -2414,6 +2419,7 @@ fn cache_fresh(entry: CacheKey, current: CacheKey) -> bool {
         && entry.results == current.results
         && entry.desc == current.desc
         && entry.mode == current.mode
+        && entry.color == current.color
 }
 
 /// Оверлей-текст в world-координатах (контекстное меню, T7): шейпится
@@ -2672,6 +2678,8 @@ struct CachedTitle {
     desc_text: String,
     /// FR-061 хвосты (D-7/D-8): биты состояния тогглов (см. CacheKey.mode).
     mode: u8,
+    /// Fix-1 (P-B): цвет ноды (см. CacheKey.color) — ключ свежести.
+    color: String,
     /// Тик последнего использования — для вытеснения невидимых нод.
     last_used: u64,
 }
@@ -3379,6 +3387,9 @@ impl TextSystem {
                 let block_expanded = !frame.block_collapsed.contains(&node.id);
                 let desc_expanded = frame.desc_expanded.contains(&node.id);
                 let mode = (u8::from(block_expanded)) | (u8::from(desc_expanded) << 1);
+                // Fix-1 (P-B): цвет ноды в ключе свежести (формульные раны
+                // fn/op запекаются в кэш шейп-временной темой).
+                let color_key = node.color.clone().unwrap_or_default();
 
                 let fresh = self.cache.get(&index).is_some_and(|e| {
                     cache_fresh(
@@ -3390,6 +3401,7 @@ impl TextSystem {
                             results: &e.results_key,
                             desc: &e.desc_text,
                             mode: e.mode,
+                            color: &e.color,
                         },
                         CacheKey {
                             zoom: zoom_px,
@@ -3399,10 +3411,18 @@ impl TextSystem {
                             results: &results_key,
                             desc: &desc_text,
                             mode,
+                            color: &color_key,
                         },
                     )
                 });
                 if !fresh {
+                    // Fix-1 (P-B): тема шейпинга тела — на окрашенной ноде
+                    // формульные роли fn/op прогнаны через readable_on_card
+                    // до бана в кэш (draw-временной ремап их не накрывает).
+                    let body_theme = self.theme.shaping_theme_for_card(crate::cards::named_color(
+                        node.color.as_deref(),
+                        &self.theme,
+                    ));
                     let mut title =
                         Buffer::new(&mut self.font_system, Metrics::new(font_size, line_height));
                     title.set_wrap(&mut self.font_system, Wrap::None);
@@ -3509,7 +3529,7 @@ impl TextSystem {
                                 .unwrap_or(&[]);
                             Some(shape_body(
                                 &mut self.font_system,
-                                &self.theme,
+                                &body_theme,
                                 &body_text,
                                 body_width,
                                 zoom_px,
@@ -3774,7 +3794,7 @@ impl TextSystem {
                             };
                             *layout = shape_body(
                                 &mut self.font_system,
-                                &self.theme,
+                                &body_theme,
                                 &body_text,
                                 body_width,
                                 zoom_px,
@@ -4115,6 +4135,7 @@ impl TextSystem {
                             results_key,
                             desc_text,
                             mode,
+                            color: color_key,
                             last_used: self.tick,
                         },
                     );
@@ -5826,12 +5847,19 @@ load = connections_per_sec / (servers * server_rate)\n";
             results: "",
             desc: "",
             mode: 0,
+            color: "",
         };
         let same = CacheKey { ..entry };
         assert!(cache_fresh(entry, same));
         assert!(
             !cache_fresh(entry, CacheKey { zoom: 1.5, ..same }),
             "зум изменился"
+        );
+        // Fix-1 (P-B): смена цвета ноды инвалидирует кэш (формульные
+        // раны fn/op запекаются шейп-временной темой)
+        assert!(
+            !cache_fresh(entry, CacheKey { color: "3", ..same }),
+            "цвет ноды изменился"
         );
         assert!(
             !cache_fresh(
