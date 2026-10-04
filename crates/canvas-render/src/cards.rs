@@ -116,15 +116,66 @@ pub fn analysis_ring_instance(node: &Node, border: [f32; 4]) -> CardInstance {
     }
 }
 
-/// Пресеты цветов JSON Canvas ("1".."6"), тёмная тема: приглушённые тона
-/// поверх тёмного фона; светлый текст темы даёт ≥ 7:1 (см. тесты contrast).
+/// Пресеты цветов JSON Canvas ("1".."6"), тёмная тема — P-A «глубокие
+/// заливки» (решение владельца 2026-10-04, P-B): затемнены к общему уровню
+/// L≈0.062 с сохранением оттенка. Все роли тёмной темы читаются на любой
+/// из них RAW без авто-ремапа (≥ 4.8:1 — тест `p_a_deep_presets_roles_meet_aa_raw`);
+/// рамка окрашенной ноды — производная заливки (`derived_card_edge`, ≥ 3:1).
 pub(crate) const PRESET_COLORS_DARK: [(&str, [f32; 4]); 6] = [
-    ("1", [0.42, 0.24, 0.24, 1.0]), // red
-    ("2", [0.45, 0.33, 0.20, 1.0]), // orange
-    ("3", [0.42, 0.38, 0.19, 1.0]), // yellow (затемнён к AA ≥ 4.5 с текстом темы, CR-007)
-    ("4", [0.24, 0.40, 0.26, 1.0]), // green
-    ("5", [0.20, 0.38, 0.40, 1.0]), // cyan
-    ("6", [0.36, 0.27, 0.45, 1.0]), // purple
+    (
+        "1",
+        [
+            0x67 as f32 / 255.0,
+            0x3b as f32 / 255.0,
+            0x3b as f32 / 255.0,
+            1.0,
+        ],
+    ), // red    #673b3b
+    (
+        "2",
+        [
+            0x5a as f32 / 255.0,
+            0x42 as f32 / 255.0,
+            0x28 as f32 / 255.0,
+            1.0,
+        ],
+    ), // orange #5a4228
+    (
+        "3",
+        [
+            0x4e as f32 / 255.0,
+            0x47 as f32 / 255.0,
+            0x23 as f32 / 255.0,
+            1.0,
+        ],
+    ), // yellow #4e4723
+    (
+        "4",
+        [
+            0x2e as f32 / 255.0,
+            0x4e as f32 / 255.0,
+            0x32 as f32 / 255.0,
+            1.0,
+        ],
+    ), // green  #2e4e32
+    (
+        "5",
+        [
+            0x28 as f32 / 255.0,
+            0x4c as f32 / 255.0,
+            0x50 as f32 / 255.0,
+            1.0,
+        ],
+    ), // cyan   #284c50
+    (
+        "6",
+        [
+            0x53 as f32 / 255.0,
+            0x3e as f32 / 255.0,
+            0x67 as f32 / 255.0,
+            1.0,
+        ],
+    ), // purple #533e67
 ];
 
 /// Пресеты светлой темы — пастели (практика Obsidian/JSON Canvas: на светлом
@@ -180,6 +231,56 @@ pub fn named_color(color: Option<&str>, theme: &ThemeColors) -> Option<[f32; 4]>
         .find(|(key, _)| *key == value)
         .map(|(_, rgba)| *rgba)
         .or_else(|| parse_hex(value))
+}
+
+/// P-A: рамка ОКРАШЕННОЙ ноды — производная заливки, ≥ 3:1 и к заливке,
+/// и к фону канваса (SC 1.4.11; старый общий card_edge на глубоких
+/// заливках давал 1.2–1.4:1). Алгоритм:
+/// 1. заливка сама читается на канвасе (≥ 3:1) — силуэт гарантирован,
+///    рамка не обязана работать против заливки → тема (card_edge);
+/// 2. иначе минимальное смешение заливки к белому, при недостижимости —
+///    к чёрному, пока рамка не даст ≥ 3:1 с ОБОИМИ (заливка и канвас);
+/// 3. ни одна сторона не спасает (теоретически невозможно при п.2 —
+///    fill-vs-canvas < 3 оставляет рабочую сторону) — тема.
+/// Возвращается НЕПРОЗРАЧНЫЙ цвет (a = 1.0): гарантия посчитана для
+/// сплошного цвета; полупрозрачная рисовка размешала бы рамку с заливкой.
+/// Шейдер рисует ширину 1.5·a ≈ 1.5 px (волосяная, как FR-075).
+pub(crate) fn derived_card_edge(fill: [f32; 4], theme: &ThemeColors) -> [f32; 4] {
+    let bg = [
+        theme.background[0] as f32 / 255.0,
+        theme.background[1] as f32 / 255.0,
+        theme.background[2] as f32 / 255.0,
+    ];
+    let fill3 = [fill[0], fill[1], fill[2]];
+    // +0.05 запаса — квантование каналов в u8 на границе порога
+    const TARGET: f32 = 3.05;
+    if crate::contrast::contrast_ratio(fill3, bg) >= 3.0 {
+        return theme.card_edge;
+    }
+    for extreme in [[1.0f32; 3], [0.0; 3]] {
+        let top = crate::contrast::mix_to(fill3, extreme, 1.0);
+        if crate::contrast::contrast_ratio(top, fill3) < TARGET
+            || crate::contrast::contrast_ratio(top, bg) < TARGET
+        {
+            continue;
+        }
+        let (mut lo, mut hi) = (0.0f32, 1.0f32);
+        for _ in 0..12 {
+            let mid = (lo + hi) / 2.0;
+            let c = crate::contrast::mix_to(fill3, extreme, mid);
+            if crate::contrast::contrast_ratio(c, fill3) >= TARGET
+                && crate::contrast::contrast_ratio(c, bg) >= TARGET
+            {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        let c = crate::contrast::mix_to(fill3, extreme, hi);
+        let ch = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as f32 / 255.0;
+        return [ch(c[0]), ch(c[1]), ch(c[2]), 1.0];
+    }
+    theme.card_edge
 }
 
 /// Цвет заливки карточки: пресет "1".."6" или "#RRGGBB" по JSON Canvas spec,
@@ -328,19 +429,30 @@ pub fn corner_radius_at(corners: [f32; 4], fallback: f32, p: [f32; 2]) -> f32 {
 pub fn card_instance(node: &Node, selected: bool, theme: &ThemeColors) -> CardInstance {
     let broken = node.broken_link == Some(true);
     let group = node.kind() == NodeKind::Group;
+    // P-B: заливка/рамка согласованы — окрашенная нода (пресет или hex)
+    // получает производную рамку ≥ 3:1 к своей заливке и к канвасу.
+    let colored_fill = if group {
+        None
+    } else {
+        named_color(node.color.as_deref(), theme)
+    };
     let border = if selected {
         SELECTION_BORDER
     } else if broken {
         BROKEN_BORDER
     } else if group {
         theme.group_border
+    } else if colored_fill.is_some() {
+        // P-A: производная рамка, непрозрачная (гарантия — для сплошного
+        // цвета; шейдерная ширина 1.5·a ≈ 1.5 px).
+        derived_card_edge(colored_fill.unwrap(), theme)
     } else {
-        // FR-075 (вёрстка prototype-unified): волосяной контур cardEdge
-        // 1.25 px на КАЖДОЙ карточке (силуэт читается на любом фоне).
-        // Шейдер: ширина = 1.5 · border.a ≈ 1.28 px при a = 0.85.
-        let mut edge = theme.card_edge;
-        edge[3] = 0.85;
-        edge
+        // FR-075 (вёрстка prototype-unified): волосяной контур cardEdge на
+        // КАЖДОЙ карточке. P-B: alpha 1.0 — документированные ≥ 3:1 к
+        // заливке и канвасу считаются для сплошного цвета (полупрозрачная
+        // рисовка a=0.85 размешивала рамку до 2.25–2.7:1); шейдерная ширина
+        // 1.5·a = 1.5 px (было 1.28 при a = 0.85) — визуально та же волосяная.
+        theme.card_edge
     };
     CardInstance {
         pos: [node.x, node.y],

@@ -9,7 +9,7 @@ use crate::Color;
 /// Палитра темы: фон, сетка, карточки, текст, UI-оверлеи.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ThemeColors {
-    /// Фон канваса, sRGB-байты (#1e1e22 тёмный / #f5f5f7 светлый).
+    /// Фон канваса, sRGB-байты (#1d1f26 тёмный P-B / #f5f5f7 светлый).
     pub background: [u8; 3],
     /// Мелкая сетка, sRGB 0..1.
     pub grid_minor: [f32; 3],
@@ -19,7 +19,9 @@ pub struct ThemeColors {
     pub card_fill: [f32; 4],
     /// FR-075 (выравнивание с прототипом): волосяная рамка КАЖДОЙ карточки
     /// — `prototype-unified.html` рисует контур `cardEdge` 1.25 px на всех
-    /// нодах (тёмная #30323c / светлая #d5dae3), а не только на статусных.
+    /// нодах (тёмная #737885 P-B / светлая #878a90 L1), а не только на
+    /// статусных. P-B: ≥ 3:1 и к заливке карточки, и к канвасу (SC 1.4.11;
+    /// окрашенные ноды — производная рамка, `cards::derived_card_edge`).
     pub card_edge: [f32; 4],
     /// FR-075: цвет линии-разделителя зон (низ шапки / верх полосы
     /// «ИТОГ») — прототип `zoneTop` #2a2b33 / #e3e8f0.
@@ -28,10 +30,12 @@ pub struct ThemeColors {
     /// `flowBg` rgba(49,184,166,.06) / светлая rgba(31,143,128,.07).
     pub strip_tint: [f32; 4],
     /// FR-075: бирюзовый цвет значения результата («ИТОГ»/Σ) — прототип
-    /// `value`/`--flow` #31b8a6 / светлая #1f8f80 (семейство value-рёбер).
+    /// `value`/`--flow` #31b8a6 / светлая #1f8f80, P-B осветлил до уровня
+    /// APCA ≥ 60: #68cbbe / #1b7e71 (семейство value-рёбер).
     pub result_value: Color,
     /// FR-075: заливка чипа категории «РАСЧЁТ» (Text-нода с формулами) —
-    /// прототип `chips.calc` #4da3ff / #2f7fe8.
+    /// прототип `chips.calc` #4da3ff / #2f7fe8, P-B: #71b6ff / #89b6f2
+    /// (Lc ≥ 60 при фиксированных чернилах chip_text, FR-075).
     pub chip_calc: [f32; 4],
     /// FR-075: заливка чипа «ЗАМЕТКА» (Text-нода без формул) — прототип
     /// `chips.note` #a78bfa / #8b5cf6.
@@ -174,23 +178,26 @@ pub struct ThemeColors {
 }
 
 impl ThemeColors {
-    /// Тема тёмная? (по фону: тёмный фон #1e1e22 / светлый #f5f5f7).
+    /// Тема тёмная? (по фону: тёмный фон #1d1f26 / светлый #f5f5f7).
     /// Управляет выбором палитры пресетов и «чернил» авто-контраста.
     pub fn is_dark(&self) -> bool {
         self.background.iter().map(|&c| c as u32).sum::<u32>() < 384
     }
 
-    /// Тёмная палитра (базовая, SPEC T1) — прежние константы рендера.
+    /// Тёмная палитра P-B («Комфорт», вариация V2 + глубокие пресеты P-A;
+    /// решение владельца 2026-10-04): весь текст ≥ AA (фактически ≥ 7:1),
+    /// APCA Lc ≥ 60 у приглушённых/цветных ролей, тело ≥ 75, заголовок ≥ 88;
+    /// рамка и сетка — SC 1.4.11 (≥ 3:1).
     pub fn dark() -> Self {
         Self {
-            background: [0x1e, 0x1e, 0x22],
-            grid_minor: [0.141, 0.141, 0.161],
-            grid_major: [0.169, 0.169, 0.190],
-            card_fill: [0.149, 0.149, 0.173, 1.0],
+            background: [0x1d, 0x1f, 0x26],
+            grid_minor: [0.149, 0.161, 0.200],
+            grid_major: [0.192, 0.204, 0.247],
+            card_fill: [0.169, 0.180, 0.220, 1.0],
             card_edge: [
-                0x30 as f32 / 255.0,
-                0x32 as f32 / 255.0,
-                0x3c as f32 / 255.0,
+                0x73 as f32 / 255.0,
+                0x78 as f32 / 255.0,
+                0x85 as f32 / 255.0,
                 1.0,
             ],
             zone_top: [
@@ -200,10 +207,10 @@ impl ThemeColors {
                 1.0,
             ],
             strip_tint: [0.121, 0.722, 0.651, 0.06],
-            result_value: Color::rgb(0x31, 0xb8, 0xa6),
-            chip_calc: [0.302, 0.639, 1.0, 1.0],
-            chip_note: [0.655, 0.545, 0.980, 1.0],
-            chip_file: [0.851, 0.627, 0.235, 1.0],
+            result_value: Color::rgb(0x68, 0xcb, 0xbe),
+            chip_calc: [0.443, 0.714, 1.0, 1.0],
+            chip_note: [0.733, 0.647, 0.984, 1.0],
+            chip_file: [0.863, 0.659, 0.294, 1.0],
             // W-b: chipTxt — тёмные чернила на цветном чипе (обе темы, FR-075).
             chip_text: Color::rgb(0x14, 0x16, 0x1c),
             // CR-018 волна v2 (решение владельца): альфа 0.04 → 0.08 —
@@ -224,7 +231,7 @@ impl ThemeColors {
             // v2.1: сепараторы 0.05 → 0.075 (+50%) — при 1px/0.05 не видны.
             col_sep_fill: [1.0, 1.0, 1.0, 0.075],
             edge_edit_fill: [0.13, 0.13, 0.16, 0.95],
-            edge_label_fill: [0.11, 0.11, 0.13, 0.85],
+            edge_label_fill: [0.125, 0.133, 0.169, 0.85],
             menu_fill: [0.11, 0.11, 0.13, 0.97],
             search_input_fill: [0.16, 0.17, 0.20, 1.0],
             search_row_fill: [0.13, 0.14, 0.17, 0.55],
@@ -235,23 +242,24 @@ impl ThemeColors {
             palette_selected_dim_fill: [0.18, 0.29, 0.48, 0.45],
             palette_hover_fill: [0.24, 0.30, 0.42, 0.6],
             palette_border: [0.22, 0.24, 0.30, 0.9],
-            title: Color::rgb(0xe6, 0xe6, 0xe6),
-            icon: Color::rgb(0x9a, 0xaa, 0xbf),
-            body: Color::rgb(0xd4, 0xd4, 0xd4),
-            edge_label: Color::rgb(0xcf, 0xd8, 0xe3),
-            link: Color::rgb(0x6c, 0xb6, 0xff),
-            quote: Color::rgb(0x9a, 0x9a, 0xa2),
-            code_text: Color::rgb(0xa5, 0xd6, 0xff),
-            // FR-061 D (O-5): прототип ux-node-body-fill (.fn/.op).
-            formula_fn: Color::rgb(0xc7, 0x92, 0xea),
-            formula_op: Color::rgb(0x66, 0x6a, 0x7c),
-            gfm_code_fill: [0.22, 0.23, 0.27, 1.0],
+            title: Color::rgb(0xeb, 0xeb, 0xeb),
+            icon: Color::rgb(0xb0, 0xbc, 0xcd),
+            body: Color::rgb(0xdb, 0xdb, 0xdb),
+            edge_label: Color::rgb(0xd1, 0xd9, 0xe4),
+            link: Color::rgb(0x80, 0xc0, 0xff),
+            quote: Color::rgb(0xbb, 0xbb, 0xc0),
+            code_text: Color::rgb(0xbc, 0xe0, 0xff),
+            // FR-061 D (O-5): прототип ux-node-body-fill (.fn/.op), P-B —
+            // уровень V2 (Lc ≥ 60) с сохранением оттенка.
+            formula_fn: Color::rgb(0xd4, 0xac, 0xef),
+            formula_op: Color::rgb(0xb9, 0xbb, 0xc3),
+            gfm_code_fill: [0.231, 0.247, 0.298, 1.0],
             gfm_quote_fill: [0.45, 0.48, 0.55, 1.0],
             gfm_muted_fill: [0.55, 0.57, 0.62, 1.0],
             group_fill: [0.396, 0.612, 0.969, 0.08],
             group_border: [0.396, 0.612, 0.969, 0.40],
-            // Маджента магнитной раскладки: контраст к фону #1e1e22 ≈ 5.2:1
-            // (подложка grid — приглушённый тон того же тона, ≈ 4.0:1)
+            // Маджента магнитной раскладки: контраст к фону #1d1f26 ≈ 5.4:1
+            // (подложка grid — приглушённый тон того же тона, ≈ 4.2:1)
             guide_align: [1.0, 0.18, 0.83, 1.0],
             guide_grid: [0.86, 0.16, 0.72, 1.0],
             // FR-046: слоты v2 — из примитивов design/tokens (ноль скачка)
@@ -307,6 +315,8 @@ impl ThemeColors {
     }
 
     /// Светлая тема: тёмный текст на белых карточках, сетка светло-серая.
+    /// Палитра — прежняя + L1 (аудит светлой темы 2026-10): иконки,
+    /// «ИТОГ», чипы и рамка подтянуты к AA ≥ 4.5 (Lc ≥ 60).
     pub fn light() -> Self {
         Self {
             background: [0xf5, 0xf5, 0xf7],
@@ -316,10 +326,11 @@ impl ThemeColors {
             card_fill: [0.984, 0.984, 0.992, 1.0],
             // FR-075: прототип light — cardEdge #d5dae3, zoneTop #e3e8f0,
             // flowBg rgba(31,143,128,.07), value #1f8f80, chips light-ряд.
+            // L1: cardEdge #878a90 — ≥ 3:1 к канвасу (SC 1.4.11).
             card_edge: [
-                0xd5 as f32 / 255.0,
-                0xda as f32 / 255.0,
-                0xe3 as f32 / 255.0,
+                0x87 as f32 / 255.0,
+                0x8a as f32 / 255.0,
+                0x90 as f32 / 255.0,
                 1.0,
             ],
             zone_top: [
@@ -329,10 +340,10 @@ impl ThemeColors {
                 1.0,
             ],
             strip_tint: [0.122, 0.561, 0.502, 0.07],
-            result_value: Color::rgb(0x1f, 0x8f, 0x80),
-            chip_calc: [0.184, 0.498, 0.910, 1.0],
-            chip_note: [0.545, 0.361, 0.965, 1.0],
-            chip_file: [0.788, 0.541, 0.118, 1.0],
+            result_value: Color::rgb(0x1b, 0x7e, 0x71),
+            chip_calc: [0.537, 0.714, 0.949, 1.0],
+            chip_note: [0.753, 0.651, 0.980, 1.0],
+            chip_file: [0.851, 0.678, 0.384, 1.0],
             // W-b: chipTxt — тёмные чернила на цветном чипе (обе темы, FR-075).
             chip_text: Color::rgb(0x14, 0x16, 0x1c),
             // CR-018 v2.1: светлая тема — тёмный тинт α 0.30 (карточки
@@ -353,7 +364,8 @@ impl ThemeColors {
             palette_hover_fill: [0.75, 0.80, 0.90, 0.6],
             palette_border: [0.75, 0.77, 0.82, 0.9],
             title: Color::rgb(0x20, 0x20, 0x24),
-            icon: Color::rgb(0x6a, 0x7a, 0x8f),
+            // L1: иконки — AA 4.75 (было #6a7a8f = 4.24 FAIL AA)
+            icon: Color::rgb(0x63, 0x72, 0x86),
             body: Color::rgb(0x38, 0x38, 0x3e),
             edge_label: Color::rgb(0x2a, 0x35, 0x42),
             link: Color::rgb(0x09, 0x69, 0xda),
@@ -389,7 +401,8 @@ impl ThemeColors {
                 canvas_core::tokens::WHATIF_BADGE[1],
                 canvas_core::tokens::WHATIF_BADGE[2],
             ),
-            // W-b: светлый акцент what-if — тон светлого ряда (chip_calc light).
+            // W-b: светлый акцент what-if — прежний тон светлого ряда
+            // (бывший chip_calc light #2f7fe8; слот чипа с P-B светлее).
             whatif_accent: Color::rgb(0x2f, 0x7f, 0xe8),
             error: Color::rgb(
                 canvas_core::tokens::ERROR[0],
@@ -444,6 +457,24 @@ impl ThemeColors {
         }
         let [ink_a, ink_b] = self.ink_candidates();
         crate::contrast::ensure_contrast(text, fill, 4.5, ink_a, ink_b)
+    }
+
+    /// Fix-1 (P-B): тема для ШЕЙПИНГА тела ноды. `formula_rich_runs`
+    /// красит формульные раны fn/op ЯВНЫМ цветом атрибутов — draw-временной
+    /// ремап `readable_on_card` (через `default_color` TextArea) их не
+    /// накрывает: на окрашенных нодах оператор формулы падал до 1.16:1.
+    /// Решение — прогнать формульные роли через `readable_on_card` ДО бана
+    /// в кэш. Остальные роли не трогаются (их ремап — draw-временной, кэш
+    /// не зависит от заливки). Смена цвета ноды — ключ свежести кэша
+    /// (`CacheKey.color`), смена темы сбрасывает кэш целиком
+    /// (`TextEngine::set_theme`).
+    pub fn shaping_theme_for_card(&self, colored_fill: Option<[f32; 4]>) -> Self {
+        let mut theme = *self;
+        if let Some(fill) = colored_fill {
+            theme.formula_fn = self.readable_on_card(self.formula_fn, fill, true);
+            theme.formula_op = self.readable_on_card(self.formula_op, fill, true);
+        }
+        theme
     }
 
     /// Палитра по enum темы (canvas-core).
@@ -538,12 +569,24 @@ impl ThemeColors {
 mod tests {
     use super::*;
 
-    /// Тёмная палитра — прежние константы рендера (регрессия не меняет вид).
+    /// Тёмная палитра P-B — значения вариации V2 «Комфорт» (решение
+    /// владельца 2026-10-04: P-B = V2 + P-A).
     #[test]
-    fn dark_palette_matches_legacy_constants() {
+    fn dark_palette_matches_p_b_design() {
         let dark = ThemeColors::dark();
-        assert_eq!(dark.background, [0x1e, 0x1e, 0x22]);
-        assert_eq!(dark.card_fill, [0.149, 0.149, 0.173, 1.0]);
+        assert_eq!(dark.background, [0x1d, 0x1f, 0x26]);
+        assert_eq!(dark.card_fill, [0.169, 0.180, 0.220, 1.0]);
+        assert_eq!(
+            dark.card_edge[0..3],
+            [
+                0x73 as f32 / 255.0,
+                0x78 as f32 / 255.0,
+                0x85 as f32 / 255.0
+            ]
+        );
+        assert_eq!(dark.title, Color::rgb(0xeb, 0xeb, 0xeb));
+        assert_eq!(dark.body, Color::rgb(0xdb, 0xdb, 0xdb));
+        assert_eq!(dark.formula_op, Color::rgb(0xb9, 0xbb, 0xc3));
         assert_eq!(dark.menu_fill, [0.11, 0.11, 0.13, 0.97]);
     }
 
@@ -589,13 +632,13 @@ mod tests {
         );
     }
 
-    /// Clear-color: sRGB-байты → linear (0x1e ≈ 0.01174 в linear).
+    /// Clear-color: sRGB-байты → linear (0x1d ≈ 0.01132 в linear).
     #[test]
     fn clear_color_is_linear() {
         let dark = ThemeColors::dark();
         let clear = dark.clear_color();
-        assert!((clear.r - srgb_to_linear(0x1e as f64 / 255.0)).abs() < 1e-9);
-        assert!((clear.b - srgb_to_linear(0x22 as f64 / 255.0)).abs() < 1e-9);
+        assert!((clear.r - srgb_to_linear(0x1d as f64 / 255.0)).abs() < 1e-9);
+        assert!((clear.b - srgb_to_linear(0x26 as f64 / 255.0)).abs() < 1e-9);
         assert_eq!(clear.a, 1.0);
         // Светлый фон в linear ярче тёмного
         let light = ThemeColors::light().clear_color();
@@ -756,9 +799,10 @@ mod tests {
                 theme.is_dark()
             );
         }
-        // error к заливке карточки: ИЗВЕСТНОЕ ИСКЛЮЧЕНИЕ к AA 4.5 (значения
-        // не менялись: 4.32 тёмная / 3.38 светлая — строка результата живёт
-        // на карточке, читаемость дотягивает автоконтраст on_card);
+        // error к заливке карточки: ИЗВЕСТНОЕ ИСКЛЮЧЕНИЕ к AA 4.5 (значение
+        // примитива ERROR не менялось; фактические: 3.88 тёмная (P-B карточка
+        // светлее базлайна) / 3.38 светлая — строка результата живёт на
+        // карточке, читаемость дотягивает автоконтраст on_card);
         // регрессионная граница ниже фактических значений.
         for theme in [&dark, &light] {
             let r = contrast_text_vs_fill(theme.error, theme.card_fill);
@@ -858,9 +902,19 @@ mod tests {
         for (_, fill) in crate::cards::PRESET_COLORS_LIGHT {
             fills.push(fill);
         }
-        // Проверяем ремонт всех «типовых» цветов текста темы
+        // Проверяем ремонт всех «типовых» цветов текста темы (включая
+        // формульные роли — Fix-1: их ремап теперь шейп-временной)
         for theme in [dark, light] {
-            let samples = [theme.title, theme.body, theme.icon, theme.link, theme.quote];
+            let samples = [
+                theme.title,
+                theme.body,
+                theme.icon,
+                theme.link,
+                theme.quote,
+                theme.formula_fn,
+                theme.formula_op,
+                theme.result_value,
+            ];
             for fill in &fills {
                 for &sample in &samples {
                     let fixed = theme.readable_on_card(sample, *fill, true);
@@ -875,8 +929,8 @@ mod tests {
         }
     }
 
-    /// Пресеты читаются цветом заголовка своей темы: тёмная — AA (≥ 4.5,
-    /// приглушённые тона остаются прежними — регрессия вида), светлая —
+    /// Пресеты читаются цветом заголовка своей темы: тёмная — AAA (≥ 7:
+    /// глубокие заливки P-A выровнены под общий уровень L≈0.062), светлая —
     /// AAA (≥ 7: пастели спроектированы под тёмный текст).
     #[test]
     fn presets_meet_contrast_with_theme_title() {
@@ -884,8 +938,8 @@ mod tests {
         for (_, fill) in crate::cards::PRESET_COLORS_DARK {
             let ratio = contrast_text_vs_fill(ThemeColors::dark().title, fill);
             assert!(
-                ratio >= 4.5,
-                "тёмная тема: {ratio:.2} < 4.5 у заливки {fill:?}"
+                ratio >= 7.0,
+                "тёмная тема: {ratio:.2} < 7 у заливки {fill:?}"
             );
         }
         for (_, fill) in crate::cards::PRESET_COLORS_LIGHT {
@@ -913,5 +967,163 @@ mod tests {
         let fixed = dark.readable_on_card(title, pastel, true);
         assert_ne!(fixed, title);
         assert!(contrast_text_vs_fill(fixed, pastel) >= 4.5);
+    }
+
+    /// P-B (V2 «Комфорт»): пороги тёмной темы — WCAG (заголовок/тело AAA ≥ 7,
+    /// остальные тексты AA ≥ 4.5) + APCA Lc (заголовок ≥ 88, тело ≥ 75,
+    /// приглушённые/цветные/чипы ≥ 60). Метод и пороги — аудит 2026-10 §2;
+    /// фиксируют уровень, выбранный владельцем (P-B = V2 + P-A).
+    #[test]
+    fn p_b_dark_roles_meet_wcag_and_apca() {
+        use crate::contrast::{apca_lc, contrast_text_vs_fill};
+        let dark = ThemeColors::dark();
+        let card = dark.card_fill;
+        for (name, ink, wcag_min, lc_min) in [
+            ("title", dark.title, 7.0, 88.0),
+            ("body", dark.body, 7.0, 75.0),
+            ("quote", dark.quote, 4.5, 60.0),
+            ("icon", dark.icon, 4.5, 60.0),
+            ("link", dark.link, 4.5, 60.0),
+            ("formula_fn", dark.formula_fn, 4.5, 60.0),
+            ("formula_op", dark.formula_op, 4.5, 60.0),
+            ("result", dark.result_value, 4.5, 60.0),
+        ] {
+            let w = contrast_text_vs_fill(ink, card);
+            assert!(w >= wcag_min, "{name}: WCAG {w:.2} < {wcag_min}");
+            let lc = apca_lc(ink, card).abs();
+            assert!(lc >= lc_min, "{name}: APCA Lc {lc:.1} < {lc_min}");
+        }
+        // Код к своей подложке, лейбл ребра к своей
+        assert!(contrast_text_vs_fill(dark.code_text, dark.gfm_code_fill) >= 4.5);
+        assert!(apca_lc(dark.code_text, dark.gfm_code_fill).abs() >= 60.0);
+        let label_bg = dark.edge_label_fill;
+        assert!(contrast_text_vs_fill(dark.edge_label, label_bg) >= 4.5);
+        // Чипы: тёмные чернила chip_text на заливках чипов (обе темы)
+        for theme in [ThemeColors::dark(), ThemeColors::light()] {
+            for (name, chip) in [
+                ("chip_calc", theme.chip_calc),
+                ("chip_note", theme.chip_note),
+                ("chip_file", theme.chip_file),
+            ] {
+                let w = contrast_text_vs_fill(theme.chip_text, chip);
+                assert!(w >= 4.5, "{name}: WCAG {w:.2} < 4.5");
+                let lc = apca_lc(theme.chip_text, chip).abs();
+                assert!(lc >= 60.0, "{name}: APCA Lc {lc:.1} < 60");
+            }
+        }
+    }
+
+    /// P-A: глубокие тёмные пресеты «1..6» — ВСЕ роли темы читаются RAW
+    /// (≥ 4.8: AA с запасом), авто-ремап на окрашенных нодах не нужен
+    /// (кроме error — ремапится и сейчас).
+    #[test]
+    fn p_a_deep_presets_roles_meet_aa_raw() {
+        use crate::contrast::contrast_text_vs_fill;
+        let dark = ThemeColors::dark();
+        for (key, fill) in crate::cards::PRESET_COLORS_DARK {
+            for (role, ink) in [
+                ("title", dark.title),
+                ("body", dark.body),
+                ("quote", dark.quote),
+                ("icon", dark.icon),
+                ("link", dark.link),
+                ("formula_fn", dark.formula_fn),
+                ("formula_op", dark.formula_op),
+                ("result", dark.result_value),
+            ] {
+                let w = contrast_text_vs_fill(ink, fill);
+                assert!(w >= 4.8, "пресет {key} {role}: {w:.2} < 4.8");
+            }
+        }
+    }
+
+    /// P-A/L1: рамка каждой карточки отделяет ноду — ≥ 3:1 и к заливке,
+    /// и к канвасу (SC 1.4.11). Окрашенные ноды — производная рамка
+    /// (`cards::derived_card_edge`); когда заливка сама читается на канвасе
+    /// (≥ 3:1), рамка — тема (ограничение «к заливке» снимается).
+    #[test]
+    fn card_edges_meet_3to1_everywhere() {
+        use crate::contrast::contrast_ratio;
+        let dark = ThemeColors::dark();
+        let light = ThemeColors::light();
+        for theme in [dark, light] {
+            let bg = [
+                theme.background[0] as f32 / 255.0,
+                theme.background[1] as f32 / 255.0,
+                theme.background[2] as f32 / 255.0,
+            ];
+            let edge3 = |e: [f32; 4]| [e[0], e[1], e[2]];
+            // Дефолтная нода: тема-рамка против обеих пар
+            let edge = edge3(theme.card_edge);
+            assert!(
+                contrast_ratio(edge, bg) >= 3.0,
+                "theme.edge vs canvas: {:.2}",
+                contrast_ratio(edge, bg)
+            );
+            assert!(
+                contrast_ratio(
+                    edge,
+                    [theme.card_fill[0], theme.card_fill[1], theme.card_fill[2]]
+                ) >= 3.0,
+                "theme.edge vs card_fill: {:.2}",
+                contrast_ratio(
+                    edge,
+                    [theme.card_fill[0], theme.card_fill[1], theme.card_fill[2]]
+                )
+            );
+            // Окрашенные ноды: пресеты + серая шкала + шумовые hex
+            let mut fills: Vec<[f32; 4]> = Vec::new();
+            for (_, fill) in crate::cards::PRESET_COLORS_DARK {
+                fills.push(fill);
+            }
+            for (_, fill) in crate::cards::PRESET_COLORS_LIGHT {
+                fills.push(fill);
+            }
+            for step in (0..=255).step_by(24) {
+                let c = step as f32 / 255.0;
+                fills.push([c, c, c, 1.0]);
+            }
+            for fill in fills {
+                let derived = crate::cards::derived_card_edge(fill, &theme);
+                let f3 = [fill[0], fill[1], fill[2]];
+                let vs_bg = contrast_ratio(edge3(derived), bg);
+                let vs_fill = contrast_ratio(edge3(derived), f3);
+                let silhouette = contrast_ratio(f3, bg);
+                assert!(
+                    vs_bg >= 3.0,
+                    "edge vs canvas {vs_bg:.2} < 3:1 на заливке {fill:?}"
+                );
+                assert!(
+                    vs_fill >= 3.0 || silhouette >= 3.0,
+                    "рамка не отделяет ноду: edge-vs-fill {vs_fill:.2}, fill-vs-canvas {silhouette:.2}, заливка {fill:?}"
+                );
+            }
+        }
+    }
+
+    /// Fix-1: формульные роли ремапятся шейп-временной темой на заливках,
+    /// где raw-контраст ниже AA (пользовательские hex), и НЕ трогаются
+    /// на неокрашенной ноде. На глубоких пресетах P-A ремап — нооп
+    /// (все роли raw ≥ 4.8 — в этом смысл P-B).
+    #[test]
+    fn shaping_theme_remaps_formula_roles_only_on_colored() {
+        use crate::contrast::contrast_text_vs_fill;
+        let dark = ThemeColors::dark();
+        // Глубокий пресет: raw уже ≥ AA — тема не меняется (нооп-ремап)
+        let deep = crate::cards::PRESET_COLORS_DARK[2].1; // yellow #4e4723
+        let shaped = dark.shaping_theme_for_card(Some(deep));
+        assert_eq!(shaped, dark, "P-A: fn/op читаются raw — ремап не нужен");
+        // Средне-серый hex: op/fn raw слабы → ремап до AA
+        let grey = [0.467, 0.467, 0.467, 1.0]; // #777
+        let shaped = dark.shaping_theme_for_card(Some(grey));
+        assert_ne!(shaped.formula_op, dark.formula_op);
+        assert_ne!(shaped.formula_fn, dark.formula_fn);
+        // Остальные роли — без изменений (их ремап — draw-временной)
+        assert_eq!(shaped.body, dark.body);
+        assert_eq!(shaped.quote, dark.quote);
+        assert!(contrast_text_vs_fill(shaped.formula_op, grey) >= 4.5);
+        assert!(contrast_text_vs_fill(shaped.formula_fn, grey) >= 4.5);
+        // Неокрашенная — тема как была
+        assert_eq!(dark.shaping_theme_for_card(None), dark);
     }
 }

@@ -610,12 +610,13 @@ fn auto_side(node: &Node, target: &Node) -> Side {
 }
 
 /// Инлайн-CSS артефакта: темы через `[data-theme]`, пресеты `np-1..6`
-/// (палитры повторяют `PRESET_COLORS_DARK/LIGHT` cards.rs:120/133), офлайн.
+/// (палитры повторяют `PRESET_COLORS_DARK/LIGHT` cards.rs — тёмные P-A
+/// глубокие заливки), офлайн.
 const CSS: &str = r#"
 :root, [data-theme="dark"] {
   --bg:#14161a; --panel:#1b1e24; --card:#232730; --text:#e8eaf0; --muted:#9aa3b2;
   --accent:#7aa2f7; --edge:#565f70; --group:#3b4252; --group-fill:#1d2128;
-  --np1:#6b3d3d; --np2:#735433; --np3:#6b6130; --np4:#3d6642; --np5:#336166; --np6:#5c4573;
+  --np1:#673b3b; --np2:#5a4228; --np3:#4e4723; --np4:#2e4e32; --np5:#284c50; --np6:#533e67;
   --dot:#262a32; --table-line:#2c313a;
 }
 [data-theme="light"] {
