@@ -46,7 +46,8 @@ use canvas_core::{Canvas, EdgeLineStyle, EdgeThickness, FlowKind, Language, Node
 use canvas_render::ThemeColors;
 
 use canvas_ui::geometry::{UiRect, UiVec2};
-use canvas_ui::kit::{self, ScrollState};
+use canvas_ui::kit::{self, icon_composition, IconKind, ScrollState};
+use canvas_ui::paint::PaintItem;
 
 use crate::i18n::{self, keys};
 use crate::ui::{point_in_rect, NodeSetting};
@@ -1139,227 +1140,66 @@ pub fn icon_text(icon: PaletteIcon) -> Option<&'static str> {
     }
 }
 
-/// Добавить квад иконки: `fill` (Some — заливка) и/или `border`
-/// (Some — контур через border.a). params: [radius, 0, 0, без тени].
-fn icon_quad(
-    quads: &mut Vec<CardInstance>,
-    pos: [f32; 2],
-    size: [f32; 2],
-    fill: Option<[f32; 4]>,
-    border: Option<[f32; 4]>,
-    radius: f32,
-) {
-    quads.push(CardInstance {
-        pos,
-        size,
-        fill: fill.unwrap_or([0.0; 4]),
-        border: border.unwrap_or([0.0; 4]),
-        params: [radius, 0.0, 0.0, 1.0],
-        corners: [0.0; 4],
-    });
-}
-
 /// Иконка как композиция квадов внутри rect (логические px). `tint` —
 /// цвет штрихов (theme.icon). Чистая функция — тестируется на число квадов
 /// и попадание в границы rect.
+///
+/// FR-UI-ICON (audit §6.1, Agent D): миграция на kit — внутренности
+/// делегируют в `canvas_ui::kit::icon_composition` (декларативная
+/// спецификация `IconKind` → `Vec<PaintItem>`, геометрия 1:1 с прежним
+/// ручным построением `CardInstance` — ноль визуального скачка I-1),
+/// затем `app::paint_items_to_cards` адаптирует items в `Vec<CardInstance>`
+/// (контракт FR-057: Painter — данные, `CardInstance` — на стороне
+/// потребителя; `palette::icon_quads` сохранил сигнатуру `Vec<CardInstance>`
+/// для обратной совместимости с `overlays.rs::palette_overlay` и тестами).
+///
+/// Прежний локальный `icon_quad` (private helper) удалён — ручная
+/// сборка `CardInstance { pos, size, fill, border, params, corners }`
+/// в overlay-логике запрещена (AGENTS.md §«UI-кит» правило 6);
+/// kit + `paint_items_to_cards` — единственный путь.
+///
+/// `Swatch` — единственный вариант, требующий цвет пресета: потребитель
+/// (`palette::icon_quads`) разрешает пресет «1»..«6» через `preset_color`
+/// ДО вызова kit (кит не знает о `ThemeColors` — инвариант G7 FR-051).
 pub fn icon_quads(
     icon: PaletteIcon,
     rect: [f32; 4],
     tint: [f32; 4],
     theme: &ThemeColors,
 ) -> Vec<CardInstance> {
-    let [x, y, w, h] = rect;
-    let cx = x + w / 2.0;
-    let cy = y + h / 2.0;
-    let mut quads: Vec<CardInstance> = Vec::new();
-    // Хелперы — Fn-замыкания с &mut Vec аргументом (без захвата quads)
-    let solid = |q: &mut Vec<CardInstance>, pos: [f32; 2], size: [f32; 2], radius: f32| {
-        icon_quad(q, pos, size, Some(tint), None, radius);
-    };
-    let outline = |q: &mut Vec<CardInstance>, pos: [f32; 2], size: [f32; 2], radius: f32| {
-        icon_quad(q, pos, size, None, Some(tint), radius);
-    };
-    match icon {
-        PaletteIcon::Swatch(preset) => match preset.and_then(|p| preset_color(p, theme)) {
-            Some(fill) => icon_quad(
-                &mut quads,
-                [x + 3.0, y + 3.0],
-                [w - 6.0, h - 6.0],
-                Some(fill),
-                None,
-                3.0,
-            ),
-            // «Без цвета»: контурный квадрат
-            None => outline(&mut quads, [x + 3.0, y + 3.0], [w - 6.0, h - 6.0], 3.0),
+    // Текстовые глифы — квадов нет (рисуются ScreenText'ом в overlays.rs).
+    // Kit-функция для них не вызывается: `icon_composition` всегда
+    // возвращает ≥ 1 квад (для каждого `IconKind`), что нарушило бы
+    // прежний контракт `Rename`/`Clear`/`Flow` → пустой `Vec`.
+    let kind = match icon {
+        PaletteIcon::Swatch(preset) => IconKind::Swatch {
+            fill: preset.and_then(|p| preset_color(p, theme)),
         },
-        PaletteIcon::LineSolid => solid(&mut quads, [x + 3.0, cy - 1.5], [w - 6.0, 3.0], 1.5),
-        // CR-008: линия связи, у правого конца — точка порта
-        PaletteIcon::Template => {
-            outline(&mut quads, [x + 3.0, y + 3.0], [w - 6.0, h - 6.0], 4.0);
-            solid(&mut quads, [cx - 3.0, cy - 3.0], [6.0, 6.0], 1.5);
-        }
-        PaletteIcon::Pin => {
-            solid(&mut quads, [x + 3.0, cy - 1.5], [w - 12.0, 3.0], 1.5);
-            solid(&mut quads, [x + w - 8.0, cy - 3.0], [6.0, 6.0], 3.0);
-        }
-        PaletteIcon::LineDashed => {
-            let seg = (w - 12.0) / 3.0;
-            for k in 0..3u8 {
-                solid(
-                    &mut quads,
-                    [x + 3.0 + k as f32 * (seg + 3.0), cy - 1.5],
-                    [seg, 3.0],
-                    1.5,
-                );
-            }
-        }
-        PaletteIcon::LineDotted => {
-            let step = (w - 11.0) / 3.0;
-            for k in 0..4u8 {
-                solid(
-                    &mut quads,
-                    [x + 4.0 + k as f32 * step, cy - 1.5],
-                    [3.0, 3.0],
-                    1.5,
-                );
-            }
-        }
-        PaletteIcon::Thin => solid(&mut quads, [x + 4.0, cy - 1.0], [w - 8.0, 2.0], 1.0),
-        PaletteIcon::Medium => solid(&mut quads, [x + 4.0, cy - 2.0], [w - 8.0, 4.0], 2.0),
-        PaletteIcon::Thick => solid(&mut quads, [x + 4.0, cy - 3.5], [w - 8.0, 7.0], 3.0),
-        PaletteIcon::TreeHorizontal => {
-            // Корень слева, два ребёнка справа; колено из осевых отрезков
-            let (bx, tx, ty, by) = (x + 2.0, x + w - 10.0, y + 2.0, y + h - 10.0);
-            solid(&mut quads, [bx, cy - 4.0], [8.0, 8.0], 2.0);
-            solid(&mut quads, [tx, ty], [8.0, 8.0], 2.0);
-            solid(&mut quads, [tx, by], [8.0, 8.0], 2.0);
-            let spine = cx - 1.0;
-            // Ствол от корня до спины
-            solid(
-                &mut quads,
-                [bx + 8.0, cy - 1.0],
-                [(spine - bx - 8.0).max(1.0), 2.0],
-                0.0,
-            );
-            // Спина между детьми
-            solid(
-                &mut quads,
-                [spine, ty + 8.0],
-                [2.0, (by - ty).max(1.0)],
-                0.0,
-            );
-            // Ветки от спины к детям (центры боков квадратов)
-            solid(
-                &mut quads,
-                [spine + 2.0, ty + 3.0],
-                [(tx - spine - 2.0).max(1.0), 2.0],
-                0.0,
-            );
-            solid(
-                &mut quads,
-                [spine + 2.0, by + 3.0],
-                [(tx - spine - 2.0).max(1.0), 2.0],
-                0.0,
-            );
-        }
-        PaletteIcon::TreeVertical => {
-            // Корень сверху, два ребёнка снизу (поворот TreeHorizontal)
-            let (by, lx, rx) = (y + h - 10.0, x + 2.0, x + w - 10.0);
-            solid(&mut quads, [cx - 4.0, y + 2.0], [8.0, 8.0], 2.0);
-            solid(&mut quads, [lx, by], [8.0, 8.0], 2.0);
-            solid(&mut quads, [rx, by], [8.0, 8.0], 2.0);
-            let spine = cy - 1.0;
-            // Ствол вниз от корня
-            solid(
-                &mut quads,
-                [cx - 1.0, y + 10.0],
-                [2.0, (spine - y - 10.0).max(1.0)],
-                0.0,
-            );
-            // Спина между детьми
-            solid(
-                &mut quads,
-                [lx + 8.0, spine],
-                [(rx - lx).max(1.0), 2.0],
-                0.0,
-            );
-            // Ветки вниз к детям
-            solid(
-                &mut quads,
-                [lx + 3.0, spine + 2.0],
-                [2.0, (by - spine - 2.0).max(1.0)],
-                0.0,
-            );
-            solid(
-                &mut quads,
-                [rx + 3.0, spine + 2.0],
-                [2.0, (by - spine - 2.0).max(1.0)],
-                0.0,
-            );
-        }
-        PaletteIcon::Radial => {
-            // Кольцо (контур круга) + центр + 4 точки по осям
-            outline(
-                &mut quads,
-                [x + 1.0, y + 1.0],
-                [w - 2.0, h - 2.0],
-                (w - 2.0) / 2.0,
-            );
-            solid(&mut quads, [cx - 2.5, cy - 2.5], [5.0, 5.0], 2.5);
-            solid(&mut quads, [cx - 2.0, y + 2.0], [4.0, 4.0], 2.0);
-            solid(&mut quads, [cx - 2.0, y + h - 6.0], [4.0, 4.0], 2.0);
-            solid(&mut quads, [x + 2.0, cy - 2.0], [4.0, 4.0], 2.0);
-            solid(&mut quads, [x + w - 6.0, cy - 2.0], [4.0, 4.0], 2.0);
-        }
-        PaletteIcon::AddChild => {
-            // Плюс + квадрат-ребёнок снизу
-            solid(&mut quads, [cx - 6.0, cy - 6.0], [12.0, 2.0], 1.0);
-            solid(&mut quads, [cx - 1.0, cy - 8.0], [2.0, 12.0], 1.0);
-            solid(&mut quads, [cx - 3.0, y + h - 7.0], [6.0, 6.0], 1.5);
-        }
-        PaletteIcon::AddSibling => {
-            // Плюс + квадрат-сиблинг справа
-            solid(&mut quads, [cx - 7.0, cy - 1.0], [12.0, 2.0], 1.0);
-            solid(&mut quads, [cx - 1.0, cy - 6.0], [2.0, 12.0], 1.0);
-            solid(&mut quads, [x + w - 7.0, cy - 3.0], [6.0, 6.0], 1.5);
-        }
-        PaletteIcon::Collapse => solid(&mut quads, [cx - 6.0, cy - 1.0], [12.0, 2.0], 1.0),
-        PaletteIcon::Expand => {
-            solid(&mut quads, [cx - 6.0, cy - 1.0], [12.0, 2.0], 1.0);
-            solid(&mut quads, [cx - 1.0, cy - 6.0], [2.0, 12.0], 1.0);
-        }
-        PaletteIcon::Duplicate => {
-            // Задняя карточка контуром, передняя — заливкой
-            outline(&mut quads, [x + 2.0, y + 3.0], [w - 7.0, h - 7.0], 2.0);
-            solid(&mut quads, [x + 5.0, y + 2.0], [w - 7.0, h - 7.0], 2.0);
-        }
-        PaletteIcon::Folder => {
-            // Язычок папки + корпус
-            solid(&mut quads, [x + 3.0, y + 4.0], [7.0, 3.0], 1.0);
-            solid(&mut quads, [x + 3.0, y + 7.0], [w - 6.0, h - 11.0], 1.5);
-        }
-        PaletteIcon::GroupBox => {
-            // Рамка группы + квадратик-нода внутри
-            outline(&mut quads, [x + 2.0, y + 2.0], [w - 4.0, h - 4.0], 2.0);
-            solid(&mut quads, [cx - 3.0, cy - 3.0], [6.0, 6.0], 1.5);
-        }
-        PaletteIcon::Sliders => {
-            // Три ползунка: линии + квадратики-каретки на разных позициях
-            for (k, knob) in [(0.0f32, 0.25f32), (1.0, 0.6), (2.0, 0.4)] {
-                let ly = y + 3.0 + k * 5.5;
-                solid(&mut quads, [x + 3.0, ly], [w - 6.0, 1.6], 0.8);
-                solid(
-                    &mut quads,
-                    [x + 3.0 + knob * (w - 10.0), ly - 1.7],
-                    [3.4, 5.0],
-                    1.0,
-                );
-            }
-        }
-        // Текстовые глифы — квадов нет (рисуются ScreenText'ом)
-        PaletteIcon::Rename | PaletteIcon::Clear | PaletteIcon::Flow => {}
-    }
-    quads
+        PaletteIcon::LineSolid => IconKind::LinesSolid,
+        PaletteIcon::LineDashed => IconKind::LinesDashed,
+        PaletteIcon::LineDotted => IconKind::LinesDotted,
+        PaletteIcon::Thin => IconKind::Thin,
+        PaletteIcon::Medium => IconKind::Medium,
+        PaletteIcon::Thick => IconKind::Thick,
+        PaletteIcon::TreeHorizontal => IconKind::TreeHorizontal,
+        PaletteIcon::TreeVertical => IconKind::TreeVertical,
+        PaletteIcon::Radial => IconKind::Radial,
+        PaletteIcon::AddChild => IconKind::AddChild,
+        PaletteIcon::AddSibling => IconKind::AddSibling,
+        PaletteIcon::Collapse => IconKind::Collapse,
+        PaletteIcon::Expand => IconKind::Expand,
+        PaletteIcon::Duplicate => IconKind::Duplicate,
+        PaletteIcon::Folder => IconKind::Folder,
+        PaletteIcon::GroupBox => IconKind::GroupBox,
+        PaletteIcon::Sliders => IconKind::Sliders,
+        PaletteIcon::Template => IconKind::Template,
+        PaletteIcon::Pin => IconKind::Pin,
+        // Текстовые глифы — квадов нет (рисуются ScreenText'ом).
+        PaletteIcon::Rename | PaletteIcon::Clear | PaletteIcon::Flow => return Vec::new(),
+    };
+    let items: Vec<PaintItem> =
+        icon_composition(UiRect::new(rect[0], rect[1], rect[2], rect[3]), kind, tint);
+    crate::app::paint_items_to_cards(items)
 }
 
 #[cfg(test)]

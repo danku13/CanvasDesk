@@ -162,6 +162,37 @@ struct StackCard {
 /// `kit::TOOLTIP_OFFSET`, flip у нижнего края, клампы вьюпорта),
 /// применённая к СТЕКУ карточек как единому блоку; карточки стекаются
 /// внутри блока сверху вниз с зазором [`TOOLTIP_STACK_GAP`].
+///
+/// TODO(FR-UI-ANCHORED-STACK, audit §6.1): миграция на
+/// [`canvas_ui::kit::anchored_stack`] отложена — у тултипа ДВЕ
+/// асимметрии, не выражаемые одним параметром `gap` kit-функции:
+///
+/// 1. **Якорь — точка (курсор), не rect.** `anchored_stack` принимает
+///    `anchor: UiRect` (правый край ноды в suggest). Курсор моделируется
+///    нулевым rect, но тогда natural-X = `cursor.x + gap` (а нужно
+///    `cursor.x + TOOLTIP_OFFSET.x = cursor.x + 14`); natural-Y =
+///    `cursor.y` (а нужно `cursor.y + TOOLTIP_OFFSET.y = cursor.y + 18`).
+///    Можно сдвинуть anchor, скомпенсировав смещение, но тогда…
+/// 2. **Симметричный flip у `anchored_stack` vs асимметричный у `tooltip`.**
+///    `kit::tooltip` использует асимметрию: natural-X = `+TOOLTIP_OFFSET.x`,
+///    flipped-X = `anchor.x - size.x` (БЕЗ вычитания offset — якорь-точка
+///    остаётся правым краем пузыря). `anchored_stack` симметричен:
+///    natural-X = `anchor.right() + gap`, flipped-X = `anchor.x - gap -
+///    max_w` (с вычитанием gap). Аналогично по Y: `kit::tooltip` ставит
+///    flipped-Y = `anchor.y - TOOLTIP_OFFSET.y - size.y`, а `anchored_stack`
+///    flipped-Y = `anchor.y - gap - total_h`. Чтобы flipped-Y совпал,
+///    нужно `gap = 2*TOOLTIP_OFFSET.y = 36`, но тогда natural-X уедет на
+///    `cursor.x + 36` (а не `+ 14`). Математически неразрешимо с одним
+///    `gap` — см. анализ в worklog Task F.
+///
+/// Suggest-карточки подходят под `anchored_stack` идеально: их offset
+/// (`SUGGEST_CARD_OFFSET_X = 12`) равен inter-card gap (`SUGGEST_CARD_GAP
+/// = 12`) — единый spacing-scale. У тултипа offset (14/18) ≠ inter-card
+/// gap (8) — асимметрия. Когда `anchored_stack` расширится отдельным
+/// параметром `anchor_offset` (или `kit::tooltip` будет принят как
+/// образующий «внешний rect» для стека внутри), миграция станет
+/// бит-в-бит возможной. До этого — текущая реализация (kit::tooltip +
+/// ручной стек внутри) корректна и сохраняет визуальный паритет.
 pub(crate) fn layout_tooltips(
     cards: Vec<TooltipCard>,
     cursor: [f32; 2],

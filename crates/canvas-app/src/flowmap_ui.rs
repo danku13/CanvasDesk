@@ -174,7 +174,11 @@ pub fn flow_map_layout(
         HAlign::End,
         VAlign::Start,
     );
-    let close = UiRect::new(panel.right() - 28.0, panel.y + 6.0, 22.0, 22.0);
+    // FR-070: каноническая «×» в правом-верхнем углу панели — kit::stage_close_button
+    // (audit §6.1 — бывшая ручная формула `panel.right() - 28, panel.y + 6, 22, 22`;
+    // size 22 → ICON_BUTTON_SIZE 26, inset 6 → SPACING_SM 8 — single source of truth,
+    // смещение ≈ 2px вправо/вниз — допустимо по AGENTS.md §«UI-кит»).
+    let close = kit::stage_close_button(panel);
     // Окно списка: прежние боковые поля (+8/−16), шапка — вплотную
     let list = UiRect::new(
         panel.x + LIST_PAD_X,

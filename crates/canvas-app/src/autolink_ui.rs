@@ -258,6 +258,12 @@ pub fn badge_rect(viewport: [f32; 2]) -> [f32; 4] {
 /// `kit::icon_button` даёт квадрат 26 (`ICON_BUTTON_SIZE`), числа
 /// дословно сильнее перечня «замена» (паттерн отклонения kit::card из
 /// FR-059).
+///
+/// TODO(G/FR-070): migrate to `kit::stage_close_button(panel_slot)` —
+/// размер 30×30 против канонического `ICON_BUTTON_SIZE=26` даёт
+/// визуальный скачок 4px (уменьшение кнопки) + сдвиг позиции на ~6px;
+/// отклонение явно задокументировано выше (FR-060/FR-059), оставлено
+/// до отдельной волны геометрии шапки autolink (I-1: ноль скачка).
 pub fn close_rect(win: [f32; 4]) -> [f32; 4] {
     let slot = UiRect::new(win[0], win[1] + 14.0, (win[2] - 14.0).max(0.0), 30.0);
     let rect = stack(slot, UiVec2::new(30.0, 30.0), HAlign::End, VAlign::Start);

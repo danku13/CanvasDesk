@@ -429,9 +429,10 @@ impl App {
                             bubble_h += PREVIEW_BTN_H + 8.0;
                         }
                         // FR-LLM-D: семантические цвета — берём из kit_palette
-                        // (control_danger) или хардкод (зелёный success).
-                        // Зелёный = [0.30, 0.75, 0.55, 1.0] — как ai_status_panel.
-                        let success_color: [f32; 4] = [0.30, 0.75, 0.55, 1.0];
+                        // (control_danger/control_success — audit §3: зелёный
+                        // раньше был инлайн-литералом `[0.30, 0.75, 0.55, 1.0]`,
+                        // паритет с ai_status_panel).
+                        let success_color: [f32; 4] = kit_palette.control_success;
                         let danger_color = kit_palette.control_danger;
                         let (bot_fill, bot_border, bot_text) = match kind {
                             AgentMsgKind::Normal => (
@@ -488,7 +489,7 @@ impl App {
                                 ToolCallStatus::Success => "✓",
                                 ToolCallStatus::Error => "✗",
                             };
-                            let success_color: [f32; 4] = [0.30, 0.75, 0.55, 1.0];
+                            let success_color: [f32; 4] = kit_palette.control_success;
                             let danger_color = kit_palette.control_danger;
                             let status_color = match tc.status {
                                 ToolCallStatus::Success => success_color,

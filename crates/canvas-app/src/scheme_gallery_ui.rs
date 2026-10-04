@@ -315,14 +315,14 @@ pub fn layout_with(
     let rows_slot = col[5];
     let footer_rect = as_rect(&col[6]);
 
-    // Кнопка «×»: правый край шапки, офсет +4 (дизайн-центровка в 40 px
-    // шапке; Stack на под-слоте шапки).
-    let close = stack(
-        UiRect::new(inner.x, inner.y + 4.0, inner_w, 24.0),
-        UiVec2::new(24.0, 24.0),
-        HAlign::End,
-        VAlign::Start,
-    );
+    // FR-070: каноническая «×» в правом-верхнем углу панели —
+    // kit::stage_close_button (audit §6.1 — бывшая раскладка через
+    // `stack(inner, 24×24, End, Start)` с офсетом +4; size 24 →
+    // ICON_BUTTON_SIZE 26, inset 6 (через inner+4) → SPACING_SM 8 от panel —
+    // single source of truth, смещение ≈ 2px вправо/вниз — допустимо по
+    // AGENTS.md §«UI-кит»; кнопка переезжает из шапки в угол панели
+    // (канонический паттерн «× в углу модали»).
+    let close = canvas_ui::kit::stage_close_button(panel);
 
     // Чипы: «Все» + категории — Row с политикой Fit (все элементы
     // раскладываются; переполнение слота НЕ маскируется — ловится

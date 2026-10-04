@@ -194,6 +194,72 @@ impl Default for TableProps {
     }
 }
 
+// --- FR-UI-TABLE-IMMEDIATE: immediate table layout --------------------------
+
+/// FR-UI-TABLE-IMMEDIATE: immediate table layout (без retained-state).
+/// Возвращает `Vec<Vec<UiRect>>` — row × column rects.
+///
+/// `slot` — bounding rect таблицы (внешняя рамка; колонки укладываются ВНУТРИ
+///   `slot`, начиная с `slot.x`/`slot.y`).
+/// `column_widths` — ширины колонок (должны суммироваться в ≤ `slot.w`;
+///   если сумма больше — колонки выходят за правый край `slot`, как в
+///   [`whatif_ui::table_layout`] с фиксированной `TABLE_COL_W`).
+/// `row_heights` — высоты строк (должны суммироваться в ≤ `slot.h`).
+/// `header_h` — опциональная высота строки-шапки (рисуется первой, если
+///   `Some`; `None` — шапки нет, только `row_heights`).
+///
+/// Геометрия: первая строка — на `slot.y`, каждая следующая — ниже
+/// предыдущей на её высоту. Колонки — выровнены по левому краю `slot.x`, в
+/// порядке, с шагом = ширина колонки. Шапка (если есть) — первой строкой,
+/// затем строки `row_heights` в порядке. Возвращает `row_heights.len() +
+/// header_h.is_some() as usize` строк, по `column_widths.len()` колонок
+/// каждая. Пустой вход (`column_widths` или `row_heights` пустые и нет
+/// шапки) → пустой `Vec`.
+///
+/// Immediate-API не делает замер текста (ширины/высоты — ответственность
+/// потребителя); retained-компонент [`Table`] владеет замерщиком и
+/// направляющими колонок (двухпроходность FR-061) — для таблиц с
+/// правовыровненными значениями/юнитами используйте его.
+pub fn table_layout_immediate(
+    slot: UiRect,
+    column_widths: &[f32],
+    row_heights: &[f32],
+    header_h: Option<f32>,
+) -> Vec<Vec<UiRect>> {
+    let cols = column_widths.len();
+    let mut rows_out = Vec::new();
+    if cols == 0 {
+        return rows_out;
+    }
+    let mut y = slot.y;
+    if let Some(h) = header_h {
+        if h > 0.0 {
+            let mut row = Vec::with_capacity(cols);
+            let mut x = slot.x;
+            for &w in column_widths {
+                row.push(UiRect::new(x, y, w, h));
+                x += w;
+            }
+            rows_out.push(row);
+            y += h;
+        }
+    }
+    for &h in row_heights {
+        if h <= 0.0 {
+            continue;
+        }
+        let mut row = Vec::with_capacity(cols);
+        let mut x = slot.x;
+        for &w in column_widths {
+            row.push(UiRect::new(x, y, w, h));
+            x += w;
+        }
+        rows_out.push(row);
+        y += h;
+    }
+    rows_out
+}
+
 // --- Компонент (дизайн §4–§5) ------------------------------------------------
 
 /// Таблица — retained-компонент (FR-068 Table v2, этап M1): владеет
@@ -546,6 +612,52 @@ mod tests {
     use crate::component::LIST_ROW_GAP;
 
     const SIZE: f32 = ROW_DEFAULT_SIZE; // 12.0 — база кит-строки (Props::default)
+
+    // === FR-UI-TABLE-IMMEDIATE: tests =======================================
+
+    /// 2 колонки × 3 строки + шапка → 4 строки × 2 колонки. Геометрия:
+    /// первая строка (шапка) на slot.y, каждая следующая — ниже
+    /// предыдущей на её высоту; колонки — слева направо с шагом = ширина.
+    #[test]
+    fn table_layout_immediate_2x3_with_header() {
+        let slot = UiRect::new(10.0, 20.0, 400.0, 200.0);
+        let col_widths = [120.0, 80.0];
+        let row_heights = [24.0, 24.0, 24.0];
+        let grid = table_layout_immediate(slot, &col_widths, &row_heights, Some(26.0));
+        // 4 строки: 1 шапка + 3 данных; 2 колонки в каждой.
+        assert_eq!(grid.len(), 4);
+        for row in &grid {
+            assert_eq!(row.len(), 2);
+        }
+        // Шапка — на slot.y=20, высота 26
+        assert_eq!(grid[0][0], UiRect::new(10.0, 20.0, 120.0, 26.0));
+        assert_eq!(grid[0][1], UiRect::new(130.0, 20.0, 80.0, 26.0));
+        // Строка 0 данных — на slot.y + header_h = 46
+        assert_eq!(grid[1][0], UiRect::new(10.0, 46.0, 120.0, 24.0));
+        assert_eq!(grid[1][1], UiRect::new(130.0, 46.0, 80.0, 24.0));
+        // Строка 1 — на 46+24=70
+        assert_eq!(grid[2][0], UiRect::new(10.0, 70.0, 120.0, 24.0));
+        // Строка 2 — на 70+24=94
+        assert_eq!(grid[3][1], UiRect::new(130.0, 94.0, 80.0, 24.0));
+    }
+
+    /// Без шапки — только `row_heights.len()` строк; пустой вход — пустой Vec.
+    #[test]
+    fn table_layout_immediate_no_header_and_empty() {
+        let slot = UiRect::new(0.0, 0.0, 400.0, 200.0);
+        let col_widths = [100.0, 100.0];
+        let row_heights = [30.0, 30.0];
+        let grid = table_layout_immediate(slot, &col_widths, &row_heights, None);
+        assert_eq!(grid.len(), 2, "без шапки — только row_heights");
+        assert_eq!(grid[0][0], UiRect::new(0.0, 0.0, 100.0, 30.0));
+        assert_eq!(grid[1][0], UiRect::new(0.0, 30.0, 100.0, 30.0));
+        // Пустой вход — пустой Vec
+        assert!(table_layout_immediate(slot, &[], &row_heights, Some(26.0)).is_empty());
+        assert!(table_layout_immediate(slot, &col_widths, &[], None).is_empty());
+        // Нулевая высота шапки — пропускается (строк = row_heights.len())
+        let grid = table_layout_immediate(slot, &col_widths, &[24.0], Some(0.0));
+        assert_eq!(grid.len(), 1, "нулевая шапка не рисуется");
+    }
 
     /// Строка-фабрика: все ячейки строками (модель теста — compact).
     fn tr(

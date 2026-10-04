@@ -394,6 +394,16 @@ pub fn gallery_layout(
 
     // Шапка: заголовок слева, кнопка темы справа (перед ✕), ✕ — край
     // (ФИКСИРОВАНА — не скроллится: hit-слоты реестра без изменений)
+    //
+    // TODO(G/FR-070): migrate to `kit::stage_close_button(panel)` —
+    // канонический паттерн «× в углу панели». Сейчас close/theme/
+    // (reset в admin) выстроены в одну строку шапки content (y = content.y,
+    // все центрированы по 30px-слоту). `stage_close_button(panel)` ставит
+    // кнопку в угол панели (panel.right - 34, panel.y + 8) — это оторвёт
+    // close от соседних кнопок по вертикали (theme останется на content.y).
+    // Миграция требует реструктуризации шапки: либо все кнопки в угол
+    // панели, либо `stage_close_button(content_header_slot)` — отдельная
+    // волна UI-геометрии (I-1: ноль скачка).
     let title = UiRect::new(
         content.x,
         y,
@@ -1409,6 +1419,10 @@ pub fn gallery_layout(
 /// Слот-раскладка интерактивных зон для hit-rect'ов реестра (без
 /// измерителя — фиксированные слоты шапки; совпадает с полной раскладкой —
 /// одна геометрия для ввода и отрисовки). Возврат: (кнопка темы, «✕»).
+//
+// TODO(G/FR-070): migrate `close` to `kit::stage_close_button(panel)` —
+// см. комментарий в `gallery_layout` выше (close/theme в одной строке
+// шапки content; `stage_close_button(panel)` оторвёт их по вертикали).
 pub fn gallery_hit_slots(viewport: [f32; 2]) -> (UiRect, UiRect) {
     let vp = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
     let panel = gallery_panel(vp);

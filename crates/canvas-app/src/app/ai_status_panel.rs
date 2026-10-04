@@ -345,13 +345,14 @@ impl App {
         let content_x = panel[0] + PAD_X;
         let content_w = panel[2] - 2.0 * PAD_X;
         let head_y = panel[1] + PAD_TOP;
-        // Цветная точка состояния: green = активно, amber = пауза.
-        // Не kit-слот (индикатор состояния — семантика, а не тема); рисуем
-        // через d.rect (FR-LLM-C: KitDraw-адаптер, не сырой CardInstance).
+        // Цветная точка состояния: green = активно, amber = пауза. Слоты
+        // `control_success`/`control_warning` kit-палитры (audit §3 — были
+        // инлайн-литералами; рисуем через d.rect, FR-LLM-C: KitDraw-адаптер,
+        // не сырой CardInstance).
         let dot_color = if self.ai_paused {
-            [0.95, 0.65, 0.30, 1.0] // янтарный — пауза
+            kit_palette.control_warning // янтарный — пауза
         } else {
-            [0.30, 0.75, 0.55, 1.0] // зелёный — активно
+            kit_palette.control_success // зелёный — активно
         };
         // Точка — 8×8, вертикально по центру строки 24px (отступ 8 сверху).
         let dot_y = head_y + (HEAD_ROW_H - DOT_SIZE) * 0.5;
@@ -505,7 +506,7 @@ impl App {
         };
         if pct > 0.0 {
             let fill_color = if pct >= 0.8 {
-                [0.95, 0.65, 0.30, 1.0] // янтарный — близко к лимиту
+                kit_palette.control_warning // янтарный — близко к лимиту
             } else {
                 kit_palette.accent
             };
@@ -518,10 +519,13 @@ impl App {
         }
 
         // FR-LLM-FIX: paused-лейбл — показывается под progress-баром когда
-        // ai_paused. Янтарный текст 10px (как `.ais-paused-lb` в прототипе).
+        // ai_paused. Янтарный текст 10px (как `.ais-paused-lb` в прототипе),
+        // через слот `control_warning` (audit §3 — был инлайн-литералом
+        // `[242/255, 165/255, 76/255, 1.0]` = каноническое amber-значение
+        // слота).
         if self.ai_paused {
             let paused_y = progress_y + BAR_H + GAP_BAR_PAUSED;
-            let amber = [242.0 / 255.0, 165.0 / 255.0, 76.0 / 255.0, 1.0];
+            let amber = kit_palette.control_warning;
             d.label_left(
                 UiRect::new(content_x, paused_y, content_w, 13.0),
                 self.tr(keys::AI_STATUS_PAUSED),
