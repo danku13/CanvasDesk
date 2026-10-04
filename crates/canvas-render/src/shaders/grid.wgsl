@@ -52,15 +52,17 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
 // прежний профиль `1 − min(dist/fwidth, 1)` давал ядру линии лишь ~50%
 // покрытия (линия падала между пикселями; на SwiftShader/WebGL2 — до ~15%)
 // — сетка и точки выглядели невидимыми при любых цветах темы. Теперь —
-// расстояние до линии в ФИЗИЧЕСКИХ px, ядро 1.0px (как полоса рамок карточек)
-// + клампнутый AA-хвост (тот же паттерн, что в cards.wgsl:
-// aa = max(fwidth, 1.0)) — на любой DPR и любом производном-бэке линия
-// держит полную альфу в ядре.
+// расстояние до линии в ФИЗИЧЕСКИХ px, ПЛАТО ядра 1.0px: полная альфа при
+// dist ≤ 1.0, спад только дальше (smoothstep(core, core + aa)) — сэмпл
+// центра пикселя (0.5px от оси) гарантированно в плато на ЛЮБОМ бэке
+// (SwiftShader подувал ядро 0.75 до 0.4–0.55 альфы, Metal/Vulkan на профиле
+// «ramp из 0» давал 0.84 — байт-паритет grid_minor ломался на GPU-раннерах;
+// grid_smoke). AA-хвост клампнут: aa = max(fwidth, 1.0), как в cards.wgsl.
 fn grid_line(coord: f32, step: f32, zoom: f32) -> f32 {
     let scaled = coord / step;
     let dist_px = abs(fract(scaled - 0.5) - 0.5) * step * zoom;
     let aa = max(fwidth(dist_px), 1.0);
-    return 1.0 - smoothstep(1.0 - aa, 1.0 + aa, dist_px);
+    return 1.0 - smoothstep(1.0, 1.0 + aa, dist_px);
 }
 
 // Расстояние в физических px до ближайшего узла сетки по одной оси.
