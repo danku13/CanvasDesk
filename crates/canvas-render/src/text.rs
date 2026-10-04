@@ -739,6 +739,10 @@ pub enum BodyQuadKind {
     /// FR-061 этап B (D-5): фон зебры — полупрозрачная подложка через
     /// строку в прогонах ≥ 4 строк данных (прототип O-7).
     RowBg,
+    /// CR-018 волна v2 (решение владельца): ненавязчивый колоночный
+    /// сепаратор — вертикаль 1px слева от колонок «значение»/«юнит»
+    /// (альфа 0.05, слот col_sep_fill).
+    ColSep,
     /// FR-069 (этап F): фон авто-строки приёмника — янтарный тинт
     /// (прототип .row.auto background rgba(amber,.05)).
     AutoRowBg,
@@ -3937,6 +3941,31 @@ impl TextSystem {
                                             }
                                         },
                                     });
+                                }
+                            }
+                        }
+                        // CR-018 волна v2 (решение владельца): ненавязчивые
+                        // колоночные сепараторы — вертикали 1px слева от колонок
+                        // «значение» и «юнит» (x = направляющая − пол-зазора),
+                        // на высоту зоны строк таблицы. Рисуются ПОСЛЕ зебры —
+                        // поверх её фонов, под текстом.
+                        if let Some(g) = row_guides {
+                            if let (Some(first), Some(last)) = (rows.first(), rows.last()) {
+                                let top = first.row_top * zoom_px;
+                                let bottom = (last.row_top + last.row_line_h) * zoom_px;
+                                let h = bottom - top;
+                                if h > 0.0 {
+                                    for x in [
+                                        g.value_x - row_grid::GUIDE_GAP / 2.0,
+                                        g.unit_x - row_grid::GUIDE_GAP / 2.0,
+                                    ] {
+                                        if x > 0.0 {
+                                            table_quads.push(BodyQuad {
+                                                rect: [x * zoom_px, top, zoom_px, h],
+                                                kind: BodyQuadKind::ColSep,
+                                            });
+                                        }
+                                    }
                                 }
                             }
                         }

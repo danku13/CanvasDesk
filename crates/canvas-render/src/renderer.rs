@@ -135,6 +135,9 @@ pub fn body_quad_fill(kind: BodyQuadKind, theme: &ThemeColors) -> [f32; 4] {
         // (zebra rgba(255,255,255,.04); прежняя заливка затемняла строки —
         // в прототипе прогонки СВЕТЛЕЕ фона карточки). Поиск — свой слот.
         BodyQuadKind::RowBg => theme.zebra_fill,
+        // CR-018 волна v2: колоночные сепараторы — свой слот (не яркие,
+        // альфа 0.05 в обеих темах).
+        BodyQuadKind::ColSep => theme.col_sep_fill,
         // FR-069 (этап F): янтарная хромировка авто-строк приёмника
         // (прототип .row.auto): фон ≈ 5 %, пунктир ≈ 55 % анализа-амбер
         // (тот же токен, что UNMAPPED_EDGE_COLOR, cards.rs).
