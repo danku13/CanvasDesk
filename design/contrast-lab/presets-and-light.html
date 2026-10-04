@@ -1,0 +1,634 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CanvasDesk — контраст v2: пресеты нод и светлая тема</title><style>
+:root{color-scheme:dark}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Noto Sans Display','Segoe UI',system-ui,sans-serif;background:#0f1114;color:#e8eaf0;padding:32px 40px;max-width:1400px;margin:0 auto}
+h1{font-size:25px;margin-bottom:6px}
+h2{font-size:19px;margin-bottom:4px}
+.lead{color:#a8b0bf;font-size:14px;line-height:1.55;max-width:1000px;margin-bottom:8px}
+.lead b{color:#e8eaf0}
+.mono{font-family:'Noto Sans Mono',ui-monospace,Consolas,monospace}
+section{margin-top:34px;padding-top:18px;border-top:1px solid #23262e}
+.rec{font-size:12px;background:#1f8f80;color:#fff;border-radius:6px;padding:2px 8px;vertical-align:2px;margin-left:6px}
+.sec-desc{color:#a8b0bf;font-size:13px;line-height:1.55;max-width:1020px;margin-bottom:14px}
+.note{color:#8b93a3;font-size:12px;line-height:1.55;max-width:1020px;margin-top:10px}
+.cols{display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+.mock{flex:1 1 480px;min-width:440px}
+.tbl{flex:1 1 620px;min-width:560px}
+.tblcap{font-size:12px;color:#8b93a3;margin:8px 0 4px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;color:#8b93a3;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px;padding:6px 8px;border-bottom:1px solid #23262e}
+td{padding:6px 8px;border-bottom:1px solid #1b1e25;vertical-align:middle}
+.dim{color:#8b93a3;font-size:11px;line-height:1.5}
+.b{display:inline-block;font-size:10.5px;font-weight:700;border-radius:5px;padding:2px 7px;white-space:nowrap}
+.b-ok{background:#123c2c;color:#5ce0a9}
+.b-mid{background:#3d3315;color:#eec96a}
+.b-bad{background:#46191c;color:#ff8d8d}
+.b-info{background:#23262e;color:#9aa3b5}
+.arrow{font-size:10.5px;color:#8b93a3;margin-left:4px}
+.chg{font-size:10px;background:#173a56;color:#7cc4ff;border-radius:5px;padding:1px 6px;font-weight:700}
+/* --- why-карточки --- */
+.why-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;margin-top:6px}
+.why-card{background:#151820;border:1px solid #23262e;border-radius:12px;padding:16px 18px}
+.why-card h3{font-size:15px;margin-bottom:10px}
+.why-card ol{padding-left:20px;color:#c3c9d6;font-size:12.5px;line-height:1.6}
+.why-card li{margin-bottom:8px}
+.why-card .when{margin-top:10px;font-size:12px;color:#9aa3b5;background:#10141b;border-radius:8px;padding:8px 10px;line-height:1.5}
+/* --- сетка пресет-нод --- */
+.pgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(258px,1fr));gap:14px;margin:6px 0 14px}
+.pcol{display:flex;flex-direction:column;gap:6px}
+.pnode{border:1.5px solid;border-radius:11px;padding:11px 13px;min-height:150px;box-shadow:0 6px 18px rgba(0,0,0,.3)}
+.p-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+.p-name{font-size:13px;font-weight:600}
+.p-body{font-size:12px;line-height:1.35;margin-bottom:3px}
+.p-fm{font-family:'Noto Sans Mono',ui-monospace,monospace;font-size:11.5px;background:rgba(0,0,0,.22);border-radius:6px;padding:4px 7px;margin:4px 0}
+.p-link{text-decoration:underline}
+.p-strip{display:flex;justify-content:space-between;border-top:1px solid;margin-top:7px;padding-top:5px}
+.p-label{font-size:9.5px;letter-spacing:.8px}
+.p-val{font-family:'Noto Sans Mono',ui-monospace,monospace;font-size:12px;font-weight:600}
+.pcap{font-size:11px;color:#8b93a3;line-height:1.7}
+.pcap b{color:#c3c9d6}
+/* --- светлая тема --- */
+.light-cv{min-height:240px}
+.canvas{position:relative;border-radius:14px;padding:24px}
+.node{width:300px;border:1.5px solid;border-radius:11px;padding:12px 14px;box-shadow:0 8px 22px rgba(0,0,0,.18)}
+.n-title{font-size:13.5px;font-weight:600;margin-bottom:5px}
+.n-body{font-size:13px;margin-bottom:4px;line-height:1.35}
+.n-quote{font-size:12.5px;border-left:2px solid currentColor;padding-left:8px;margin:5px 0}
+.n-link{text-decoration:underline}
+.chips{display:flex;gap:6px;margin:9px 0 4px}
+.chip{font-size:9.5px;font-weight:700;letter-spacing:.4px;border-radius:5px;padding:2.5px 7px}
+.strip{display:flex;justify-content:space-between;align-items:baseline;border-top:1px solid;margin-top:9px;padding-top:7px}
+.s-label{font-size:10px;letter-spacing:.8px}
+.s-val{font-family:'Noto Sans Mono',ui-monospace,monospace;font-size:13.5px;font-weight:600}
+code{background:#1a1d24;border:1px solid #262a33;border-radius:5px;padding:1px 6px;font-family:'Noto Sans Mono',ui-monospace,monospace;font-size:11.5px;color:#bcd3f5}
+footer{margin-top:38px;border-top:1px solid #23262e;padding-top:16px;color:#a8b0bf;font-size:13px;line-height:1.65;max-width:1020px}
+footer b{color:#e8eaf0}
+</style></head><body><h1>CanvasDesk · контраст v2 — 6 цветов нод и светлая тема</h1>
+<p class="lead">Дополнение к лаборатории v1 (5 вариаций темы). Здесь: <b>проверка всех 6 пресетных цветов
+нод</b> обеих тем (тёмные заливки и светлые пастели), найденный <b>обход авто-ремапа для формул</b> (Fix-1),
+полный <b>аудит светлой темы</b> с фиксами L1 и развёрнутый ответ <b>«почему не V3/V4/V5»</b>.
+Пороги: WCAG 2.1 — текст AA ≥ 4.5:1 / AAA ≥ 7:1, не-текст ≥ 3:1 (SC 1.4.11); APCA Lc — 90 флюентно,
+75 тело, 60 приглушённые, 30 не-текст. Текст нод ≈13 px.</p>
+<nav class="lead">Секции: <a href="#why" style="color:#7cc4ff">почему не V3/V4/V5</a> ·
+<a href="#presets-dark" style="color:#7cc4ff">пресеты тёмные</a> ·
+<a href="#fix1" style="color:#7cc4ff">Fix-1 формулы</a> ·
+<a href="#pa" style="color:#7cc4ff">P-A заливки</a> ·
+<a href="#pb" style="color:#7cc4ff">P-B комплект</a> ·
+<a href="#pastels" style="color:#7cc4ff">пастели</a> ·
+<a href="#light" style="color:#7cc4ff">светлая тема + L1</a></nav>
+<section id="why">
+  <h2>Почему я не рекомендую V3 / V4 / V5 — и когда они уместны</h2>
+  <p class="sec-desc">Это не «худшие» вариации — каждая проходит свои пороги. Они не попали в рекомендацию
+  по причинам <b>информационного дизайна</b>, а не «мало контраста». Ниже — честные аргументы, чтобы решение
+  принимали вы, а не «так показалось».</p>
+  <div class="why-grid">
+    <div class="why-card">
+      <h3>V3 «Максимум» <span class="b b-info">AAA 7:1 · Lc 75–90</span></h3>
+      <ol>
+        <li><b>Гибнет иерархия.</b> Все роли вытянуты к одному уровню: title #eeeeee = body #eeeeee,
+        цитата #d6d6d9 почти не отличается от тела. Глаз теряет опорные точки — сканировать канвас
+        становится <i>труднее</i>, хотя формально контраста «больше».</li>
+        <li><b>Вымывается цветовая семантика.</b> link #b5dbff, fn #e5cef5, result #a9e1da — почти
+        белые пастели: ссылка перестаёт читаться «ссылкой», функция — функцией. Цветовые роли — это
+        тоже доступность (SC 1.4.1 «Use of Color» работает в обе стороны).</li>
+        <li><b>Это другая тема, а не фикс.</b> Ноды светлее (#31343f), канвас темнее (#191b20) — самый
+        большой визуальный сдвиг из пяти вариаций.</li>
+      </ol>
+      <p class="when"><b>Брать когда:</b> соответствие EN 301 549 / Section 508, яркое освещение и
+      проекторы, режим пониженного зрения — как <i>отдельный режим доступности</i>, а не дефолт.</p>
+    </div>
+    <div class="why-card">
+      <h3>V4 «Тёплый графит» <span class="b b-info">= V2 по метрикам</span></h3>
+      <ol>
+        <li><b>Ноль выигрыша в доступности.</b> Метрики совпадают с V2 (min 7.2:1, Lc 61) — это
+        чисто эстетическая альтернатива «без синевы».</li>
+        <li><b>Хром остаётся холодным.</b> Accent, selection, HUD, чипы, гайды не перекрашивались —
+        тёплые нейтральные серые конфликтуют с холодным синим хромом. Полное согласование потянет
+        ещё десяток слотов и риски рассинхрона токенов.</li>
+        <li><b>Риск дороже пользы.</b> V2 доминирует: та же доступность при нулевой перестройке
+        палитры.</li>
+      </ol>
+      <p class="when"><b>Брать когда:</b> есть конкретные жалобы именно на сине-серый подтон
+      (например, при деuteranomaly-фильтрах или на калибровках «теплее») — тогда как отдельный пресет темы.</p>
+    </div>
+    <div class="why-card">
+      <h3>V5 «Светлая (контроль)» <span class="b b-info">Lc 84–105</span></h3>
+      <ol>
+        <li><b>Это линейка, а не кандидат.</b> V5 был верхней калибровочной точкой шкалы («как выглядит
+        потолок контраста»), задача же — поднять контраст <i>текущей тёмной темы</i>, не меняя тему.</li>
+        <li><b>В V5 обесцвечены чипы</b> (#b4b4b6 для всех трёх) — кодировка РАСЧЁТ / ЗАМЕТКА / ФАЙЛ
+        цветом потеряна. Светлая тема требует собственной палитровой работы — она сделана ниже
+        (аудит реальной <code>ThemeColors::light()</code> + фиксы L1).</li>
+        <li><b>Смена темы — продуктовое решение</b> (идентичность, привычка, сценарии), а не ответ
+        на «шрифту не хватает контраста».</li>
+      </ol>
+      <p class="when"><b>Брать когда:</b> решите делать светлую тему полноценной — за основу брать
+      секцию «Светлая тема» ниже, а не V5.</p>
+    </div>
+  </div>
+</section>
+<section id="presets-dark">
+  <h2>Тёмные пресеты «1..6» — как есть</h2>
+  <p class="sec-desc">Заливки из <code>PRESET_COLORS_DARK</code> (cards.rs:121). Мини-ноды показывают
+  <b>фактический рендер</b>: обычный текст прошёл авто-ремап <code>readable_on_card</code> (CR-007),
+  а строка формулы «итог = vm(2) + db» — <b>нет</b>: токены fn/op красятся в
+  <code>formula_rich_runs</code> до ремапа — это худшие пары в приложении (op до 1.16:1).
+  Ремап на светло-тонированных заливках (yellow/orange) выбеливает приглушённые роли почти в белый —
+  иерархия и оттенок теряются.</p>
+  <div class="pgrid"><div class="pcol">
+    <div class="pnode" style="background:#6b3d3d;border-color:#30323c">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">red</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#666a7c">=</span> <span style="color:#c792ea">vm</span><span style="color:#666a7c">(</span>2<span style="color:#666a7c">)</span> <span style="color:#666a7c">+</span> <span style="color:#c792ea">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#b3d9ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#30323c">
+        <span class="p-label" style="color:#d5d5d8">ИТОГ</span>
+        <span class="p-val" style="color:#a5e0d8">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«1» #6b3d3d · L=0.068<br><span class="b b-bad">op формулы 1.66</span> <span class="b b-bad">min raw 1.66</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#735433;border-color:#30323c">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">orange</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#666a7c">=</span> <span style="color:#c792ea">vm</span><span style="color:#666a7c">(</span>2<span style="color:#666a7c">)</span> <span style="color:#666a7c">+</span> <span style="color:#c792ea">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#e4f2ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#30323c">
+        <span class="p-label" style="color:#f0f0f1">ИТОГ</span>
+        <span class="p-val" style="color:#e0f4f2">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«2» #735433 · L=0.102<br><span class="b b-bad">op формулы 1.29</span> <span class="b b-bad">min raw 1.29</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#6b6130;border-color:#30323c">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">yellow</span></div>
+      <div class="p-body" style="color:#fcfcfc">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#fcfcfc">итог <span style="color:#666a7c">=</span> <span style="color:#c792ea">vm</span><span style="color:#666a7c">(</span>2<span style="color:#666a7c">)</span> <span style="color:#666a7c">+</span> <span style="color:#c792ea">db</span></div>
+      <div class="p-body" style="color:#fcfcfc">динамика: <a class="p-link" style="color:#f9fcff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#30323c">
+        <span class="p-label" style="color:#fcfcfc">ИТОГ</span>
+        <span class="p-val" style="color:#f9fdfc">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«3» #6b6130 · L=0.119<br><span class="b b-bad">op формулы 1.16</span> <span class="b b-bad">min raw 1.16</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#3d6642;border-color:#30323c">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">green</span></div>
+      <div class="p-body" style="color:#f5f5f5">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#f5f5f5">итог <span style="color:#666a7c">=</span> <span style="color:#c792ea">vm</span><span style="color:#666a7c">(</span>2<span style="color:#666a7c">)</span> <span style="color:#666a7c">+</span> <span style="color:#c792ea">db</span></div>
+      <div class="p-body" style="color:#f5f5f5">динамика: <a class="p-link" style="color:#edf6ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#30323c">
+        <span class="p-label" style="color:#f5f5f6">ИТОГ</span>
+        <span class="p-val" style="color:#eaf8f6">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«4» #3d6642 · L=0.109<br><span class="b b-bad">op формулы 1.23</span> <span class="b b-bad">min raw 1.23</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#336166;border-color:#30323c">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">cyan</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#666a7c">=</span> <span style="color:#c792ea">vm</span><span style="color:#666a7c">(</span>2<span style="color:#666a7c">)</span> <span style="color:#666a7c">+</span> <span style="color:#c792ea">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#e4f2ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#30323c">
+        <span class="p-label" style="color:#f0f0f1">ИТОГ</span>
+        <span class="p-val" style="color:#e0f4f2">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«5» #336166 · L=0.102<br><span class="b b-bad">op формулы 1.29</span> <span class="b b-bad">min raw 1.29</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#5c4573;border-color:#30323c">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">purple</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#666a7c">=</span> <span style="color:#c792ea">vm</span><span style="color:#666a7c">(</span>2<span style="color:#666a7c">)</span> <span style="color:#666a7c">+</span> <span style="color:#c792ea">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#c2e1ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#30323c">
+        <span class="p-label" style="color:#dddddf">ИТОГ</span>
+        <span class="p-val" style="color:#b7e6e0">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«6» #5c4573 · L=0.078<br><span class="b b-bad">op формулы 1.53</span> <span class="b b-bad">min raw 1.53</span></div></div></div>
+  <table><thead><tr><th>пресет</th><th>Загол.</th><th>Тело</th><th>Цитата</th><th>Иконки</th><th>Ссылка</th><th>«ИТОГ»</th><th>fn ⚠</th><th>op ⚠</th></tr></thead><tbody><tr><td class="mono">«1» #6b3d3d</td><td><span class="b b-ok">7.13</span></td><td><span class="b b-mid">6.00</span></td><td><span class="b b-bad">3.19</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">3.76</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">4.14</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.62</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.70</span><span class="arrow">без ремапа</span></td><td><span class="b b-bad">1.66</span><span class="arrow">без ремапа</span></td></tr><tr><td class="mono">«2» #735433</td><td><span class="b b-mid">5.53</span></td><td><span class="b b-mid">4.65</span></td><td><span class="b b-bad">2.47</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.92</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.21</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.80</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">2.87</span><span class="arrow">без ремапа</span></td><td><span class="b b-bad">1.29</span><span class="arrow">без ремапа</span></td></tr><tr><td class="mono">«3» #6b6130</td><td><span class="b b-mid">4.98</span></td><td><span class="b b-bad">4.19</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.23</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.63</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">2.89</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">2.53</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.58</span><span class="arrow">без ремапа</span></td><td><span class="b b-bad">1.16</span><span class="arrow">без ремапа</span></td></tr><tr><td class="mono">«4» #3d6642</td><td><span class="b b-mid">5.30</span></td><td><span class="b b-bad">4.46</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.37</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.79</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.08</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">2.69</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.75</span><span class="arrow">без ремапа</span></td><td><span class="b b-bad">1.23</span><span class="arrow">без ремапа</span></td></tr><tr><td class="mono">«5» #336166</td><td><span class="b b-mid">5.53</span></td><td><span class="b b-mid">4.66</span></td><td><span class="b b-bad">2.47</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.92</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.21</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.81</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">2.87</span><span class="arrow">без ремапа</span></td><td><span class="b b-bad">1.29</span><span class="arrow">без ремапа</span></td></tr><tr><td class="mono">«6» #5c4573</td><td><span class="b b-mid">6.59</span></td><td><span class="b b-mid">5.55</span></td><td><span class="b b-bad">2.94</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">3.48</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">3.83</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">3.34</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.42</span><span class="arrow">без ремапа</span></td><td><span class="b b-bad">1.53</span><span class="arrow">без ремапа</span></td></tr></tbody></table><p class="note">⚠ fn/op — роли <b>вне</b> ремапа (bypass, text.rs formula_rich_runs). «→X.X» — итог авто-ремапа readable_on_card (цель 4.5, запас до ~6.05).</p>
+</section>
+
+<section id="fix1">
+  <h2>Fix-1: формула-токены под ремапом — 1 строка кода</h2>
+  <p class="sec-desc"><code>formula_rich_runs(...)</code> получает сырые <code>theme.formula_fn / formula_op</code>.
+  Правка: в месте вызова (text.rs:1692) передавать цвета, уже прогнанные через
+  <code>readable_on_card(color, fill, true)</code> — тот же приём, что у title/body (text.rs:4467).
+  После Fix-1 оператор на любом пресете и на любой пользовательской hex-заливке ≥ 4.5:1 (фактически ~6.05).</p>
+  <div class="cols">
+    <div class="tbl"><p class="tblcap">текущие пресеты</p><table><thead><tr><th>пресет</th><th>fn: raw → ремап</th><th>op: raw → ремап</th></tr></thead><tbody><tr>
+          <td class="mono">«1» #6b3d3d</td>
+          <td><span class="b b-bad">3.70</span> → <span class="b b-ok">6.05</span><br>
+              <span class="mono dim">#e5ccf5</span></td>
+          <td><span class="b b-bad">1.66</span> → <span class="b b-ok">6.07</span><br>
+              <span class="mono dim">#d4d5da</span></td>
+        </tr><tr>
+          <td class="mono">«2» #735433</td>
+          <td><span class="b b-bad">2.87</span> → <span class="b b-ok">6.06</span><br>
+              <span class="mono dim">#f6edfc</span></td>
+          <td><span class="b b-bad">1.29</span> → <span class="b b-ok">6.06</span><br>
+              <span class="mono dim">#f0f0f2</span></td>
+        </tr><tr>
+          <td class="mono">«3» #6b6130</td>
+          <td><span class="b b-bad">2.58</span> → <span class="b b-ok">6.04</span><br>
+              <span class="mono dim">#fdfbfe</span></td>
+          <td><span class="b b-bad">1.16</span> → <span class="b b-ok">6.06</span><br>
+              <span class="mono dim">#fcfcfc</span></td>
+        </tr><tr>
+          <td class="mono">«4» #3d6642</td>
+          <td><span class="b b-bad">2.75</span> → <span class="b b-ok">6.06</span><br>
+              <span class="mono dim">#f9f3fd</span></td>
+          <td><span class="b b-bad">1.23</span> → <span class="b b-ok">6.07</span><br>
+              <span class="mono dim">#f5f5f6</span></td>
+        </tr><tr>
+          <td class="mono">«5» #336166</td>
+          <td><span class="b b-bad">2.87</span> → <span class="b b-ok">6.06</span><br>
+              <span class="mono dim">#f6edfc</span></td>
+          <td><span class="b b-bad">1.29</span> → <span class="b b-ok">6.05</span><br>
+              <span class="mono dim">#eff0f2</span></td>
+        </tr><tr>
+          <td class="mono">«6» #5c4573</td>
+          <td><span class="b b-bad">3.42</span> → <span class="b b-ok">6.05</span><br>
+              <span class="mono dim">#ead6f7</span></td>
+          <td><span class="b b-bad">1.53</span> → <span class="b b-ok">6.06</span><br>
+              <span class="mono dim">#dcdde1</span></td>
+        </tr></tbody></table></div>
+    <div class="tbl"><p class="tblcap">P-A заливки</p><table><thead><tr><th>пресет</th><th>fn: raw → ремап</th><th>op: raw → ремап</th></tr></thead><tbody><tr>
+          <td class="mono">«1» #673b3b</td>
+          <td><span class="b b-bad">3.85</span> → <span class="b b-ok">6.05</span><br>
+              <span class="mono dim">#e2c7f4</span></td>
+          <td><span class="b b-bad">1.73</span> → <span class="b b-ok">6.07</span><br>
+              <span class="mono dim">#cfd1d6</span></td>
+        </tr><tr>
+          <td class="mono">«2» #5a4228</td>
+          <td><span class="b b-bad">3.89</span> → <span class="b b-ok">6.07</span><br>
+              <span class="mono dim">#e2c6f4</span></td>
+          <td><span class="b b-bad">1.75</span> → <span class="b b-ok">6.06</span><br>
+              <span class="mono dim">#ced0d5</span></td>
+        </tr><tr>
+          <td class="mono">«3» #4e4723</td>
+          <td><span class="b b-bad">3.88</span> → <span class="b b-ok">6.05</span><br>
+              <span class="mono dim">#e2c6f4</span></td>
+          <td><span class="b b-bad">1.74</span> → <span class="b b-ok">6.07</span><br>
+              <span class="mono dim">#cfd0d6</span></td>
+        </tr><tr>
+          <td class="mono">«4» #2e4e32</td>
+          <td><span class="b b-bad">3.88</span> → <span class="b b-ok">6.05</span><br>
+              <span class="mono dim">#e2c6f4</span></td>
+          <td><span class="b b-bad">1.74</span> → <span class="b b-ok">6.06</span><br>
+              <span class="mono dim">#cfd0d6</span></td>
+        </tr><tr>
+          <td class="mono">«5» #284c50</td>
+          <td><span class="b b-bad">3.90</span> → <span class="b b-ok">6.02</span><br>
+              <span class="mono dim">#e1c5f4</span></td>
+          <td><span class="b b-bad">1.75</span> → <span class="b b-ok">6.03</span><br>
+              <span class="mono dim">#cecfd5</span></td>
+        </tr><tr>
+          <td class="mono">«6» #533e67</td>
+          <td><span class="b b-bad">3.87</span> → <span class="b b-ok">6.05</span><br>
+              <span class="mono dim">#e2c6f4</span></td>
+          <td><span class="b b-bad">1.74</span> → <span class="b b-ok">6.06</span><br>
+              <span class="mono dim">#cfd0d6</span></td>
+        </tr></tbody></table></div>
+  </div>
+</section>
+
+<section id="pa">
+  <h2>P-A «Глубокие пресеты» — предложение по 6 заливкам <span class="rec">для тёмной темы</span></h2>
+  <p class="sec-desc">Каждая заливка затемнена к общему уровню L≈0.062 (hue сохранён — сдвиг к чёрному):
+  заголовок <b>7.4–7.5:1 (AAA)</b>, тело <b>6.3:1</b>, дельта ремапа падает в ~5 раз (цитата: было →#fcfcfc,
+  стало →#d0d0d4 — приглушённость сохраняется). Рамка окрашенной ноды теперь производная заливки
+  (3:1 и к заливке, и к канвасу — SC 1.4.11), а не общий серый cardEdge, который на глубоких заливках исчезает.</p>
+  <div class="pgrid"><div class="pcol">
+    <div class="pnode" style="background:#673b3b;border-color:#a99090">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">red</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#cfd1d6">=</span> <span style="color:#e2c7f4">vm</span><span style="color:#cfd1d6">(</span>2<span style="color:#cfd1d6">)</span> <span style="color:#cfd1d6">+</span> <span style="color:#e2c7f4">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#abd5ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#a99090">
+        <span class="p-label" style="color:#d0d0d4">ИТОГ</span>
+        <span class="p-val" style="color:#9cddd4">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«1» #6b3d3d → <b>#673b3b</b> · L=0.063<br>рамка #a99090 · Fix-1 применён · <span class="b b-ok">min 6.03</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#5a4228;border-color:#a09384">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">orange</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#ced0d5">=</span> <span style="color:#e2c6f4">vm</span><span style="color:#ced0d5">(</span>2<span style="color:#ced0d5">)</span> <span style="color:#ced0d5">+</span> <span style="color:#e2c6f4">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#a9d4ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#a09384">
+        <span class="p-label" style="color:#cfcfd3">ИТОГ</span>
+        <span class="p-val" style="color:#9adcd3">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«2» #735433 → <b>#5a4228</b> · L=0.062<br>рамка #a09384 · Fix-1 применён · <span class="b b-ok">min 6.02</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#4e4723;border-color:#999581">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">yellow</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#cfd0d6">=</span> <span style="color:#e2c6f4">vm</span><span style="color:#cfd0d6">(</span>2<span style="color:#cfd0d6">)</span> <span style="color:#cfd0d6">+</span> <span style="color:#e2c6f4">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#a9d5ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#999581">
+        <span class="p-label" style="color:#d0d0d3">ИТОГ</span>
+        <span class="p-val" style="color:#9bdcd4">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«3» #6b6130 → <b>#4e4723</b> · L=0.062<br>рамка #999581 · Fix-1 применён · <span class="b b-ok">min 6.04</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#2e4e32;border-color:#879a8a">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">green</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#cfd0d6">=</span> <span style="color:#e2c6f4">vm</span><span style="color:#cfd0d6">(</span>2<span style="color:#cfd0d6">)</span> <span style="color:#cfd0d6">+</span> <span style="color:#e2c6f4">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#aad5ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#879a8a">
+        <span class="p-label" style="color:#d0d0d4">ИТОГ</span>
+        <span class="p-val" style="color:#9bdcd4">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«4» #3d6642 → <b>#2e4e32</b> · L=0.063<br>рамка #879a8a · Fix-1 применён · <span class="b b-ok">min 6.03</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#284c50;border-color:#84989b">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">cyan</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#cecfd5">=</span> <span style="color:#e1c5f4">vm</span><span style="color:#cecfd5">(</span>2<span style="color:#cecfd5">)</span> <span style="color:#cecfd5">+</span> <span style="color:#e1c5f4">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#a9d4ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#84989b">
+        <span class="p-label" style="color:#cfcfd3">ИТОГ</span>
+        <span class="p-val" style="color:#9adcd3">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«5» #336166 → <b>#284c50</b> · L=0.062<br>рамка #84989b · Fix-1 применён · <span class="b b-ok">min 6.02</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#533e67;border-color:#9c90a8">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">purple</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#cfd0d6">=</span> <span style="color:#e2c6f4">vm</span><span style="color:#cfd0d6">(</span>2<span style="color:#cfd0d6">)</span> <span style="color:#cfd0d6">+</span> <span style="color:#e2c6f4">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#aad5ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#9c90a8">
+        <span class="p-label" style="color:#d0d0d4">ИТОГ</span>
+        <span class="p-val" style="color:#9bddd4">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«6» #5c4573 → <b>#533e67</b> · L=0.063<br>рамка #9c90a8 · Fix-1 применён · <span class="b b-ok">min 6.04</span></div></div></div>
+  <table><thead><tr><th>пресет</th><th>Загол.</th><th>Тело</th><th>Цитата</th><th>Иконки</th><th>Ссылка</th><th>«ИТОГ»</th><th>fn ⚠</th><th>op ⚠</th></tr></thead><tbody><tr><td class="mono">«1» #673b3b</td><td><span class="b b-ok">7.43</span></td><td><span class="b b-mid">6.25</span></td><td><span class="b b-bad">3.32</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.92</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">4.31</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.77</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.85</span><span class="arrow">Fix-1→</span><span class="b b-ok">6.05</span></td><td><span class="b b-bad">1.73</span><span class="arrow">Fix-1→</span><span class="b b-ok">6.07</span></td></tr><tr><td class="mono">«2» #5a4228</td><td><span class="b b-ok">7.50</span></td><td><span class="b b-mid">6.31</span></td><td><span class="b b-bad">3.35</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.95</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">4.35</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.80</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.89</span><span class="arrow">Fix-1→</span><span class="b b-ok">6.07</span></td><td><span class="b b-bad">1.75</span><span class="arrow">Fix-1→</span><span class="b b-ok">6.06</span></td></tr><tr><td class="mono">«3» #4e4723</td><td><span class="b b-ok">7.48</span></td><td><span class="b b-mid">6.30</span></td><td><span class="b b-bad">3.34</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">3.95</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">4.34</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">3.80</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.88</span><span class="arrow">Fix-1→</span><span class="b b-ok">6.05</span></td><td><span class="b b-bad">1.74</span><span class="arrow">Fix-1→</span><span class="b b-ok">6.07</span></td></tr><tr><td class="mono">«4» #2e4e32</td><td><span class="b b-ok">7.47</span></td><td><span class="b b-mid">6.29</span></td><td><span class="b b-bad">3.34</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">3.94</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">4.34</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">3.79</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.88</span><span class="arrow">Fix-1→</span><span class="b b-ok">6.05</span></td><td><span class="b b-bad">1.74</span><span class="arrow">Fix-1→</span><span class="b b-ok">6.06</span></td></tr><tr><td class="mono">«5» #284c50</td><td><span class="b b-ok">7.51</span></td><td><span class="b b-mid">6.33</span></td><td><span class="b b-bad">3.36</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.96</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">4.36</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.81</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.90</span><span class="arrow">Fix-1→</span><span class="b b-ok">6.02</span></td><td><span class="b b-bad">1.75</span><span class="arrow">Fix-1→</span><span class="b b-ok">6.03</span></td></tr><tr><td class="mono">«6» #533e67</td><td><span class="b b-ok">7.47</span></td><td><span class="b b-mid">6.29</span></td><td><span class="b b-bad">3.34</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">3.94</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">4.34</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">3.79</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">3.87</span><span class="arrow">Fix-1→</span><span class="b b-ok">6.05</span></td><td><span class="b b-bad">1.74</span><span class="arrow">Fix-1→</span><span class="b b-ok">6.06</span></td></tr></tbody></table><p class="note">fn/op — с применённым Fix-1 (raw → после ремапа). Остальные роли: raw → итог ремапа.</p>
+</section>
+
+<section id="pb">
+  <h2>P-B «Полный комплект»: P-A + светлые muted/цветные роли уровня V2</h2>
+  <p class="sec-desc">Если поднять приглушённые и цветные роли темы до уровня V2
+  (quote #bbbbc0, icon #b0bccd, link #80c0ff, fn #d4acef, op #b9bbc3, result #68cbbe), то на P-A заливках
+  <b>все роли читаются raw ≥ 4.8:1 — авто-ремап больше не нужен</b> (кроме error #e55c5c — она ремапится
+  и на текущей теме). Это режим «цветные ноды без сюрпризов»: WYSIWYG-цвета вместо динамического ремонта.</p>
+  <div class="pgrid"><div class="pcol">
+    <div class="pnode" style="background:#673b3b;border-color:#a99090">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">red</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#b9bbc3">=</span> <span style="color:#d4acef">vm</span><span style="color:#b9bbc3">(</span>2<span style="color:#b9bbc3">)</span> <span style="color:#b9bbc3">+</span> <span style="color:#d4acef">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#80c0ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#a99090">
+        <span class="p-label" style="color:#bbbbc0">ИТОГ</span>
+        <span class="p-val" style="color:#68cbbe">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«1» #673b3b · без ремапа<br><span class="b b-ok">min raw 4.80</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#5a4228;border-color:#a09384">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">orange</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#b9bbc3">=</span> <span style="color:#d4acef">vm</span><span style="color:#b9bbc3">(</span>2<span style="color:#b9bbc3">)</span> <span style="color:#b9bbc3">+</span> <span style="color:#d4acef">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#80c0ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#a09384">
+        <span class="p-label" style="color:#bbbbc0">ИТОГ</span>
+        <span class="p-val" style="color:#68cbbe">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«2» #5a4228 · без ремапа<br><span class="b b-ok">min raw 4.84</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#4e4723;border-color:#999581">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">yellow</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#b9bbc3">=</span> <span style="color:#d4acef">vm</span><span style="color:#b9bbc3">(</span>2<span style="color:#b9bbc3">)</span> <span style="color:#b9bbc3">+</span> <span style="color:#d4acef">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#80c0ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#999581">
+        <span class="p-label" style="color:#bbbbc0">ИТОГ</span>
+        <span class="p-val" style="color:#68cbbe">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«3» #4e4723 · без ремапа<br><span class="b b-ok">min raw 4.83</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#2e4e32;border-color:#879a8a">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">green</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#b9bbc3">=</span> <span style="color:#d4acef">vm</span><span style="color:#b9bbc3">(</span>2<span style="color:#b9bbc3">)</span> <span style="color:#b9bbc3">+</span> <span style="color:#d4acef">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#80c0ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#879a8a">
+        <span class="p-label" style="color:#bbbbc0">ИТОГ</span>
+        <span class="p-val" style="color:#68cbbe">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«4» #2e4e32 · без ремапа<br><span class="b b-ok">min raw 4.83</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#284c50;border-color:#84989b">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">cyan</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#b9bbc3">=</span> <span style="color:#d4acef">vm</span><span style="color:#b9bbc3">(</span>2<span style="color:#b9bbc3">)</span> <span style="color:#b9bbc3">+</span> <span style="color:#d4acef">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#80c0ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#84989b">
+        <span class="p-label" style="color:#bbbbc0">ИТОГ</span>
+        <span class="p-val" style="color:#68cbbe">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«5» #284c50 · без ремапа<br><span class="b b-ok">min raw 4.86</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#533e67;border-color:#9c90a8">
+      <div class="p-head"><span class="p-name" style="color:#e6e6e6">purple</span></div>
+      <div class="p-body" style="color:#d4d4d4">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#d4d4d4">итог <span style="color:#b9bbc3">=</span> <span style="color:#d4acef">vm</span><span style="color:#b9bbc3">(</span>2<span style="color:#b9bbc3">)</span> <span style="color:#b9bbc3">+</span> <span style="color:#d4acef">db</span></div>
+      <div class="p-body" style="color:#d4d4d4">динамика: <a class="p-link" style="color:#80c0ff">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#9c90a8">
+        <span class="p-label" style="color:#bbbbc0">ИТОГ</span>
+        <span class="p-val" style="color:#68cbbe">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«6» #533e67 · без ремапа<br><span class="b b-ok">min raw 4.83</span></div></div></div>
+  <table><thead><tr><th>пресет</th><th>Загол.</th><th>Тело</th><th>Цитата</th><th>Иконки</th><th>Ссылка</th><th>«ИТОГ»</th><th>fn ⚠</th><th>op ⚠</th></tr></thead><tbody><tr><td class="mono">«1» #673b3b</td><td><span class="b b-ok">7.43</span></td><td><span class="b b-mid">6.25</span></td><td><span class="b b-mid">4.85</span></td><td><span class="b b-mid">4.82</span></td><td><span class="b b-mid">4.81</span></td><td><span class="b b-mid">4.80</span></td><td><span class="b b-mid">4.83</span></td><td><span class="b b-mid">4.84</span></td></tr><tr><td class="mono">«2» #5a4228</td><td><span class="b b-ok">7.50</span></td><td><span class="b b-mid">6.31</span></td><td><span class="b b-mid">4.89</span></td><td><span class="b b-mid">4.87</span></td><td><span class="b b-mid">4.86</span></td><td><span class="b b-mid">4.84</span></td><td><span class="b b-mid">4.88</span></td><td><span class="b b-mid">4.88</span></td></tr><tr><td class="mono">«3» #4e4723</td><td><span class="b b-ok">7.48</span></td><td><span class="b b-mid">6.30</span></td><td><span class="b b-mid">4.88</span></td><td><span class="b b-mid">4.85</span></td><td><span class="b b-mid">4.85</span></td><td><span class="b b-mid">4.83</span></td><td><span class="b b-mid">4.87</span></td><td><span class="b b-mid">4.87</span></td></tr><tr><td class="mono">«4» #2e4e32</td><td><span class="b b-ok">7.47</span></td><td><span class="b b-mid">6.29</span></td><td><span class="b b-mid">4.88</span></td><td><span class="b b-mid">4.85</span></td><td><span class="b b-mid">4.84</span></td><td><span class="b b-mid">4.83</span></td><td><span class="b b-mid">4.86</span></td><td><span class="b b-mid">4.87</span></td></tr><tr><td class="mono">«5» #284c50</td><td><span class="b b-ok">7.51</span></td><td><span class="b b-mid">6.33</span></td><td><span class="b b-mid">4.90</span></td><td><span class="b b-mid">4.88</span></td><td><span class="b b-mid">4.87</span></td><td><span class="b b-mid">4.86</span></td><td><span class="b b-mid">4.89</span></td><td><span class="b b-mid">4.89</span></td></tr><tr><td class="mono">«6» #533e67</td><td><span class="b b-ok">7.47</span></td><td><span class="b b-mid">6.29</span></td><td><span class="b b-mid">4.88</span></td><td><span class="b b-mid">4.85</span></td><td><span class="b b-mid">4.84</span></td><td><span class="b b-mid">4.83</span></td><td><span class="b b-mid">4.86</span></td><td><span class="b b-mid">4.86</span></td></tr></tbody></table><p class="note">⚠ fn/op — роли <b>вне</b> ремапа (bypass, text.rs formula_rich_runs). «→X.X» — итог авто-ремапа readable_on_card (цель 4.5, запас до ~6.05).</p>
+</section>
+
+<section id="pastels">
+  <h2>Светлые пастели «1..6» — как есть</h2>
+  <p class="sec-desc"><code>PRESET_COLORS_LIGHT</code> (cards.rs:134, пастели в духе Obsidian):
+  заголовок 9.4–12:1 (AAA) и тело 6.8–8.6:1 — отлично. Приглушённые роли raw 2.0–4.5 → ремап затемняет их
+  (на светлой заливке экстремум — чёрный, оттенок сохраняется). Формула-токены (bypass) на пастелях
+  в основном держатся: fn 5.1–6.5, op 4.4–5.6 — провал только op на фиолетовой (4.40), закрывается Fix-1.</p>
+  <div class="pgrid"><div class="pcol">
+    <div class="pnode" style="background:#edc2ba;border-color:#d5dae3">
+      <div class="p-head"><span class="p-name" style="color:#202024">red</span></div>
+      <div class="p-body" style="color:#38383e">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#38383e">итог <span style="color:#4b5563">=</span> <span style="color:#6b21a8">vm</span><span style="color:#4b5563">(</span>2<span style="color:#4b5563">)</span> <span style="color:#4b5563">+</span> <span style="color:#6b21a8">db</span></div>
+      <div class="p-body" style="color:#38383e">динамика: <a class="p-link" style="color:#064289">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#d5dae3">
+        <span class="p-label" style="color:#3e454c">ИТОГ</span>
+        <span class="p-val" style="color:#114c44">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«1» #edc2ba · L=0.601<br><span class="b b-bad">min raw 2.16</span> → ремап <span class="b b-mid">6.0</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#f0d4a3;border-color:#d5dae3">
+      <div class="p-head"><span class="p-name" style="color:#202024">orange</span></div>
+      <div class="p-body" style="color:#38383e">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#38383e">итог <span style="color:#4b5563">=</span> <span style="color:#6b21a8">vm</span><span style="color:#4b5563">(</span>2<span style="color:#4b5563">)</span> <span style="color:#4b5563">+</span> <span style="color:#6b21a8">db</span></div>
+      <div class="p-body" style="color:#38383e">динамика: <a class="p-link" style="color:#064998">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#d5dae3">
+        <span class="p-label" style="color:#454c55">ИТОГ</span>
+        <span class="p-val" style="color:#12554c">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«2» #f0d4a3 · L=0.683<br><span class="b b-bad">min raw 2.43</span> → ремап <span class="b b-mid">6.0</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#ebdea8;border-color:#d5dae3">
+      <div class="p-head"><span class="p-name" style="color:#202024">yellow</span></div>
+      <div class="p-body" style="color:#38383e">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#38383e">итог <span style="color:#4b5563">=</span> <span style="color:#6b21a8">vm</span><span style="color:#4b5563">(</span>2<span style="color:#4b5563">)</span> <span style="color:#4b5563">+</span> <span style="color:#6b21a8">db</span></div>
+      <div class="p-body" style="color:#38383e">динамика: <a class="p-link" style="color:#074da0">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#d5dae3">
+        <span class="p-label" style="color:#59636e">ИТОГ</span>
+        <span class="p-val" style="color:#135950">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«3» #ebdea8 · L=0.727<br><span class="b b-bad">min raw 2.58</span> → ремап <span class="b b-mid">4.5</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#bfd6bd;border-color:#d5dae3">
+      <div class="p-head"><span class="p-name" style="color:#202024">green</span></div>
+      <div class="p-body" style="color:#38383e">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#38383e">итог <span style="color:#4b5563">=</span> <span style="color:#6b21a8">vm</span><span style="color:#4b5563">(</span>2<span style="color:#4b5563">)</span> <span style="color:#4b5563">+</span> <span style="color:#6b21a8">db</span></div>
+      <div class="p-body" style="color:#38383e">динамика: <a class="p-link" style="color:#06458e">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#d5dae3">
+        <span class="p-label" style="color:#40474f">ИТОГ</span>
+        <span class="p-val" style="color:#114f47">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«4» #bfd6bd · L=0.628<br><span class="b b-bad">min raw 2.26</span> → ремап <span class="b b-mid">6.0</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#b2d1d6;border-color:#d5dae3">
+      <div class="p-head"><span class="p-name" style="color:#202024">cyan</span></div>
+      <div class="p-body" style="color:#38383e">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#38383e">итог <span style="color:#4b5563">=</span> <span style="color:#6b21a8">vm</span><span style="color:#4b5563">(</span>2<span style="color:#4b5563">)</span> <span style="color:#4b5563">+</span> <span style="color:#6b21a8">db</span></div>
+      <div class="p-body" style="color:#38383e">динамика: <a class="p-link" style="color:#064289">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#d5dae3">
+        <span class="p-label" style="color:#3e444c">ИТОГ</span>
+        <span class="p-val" style="color:#114c44">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«5» #b2d1d6 · L=0.599<br><span class="b b-bad">min raw 2.16</span> → ремап <span class="b b-mid">6.0</span></div></div><div class="pcol">
+    <div class="pnode" style="background:#d1bfde;border-color:#d5dae3">
+      <div class="p-head"><span class="p-name" style="color:#202024">purple</span></div>
+      <div class="p-body" style="color:#38383e">Выручка 120 000 ₽/мес, маржа 68%</div>
+      <div class="p-fm" style="color:#38383e">итог <span style="color:#4b5563">=</span> <span style="color:#6b21a8">vm</span><span style="color:#4b5563">(</span>2<span style="color:#4b5563">)</span> <span style="color:#4b5563">+</span> <span style="color:#6b21a8">db</span></div>
+      <div class="p-body" style="color:#38383e">динамика: <a class="p-link" style="color:#053e81">дашборд метрик</a></div>
+      <div class="p-strip" style="border-color:#d5dae3">
+        <span class="p-label" style="color:#3a4148">ИТОГ</span>
+        <span class="p-val" style="color:#104840">Σ 240 000 ₽</span>
+      </div>
+    </div><div class="pcap">«6» #d1bfde · L=0.561<br><span class="b b-bad">min raw 2.03</span> → ремап <span class="b b-mid">6.0</span></div></div></div>
+  <table><thead><tr><th>пресет</th><th>Загол.</th><th>Тело</th><th>Цитата</th><th>Иконки</th><th>Ссылка</th><th>«ИТОГ»</th><th>fn ⚠</th><th>op ⚠</th></tr></thead><tbody><tr><td class="mono">«1» #edc2ba</td><td><span class="b b-ok">10.07</span></td><td><span class="b b-ok">7.22</span></td><td><span class="b b-bad">3.79</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">2.72</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.22</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.46</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">5.41</span><span class="arrow">без ремапа</span></td><td><span class="b b-bad">4.69</span><span class="arrow">без ремапа</span></td></tr><tr><td class="mono">«2» #f0d4a3</td><td><span class="b b-ok">11.33</span></td><td><span class="b b-ok">8.12</span></td><td><span class="b b-bad">4.27</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">3.06</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">3.62</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.76</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">6.08</span><span class="arrow">без ремапа</span></td><td><span class="b b-bad">5.27</span><span class="arrow">без ремапа</span></td></tr><tr><td class="mono">«3» #ebdea8</td><td><span class="b b-ok">12.02</span></td><td><span class="b b-ok">8.62</span></td><td><span class="b b-mid">4.53</span></td><td><span class="b b-bad">3.24</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.84</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">2.93</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">6.46</span><span class="arrow">без ремапа</span></td><td><span class="b b-bad">5.59</span><span class="arrow">без ремапа</span></td></tr><tr><td class="mono">«4» #bfd6bd</td><td><span class="b b-ok">10.49</span></td><td><span class="b b-ok">7.52</span></td><td><span class="b b-bad">3.95</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.83</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">3.35</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">2.56</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">5.63</span><span class="arrow">без ремапа</span></td><td><span class="b b-bad">4.88</span><span class="arrow">без ремапа</span></td></tr><tr><td class="mono">«5» #b2d1d6</td><td><span class="b b-ok">10.04</span></td><td><span class="b b-ok">7.20</span></td><td><span class="b b-bad">3.78</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.71</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.21</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">2.45</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">5.39</span><span class="arrow">без ремапа</span></td><td><span class="b b-bad">4.67</span><span class="arrow">без ремапа</span></td></tr><tr><td class="mono">«6» #d1bfde</td><td><span class="b b-ok">9.45</span></td><td><span class="b b-mid">6.78</span></td><td><span class="b b-bad">3.56</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">2.55</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">3.02</span><span class="arrow">→6.1</span></td><td><span class="b b-bad">2.31</span><span class="arrow">→6.0</span></td><td><span class="b b-bad">5.07</span><span class="arrow">без ремапа</span></td><td><span class="b b-bad">4.40</span><span class="arrow">без ремапа</span></td></tr></tbody></table><p class="note">⚠ fn/op — роли <b>вне</b> ремапа (bypass, text.rs formula_rich_runs). «→X.X» — итог авто-ремапа readable_on_card (цель 4.5, запас до ~6.05).</p>
+  <p class="note">Пастели менять не предлагаю: их сила — светлый тонированный фон с тёмными «чернилами»
+  (тест <code>presets_text_contrast_vs_card</code> гарантирует ≥ 7:1). Проблемные роли чинятся на уровне
+  темы (L1 ниже) — пастелям это достаётся бесплатно.</p>
+</section>
+
+<section id="light">
+  <h2>Светлая тема <code>ThemeColors::light()</code> — аудит и фиксы L1</h2>
+  <p class="sec-desc">Матрица 15 пар (та же методология, что у тёмной в аудите №1). База отличная
+  (title 15.7, body 11.3), но найдены <b>4 провала AA</b> и рамка ниже нормы SC 1.4.11.
+  L1 — минимальный набор правок (hue сохранён): icon, result, две чип-заливки, рамка.
+  Чипы светлеются, а не темнеют: чернила #14161c фиксированы (FR-075), контраст растёт от заливки.</p>
+  <div class="cols">
+    <div class="mock">
+    <div class="canvas light-cv" style="background:#f5f5f7">
+      <div class="node" style="background:#fbfbfd;border-color:#d5dae3">
+        <div class="n-title" style="color:#202024">Юнит-экономика подписки</div>
+        <div class="n-body" style="color:#38383e">Выручка 120 000 ₽/мес, маржа 68%</div>
+        <div class="n-quote" style="color:#59636e">&gt; узкое место — онбординг</div>
+        <div class="n-body" style="color:#38383e">итого <span style="color:#4b5563">=</span> <span style="color:#6b21a8">vm</span> <span style="color:#4b5563">+</span> <span style="color:#6b21a8">db</span> · <a class="n-link" style="color:#0969da">дашборд</a></div>
+        <div class="chips">
+          <span class="chip" style="background:#2f7fe8;color:#14161c">РАСЧЁТ</span>
+          <span class="chip" style="background:#8b5cf6;color:#14161c">ЗАМЕТКА</span>
+          <span class="chip" style="background:#c98a1e;color:#14161c">ФАЙЛ</span>
+        </div>
+        <div class="strip" style="border-color:#d5dae3">
+          <span class="s-label" style="color:#6a7a8f">ИТОГ</span>
+          <span class="s-val" style="color:#1f8f80">Σ 240 000 ₽</span>
+        </div>
+      </div>
+    </div></div>
+    <div class="tbl"><table><thead><tr><th>Пара</th><th>как есть</th><th>WCAG / Lc</th><th>после L1</th><th>WCAG / Lc</th></tr></thead><tbody><tr>
+          <td>Заголовок</td>
+          <td class="mono dim">#202024<br>#fbfbfd</td>
+          <td><span class="b b-ok">15.71</span><br><span class="b b-ok">Lc 101</span></td>
+          <td class="mono dim">#202024<br>#fbfbfd</td>
+          <td><span class="b b-ok">15.71</span><br><span class="b b-ok">Lc 101</span></td>
+        </tr><tr>
+          <td>Тело</td>
+          <td class="mono dim">#38383e<br>#fbfbfd</td>
+          <td><span class="b b-ok">11.27</span><br><span class="b b-ok">Lc 94</span></td>
+          <td class="mono dim">#38383e<br>#fbfbfd</td>
+          <td><span class="b b-ok">11.27</span><br><span class="b b-ok">Lc 94</span></td>
+        </tr><tr>
+          <td>Цитата</td>
+          <td class="mono dim">#59636e<br>#fbfbfd</td>
+          <td><span class="b b-mid">5.92</span><br><span class="b b-mid">Lc 78</span></td>
+          <td class="mono dim">#59636e<br>#fbfbfd</td>
+          <td><span class="b b-mid">5.92</span><br><span class="b b-mid">Lc 78</span></td>
+        </tr><tr>
+          <td>Иконки <span class="chg">L1</span></td>
+          <td class="mono dim">#6a7a8f<br>#fbfbfd</td>
+          <td><span class="b b-bad">4.24</span><br><span class="b b-mid">Lc 68</span></td>
+          <td class="mono dim">#637286<br>#fbfbfd</td>
+          <td><span class="b b-mid">4.75</span><br><span class="b b-mid">Lc 72</span></td>
+        </tr><tr>
+          <td>Ссылка</td>
+          <td class="mono dim">#0969da<br>#fbfbfd</td>
+          <td><span class="b b-mid">5.02</span><br><span class="b b-mid">Lc 73</span></td>
+          <td class="mono dim">#0969da<br>#fbfbfd</td>
+          <td><span class="b b-mid">5.02</span><br><span class="b b-mid">Lc 73</span></td>
+        </tr><tr>
+          <td>Формула: fn</td>
+          <td class="mono dim">#6b21a8<br>#fbfbfd</td>
+          <td><span class="b b-ok">8.44</span><br><span class="b b-mid">Lc 86</span></td>
+          <td class="mono dim">#6b21a8<br>#fbfbfd</td>
+          <td><span class="b b-ok">8.44</span><br><span class="b b-mid">Lc 86</span></td>
+        </tr><tr>
+          <td>Формула: op</td>
+          <td class="mono dim">#4b5563<br>#fbfbfd</td>
+          <td><span class="b b-ok">7.31</span><br><span class="b b-mid">Lc 84</span></td>
+          <td class="mono dim">#4b5563<br>#fbfbfd</td>
+          <td><span class="b b-ok">7.31</span><br><span class="b b-mid">Lc 84</span></td>
+        </tr><tr>
+          <td>«ИТОГ» <span class="chg">L1</span></td>
+          <td class="mono dim">#1f8f80<br>#fbfbfd</td>
+          <td><span class="b b-bad">3.83</span><br><span class="b b-mid">Lc 64</span></td>
+          <td class="mono dim">#1b7e71<br>#fbfbfd</td>
+          <td><span class="b b-mid">4.76</span><br><span class="b b-mid">Lc 71</span></td>
+        </tr><tr>
+          <td>Код</td>
+          <td class="mono dim">#0550ae<br>#edf0f5</td>
+          <td><span class="b b-mid">6.65</span><br><span class="b b-mid">Lc 77</span></td>
+          <td class="mono dim">#0550ae<br>#edf0f5</td>
+          <td><span class="b b-mid">6.65</span><br><span class="b b-mid">Lc 77</span></td>
+        </tr><tr>
+          <td>Лейбл ребра</td>
+          <td class="mono dim">#2a3542<br>#f2f2f8</td>
+          <td><span class="b b-ok">11.17</span><br><span class="b b-ok">Lc 91</span></td>
+          <td class="mono dim">#2a3542<br>#f2f2f8</td>
+          <td><span class="b b-ok">11.17</span><br><span class="b b-ok">Lc 91</span></td>
+        </tr><tr>
+          <td>Чип «РАСЧЁТ»</td>
+          <td class="mono dim">#14161c<br>#2f7fe8</td>
+          <td><span class="b b-ok">4.58</span><br><span class="b b-bad">Lc 36</span></td>
+          <td class="mono dim">#14161c<br>#6ba4ef</td>
+          <td><span class="b b-ok">7.05</span><br><span class="b b-mid">Lc 53</span></td>
+        </tr><tr>
+          <td>Чип «ЗАМЕТКА»</td>
+          <td class="mono dim">#14161c<br>#8b5cf6</td>
+          <td><span class="b b-bad">4.27</span><br><span class="b b-bad">Lc 34</span></td>
+          <td class="mono dim">#14161c<br>#b090f9</td>
+          <td><span class="b b-ok">7.06</span><br><span class="b b-mid">Lc 53</span></td>
+        </tr><tr>
+          <td>Чип «ФАЙЛ»</td>
+          <td class="mono dim">#14161c<br>#c98a1e</td>
+          <td><span class="b b-ok">6.15</span><br><span class="b b-mid">Lc 47</span></td>
+          <td class="mono dim">#14161c<br>#c98a1e</td>
+          <td><span class="b b-ok">6.15</span><br><span class="b b-mid">Lc 47</span></td>
+        </tr><tr>
+          <td>Рамка ноды → канвас <span class="chg">L1</span></td>
+          <td class="mono dim">#d5dae3<br>#f5f5f7</td>
+          <td><span class="b b-bad">1.29</span><br><span class="b b-mid">Lc 14</span></td>
+          <td class="mono dim">#878a90<br>#f5f5f7</td>
+          <td><span class="b b-ok">3.18</span><br><span class="b b-ok">Lc 56</span></td>
+        </tr><tr>
+          <td>Заливка ноды → канвас</td>
+          <td class="mono dim">#fbfbfd<br>#f5f5f7</td>
+          <td><span class="b b-info">1.05:1</span><br><span class="b b-bad">Lc 0</span></td>
+          <td class="mono dim">#fbfbfd<br>#f5f5f7</td>
+          <td><span class="b b-info">1.05:1</span><br><span class="b b-bad">Lc 0</span></td>
+        </tr></tbody></table></div>
+  </div>
+  <p class="note">После L1: весь текст ≥ 4.5:1 (AA), рамка 3.18:1 (SC 1.4.11), чипы 6.2–7.1:1.
+  На пастелях L1 тоже помогает: icon на красной пастели 2.72 → 3.04 raw (ремап мягче).</p>
+</section><footer>
+<p><b>Методология.</b> WCAG 2.1 (SC 1.4.3 AA ≥ 4.5:1; SC 1.4.6 AAA ≥ 7:1; SC 1.4.11 не-текст ≥ 3:1) +
+APCA 0.0.98G-4g. Ремап смоделирован точным портом <code>ensure_contrast</code> из
+<code>canvas-render/contrast.rs</code> (цель 4.5 + запас до 6.05, экстремум по люминанс фона, fallback
+«лучшие чернила»). Значения тем и пресетов взяты из <code>theme.rs</code> (dark()/light()) и
+<code>cards.rs</code> (PRESET_COLORS_DARK/LIGHT, f32→sRGB).</p>
+<p style="margin-top:10px"><b>Как применить.</b> P-A: обновить <code>PRESET_COLORS_DARK</code> в cards.rs
+(6 f32-констант) + рамка окрашенной ноды из заливки (cards.rs card_instance: ветка border при наличии
+node.color). L1: слоты icon / result_value / chip_calc / chip_note / card_edge в
+<code>ThemeColors::light()</code> (theme.rs:292) + зеркально в design/tokens (тест паритета).
+Fix-1: text.rs:1692 — обернуть fn/op в readable_on_card(color, fill, true); тест
+<code>readable_on_card_guarantees_aa_contrast_everywhere</code> дополнить формульными ролями.
+Для P-B сначала принять V2 (лаборатория v1), затем P-A заливки.</p>
+<p style="margin-top:10px"><b>Рекомендация.</b> Минимум: Fix-1 + L1 (закрывают все WCAG-провалы в обеих
+темах, не меняя характер). Оптимум: Fix-1 + L1 + P-A. Максимум предсказуемости: Fix-1 + L1 + V2 + P-A
+(= P-B, ремап фактически не нужен).</p>
+</footer></body></html>
