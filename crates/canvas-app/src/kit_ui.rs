@@ -395,15 +395,27 @@ pub fn gallery_layout(
     // Шапка: заголовок слева, кнопка темы справа (перед ✕), ✕ — край
     // (ФИКСИРОВАНА — не скроллится: hit-слоты реестра без изменений)
     //
-    // TODO(G/FR-070): migrate to `kit::stage_close_button(panel)` —
-    // канонический паттерн «× в углу панели». Сейчас close/theme/
-    // (reset в admin) выстроены в одну строку шапки content (y = content.y,
-    // все центрированы по 30px-слоту). `stage_close_button(panel)` ставит
-    // кнопку в угол панели (panel.right - 34, panel.y + 8) — это оторвёт
-    // close от соседних кнопок по вертикали (theme останется на content.y).
-    // Миграция требует реструктуризации шапки: либо все кнопки в угол
-    // панели, либо `stage_close_button(content_header_slot)` — отдельная
-    // волна UI-геометрии (I-1: ноль скачка).
+    // TODO(K3/FR-070): migrate `close` to `kit::stage_close_button(panel)`
+    // (или `stage_close_button_lg` если требуется LG-вариант). Сейчас close
+    // и theme выстроены в одну строку шапки content (y = content.y, оба
+    // центрированы по 30px-слоту). `stage_close_button(panel)` ставит кнопку
+    // в угол панели (panel.right - 34, panel.y + 8) — это оторвёт close от
+    // theme по вертикали (theme останется на content.y = panel.y + 12).
+    //
+    // theme — широкая toggle-кнопка (THEME_SLOT_W=170, BUTTON_HEIGHT=30),
+    // не квадратная icon-button: не подходит ни под `stage_close_button`,
+    // ни под `icon_button_rect`. Мигрировать close alone — нарушит визуальную
+    // когезию шапки (close уедет в угол, theme останется в content.y).
+    //
+    // Правильный фикс — новый kit-компонент `kit::panel_header(slot,
+    // [buttons])` (audit §6.1: см. запись K3 от этой волны), который
+    // раскладывает ВСЕ кнопки шапки вместе (title | theme | reset | close) с
+    // единым inset и центрированием. Это стратегический kit-компонент —
+    // требует UX-ревью форм-фактора (сейчас 30px-slot центрирование;
+    // миграция на `stage_close_button`-стиль меняет шапку визуально).
+    // Оставлено как TODO до отдельной волны UI-геометрии шапки (I-1: ноль
+    // скачка). Паритет с `admin_ui::admin_hit_slots` (там же: close/theme/
+    // reset в одной строке content).
     let title = UiRect::new(
         content.x,
         y,
@@ -1420,9 +1432,12 @@ pub fn gallery_layout(
 /// измерителя — фиксированные слоты шапки; совпадает с полной раскладкой —
 /// одна геометрия для ввода и отрисовки). Возврат: (кнопка темы, «✕»).
 //
-// TODO(G/FR-070): migrate `close` to `kit::stage_close_button(panel)` —
+// TODO(K4/FR-070): migrate `close` to `kit::stage_close_button(panel)` —
 // см. комментарий в `gallery_layout` выше (close/theme в одной строке
-// шапки content; `stage_close_button(panel)` оторвёт их по вертикали).
+// шапки content; `stage_close_button(panel)` оторвёт их по вертикали —
+// theme широкая toggle-кнопка THEME_SLOT_W=170, не подходит под
+// `icon_button_rect`). Правильный фикс — `kit::panel_header(slot,
+// [buttons])` (audit §6.1 K3 entry).
 pub fn gallery_hit_slots(viewport: [f32; 2]) -> (UiRect, UiRect) {
     let vp = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
     let panel = gallery_panel(vp);

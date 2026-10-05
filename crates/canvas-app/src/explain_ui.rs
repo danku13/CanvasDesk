@@ -80,7 +80,10 @@ pub const WIN_MIN_H: f32 = 240.0;
 pub const HEADER_H: f32 = 56.0;
 /// Высота футера окна (статистика + подсказка Esc).
 pub const FOOTER_H: f32 = 40.0;
-/// Размер кнопки ✕.
+/// Размер кнопки ✕ (историческое значение 30 — FR-059 documented
+/// deviation; [`close_rect`] теперь использует `kit::stage_close_button_lg`
+/// с тем же размером 30, константа сохранена как документированное
+/// отклонение для будущей волны миграции `HEADER_H` на `PANEL_HEADER_H_L`).
 pub const CLOSE_SIZE: f32 = 30.0;
 /// Размер чипа «Данные изменены» (кнопка в шапке).
 pub const CHIP_W: f32 = 210.0;
@@ -115,20 +118,19 @@ pub fn window_rect(viewport: [f32; 2]) -> [f32; 4] {
 
 /// Кнопка ✕ — правый верхний угол шапки (паттерн main stage).
 ///
-/// TODO(G/FR-070): migrate to `kit::stage_close_button(panel_slot)` —
-/// размер 30×30 (`CLOSE_SIZE`) против канонического `ICON_BUTTON_SIZE=26`
-/// даёт визуальный скачок 4px (уменьшение кнопки) + сдвиг позиции
-/// (inset 14 → `SPACING_SM=8`, `y=(HEADER_H-CLOSE_SIZE)/2=13` → `+8`);
-/// `HEADER_H=56` уже имеет TODO на `PANEL_HEADER_H_L=44` (W-d аудит §4) —
-/// миграция close_button связана с переносом всей шапки на новую шкалу
-/// (I-1: ноль скачка).
+/// FR-070: позиция/размер — `kit::stage_close_button_lg(panel)` —
+/// LG-вариант канонического `stage_close_button`: размер 30×30 (вместо
+/// `ICON_BUTTON_SIZE`=26, паритет с прежним `CLOSE_SIZE`=30),
+/// inset `SPACING_SM`=8 (вместо прежнего hand-rolled 14 = `(HEADER_H −
+/// CLOSE_SIZE)/2 = (56−30)/2 = 13`). Сдвиг позиции ~5-6px по диагонали к
+/// углу панели (canonical kit direction, FR-070/§6.1). `HEADER_H=56`
+/// сохраняет отдельный TODO на `PANEL_HEADER_H_L=44` (W-d аудит §4) —
+/// когда высота шапки мигрирует на 44, `(44−30)/2=7` почти совпадает с
+/// `SPACING_SM`=8, и LG-вариант можно будет пересмотреть.
 pub fn close_rect(win: [f32; 4]) -> [f32; 4] {
-    [
-        win[0] + win[2] - CLOSE_SIZE - 14.0,
-        win[1] + (HEADER_H - CLOSE_SIZE) / 2.0,
-        CLOSE_SIZE,
-        CLOSE_SIZE,
-    ]
+    let panel = UiRect::new(win[0], win[1], win[2].max(0.0), win[3]);
+    let rect = kit::stage_close_button_lg(panel);
+    [rect.x, rect.y, rect.w, rect.h]
 }
 
 /// Чип «Данные изменены» — в шапке, левее кнопки ✕ (AC-3.3).

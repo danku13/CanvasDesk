@@ -428,40 +428,48 @@ impl App {
                         if has_preview {
                             bubble_h += PREVIEW_BTN_H + 8.0;
                         }
-                        // FR-LLM-D: семантические цвета — берём из kit_palette
-                        // (control_danger/control_success — audit §3: зелёный
-                        // раньше был инлайн-литералом `[0.30, 0.75, 0.55, 1.0]`,
-                        // паритет с ai_status_panel).
-                        let success_color: [f32; 4] = kit_palette.control_success;
-                        let danger_color = kit_palette.control_danger;
-                        let (bot_fill, bot_border, bot_text) = match kind {
-                            AgentMsgKind::Normal => (
-                                kit_palette.panel_fill,
-                                kit_palette.panel_border,
-                                kit_palette.text,
-                            ),
-                            AgentMsgKind::Error => (
-                                [danger_color[0], danger_color[1], danger_color[2], 0.08],
-                                [danger_color[0], danger_color[1], danger_color[2], 0.38],
-                                danger_color,
-                            ),
-                            AgentMsgKind::Success => (
-                                [success_color[0], success_color[1], success_color[2], 0.08],
-                                [success_color[0], success_color[1], success_color[2], 0.38],
-                                success_color,
-                            ),
+                        // J5 (Task J / FR-UI-CHAT): migrate bubble style
+                        // computation to `kit::chat_bubble`. The kit's
+                        // (kind → fill/border/text_color) mapping matches
+                        // the previous manual match 1:1 (Normal →
+                        // panel_fill/panel_border/text; Error →
+                        // control_danger tint 0.08/0.38/danger; Success →
+                        // control_success tint 0.08/0.38/success — Agent A
+                        // §B already migrated the `success_color`/`
+                        // danger_color` slot reads to `kit_palette` slots;
+                        // this J5 step consolidates the kind→style match
+                        // itself into the kit). Geometry (bubble rect,
+                        // "AI Агент" header at y=4, text at y=16, tool_call
+                        // rows starting at y=20+n_lines*14) preserved as-is
+                        // — kit's canonical chat_bubble layout (text_area
+                        // at y=8, tool_call_rows at text_area.bottom()+6)
+                        // doesn't accommodate the "AI Агент" header line
+                        // inside the bubble; full geometry migration would
+                        // drop the header (visual change) — separate wave
+                        // of UI-geometry canonicalization.
+                        let kind_kit = match kind {
+                            AgentMsgKind::Normal => canvas_ui::kit::ChatBubbleKind::Normal,
+                            AgentMsgKind::Error => canvas_ui::kit::ChatBubbleKind::Error,
+                            AgentMsgKind::Success => canvas_ui::kit::ChatBubbleKind::Success,
                         };
-                        let bot_style = canvas_ui::kit::control_style_of(
-                            bot_fill,
-                            bot_border,
-                            bot_text,
-                            canvas_core::tokens::RADIUS_PANEL,
+                        let bubble_slot = UiRect::new(log_rect.x + 8.0, msg_y, bubble_w, bubble_h);
+                        let (_cb_layout, cb_style) = canvas_ui::kit::chat_bubble(
+                            bubble_slot,
+                            n_lines,
+                            tool_calls.len(),
+                            kind_kit,
+                            &kit_palette,
                         );
-                        let bubble_rect = UiRect::new(log_rect.x + 8.0, msg_y, bubble_w, bubble_h);
-                        d.control(bubble_rect, &bot_style);
+                        let bot_style = canvas_ui::kit::control_style_of(
+                            cb_style.fill,
+                            cb_style.border,
+                            cb_style.text_color,
+                            cb_style.radius,
+                        );
+                        d.control(bubble_slot, &bot_style);
                         d.label_left(
                             UiRect::new(
-                                bubble_x_inner(bubble_rect),
+                                bubble_x_inner(bubble_slot),
                                 msg_y + 4.0,
                                 bubble_w - 16.0,
                                 14.0,
@@ -472,13 +480,13 @@ impl App {
                         );
                         d.label_left(
                             UiRect::new(
-                                bubble_x_inner(bubble_rect),
+                                bubble_x_inner(bubble_slot),
                                 msg_y + 16.0,
                                 bubble_w - 16.0,
                                 bubble_h - 20.0,
                             ),
                             text,
-                            bot_text,
+                            cb_style.text_color,
                             11.0,
                         );
                         msg_y += 16.0 + (n_lines as f32) * 14.0 + 4.0;
@@ -498,7 +506,7 @@ impl App {
                             };
                             d.label_left(
                                 UiRect::new(
-                                    bubble_x_inner(bubble_rect),
+                                    bubble_x_inner(bubble_slot),
                                     msg_y,
                                     bubble_w - 16.0,
                                     14.0,
@@ -509,7 +517,7 @@ impl App {
                             );
                             // Status glyph — отдельным цветом (поверх серого).
                             d.label_left(
-                                UiRect::new(bubble_x_inner(bubble_rect), msg_y, 14.0, 14.0),
+                                UiRect::new(bubble_x_inner(bubble_slot), msg_y, 14.0, 14.0),
                                 status_glyph,
                                 status_color,
                                 10.0,
@@ -521,13 +529,13 @@ impl App {
                             msg_y += 4.0;
                             let btn_w = (bubble_w - 8.0) / 2.0;
                             let accept_rect = UiRect::new(
-                                bubble_x_inner(bubble_rect),
+                                bubble_x_inner(bubble_slot),
                                 msg_y,
                                 btn_w,
                                 PREVIEW_BTN_H,
                             );
                             let reject_rect = UiRect::new(
-                                bubble_x_inner(bubble_rect) + btn_w + 8.0,
+                                bubble_x_inner(bubble_slot) + btn_w + 8.0,
                                 msg_y,
                                 btn_w,
                                 PREVIEW_BTN_H,

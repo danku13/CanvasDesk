@@ -298,6 +298,65 @@ impl TextMeasurer {
         lines
     }
 
+    /// Перенос текста с уважением явных `\n` (параграфов) и NBSP
+    /// (`\u{00A0}` — неразрывный пробел; каталог §6.3: LOW-priority kit
+    /// gap, миграция `tooltip.rs::wrap_width`).
+    ///
+    /// В отличие от [`wrap`] (которая через `split_whitespace` схлопывает
+    /// любые пробелы, включая `\n`, и не различает NBSP), этот метод:
+    /// - сперва дробит текст на параграфы по `\n` (каждый параграф
+    ///   переносится независимо — явный перенос источника сохраняется как
+    ///   граница строки);
+    /// - внутри параграфа слова разделяются по whitespace, КРОМЕ NBSP
+    ///   (`char::is_whitespace() && c != '\u{a0}'`) — NBSP-группа (разряды
+    ///   чисел `1\u{a0}234\u{a0}567` из `format_num`) остаётся одним
+    ///   токеном, не рвётся посреди групп.
+    ///
+    /// Поведение идентично `tooltip.rs::wrap_width` (бит-в-бит, та же
+    /// жадная стратегия: строка набирается, пока кандидат «строка +
+    /// пробел + слово» укладывается в `max_w`; слово шире `max_w` —
+    /// отдельной строкой). Пустой текст → пустой вектор (карточка без
+    /// строк не рисуется); пустые параграфы (`"a\n\nb"`) не дают пустых
+    /// строк-разделителей (соответствует `wrap_width`). Вес — MEDIUM
+    /// (паритет [`width_of`]/[`wrap`]).
+    ///
+    /// Возвращает `Vec<String>` — одна строка на визуальную линию
+    /// (параграфы склеены без разделителя; потребитель различает
+    /// параграфы по контексту, как и `wrap_width`).
+    pub fn wrap_paragraphs(
+        &mut self,
+        fs: &mut cosmic_text::FontSystem,
+        text: &str,
+        family: &str,
+        size: f32,
+        max_w: f32,
+    ) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        for para in text.split('\n') {
+            let mut current = String::new();
+            for word in para
+                .split(|c: char| c.is_whitespace() && c != '\u{a0}')
+                .filter(|word| !word.is_empty())
+            {
+                if current.is_empty() {
+                    current.push_str(word);
+                    continue;
+                }
+                let candidate = format!("{current} {word}");
+                if self.width_of(fs, &candidate, family, size) <= max_w {
+                    current = candidate;
+                } else {
+                    lines.push(std::mem::take(&mut current));
+                    current.push_str(word);
+                }
+            }
+            if !current.is_empty() {
+                lines.push(current);
+            }
+        }
+        lines
+    }
+
     /// Политика Ellipsis (AC-4.2): самая длинная граница символов
     /// префикса, чья ширина с хвостом «…» укладывается в `max_width`;
     /// текст целиком, если помещается. Бинарный поиск по префиксам —
@@ -554,5 +613,118 @@ mod tests {
         );
         assert_eq!(r.lines, 1, "Wrap::None — без переноса");
         assert!((r.height - 13.0 * SCREEN_LINE_FACTOR).abs() < 1e-3);
+    }
+
+    /// `wrap_paragraphs` уважает явные `\n` как границы параграфов:
+    /// каждый параграф переносится независимо (в отличие от [`TextMeasurer::wrap`],
+    /// которая через `split_whitespace` схлопывает `\n` и склеивает слова
+    /// разных параграфов в одну строку). Бит-в-бит паритет с
+    /// `tooltip.rs::wrap_width` (оракул с моком 10 px/симв.):
+    /// `"a\nb"` → `["a", "b"]` (2 строки), а `wrap("a\nb", ∞)` → `["a b"]`.
+    #[test]
+    fn wrap_paragraphs_respects_explicit_newlines_as_paragraph_breaks() {
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        // Широкий бюджет — wrap склеил бы всё в одну строку (через
+        // split_whitespace, который схлопывает \n). wrap_paragraphs
+        // уважает \n как границу параграфа.
+        let text = "строка раз\nстрока два";
+        let lines = m.wrap_paragraphs(&mut fs, text, FAMILY, 13.0, 10_000.0);
+        assert_eq!(
+            lines,
+            vec!["строка раз".to_owned(), "строка два".to_owned()],
+            "явный \\n — граница параграфа, склейки через \\n нет"
+        );
+        // Контраст с wrap: та же строка, тот же бюджет — 1 строка
+        // (split_whitespace схлопывает \n с пробелами).
+        let wrapped = m.wrap(&mut fs, text, FAMILY, 13.0, 10_000.0);
+        assert_eq!(
+            wrapped,
+            vec!["строка раз строка два".to_owned()],
+            "wrap схлопывает \\n — контрольный контраст"
+        );
+        // Пустые параграфы не дают пустых строк-разделителей (паритет
+        // wrap_width: `"a\n\nb"` → `["a", "b"]`).
+        let lines = m.wrap_paragraphs(&mut fs, "a\n\nb", FAMILY, 13.0, 10_000.0);
+        assert_eq!(
+            lines,
+            vec!["a".to_owned(), "b".to_owned()],
+            "пустые параграфы не плодят пустых строк"
+        );
+        // Пустой текст → пустой вектор (карточка без строк; паритет
+        // wrap_width_empty_text_is_empty).
+        assert!(m
+            .wrap_paragraphs(&mut fs, "", FAMILY, 13.0, 100.0)
+            .is_empty());
+        assert!(m
+            .wrap_paragraphs(&mut fs, "   \n  ", FAMILY, 13.0, 100.0)
+            .is_empty());
+    }
+
+    /// `wrap_paragraphs` НЕ рвёт NBSP-группу (неразрывный пробел `\u{a0}`)
+    /// — разряды чисел (`1\u{a0}234\u{a0}567` из `format_num`) остаются
+    /// одним токеном, не разрываются посреди групп (паритет с
+    /// `tooltip.rs::wrap_width_keeps_nbsp_digit_groups_whole`).
+    #[test]
+    fn wrap_paragraphs_keeps_nbsp_token_whole() {
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        // Бюджет: достаточно узкий, чтобы заставить перенос после «итог»
+        // и после числа; достаточно широкий для каждого токена в отдельности.
+        // NBSP-группа «1\u{a0}234\u{a0}567» — один токен (неразрывный),
+        // остаётся целой строкой в выводе.
+        let text = "итог 1\u{a0}234\u{a0}567 руб";
+        // Ширины: отдельно — каждое слово; комбинации — два варианта
+        // «объединённой» строки. Бюджет между max_single и min_combo.
+        let w_itog = m.width_of(&mut fs, "итог", FAMILY, 13.0);
+        let w_num = m.width_of(&mut fs, "1\u{a0}234\u{a0}567", FAMILY, 13.0);
+        let w_rub = m.width_of(&mut fs, "руб", FAMILY, 13.0);
+        let w_itog_num = m.width_of(&mut fs, "итог 1\u{a0}234\u{a0}567", FAMILY, 13.0);
+        let w_num_rub = m.width_of(&mut fs, "1\u{a0}234\u{a0}567 руб", FAMILY, 13.0);
+        // Бюджет: между max(одиночные) и min(комбинации) — так, что
+        // каждое слово помещается, но любая пара — нет.
+        let max_single = w_itog.max(w_num).max(w_rub);
+        let min_combo = w_itog_num.min(w_num_rub);
+        assert!(
+            max_single < min_combo,
+            "премиса: max single ({max_single}) < min combo ({min_combo}) — бюджет существует"
+        );
+        let max_w = (max_single + min_combo) / 2.0;
+        // Премисы: каждое слово помещается, обе комбинации — нет.
+        assert!(w_itog <= max_w, "«итог» помещается: {w_itog} ≤ {max_w}");
+        assert!(w_num <= max_w, "NBSP-число помещается: {w_num} ≤ {max_w}");
+        assert!(w_rub <= max_w, "«руб» помещается: {w_rub} ≤ {max_w}");
+        assert!(
+            w_itog_num > max_w,
+            "«итог 1…567» НЕ помещается: {w_itog_num} > {max_w}"
+        );
+        assert!(
+            w_num_rub > max_w,
+            "«1…567 руб» НЕ помещается: {w_num_rub} > {max_w}"
+        );
+
+        let lines = m.wrap_paragraphs(&mut fs, text, FAMILY, 13.0, max_w);
+        // Три строки: «итог», «1…567» (NBSP-группа целая), «руб».
+        assert_eq!(
+            lines,
+            vec![
+                "итог".to_owned(),
+                "1\u{a0}234\u{a0}567".to_owned(),
+                "руб".to_owned()
+            ],
+            "NBSP-группа остаётся одним токеном, не рвётся"
+        );
+        // Контраст: wrap (через split_whitespace) рвёт NBSP как обычный
+        // пробел → мог бы склеить «1 234 567» в одну строку, и сам
+        // NBSP в выводе не сохраняется (split_whitespace его удаляет).
+        let wrapped = m.wrap(&mut fs, text, FAMILY, 13.0, max_w);
+        // wrap не содержит NBSP (split_whitespace его схлопнул) —
+        // цифры «1», «234», «567» — отдельные слова, склеиваются в
+        // строках как «1 234 567» (без NBSP). Демонстрация асимметрии.
+        let joined_wrap = wrapped.join(" | ");
+        assert!(
+            !joined_wrap.contains('\u{a0}'),
+            "wrap схлопывает NBSP (контрольный контраст): {joined_wrap:?}"
+        );
     }
 }

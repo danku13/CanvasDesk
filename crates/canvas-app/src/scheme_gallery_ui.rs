@@ -329,6 +329,23 @@ pub fn layout_with(
     // тестом `chips_all_categories_fit`/G4-линтом; прежний молчаливый
     // `break`-кламп удалён). Ширина «Все» всегда влезает: панель ≥ 280,
     // слот чипов ≥ 256.
+    //
+    // TODO(J/FR-UI-CHIP-STRIP): migrate to `kit::chip_strip`. The kit's
+    // chip_strip uses `MeasuredItem::Text` with `pad_x = 2*CHIP_PAD_H = 16`
+    // (text-measured widths) and `h = CHIP_HEIGHT = 24` (kit canonical).
+    // Existing scheme_gallery uses `MeasuredItem::Fixed` with `CHIP_W = 108`
+    // (fixed widths) and `h = CHIP_H = 28` (4px taller than kit's
+    // `CHIP_HEIGHT`). Migrating would change:
+    // 1. chip height 28 → 24 (4px shorter — visual change in row height +
+    //    panel layout: `chrome = HEADER_H + INPUT_H + CHIP_H + FOOTER_H +
+    //    PANEL_PAD * 3.0` — shifts everything below chips by 4px).
+    // 2. chip widths fixed 108 → measured text width (variable per label) —
+    //    would break the test `chips_all_categories_fit` (asserts
+    //    `chips_w <= inner_w` based on fixed widths).
+    // Separate wave of UI-geometry canonicalization needed (align
+    // `CHIP_H`/`CHIP_W` constants with kit's `CHIP_HEIGHT`/measured widths +
+    // update test fixture). The kit's `chip_strip` API itself fits (squeeze
+    // = false → RowPolicy::Fit, matches existing); only the constants differ.
     let mut chip_children = vec![MeasuredItem::Fixed {
         w: CHIP_ALL_W,
         h: CHIP_H,
