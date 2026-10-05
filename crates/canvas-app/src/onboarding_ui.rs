@@ -345,14 +345,42 @@ pub fn progress_dots(card: [f32; 4]) -> (Vec<f32>, f32) {
 /// кнопки остаются достижимы): Prev — слева, Next — справа (оба в футере);
 /// Skip — в правом верхнем углу карточки (выход виден всегда — NN/g).
 //
-// TODO(G/FR-070): `Skip` — это подписанная прямоугольная кнопка 64×22
-// («Пропустить»), не каноническая «×» в углу модали. `kit::stage_close_button`
-// возвращает квадрат `ICON_BUTTON_SIZE` (26×26) под глиф «×» — смена
-// форм-фактора и UX (подпись → иконка). Skip нуждается в собственной
-// миграции: либо `kit::button_layout` (rect подписанной кнопки-призрака),
-// либо отдельный `kit::stage_skip_button` — отдельная волна. Позиция
-// «правый-верхний угол карточки» семантически = stage-close, но
-// форм-фактор отличается — оставлено как есть (I-1: ноль скачка).
+// K5/FR-070: `Skip` — это подписанная прямоугольная кнопка 64×22
+// («Пропустить»), НЕ каноническая «×» в углу модали. Поэтому `Skip` НЕ
+// является миграционным кандидатом для `kit::stage_close_button` (тот
+// возвращает квадрат `ICON_BUTTON_SIZE`=26×26 под глиф «×», а Skip —
+// широкая кнопка-призрак с подписью). Этот TODO — НЕ close-button
+// migration (вопреки FR-070 тегу), а кнопочный layout-миграция.
+//
+// TODO(J/FR-UI-FOOTER): `kit::footer_buttons` / `footer_buttons_measured`
+// does NOT fit this pattern — the kit expects N buttons right-aligned
+// (last button flush to slot.right), but onboarding carousel footer has
+// Prev on the LEFT (card.x + PAD), Next on the RIGHT (card.right - PAD -
+// W), and Skip in the TOP-RIGHT CORNER (not in the footer at all). The
+// Prev/Next are on opposite sides (not right-aligned); Skip is outside
+// the footer. The kit's footer_buttons is for the "3 right-aligned
+// buttons" pattern (autolink Create/Accept_All/Reject_All, graph_builder
+// Cancel/Generate). Onboarding carousel is a "split footer" pattern
+// (one button on each side) — not currently in the kit. Migration would
+// require a new kit component (`kit::split_footer_buttons(slot, left_n,
+// right_n, widths)`) or a manual layout (current). Skip button needs
+// its own migration (see K5 TODO above).
+//
+// Будущая миграция Skip — на `kit::button_layout` (измеренный размер
+// подписи + `BUTTON_PAD_H` × 2, высота `BUTTON_HEIGHT`=30). Требует:
+// 1. Сигнатуру `button_rect(card, button, m, fs, family, size)` —
+//    вместо текущей без замерщика (10+ callers в onboarding_ui.rs,
+//    app/overlays.rs:3669, app.rs:13310 — большая площадь рефактора).
+// 2. UX-ревью: размер меняется с 64×22 на ~(80–100)×30 (ширина
+//    измеренной подписи «Пропустить» + 2·BUTTON_PAD_H=12; высота — kit
+//    canonical `BUTTON_HEIGHT`=30). Это сдвиг позиции кнопки в карточке
+//    (примерно +6px по высоте, +16–36px по ширине).
+// 3. Стиль: `kit::button_style(ButtonVariant::Ghost, KitState::Normal,
+//    palette)` — ghost-кнопка без заливки/рамки, hover → accent border.
+//
+// Оставлено как TODO до отдельной волны onboarding button_layout
+// (I-1: ноль скачка). Паритет с другими подписанными кнопками-призраками
+// в карточках (например suggest-cards).
 pub fn button_rect(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
     let footer_y =
         card[1] + card[3] - ONBOARDING_FOOTER_H + (ONBOARDING_FOOTER_H - ONBOARDING_BUTTON_H) / 2.0;
@@ -596,6 +624,28 @@ pub struct AiOnboardingLayout {
 /// высоты строк фиксированы по прототипу F-8). Карточка центрируется во
 /// вьюпорте с полями `AI_ONB_VIEWPORT_MARGIN`; высота зависит от
 /// `state.privacy_open`.
+//
+// TODO(J/FR-UI-RADIO): migrate mode-card layout to `kit::radio_card`.
+// `ai_onboarding_layout` returns just the mode-card slot rects (the
+// `mode_cards: [[f32; 4]; 3]` field); the rendering of indicator/label/desc
+// happens in `app/overlays.rs::ai_onboarding_overlay` (DO-NOT-TOUCH for
+// Agent J — outside scope). The kit's `radio_card(slot, label_w, desc_w,
+// selected, state, palette) -> (RadioCardLayout, RadioCardStyle)` returns
+// layout.label/indicator/desc rects + style colors; to consume them, the
+// overlay rendering code would need to use `paint_radio_card` (for the
+// card background + indicator) and the layout.label/desc rects for text
+// positioning — that's an `overlays.rs` change, gated for a future wave.
+// Additionally, the existing rendering uses hand-rolled positions
+// (indicator at y=18 with dot_r=6, label at y=4, tag at y=6 right-corner,
+// desc at y=24) that differ from the kit's canonical geometry (indicator
+// 12×12 at y=center, label at y=8, desc at y=30). A 1:1 migration would
+// cause a ~6-12px visual shift of label/desc rows + indicator resize
+// 12→6(radius) — separate wave of UI-geometry canonicalization with
+// manual L2 verification (AGENTS.md §«Самопроверка UI на WASM»).
+// `kit::radio_card` style values (card_fill/card_border/indicator_fill)
+// match the existing manual match 1:1 — when overlays.rs is opened for
+// the next wave, the style migration can be done first (zero visual
+// change), then the geometry migration (with manual L2 verification).
 pub fn ai_onboarding_layout(viewport: [f32; 2], state: &AiOnboardingState) -> AiOnboardingLayout {
     use canvas_ui::geometry::{UiRect, UiVec2};
     use canvas_ui::kit;
@@ -646,6 +696,12 @@ pub fn ai_onboarding_layout(viewport: [f32; 2], state: &AiOnboardingState) -> Ai
         ];
     }
     let actions_y = y + 3.0 * AI_ONB_MODE_H + 2.0 * AI_ONB_MODE_GAP + 18.0;
+    // TODO(J/FR-UI-FOOTER): Privacy (left) + Continue (right) is a
+    // "split footer" (one button per side) — NOT the kit's footer_buttons
+    // pattern (N buttons right-aligned, last flush to slot.right).
+    // Migration would need a new `kit::split_footer_buttons` component
+    // (or two footer_buttons calls — one right-aligned for Continue, one
+    // left-aligned for Privacy). Currently manual layout — preserved.
     let btn_privacy = [x, actions_y, AI_ONB_BTN_PRIV_W, AI_ONB_BTN_H];
     let btn_continue = [
         x + inner_w - AI_ONB_BTN_CONTINUE_W,

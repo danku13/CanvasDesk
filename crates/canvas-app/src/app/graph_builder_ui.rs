@@ -192,52 +192,59 @@ impl App {
             let mc_rect = UiRect::new(dialog_x + PAD, mc_y, ta_w, MODE_CARD_H);
             let selected = self.graph_builder.mode == *mode;
             let hovered = point_in_rect([mc_rect.x, mc_mc_y(mc_y), ta_w, MODE_CARD_H], self.cursor);
-            let (fill, border) = if selected {
-                (
-                    [
-                        kit_palette.accent[0],
-                        kit_palette.accent[1],
-                        kit_palette.accent[2],
-                        0.10,
-                    ],
-                    kit_palette.accent,
-                )
-            } else if hovered {
-                (kit_palette.hover_fill, kit_palette.panel_border)
+            // J2 (Task J / FR-UI-RADIO): migrate style computation to
+            // `kit::radio_card` — card_fill/card_border/indicator_fill/
+            // label_color/desc_color now come from the kit's (selected,
+            // state) → palette slots mapping (1:1 with the previous manual
+            // match — I-1: zero visual jump). Geometry (indicator 16×16
+            // glyph at y=8, label.y=6, desc.y=24) preserved as-is — kit's
+            // canonical indicator 12×12 at y=center/label.y=8/desc.y=30
+            // differs from existing layout; full geometry migration would
+            // cause ~6px visual shift of label/desc rows + indicator resize
+            // 16→12 — separate wave of UI-geometry canonicalization
+            // (analogous to Agent G's close-button TODOs).
+            let state = if hovered {
+                canvas_ui::kit::KitState::Hovered
             } else {
-                (kit_palette.panel_fill, kit_palette.panel_border)
+                canvas_ui::kit::KitState::Normal
             };
+            let (_rc_layout, rc_style) = canvas_ui::kit::radio_card(
+                mc_rect,
+                100.0,
+                Some(ta_w - 36.0),
+                selected,
+                state,
+                &kit_palette,
+            );
             let mc_style = canvas_ui::kit::control_style_of(
-                fill,
-                border,
-                kit_palette.text,
-                canvas_core::tokens::RADIUS_PANEL,
+                rc_style.card_fill,
+                rc_style.card_border,
+                rc_style.label_color,
+                rc_style.radius,
             );
             d.control(mc_rect, &mc_style);
-            // Radio dot ◉ / ○
+            // Radio dot ◉ / ○ — glyph fallback (kit's paint_radio_card draws
+            // a filled circle 12×12 at canonical centered position; existing
+            // uses glyph "◉"/"○" in 14px font at y=8 — preserved 1:1).
             let dot_glyph = if selected { "◉" } else { "○" };
             d.label_left(
                 UiRect::new(mc_rect.x + 8.0, mc_rect.y + 8.0, 16.0, 16.0),
                 dot_glyph,
-                if selected {
-                    kit_palette.accent
-                } else {
-                    kit_palette.text_muted
-                },
+                rc_style.indicator_fill,
                 14.0,
             );
-            // Label (bold)
+            // Label (bold) — position preserved.
             d.label_left(
                 UiRect::new(mc_rect.x + 28.0, mc_rect.y + 6.0, 100.0, 16.0),
                 label,
-                kit_palette.text_title,
+                rc_style.label_color,
                 12.0,
             );
-            // Description (приглушённый)
+            // Description (приглушённый) — position preserved.
             d.label_left(
                 UiRect::new(mc_rect.x + 28.0, mc_rect.y + 24.0, ta_w - 36.0, 14.0),
                 desc,
-                kit_palette.text_muted,
+                rc_style.desc_color,
                 11.0,
             );
         }
@@ -257,12 +264,29 @@ impl App {
             10.0,
         );
 
-        // === Кнопки Cancel / Generate ====================================
+        // === Кнопки Cancel / Generate — kit::footer_buttons_measured ======
+        // J2 (Task J / FR-UI-FOOTER): migrate footer button rect computation
+        // to `kit::footer_buttons_measured`. Slot is the bottom button row
+        // ( BTN_H tall, dialog.w - PAD wide — the right inset PAD = 16 is
+        // preserved by insetting slot.w). Buttons [Cancel (130), Generate
+        // (130)] right-aligned, gap = `GAP_CONTROLS = SPACING_SM = 8`
+        // (matches existing `gen_x - 8.0 - BTN_W`). Positions are 1:1 with
+        // the previous manual `gen_x = dialog.right - PAD - BTN_W` /
+        // `cancel_x = gen_x - 8 - BTN_W` formula — I-1: zero visual jump.
         let btn_y = dialog_y + dialog_h - PAD - BTN_H;
-        let gen_x = dialog_x + dialog_w - PAD - BTN_W;
-        let cancel_x = gen_x - 8.0 - BTN_W;
+        let footer_slot = UiRect::new(dialog_x, btn_y, dialog_w - PAD, BTN_H);
+        let mut footer_m = canvas_ui::measure::TextMeasurer::new();
+        let footer_widths = [BTN_W, BTN_W];
+        let footer_btns =
+            canvas_ui::kit::footer_buttons_measured(footer_slot, &footer_widths, &mut footer_m);
+        // kit returns left-to-right: [0] = Cancel (left), [1] = Generate (right).
+        let cancel_rect = footer_btns[0].0;
+        let gen_rect = footer_btns[1].0;
         // Cancel — Secondary.
-        let cancel_hovered = point_in_rect([cancel_x, btn_y, BTN_W, BTN_H], self.cursor);
+        let cancel_hovered = point_in_rect(
+            [cancel_rect.x, cancel_rect.y, cancel_rect.w, cancel_rect.h],
+            self.cursor,
+        );
         let cancel_style = canvas_ui::kit::button_style(
             canvas_ui::kit::ButtonVariant::Secondary,
             if cancel_hovered {
@@ -272,11 +296,13 @@ impl App {
             },
             &kit_palette,
         );
-        let cancel_rect = UiRect::new(cancel_x, btn_y, BTN_W, BTN_H);
         d.control(cancel_rect, &cancel_style);
         d.label_center(cancel_rect, "Отмена", cancel_style.text, 13.0);
         // Generate — Primary (disabled если busy).
-        let gen_hovered = point_in_rect([gen_x, btn_y, BTN_W, BTN_H], self.cursor);
+        let gen_hovered = point_in_rect(
+            [gen_rect.x, gen_rect.y, gen_rect.w, gen_rect.h],
+            self.cursor,
+        );
         let gen_state = if self.graph_builder.busy {
             canvas_ui::kit::KitState::Disabled
         } else if gen_hovered {
@@ -294,7 +320,6 @@ impl App {
         } else {
             "Сгенерировать"
         };
-        let gen_rect = UiRect::new(gen_x, btn_y, BTN_W, BTN_H);
         d.control(gen_rect, &gen_style);
         d.label_center(gen_rect, gen_label, gen_style.text, 13.0);
 
@@ -410,14 +435,23 @@ impl App {
         if !point_in_rect([dx, dy, dw, dh], point) {
             return Some(GraphBuilderHit::Backdrop);
         }
-        // Cancel / Generate кнопки.
+        // Cancel / Generate кнопки — kit::footer_buttons_measured (J2:
+        // geometry mirrors the overlay render path; same slot/widths).
         let btn_y = dy + dh - PAD - BTN_H;
-        let gen_x = dx + dw - PAD - BTN_W;
-        let cancel_x = gen_x - 8.0 - BTN_W;
-        if point_in_rect([cancel_x, btn_y, BTN_W, BTN_H], point) {
+        let footer_slot = UiRect::new(dx, btn_y, dw - PAD, BTN_H);
+        let mut footer_m = canvas_ui::measure::TextMeasurer::new();
+        let footer_widths = [BTN_W, BTN_W];
+        let footer_btns =
+            canvas_ui::kit::footer_buttons_measured(footer_slot, &footer_widths, &mut footer_m);
+        let cancel_rect = footer_btns[0].0;
+        let gen_rect = footer_btns[1].0;
+        if point_in_rect(
+            [cancel_rect.x, cancel_rect.y, cancel_rect.w, cancel_rect.h],
+            point,
+        ) {
             return Some(GraphBuilderHit::Cancel);
         }
-        if point_in_rect([gen_x, btn_y, BTN_W, BTN_H], point) {
+        if point_in_rect([gen_rect.x, gen_rect.y, gen_rect.w, gen_rect.h], point) {
             return Some(GraphBuilderHit::Generate);
         }
         // Textarea (для фокуса).

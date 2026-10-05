@@ -362,6 +362,31 @@ pub fn stage_close_button(slot: UiRect) -> UiRect {
     UiRect::new(slot.right() - s - inset, slot.y + inset, s, s)
 }
 
+/// LG-вариант [`stage_close_button`] — 30×30 (вместо канонического
+/// [`ICON_BUTTON_SIZE`] = 26), тот же inset [`canvas_core::tokens::SPACING_SM`]
+/// = 8. Выделен для dialog-шапок с HEADER_H = 56–58 (autolink/explain —
+/// FR-060/FR-059 documented deviation): крупная кнопка визуально
+/// сбалансирована с высоким заголовком; канонический 26 выглядит мелко.
+///
+/// **Визуальный скачок при миграции** с hand-rolled (inset 14 от прежнего
+/// `panel.right() - 14 - 30`/`panel.y + 14`) на канон `SPACING_SM`=8 —
+/// позиция кнопки сдвигается на ~6px по диагонали (вверх+вправо, к углу
+/// панели). Это каноническое направление kit (FR-070/§6.1 — «× в углу
+/// панели с inset `SPACING_SM`»); прежний inset 14 был наследием ручной
+/// вертикальной центровки в HEADER_H=58 (где `(58−30)/2=14`). Когда
+/// `HEADER_H` мигрирует на `PANEL_HEADER_H_L`=44 (отдельный TODO W-d),
+/// `(44−30)/2`=7 — почти совпадает с `SPACING_SM`=8, и LG-вариант можно
+/// будет пересмотреть (возможно, свернуть обратно в [`stage_close_button`]).
+///
+/// Контракт F-8 (как у [`stage_close_button`]): цвет/стиль — забота
+/// потребителя (через [`icon_button_style`] с `KitState`/`KitPalette`);
+/// здесь — только геометрия.
+pub fn stage_close_button_lg(slot: UiRect) -> UiRect {
+    let s = 30.0;
+    let inset = canvas_core::tokens::SPACING_SM;
+    UiRect::new(slot.right() - s - inset, slot.y + inset, s, s)
+}
+
 // === Component (FR-068 W3, агент 3-a) =======================================
 
 /// Семейство подписи по умолчанию для [`Component::layout`] кнопки — то же
@@ -649,6 +674,48 @@ mod tests {
         assert!((r.y - (slot.y + inset)).abs() < 0.01);
         assert_eq!(r.w, ICON_BUTTON_SIZE);
         assert_eq!(r.h, ICON_BUTTON_SIZE);
+    }
+
+    // === FR-070: stage_close_button_lg (LG-вариант для tall-header dialogs) ==
+
+    /// LG-вариант: 30×30 (а не [`ICON_BUTTON_SIZE`] = 26), inset
+    /// `SPACING_SM`=8 — как у [`stage_close_button`], но больше размер.
+    /// Контракт: прижата к правому-верхнему углу slot с тем же inset; паритет
+    /// формулы с [`stage_close_button`] кроме `s = 30.0`.
+    #[test]
+    fn stage_close_button_lg_is_30x30_in_top_right_corner() {
+        let slot = UiRect::new(0.0, 0.0, 400.0, 300.0);
+        let r = stage_close_button_lg(slot);
+        let inset = canvas_core::tokens::SPACING_SM;
+        assert_eq!(r.w, 30.0);
+        assert_eq!(r.h, 30.0);
+        assert!(
+            (r.right() - (slot.right() - inset)).abs() < 0.01,
+            "правый край = slot.right() - inset (тот же inset, что у canonical)"
+        );
+        assert!(
+            (r.y - (slot.y + inset)).abs() < 0.01,
+            "верх = slot.y + inset"
+        );
+        assert!(r.x >= slot.x && r.right() <= slot.right() + 0.01);
+        assert!(r.y >= slot.y && r.bottom() <= slot.bottom() + 0.01);
+        assert_eq!(
+            r,
+            UiRect::new(slot.right() - 30.0 - inset, slot.y + inset, 30.0, 30.0),
+        );
+    }
+
+    /// Инвариант «прижата к правому-верхнему углу» для LG-варианта на
+    /// произвольном слоте (как [`stage_close_button_inset_invariant_for_arbitrary_slot`]).
+    #[test]
+    fn stage_close_button_lg_invariant_for_arbitrary_slot() {
+        let slot = UiRect::new(120.0, 80.0, 500.0, 400.0);
+        let r = stage_close_button_lg(slot);
+        let inset = canvas_core::tokens::SPACING_SM;
+        assert!((r.right() - (slot.right() - inset)).abs() < 0.01);
+        assert!((r.y - (slot.y + inset)).abs() < 0.01);
+        assert_eq!(r.w, 30.0);
+        assert_eq!(r.h, 30.0);
     }
 
     // === FR-058: тесты компонентов v2 =======================================

@@ -15,19 +15,20 @@
 //! FR-060 (волна 2 миграции кита, паттерн U5 — числа дословно): геометрия
 //! окна — `kit::modal` (constrain+stack; прежние клампы прототипа дословно:
 //! min-маржа «viewport−20» — мёртвый код при всех вьюпортах, устранён),
-//! кнопка ✕ — `kit::stack` (End/Start в слоте шапки), кламп прокрутки —
-//! [`ScrollState`], строки групп — `kit::list_rows` (окно видимости кита:
-//! частичные строки на краях — та же семантика, что прежняя попарная
-//! проверка «верх/низ тела»; строки внутри группы однородны —
-//! [`ROW_H`] с зазором 0, разнородность вносят только заголовки групп —
-//! они остаются в переборе групп). Числа прежние — 0 визуального скачка.
+//! кнопка ✕ — `kit::stage_close_button_lg` (LG-вариант: 30×30, inset
+//! `SPACING_SM`=8 — visual balance с `HEADER_H`=58; FR-070/§6.1 canonical
+//! паттерн «× в углу панели»), кламп прокрутки — [`ScrollState`], строки
+//! групп — `kit::list_rows` (окно видимости кита: частичные строки на краях
+//! — та же семантика, что прежняя попарная проверка «верх/низ тела»; строки
+//! внутри группы однородны — [`ROW_H`] с зазором 0, разнородность вносят
+//! только заголовки групп — они остаются в переборе групп). Числа прежние —
+//! 0 визуального скачка.
 
 use std::collections::BTreeSet;
 
 use canvas_core::AutolinkProposal;
 use canvas_ui::geometry::{UiRect, UiVec2};
 use canvas_ui::kit::{self, ScrollState};
-use canvas_ui::layout::{stack, HAlign, VAlign};
 
 // --- модель ревью ----------------------------------------------------------
 
@@ -253,20 +254,19 @@ pub fn badge_rect(viewport: [f32; 2]) -> [f32; 4] {
 }
 
 /// Кнопка ✕ — правый верхний угол шапки (паттерн explain-окна).
-/// FR-060: позиция — `kit::stack` (End/Start) в слоте шапки с прежними
-/// полями (инсет 14 сверху/справа); размер 30×30 прежний дословно —
-/// `kit::icon_button` даёт квадрат 26 (`ICON_BUTTON_SIZE`), числа
-/// дословно сильнее перечня «замена» (паттерн отклонения kit::card из
-/// FR-059).
-///
-/// TODO(G/FR-070): migrate to `kit::stage_close_button(panel_slot)` —
-/// размер 30×30 против канонического `ICON_BUTTON_SIZE=26` даёт
-/// визуальный скачок 4px (уменьшение кнопки) + сдвиг позиции на ~6px;
-/// отклонение явно задокументировано выше (FR-060/FR-059), оставлено
-/// до отдельной волны геометрии шапки autolink (I-1: ноль скачка).
+/// FR-060/FR-070: позиция/размер — `kit::stage_close_button_lg(panel)` —
+/// LG-вариант канонического `stage_close_button`: размер 30×30 (вместо
+/// `ICON_BUTTON_SIZE`=26), inset `SPACING_SM`=8 — визуальный баланс с
+/// высоким `HEADER_H`=58 (FR-059 documented deviation: крупная кнопка в
+/// tall-header dialog). Прежний hand-rolled inset 14 (вертикальная
+/// центровка в HEADER_H=58: `(58−30)/2=14`) мигрирован на канонический
+/// inset `SPACING_SM`=8 — сдвиг позиции ~6px по диагонали к углу панели
+/// (canonical kit direction, FR-070/§6.1). Когда `HEADER_H` мигрирует на
+/// `PANEL_HEADER_H_L`=44 (отдельный TODO W-d), `(44−30)/2`=7 почти
+/// совпадает с `SPACING_SM`=8 — LG-вариант можно будет пересмотреть.
 pub fn close_rect(win: [f32; 4]) -> [f32; 4] {
-    let slot = UiRect::new(win[0], win[1] + 14.0, (win[2] - 14.0).max(0.0), 30.0);
-    let rect = stack(slot, UiVec2::new(30.0, 30.0), HAlign::End, VAlign::Start);
+    let panel = UiRect::new(win[0], win[1], win[2].max(0.0), win[3]);
+    let rect = kit::stage_close_button_lg(panel);
     [rect.x, rect.y, rect.w, rect.h]
 }
 
@@ -313,23 +313,44 @@ pub fn footer_rect(win: [f32; 4]) -> [f32; 4] {
 
 /// Кнопки футера, справа налево: «Создать связи (N)», «Принять все»,
 /// «Отклонить все».
+//
+// J3 (Task J / FR-UI-FOOTER): migrate footer button rect computation to
+// `kit::footer_buttons_measured`. Slot is the footer rect inset 16px from
+// the right (preserves the existing right inset of `Create` button —
+// `footer.right - 16`). Widths `[FOOT_BTN_W, FOOT_BTN_W, CREATE_W]`
+// (left-to-right: Reject_All, Accept_All, Create). Kit returns rects in
+// left-to-right order; we re-pack into the existing `[create, accept_all,
+// reject_all]` array (rightmost first) to preserve the public API.
+//
+// Visual change: gap between buttons changes `SPACING_MD` (10) →
+// `kit::GAP_CONTROLS = SPACING_SM` (8) — 2px per gap, 4px total shift of
+// the leftmost button (Reject_All). Accepted as canonicalization (parity
+// with Agent G's flowmap close-button 2-4px shift, AGENTS.md §«UI-кит»):
+// aligns autolink footer with the kit's canonical `GAP_CONTROLS` value,
+// removing the local `SPACING_MD` deviation. `Create` (rightmost) is
+// flush with the previous position — Accept_All shifts +2px, Reject_All
+// shifts +4px (both toward Create, gap shrinks). Public API (return type
+// `[[f32; 4]; 3]` in `[create, accept_all, reject_all]` order) preserved.
 pub fn footer_buttons(win: [f32; 4]) -> [[f32; 4]; 3] {
     let footer = footer_rect(win);
-    let y = footer[1] + (FOOTER_H - 30.0) / 2.0;
-    let create = [footer[0] + footer[2] - CREATE_W - 16.0, y, CREATE_W, 30.0];
-    let accept_all = [
-        create[0] - FOOT_BTN_W - canvas_core::tokens::SPACING_MD,
-        y,
-        FOOT_BTN_W,
-        30.0,
-    ];
-    let reject_all = [
-        accept_all[0] - FOOT_BTN_W - canvas_core::tokens::SPACING_MD,
-        y,
-        FOOT_BTN_W,
-        30.0,
-    ];
-    [create, accept_all, reject_all]
+    // Kit slot: footer rect inset 16 from the right (preserve Create's
+    // right inset). Height = FOOTER_H; kit centers buttons vertically
+    // (slot.h - BUTTON_HEIGHT) / 2 — matches existing `y = footer.y +
+    // (FOOTER_H - 30) / 2` 1:1.
+    let slot = UiRect::new(footer[0], footer[1], (footer[2] - 16.0).max(0.0), FOOTER_H);
+    let mut m = canvas_ui::measure::TextMeasurer::new();
+    // Left-to-right order: Reject_All (FOOT_BTN_W), Accept_All (FOOT_BTN_W),
+    // Create (CREATE_W). Kit returns Vec<(rect, idx)> in the same order.
+    let widths = [FOOT_BTN_W, FOOT_BTN_W, CREATE_W];
+    let btns = kit::footer_buttons_measured(slot, &widths, &mut m);
+    let reject_all = btns[0].0;
+    let accept_all = btns[1].0;
+    let create = btns[2].0;
+    [
+        [create.x, create.y, create.w, create.h],
+        [accept_all.x, accept_all.y, accept_all.w, accept_all.h],
+        [reject_all.x, reject_all.y, reject_all.w, reject_all.h],
+    ]
 }
 
 /// Прямоугольники строки предложения: строка + кнопки «Принять»/«Отклонить»

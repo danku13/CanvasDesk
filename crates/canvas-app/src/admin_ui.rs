@@ -164,13 +164,18 @@ pub fn admin_demo_viewport(viewport: [f32; 2]) -> UiRect {
 /// реестра (те же формулы, что у [`admin_layout`]; шапка фиксирована —
 /// скролл демо-зоны слоты не сдвигает).
 //
-// TODO(G/FR-070): migrate `close` to `kit::stage_close_button(panel)` —
+// TODO(K4/FR-070): migrate `close` to `kit::stage_close_button(panel)` —
 // канонический паттерн «× в углу панели». Сейчас close/theme/reset
 // выстроены в одну строку шапки content (все на content.y, центрированы
 // по HEADER_H-слоту). `stage_close_button(panel)` ставит кнопку в угол
 // панели (panel.right - 34, panel.y + 8) — это оторвёт close от theme/
-// reset по вертикали. Миграция требует реструктуризации шапки — отдельная
-// волна UI-геометрии (I-1: ноль скачка; см. паритет с kit_ui::gallery_layout).
+// reset по вертикали (theme/reset широкие toggle-кнопки THEME_SLOT_W=170
+// и RESET_SLOT_W=96 — не подходят под `icon_button_rect`). Мигрировать
+// close alone — нарушит визуальную когезию шапки. Правильный фикс —
+// `kit::panel_header(slot, [buttons])` (audit §6.1 K3 entry), который
+// раскладывает все кнопки шапки вместе. Оставлено как TODO до отдельной
+// волны UI-геометрии (I-1: ноль скачка; паритет с
+// `kit_ui::gallery_layout`).
 pub fn admin_hit_slots(viewport: [f32; 2]) -> (UiRect, UiRect, UiRect) {
     let vp = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
     let panel = admin_panel(vp);

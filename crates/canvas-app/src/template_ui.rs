@@ -961,6 +961,20 @@ pub fn panel_layout(
     // скриншот 13_palette: SqueezeTail сжимал «unit-economics» до нуля —
     // срезанный текст выглядел браком). Слоту отдаётся высота до 2 рядов;
     // строки шаблонов стартуют ниже фактического низа чипов.
+    //
+    // TODO(J/FR-UI-CHIP-STRIP): migrate to `kit::chip_strip`. The kit's
+    // chip_strip supports `RowPolicy::Fit` (squeeze=false) and
+    // `RowPolicy::SqueezeTail` (squeeze=true) — but NOT `RowPolicy::Wrap`
+    // (which template_ui uses here for the 2-row wrap-overflow behavior).
+    // Migrating to kit would lose the Wrap policy — chips that don't fit
+    // would either overflow (Fit) or be compressed to 0 width
+    // (SqueezeTail), instead of wrapping to a 2nd row. The Wrap behavior
+    // is documented as intentional (wasm-audit 2026-09-25: SqueezeTail
+    // cut «unit-economics» mid-text). A future kit extension
+    // (`chip_strip_wrap` or adding Wrap to chip_strip's policy parameter)
+    // would unblock this migration. Also: existing uses `pad_x = 20.0`
+    // vs kit's `pad_x = 2*CHIP_PAD_H = 16` (4px wider chips in existing) —
+    // minor visual change.
     // FR-068 W3.3 (каталог §9.3.1): чип сам себя измеряет —
     // [`MeasuredItem::Text`] c `pad_x: 20.0` (тот же пад, что был в
     // [`category_chip_width`]) вместо проводки «width_of → Fixed»;
