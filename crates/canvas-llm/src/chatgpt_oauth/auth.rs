@@ -534,7 +534,14 @@ pub fn tokens_from_json(body: &serde_json::Value, now: u64) -> Result<OAuthToken
             .unwrap_or_default()
             .to_string(),
         expires_at: now.saturating_add(expires_in),
-        account_email: None,
+        // FR-LLM-OAUTH-FIX: email из id_token сразу при exchange (симметрично
+        // refresh-пути в provider.rs) — иначе Settings-бейдж «вход выполнен ·
+        // email» пуст до первого refresh. Парсинг некритичен (.ok()).
+        account_email: body
+            .get("id_token")
+            .and_then(|v| v.as_str())
+            .and_then(|t| super::jwt::parse_id_token(t).ok())
+            .and_then(|c| c.email),
     })
 }
 
@@ -655,8 +662,15 @@ mod desktop {
                         return Err(e);
                     }
                 };
-                let (path_query, _) = request
-                    .split_once(' ')
+                // FR-LLM-OAUTH-FIX (E2E-смоук oauth_e2e): request-line =
+                // "METHOD /path?query HTTP/1.1" — путь это ВТОРОЙ токен, а не
+                // первый. Раньше split_once(' ').0 давал метод ("GET") → path
+                // всегда != CALLBACK_PATH → 404-цикл и вечное ожидание
+                // следующего запроса (реальный браузер вечно крутился).
+                let request_line = request.lines().next().unwrap_or_default();
+                let path_query = request_line
+                    .split_whitespace()
+                    .nth(1)
                     .ok_or_else(|| LlmError::Protocol("битая request-line".into()))?;
                 let (path, query) = match path_query.split_once('?') {
                     Some((p, q)) => (p, q),

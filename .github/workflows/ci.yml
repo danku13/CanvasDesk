@@ -200,3 +200,17 @@ jobs:
             dist/canvasdesk
           if-no-files-found: error
           retention-days: 14
+
+  # FR-LLM-PROXY / PRD-0010 F-5.10: stateless cloud-proxy для wasm-пути
+  # OAuth/BYOK — юнит-тесты воркера (node --test, без wrangler и сети).
+  llm-proxy:
+    name: llm-proxy (worker tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: test
+        working-directory: cloud/llm-proxy
+        run: npm test
