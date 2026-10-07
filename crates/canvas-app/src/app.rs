@@ -497,6 +497,16 @@ enum AppDialog {
         /// id рёбер пачки — подсветка отменяемого на канвасе.
         edge_ids: Vec<String>,
     },
+    /// What-if «Сброс»: подтверждение ПОЛНОГО сброса режима — удалить
+    /// все сценарии с подменами и снять все заморозки (персистентно,
+    /// один undo-шаг). База канваса не меняется (инвариант 2 FR-017):
+    /// сбрасываются только гипотезы, не текст нод.
+    WhatIfReset {
+        /// Число сценариев (для тела диалога).
+        scenarios: usize,
+        /// Суммарное число подмен по всем сценариям.
+        overrides: usize,
+    },
 }
 
 impl AppDialog {
@@ -513,6 +523,10 @@ impl AppDialog {
             ],
             AppDialog::AutolinkRollback { .. } => [
                 (i18n::tr(language, keys::AUTOLINK_UNDO_YES), true),
+                (i18n::tr(language, keys::DIALOG_CANCEL), false),
+            ],
+            AppDialog::WhatIfReset { .. } => [
+                (i18n::tr(language, keys::DIALOG_WHATIF_RESET_YES), true),
                 (i18n::tr(language, keys::DIALOG_CANCEL), false),
             ],
             _ => [
@@ -564,6 +578,10 @@ impl AppDialog {
                 keys::AUTOLINK_UNDO_TITLE,
                 &[("{n}", count.to_string().as_str())],
             ),
+            // What-if: полный сброс — «Сбросить все сценарии?»
+            AppDialog::WhatIfReset { .. } => {
+                i18n::tr(language, keys::DIALOG_WHATIF_RESET_TITLE).to_owned()
+            }
         }
     }
 
@@ -600,6 +618,18 @@ impl AppDialog {
             AppDialog::AutolinkRollback { .. } => {
                 i18n::tr(language, keys::AUTOLINK_UNDO_BODY).to_owned()
             }
+            // What-if: полный сброс — статистика в теле (n сценариев / m подмен)
+            AppDialog::WhatIfReset {
+                scenarios,
+                overrides,
+            } => i18n::trf(
+                language,
+                keys::DIALOG_WHATIF_RESET_BODY,
+                &[
+                    ("{scenarios}", scenarios.to_string().as_str()),
+                    ("{overrides}", overrides.to_string().as_str()),
+                ],
+            ),
         }
     }
 }
@@ -3643,6 +3673,14 @@ impl App {
         {
             self.scene.active_scenario = None;
         }
+        // FR-064 P2 (undo полного сброса what-if): заморозки — runtime-снимки;
+        // снапшот вернул персистентные имена `canvasdesk.whatif.frozen` —
+        // снимки пересчитываются по ним (тот же путь, что загрузка сцены
+        // [`SceneState::restore_frozen`]). Отсутствующий сценарий
+        // пропускается — имя не восстанавливается (контракт restore_frozen).
+        let frozen_names = canvas_core::whatif::frozen_from_canvas(&self.scene.canvas);
+        self.scene.frozen.clear();
+        self.scene.restore_frozen(&frozen_names);
         // FR-013: снапшот мог изменить формулы и топологию — живой
         // пересчёт графа потока (FR-014)
         self.scene.recompute_flow();

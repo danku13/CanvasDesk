@@ -696,6 +696,15 @@ pub mod keys {
     /// Строка списка подмен «нода → стр. i: было → стало» (была хардкодом
     /// RU в отрисовке — CR-015/i18n).
     pub const WHATIF_OVERRIDE_ROW: &str = "whatif.override_row";
+    /// Диалог полного сброса what-if (кнопка «Сброс» бара): заголовок.
+    pub const DIALOG_WHATIF_RESET_TITLE: &str = "dialog.whatif_reset.title";
+    /// Тело диалога сброса: статистика (сценарии/подмены) + гарантия,
+    /// что текст нод не меняется + подсказка undo.
+    pub const DIALOG_WHATIF_RESET_BODY: &str = "dialog.whatif_reset.body";
+    /// Кнопка-подтверждение диалога сброса («Сбросить»).
+    pub const DIALOG_WHATIF_RESET_YES: &str = "dialog.whatif_reset.yes";
+    /// Тост после полного сброса what-if.
+    pub const TOAST_WHATIF_RESET_DONE: &str = "toast.whatif_reset.done";
 
     // --- Палитра выделения (FR-009/010, FR-014, FR-019/020, FR-025, CR-008) ---
     pub const PAL_GROUP_COLOR: &str = "palette.group.color";
@@ -1593,6 +1602,19 @@ const RU: &[(&str, &str)] = &[
     (
         keys::WHATIF_OVERRIDE_ROW,
         "{node} → стр. {line}: {was} → {became}",
+    ),
+    (
+        keys::DIALOG_WHATIF_RESET_TITLE,
+        "Сбросить все what-if сценарии?",
+    ),
+    (
+        keys::DIALOG_WHATIF_RESET_BODY,
+        "Сценариев: {scenarios}, подмен: {overrides}. Заморозки сравнения будут сняты. Текст нод не изменится; действие можно отменить (Ctrl+Z).",
+    ),
+    (keys::DIALOG_WHATIF_RESET_YES, "Сбросить"),
+    (
+        keys::TOAST_WHATIF_RESET_DONE,
+        "What-if сброшен: сценариев удалено — {count}",
     ),
     // --- Палитра выделения ---
     (keys::PAL_GROUP_COLOR, "Цвет"),
@@ -2780,6 +2802,19 @@ const EN: &[(&str, &str)] = &[
     (
         keys::WHATIF_OVERRIDE_ROW,
         "{node} → line {line}: {was} → {became}",
+    ),
+    (
+        keys::DIALOG_WHATIF_RESET_TITLE,
+        "Reset all what-if scenarios?",
+    ),
+    (
+        keys::DIALOG_WHATIF_RESET_BODY,
+        "Scenarios: {scenarios}, overrides: {overrides}. Comparison snapshots will be released. Node text stays untouched; the action can be undone (Ctrl+Z).",
+    ),
+    (keys::DIALOG_WHATIF_RESET_YES, "Reset"),
+    (
+        keys::TOAST_WHATIF_RESET_DONE,
+        "What-if reset: {count} scenario(s) removed",
     ),
     // --- Selection palette ---
     (keys::PAL_GROUP_COLOR, "Color"),
