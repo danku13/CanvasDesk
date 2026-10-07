@@ -690,6 +690,12 @@ pub mod keys {
     pub const WHATIF_FROZEN_TOAST: &str = "whatif.frozen_toast";
     pub const WHATIF_UNFROZEN_TOAST: &str = "whatif.unfrozen_toast";
     pub const WHATIF_ROW_TOTAL: &str = "whatif.row_total";
+    /// Индикатор усечённого хвоста списка подмен/таблицы сравнения —
+    /// «… ещё N» (был хардкод RU в отрисовке).
+    pub const WHATIF_MORE: &str = "whatif.more";
+    /// Строка списка подмен «нода → стр. i: было → стало» (была хардкодом
+    /// RU в отрисовке — CR-015/i18n).
+    pub const WHATIF_OVERRIDE_ROW: &str = "whatif.override_row";
 
     // --- Палитра выделения (FR-009/010, FR-014, FR-019/020, FR-025, CR-008) ---
     pub const PAL_GROUP_COLOR: &str = "palette.group.color";
@@ -1583,6 +1589,11 @@ const RU: &[(&str, &str)] = &[
     (keys::WHATIF_FROZEN_TOAST, "Снимок заморожен: {name} — правки канваса его не сдвинут"),
     (keys::WHATIF_UNFROZEN_TOAST, "Заморозка снята: {name}"),
     (keys::WHATIF_ROW_TOTAL, "итог"),
+    (keys::WHATIF_MORE, "… ещё {count}"),
+    (
+        keys::WHATIF_OVERRIDE_ROW,
+        "{node} → стр. {line}: {was} → {became}",
+    ),
     // --- Палитра выделения ---
     (keys::PAL_GROUP_COLOR, "Цвет"),
     (keys::PAL_GROUP_LAYOUT, "Раскладка"),
@@ -2765,6 +2776,11 @@ const EN: &[(&str, &str)] = &[
     (keys::WHATIF_FROZEN_TOAST, "Snapshot frozen: {name} — canvas edits will not move it"),
     (keys::WHATIF_UNFROZEN_TOAST, "Snapshot released: {name}"),
     (keys::WHATIF_ROW_TOTAL, "total"),
+    (keys::WHATIF_MORE, "… {count} more"),
+    (
+        keys::WHATIF_OVERRIDE_ROW,
+        "{node} → line {line}: {was} → {became}",
+    ),
     // --- Selection palette ---
     (keys::PAL_GROUP_COLOR, "Color"),
     (keys::PAL_GROUP_LAYOUT, "Layout"),

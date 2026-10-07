@@ -2778,9 +2778,10 @@ impl App {
     }
 
     /// Геометрия нижнего бара режима (имена сценариев + счётчик подмен).
-    /// FR-053 (U3): ширины — измеренные TextMeasurer'ом (шейпинг теми же
-    /// метриками, что рендер); счётчик — i18n-строка приложения (ширина
-    /// считается по ТОЙ ЖЕ строке, что рисуется).
+    /// FR-053/CR-015 (все подписи): ширины — измеренные TextMeasurer'ом
+    /// (шейпинг теми же метриками, что рендер) по ТЕМ ЖЕ строкам, что
+    /// рисуются ([`whatif_ui::BarLabels`] — включая «База»/«Сброс»/
+    /// «Сравнить», раньше хардкод RU); счётчик — i18n-строка приложения.
     fn whatif_bar_layout(&self) -> whatif_ui::BarLayout {
         let viewport = self.viewport_logical();
         // FR-064 P2: замороженные сценарии — маркер «❄» в подписи чипа
@@ -2798,7 +2799,8 @@ impl App {
             })
             .collect();
         let count = self.scene.whatif_override_count();
-        let counter_label = self.trf(keys::WHATIF_OVERRIDES, &[("{count}", &count.to_string())]);
+        let counter_label =
+            self.trf(keys::WHATIF_OVERRIDES, &[("{count}", &count.to_string())]);
         // FR-064 P2: лейбл кнопки заморозки — по состоянию активного сценария
         // (измеряется та же строка, что рисуется — фикс FR-053).
         let freeze_label = match self.scene.active_scenario {
@@ -2813,16 +2815,17 @@ impl App {
             }
             _ => self.tr(keys::WHATIF_FREEZE),
         };
+        let labels = whatif_ui::BarLabels {
+            base: self.tr(keys::WHATIF_BASE),
+            apply: self.tr(keys::WHATIF_APPLY),
+            reset: self.tr(keys::WHATIF_RESET),
+            freeze: freeze_label,
+            compare: self.tr(keys::WHATIF_COMPARE),
+            counter: &counter_label,
+        };
         let mut measurer = canvas_ui::measure::TextMeasurer::new();
         let mut fs = canvas_render::text::measure_font_system();
-        whatif_ui::bar_layout(
-            &names,
-            &counter_label,
-            freeze_label,
-            viewport,
-            &mut measurer,
-            &mut fs,
-        )
+        whatif_ui::bar_layout(&names, &labels, viewport, &mut measurer, &mut fs)
     }
 
     /// Подпись ноды для панелей what-if: первая строка текста (обрезка),
