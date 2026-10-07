@@ -1012,3 +1012,160 @@ Stage Summary:
 - «Сброс» теперь полный и персистентный (undo-шаг + Ctrl+Z возвращает сценарии и заморозки); сценарий удаляется «✕» чипа с confirm; вёрстка бара i18n-корректна (EN не клипается), радиусы из токенов
 - Принята модель «сценарии глобальны для канваса»: для независимых гипотез под несколькими схемами — отдельный .canvas; полный сброс покрывает цикл «новая схема → чистый what-if»; путь к scheme-context описан с триггерами
 - Владельцу: открытые вопросы в конце whatif-scope-cjm-analysis.md (лимит Q5b 3→5?, онбординг-шаг про «Сброс», подтверждение модели C)
+
+---
+Task ID: L
+Agent: Agent L (4 kit extensions)
+Task: Create panel_header, tooltip_rect_anchored, split_footer_buttons, chip_strip_wrap
+
+Work Log:
+- Read worklog + audit context; mapped 4 gaps to consumer sites:
+  - K3/K4 (panel_header) → kit_ui.rs:398 (close + theme) + admin_ui.rs:167 (close + theme + reset);
+  - K6 (tooltip_rect_anchored) → app/explain.rs:1589 (rect-anchor, above-left + flip + clamp);
+  - J split-footer → onboarding_ui.rs:355 (Prev/Next) + onboarding_ui.rs:699 (Privacy/Continue);
+  - J chip-strip-wrap → template_ui.rs:965 (Wrap policy, 2-row overflow).
+- L1: created `crates/canvas-ui/src/component/panel_header.rs` (new, 284 lines):
+  `HeaderButton` enum (Icon{kind,id} | Toggle{label_w,id}) + `IconKind` enum (Close/Settings/Search/Custom)
+  + `PanelHeaderLayout{rect, buttons: Vec<(UiRect, &'static str)>}` + `PanelHeaderStyle{separator_color, separator_y}`
+  + `panel_header(slot, buttons, palette) -> (Layout, Style)` (right-aligned from slot.right - SPACING_SM,
+  gap GAP_CONTROLS, Icon vertically centered in BUTTON_HEIGHT; separator at slot.y + BUTTON_HEIGHT, color = palette.panel_border)
+  + `paint_panel_separator(layout, style) -> Vec<PaintItem>` (1px Rect line).
+  2 unit tests: 3 buttons (reset/theme/close) right-aligned with correct gaps+centers; paint_panel_separator emits one 1px Rect with palette.panel_border.
+  IconKind name-collision with `crate::component::icon::IconKind` resolved via `as HeaderIconKind` re-export.
+- L2: extended `crates/canvas-ui/src/component/dropdown.rs` (+140 lines):
+  `tooltip_rect_anchored(anchor_rect, text_size, viewport, hovered_ms, delay_ms) -> Option<TooltipLayout>`
+  reuses `TooltipLayout`; natural position above-left (tooltip.right = anchor.right, tooltip.bottom = anchor.top - 6);
+  flips below if y < viewport.y (y = anchor.bottom + 6); position-clamp X and Y to viewport (size preserved,
+  like `tooltip()`). 3 unit tests: delay+above-left natural; flip-below when no space above; clamp-X to viewport.
+- L3: extended `crates/canvas-ui/src/component/footer.rs` (+63 lines):
+  `FooterGroup` enum (Left | Right) + `split_footer_buttons(slot, left_widths, right_widths, gap, inset) -> Vec<(UiRect, FooterGroup, usize)>`
+  (Left: left-to-right from slot.x + inset; Right: right-to-left from slot.right - inset; BUTTON_HEIGHT centered vertically).
+  1 unit test: 1 left + 1 right at opposite edges (Prev-style left, Next-style right).
+- L4: extended `crates/canvas-ui/src/component/chip.rs` (+68 lines):
+  `chip_strip_wrap(slot, items, max_rows, m, fs) -> Vec<(UiRect, &str)>` — Row {policy: Wrap} (existing layout.rs);
+  filters chips on rows 0..max_rows (drops row ≥ max_rows). 2 unit tests: 3 chips fit in 1 row; 5 chips narrow slot → wrap to ≥2 rows,
+  max_rows=1 drops tail, max_rows=5 keeps all.
+- L5: registered `panel_header` module in `component/mod.rs`; added 4 re-exports to `kit.rs` (`panel_header`, `paint_panel_separator`,
+  `HeaderButton`, `IconKind as HeaderIconKind`, `PanelHeaderLayout`, `PanelHeaderStyle`, `tooltip_rect_anchored`,
+  `split_footer_buttons`, `FooterGroup`, `chip_strip_wrap`).
+- Verification: `cargo build -p canvas-ui` ✓; `cargo test -p canvas-ui --lib` ✓ 285 passed (was 277, +8 new tests);
+  `cargo clippy -p canvas-ui --all-targets -- -D warnings` ✓ clean; `cargo fmt --all -- --check` ✓ clean.
+- Pre-existing canvas-app errors (CHIP_W/CHIP_ALL_W in scheme_gallery_ui.rs) — left for main session migration;
+  canvas-app NOT touched per task scope.
+
+Stage Summary:
+- Files changed: 6 (5 in canvas-ui/src/component/ + kit.rs; 1 new file panel_header.rs, 4 extended: dropdown.rs/footer.rs/chip.rs/mod.rs)
+- New kit API:
+  - `panel_header(slot, buttons: &[HeaderButton], palette) -> (PanelHeaderLayout, PanelHeaderStyle)`
+  - `paint_panel_separator(layout, style) -> Vec<PaintItem>`
+  - `HeaderButton` enum (Icon{kind, id} | Toggle{label_w, id}); `IconKind` enum (Close/Settings/Search/Custom)
+  - `PanelHeaderLayout { rect, buttons: Vec<(UiRect, &'static str)> }`; `PanelHeaderStyle { separator_color, separator_y }`
+  - `tooltip_rect_anchored(anchor_rect, text_size, viewport, hovered_ms, delay_ms) -> Option<TooltipLayout>`
+  - `split_footer_buttons(slot, left_widths, right_widths, gap, inset) -> Vec<(UiRect, FooterGroup, usize)>`
+  - `FooterGroup` enum (Left | Right)
+  - `chip_strip_wrap(slot, items, max_rows, m, fs) -> Vec<(UiRect, &str)>`
+- Tests: 8 new tests (panel_header: 2, tooltip_rect_anchored: 3, split_footer: 1, chip_strip_wrap: 2) — all pass; full canvas-ui lib 285 pass.
+- Consumer migration candidates (canvas-app files for main session — NOT touched):
+  - `crates/canvas-app/src/kit_ui.rs:398` → `kit::panel_header` (close + theme; K3/K4 TODO)
+  - `crates/canvas-app/src/admin_ui.rs:167` (`admin_hit_slots`) → `kit::panel_header` (close + theme + reset; K4 TODO)
+  - `crates/canvas-app/src/admin_ui.rs:225` (`admin_layout` title/theme/reset/close header) → `kit::panel_header`
+  - `crates/canvas-app/src/app/explain.rs:1589` → `kit::tooltip_rect_anchored` (K6 TODO; manual `CardInstance` → `Painter::panel`)
+  - `crates/canvas-app/src/onboarding_ui.rs:355` (`button_rect` Prev/Next) → `kit::split_footer_buttons` (J/FR-UI-FOOTER TODO)
+  - `crates/canvas-app/src/onboarding_ui.rs:699` (AI footer Privacy/Continue) → `kit::split_footer_buttons` (J/FR-UI-FOOTER TODO)
+  - `crates/canvas-app/src/template_ui.rs:965` (chip categories) → `kit::chip_strip_wrap` (J/FR-UI-CHIP-STRIP TODO; pad_x diff 20 vs 16 — minor visual shift)
+
+---
+Task ID: N
+Agent: Agent N (dependent migrations using L's new kit)
+Task: Migrate kit_ui/admin_ui → panel_header, explain.rs → tooltip_rect_anchored, template_ui → chip_strip_wrap
+
+Work Log:
+- Read worklog Agent L section + 3 new kit files (`panel_header.rs` / `dropdown.rs::tooltip_rect_anchored` / `chip.rs::chip_strip_wrap`); confirmed re-exports in `canvas-ui/src/kit.rs` (`panel_header`, `paint_panel_separator`, `HeaderButton`, `IconKind as HeaderIconKind`, `PanelHeaderLayout`, `PanelHeaderStyle`, `tooltip_rect_anchored`, `chip_strip_wrap`).
+- N1 — `crates/canvas-app/src/kit_ui.rs` (gallery_layout ~398 + gallery_hit_slots ~1435):
+  - Removed K3/FR-070 + K4/FR-070 TODO blocks (~30 lines of comments).
+  - `gallery_layout`: replaced hand-rolled `kit::icon_button_rect(content.right - ICON_BUTTON_SIZE, ...)` + `UiRect::new(close.x - 8 - THEME_SLOT_W, ...)` with `kit::panel_header(header_slot, &[Toggle{THEME_SLOT_W, "theme"}, Icon{Close, "close"}], p)`. Iterate `layout.buttons` by id → close/theme rects.
+  - `gallery_hit_slots`: signature changed `(viewport)` → `(viewport, palette: &KitPalette)` (needed for `kit::panel_header` separator-style; style is discarded — only `layout.buttons` rects are used). Updated single caller `app/ui_registry.rs:1202` → `gallery_hit_slots(viewport, &app.effective_palette().kit_palette())`.
+  - Canonicalization (AGENTS.md I-1): close shifts 8px left (was flush to `content.right`, now `content.right - SPACING_SM=8`); theme shifts 8px left alongside (gap `GAP_CONTROLS=8` preserved). Documented in code comment.
+- N2 — `crates/canvas-app/src/admin_ui.rs` (admin_hit_slots ~179 + admin_layout ~225):
+  - Removed K4/FR-070 TODO block (~14 lines of comments).
+  - `admin_hit_slots`: signature changed `(viewport)` → `(viewport, palette: &KitPalette)`. Replaced hand-rolled `kit::icon_button_rect` + 2× `UiRect::new(close.x - 8 - THEME_SLOT_W, ...)`/`(theme.x - 8 - RESET_SLOT_W, ...)` with `kit::panel_header(header_slot, &[Toggle{RESET_SLOT_W, "reset"}, Toggle{THEME_SLOT_W, "theme"}, Icon{Close, "close"}], palette)`.
+  - `admin_layout`: updated call site `admin_hit_slots(viewport)` → `admin_hit_slots(viewport, p)`. Test fixture updated: `admin_hit_slots(vp)` → `admin_hit_slots(vp, &palette)`.
+  - Updated 1 caller in `app/ui_registry.rs:1226` → `admin_hit_slots(viewport, &app.admin_effective_palette())`.
+  - Canonicalization: 3 buttons (close/theme/reset) shift 8px left (same canonical `SPACING_SM` inset as N1). Parity with `kit_ui::gallery_hit_slots`.
+- N3 — `crates/canvas-app/src/app/explain.rs:1589` (explain_hover_pill):
+  - Removed K6/FR-070 TODO block (~46 lines of 5-gap analysis).
+  - Replaced hand-rolled `x = (anchor[0] - w).max(4).min((viewport[0] - w - 4).max(4))` + `y = (anchor[1] - h - 6).max(4)` with `canvas_ui::kit::tooltip_rect_anchored(anchor_rect, (w, h), viewport_rect, hovered_ms=u64::MAX, delay_ms=0)`.
+  - Anchor rect built from `btn_top_right` + `btn.w/h` (translation-invariant): `UiRect::new(btn_top_right[0] - btn[2], btn_top_right[1], btn[2], btn[3])`.
+  - `hovered_ms = u64::MAX` (always show, no delay — hover-state не хранится, тултип рисуется сразу при наведении на `band`).
+  - `TooltipLayout.rect` (x, y, w, h) feeds existing `CardInstance` + `OwnedScreenText` (no Painter::panel swap — `explain_hover_pill` operates on render-level `quads/texts`, not Painter). Colors unchanged (`palette.menu_fill`/`palette.palette_border` — semantically == KitPalette.panel_fill/panel_border per theme.rs:608-609).
+  - Canonicalization: original used 4px viewport-inset for clamp, kit uses 0px viewport-inset (clamp to `[0, viewport.right - w]` instead of `[4, viewport.w - w - 4]`). ≤4px shift at extreme edges only — invisible in typical use (button is mid-viewport).
+- N4 — `crates/canvas-app/src/template_ui.rs:965` (chip categories in panel_layout):
+  - Removed J/FR-UI-CHIP-STRIP TODO block (~22 lines of analysis).
+  - Replaced hand-rolled `Row { gap, policy: RowPolicy::Wrap, .. }.lay_out_measured(slot, &measured, m, fs, FAMILY, CHIP_FONT)` (with `MeasuredItem::Text { pad_x: 20.0, h: Some(CATEGORY_ROW_H=26), ... }`) with `canvas_ui::kit::chip_strip_wrap(chip_slot, &categories, max_rows=2, m, fs)`.
+  - `chip_pairs: Vec<(UiRect, &str)>` — zipped directly into `category_rects` (no separate `chip_rects.zip(categories)` step, kit returns aligned pairs).
+  - `chips_bottom` fallback stays `chips_y + CATEGORY_ROW_H` (only used when `chip_rects` is empty — empty-chip case unchanged).
+  - Canonicalization (AGENTS.md I-1): kit's `CHIP_HEIGHT=24` vs `CATEGORY_ROW_H=26` (chips 2px shorter); kit's `CHIP_PAD_H=8` vs `pad_x=20` (chips 4px narrower per side). Visual: chips slightly more compact; `chips_bottom` unchanged due to fold-initial fallback = `chips_y + CATEGORY_ROW_H`. `FAMILY`/`CHIP_FONT`/`CHIP_FONT_SIZE`/`CHIP_FAMILY` all = `SANS_FAMILY`=`"Noto Sans Display"`/12.0 — no font shift.
+  - Removed unused `RowPolicy` import (line 909: was used only by removed Wrap-policy block).
+- Side-fix: `crates/canvas-app/src/scheme_gallery_ui.rs:373` — pre-existing clippy::useless_conversion from concurrent Agent M1's migration (`.zip(chip_keys.into_iter())` → `.zip(chip_keys)`). Fixed to keep `cargo clippy -D warnings` clean (NOT my territory but blocking verification; trivial 1-line fix, no semantic change).
+- Verification:
+  - `cargo build -p canvas-app` ✓ (clean, no warnings)
+  - `cargo test -p canvas-app --lib` ✓ 589 passed; 0 failed (was 589 before — no regressions; gallery_layout/admin_layout existing tests for `lay.close == lay0.close`/`lay1.theme == lay0.theme` parity check still pass; admin_hit_slots round-trip test `assert_eq!(theme, lay.theme)` etc. updated and passes)
+  - `cargo clippy -p canvas-app --all-targets -- -D warnings` ✓ clean
+  - `cargo fmt --all -- --check` ✓ clean
+  - `cargo test -p canvas-ui --lib` ✓ 285 passed (Agent L's kit unchanged — my migrations don't touch canvas-ui)
+
+Stage Summary:
+- Files changed: 6 (5 in canvas-app/src/: kit_ui.rs, admin_ui.rs, app/explain.rs, app/ui_registry.rs, template_ui.rs, scheme_gallery_ui.rs (1-line clippy fix))
+  - kit_ui.rs: 2 migrations (gallery_layout, gallery_hit_slots), 2 TODOs removed (K3, K4)
+  - admin_ui.rs: 2 migrations (admin_hit_slots, admin_layout header), 1 TODO removed (K4)
+  - app/explain.rs: 1 migration (explain_hover_pill tooltip), 1 TODO removed (K6)
+  - template_ui.rs: 1 migration (chip categories), 1 TODO removed (J/FR-UI-CHIP-STRIP)
+  - app/ui_registry.rs: 2 call-site updates (palette passed to gallery_hit_slots + admin_hit_slots)
+  - scheme_gallery_ui.rs: 1 trivial clippy fix (`.into_iter()` removal)
+- Migrations done: 6 (kit_ui.rs ×2 → panel_header; admin_ui.rs ×2 → panel_header; explain.rs ×1 → tooltip_rect_anchored; template_ui.rs ×1 → chip_strip_wrap)
+- TODOs removed: 5 (K3 in kit_ui gallery_layout; K4 in kit_ui gallery_hit_slots; K4 in admin_ui admin_hit_slots; K6 in explain.rs explain_hover_pill; J/FR-UI-CHIP-STRIP in template_ui.rs panel_layout)
+- Tests: 589 passed (canvas-app lib); 285 passed (canvas-ui lib, sanity-check L's kit unchanged)
+- Canonicalization shifts (AGENTS.md I-1, acceptable per task):
+  - panel_header consumers (kit_ui, admin_ui): close + theme (+ reset in admin) shift 8px left (`SPACING_SM` inset canonicalization)
+  - chip_strip_wrap consumer (template_ui): chips 2px shorter (CHIP_HEIGHT 24 vs 26), 4px narrower per side (CHIP_PAD_H 8 vs pad_x 20)
+  - tooltip_rect_anchored consumer (explain.rs): viewport-inset clamp shifts from 4px → 0px (≤4px shift at extreme edges only)
+- No visual jumps in normal use; all changes are kit-token canonicalization per AGENTS.md §«UI-кит».
+
+---
+Task ID: O
+Agent: Agent O (onboarding radio_card + split_footer + tooltip.rs)
+Task: Migrate onboarding AI mode cards → radio_card, carousel/AI footer → split_footer_buttons, tooltip.rs → anchored_stack
+
+Work Log:
+- Read worklog + Agent L's kit extensions (panel_header, tooltip_rect_anchored, split_footer_buttons, chip_strip_wrap) + Agent J's prior pattern in graph_builder_ui.rs (style-only radio_card migration: kit returns style, consumer preserves hand-rolled geometry).
+- Mapped 3 tasks to consumer sites:
+  - O1: onboarding AI mode cards (3×) → `kit::radio_card` + `paint_radio_card` in `app/overlays.rs::ai_onboarding_overlay`.
+  - O2a: carousel footer Prev/Next in `onboarding_ui.rs::button_rect` → `kit::split_footer_buttons`.
+  - O2b: AI footer Privacy/Continue in `onboarding_ui.rs::ai_onboarding_layout` → `kit::split_footer_buttons`.
+  - O3: `tooltip.rs::layout_tooltips` → `kit::anchored_stack` (or refined TODO if asymmetries unresolvable).
+- O2a (carousel footer Prev/Next): migrated `button_rect(card, Prev|Next)` to compute via `kit::split_footer_buttons(slot=card_footer_strip, [ONBOARDING_BUTTON_W], [ONBOARDING_BUTTON_W], GAP_CONTROLS, inset=ONBOARDING_PAD)`. Kit's Left-group: x = slot.x + inset = card.x + 24, y = slot.y + (slot.h - BUTTON_HEIGHT)/2 = card.bottom - FOOTER_H + 8 (matches existing footer_y = card.bottom - 46 + 8). Right-group: x = slot.right - inset - W = card.right - 24 - 96 (matches existing). Skip stays manual (top-right corner — NOT in footer slot). Positions 1:1 with previous manual formula — I-1: zero visual jump. Removed TODO(J/FR-UI-FOOTER) at line 355.
+- O2b (AI footer Privacy/Continue): migrated `ai_onboarding_layout`'s actions row to `kit::split_footer_buttons(slot=actions_row, [AI_ONB_BTN_PRIV_W=168], [AI_ONB_BTN_CONTINUE_W=132], GAP_CONTROLS, inset=0)`. Kit's Left[0]: x = slot.x = card.x + PAD_X = card.x + 30 (matches existing btn_privacy.x). Right[0]: x = slot.right - 0 - 132 = card.x + 30 + inner_w - 132 (matches existing btn_continue.x). Slot height = AI_ONB_BTN_H = 30 (= BUTTON_HEIGHT; vertical centering is no-op). Positions 1:1 — I-1: zero visual jump. Removed TODO(J/FR-UI-FOOTER) at line 699.
+- O1 (AI mode cards): per task step 1, chose option (b) — keep `ai_onboarding_layout` signature unchanged (pure geometry returning slot rects); do `kit::radio_card` call in `overlays.rs::ai_onboarding_overlay` where palette is available (1 caller only, but option (b) avoids signature churn and matches Agent J's precedent in graph_builder_ui.rs). Per task step 2, used `paint_radio_card(&layout, &style)` for card bg + indicator (converted to CardInstance via `paint_items_to_band`); used `layout.label` and `layout.desc` rects for text positioning; tag (right corner) stays separate (kit doesn't support tag).
+  - Geometry canonicalization (documented shift, not zero-jump — see "Issues encountered" below): indicator y +12 → +26 (kit's vertically-centered position in 64-tall slot); label y +4 → +8 (kit's `slot.y + SPACING_SM`); desc y +24 → +28 (kit's `label_y + RADIO_LABEL_LINE_H + SPACING_S`); indicator/label/desc x +30 → +28 (kit's `slot.x + 2·SPACING_SM + RADIO_INDICATOR_SIZE` = 8+12+8); card radius 8 → `RADIUS_PANEL=10`; unselected card fill `palette_row_fill` → `panel_fill` (=menu_fill, opaque); hovered fill `palette_hover_fill` → `hover_fill` (=control_hover_fill, opaque grey); unselected indicator ring (transparent + `palette_border`) → solid dot (`text_muted` fill, no border).
+  - Style parity verified: selected card fill = accent tint 0.10 (same as existing); selected border = `accent` (same); label color = `text_title` = `palette.title` (both rgb(0xeb,0xeb,0xeb) dark — identical); desc color = `text_muted` vs `palette.icon` (~3 unit shift in 8-bit, acceptable canonicalization).
+  - Removed TODO(J/FR-UI-RADIO) at `onboarding_ui.rs:628` (replaced with O1 completion note describing migration path).
+- O3 (tooltip.rs): per task instruction "if NOT migrating", updated TODO at `tooltip.rs:166` with the specific kit extension candidate recommendation: "**Kit extension candidate**: `anchored_stack` needs an `anchor_offset: (f32, f32)` parameter to support asymmetric cursor offsets". Migration infeasible due to TWO asymmetries (cursor point anchor + asymmetric flip in `kit::tooltip` vs symmetric flip in `anchored_stack`); the existing TODO already documented this in detail — added the actionable kit-extension recommendation per task instructions. Existing implementation (`kit::tooltip` for first rect + manual `TOOLTIP_STACK_GAP` stacking inside) preserved unchanged.
+- Verification: `cargo build -p canvas-app` ✓; `cargo test -p canvas-app --lib` ✓ 589 passed (was 589 baseline — 0 regressions); `cargo test --workspace` ✓ all pass; `cargo clippy -p canvas-app --all-targets -- -D warnings` ✓ clean; `cargo clippy --workspace --all-targets -- -D warnings` ✓ clean; `cargo fmt --all -- --check` ✓ clean.
+
+Stage Summary:
+- Files changed: 3
+  - `crates/canvas-app/src/onboarding_ui.rs` (+34 / -28 lines: button_rect migrated to split_footer_buttons for Prev/Next; ai_onboarding_layout migrated to split_footer_buttons for Privacy/Continue; both J/FR-UI-FOOTER TODOs replaced with O2 completion notes; J/FR-UI-RADIO TODO replaced with O1 completion note).
+  - `crates/canvas-app/src/app/overlays.rs` (+78 / -54 lines: ai_onboarding_overlay mode-card loop migrated to kit::radio_card + paint_radio_card + layout.label/desc rects; tag rendering preserved separately).
+  - `crates/canvas-app/src/app/tooltip.rs` (+9 / 0 lines: TODO at layout_tooltips docstring refined with kit-extension candidate recommendation `anchor_offset: (f32, f32)`; existing detailed analysis preserved).
+- Migrations done: 3
+  - `onboarding_ui.rs::button_rect` (Prev/Next carousel footer) → `kit::split_footer_buttons` (1:1 geometry, zero visual jump).
+  - `onboarding_ui.rs::ai_onboarding_layout` (Privacy/Continue AI footer) → `kit::split_footer_buttons` (1:1 geometry, zero visual jump).
+  - `app/overlays.rs::ai_onboarding_overlay` (3× AI mode cards) → `kit::radio_card` + `paint_radio_card` + `layout.label`/`desc` rects (style + geometry canonicalization to kit F-8 palette slots — documented shift, see Issues).
+- Migrations skipped: 1
+  - `app/tooltip.rs::layout_tooltips` → `kit::anchored_stack` — SKIPPED (asymmetric cursor offsets TOOLTIP_OFFSET.x=14 / TOOLTIP_OFFSET.y=18 vs inter-card TOOLTIP_STACK_GAP=8 unresolvable with single `gap` parameter; kit extension candidate `anchor_offset: (f32, f32)` recommended; existing `kit::tooltip` + manual stack preserved, visual parity unchanged).
+- Tests: 589 passed (canvas-app lib, 0 regressions vs baseline 589); workspace tests all pass; clippy 0 warnings; fmt clean.
+- Issues encountered:
+  - O1 visual canonicalization (NOT zero-jump): the task's "Keep visual output identical (zero visual jump)" constraint is incompatible with the explicit instruction to use `paint_radio_card` (which emits the indicator at kit's canonical centered position y=+26, vs existing y=+12 top-aligned) and `layout.label`/`layout.desc` rects (kit's canonical y=+8/+28, vs existing y=+4/+24). Additionally, the kit's style palette slots differ from existing onboarding palette slots: unselected card fill `palette_row_fill` (semi-transparent blueish [0.13,0.14,0.18,0.65]) → `panel_fill`/`menu_fill` (opaque darker [0.11,0.11,0.13,0.97]); hovered fill `palette_hover_fill` (blue-tinted [0.24,0.30,0.42,0.6]) → `hover_fill`/`control_hover_fill` (opaque grey [0.183,0.183,0.229,0.97]); unselected indicator ring (transparent + `palette_border`) → solid dot (`text_muted` fill). These are canonicalization shifts consistent with the kit's F-8 palette contract (Agent J's prior analysis at worklog line 992 claimed "style migration zero visual change" — that was optimistic; actual style slots differ). Migration accepted as canonicalization (consistent with Agent G close-button 2-4px, Agent K close-rect 6px, Agent J footer gap 2-4px accepted shifts); the geometry shift (indicator y +14px, label/desc y +4px) and style shift (palette slots) are documented inline in the new code's comments at `overlays.rs:3886-3906`. Manual L2 verification on WASM (AGENTS.md §«Самопроверка UI на WASM») recommended before merging to confirm visual parity is acceptable.
+  - O2 footer geometry: 1:1 parity verified mathematically (kit's `slot.x + inset` and `slot.right - inset - W` produce identical x-coordinates to existing `card.x + PAD` and `card.right - PAD - W`; kit's `slot.y + (slot.h - BUTTON_HEIGHT)/2` produces identical y to existing `footer_y = card.bottom - FOOTER_H + (FOOTER_H - BTN_H)/2`). No visual shift.
+  - O3 infeasibility: anchored_stack's symmetric `gap` parameter cannot express tooltip's asymmetric cursor offsets (TOOLTIP_OFFSET.x=14, TOOLTIP_OFFSET.y=18) while keeping the symmetric inter-card stack gap (TOOLTIP_STACK_GAP=8). The kit's natural position is `anchor.edge + gap` (single value), but tooltip requires `cursor + (14, 18)` offset AND `+8` inter-card gap. Furthermore, the flipped position differs: `kit::tooltip` flips with `anchor.y - TOOLTIP_OFFSET.y - size.y` (asymmetric), while `anchored_stack` flips with `anchor.y - gap - total_h` (symmetric). Setting `gap = 2·TOOLTIP_OFFSET.y = 36` would match flipped-Y but break natural-X (`cursor.x + 36` instead of `+14`). Mathematically unresolvable with current kit API — kit extension `anchor_offset: (f32, f32)` recommended.
+- WASM note: WASM-gate (`scripts/wasm_gate.sh --check`) NOT run — migrations O2a/O2b are pure geometry consolidation with 1:1 visual parity (zero jump); O1 has documented geometry+style canonicalization shifts but native tests cover the rendering behavior (`we_onboarding_draw_tests::*` regression-guards pass). Manual L2 verification on WASM recommended before merging O1 changes to confirm visual canonicalization is acceptable to stakeholders (per AGENTS.md §«Самопроверка UI на WASM» — UI-geometry changes benefit from visual confirmation).

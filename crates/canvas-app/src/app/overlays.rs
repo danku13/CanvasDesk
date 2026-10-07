@@ -1754,15 +1754,16 @@ impl App {
             &self.scheme_gallery,
             &self.visible_scheme_categories(),
         );
+        // FR-053 (U3): измеренные подписи строк (Ellipsis по фактической
+        // ширине строки) — раскладка и отрисовка используют одни строки.
+        let ru = self.settings.language == canvas_core::Language::Ru;
         let lay = scheme_gallery_ui::layout(
             viewport,
             &list,
             &self.scheme_gallery,
+            ru,
             &self.visible_scheme_categories(),
         );
-        // FR-053 (U3): измеренные подписи строк (Ellipsis по фактической
-        // ширине строки) — раскладка и отрисовка используют одни строки.
-        let ru = self.settings.language == canvas_core::Language::Ru;
         let mut measurer = canvas_ui::measure::TextMeasurer::new();
         let mut fs = canvas_render::text::measure_font_system();
         let row_labels = scheme_gallery_ui::row_labels(
@@ -3882,62 +3883,69 @@ impl App {
             let mode_rect = lay.mode_cards[i];
             let selected = state.selected == Some(choice);
             let hovered = point_in_rect(mode_rect, self.cursor);
-            // Радио-карточка: selected — акцентная рамка + полупрозрачная
-            // заливка; hovered — нейтральная подсветка; иначе — chip-заливка.
-            quads.push(CardInstance {
-                pos: [mode_rect[0], mode_rect[1]],
-                size: [mode_rect[2], mode_rect[3]],
-                fill: if selected {
-                    [
-                        kit_palette.accent[0],
-                        kit_palette.accent[1],
-                        kit_palette.accent[2],
-                        0.10,
-                    ]
-                } else if hovered {
-                    palette.palette_hover_fill
-                } else {
-                    palette.palette_row_fill
-                },
-                border: if selected {
-                    kit_palette.accent
-                } else {
-                    palette.palette_border
-                },
-                params: [8.0, selected as u8 as f32, 0.0, 1.0],
-                corners: [0.0; 4],
-            });
-            // Радио-кружок слева (selected — залитый, иначе — контурный).
-            let dot_r = 6.0;
-            let dot_cx = mode_rect[0] + 14.0;
-            let dot_cy = mode_rect[1] + 18.0;
-            quads.push(CardInstance {
-                pos: [dot_cx - dot_r, dot_cy - dot_r],
-                size: [dot_r * 2.0, dot_r * 2.0],
-                fill: if selected {
-                    kit_palette.accent
-                } else {
-                    [0.0; 4]
-                },
-                border: if selected {
-                    kit_palette.accent
-                } else {
-                    palette.palette_border
-                },
-                params: [dot_r, 0.0, 0.0, 1.0],
-                corners: [0.0; 4],
-            });
-            // Заголовок режима (Local only / Cloud / Self-hosted).
+            // O1 (Task O / FR-UI-RADIO): migrate mode-card render to
+            // `kit::radio_card` + `paint_radio_card`. The kit returns
+            // (RadioCardLayout { rect, indicator, label, desc }, RadioStyle)
+            // — paint_radio_card emits 2 PaintItems (card bg + indicator),
+            // converted to CardInstance via `paint_items_to_band`. Label
+            // and desc text rects come from layout.label/desc (kit's
+            // canonical geometry: indicator 12×12 left-center, label at
+            // y=+pad=+8, desc at y=+pad+RADIO_LABEL_LINE_H+SPACING_S=+28).
+            // Tag (right corner) stays separate — kit doesn't support tag.
+            //
+            // Geometry note (zero visual jump parity): kit's canonical
+            // radio_card geometry differs slightly from the previous
+            // hand-rolled layout (indicator y: +12 → +26 centered;
+            // label y: +4 → +8; desc y: +24 → +28; indicator x same +8;
+            // label/desc x: +30 → +28). Style canonicalization:
+            // unselected card fill `palette_row_fill` → `panel_fill`;
+            // hovered fill `palette_hover_fill` → `hover_fill`;
+            // unselected indicator ring (transparent + palette_border)
+            // → solid dot (text_muted); card radius 8 → RADIUS_PANEL=10.
+            // All changes are canonicalization to kit's F-8 palette slots
+            // (consistent with Agent G/K/J canonicalization trend).
+            let kit_state = if hovered {
+                canvas_ui::kit::KitState::Hovered
+            } else {
+                canvas_ui::kit::KitState::Normal
+            };
+            let slot = canvas_ui::geometry::UiRect::new(
+                mode_rect[0],
+                mode_rect[1],
+                mode_rect[2],
+                mode_rect[3],
+            );
+            // Label width preserves the existing visible text area
+            // (right edge = mode_rect.right - 80, matching tag's left
+            // edge minus 8px gap). Desc width: right edge = mode_rect.right - 12.
+            let tag_w = 80.0_f32;
+            let label_w = (mode_rect[2] - 28.0 - tag_w).max(0.0);
+            let desc_w = (mode_rect[2] - 28.0 - 12.0).max(0.0);
+            let (rc_layout, rc_style) = canvas_ui::kit::radio_card(
+                slot,
+                label_w,
+                Some(desc_w),
+                selected,
+                kit_state,
+                &kit_palette,
+            );
+            // Card background + indicator via kit::paint_radio_card → band.
+            paint_items_to_band(
+                canvas_ui::kit::paint_radio_card(&rc_layout, &rc_style),
+                &mut quads,
+                &mut texts,
+            );
+            // Заголовок режима (Local only / Cloud / Self-hosted) —
+            // positioned via kit's layout.label rect.
             texts.push(OwnedScreenText {
                 text: self.tr(choice.title_key()).to_owned(),
-                origin: [mode_rect[0] + 30.0, mode_rect[1] + 4.0],
-                width: mode_rect[2] - 30.0 - 80.0,
+                origin: [rc_layout.label.x, rc_layout.label.y],
+                width: rc_layout.label.w,
                 font_size: onboarding_ui::AI_ONB_MODE_TITLE_FONT,
-                color: palette.title,
+                color: crate::kit_ui::color4(rc_style.label_color),
                 align: TextAlign::Left,
             });
             // Тег режима (правый верхний угол — «offline» / «лучшее качество» / «в контуре»).
-            let tag_w = 80.0;
             quads.push(CardInstance {
                 pos: [
                     mode_rect[0] + mode_rect[2] - tag_w - 8.0,
@@ -3970,15 +3978,18 @@ impl App {
                 color: palette.link,
                 align: TextAlign::Center,
             });
-            // Описание режима (приглушённый, под заголовком).
-            texts.push(OwnedScreenText {
-                text: self.tr(choice.desc_key()).to_owned(),
-                origin: [mode_rect[0] + 30.0, mode_rect[1] + 24.0],
-                width: mode_rect[2] - 30.0 - 12.0,
-                font_size: onboarding_ui::AI_ONB_MODE_DESC_FONT,
-                color: palette.icon,
-                align: TextAlign::Left,
-            });
+            // Описание режима (приглушённый, под заголовком) —
+            // positioned via kit's layout.desc rect.
+            if let Some(desc_rect) = rc_layout.desc {
+                texts.push(OwnedScreenText {
+                    text: self.tr(choice.desc_key()).to_owned(),
+                    origin: [desc_rect.x, desc_rect.y],
+                    width: desc_rect.w,
+                    font_size: onboarding_ui::AI_ONB_MODE_DESC_FONT,
+                    color: crate::kit_ui::color4(rc_style.desc_color),
+                    align: TextAlign::Left,
+                });
+            }
         }
         // Кнопка «Подробнее о privacy» (secondary).
         let btn_priv = lay.btn_privacy;

@@ -268,6 +268,85 @@ pub fn toast_area(viewport: UiRect, avoid: Option<UiRect>) -> UiRect {
     viewport_clamp(UiRect::new(40.0, y, width, 20.0), viewport)
 }
 
+// --- FR-UI-TOOLTIP-RECT: tooltip anchored to a RECT (not a point) -----------
+
+/// FR-UI-TOOLTIP-RECT: tooltip anchored to a RECT (not a point).
+///
+/// Closes TODO K6 (audit §6.1) — `app/explain.rs:1589` needs a rect-anchored
+/// tooltip: natural position «above-left of anchor_rect» (тултип ВЫШЕ-ЛЕВЕЕ
+/// правого-верхнего угла кнопки — `tooltip.right = anchor_rect.right`,
+/// `tooltip.bottom = anchor_rect.top - 6`). [`tooltip`] принимает только
+/// `UiPoint` (точку-якорь) и natural-position = «вниз-вправо от якоря»,
+/// что НЕ выражает поведение explain.rs без хаков (форсированный flip
+/// обеих осей через поддельный viewport — нечитаемый контракт-обход,
+/// см. комментарий K6 в explain.rs:1589).
+///
+/// Поведение:
+/// - **delay**: тултип показан при `hovered_ms >= delay_ms` (как [`tooltip`]);
+/// - **natural**: `x = anchor_rect.right - text_w`,
+///   `y = anchor_rect.y - text_h - 6` (above-left);
+/// - **flip Y**: если `y < viewport.y` (не хватает места над якорем) —
+///   разместить ПОД якорем: `y = anchor_rect.bottom + 6`; `flipped = true`;
+/// - **clamp X**: `x` зажимается в `[viewport.x, viewport.right - text_w]`
+///   (правый край не выходит за вьюпорт — паритет с explain.rs:1587
+///   `.min(viewport.w - w - 4)`; отступ 4 здесь = viewport.x типичного
+///   вьюпорта 0..N, при смещённом вьюпорте — `viewport.x`);
+/// - **clamp Y**: `y` зажимается в `[viewport.y, viewport.bottom - text_h]`.
+///
+/// Возвращает [`TooltipLayout`] (тот же тип, что у [`tooltip`]) —
+/// потребитель использует `rect` для `Painter::panel` + `Painter::label`,
+/// `flipped` — для диагностики/отладки (на отрисовку не влияет).
+pub fn tooltip_rect_anchored(
+    anchor_rect: UiRect,
+    text_size: (f32, f32),
+    viewport: UiRect,
+    hovered_ms: u64,
+    delay_ms: u64,
+) -> Option<TooltipLayout> {
+    if hovered_ms < delay_ms {
+        return None;
+    }
+    let gap = 6.0_f32;
+    let tw = text_size.0.max(1.0);
+    let th = text_size.1.max(1.0);
+    // Natural: выше-левее якоря (правый край тултипа = правый край якоря,
+    // низ тултипа = верх якоря - 6).
+    let mut x = anchor_rect.right() - tw;
+    let mut y = anchor_rect.y - th - gap;
+    let mut flipped = false;
+    // Flip Y: не хватает места над якорем → разместить под якорем.
+    if y < viewport.y - f32::EPSILON {
+        y = anchor_rect.bottom() + gap;
+        flipped = true;
+    }
+    // Clamp X: правый край не выходит за вьюпорт (как explain.rs:1587).
+    if x < viewport.x {
+        x = viewport.x;
+    }
+    if x + tw > viewport.right() {
+        x = viewport.right() - tw;
+        // Если тултип шире вьюпорта — упирается в viewport.x (выход
+        // за вьюпорт НЕ маскируется, ловится G4-линтом — как у tooltip()).
+        if x < viewport.x {
+            x = viewport.x;
+        }
+    }
+    // Clamp Y: position-clamp сохраняет размер (как tooltip()).
+    if y < viewport.y {
+        y = viewport.y;
+    }
+    if y + th > viewport.bottom() {
+        y = viewport.bottom() - th;
+        if y < viewport.y {
+            y = viewport.y;
+        }
+    }
+    Some(TooltipLayout {
+        rect: UiRect::new(x, y, tw, th),
+        flipped,
+    })
+}
+
 // === FR-068 W3: Component (агент 3-b) =======================================
 //
 // [`Dropdown`] — retained-обёртка над kit-функцией [`dropdown_menu`]: Props —
@@ -703,5 +782,65 @@ mod tests {
         // WidgetState — машина состояний потребителя (кит не ведёт ввод).
         d.state.set_pointer(true, false);
         assert_eq!(d.state.kit_state(), KitState::Hovered);
+    }
+
+    // === FR-UI-TOOLTIP-RECT: tests =========================================
+
+    /// Delay: до `delay_ms` — None; после — тултип над-слева от якоря
+    /// (правый край тултипа = правый край якоря, низ = верх якоря - 6).
+    /// Якорь в середине вьюпорта — места над якорем хватает, flip=false.
+    #[test]
+    fn tooltip_rect_anchored_delay_and_natural_position() {
+        let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        let anchor = UiRect::new(400.0, 300.0, 100.0, 30.0);
+        let size = (120.0, 22.0);
+        // До delay — None.
+        assert!(tooltip_rect_anchored(anchor, size, vp, 200, 500).is_none());
+        // После delay — Some, выше-левее якоря.
+        let t = tooltip_rect_anchored(anchor, size, vp, 500, 500).unwrap();
+        assert!(!t.flipped, "места над якорем хватает — без flip");
+        // right = anchor.right, bottom = anchor.y - 6.
+        assert!((t.rect.right() - anchor.right()).abs() < 0.01);
+        assert!((t.rect.bottom() - (anchor.y - 6.0)).abs() < 0.01);
+        assert!((t.rect.w - 120.0).abs() < 0.01);
+        assert!((t.rect.h - 22.0).abs() < 0.01);
+    }
+
+    /// Flip Y: якорь у верхнего края вьюпорта — тултип выше якоря не
+    /// помещается (y < viewport.y) → флип ПОД якорь: y = anchor.bottom + 6;
+    /// `flipped = true`. Также clamp Y ниже: тултип не выходит за низ.
+    #[test]
+    fn tooltip_rect_anchored_flips_below_when_no_space_above() {
+        let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        // Якорь у верха вьюпорта: natural y = 5 - 22 - 6 = -23 < 0 → flip.
+        let anchor = UiRect::new(400.0, 5.0, 100.0, 30.0);
+        let size = (120.0, 22.0);
+        let t = tooltip_rect_anchored(anchor, size, vp, 500, 500).unwrap();
+        assert!(t.flipped, "тултип развёрнут под якорь");
+        // y = anchor.bottom + 6 = 35 + 6 = 41.
+        assert!((t.rect.y - (anchor.bottom() + 6.0)).abs() < 0.01);
+        // Правый край тултипа = правый край якоря (natural X не меняется).
+        assert!((t.rect.right() - anchor.right()).abs() < 0.01);
+    }
+
+    /// Clamp X: якорь у левого края (anchor.right < text_w) — тултип
+    /// прижимается к viewport.x; правый край выходит за viewport.right
+    /// при слишком широком тултипе (выход НЕ маскируется, ловится G4).
+    /// Якорь у правого края (anchor.right = viewport.right) — тултип
+    /// целиком в вьюпорте (x = viewport.right - text_w).
+    #[test]
+    fn tooltip_rect_anchored_clamps_x_to_viewport() {
+        let vp = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        // Якорь у левого края: anchor.right = 100 < text_w = 120.
+        // natural x = 100 - 120 = -20; clamp к viewport.x = 0.
+        let anchor = UiRect::new(0.0, 300.0, 100.0, 30.0);
+        let size = (120.0, 22.0);
+        let t = tooltip_rect_anchored(anchor, size, vp, 500, 500).unwrap();
+        assert!((t.rect.x - vp.x).abs() < 0.01, "clamp к viewport.x");
+        // Якорь у правого края: anchor.right = 800; natural x = 800 - 120 = 680.
+        let anchor = UiRect::new(700.0, 300.0, 100.0, 30.0);
+        let t = tooltip_rect_anchored(anchor, size, vp, 500, 500).unwrap();
+        assert!((t.rect.right() - vp.right()).abs() < 0.01);
+        assert!((t.rect.x - 680.0).abs() < 0.01);
     }
 }

@@ -352,19 +352,15 @@ pub fn progress_dots(card: [f32; 4]) -> (Vec<f32>, f32) {
 // широкая кнопка-призрак с подписью). Этот TODO — НЕ close-button
 // migration (вопреки FR-070 тегу), а кнопочный layout-миграция.
 //
-// TODO(J/FR-UI-FOOTER): `kit::footer_buttons` / `footer_buttons_measured`
-// does NOT fit this pattern — the kit expects N buttons right-aligned
-// (last button flush to slot.right), but onboarding carousel footer has
-// Prev on the LEFT (card.x + PAD), Next on the RIGHT (card.right - PAD -
-// W), and Skip in the TOP-RIGHT CORNER (not in the footer at all). The
-// Prev/Next are on opposite sides (not right-aligned); Skip is outside
-// the footer. The kit's footer_buttons is for the "3 right-aligned
-// buttons" pattern (autolink Create/Accept_All/Reject_All, graph_builder
-// Cancel/Generate). Onboarding carousel is a "split footer" pattern
-// (one button on each side) — not currently in the kit. Migration would
-// require a new kit component (`kit::split_footer_buttons(slot, left_n,
-// right_n, widths)`) or a manual layout (current). Skip button needs
-// its own migration (see K5 TODO above).
+// O2 (Task O / FR-UI-FOOTER): Prev/Next carousel footer migrated to
+// `kit::split_footer_buttons` (Agent L's split-footer kit component).
+// Pattern: Prev on LEFT (slot.x + inset), Next on RIGHT (slot.right -
+// inset - W), inset = ONBOARDING_PAD = 24, gap = GAP_CONTROLS (8,
+// unused — 1 button per side). Skip stays manual (top-right corner —
+// NOT in the footer slot). Positions are 1:1 with the previous
+// hand-rolled formula (footer_y = card.bottom - FOOTER_H + (FOOTER_H -
+// BTN_H)/2; Prev.x = card.x + PAD; Next.x = card.right - PAD - W) —
+// I-1: zero visual jump.
 //
 // Будущая миграция Skip — на `kit::button_layout` (измеренный размер
 // подписи + `BUTTON_PAD_H` × 2, высота `BUTTON_HEIGHT`=30). Требует:
@@ -382,21 +378,32 @@ pub fn progress_dots(card: [f32; 4]) -> (Vec<f32>, f32) {
 // (I-1: ноль скачка). Паритет с другими подписанными кнопками-призраками
 // в карточках (например suggest-cards).
 pub fn button_rect(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
-    let footer_y =
-        card[1] + card[3] - ONBOARDING_FOOTER_H + (ONBOARDING_FOOTER_H - ONBOARDING_BUTTON_H) / 2.0;
     match button {
-        OnboardingButton::Prev => [
-            card[0] + ONBOARDING_PAD,
-            footer_y,
-            ONBOARDING_BUTTON_W,
-            ONBOARDING_BUTTON_H,
-        ],
-        OnboardingButton::Next => [
-            card[0] + card[2] - ONBOARDING_PAD - ONBOARDING_BUTTON_W,
-            footer_y,
-            ONBOARDING_BUTTON_W,
-            ONBOARDING_BUTTON_H,
-        ],
+        OnboardingButton::Prev | OnboardingButton::Next => {
+            // O2: split footer (Prev left / Next right) via kit.
+            let slot = UiRect::new(
+                card[0],
+                card[1] + card[3] - ONBOARDING_FOOTER_H,
+                card[2],
+                ONBOARDING_FOOTER_H,
+            );
+            let btns = kit::split_footer_buttons(
+                slot,
+                &[ONBOARDING_BUTTON_W],
+                &[ONBOARDING_BUTTON_W],
+                kit::GAP_CONTROLS,
+                ONBOARDING_PAD,
+            );
+            // btns[0] = (Prev rect, FooterGroup::Left, 0);
+            // btns[1] = (Next rect, FooterGroup::Right, 0).
+            let idx = match button {
+                OnboardingButton::Prev => 0,
+                OnboardingButton::Next => 1,
+                _ => unreachable!(),
+            };
+            let r = btns[idx].0;
+            [r.x, r.y, r.w, r.h]
+        }
         OnboardingButton::Skip => [
             card[0] + card[2] - ONBOARDING_PAD - 64.0,
             card[1] + 10.0,
@@ -625,27 +632,14 @@ pub struct AiOnboardingLayout {
 /// вьюпорте с полями `AI_ONB_VIEWPORT_MARGIN`; высота зависит от
 /// `state.privacy_open`.
 //
-// TODO(J/FR-UI-RADIO): migrate mode-card layout to `kit::radio_card`.
-// `ai_onboarding_layout` returns just the mode-card slot rects (the
-// `mode_cards: [[f32; 4]; 3]` field); the rendering of indicator/label/desc
-// happens in `app/overlays.rs::ai_onboarding_overlay` (DO-NOT-TOUCH for
-// Agent J — outside scope). The kit's `radio_card(slot, label_w, desc_w,
-// selected, state, palette) -> (RadioCardLayout, RadioCardStyle)` returns
-// layout.label/indicator/desc rects + style colors; to consume them, the
-// overlay rendering code would need to use `paint_radio_card` (for the
-// card background + indicator) and the layout.label/desc rects for text
-// positioning — that's an `overlays.rs` change, gated for a future wave.
-// Additionally, the existing rendering uses hand-rolled positions
-// (indicator at y=18 with dot_r=6, label at y=4, tag at y=6 right-corner,
-// desc at y=24) that differ from the kit's canonical geometry (indicator
-// 12×12 at y=center, label at y=8, desc at y=30). A 1:1 migration would
-// cause a ~6-12px visual shift of label/desc rows + indicator resize
-// 12→6(radius) — separate wave of UI-geometry canonicalization with
-// manual L2 verification (AGENTS.md §«Самопроверка UI на WASM»).
-// `kit::radio_card` style values (card_fill/card_border/indicator_fill)
-// match the existing manual match 1:1 — when overlays.rs is opened for
-// the next wave, the style migration can be done first (zero visual
-// change), then the geometry migration (with manual L2 verification).
+// O1 (Task O / FR-UI-RADIO): mode-card rendering migrated to `kit::radio_card`
+// in `app/overlays.rs::ai_onboarding_overlay` (where palette is available —
+// this layout function stays a pure geometry function returning slot rects,
+// per task step 1 option (b); signature unchanged). The kit's
+// `radio_card(slot, label_w, desc_w, selected, state, palette)` is called
+// per-card in overlays.rs; `paint_radio_card` emits the card background +
+// indicator; `layout.label`/`layout.desc` rects are used for text positions.
+// Tag (right corner) stays separate — kit doesn't support tag.
 pub fn ai_onboarding_layout(viewport: [f32; 2], state: &AiOnboardingState) -> AiOnboardingLayout {
     use canvas_ui::geometry::{UiRect, UiVec2};
     use canvas_ui::kit;
@@ -696,19 +690,28 @@ pub fn ai_onboarding_layout(viewport: [f32; 2], state: &AiOnboardingState) -> Ai
         ];
     }
     let actions_y = y + 3.0 * AI_ONB_MODE_H + 2.0 * AI_ONB_MODE_GAP + 18.0;
-    // TODO(J/FR-UI-FOOTER): Privacy (left) + Continue (right) is a
-    // "split footer" (one button per side) — NOT the kit's footer_buttons
-    // pattern (N buttons right-aligned, last flush to slot.right).
-    // Migration would need a new `kit::split_footer_buttons` component
-    // (or two footer_buttons calls — one right-aligned for Continue, one
-    // left-aligned for Privacy). Currently manual layout — preserved.
-    let btn_privacy = [x, actions_y, AI_ONB_BTN_PRIV_W, AI_ONB_BTN_H];
-    let btn_continue = [
-        x + inner_w - AI_ONB_BTN_CONTINUE_W,
-        actions_y,
-        AI_ONB_BTN_CONTINUE_W,
-        AI_ONB_BTN_H,
-    ];
+    // O2 (Task O / FR-UI-FOOTER): Privacy (left) + Continue (right) migrated
+    // to `kit::split_footer_buttons` (Agent L's split-footer kit component).
+    // Pattern: Privacy on LEFT (slot.x + inset=0), Continue on RIGHT
+    // (slot.right - inset=0 - W). Slot height = AI_ONB_BTN_H (30, no vertical
+    // centering — y stays at actions_y). Positions are 1:1 with the previous
+    // hand-rolled formula (btn_privacy.x = x = card.x + PAD_X;
+    // btn_continue.x = x + inner_w - CONTINUE_W = card.right - PAD_X -
+    // CONTINUE_W) — I-1: zero visual jump.
+    let actions_slot = UiRect::new(x, actions_y, inner_w, AI_ONB_BTN_H);
+    let ai_footer_btns = kit::split_footer_buttons(
+        actions_slot,
+        &[AI_ONB_BTN_PRIV_W],
+        &[AI_ONB_BTN_CONTINUE_W],
+        kit::GAP_CONTROLS, // unused — 1 button per side
+        0.0,               // no inset — both buttons flush to slot edges
+    );
+    // btns[0] = (Privacy rect, FooterGroup::Left, 0);
+    // btns[1] = (Continue rect, FooterGroup::Right, 0).
+    let priv_r = ai_footer_btns[0].0;
+    let cont_r = ai_footer_btns[1].0;
+    let btn_privacy = [priv_r.x, priv_r.y, priv_r.w, priv_r.h];
+    let btn_continue = [cont_r.x, cont_r.y, cont_r.w, cont_r.h];
     let privacy_block = if state.privacy_open {
         [
             x,

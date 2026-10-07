@@ -1572,7 +1572,7 @@ impl App {
         // Якорь — правый край кнопки (world → screen): тултип над полосой,
         // выровнен по правому краю кнопки; клампы к вьюпорту.
         let btn = canvas_render::cards::explain_button_rect(node);
-        let anchor = self
+        let btn_top_right = self
             .camera
             .world_to_screen([btn[0] + btn[2], btn[1]], viewport);
         let label = self.tr(keys::EXPLAIN_TITLE).to_owned();
@@ -1582,60 +1582,25 @@ impl App {
         drop(fs);
         let w = (text_w + 16.0).max(40.0);
         let h = 22.0;
-        let x = (anchor[0] - w)
-            .max(4.0)
-            .min((viewport[0] - w - 4.0).max(4.0));
-        let y = (anchor[1] - h - 6.0).max(4.0);
-        // TODO(K6/FR-070): migrate to `kit::tooltip` + `Painter::panel`
-        // (audit §6.1). `app/tooltip.rs::layout_tooltips` уже использует
-        // `kit::tooltip` (cursor-anchored + flip + clamp — FR-068 W0), но
-        // здесь якорь — правый-край КНОПКИ (rect-anchor), а kit::tooltip
-        // принимает только `UiPoint` (точку-якорь). Конкретные разрывы:
-        //
-        // 1. **Якорь-точка vs rect**: kit::tooltip natural-position = `anchor
-        //    + TOOLTIP_OFFSET (14, 18)` (вниз-вправо от якоря), с flip при
-        //    нехватке места. Желаемое здесь поведение — «тултип ВЫШЕ-ЛЕВЕЕ
-        //    правого-верхнего угла кнопки» (т.е. якорь = button.right-top,
-        //    тултип `x = anchor.x - w`, `y = anchor.y - h - 6`). Чтобы
-        //    получить это через kit::tooltip, нужно искусственно
-        //    форсировать flip по обеим осям (передать viewport с
-        //    `right = anchor.x + 1`, `bottom = anchor.y + 13`) — хак,
-        //    нечитаемый для будущих мейнтейнеров.
-        //
-        // 2. **Y-offset gap**: даже при форсированном flip kit::tooltip
-        //    даёт `y = anchor.y - TOOLTIP_OFFSET.y - h = anchor.y - 18 - h`,
-        //    а текущий код — `anchor.y - 6 - h`. Расхождение 12px
-        //    (`TOOLTIP_OFFSET.y`=18 vs hand-rolled 6). Чтобы выровнять,
-        //    нужно передавать `anchor = (btn.right, btn.top + 12)`, что
-        //    хрупко и завязано на конкретное смещение.
-        //
-        // 3. **Right-side clamp**: оригинал клампит `x ≤ viewport.w - w -
-        //    4` (тултип не вылезает за правый край экрана); kit::tooltip
-        //    применяет только `.max(viewport.x)` (нет правого clamp'а).
-        //
-        // 4. **hover_ms**: kit::tooltip требует `hovered_ms` (задержка
-        //    показа); здесь hover-state не хранится — тултип рисуется сразу
-        //    при наведении на полосу (`band` hit-test). Передача
-        //    `hovered_ms = delay_ms` обходит delay (как в app/tooltip.rs),
-        //    но это контракт-обход.
-        //
-        // 5. **Цвет/стиль**: ручная сборка `CardInstance` с
-        //    `palette.menu_fill`/`palette.palette_border` (слоты
-        //    ThemeColors, не KitPalette) и радиусом 6 — kit не предоставляет
-        //    «tooltip paint», только геометрию; нужен `Painter::panel` с
-        //    `PanelStyle` из KitPalette (отдельная миграция).
-        //
-        // **Чистое решение**: расширить kit-функцией `tooltip_rect_anchored(
-        // anchor: UiRect, text_size, viewport, ...)` (или
-        // `tooltip_force_above_left`) — anchor rect с поддержкой
-        // «естественная позиция над-слева от якоря» (как dropdown_menu
-        // поддерживает Bottom-естественную). Это стратегическое расширение
-        // kit — добавлено в backlog audit §6.1 (запись K6). Текущая ручная
-        // сборка корректна, поведение 1:1 с прежним — оставлено до
-        // отдельной W-e волны (I-1: ноль скачка).
+        // FR-070 (агент N): kit::tooltip_rect_anchored — natural выше-левее
+        // правого-верхнего угла якоря (`tooltip.right = anchor.right`,
+        // `tooltip.bottom = anchor.top - 6`), flip ниже при нехватке места
+        // сверху, clamp X/Y к вьюпорту. Якорь — rect кнопки в screen-коорд
+        // (top-right = btn_top_right, w/h = btn.w/h, инвариант трансляции).
+        // hovered_ms = u64::MAX (always show, без delay — тултип рисуется
+        // сразу при наведении на полосу `band`, delay-state не хранится).
+        let anchor_rect = UiRect::new(btn_top_right[0] - btn[2], btn_top_right[1], btn[2], btn[3]);
+        let viewport_rect = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
+        let Some(tl) =
+            canvas_ui::kit::tooltip_rect_anchored(anchor_rect, (w, h), viewport_rect, u64::MAX, 0)
+        else {
+            return;
+        };
+        let x = tl.rect.x;
+        let y = tl.rect.y;
         quads.push(CardInstance {
             pos: [x, y],
-            size: [w, h],
+            size: [tl.rect.w, tl.rect.h],
             fill: palette.menu_fill,
             border: palette.palette_border,
             params: [6.0, 0.0, 0.0, 1.0],
@@ -1643,8 +1608,8 @@ impl App {
         });
         texts.push(OwnedScreenText {
             text: label,
-            origin: [x, y + (h - 12.0 * 1.3) / 2.0],
-            width: w,
+            origin: [x, y + (tl.rect.h - 12.0 * 1.3) / 2.0],
+            width: tl.rect.w,
             font_size: 12.0,
             color: palette.title,
             align: TextAlign::Center,

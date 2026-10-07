@@ -906,7 +906,7 @@ pub fn panel_layout(
     visible: &[String],
 ) -> PanelLayout {
     use canvas_ui::geometry::{UiRect, UiVec2};
-    use canvas_ui::layout::{pad, stack, Column, HAlign, MeasuredItem, Row, RowPolicy, VAlign};
+    use canvas_ui::layout::{pad, stack, Column, HAlign, MeasuredItem, Row, VAlign};
 
     let width = PANEL_WIDTH.min((window_w - PANEL_MARGIN * 2.0).max(0.0));
     // FR-024: док у ЛЕВОГО края, во всю высоту окна (как Miro)
@@ -962,24 +962,15 @@ pub fn panel_layout(
     // срезанный текст выглядел браком). Слоту отдаётся высота до 2 рядов;
     // строки шаблонов стартуют ниже фактического низа чипов.
     //
-    // TODO(J/FR-UI-CHIP-STRIP): migrate to `kit::chip_strip`. The kit's
-    // chip_strip supports `RowPolicy::Fit` (squeeze=false) and
-    // `RowPolicy::SqueezeTail` (squeeze=true) — but NOT `RowPolicy::Wrap`
-    // (which template_ui uses here for the 2-row wrap-overflow behavior).
-    // Migrating to kit would lose the Wrap policy — chips that don't fit
-    // would either overflow (Fit) or be compressed to 0 width
-    // (SqueezeTail), instead of wrapping to a 2nd row. The Wrap behavior
-    // is documented as intentional (wasm-audit 2026-09-25: SqueezeTail
-    // cut «unit-economics» mid-text). A future kit extension
-    // (`chip_strip_wrap` or adding Wrap to chip_strip's policy parameter)
-    // would unblock this migration. Also: existing uses `pad_x = 20.0`
-    // vs kit's `pad_x = 2*CHIP_PAD_H = 16` (4px wider chips in existing) —
-    // minor visual change.
-    // FR-068 W3.3 (каталог §9.3.1): чип сам себя измеряет —
-    // [`MeasuredItem::Text`] c `pad_x: 20.0` (тот же пад, что был в
-    // [`category_chip_width`]) вместо проводки «width_of → Fixed»;
-    // `Text` резолвится в `Fixed { w: width_of + pad_x }` — rect'ы
-    // бит-в-бит прежние (оракулы canvas-ui `measured_text_pad_x_*`).
+    // FR-070 (агент N): миграция на `kit::chip_strip_wrap` (агент L):
+    // `RowPolicy::Wrap` с `max_rows=2` (чипы, не влезающие в строку,
+    // переносятся на 2-й ряд; чипы на строках ≥ 2 — drop, как явный cap).
+    // Канонизация (AGENTS.md I-1): kit's `CHIP_HEIGHT=24` vs прежнего
+    // `CATEGORY_ROW_H=26` (2px короче) и kit's `CHIP_PAD_H=8` vs прежнего
+    // `pad_x=20.0` (4px у́же чип) — chips слегка компактнее, пропорции
+    // прежние (text+2·PAD vs text+20). `chip_strip_wrap` сам измеряет
+    // текст (через `TextMeasurer`), `gap = CHIP_GAP = SPACING_S = gap`
+    // (как и прежний ручной `gap`).
     // FR-087: чипы категорий — только видимые (роль/ручной фильтр);
     // чип скрытой категории в panel.category (протух после смены роли)
     // не рисуется — строки фильтруются тем же allow-list в panel_rows.
@@ -988,37 +979,17 @@ pub fn panel_layout(
         .into_iter()
         .filter(|category| visible.iter().any(|v| v == category))
         .collect();
-    let chip_rects = Row {
-        gap,
-        policy: RowPolicy::Wrap,
-        ..Row::default()
-    }
-    .lay_out_measured(
-        UiRect::new(
-            inner.x,
-            chips_y,
-            inner_w,
-            (CATEGORY_ROW_H * 2.0 + gap).max(CATEGORY_ROW_H),
-        ),
-        &categories
-            .iter()
-            .map(|c| MeasuredItem::Text {
-                text: c,
-                max_w: None,
-                min_w: 0.0,
-                pad_x: 20.0,
-                h: Some(CATEGORY_ROW_H),
-            })
-            .collect::<Vec<_>>(),
-        m,
-        fs,
-        FAMILY,
-        CHIP_FONT,
+    let chip_slot = UiRect::new(
+        inner.x,
+        chips_y,
+        inner_w,
+        (CATEGORY_ROW_H * 2.0 + gap).max(CATEGORY_ROW_H),
     );
-    let category_rects: Vec<([f32; 4], String, bool)> = categories
+    let chip_pairs = canvas_ui::kit::chip_strip_wrap(chip_slot, &categories, 2, m, fs);
+    let chip_rects: Vec<UiRect> = chip_pairs.iter().map(|(r, _)| *r).collect();
+    let category_rects: Vec<([f32; 4], String, bool)> = chip_pairs
         .iter()
-        .zip(&chip_rects)
-        .map(|(category, r)| {
+        .map(|(r, category)| {
             let active = panel.category.as_deref() == Some(*category);
             ([r.x, r.y, r.w, r.h], (*category).to_owned(), active)
         })

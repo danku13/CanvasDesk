@@ -5560,6 +5560,7 @@ impl App {
             self.viewport_logical(),
             &list,
             &self.scheme_gallery,
+            self.settings.language == canvas_core::Language::Ru,
             &self.visible_scheme_categories(),
         );
         let visible = lay.visible_rows.len().max(1);
@@ -5623,6 +5624,7 @@ impl App {
             self.viewport_logical(),
             &list,
             &self.scheme_gallery,
+            self.settings.language == canvas_core::Language::Ru,
             &self.visible_scheme_categories(),
         );
         if scheme_gallery_ui::point_in_rect(lay.close_rect, self.cursor) {

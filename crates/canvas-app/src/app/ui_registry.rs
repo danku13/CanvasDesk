@@ -1178,6 +1178,7 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 viewport,
                 &list,
                 &app.scheme_gallery,
+                app.settings.language == canvas_core::Language::Ru,
                 &app.visible_scheme_categories(),
             );
             surface
@@ -1198,7 +1199,8 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             surface
                 .hit_rects
                 .push(HitRect::interactive(body, "kit-gallery-panel"));
-            let (theme, close) = crate::kit_ui::gallery_hit_slots(viewport);
+            let (theme, close) =
+                crate::kit_ui::gallery_hit_slots(viewport, &app.effective_palette().kit_palette());
             surface.hit_rects.push(HitRect::interactive(
                 UiRect::new(theme.x, theme.y, theme.w, theme.h),
                 "kit-gallery-theme",
@@ -1221,7 +1223,8 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             surface
                 .hit_rects
                 .push(HitRect::interactive(admin_body, "admin-panel"));
-            let (theme, reset, close) = crate::admin_ui::admin_hit_slots(viewport);
+            let (theme, reset, close) =
+                crate::admin_ui::admin_hit_slots(viewport, &app.admin_effective_palette());
             surface.hit_rects.push(HitRect::interactive(
                 UiRect::new(theme.x, theme.y, theme.w, theme.h),
                 "admin-theme",
