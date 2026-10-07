@@ -507,6 +507,16 @@ enum AppDialog {
         /// Суммарное число подмен по всем сценариям.
         overrides: usize,
     },
+    /// What-if «✕» чипа: подтверждение удаления ОДНОГО сценария (дизайн-док
+    /// whatif-bar §5). Хранит ИМЯ, а не индекс — подтверждение ищет по имени
+    /// (контракт MCP whatif_scenario_delete); заморозка одноимённого снимка
+    /// снимается вместе со сценарием.
+    WhatIfDeleteScenario {
+        /// Имя удаляемого сценария (уникально — инвариант create).
+        name: String,
+        /// Число подмен удаляемого сценария (для тела диалога).
+        overrides: usize,
+    },
 }
 
 impl AppDialog {
@@ -527,6 +537,10 @@ impl AppDialog {
             ],
             AppDialog::WhatIfReset { .. } => [
                 (i18n::tr(language, keys::DIALOG_WHATIF_RESET_YES), true),
+                (i18n::tr(language, keys::DIALOG_CANCEL), false),
+            ],
+            AppDialog::WhatIfDeleteScenario { .. } => [
+                (i18n::tr(language, keys::DIALOG_WHATIF_DELETE_YES), true),
                 (i18n::tr(language, keys::DIALOG_CANCEL), false),
             ],
             _ => [
@@ -582,6 +596,12 @@ impl AppDialog {
             AppDialog::WhatIfReset { .. } => {
                 i18n::tr(language, keys::DIALOG_WHATIF_RESET_TITLE).to_owned()
             }
+            // What-if: удаление одного сценария — «Удалить сценарий «имя»?»
+            AppDialog::WhatIfDeleteScenario { name, .. } => i18n::trf(
+                language,
+                keys::DIALOG_WHATIF_DELETE_TITLE,
+                &[("{name}", name.as_str())],
+            ),
         }
     }
 
@@ -629,6 +649,12 @@ impl AppDialog {
                     ("{scenarios}", scenarios.to_string().as_str()),
                     ("{overrides}", overrides.to_string().as_str()),
                 ],
+            ),
+            // What-if: удаление одного сценария — статистика в теле + гарантии
+            AppDialog::WhatIfDeleteScenario { overrides, .. } => i18n::trf(
+                language,
+                keys::DIALOG_WHATIF_DELETE_BODY,
+                &[("{count}", overrides.to_string().as_str())],
             ),
         }
     }
@@ -2829,8 +2855,7 @@ impl App {
             })
             .collect();
         let count = self.scene.whatif_override_count();
-        let counter_label =
-            self.trf(keys::WHATIF_OVERRIDES, &[("{count}", &count.to_string())]);
+        let counter_label = self.trf(keys::WHATIF_OVERRIDES, &[("{count}", &count.to_string())]);
         // FR-064 P2: лейбл кнопки заморозки — по состоянию активного сценария
         // (измеряется та же строка, что рисуется — фикс FR-053).
         let freeze_label = match self.scene.active_scenario {

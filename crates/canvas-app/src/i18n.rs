@@ -705,6 +705,14 @@ pub mod keys {
     pub const DIALOG_WHATIF_RESET_YES: &str = "dialog.whatif_reset.yes";
     /// Тост после полного сброса what-if.
     pub const TOAST_WHATIF_RESET_DONE: &str = "toast.whatif_reset.done";
+    /// Диалог удаления одного сценария («✕» чипа): заголовок с именем.
+    pub const DIALOG_WHATIF_DELETE_TITLE: &str = "dialog.whatif_delete.title";
+    /// Тело диалога удаления сценария: гарантии базы + undo.
+    pub const DIALOG_WHATIF_DELETE_BODY: &str = "dialog.whatif_delete.body";
+    /// Кнопка-подтверждение удаления сценария («Удалить»).
+    pub const DIALOG_WHATIF_DELETE_YES: &str = "dialog.whatif_delete.yes";
+    /// Тост после удаления сценария.
+    pub const TOAST_WHATIF_DELETED: &str = "toast.whatif_deleted.done";
 
     // --- Палитра выделения (FR-009/010, FR-014, FR-019/020, FR-025, CR-008) ---
     pub const PAL_GROUP_COLOR: &str = "palette.group.color";
@@ -1615,6 +1623,19 @@ const RU: &[(&str, &str)] = &[
     (
         keys::TOAST_WHATIF_RESET_DONE,
         "What-if сброшен: сценариев удалено — {count}",
+    ),
+    (
+        keys::DIALOG_WHATIF_DELETE_TITLE,
+        "Удалить сценарий «{name}»?",
+    ),
+    (
+        keys::DIALOG_WHATIF_DELETE_BODY,
+        "Подмен сценария: {count}. Заморозка одноимённого снимка будет снята. Текст нод не изменится; действие можно отменить (Ctrl+Z).",
+    ),
+    (keys::DIALOG_WHATIF_DELETE_YES, "Удалить"),
+    (
+        keys::TOAST_WHATIF_DELETED,
+        "Сценарий «{name}» удалён (подмен: {count})",
     ),
     // --- Палитра выделения ---
     (keys::PAL_GROUP_COLOR, "Цвет"),
@@ -2815,6 +2836,19 @@ const EN: &[(&str, &str)] = &[
     (
         keys::TOAST_WHATIF_RESET_DONE,
         "What-if reset: {count} scenario(s) removed",
+    ),
+    (
+        keys::DIALOG_WHATIF_DELETE_TITLE,
+        "Delete scenario \"{name}\"?",
+    ),
+    (
+        keys::DIALOG_WHATIF_DELETE_BODY,
+        "Scenario overrides: {count}. The snapshot frozen under the same name will be released. Node text stays untouched; the action can be undone (Ctrl+Z).",
+    ),
+    (keys::DIALOG_WHATIF_DELETE_YES, "Delete"),
+    (
+        keys::TOAST_WHATIF_DELETED,
+        "Scenario \"{name}\" deleted (overrides: {count})",
     ),
     // --- Selection palette ---
     (keys::PAL_GROUP_COLOR, "Color"),
