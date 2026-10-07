@@ -334,7 +334,8 @@ impl App {
             size: [rect[2], rect[3]],
             fill,
             border,
-            params: [6.0, 0.0, 0.0, 1.0],
+            // Радиус чипа — токен design-системы (бывший литерал 6.0).
+            params: [canvas_core::tokens::RADIUS_CHIP, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         };
         // FR-055 (этап U4): контейнер бара — через кит (kit::panel_style_of:
@@ -458,16 +459,24 @@ impl App {
                 align: TextAlign::Center,
             });
         }
-        // Раскрытый список подмен.
+        // Раскрытый список подмен: та же панель-геометрия, что у бара
+        // (kit::panel_style_of, радиус 8 — I-1 ноль скачка внутри семейства
+        // поверхностей what-if; бывший литерал 6.0 не совпадал с баром).
         if self.whatif_list_open {
             let rows = self.whatif_override_rows();
             let list = whatif_ui::overrides_list_layout(layout.rect, rows.len(), viewport);
+            let list_style = canvas_ui::kit::panel_style_of(
+                palette.menu_fill,
+                canvas_core::tokens::DIALOG_BUTTON_BORDER,
+                8.0,
+                canvas_core::tokens::SPACING_MD,
+            );
             instances.push(CardInstance {
                 pos: [list[0], list[1]],
                 size: [list[2], list[3]],
-                fill: palette.menu_fill,
-                border: canvas_core::tokens::DIALOG_BUTTON_BORDER,
-                params: [6.0, 0.0, 0.0, 1.0],
+                fill: list_style.fill,
+                border: list_style.border,
+                params: [list_style.radius, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
             if rows.is_empty() {
@@ -489,12 +498,17 @@ impl App {
             let visible = whatif_ui::list_visible_rows(rows.len(), list);
             for (i, row) in rows.iter().take(visible).enumerate() {
                 let rect = whatif_ui::override_row_rect(list, i);
-                let mut text = format!(
-                    "{} → стр. {}: {} → {}",
-                    row.node_label,
-                    row.line + 1,
-                    row.base,
-                    row.whatif
+                // Строка списка — i18n-формат (бывший хардкод RU «нода →
+                // стр. i: было → стало»).
+                let line_no = (row.line + 1).to_string();
+                let mut text = self.trf(
+                    keys::WHATIF_OVERRIDE_ROW,
+                    &[
+                        ("{node}", &row.node_label),
+                        ("{line}", &line_no),
+                        ("{was}", &row.base),
+                        ("{became}", &row.whatif),
+                    ],
                 );
                 let color = if row.stale.is_some() {
                     text = format!("{text}  ⚠ {}", row.stale.as_deref().unwrap_or_default());
@@ -527,8 +541,9 @@ impl App {
             // W-a: усечённый хвост — честный индикатор (никаких молчаливых
             // take, CR-015) в зарезервированном раскладкой слоте.
             if rows.len() > visible {
+                let more = (rows.len() - visible).to_string();
                 texts.push(OwnedScreenText {
-                    text: format!("… ещё {}", rows.len() - visible),
+                    text: self.trf(keys::WHATIF_MORE, &[("{count}", &more)]),
                     origin: [
                         list[0] + whatif_ui::LIST_MARGIN,
                         list[1]
@@ -543,16 +558,23 @@ impl App {
                 });
             }
         }
-        // Таблица сравнения сценариев.
+        // Таблица сравнения сценариев: панель — та же геометрия, что у бара
+        // (kit::panel_style_of радиус 8 — I-1; бывший литерал 6.0).
         if self.whatif_compare_open {
             let (columns, rows) = self.whatif_compare_table();
             let table = whatif_ui::table_layout(&columns, rows.len(), layout.rect, viewport);
+            let table_style = canvas_ui::kit::panel_style_of(
+                palette.menu_fill,
+                canvas_core::tokens::DIALOG_BUTTON_BORDER,
+                8.0,
+                canvas_core::tokens::SPACING_MD,
+            );
             instances.push(CardInstance {
                 pos: [table.rect[0], table.rect[1]],
                 size: [table.rect[2], table.rect[3]],
-                fill: palette.menu_fill,
-                border: canvas_core::tokens::DIALOG_BUTTON_BORDER,
-                params: [6.0, 0.0, 0.0, 1.0],
+                fill: table_style.fill,
+                border: table_style.border,
+                params: [table_style.radius, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
             for (c, rect) in table.header.iter().enumerate() {
@@ -584,8 +606,9 @@ impl App {
             // индикатором в слоте из раскладки (cells содержит только
             // вмещающиеся строки — за клампом ничего не рисуется).
             if let Some(tail) = table.tail {
+                let more = (rows.len() - table.cells.len()).to_string();
                 texts.push(OwnedScreenText {
-                    text: format!("… ещё {}", rows.len() - table.cells.len()),
+                    text: self.trf(keys::WHATIF_MORE, &[("{count}", &more)]),
                     origin: [tail[0] + 6.0, tail[1] + 4.0],
                     width: tail[2] - 12.0,
                     font_size: 13.0,

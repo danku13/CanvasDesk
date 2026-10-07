@@ -78,6 +78,31 @@ pub const TABLE_MARGIN: f32 = canvas_core::tokens::SPACING_SM;
 /// Семейство измерения = семейство screen-текстов рендера (parity метрик).
 const FAMILY: &str = canvas_render::text::SANS_FAMILY;
 
+/// Подписи бара what-if — строки приложения (i18n), по которым
+/// СЧИТАЕТСЯ ШИРИНА и которые РИСУЮТСЯ. Фикс класса CR-015 (расширение
+/// фикса FR-053 с counter/freeze на все элементы): раньше «База»/«Apply»/
+/// «Сброс»/«Сравнить» были хардкодом RU внутри [`bar_layout`], а отрисовка
+/// шла по i18n — в EN-локали чип «Compare» измерялся по «Сравнить» и
+/// подпись переливалась на соседа (обрезалась). Один источник строк —
+/// вызывающий (`App::whatif_bar_layout`), раскладка и отрисовка
+/// используют ОДНИ И ТЕ ЖЕ подписи.
+#[derive(Debug, Clone, Copy)]
+pub struct BarLabels<'a> {
+    /// Чип «База» (отключить подмены).
+    pub base: &'a str,
+    /// Кнопка Apply активного сценария.
+    pub apply: &'a str,
+    /// Кнопка «Сброс» (полный сброс сценариев — см. `BarAction::Reset`).
+    pub reset: &'a str,
+    /// FR-064 P2: кнопка «Заморозить»/«Разморозить» — лейбл по состоянию
+    /// активного сценария (та же строка, что рисуется).
+    pub freeze: &'a str,
+    /// Кнопка «Сравнить» (таблица сравнения сценариев).
+    pub compare: &'a str,
+    /// Счётчик подмен активного сценария (i18n-строка с числом).
+    pub counter: &'a str,
+}
+
 /// Действие клика по нижнему бару.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BarAction {
@@ -166,33 +191,32 @@ fn btn_width(label: &str, m: &mut TextMeasurer, fs: &mut cosmic_text::FontSystem
 }
 
 /// Геометрия полосы режима. `scenario_names` — имена пользовательских
-/// сценариев; `counter_label` — подпись счётчика подмен (i18n-строка
-/// приложения — ширина считается по ТОЙ ЖЕ строке, что рисуется: фикс
-/// FR-053, раньше ширина считалась по RU при EN-подписи). Полоса
-/// центрируется по низу окна; ширина — сумма измеренных элементов,
+/// сценариев; `labels` — подписи бара ([`BarLabels`]: i18n-строки
+/// приложения — ширина считается по ТЕМ ЖЕ строкам, что рисуются: фикс
+/// класса CR-015, раньше «База»/«Сброс»/«Сравнить» были хардкодом RU).
+/// Полоса центрируется по низу окна; ширина — сумма измеренных элементов,
 /// сжатая [`constrain`] к вьюпорту.
 pub fn bar_layout(
     scenario_names: &[String],
-    counter_label: &str,
-    freeze_label: &str,
+    labels: &BarLabels,
     viewport: [f32; 2],
     measurer: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> BarLayout {
-    let counter_w = chip_width(counter_label, measurer, fs);
+    let counter_w = chip_width(labels.counter, measurer, fs);
     let chips_w: f32 = scenario_names
         .iter()
         .map(|name| chip_width(name, measurer, fs))
         .sum::<f32>()
-        + chip_width("База", measurer, fs)
+        + chip_width(labels.base, measurer, fs)
         + chip_width("+", measurer, fs);
     let controls_w = INDICATOR_WIDTH
         + counter_w
         + CLOSE_WIDTH
-        + btn_width("Apply", measurer, fs)
-        + btn_width("Сброс", measurer, fs)
-        + btn_width(freeze_label, measurer, fs)
-        + btn_width("Сравнить", measurer, fs);
+        + btn_width(labels.apply, measurer, fs)
+        + btn_width(labels.reset, measurer, fs)
+        + btn_width(labels.freeze, measurer, fs)
+        + btn_width(labels.compare, measurer, fs);
     let elements = scenario_names.len() as f32 + 8.0; // чипы+База+«+»+инд+счёт+4кн+✕
     let desired = BAR_PADDING * 2.0 + chips_w + controls_w + BAR_GAP * (elements - 1.0).max(0.0);
     // Ширина бара: желаемая, сжатая к вьюпорту (примитив Constrain).
@@ -252,7 +276,7 @@ pub fn bar_layout(
         h: CHIP_HEIGHT,
     });
     items.push(MeasuredItem::Text {
-        text: "База",
+        text: labels.base,
         max_w: None,
         min_w: 0.0,
         pad_x: CHIP_PAD_X * 2.0,
@@ -275,35 +299,35 @@ pub fn bar_layout(
         h: Some(CHIP_HEIGHT),
     });
     items.push(MeasuredItem::Text {
-        text: counter_label,
+        text: labels.counter,
         max_w: None,
         min_w: 0.0,
         pad_x: CHIP_PAD_X * 2.0,
         h: Some(CHIP_HEIGHT),
     });
     items.push(MeasuredItem::Text {
-        text: "Apply",
+        text: labels.apply,
         max_w: None,
         min_w: BTN_WIDTH,
         pad_x: BTN_PAD_X * 2.0,
         h: Some(CHIP_HEIGHT),
     });
     items.push(MeasuredItem::Text {
-        text: "Сброс",
+        text: labels.reset,
         max_w: None,
         min_w: BTN_WIDTH,
         pad_x: BTN_PAD_X * 2.0,
         h: Some(CHIP_HEIGHT),
     });
     items.push(MeasuredItem::Text {
-        text: freeze_label,
+        text: labels.freeze,
         max_w: None,
         min_w: BTN_WIDTH,
         pad_x: BTN_PAD_X * 2.0,
         h: Some(CHIP_HEIGHT),
     });
     items.push(MeasuredItem::Text {
-        text: "Сравнить",
+        text: labels.compare,
         max_w: None,
         min_w: BTN_WIDTH,
         pad_x: BTN_PAD_X * 2.0,
@@ -583,7 +607,49 @@ mod tests {
     fn layout(names: &[String], counter: &str, viewport: [f32; 2]) -> BarLayout {
         let mut fs = font_system();
         let mut m = TextMeasurer::new();
-        bar_layout(names, counter, "❄ Заморозить", viewport, &mut m, &mut fs)
+        let labels = BarLabels {
+            base: "База",
+            apply: "Apply",
+            reset: "Сброс",
+            freeze: "❄ Заморозить",
+            compare: "Сравнить",
+            counter,
+        };
+        bar_layout(names, &labels, viewport, &mut m, &mut fs)
+    }
+
+    /// EN-подписи бара (регресс фикса класса CR-015): раскладка измеряет
+    /// ПЕРЕДАННЫЕ строки — кнопка не уже своей фактической EN-подписи
+    /// (раньше «Compare» измерялся по хардкоду «Сравнить» и переливался).
+    #[test]
+    fn bar_layout_covers_en_labels() {
+        let names: Vec<String> = vec!["Growth ×2".to_owned()];
+        let labels = BarLabels {
+            base: "Base",
+            apply: "Apply",
+            reset: "Reset",
+            freeze: "❄ Freeze",
+            compare: "Compare",
+            counter: "overrides: 12",
+        };
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        let lay = bar_layout(&names, &labels, [1600.0, 900.0], &mut m, &mut fs);
+        let mut cover = |rect: [f32; 4], label: &str, tag: &str| {
+            assert!(
+                rect[2] >= m.width_of(&mut fs, label, FAMILY, CHIP_FONT) + BTN_PAD_X * 2.0 - 0.01,
+                "кнопка «{tag}» уже своей EN-подписи"
+            );
+        };
+        cover(lay.apply, labels.apply, "Apply");
+        cover(lay.reset, labels.reset, "Reset");
+        cover(lay.freeze, labels.freeze, "Freeze");
+        cover(lay.compare, labels.compare, "Compare");
+        assert!(
+            lay.base[2]
+                >= m.width_of(&mut fs, labels.base, FAMILY, CHIP_FONT) + CHIP_PAD_X * 2.0 - 0.01,
+            "чип «Base» уже своей EN-подписи"
+        );
     }
 
     fn names() -> Vec<String> {
