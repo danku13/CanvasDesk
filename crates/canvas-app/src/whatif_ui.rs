@@ -66,6 +66,10 @@ pub const LIST_MARGIN: f32 = canvas_core::tokens::SPACING_S;
 pub const LIST_WIDTH: f32 = 480.0;
 /// Ширина кнопки «✕» у строки подмены.
 pub const REMOVE_WIDTH: f32 = 22.0;
+/// Ширина слота «✕» удаления сценария в чипе бара (hit-зона ≥ визуала,
+/// A3 design/rules/04; тот же размер, что у кнопки списка подмен —
+/// один размер снятия в what-if).
+pub const CHIP_CLOSE_W: f32 = 22.0;
 /// Высота строки таблицы сравнения.
 pub const TABLE_ROW_H: f32 = 24.0;
 /// Высота шапки таблицы сравнения.
@@ -118,8 +122,12 @@ pub enum BarAction {
     ToggleOverrides,
     /// Apply активного сценария.
     Apply,
-    /// Сброс подмен активного сценария.
+    /// Полный сброс what-if режима (все сценарии + подмены + заморозки,
+    /// confirm-диалог — CJM-фикс).
     Reset,
+    /// «✕» чипа сценария — удаление сценария `usize` (confirm-диалог,
+    /// дизайн-док whatif-bar §5).
+    DeleteScenario(usize),
     /// FR-064 P2: заморозка/разморозка активного сценария (снимок
     /// решений для сравнения сценариев).
     Freeze,
@@ -142,12 +150,16 @@ pub struct BarLayout {
     pub scenarios: Vec<[f32; 4]>,
     /// Чип «+» (новый сценарий).
     pub new_scenario: [f32; 4],
+    /// Слоты «✕» удаления сценария внутри чипов (параллелен `scenarios`;
+    /// правый край чипа, полная высота — hit-зона ≥ визуала, A3).
+    pub scenario_closes: Vec<[f32; 4]>,
     /// Счётчик подмен.
     pub overrides: [f32; 4],
     /// Кнопка «Apply».
     pub apply: [f32; 4],
     /// Кнопка «Сброс».
     pub reset: [f32; 4],
+    /// Кнопка «Заморозить»/«Разморозить».
     /// FR-064 P2: кнопка «Заморозить»/«Разморозить» (лейбл — состояние
     /// активного сценария, измеряется та же строка, что рисуется).
     pub freeze: [f32; 4],
@@ -204,9 +216,10 @@ pub fn bar_layout(
     fs: &mut cosmic_text::FontSystem,
 ) -> BarLayout {
     let counter_w = chip_width(labels.counter, measurer, fs);
+    // Чип сценария шире имени на слот «✕» удаления (right slot).
     let chips_w: f32 = scenario_names
         .iter()
-        .map(|name| chip_width(name, measurer, fs))
+        .map(|name| chip_width(name, measurer, fs) + CHIP_CLOSE_W)
         .sum::<f32>()
         + chip_width(labels.base, measurer, fs)
         + chip_width("+", measurer, fs);
@@ -287,7 +300,10 @@ pub fn bar_layout(
             text: name.as_str(),
             max_w: None,
             min_w: 0.0,
-            pad_x: CHIP_PAD_X * 2.0,
+            // pad_x симметричен; справа к нему добавляется слот «✕»
+            // удаления сценария (правый край чипа — BarLayout::
+            // scenario_closes).
+            pad_x: CHIP_PAD_X * 2.0 + CHIP_CLOSE_W,
             h: Some(CHIP_HEIGHT),
         });
     }
@@ -346,13 +362,18 @@ pub fn bar_layout(
     .lay_out_measured(items_slot, &items, measurer, fs, FAMILY, CHIP_FONT);
     let n = scenario_names.len();
     let as_rect = |r: &UiRect| [r.x, r.y, r.w, r.h];
+    // Слоты «✕» удаления: правый край чипа, полная высота (hit-зона A3).
+    let scenario_closes: Vec<[f32; 4]> = rects[2..2 + n]
+        .iter()
+        .map(|r| [r.x + r.w - CHIP_CLOSE_W, r.y, CHIP_CLOSE_W, r.h])
+        .collect();
     // Подписи сценариев — Ellipsis по фактической (возможно сжатой)
-    // ширине чипа минус поля: раскладка и отрисовка — одна строка.
+    // ширине чипа минус поля и слот «✕»: раскладка и отрисовка — одна строка.
     let scenario_labels = scenario_names
         .iter()
         .zip(rects[2..2 + n].iter())
         .map(|(name, rect)| {
-            let inner = (rect.w - CHIP_PAD_X * 2.0).max(0.0);
+            let inner = (rect.w - CHIP_PAD_X * 2.0 - CHIP_CLOSE_W).max(0.0);
             measurer.ellipsis(fs, name, FAMILY, CHIP_FONT, inner)
         })
         .collect();
@@ -362,6 +383,7 @@ pub fn bar_layout(
         base: as_rect(&rects[1]),
         scenarios: rects[2..2 + n].iter().map(as_rect).collect(),
         new_scenario: as_rect(&rects[2 + n]),
+        scenario_closes,
         overrides: as_rect(&rects[3 + n]),
         apply: as_rect(&rects[4 + n]),
         reset: as_rect(&rects[5 + n]),
@@ -396,6 +418,12 @@ pub fn bar_action_at(layout: &BarLayout, point: [f32; 2]) -> Option<BarAction> {
     }
     if point_in_rect(layout.new_scenario, point) {
         return Some(BarAction::NewScenario);
+    }
+    // «✕» удаления сценария — ПЕРЕД телом чипа (слот — правый край чипа).
+    for (i, rect) in layout.scenario_closes.iter().enumerate() {
+        if point_in_rect(*rect, point) {
+            return Some(BarAction::DeleteScenario(i));
+        }
     }
     for (i, rect) in layout.scenarios.iter().enumerate() {
         if point_in_rect(*rect, point) {
@@ -830,12 +858,13 @@ mod tests {
             lay.overrides[2] >= wanted_counter - 0.01,
             "чип счётчика уже подписи"
         );
-        // Метка сценария из раскладки помещается в свой чип.
+        // Метка сценария из раскладки помещается в свой чип (минус поля
+        // и слот «✕» удаления).
         for (rect, label) in lay.scenarios.iter().zip(lay.scenario_labels.iter()) {
             let label_w = m.width_of(&mut fs, label, FAMILY, CHIP_FONT);
             assert!(
-                label_w <= rect[2] - CHIP_PAD_X * 2.0 + 0.01,
-                "метка «{label}» ({label_w}) шире чипа"
+                label_w <= rect[2] - CHIP_PAD_X * 2.0 - CHIP_CLOSE_W + 0.01,
+                "метка «{label}» ({label_w}) шире чипа без слота «✕»"
             );
         }
         let mut btn_cover = |rect: [f32; 4], label: &str| {
@@ -876,13 +905,55 @@ mod tests {
         let mut m = TextMeasurer::new();
         let label_w = m.width_of(&mut fs, label, FAMILY, CHIP_FONT);
         assert!(
-            label_w <= narrow.scenarios[0][2] - CHIP_PAD_X * 2.0 + 0.01,
-            "усечённая подпись укладывается в сжатый чип"
+            label_w <= narrow.scenarios[0][2] - CHIP_PAD_X * 2.0 - CHIP_CLOSE_W + 0.01,
+            "усечённая подпись укладывается в сжатый чип (без слота «✕»)"
         );
         // Короткое имя не усекается.
         let short_names = vec!["С1".to_owned()];
         let short = layout(&short_names, "подмен: 0", [1600.0, 900.0]);
         assert_eq!(short.scenario_labels[0], "С1");
+    }
+
+    /// «✕» удаления сценария: слот — правый край чипа (полная высота,
+    /// hit-зона A3), hit-тест различает удаление и активацию, подпись
+    /// не наезжает на слот.
+    #[test]
+    fn scenario_chip_close_slot_hit_and_layout() {
+        let layout = layout(&names(), "подмен: 2", [1600.0, 900.0]);
+        assert_eq!(layout.scenario_closes.len(), layout.scenarios.len());
+        for (chip, close) in layout.scenarios.iter().zip(layout.scenario_closes.iter()) {
+            // Слот — у правого края чипа, той же высоты.
+            assert!((close[0] + close[2] - (chip[0] + chip[2])).abs() <= 0.01);
+            assert_eq!(close[1], chip[1]);
+            assert_eq!(close[3], chip[3]);
+        }
+        // Прямой hit-тест: точка в слоте → DeleteScenario, точка в теле
+        // (левая часть чипа) → Scenario(i).
+        for i in 0..layout.scenarios.len() {
+            let close = layout.scenario_closes[i];
+            let point = [close[0] + close[2] / 2.0, close[1] + close[3] / 2.0];
+            assert_eq!(
+                bar_action_at(&layout, point),
+                Some(BarAction::DeleteScenario(i)),
+                "«✕» чипа {i} — удаление сценария"
+            );
+            let chip = layout.scenarios[i];
+            let body = [chip[0] + 4.0, chip[1] + chip[3] / 2.0];
+            assert_eq!(
+                bar_action_at(&layout, body),
+                Some(BarAction::Scenario(i)),
+                "тело чипа {i} — активация сценария"
+            );
+            // Подпись не наезжает на слот «✕».
+            let label = &layout.scenario_labels[i];
+            let mut fs = font_system();
+            let mut m = TextMeasurer::new();
+            let label_w = m.width_of(&mut fs, label, FAMILY, CHIP_FONT);
+            assert!(
+                CHIP_PAD_X + label_w <= close[0] - chip[0] + 0.01,
+                "подпись «{label}» наезжает на слот «✕»"
+            );
+        }
     }
 
     /// CR-015: ширина кнопки — не уже минимума и покрывает подпись.

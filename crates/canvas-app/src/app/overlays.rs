@@ -260,6 +260,22 @@ impl App {
                 });
                 self.request_redraw();
             }
+            BarAction::DeleteScenario(index) => {
+                // «✕» чипа сценария — удаление с confirm (дизайн-док
+                // whatif-bar §5; до сессии сценарий можно было удалить
+                // только через MCP). Диалог хранит ИМЯ (не индекс):
+                // подтверждение ищет по имени — тот же контракт, что MCP
+                // whatif_scenario_delete; заморозка одноимённого снимка
+                // снимается вместе со сценарием (ghost-колонка сравнения
+                // не остаётся).
+                let Some(scenario) = self.scene.scenarios.get(index) else {
+                    return;
+                };
+                let name = scenario.name.clone();
+                let overrides = scenario.line_exprs.len();
+                self.dialog = Some(AppDialog::WhatIfDeleteScenario { name, overrides });
+                self.request_redraw();
+            }
             BarAction::Freeze => {
                 // FR-064 P2: заморозка/разморозка активного сценария —
                 // снимок решений за Arc (runtime); имена — в
@@ -381,6 +397,65 @@ impl App {
         });
         // Чипы: «База» + сценарии + «+». Активный — акцентной рамкой.
         let active = self.scene.active_scenario;
+        // Сначала чипы сценариев (прямая отрисовка: подпись + слот «✕»),
+        // затем обобщённое замыкание для одиночных чипов — иначе два
+        // мутабельных захвата instances/texts конфликтуют.
+        for (i, rect) in layout.scenarios.iter().enumerate() {
+            // FR-053 (U3): подпись — из раскладки (та же Ellipsis-строка,
+            // по которой считалась ширина чипа — урок CR-015; при узком
+            // окне подпись усечена по фактической ширине сжатого чипа).
+            let label = layout.scenario_labels.get(i).cloned().unwrap_or_default();
+            let current = active == Some(i);
+            let chip_fill = if current {
+                canvas_core::tokens::DIALOG_BUTTON_PRIMARY
+            } else {
+                canvas_core::tokens::DIALOG_BUTTON_SECONDARY
+            };
+            let chip_border = if current {
+                canvas_core::tokens::WHATIF_CHIP
+            } else {
+                canvas_core::tokens::DIALOG_BUTTON_BORDER
+            };
+            instances.push(chip(*rect, chip_fill, chip_border));
+            // Тело чипа для подписи — минус слот «✕» удаления (правый край):
+            // подпись центрируется в оставшейся площади, «✕» — в своём слоте
+            // (подпись и слот не пересекаются — инвариант раскладки).
+            let body_rect = [
+                rect[0],
+                rect[1],
+                (rect[2] - whatif_ui::CHIP_CLOSE_W).max(0.0),
+                rect[3],
+            ];
+            let (box_origin, box_width) = centered_box(body_rect, 3.0);
+            texts.push(OwnedScreenText {
+                text: label,
+                origin: [box_origin[0], rect[1] + 6.0],
+                width: box_width,
+                font_size: 13.0,
+                color: if current {
+                    token_color(canvas_core::tokens::DIALOG_TEXT)
+                } else {
+                    palette.title
+                },
+                align: TextAlign::Center,
+            });
+            // «✕» удаления сценария (confirm-диалог, дизайн-док whatif-bar §5);
+            // активный чип — «чернила» активной заливки, прочие — title.
+            let close = layout.scenario_closes.get(i).copied().unwrap_or([0.0; 4]);
+            let (close_origin, close_width) = centered_box(close, 2.0);
+            texts.push(OwnedScreenText {
+                text: "×".to_owned(),
+                origin: [close_origin[0], close[1] + 6.0],
+                width: close_width,
+                font_size: 13.0,
+                color: if current {
+                    token_color(canvas_core::tokens::DIALOG_TEXT)
+                } else {
+                    palette.title
+                },
+                align: TextAlign::Center,
+            });
+        }
         let mut chip_text = |rect: [f32; 4], label: &str, current: bool| {
             instances.push(chip(
                 rect,
@@ -410,13 +485,6 @@ impl App {
             });
         };
         chip_text(layout.base, self.tr(keys::WHATIF_BASE), active.is_none());
-        for (i, rect) in layout.scenarios.iter().enumerate() {
-            // FR-053 (U3): подпись — из раскладки (та же Ellipsis-строка,
-            // по которой считалась ширина чипа — урок CR-015; при узком
-            // окне подпись усечена по фактической ширине сжатого чипа).
-            let label = layout.scenario_labels.get(i).cloned().unwrap_or_default();
-            chip_text(*rect, &label, active == Some(i));
-        }
         chip_text(layout.new_scenario, "+", false);
         // Счётчик подмен (клик — список; раскрыт — акцент).
         let count = self.scene.whatif_override_count();
@@ -432,8 +500,8 @@ impl App {
         // раскладке); кнопка приглушена без активного сценария.
         let has_overrides = active.is_some() && count > 0;
         let has_active = active.is_some();
-        let has_any_whatif = !self.scene.scenarios.is_empty()
-            || !self.scene.whatif_frozen_names().is_empty();
+        let has_any_whatif =
+            !self.scene.scenarios.is_empty() || !self.scene.whatif_frozen_names().is_empty();
         let freeze_label = match active {
             Some(index)
                 if self
@@ -6157,6 +6225,36 @@ impl App {
                 self.show_toast(
                     self.trf(keys::TOAST_WHATIF_RESET_DONE, &[("{count}", &scenarios)]),
                 );
+                self.request_redraw();
+            }
+            // What-if «✕» подтверждён: удалить один сценарий (по имени —
+            // контракт MCP whatif_scenario_delete), снять одноимённую
+            // заморозку (ghost-колонка не остаётся), персистентно одним
+            // undo-шагом; активация уходит на «Базу», если удалён активный.
+            AppDialog::WhatIfDeleteScenario { name, .. } => {
+                self.dialog = None;
+                if let Some(index) = self.scene.scenarios.iter().position(|s| s.name == name) {
+                    let snapshot = self.scene.canvas.clone();
+                    let removed = self.scene.scenarios[index].line_exprs.len();
+                    self.scene.whatif_unfreeze(&name);
+                    self.scene.whatif_delete_scenario(index);
+                    canvas_core::whatif::scenarios_to_canvas(
+                        &mut self.scene.canvas,
+                        &self.scene.scenarios,
+                    );
+                    let frozen_names = self.scene.whatif_frozen_names();
+                    canvas_core::whatif::frozen_to_canvas(&mut self.scene.canvas, &frozen_names);
+                    if self.scene.canvas != snapshot {
+                        self.scene.push_undo(snapshot);
+                        self.scene.mark_dirty();
+                    }
+                    self.scene.recompute_flow();
+                    let removed = removed.to_string();
+                    self.show_toast(self.trf(
+                        keys::TOAST_WHATIF_DELETED,
+                        &[("{name}", &name), ("{count}", &removed)],
+                    ));
+                }
                 self.request_redraw();
             }
         }
