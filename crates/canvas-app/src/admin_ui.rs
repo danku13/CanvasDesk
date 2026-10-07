@@ -163,44 +163,45 @@ pub fn admin_demo_viewport(viewport: [f32; 2]) -> UiRect {
 /// Слоты шапки (кнопки темы/сброса/«✕») без полной раскладки — hit-rect'ы
 /// реестра (те же формулы, что у [`admin_layout`]; шапка фиксирована —
 /// скролл демо-зоны слоты не сдвигает).
-//
-// TODO(K4/FR-070): migrate `close` to `kit::stage_close_button(panel)` —
-// канонический паттерн «× в углу панели». Сейчас close/theme/reset
-// выстроены в одну строку шапки content (все на content.y, центрированы
-// по HEADER_H-слоту). `stage_close_button(panel)` ставит кнопку в угол
-// панели (panel.right - 34, panel.y + 8) — это оторвёт close от theme/
-// reset по вертикали (theme/reset широкие toggle-кнопки THEME_SLOT_W=170
-// и RESET_SLOT_W=96 — не подходят под `icon_button_rect`). Мигрировать
-// close alone — нарушит визуальную когезию шапки. Правильный фикс —
-// `kit::panel_header(slot, [buttons])` (audit §6.1 K3 entry), который
-// раскладывает все кнопки шапки вместе. Оставлено как TODO до отдельной
-// волны UI-геометрии (I-1: ноль скачка; паритет с
-// `kit_ui::gallery_layout`).
-pub fn admin_hit_slots(viewport: [f32; 2]) -> (UiRect, UiRect, UiRect) {
+///
+/// FR-070 (агент N): миграция на `kit::panel_header` — те же слоты, что у
+/// [`admin_layout`] (один вызов `kit::panel_header` даёт кнопки для обоих).
+/// Канонизация (AGENTS.md I-1): close прижимается к `slot.right -
+/// SPACING_SM` (8px inset), тогда как прежний код ставил close flush к
+/// `content.right` — все 3 кнопки сдвигаются на 8px влево (canonical
+/// panel-header inset, паритет с `kit_ui::gallery_hit_slots`).
+pub fn admin_hit_slots(viewport: [f32; 2], palette: &KitPalette) -> (UiRect, UiRect, UiRect) {
     let vp = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
     let panel = admin_panel(vp);
     let content = panel.inset(&EdgeInsets::uniform(canvas_core::tokens::SPACING_LG));
-    let close = kit::icon_button_rect(
-        UiRect::new(
-            content.right() - kit::ICON_BUTTON_SIZE,
-            content.y,
-            kit::ICON_BUTTON_SIZE,
-            HEADER_H,
-        ),
-        (HAlign::Center, VAlign::Center),
-    );
-    let theme = UiRect::new(
-        close.x - 8.0 - THEME_SLOT_W,
-        content.y,
-        THEME_SLOT_W,
-        kit::BUTTON_HEIGHT,
-    );
-    let reset = UiRect::new(
-        theme.x - 8.0 - RESET_SLOT_W,
-        content.y,
-        RESET_SLOT_W,
-        kit::BUTTON_HEIGHT,
-    );
+    let header_slot = UiRect::new(content.x, content.y, content.w, HEADER_H);
+    // Порядок справа-налево: reset (toggle, левее), theme (toggle), close (icon, правее).
+    let header_buttons = [
+        kit::HeaderButton::Toggle {
+            label_w: RESET_SLOT_W,
+            id: "reset",
+        },
+        kit::HeaderButton::Toggle {
+            label_w: THEME_SLOT_W,
+            id: "theme",
+        },
+        kit::HeaderButton::Icon {
+            kind: kit::HeaderIconKind::Close,
+            id: "close",
+        },
+    ];
+    let (header_layout, _header_style) = kit::panel_header(header_slot, &header_buttons, palette);
+    let mut close = UiRect::default();
+    let mut theme = UiRect::default();
+    let mut reset = UiRect::default();
+    for (r, id) in &header_layout.buttons {
+        match *id {
+            "close" => close = *r,
+            "theme" => theme = *r,
+            "reset" => reset = *r,
+            _ => {}
+        }
+    }
     (theme, reset, close)
 }
 
@@ -223,7 +224,7 @@ pub fn admin_layout(
     let content = panel.inset(&EdgeInsets::uniform(canvas_core::tokens::SPACING_LG));
 
     // Шапка: заголовок слева; справа — «Сброс», тема, «✕» (край).
-    let (theme, reset, close) = admin_hit_slots(viewport);
+    let (theme, reset, close) = admin_hit_slots(viewport, p);
     let title_w = (reset.x - 8.0 - content.x).max(0.0);
     let title = UiRect::new(content.x, content.y + 6.0, title_w, 20.0);
 
@@ -2886,7 +2887,7 @@ mod tests {
                 &mut m,
                 &mut fs,
             );
-            let (theme, reset, close) = admin_hit_slots(vp);
+            let (theme, reset, close) = admin_hit_slots(vp, &palette);
             assert_eq!(theme, lay.theme);
             assert_eq!(reset, lay.reset);
             assert_eq!(close, lay.close);

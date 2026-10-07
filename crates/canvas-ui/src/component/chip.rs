@@ -90,6 +90,75 @@ pub fn chip_strip<'a>(
         .collect()
 }
 
+// === FR-UI-CHIP-STRIP-WRAP: chip strip with Wrap policy ==================
+
+/// FR-UI-CHIP-STRIP-WRAP: chip strip with `RowPolicy::Wrap`
+/// (2-row wrap-overflow + `max_rows` cap).
+///
+/// Closes TODO J/FR-UI-CHIP-STRIP (audit §6.1) — `template_ui.rs:965`
+/// использует `RowPolicy::Wrap` для чипов категорий (не влезающие чипы
+/// переносятся на 2-й ряд вместо сжатия в нулевую ширину, как
+/// `SqueezeTail` — wasm-аudit 2026-09-25: SqueezeTail срезал
+/// «unit-economics» mid-text, выглядело браком). Существующий
+/// [`chip_strip`] поддерживает только `Fit`/`SqueezeTail`, без Wrap.
+///
+/// Поведение:
+/// - Чипы измеряются как [`MeasuredItem::Text`] с `pad_x = 2·CHIP_PAD_H`
+///   и высотой `CHIP_HEIGHT` (бит-в-бит эквивалент [`chip_strip`]);
+/// - Раскладка — `Row { gap: CHIP_GAP, policy: Wrap, cross: Start }`
+///   (жадная упаковка по строкам; ребёнок не влез в строку — перенос);
+/// - **`max_rows` cap**: возвращаются только чипы на строках
+///   `0..max_rows` (row 0 = `slot.y`, row 1 = `slot.y + CHIP_HEIGHT + CHIP_GAP`,
+///   …). Чипы на строках `≥ max_rows` **drop**-ятся (это расширение
+///   `RowPolicy::Wrap`, которая НЕ маскирует переполнение — `chip_strip_wrap`
+///   добавляет явный cap с семантикой «drop tail», в отличие от базового
+///   `Row::lay_out_measured` с `Wrap`, который возвращает ВСЕ rects).
+///
+/// Контракт F-8: цвет/стиль — `chip_style(state, palette)` от потребителя
+/// (как у [`chip_strip`]); здесь — только геометрия.
+pub fn chip_strip_wrap<'a>(
+    slot: UiRect,
+    items: &'a [&str],
+    max_rows: usize,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> Vec<(UiRect, &'a str)> {
+    if items.is_empty() || max_rows == 0 {
+        return Vec::new();
+    }
+    // Измеряем каждого ребёнка как MeasuredItem::Text — бит-в-бит
+    // эквивалент `chip_strip` (text + 2·CHIP_PAD_H, высота CHIP_HEIGHT).
+    let measured: Vec<MeasuredItem> = items
+        .iter()
+        .map(|&label| MeasuredItem::Text {
+            text: label,
+            max_w: None,
+            min_w: 0.0,
+            pad_x: CHIP_PAD_H * 2.0,
+            h: Some(CHIP_HEIGHT),
+        })
+        .collect();
+    let row = Row {
+        gap: CHIP_GAP,
+        cross: CrossAlign::Start,
+        policy: RowPolicy::Wrap,
+        ..Row::default()
+    };
+    let rects = row.lay_out_measured(slot, &measured, m, fs, CHIP_FAMILY, CHIP_FONT_SIZE);
+    // Filter: keep chips on rows 0..max_rows.
+    // Row 0: y in [slot.y, slot.y + CHIP_HEIGHT); row 1: y in [slot.y +
+    // (CHIP_HEIGHT + CHIP_GAP), …); row i: y in [slot.y + i·(CHIP_HEIGHT +
+    // CHIP_GAP), …). Порог: y < slot.y + max_rows · (CHIP_HEIGHT + CHIP_GAP).
+    let row_step = CHIP_HEIGHT + CHIP_GAP;
+    let max_y_threshold = slot.y + (max_rows as f32) * row_step;
+    rects
+        .into_iter()
+        .zip(items.iter())
+        .filter(|(r, _)| r.y < max_y_threshold - f32::EPSILON)
+        .map(|(r, &label)| (r, label))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,5 +267,76 @@ mod tests {
         for (i, (_, label)) in chips.iter().enumerate() {
             assert_eq!(*label, labels[i], "порядок labels сохранён");
         }
+    }
+
+    // === FR-UI-CHIP-STRIP-WRAP: tests =====================================
+
+    /// 3 чипа в широком слоте → все на 1-й строке (y = slot.y);
+    /// `max_rows = 2` не ограничивает (1 строка ≤ 2).
+    #[test]
+    fn wrap_three_chips_fit_in_one_row() {
+        let mut fs = cosmic_text::FontSystem::new();
+        load_display_font(&mut fs);
+        let mut m = TextMeasurer::new();
+        let labels = ["Все", "API", "DB"];
+        let slot = UiRect::new(0.0, 0.0, 400.0, 60.0);
+        let chips = chip_strip_wrap(slot, &labels, 2, &mut m, &mut fs);
+        assert_eq!(chips.len(), 3, "все 3 чипа на 1-й строке");
+        // Все на y = slot.y (строка 0).
+        for (r, _) in &chips {
+            assert!((r.y - slot.y).abs() < 0.01, "чип на строке 0 (y = slot.y)");
+            assert!((r.h - CHIP_HEIGHT).abs() < 0.01);
+        }
+        // Порядок labels сохранён.
+        for (i, (_, label)) in chips.iter().enumerate() {
+            assert_eq!(*label, labels[i]);
+        }
+        // Первый чип — слева (slot.x).
+        assert!((chips[0].0.x - slot.x).abs() < 0.01);
+        // Зазор между чипами = CHIP_GAP.
+        let gap = chips[1].0.x - chips[0].0.right();
+        assert!((gap - CHIP_GAP).abs() < 0.01);
+    }
+
+    /// 5 чипов в узком слоте → wrap на 2-ю строку. `max_rows = 1` →
+    /// дроп чипов на 2-й строке (возвращаются только чипы строки 0);
+    /// `max_rows = 2` → все чипы возвращены. Паритет с template_ui:965
+    /// (SqueezeTail сжимал «unit-economics» mid-text — Wrap даёт 2-ю
+    /// строку вместо сжатия).
+    #[test]
+    fn wrap_five_chips_narrow_slot_drops_beyond_max_rows() {
+        let mut fs = cosmic_text::FontSystem::new();
+        load_display_font(&mut fs);
+        let mut m = TextMeasurer::new();
+        // Длинные подписи → узкий слот вызывает перенос на 2-ю строку.
+        let labels = [
+            "Все категории",
+            "Очень длинная категория",
+            "API Gateway",
+            "Database",
+            "Network",
+        ];
+        let slot = UiRect::new(0.0, 0.0, 80.0, 80.0); // узкий — 1 чип на строку
+                                                      // max_rows = 1 → только чипы на строке 0 возвращены.
+        let chips_one_row = chip_strip_wrap(slot, &labels, 1, &mut m, &mut fs);
+        // Хотя бы 1 чип дропнут (на 2-й строке и далее).
+        assert!(
+            chips_one_row.len() < labels.len(),
+            "хотя бы 1 чип дропнут при max_rows=1 (узкий слот → wrap)"
+        );
+        // Все возвращённые чипы — на строке 0 (y = slot.y).
+        for (r, _) in &chips_one_row {
+            assert!((r.y - slot.y).abs() < 0.01, "все на строке 0");
+        }
+        // max_rows = 5 → все 5 чипов возвращены (5 строк хватает).
+        let chips_all = chip_strip_wrap(slot, &labels, 5, &mut m, &mut fs);
+        assert_eq!(chips_all.len(), labels.len(), "все 5 чипов при max_rows=5");
+        // Хотя бы 2 различных Y (есть перенос на 2-ю строку).
+        let distinct_y: std::collections::HashSet<_> =
+            chips_all.iter().map(|(r, _)| r.y.to_bits()).collect();
+        assert!(
+            distinct_y.len() >= 2,
+            "wrap переносит часть чипов на 2-ю строку"
+        );
     }
 }

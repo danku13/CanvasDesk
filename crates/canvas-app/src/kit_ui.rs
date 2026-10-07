@@ -392,54 +392,46 @@ pub fn gallery_layout(
     let mut y = content.y;
     let full_w = content.w;
 
-    // Шапка: заголовок слева, кнопка темы справа (перед ✕), ✕ — край
-    // (ФИКСИРОВАНА — не скроллится: hit-слоты реестра без изменений)
+    // Шапка: заголовок слева, кнопка темы + «✕» справа — раскладываются
+    // вместе через `kit::panel_header` (FR-070, агент L: panel_header
+    // раскладывает toggle + icon-кнопки в едином right-aligned ряду с
+    // каноничным inset SPACING_SM и зазором GAP_CONTROLS). Шапка
+    // ФИКСИРОВАНА — не скроллится (hit-слоты реестра без изменений).
     //
-    // TODO(K3/FR-070): migrate `close` to `kit::stage_close_button(panel)`
-    // (или `stage_close_button_lg` если требуется LG-вариант). Сейчас close
-    // и theme выстроены в одну строку шапки content (y = content.y, оба
-    // центрированы по 30px-слоту). `stage_close_button(panel)` ставит кнопку
-    // в угол панели (panel.right - 34, panel.y + 8) — это оторвёт close от
-    // theme по вертикали (theme останется на content.y = panel.y + 12).
-    //
-    // theme — широкая toggle-кнопка (THEME_SLOT_W=170, BUTTON_HEIGHT=30),
-    // не квадратная icon-button: не подходит ни под `stage_close_button`,
-    // ни под `icon_button_rect`. Мигрировать close alone — нарушит визуальную
-    // когезию шапки (close уедет в угол, theme останется в content.y).
-    //
-    // Правильный фикс — новый kit-компонент `kit::panel_header(slot,
-    // [buttons])` (audit §6.1: см. запись K3 от этой волны), который
-    // раскладывает ВСЕ кнопки шапки вместе (title | theme | reset | close) с
-    // единым inset и центрированием. Это стратегический kit-компонент —
-    // требует UX-ревью форм-фактора (сейчас 30px-slot центрирование;
-    // миграция на `stage_close_button`-стиль меняет шапку визуально).
-    // Оставлено как TODO до отдельной волны UI-геометрии шапки (I-1: ноль
-    // скачка). Паритет с `admin_ui::admin_hit_slots` (там же: close/theme/
-    // reset в одной строке content).
+    // Канонизация (AGENTS.md I-1): `kit::panel_header` прижимает close к
+    // `slot.right - SPACING_SM` (8px inset), тогда как прежний код ставил
+    // close flush к `content.right` (0 inset) — close и theme сдвигаются
+    // на 8px влево (внутрь панели), визуально canonical-выравнивание с
+    // `kit::modal`/`kit::panel` хромой.
     let title = UiRect::new(
         content.x,
         y,
         (full_w - 2.0 * (kit::ICON_BUTTON_SIZE + 8.0)).max(0.0),
         30.0,
     );
-    let close = kit::icon_button_rect(
-        UiRect::new(
-            content.right() - kit::ICON_BUTTON_SIZE,
-            y,
-            kit::ICON_BUTTON_SIZE,
-            30.0,
-        ),
-        (
-            canvas_ui::layout::HAlign::Center,
-            canvas_ui::layout::VAlign::Center,
-        ),
-    );
-    let theme = UiRect::new(
-        close.x - 8.0 - THEME_SLOT_W,
-        y + (30.0 - kit::BUTTON_HEIGHT) / 2.0,
-        THEME_SLOT_W,
-        kit::BUTTON_HEIGHT,
-    );
+    let header_slot = UiRect::new(content.x, y, content.w, 30.0);
+    // Порядок справа-налево: theme (toggle, левее), close (icon, правее).
+    // `panel_header` класть кнопки right-to-left от `slot.right - SPACING_SM`.
+    let header_buttons = [
+        kit::HeaderButton::Toggle {
+            label_w: THEME_SLOT_W,
+            id: "theme",
+        },
+        kit::HeaderButton::Icon {
+            kind: kit::HeaderIconKind::Close,
+            id: "close",
+        },
+    ];
+    let (header_layout, _header_style) = kit::panel_header(header_slot, &header_buttons, p);
+    let mut close = UiRect::default();
+    let mut theme = UiRect::default();
+    for (r, id) in &header_layout.buttons {
+        match *id {
+            "close" => close = *r,
+            "theme" => theme = *r,
+            _ => {}
+        }
+    }
     y += 30.0 + SECTION_GAP;
     // Окно скролла секций (шапка выше — фиксирована)
     let sections_viewport = UiRect::new(content.x, y, content.w, (content.bottom() - y).max(0.0));
@@ -1431,35 +1423,36 @@ pub fn gallery_layout(
 /// Слот-раскладка интерактивных зон для hit-rect'ов реестра (без
 /// измерителя — фиксированные слоты шапки; совпадает с полной раскладкой —
 /// одна геометрия для ввода и отрисовки). Возврат: (кнопка темы, «✕»).
-//
-// TODO(K4/FR-070): migrate `close` to `kit::stage_close_button(panel)` —
-// см. комментарий в `gallery_layout` выше (close/theme в одной строке
-// шапки content; `stage_close_button(panel)` оторвёт их по вертикали —
-// theme широкая toggle-кнопка THEME_SLOT_W=170, не подходит под
-// `icon_button_rect`). Правильный фикс — `kit::panel_header(slot,
-// [buttons])` (audit §6.1 K3 entry).
-pub fn gallery_hit_slots(viewport: [f32; 2]) -> (UiRect, UiRect) {
+///
+/// FR-070 (агент N): миграция на `kit::panel_header` — те же слоты, что у
+/// [`gallery_layout`] (один вызов `kit::panel_header` даёт кнопки для обоих).
+/// Палитра нужна только для separator-style (который hit-слотам не нужен),
+/// но подпись сохранена для симметрии с `gallery_layout`.
+pub fn gallery_hit_slots(viewport: [f32; 2], palette: &KitPalette) -> (UiRect, UiRect) {
     let vp = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
     let panel = gallery_panel(vp);
     let content = panel.inset(&EdgeInsets::uniform(canvas_core::tokens::SPACING_LG));
-    let close = kit::icon_button_rect(
-        UiRect::new(
-            content.right() - kit::ICON_BUTTON_SIZE,
-            content.y,
-            kit::ICON_BUTTON_SIZE,
-            30.0,
-        ),
-        (
-            canvas_ui::layout::HAlign::Center,
-            canvas_ui::layout::VAlign::Center,
-        ),
-    );
-    let theme = UiRect::new(
-        close.x - 8.0 - THEME_SLOT_W,
-        content.y + (30.0 - kit::BUTTON_HEIGHT) / 2.0,
-        THEME_SLOT_W,
-        kit::BUTTON_HEIGHT,
-    );
+    let header_slot = UiRect::new(content.x, content.y, content.w, 30.0);
+    let header_buttons = [
+        kit::HeaderButton::Toggle {
+            label_w: THEME_SLOT_W,
+            id: "theme",
+        },
+        kit::HeaderButton::Icon {
+            kind: kit::HeaderIconKind::Close,
+            id: "close",
+        },
+    ];
+    let (header_layout, _header_style) = kit::panel_header(header_slot, &header_buttons, palette);
+    let mut close = UiRect::default();
+    let mut theme = UiRect::default();
+    for (r, id) in &header_layout.buttons {
+        match *id {
+            "close" => close = *r,
+            "theme" => theme = *r,
+            _ => {}
+        }
+    }
     (theme, close)
 }
 

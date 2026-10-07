@@ -35,13 +35,17 @@ pub use crate::component::button::{
 pub use crate::component::chat_bubble::{
     chat_bubble, paint_chat_bubble, ChatBubbleKind, ChatBubbleLayout, ChatBubbleStyle,
 };
-pub use crate::component::chip::{chip_strip, CHIP_FAMILY, CHIP_FONT_SIZE, CHIP_GAP};
+pub use crate::component::chip::{
+    chip_strip, chip_strip_wrap, CHIP_FAMILY, CHIP_FONT_SIZE, CHIP_GAP,
+};
 pub use crate::component::crumbs::{crumbs, crumbs_active_index};
 pub use crate::component::dropdown::{
-    anchored_stack, dropdown_menu, toast_area, tooltip, viewport_clamp, AnchoredSide,
-    DropdownLayout, TooltipLayout,
+    anchored_stack, dropdown_menu, toast_area, tooltip, tooltip_rect_anchored, viewport_clamp,
+    AnchoredSide, DropdownLayout, TooltipLayout,
 };
-pub use crate::component::footer::{footer_buttons, footer_buttons_measured};
+pub use crate::component::footer::{
+    footer_buttons, footer_buttons_measured, split_footer_buttons, FooterGroup,
+};
 pub use crate::component::icon::{icon_composition, IconKind};
 pub use crate::component::list::{list_rows, scroll_bar, ScrollState};
 pub use crate::component::modal::{focus_order, modal, modal_style, ModalLayout};
@@ -51,6 +55,10 @@ pub use crate::component::overflow_arrow::{
 pub use crate::component::panel::{
     backdrop, card, control_style_of, panel_content, panel_rect, panel_style, panel_style_of,
     CardLayout,
+};
+pub use crate::component::panel_header::{
+    paint_panel_separator, panel_header, HeaderButton, IconKind as HeaderIconKind,
+    PanelHeaderLayout, PanelHeaderStyle,
 };
 pub use crate::component::radio_card::{
     paint_radio_card, radio_card, RadioCardLayout, RadioCardStyle, RADIO_DESC_LINE_H,

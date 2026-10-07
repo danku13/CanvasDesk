@@ -24,6 +24,7 @@ pub mod list;
 pub mod modal;
 pub mod overflow_arrow;
 pub mod panel;
+pub mod panel_header;
 pub mod radio_card;
 pub mod row;
 pub mod search_panel;

@@ -23,6 +23,7 @@
 
 use canvas_core::schemes::{SchemeManifest, SchemeRegistry};
 use canvas_ui::geometry::{EdgeInsets, UiRect, UiVec2};
+use canvas_ui::kit;
 use canvas_ui::layout::{
     constrain, pad, stack, Column, CrossAlign, HAlign, MeasuredItem, Row, VAlign,
 };
@@ -46,7 +47,14 @@ pub const HEADER_H: f32 = 40.0;
 /// Высота поля фильтра.
 pub const INPUT_H: f32 = 34.0;
 /// Высота чипа категории.
-pub const CHIP_H: f32 = 28.0;
+///
+/// M1 (FR-UI-CHIP-STRIP): мигрировано на `kit::chip_strip` — высота
+/// каноническая кита `CHIP_HEIGHT = 24` (прежний локальный литерал 28
+/// заменён на реэкспорт кита — single source of truth, AGENTS.md §4).
+/// Визуальное следствие: полоса чипов на 4 px ниже — acceptable
+/// canonicalization (audit §6.1, I-1 FR-046 — канонизация к kit-токенам
+/// явно желаема аудит-отчётом).
+pub use canvas_ui::kit::CHIP_HEIGHT as CHIP_H;
 /// Полный шаг строки списка (строка + зазор).
 pub const ROW_H: f32 = 62.0;
 /// Высота видимой части строки (шаг минус зазор `SPACING_S`).
@@ -55,12 +63,11 @@ pub const ROW_INNER_H: f32 = ROW_H - canvas_core::tokens::SPACING_S;
 pub const FOOTER_H: f32 = 26.0;
 /// Внутренние поля панели (spacing-scale).
 pub const PANEL_PAD: f32 = canvas_core::tokens::SPACING_LG;
-/// Ширина чипа категории (фикс — D2 CJM: полный ряд «Все» + N категорий
-/// при PANEL_W 660 (N=5 после аудита каталога 2026-09, ранее — 4 при
-/// PANEL_W 560); design-константа, не эвристика).
-pub const CHIP_W: f32 = 108.0;
-/// Ширина чипа «Все».
-pub const CHIP_ALL_W: f32 = 56.0;
+// M1 (FR-UI-CHIP-STRIP): `CHIP_W`/`CHIP_ALL_W` (108/56) удалены — ширина
+// чипов измеряется через `kit::chip_strip` (`MeasuredItem::Text` с
+// `pad_x = 2*CHIP_PAD_H = 16`), а не фиксируется литералом. Полный ряд
+// чипов «Все» + N категорий по-прежнему помещается в PANEL_W=660
+// (внутренняя ширина 636 — измеренный ряд ≤ ~280 при 6 категориях).
 /// Кегль заголовка строки.
 // FR-046 W-d аудит §4: токен-источник `FONT_BODY` (13 — body вариант
 // типографической шкалы UI-оверлеев). Прежний локальный литерал 13.0
@@ -221,27 +228,37 @@ pub struct GalleryLayout {
 /// Stack/Constrain. W3.2 (каталог `docs/plans/fr-068-w3-consumer-migration.md`):
 /// дети скелета/чипов/строк выражаются [`MeasuredItem`] —
 /// `Row/Column::lay_out_measured` без ручных фиксированных детей.
+///
+/// M1 (FR-UI-CHIP-STRIP): `ru` — выбор языка подписи чипа для замера
+/// ширины (кит `chip_strip` измеряет текст — нужна конкретная подпись).
+/// Сам язык строки (RU/EN) сохранён в `chip_rects` как `Option<String>`
+/// (ключ категории; подпись рендера выбирается по языку пользователя).
 pub fn layout(
     viewport: [f32; 2],
     list: &[&SchemeManifest],
     state: &SchemeGalleryState,
+    ru: bool,
     visible_cats: &[String],
 ) -> GalleryLayout {
     // W3.2: замерщик — канонические shared-точки на вызов (Text-детей
     // нет — замерщик геометрию не читает).
     let mut m = TextMeasurer::new();
     let mut fs = canvas_render::text::measure_font_system();
-    layout_with(viewport, list, state, &mut m, &mut fs, visible_cats)
+    layout_with(viewport, list, state, ru, &mut m, &mut fs, visible_cats)
 }
 
 /// То же с ЯВНЫМ замерщиком (для потребителей, уже держащих
 /// `measure_font_system` — двойной лок глобального FontSystem невозможен).
 /// FR-087: `visible` — allow-list категорий схем (роль/ручной фильтр) —
 /// чипы категорий строятся только из видимых.
+///
+/// M1 (FR-UI-CHIP-STRIP): `ru` — выбор языка подписи чипа для замера
+/// ширины через `kit::chip_strip`. См. [`layout`].
 pub fn layout_with(
     viewport: [f32; 2],
     list: &[&SchemeManifest],
     state: &SchemeGalleryState,
+    ru: bool,
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
     visible_cats: &[String],
@@ -324,50 +341,37 @@ pub fn layout_with(
     // (канонический паттерн «× в углу модали»).
     let close = canvas_ui::kit::stage_close_button(panel);
 
-    // Чипы: «Все» + категории — Row с политикой Fit (все элементы
-    // раскладываются; переполнение слота НЕ маскируется — ловится
-    // тестом `chips_all_categories_fit`/G4-линтом; прежний молчаливый
-    // `break`-кламп удалён). Ширина «Все» всегда влезает: панель ≥ 280,
-    // слот чипов ≥ 256.
+    // Чипы: «Все» + категории — M1 (FR-UI-CHIP-STRIP): мигрировано на
+    // `kit::chip_strip`. Кит измеряет подпись (CHIP_FAMILY = SANS_FAMILY,
+    // CHIP_FONT_SIZE = 12 — паритет метрик рендера), ширина чипа =
+    // text_w + 2·CHIP_PAD_H (16), высота = CHIP_HEIGHT = 24, зазор =
+    // CHIP_GAP = SPACING_S — single source of truth (AGENTS.md §4).
+    // squeeze=false → RowPolicy::Fit (паритет прежней ручной Row(Fit):
+    // переполнение НЕ маскируется — ловится G4-линтом; прежний молчаливый
+    // `break`-кламп удалён). Канонизация: высота чипа 28→24 (4px короче
+    // — panel chrome ниже, shifts everything below by 4px; acceptable per
+    // audit §6.1, I-1 FR-046 — canonicalization to kit tokens desired).
     //
-    // TODO(J/FR-UI-CHIP-STRIP): migrate to `kit::chip_strip`. The kit's
-    // chip_strip uses `MeasuredItem::Text` with `pad_x = 2*CHIP_PAD_H = 16`
-    // (text-measured widths) and `h = CHIP_HEIGHT = 24` (kit canonical).
-    // Existing scheme_gallery uses `MeasuredItem::Fixed` with `CHIP_W = 108`
-    // (fixed widths) and `h = CHIP_H = 28` (4px taller than kit's
-    // `CHIP_HEIGHT`). Migrating would change:
-    // 1. chip height 28 → 24 (4px shorter — visual change in row height +
-    //    panel layout: `chrome = HEADER_H + INPUT_H + CHIP_H + FOOTER_H +
-    //    PANEL_PAD * 3.0` — shifts everything below chips by 4px).
-    // 2. chip widths fixed 108 → measured text width (variable per label) —
-    //    would break the test `chips_all_categories_fit` (asserts
-    //    `chips_w <= inner_w` based on fixed widths).
-    // Separate wave of UI-geometry canonicalization needed (align
-    // `CHIP_H`/`CHIP_W` constants with kit's `CHIP_HEIGHT`/measured widths +
-    // update test fixture). The kit's `chip_strip` API itself fits (squeeze
-    // = false → RowPolicy::Fit, matches existing); only the constants differ.
-    let mut chip_children = vec![MeasuredItem::Fixed {
-        w: CHIP_ALL_W,
-        h: CHIP_H,
-    }];
+    // Язык подписи (`ru`) выбирает «Все»/«All» + category_ru/category_en
+    // для ЗАМЕРА ширины; сам ключ категории сохранён отдельно
+    // (`chip_keys: Option<String>`, None для «Все») — рендер в overlays.rs
+    // выбирает подпись по языку пользователя.
+    let all_label = if ru { "Все" } else { "All" };
+    let cats = categories(SchemeRegistry::embedded(), visible_cats);
+    let mut chip_labels: Vec<String> = vec![all_label.to_owned()];
     let mut chip_keys: Vec<Option<String>> = vec![None];
-    for (key, _, _) in categories(SchemeRegistry::embedded(), visible_cats) {
-        chip_children.push(MeasuredItem::Fixed {
-            w: CHIP_W,
-            h: CHIP_H,
-        });
-        chip_keys.push(Some(key));
+    for (key, cat_ru, cat_en) in &cats {
+        chip_labels.push(if ru { cat_ru.clone() } else { cat_en.clone() });
+        chip_keys.push(Some(key.clone()));
     }
-    let chip_layout = Row {
-        gap: canvas_core::tokens::SPACING_S,
-        cross: CrossAlign::Start,
-        ..Row::default()
-    }
-    .lay_out_measured(chips_slot, &chip_children, m, fs, FAMILY, 12.0);
-    let chip_rects: Vec<([f32; 4], Option<String>)> = chip_layout
+    let labels_ref: Vec<&str> = chip_labels.iter().map(|s| s.as_str()).collect();
+    let chips = kit::chip_strip(chips_slot, &labels_ref, false, m, fs);
+    // Порядок items сохранён kit'ом (документировано в chip_strip): result[i]
+    // ↔ items[i]. Zip с chip_keys для проброса ключа категории в рендер.
+    let chip_rects: Vec<([f32; 4], Option<String>)> = chips
         .iter()
         .zip(chip_keys)
-        .map(|(r, key)| (as_rect(r), key))
+        .map(|((r, _), key)| ([r.x, r.y, r.w, r.h], key))
         .collect();
 
     // Строки окна видимости: Column с зазором `SPACING_S`, видимая часть
@@ -438,7 +442,7 @@ pub fn row_labels(
     fs: &mut cosmic_text::FontSystem,
     visible_cats: &[String],
 ) -> Vec<RowLabel> {
-    let lay = layout_with(viewport, list, state, measurer, fs, visible_cats);
+    let lay = layout_with(viewport, list, state, ru, measurer, fs, visible_cats);
     let max_w = (lay.row_rects.first().map(|r| r[2]).unwrap_or(0.0) - ROW_TEXT_PAD * 2.0).max(0.0);
     lay.visible_rows
         .iter()
@@ -641,7 +645,7 @@ mod tests {
         let st = state();
         let list = rows(registry, &st, &all_visible(registry));
         // Инвариант 320×240: панель помещается, хотя бы одна строка видна.
-        let lay = layout([320.0, 240.0], &list, &st, &all_visible(registry));
+        let lay = layout([320.0, 240.0], &list, &st, true, &all_visible(registry));
         assert!(lay.panel_rect[2] <= 320.0);
         assert!(lay.panel_rect[3] <= 240.0);
         assert_eq!(lay.visible_rows.len(), 1, "одна строка в окне");
@@ -649,7 +653,7 @@ mod tests {
         // схем (аудит 2026-09: 6 → 10) выше окна — окно видимости
         // показывает вместившиеся строки, остальное добирает скролл
         // (clamp_scroll приводит последнюю схему в видимость).
-        let lay = layout([1280.0, 800.0], &list, &st, &all_visible(registry));
+        let lay = layout([1280.0, 800.0], &list, &st, true, &all_visible(registry));
         assert!(
             !lay.visible_rows.is_empty() && lay.visible_rows.len() <= list.len(),
             "окно видимости непустое и не больше списка"
@@ -662,7 +666,13 @@ mod tests {
         let mut scrolled = st.clone();
         scrolled.selected = list.len() - 1;
         clamp_scroll(&mut scrolled, lay.visible_rows.len());
-        let lay2 = layout([1280.0, 800.0], &list, &scrolled, &all_visible(registry));
+        let lay2 = layout(
+            [1280.0, 800.0],
+            &list,
+            &scrolled,
+            true,
+            &all_visible(registry),
+        );
         assert!(
             lay2.visible_rows.contains(&(list.len() - 1)),
             "последняя схема доступна прокруткой"
@@ -678,8 +688,26 @@ mod tests {
         let registry = SchemeRegistry::embedded();
         let st = state();
         let list = rows(registry, &st, &all_visible(registry));
+        // M1 (FR-UI-CHIP-STRIP): чипы измеряются kit::chip_strip — замер
+        // тот же (TextMeasurer + SANS_FAMILY + CHIP_FONT_SIZE=12). Тест
+        // повторяет замер и проверяет, что измеренный ряд помещается в
+        // слот (без переполнения — RowPolicy::Fit НЕ маскирует).
+        //
+        // ВАЖНО: используется `layout_with` с локальным FontSystem (а не
+        // `layout` с глобальным `measure_font_system()`) — иначе двойной
+        // лок глобального мьютекса (контракт W3.2, прецедент 2026-09-26).
+        let mut m = TextMeasurer::new();
+        let mut fs = font_system();
         for viewport in [[1280.0, 800.0], [1024.0, 768.0], [800.0, 600.0]] {
-            let lay = layout(viewport, &list, &st, &all_visible(registry));
+            let lay = layout_with(
+                viewport,
+                &list,
+                &st,
+                true,
+                &mut m,
+                &mut fs,
+                &all_visible(registry),
+            );
             assert_eq!(
                 lay.chip_rects.len(),
                 1 + categories(registry, &all_visible(registry)).len(),
@@ -687,17 +715,40 @@ mod tests {
                 viewport
             );
             // Полный ряд реально помещается в слот чипов (без переполнения).
-            let chips_w = CHIP_ALL_W
-                + canvas_core::tokens::SPACING_S
-                + categories(registry, &all_visible(registry)).len() as f32
-                    * (CHIP_W + canvas_core::tokens::SPACING_S)
-                - canvas_core::tokens::SPACING_S;
+            // Замер: каждый чип = text_w + 2·CHIP_PAD_H; зазор = SPACING_S
+            // (= CHIP_GAP). Повторяет формулу kit::chip_strip.
+            let pad2 = 2.0 * canvas_ui::kit::CHIP_PAD_H;
+            let gap = canvas_ui::kit::CHIP_GAP;
+            let mut chips_w = m.width_of(
+                &mut fs,
+                "Все",
+                canvas_render::text::SANS_FAMILY,
+                canvas_ui::kit::CHIP_FONT_SIZE,
+            ) + pad2;
+            for (_, ru_label, _) in categories(registry, &all_visible(registry)) {
+                let w = m.width_of(
+                    &mut fs,
+                    &ru_label,
+                    canvas_render::text::SANS_FAMILY,
+                    canvas_ui::kit::CHIP_FONT_SIZE,
+                ) + pad2;
+                chips_w += gap + w;
+            }
             let inner_w = lay.panel_rect[2] - PANEL_PAD * 2.0;
             assert!(
                 chips_w <= inner_w + 0.01,
                 "ряд чипов {chips_w} шире слота {inner_w} при {:?}",
                 viewport
             );
+            // Дополнительно: правый край последнего чипа — внутри слота
+            // (поведенческий ассерт, не завязенный на формулу ширины).
+            if let Some((last_rect, _)) = lay.chip_rects.last() {
+                assert!(
+                    last_rect[0] + last_rect[2] <= lay.panel_rect[0] + inner_w + 0.01,
+                    "последний чип выходит за слот при {:?}",
+                    viewport
+                );
+            }
         }
     }
 
@@ -752,7 +803,7 @@ mod tests {
         let mut st = state();
         let list = rows(registry, &st, &all_visible(registry));
         assert!(list.len() >= 10, "каталог 10+ схем (аудит 2026-09)");
-        let lay = layout([800.0, 560.0], &list, &st, &all_visible(registry));
+        let lay = layout([800.0, 560.0], &list, &st, true, &all_visible(registry));
         let visible = lay.visible_rows.len();
         assert!(visible < list.len(), "окно меньше списка — скролл нужен");
         // Колесо вниз до упора: щелчок = −y · WHEEL_ROWS_PER_LINE.
@@ -766,7 +817,7 @@ mod tests {
             guard += 1;
             assert!(guard <= list.len(), "скролл обязан сойтись");
         }
-        let lay_end = layout([800.0, 560.0], &list, &st, &all_visible(registry));
+        let lay_end = layout([800.0, 560.0], &list, &st, true, &all_visible(registry));
         assert_eq!(
             st.scroll_top,
             list.len() - visible,
@@ -793,7 +844,7 @@ mod tests {
         st.scroll_top = list.len() - visible;
         st.selected = 0;
         clamp_scroll(&mut st, visible);
-        let lay_sel = layout([800.0, 560.0], &list, &st, &all_visible(registry));
+        let lay_sel = layout([800.0, 560.0], &list, &st, true, &all_visible(registry));
         assert!(
             lay_sel.visible_rows.contains(&0),
             "clamp_scroll вернул выбранную строку в окно"
@@ -805,7 +856,7 @@ mod tests {
         let registry = SchemeRegistry::embedded();
         let st = state();
         let list = rows(registry, &st, &all_visible(registry));
-        let lay = layout([1280.0, 800.0], &list, &st, &all_visible(registry));
+        let lay = layout([1280.0, 800.0], &list, &st, true, &all_visible(registry));
         let rect = lay.row_rects[0];
         assert_eq!(
             row_at(&lay, [rect[0] + 4.0, rect[1] + 4.0]),
@@ -846,7 +897,7 @@ mod tests {
         let viewports = [[1280.0, 800.0], [1024.0, 640.0], [800.0, 560.0]];
         for ru in [true, false] {
             for vp in viewports {
-                let lay = layout(vp, &list, &st, &all_visible(registry));
+                let lay = layout(vp, &list, &st, ru, &all_visible(registry));
                 // Панель внутри вьюпорта (маржа xl).
                 assert!(
                     lay.panel_rect[0] >= canvas_core::tokens::SPACING_XL - 0.01,
@@ -934,7 +985,7 @@ mod tests {
         // onboarding, который App-хелпер добавляет поверх фильтра роли).
         let cats = categories(registry, &visible);
         assert_eq!(cats.len(), 3, "business + framework + onboarding");
-        let lay = layout([1280.0, 800.0], &list, &st, &visible);
+        let lay = layout([1280.0, 800.0], &list, &st, true, &visible);
         assert_eq!(lay.chip_rects.len(), 4, "«Все» + 3 видимых чипа");
         // Без onboarding в списке — он не появляется сам (чистая функция
         // добавляет только App-хелпер `visible_scheme_categories`).

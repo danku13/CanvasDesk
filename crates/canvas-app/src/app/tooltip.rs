@@ -165,7 +165,16 @@ struct StackCard {
 ///
 /// TODO(FR-UI-ANCHORED-STACK, audit §6.1): миграция на
 /// [`canvas_ui::kit::anchored_stack`] отложена — у тултипа ДВЕ
-/// асимметрии, не выражаемые одним параметром `gap` kit-функции:
+/// асимметрии, не выражаемые одним параметром `gap` kit-функции.
+/// **Kit extension candidate**: `anchored_stack` needs an
+/// `anchor_offset: (f32, f32)` parameter to support asymmetric cursor
+/// offsets (current kit API takes `gap: f32` only — natural position is
+/// `anchor.edge + gap`, but tooltip requires `cursor.x +
+/// TOOLTIP_OFFSET.x=14` / `cursor.y + TOOLTIP_OFFSET.y=18`, with inter-card
+/// `TOOLTIP_STACK_GAP=8`). Until the kit supports per-axis anchor offsets
+/// (separate from inter-card gap), the current implementation
+/// (`kit::tooltip` for the first rect + manual stack with
+/// `TOOLTIP_STACK_GAP` inside) is correct and preserves visual parity.
 ///
 /// 1. **Якорь — точка (курсор), не rect.** `anchored_stack` принимает
 ///    `anchor: UiRect` (правый край ноды в suggest). Курсор моделируется
