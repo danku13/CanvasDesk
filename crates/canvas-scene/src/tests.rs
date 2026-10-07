@@ -2701,6 +2701,41 @@ fn whatif_autoname_picks_first_free_slot() {
     assert_eq!(scene.scenarios[again].name, "Сценарий 1");
 }
 
+/// Полный сброс what-if (UI-кнопка «Сброс», CJM-фикс): все сценарии с
+/// подменами и все заморозки снимаются, активация — «База», текст нод
+/// не мутируется (инвариант 2). Возвращает счётчики для тоста/диалога.
+#[test]
+fn whatif_reset_all_clears_scenarios_frozen_and_activation() {
+    let mut scene = mcp_scene();
+    let base_json = scene.canvas.to_json().expect("сериализация базы");
+    scene.whatif_active = true;
+    let s1 = scene.whatif_create_scenario("S1").expect("S1");
+    scene.whatif_create_scenario("S2").expect("S2");
+    let node_id = scene.canvas.nodes[0].id.clone();
+    scene.scenarios[s1]
+        .line_exprs
+        .insert((node_id.clone(), 0), "a = 20".to_owned());
+    scene.whatif_activate(Some(s1));
+    scene
+        .whatif_freeze_active()
+        .expect("заморозка активного сценария");
+    assert_eq!(scene.frozen.len(), 1);
+
+    let (scenarios, overrides) = scene.whatif_reset_all();
+    assert_eq!(scenarios, 2, "два сценария удалены");
+    assert_eq!(overrides, 1, "одна подмена суммарно");
+    assert!(scene.scenarios.is_empty(), "сценариев нет");
+    assert_eq!(scene.active_scenario, None, "активация — «База»");
+    assert!(scene.frozen.is_empty(), "заморозки сняты");
+    assert_eq!(
+        scene.canvas.to_json().expect("сериализация базы"),
+        base_json,
+        "текст нод не мутирован (инвариант 2): персистентность — вызывающий"
+    );
+    // Повторный сброс пустого состояния — no-op с нулями.
+    assert_eq!(scene.whatif_reset_all(), (0, 0));
+}
+
 // --- FR-050 этап A: Н4 fail-fast дубль-входов; Р-4 кэш авто-строк ---
 
 /// FR-050 Н4: fail-fast дубль-входов — прямое `edge_create` со вторым

@@ -237,13 +237,28 @@ impl App {
                 );
             }
             BarAction::Reset => {
-                // Сброс подмен активного сценария — runtime-only.
-                if let Some(index) = self.scene.active_scenario {
-                    if let Some(scenario) = self.scene.scenarios.get_mut(index) {
-                        scenario.line_exprs.clear();
-                    }
-                    self.scene.recompute_flow();
+                // Полный сброс (CJM-фикс): удалить ВСЕ сценарии + подмены +
+                // заморозки, персистентно в `.canvas` (раньше — чистка только
+                // подмен АКТИВНОГО сценария runtime-only: файл не менялся,
+                // после переоткрытия всё возвращалось; кейс «собираю новую
+                // схему → нужен чистый what-if» не решался). Деструктивно —
+                // confirm-диалог (паттерн «✕ чипа» из дизайн-дока whatif-bar).
+                let overrides = self
+                    .scene
+                    .scenarios
+                    .iter()
+                    .map(|s| s.line_exprs.len())
+                    .sum::<usize>();
+                let frozen = self.scene.whatif_frozen_names().len();
+                let scenarios = self.scene.scenarios.len();
+                if scenarios == 0 && frozen == 0 {
+                    return; // сбрасывать нечего
                 }
+                self.dialog = Some(AppDialog::WhatIfReset {
+                    scenarios,
+                    overrides,
+                });
+                self.request_redraw();
             }
             BarAction::Freeze => {
                 // FR-064 P2: заморозка/разморозка активного сценария —
@@ -411,11 +426,14 @@ impl App {
             &counter_label,
             self.whatif_list_open && count > 0,
         );
-        // Кнопки. Apply/Сброс — без активного сценария/подмен приглушены.
+        // Кнопки. Apply — при активном сценарии с подменами; «Сброс» —
+        // полный сброс режима (доступен пока есть сценарии или заморозки).
         // FR-064 P2: лейбл заморозки — по состоянию (та же строка, что в
         // раскладке); кнопка приглушена без активного сценария.
         let has_overrides = active.is_some() && count > 0;
         let has_active = active.is_some();
+        let has_any_whatif = !self.scene.scenarios.is_empty()
+            || !self.scene.whatif_frozen_names().is_empty();
         let freeze_label = match active {
             Some(index)
                 if self
@@ -430,7 +448,7 @@ impl App {
         };
         let buttons = [
             (layout.apply, self.tr(keys::WHATIF_APPLY), has_overrides),
-            (layout.reset, self.tr(keys::WHATIF_RESET), has_overrides),
+            (layout.reset, self.tr(keys::WHATIF_RESET), has_any_whatif),
             (layout.freeze, freeze_label, has_active),
             (
                 layout.compare,
@@ -6110,6 +6128,35 @@ impl App {
                     self.restore_canvas(before);
                     tracing::debug!(depth = self.scene.undo_stack.len(), "undo");
                 }
+                self.request_redraw();
+            }
+            // What-if «Сброс» подтверждён: полный сброс режима — все
+            // сценарии + подмены + заморозки, персистентно одним undo-шагом
+            // (паттерн whatif_create_scenario). Панели what-if гаснут,
+            // активация — «База», пересчёт живой.
+            AppDialog::WhatIfReset { .. } => {
+                self.dialog = None;
+                let snapshot = self.scene.canvas.clone();
+                let (scenarios, _overrides) = self.scene.whatif_reset_all();
+                canvas_core::whatif::scenarios_to_canvas(
+                    &mut self.scene.canvas,
+                    &self.scene.scenarios,
+                );
+                // whatif_reset_all уже снял все заморозки — в файл пишем
+                // пустой список имён (контейнер удаляется, round-trip чистый).
+                let frozen_names: Vec<String> = Vec::new();
+                canvas_core::whatif::frozen_to_canvas(&mut self.scene.canvas, &frozen_names);
+                if self.scene.canvas != snapshot {
+                    self.scene.push_undo(snapshot);
+                    self.scene.mark_dirty();
+                }
+                self.whatif_list_open = false;
+                self.whatif_compare_open = false;
+                self.scene.recompute_flow();
+                let scenarios = scenarios.to_string();
+                self.show_toast(
+                    self.trf(keys::TOAST_WHATIF_RESET_DONE, &[("{count}", &scenarios)]),
+                );
                 self.request_redraw();
             }
         }

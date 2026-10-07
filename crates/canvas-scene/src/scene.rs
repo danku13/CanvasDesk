@@ -1322,6 +1322,33 @@ impl SceneState {
         };
     }
 
+    /// Полный сброс what-if режима (UI-кнопка «Сброс»): удалить ВСЕ
+    /// сценарии с подменами, снять активацию (→ «База») и разморозить все
+    /// снимки сравнения. Возвращает `(число сценариев, суммарное число
+    /// подмен)` — для текста confirm-диалога и тоста.
+    ///
+    /// Кейс CJM (сборка новой схемы на том же канвасе): прежний «Сброс»
+    /// чистил только подмены АКТИВНОГО сценария runtime-only — файл
+    /// `.canvas` не менялся, сценарии возвращались после переоткрытия,
+    /// а удалить их из UI было нечем. Полный сброс решает цикл
+    /// «провёл what-if → собираю новую схему → нужен чистый what-if».
+    ///
+    /// Персистентность — вызывающий: `scenarios_to_canvas` +
+    /// `frozen_to_canvas` + push_undo/mark_dirty (паттерн
+    /// `whatif_create_scenario`); текст нод не мутируется (инвариант 2).
+    pub fn whatif_reset_all(&mut self) -> (usize, usize) {
+        let scenarios = self.scenarios.len();
+        let overrides = self
+            .scenarios
+            .iter()
+            .map(|scenario| scenario.line_exprs.len())
+            .sum();
+        self.scenarios.clear();
+        self.active_scenario = None;
+        self.frozen.clear();
+        (scenarios, overrides)
+    }
+
     /// FR-017 (Q6b): Apply активного сценария — записать подмены в
     /// persisted-строки/params и УДАЛИТЬ сценарий (его смысл исчерпан).
     /// Вызывающий отвечает за push_undo ДО вызова и mark_dirty/ревал ПОСЛЕ.
