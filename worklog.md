@@ -994,3 +994,21 @@ Stage Summary:
   - `scheme_gallery_ui.rs` chip migration (J4) — align local `CHIP_H=28`/`CHIP_W=108`/`CHIP_ALL_W` constants with kit's `CHIP_HEIGHT=24`/measured text widths + update test fixture `chips_all_categories_fit`.
   - `kit::chip_strip_wrap` or extending `chip_strip` with `RowPolicy::Wrap` — for template_ui's 2-row wrap-overflow behavior (J4).
   - `agent_panel.rs` chat bubble full geometry migration (J5) — requires dropping the "AI Агент" header line OR restructuring the bubble to use kit's canonical `text_area` (y=8) + `tool_call_rows` (text_area.bottom()+SPACING_S). Visual change (text shifts up 8px, header dropped) — separate wave with manual L2 verification.
+---
+Task ID: WHATIF-CJM-сессия
+Agent: Super Z (main)
+Task: Аудит и фикс what-if функционала (задача владельца 2026-10-07): вёрстка/цветовая схема бара, полный сброс кнопкой «Сброс» (не работал: runtime-only, только активный сценарий), UX/CJM привязки сценариев к схеме/канвасу при сборке нескольких схем на одном канвасе
+
+Work Log:
+- Аудит: bar_layout измерял хардкод RU «База/Сброс/Сравнить» при i18n-отрисовке (CR-015-класс: EN-локаль клипалась); «… ещё N» и строки списка подмен — хардкод RU; радиусы списка/таблицы (6.0) расходились с баром (kit 8.0); чипы — литерал вместо RADIUS_CHIP
+- Этап 1 (ff3e1f7): BarLabels — единый источник подписей для замера и отрисовки (расширение фикса FR-053 на весь бар); i18n WHATIF_MORE/WHATIF_OVERRIDE_ROW; радиусы из токенов/кита; тест bar_layout_covers_en_labels
+- Этап 2 (d50217a): SceneState::whatif_reset_all (все сценарии+подмены+заморозки, активация→База, счётчики); AppDialog::WhatIfReset с статистикой и гарантиями; персистентность scenarios_to_canvas+frozen_to_canvas одним undo-шагом; restore_canvas восстанавливает заморозки по именам снапшота (раньше путь не покрывался); гейт кнопки «есть сценарии ИЛИ заморозки»; тест whatif_reset_all_clears_scenarios_frozen_and_activation
+- Этап 3 (73a1da6): CJM-анализ (docs/dev-researches/whatif-scope-cjm-analysis.md): варианты A (scheme-context), B (сеты), C (глобально-пер-канвас + полный цикл жизни) — принято C, миграционный путь к A с триггерами; «✕» чипа сценария (CHIP_CLOSE_W-слот, hit-зона A3, Ellipsis учитывает слот) — реализация дизайн-дока whatif-bar §5 (до этого удаление только MCP); AppDialog::WhatIfDeleteScenario (имя, не индекс — контракт MCP) + unfreeze одноимённого снимка (ghost-колонок нет); i18n RU/EN
+- L0/L2-верификация (правило AGENTS.md «Самопроверка UI на WASM»): L0 — cargo check wasm32 canvas-web + стенд wasm-bindgen; L2 — scripts/wasm_ui_whatif_scenario.mjs (Chromium/Xvfb, SwiftShader): полный цикл вход→«+»→Сброс+confirm→тост→повтор→«✕»+confirm→чистый бар; пиксельные диффы + VLM-контроль кадров; попутно найден и исправлен неподставленный {count} в теле диалога удаления (tr→trf); грабли стенда: координата Skip онбординга плывёт (Esc вместо клика), lang-picker DOM-оверлей требует «Продолжить без роли» с перезагрузкой
+- MCP whatif_reset не тронут (задокументированный контракт «сброс подмен активного сценария») — семантика UI и MCP разведена осознанно
+- Проверки: cargo test --workspace — 94 сюиты зелёные; clippy --workspace --all-targets 0 warning; fmt --check чисто; skills/ не менялись (состав/семантика MCP-инструментов не тронуты)
+
+Stage Summary:
+- «Сброс» теперь полный и персистентный (undo-шаг + Ctrl+Z возвращает сценарии и заморозки); сценарий удаляется «✕» чипа с confirm; вёрстка бара i18n-корректна (EN не клипается), радиусы из токенов
+- Принята модель «сценарии глобальны для канваса»: для независимых гипотез под несколькими схемами — отдельный .canvas; полный сброс покрывает цикл «новая схема → чистый what-if»; путь к scheme-context описан с триггерами
+- Владельцу: открытые вопросы в конце whatif-scope-cjm-analysis.md (лимит Q5b 3→5?, онбординг-шаг про «Сброс», подтверждение модели C)
