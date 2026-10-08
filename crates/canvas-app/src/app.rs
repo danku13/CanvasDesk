@@ -5966,7 +5966,13 @@ impl App {
     /// FR-079: вмерджить актуальные ИИ-ответы в текущие L0-строки попапа
     /// (после пересинхронизации L0 — каретка двигалась без смены текста;
     /// ответ воркера — тот же путь из [`Self::on_suggest_ready`]).
+    /// CR-022: гейт флагом `suggest.c1_in_popup` (default false) — ИИ-строки
+    /// НЕ добавляются в попап редактора (решение владельца «вообще не надо
+    /// триггерить»); прежний контракт жив только при явном `true`.
     fn suggest_remerge(&mut self) {
+        if !self.settings.suggest.c1_in_popup {
+            return;
+        }
         let ai_items = self.suggest_ai_items();
         if ai_items.is_empty() {
             return;
@@ -13128,9 +13134,13 @@ mod suggest_flow_tests {
 
     /// Полный цикл C1: триггер → дебаунс-тик → sync-lex → мердж ИИ-строк;
     /// принятие заменяет ноду шаблоном (id/позиция живы, undo один шаг).
+    /// CR-022: путь снят из продукта (дефолт `c1_in_popup = false`) — тест
+    /// держит сохранённую за флагом поверхность живой для будущих решений.
     #[test]
     fn suggest_c1_flow_popup_and_acceptance() {
         let mut app = suggest_stub_app(suggest_calc_canvas());
+        // CR-022: код C1 сохранён за флагом — включаем явно
+        app.settings.suggest.c1_in_popup = true;
         let hole = 2;
         suggest_start_editing(&mut app, hole, "margin");
         app.update_hints();
@@ -13204,6 +13214,7 @@ mod suggest_flow_tests {
     #[test]
     fn suggest_c1_trigger_gated_by_config() {
         let mut app = suggest_stub_app(suggest_calc_canvas());
+        app.settings.suggest.c1_in_popup = true; // проверяем только off/disabled
         app.settings.suggest.engine = canvas_core::SuggestEngineKind::Off;
         suggest_start_editing(&mut app, 2, "margin");
         app.update_hints();
@@ -13212,6 +13223,95 @@ mod suggest_flow_tests {
         app.settings.suggest.enabled = false;
         app.update_hints();
         assert!(app.suggest.pending.is_none(), "disabled — триггер молчит");
+    }
+
+    /// CR-022 (UR-001-06, Q5): репродуктор владельца — редактирование
+    /// `price = 100 rub` при ВКЛЮЧЁННОМ suggest НЕ даёт ИИ-строк в попапе
+    /// ни на одном токене (значение, единица, проза); C1-триггер не
+    /// взводится, конвейер C1 не запускается. L0-подсказки живы (приём
+    /// единиц/переменных — прежний контракт FR-021).
+    #[test]
+    fn suggest_c1_not_armed_when_editing_price_rub() {
+        let mut app = suggest_stub_app(suggest_calc_canvas());
+        assert!(
+            app.suggest_active(),
+            "suggest включён (мастер-тумблер + lex) — гейтит только CR-022"
+        );
+        assert!(
+            !app.settings.suggest.c1_in_popup,
+            "дефолт флага CR-022 — false (старые конфиги получают снятое состояние)"
+        );
+        for text in [
+            "price = 100",         // значение
+            "price = 100 rub",     // единица
+            "Печатаю имя шаблона", // проза
+        ] {
+            suggest_start_editing(&mut app, 2, text);
+            app.update_hints();
+            assert!(
+                app.suggest.pending.is_none(),
+                "C1-триггер не взведён (CR-022): {text}"
+            );
+            assert!(
+                !app.hints
+                    .items
+                    .iter()
+                    .any(|i| i.kind == hints_ui::HintKind::Ai),
+                "ИИ-строк нет в попапе (CR-022): {text}"
+            );
+        }
+        // Тик дебаунса ничего не меняет: pending нет — конвейер не запускался
+        suggest_force_debounce(&mut app);
+        app.suggest_dispatch();
+        assert!(
+            app.suggest.answers.is_empty(),
+            "C1-запросы не ходили — ответов нет (лог shown/accepted от C1 не пишется)"
+        );
+    }
+
+    /// CR-022: `suggest_remerge` не добавляет ИИ-строки в попап (тот же
+    /// гейт-флаг): после снятия флага пересинхронизация L0 гасит
+    /// накопленные ответы и оставляет попап только с L0-строками.
+    #[test]
+    fn suggest_remerge_gated_by_c1_in_popup() {
+        let mut app = suggest_stub_app(suggest_calc_canvas());
+        // Реальный C1-конвейер под флагом: ответы + каталог + мердж в попапе
+        app.settings.suggest.c1_in_popup = true;
+        suggest_start_editing(&mut app, 2, "margin");
+        app.update_hints();
+        suggest_force_debounce(&mut app);
+        app.suggest_dispatch();
+        assert!(!app.suggest.answers.is_empty(), "конвейер дал ответы");
+        assert!(
+            app.hints
+                .items
+                .iter()
+                .any(|i| i.kind == hints_ui::HintKind::Ai),
+            "под флагом ИИ-строки мерджатся (поверхность сохранена)"
+        );
+        // CR-022: флаг снят — remerge не добавляет ИИ-строки
+        app.settings.suggest.c1_in_popup = false;
+        app.update_hints(); // пересинхронизация L0 (каретка/текст без правки)
+        assert!(
+            !app.hints
+                .items
+                .iter()
+                .any(|i| i.kind == hints_ui::HintKind::Ai),
+            "ИИ-строки не переживают пересинхронизацию L0 (CR-022)"
+        );
+        assert!(
+            app.suggest.answers.is_empty(),
+            "накопленные ответы погашены при снятом триггере"
+        );
+        // Прямой вызов remerge без ответов — no-op, ИИ-примесей нет
+        app.suggest_remerge();
+        assert!(
+            !app.hints
+                .items
+                .iter()
+                .any(|i| i.kind == hints_ui::HintKind::Ai),
+            "remerge при погашенных ответах не добавляет ИИ-строки"
+        );
     }
 
     /// CR-020 (UR-001-03, Q1): зона полосы «ИТОГ» — только при видимом
@@ -13303,6 +13403,7 @@ mod suggest_flow_tests {
     }
 
     /// Домен-гейт C4: прозаический фреймворк-канвас — не предлагаем.
+    /// CR-022: путь сохранён за флагом `c1_in_popup` (дефолт — снят).
     #[test]
     fn suggest_c1_framework_canvas_suppressed() {
         let mut canvas = Canvas::default();
@@ -13324,6 +13425,7 @@ mod suggest_flow_tests {
             ));
         }
         let mut app = suggest_stub_app(canvas);
+        app.settings.suggest.c1_in_popup = true; // CR-022: путь за флагом
         suggest_start_editing(&mut app, 0, "Шаг 0 пути пользователя");
         app.update_hints();
         suggest_force_debounce(&mut app);
@@ -13343,9 +13445,12 @@ mod suggest_flow_tests {
 
     /// S0-воронка: shown при мердже, dismissed при закрытии правки,
     /// accepted при принятии (файл-журнал песочницы теста).
+    /// CR-022: события пишутся только от явного `c1_in_popup = true` —
+    /// при дефолтном false C1 не ходит и shown/accepted не пишет.
     #[test]
     fn suggest_s0_events_written() {
         let mut app = suggest_stub_app(suggest_calc_canvas());
+        app.settings.suggest.c1_in_popup = true; // CR-022: путь за флагом
         let log_dir = std::env::temp_dir().join(format!("suggest-log-{}", std::process::id()));
         let journal = log_dir.join("suggest-log.jsonl");
         let _ = std::fs::remove_file(&journal);

@@ -2075,6 +2075,12 @@ impl App {
     /// Текст изменился (префикс новый) → поколение растёт, устаревшие
     /// ответы тонут; каретка двигалась без правки — поколение стабильно,
     /// ИИ-строки переживают пересинхронизацию L0 без мигания.
+    /// CR-022 (решение владельца Q5, «вообще не надо триггерить»):
+    /// триггер C1 по умолчанию НЕ взводится — ИИ-предложения шаблонов
+    /// не триггерятся при редактировании ноды ни на Numi-строках, ни на
+    /// прозе; попап содержит только L0-подсказки. Код сохранён за флагом
+    /// `suggest.c1_in_popup` (serde default = false — старые конфиги
+    /// получают снятое состояние).
     pub(super) fn update_hints(&mut self) {
         let Some(session) = self.editing.as_ref() else {
             self.hints.reset();
@@ -2099,8 +2105,11 @@ impl App {
             });
         // FR-079 (S3): триггер C1 — любой ввод в тексте ноды вне фенсов
         // (включая прозу — это и есть сценарий «печатаю имя шаблона»);
-        // выключенный движок гасит и накопленные ответы
-        if self.suggest_active() && !in_fence {
+        // выключенный движок гасит и накопленные ответы.
+        // CR-022: гейт-флаг `c1_in_popup` (default false) снимает триггер —
+        // при редактировании ноды ИИ-запросы не ходят, накопленные ответы
+        // гасятся (попап без ИИ-примесей на любом токене)
+        if self.settings.suggest.c1_in_popup && self.suggest_active() && !in_fence {
             if prefix != self.suggest.last_prefix {
                 self.suggest.generation += 1;
                 self.suggest.last_prefix = prefix.to_owned();
@@ -2122,7 +2131,8 @@ impl App {
             )
         {
             self.hints.reset();
-            // Актуальные ИИ-строки переживают закрытие L0 (AI-only-попап)
+            // Актуальные ИИ-строки переживают закрытие L0 (AI-only-попап);
+            // CR-022: гейт флагом — при снятом C1 мерджа нет (no-op)
             self.suggest_remerge();
             return;
         }
@@ -2166,7 +2176,8 @@ impl App {
         let items = hints_ui::hint_items(prefix, &ctx, self.settings.language);
         let token = hints_ui::token_before_caret(prefix, prefix.len()).0;
         self.hints.sync(token, items);
-        // FR-079 (S3): мердж актуальных ИИ-строк под L0 (триггер — выше)
+        // FR-079 (S3): мердж актуальных ИИ-строк под L0 (триггер — выше);
+        // CR-022: гейт флагом — попап только L0 (no-op при дефолте)
         self.suggest_remerge();
         // Якорь — низ каретки (screen logical px) — см. sync_hints_anchor.
         self.sync_hints_anchor();
@@ -2181,6 +2192,8 @@ impl App {
     /// перевод в логические px.
     /// FR-079 (S3): якорь живёт и при закрытом L0-попапе — AI-only-открытие
     /// по SuggestReady (пока взведён debounce-триггер C1).
+    /// CR-022: при дефолтном `c1_in_popup = false` триггер C1 не взводится —
+    /// якорь обновляется только пока попап открыт.
     pub(super) fn sync_hints_anchor(&mut self) {
         if !self.hints.open && self.suggest.pending.is_none() {
             return;
