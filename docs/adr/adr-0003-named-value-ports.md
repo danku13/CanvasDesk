@@ -82,3 +82,14 @@ Numi-листа истока, и позиционные входы `$1..$N` по
   `model.rs:1299-1335`).
 - E2E через MCP (FR-029 §Проверка): `edge_create {fromOutput, toParam, kind:"value"}`
   → `flow_recalc` — downstream видит значение конкретной характеристики.
+
+## Примечание реализации (2026-10-08, CR-025)
+
+Противоречие приоритетов устранено в пользу ADR: при обоих полях
+(`fromOutput` + `fromLine`) имя старше индекса во ВСЕХ путях — исполнение
+(`flow::edge_source_value`, `lineage::edge_target`), display
+(`dataref::display_ref_for_edge` → `flow::spill_source_field`,
+`source_line_name`), тултипы портов (`port_label_for`). Сломанная адресация
+имени — тихий фолбэк на `fromLine` (деградация без паник). Для data-нод
+(CSV) пара «колонка × запись» — не приоритет, а ортогональная адресация
+(`edge_source_value_with_data`) — не затронуто.

@@ -333,6 +333,15 @@ pub struct RowHit {
     pub line: Option<usize>,
 }
 
+/// CR-020: строка-результат с триггером explain — адрес строки исходного
+/// текста + world-rect иконки-лупы (единая геометрия рендера, hit-теста
+/// и тултипа приложения).
+#[derive(Debug, Clone, Copy)]
+pub struct RowExplainHit {
+    pub line: usize,
+    pub rect: [f32; 4],
+}
+
 /// FR-050 Н9-2 (этап D): вид проливаемой строки для тултипа источника —
 /// данные (не текст): форматирование в приложении (i18n RU/EN FR-040).
 /// «Param» — строка параметра шаблонной ноды, запитанная `toParam`-ребром;
@@ -2747,6 +2756,12 @@ struct CachedRow {
     badge_tone: Option<row_grid::BadgeTone>,
     /// Полный текст ошибки (тултип «!», механика FR-013 пр.4).
     error_message: Option<String>,
+    /// CR-020 (решение владельца Q1): строка-результат с триггером explain
+    /// («Проверка цепочки») — видимое значение и НЕ константа-присваивание
+    /// (вердикт [`row_grid::row_is_explainable`], посчитан при сборке кэша).
+    /// Потребители — рендер мини-луп (renderer.rs), hit-тест и тултип
+    /// приложения ([`TextSystem::row_explain_hits`]).
+    explainable: bool,
     /// CR-018 волна v2: зашейпленный инлайн-текст ошибки (красным в зоне
     /// значение/юнит, усечённый по ширине колонок); строится только у
     /// строк с пустыми ячейками результата (Err-исход без what-if).
@@ -3030,6 +3045,52 @@ impl TextSystem {
         self.cache
             .get(&index)
             .is_some_and(|entry| entry.result.is_some())
+    }
+
+    /// CR-020: адресная зона мини-лупы строки-результата. Иконка — правый
+    /// край полосы строки (колонка луп — одна вертикаль с кнопкой футера
+    /// FR-088 [`crate::cards::explain_button_rect`]), вертикаль — центр
+    /// полосы строки (инвариант 2026-10-05, [`result_row_center_y`]).
+    /// Правый отступ — [`BODY_PADDING`]: ячейка юнита заканчивается на
+    /// `body_width − badge_w − GUIDE_GAP` ([`row_guides::RowGuides::
+    /// with_right_edge`]) — наезд исключён.
+    fn row_explain_lupa_rect(node: &Node, row_top: f32, row_line_h: f32) -> [f32; 4] {
+        let cy = result_row_center_y(node, row_top, row_line_h);
+        let size = crate::cards::EXPLAIN_BTN_SIZE;
+        [
+            node.x + node.width - BODY_PADDING - size,
+            cy - size / 2.0,
+            size,
+            size,
+        ]
+    }
+
+    /// CR-020 (UR-001-03, Q2 «лупа на строку»): адресные зоны мини-луп
+    /// строк-результатов — ЕДИНАЯ точка истины для рендера иконок
+    /// (renderer.rs), hit-теста клика и тултипа приложения. Строка
+    /// объяснима по вердикту [`row_grid::row_is_explainable`] (кэш строк:
+    /// Calc/Param-формула со значением; константы-присваивания — нет).
+    /// Порядок — по строкам сверху вниз; шаблонным нодам лупы строк не
+    /// выдаются (триггер — футер FR-088, без регрессий).
+    pub fn row_explain_hits(&self, index: usize, node: &Node) -> Vec<RowExplainHit> {
+        if node.template().is_some() {
+            return Vec::new();
+        }
+        let Some(entry) = self.cache.get(&index) else {
+            return Vec::new();
+        };
+        entry
+            .rows
+            .iter()
+            .filter(|row| row.explainable)
+            .filter_map(|row| {
+                let line = row.source_line?;
+                Some(RowExplainHit {
+                    line,
+                    rect: Self::row_explain_lupa_rect(node, row.row_top, row.row_line_h),
+                })
+            })
+            .collect()
     }
 
     /// FR-025: построчные точки выхода ноды из кэша раскладки: для каждой
@@ -3989,6 +4050,8 @@ impl TextSystem {
                                 left_end: g.2,
                                 zebra: *z,
                                 badge_tone,
+                                // CR-020: вердикт «строка объяснима» — один раз
+                                explainable: row_grid::row_is_explainable(row),
                                 value: shape_row_cell(
                                     &mut self.font_system,
                                     &row.value,
@@ -6553,6 +6616,7 @@ load = connections_per_sec / (servers * server_rate)\n";
             left_end: 0.0,
             zebra: false,
             badge_tone: None,
+            explainable: true,
             value: Some(cell(fs)),
             unit: None,
             badge: None,
@@ -6579,6 +6643,30 @@ load = connections_per_sec / (servers * server_rate)\n";
         assert_eq!(quads[1].rect[0], 520.0);
         // Пустой список строк — квадов нет
         assert!(guide_debug_quads(&guides, &[], 1.0).is_empty());
+    }
+
+    /// CR-020: геометрия мини-лупы строки-результата — правый край полосы
+    /// строки (x-право = node right − BODY_PADDING), размер — кнопки футера
+    /// ([`crate::cards::EXPLAIN_BTN_SIZE`]), вертикаль — центр полосы
+    /// строки (инвариант [`result_row_center_y`], единый с портами).
+    #[test]
+    fn row_explain_lupa_rect_pinned_to_row_strip_right_edge() {
+        let mut node = Node::text("n", "qty = 10", 100.0, 200.0);
+        node.width = 300.0;
+        node.height = 150.0;
+        let rect = TextSystem::row_explain_lupa_rect(&node, 40.0, 24.0);
+        assert_eq!(rect[2], crate::cards::EXPLAIN_BTN_SIZE);
+        assert_eq!(rect[3], crate::cards::EXPLAIN_BTN_SIZE);
+        let expected_right = node.x + node.width - BODY_PADDING;
+        assert!(
+            (rect[0] + rect[2] - expected_right).abs() < 0.01,
+            "иконка прижата к правому краю полосы строки"
+        );
+        let cy = result_row_center_y(&node, 40.0, 24.0);
+        assert!(
+            (rect[1] + rect[3] / 2.0 - cy).abs() < 0.01,
+            "вертикаль — центр полосы строки"
+        );
     }
 
     /// FR-061 этап D (O-5): раскраска лексем формулы — функция (ident + «(»)

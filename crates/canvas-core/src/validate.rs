@@ -45,7 +45,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use crate::expr::{self, EvalError, Expr};
+use crate::expr::{self, unescape_canonical, EvalError, Expr};
 use crate::flow::{self, FlowKind};
 use crate::model::{Canvas, Edge, Node};
 
@@ -499,7 +499,8 @@ pub(crate) fn slot_references(node: &Node) -> SlotRefs {
             collect_slot_refs(&parsed, &mut refs);
         }
     }
-    let text = node.text.clone().unwrap_or_default().replace("\\=", "=");
+    // CR-019: экранирование каноники (`\=`, `\*`) снимается перед разбором
+    let text = unescape_canonical(node.text.clone().unwrap_or_default().as_str());
     let mut in_fence = false;
     for line in text.split('\n') {
         if line.trim_start().starts_with("```") {

@@ -863,6 +863,27 @@ pub(crate) fn is_literal_rhs(row: &RowCells) -> bool {
         == value_unit.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// CR-020 (UR-001-03, решение владельца Q1): строка-результат с триггером
+/// explain («Проверка цепочки») — видимое значение ячейки и НЕ
+/// константа-присваивание. Расчётные строки — Calc (голое выражение) и
+/// Param с формульным RHS («sum = $1 * $2») — триггер есть (мини-лупа
+/// строки); литеральные присваивания («qty = 10») — триггера нет.
+/// Auto-строки — вход upstream (не расчёт этой ноды), Err-строки —
+/// значения не показывают (симметрично Ok-only зоне футера).
+/// Вычисляется ОДИН раз при сборке кэша строк — вердикт живёт в
+/// `CachedRow::explainable`, потребители (рендер иконок, hit-тест,
+/// тултип приложения) читают готовое.
+pub(crate) fn row_is_explainable(row: &RowCells) -> bool {
+    if row.value.is_empty() {
+        return false;
+    }
+    match row.kind {
+        RowKind::Calc => true,
+        RowKind::Param => !row.formula.is_empty() && !is_literal_rhs(row),
+        RowKind::Auto | RowKind::Total | RowKind::Preview | RowKind::Sigma => false,
+    }
+}
+
 /// Strip-переопределения левой части Param-строк с литеральным RHS
 /// (приёмка T9 FR-061, дублирование текста): сегмент тела `servers = 3`
 /// замещается «servers =» — литерал показывается ТОЛЬКО в ячейке значения
@@ -1162,6 +1183,47 @@ mod tests {
         assert_eq!(assignment_rhs("flag = a == b"), "a == b");
         assert_eq!(assignment_rhs("lit = 2 \\= 2"), "2 \\= 2");
         assert_eq!(assignment_rhs("no-op"), "");
+    }
+
+    /// CR-020 (Q1): вердикт «строка объяснима» — Calc со значением и
+    /// Param с формульным RHS объяснимы; константа-присваивание
+    /// («qty = 10», литеральный Param) и Auto/Err-строки — нет.
+    #[test]
+    fn row_is_explainable_gates_constants_and_auto_rows() {
+        let row = |kind: RowKind, formula: &str, value: &str, unit: &str| RowCells {
+            kind,
+            source_line: Some(0),
+            name: String::new(),
+            formula: formula.to_owned(),
+            value: value.to_owned(),
+            unit: unit.to_owned(),
+            upstream: false,
+            dim_value: false,
+            badge: None,
+            error_message: None,
+        };
+        // Константа-присваивание: значение повторяет формулу дословно
+        assert!(
+            !row_is_explainable(&row(RowKind::Param, "10", "10", "")),
+            "qty = 10 — без триггера (решение владельца Q1)"
+        );
+        assert!(
+            !row_is_explainable(&row(RowKind::Param, "10 rub", "10", "rub")),
+            "литерал с юнитом — тоже константа"
+        );
+        // Формульный RHS: значение не повторяет формулу
+        assert!(
+            row_is_explainable(&row(RowKind::Param, "$1 * $2", "1000", "")),
+            "sum = $1 * $2 — расчётная строка, триггер есть"
+        );
+        // Голое выражение
+        assert!(
+            row_is_explainable(&row(RowKind::Calc, "a * 2", "20", "")),
+            "Calc со значением — триггер есть"
+        );
+        // Вход upstream и пустое значение — не объяснимы
+        assert!(!row_is_explainable(&row(RowKind::Auto, "", "10", "")));
+        assert!(!row_is_explainable(&row(RowKind::Calc, "a *", "", "")));
     }
 
     /// T3-расширение: проход A — направляющие от max по строкам, право-край
