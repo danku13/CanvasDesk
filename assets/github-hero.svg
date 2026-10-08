@@ -1,0 +1,90 @@
+<svg width="1200" height="400" viewBox="0 0 1200 400" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CanvasDesk — models that compute themselves">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1a1b26"/>
+      <stop offset="1" stop-color="#16161e"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="620" y1="60" x2="1160" y2="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7aa2f7"/>
+      <stop offset="1" stop-color="#bb9af7"/>
+    </linearGradient>
+    <pattern id="dots" width="26" height="26" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#2f334d"/>
+    </pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9" stroke="#7aa2f7" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="400" fill="url(#bg)"/>
+  <rect width="1200" height="400" fill="url(#dots)"/>
+
+  <!-- левая часть: логотип и слоган -->
+  <g>
+    <rect x="70" y="92" width="56" height="56" rx="14" fill="url(#accent)"/>
+    <path d="M84 122 L98 108 L112 122 M98 108 L98 132" stroke="#1a1b26" stroke-width="3.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="150" y="138" font-family="ui-sans-serif, system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="58" font-weight="700" fill="#e6edf6">CanvasDesk</text>
+    <text x="72" y="192" font-family="ui-sans-serif, system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="27" font-weight="600" fill="#c0caf5">Models that compute themselves.</text>
+    <text x="72" y="230" font-family="ui-sans-serif, system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="18" fill="#9aa5ce">Infinite canvas where nodes pass values, not arrows —</text>
+    <text x="72" y="256" font-family="ui-sans-serif, system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="18" fill="#9aa5ce">capacity, unit economics and runway, recalculated live.</text>
+    <g font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="15">
+      <rect x="72" y="286" width="122" height="30" rx="8" fill="#24283b" stroke="#2f334d"/>
+      <text x="86" y="306" fill="#9ece6a">rps = 1000</text>
+      <rect x="206" y="286" width="150" height="30" rx="8" fill="#24283b" stroke="#2f334d"/>
+      <text x="220" y="306" fill="#7aa2f7">latency = 50 ms</text>
+      <rect x="368" y="286" width="164" height="30" rx="8" fill="#24283b" stroke="#2f334d"/>
+      <text x="382" y="306" fill="#bb9af7">runway = 14 mo</text>
+    </g>
+  </g>
+
+  <!-- правая часть: мини-канвас с графом -->
+  <g filter="url(#soft)">
+    <!-- нода-источник -->
+    <rect x="640" y="70" width="216" height="58" rx="12" fill="#24283b" stroke="#2f334d" stroke-width="1.5"/>
+    <circle cx="662" cy="99" r="5" fill="#7aa2f7"/>
+    <text x="678" y="95" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="14.5" fill="#9aa5ce">load-balancer</text>
+    <text x="678" y="114" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="15" fill="#e6edf6">rps = <tspan fill="#9ece6a">10 000</tspan></text>
+
+    <!-- ребро вниз-вправо -->
+    <path d="M 748 128 C 748 158, 690 168, 690 192" stroke="url(#accent)" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+    <!-- нода кэша -->
+    <rect x="588" y="196" width="216" height="58" rx="12" fill="#24283b" stroke="#2f334d" stroke-width="1.5"/>
+    <circle cx="610" cy="225" r="5" fill="#e0af68"/>
+    <text x="626" y="221" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="14.5" fill="#9aa5ce">cache</text>
+    <text x="626" y="240" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="15" fill="#e6edf6">hit = <tspan fill="#9ece6a">92%</tspan></text>
+
+    <!-- ребро вниз -->
+    <path d="M 696 254 C 696 284, 750 292, 750 314" stroke="url(#accent)" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+    <!-- нода origin -->
+    <rect x="640" y="318" width="216" height="58" rx="12" fill="#24283b" stroke="#2f334d" stroke-width="1.5"/>
+    <circle cx="662" cy="347" r="5" fill="#9ece6a"/>
+    <text x="678" y="343" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="14.5" fill="#9aa5ce">origin</text>
+    <text x="678" y="362" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="15" fill="#e6edf6">rps = <tspan fill="#9ece6a">800</tspan> · replicas = <tspan fill="#9ece6a">4</tspan></text>
+
+    <!-- ребро вправо к узкому месту -->
+    <path d="M 856 225 C 906 225, 906 225, 948 225" stroke="#7aa2f7" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+    <!-- нода узкого места -->
+    <rect x="952" y="196" width="196" height="58" rx="12" fill="#2d202a" stroke="#f7768e" stroke-width="1.5"/>
+    <circle cx="974" cy="225" r="5" fill="#f7768e"/>
+    <text x="990" y="221" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="14.5" fill="#f7768e">queue · ρ ≥ 1</text>
+    <text x="990" y="240" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="14.5" fill="#e6edf6">bottleneck<tspan fill="#f7768e"> ⚠</tspan></text>
+
+    <!-- ребро от очереди вверх к финансам -->
+    <path d="M 1050 192 C 1050 158, 1050 150, 1050 128" stroke="url(#accent)" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+
+    <!-- финансовая нода -->
+    <rect x="952" y="70" width="196" height="58" rx="12" fill="#24283b" stroke="#2f334d" stroke-width="1.5"/>
+    <circle cx="974" cy="99" r="5" fill="#bb9af7"/>
+    <text x="990" y="95" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="14.5" fill="#9aa5ce">unit-economics</text>
+    <text x="990" y="114" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="15" fill="#e6edf6">LTV/CAC = <tspan fill="#9ece6a">3.2</tspan></text>
+  </g>
+
+  <!-- нижняя линия -->
+  <rect x="0" y="394" width="1200" height="6" fill="url(#accent)"/>
+</svg>
