@@ -1255,3 +1255,23 @@ Stage Summary:
 - chat_bubble force-fit: resolved — kit extended with `header: bool` param + `ChatBubbleLayout.header_area: Option<UiRect>` + `CHAT_HEADER_H` constant (12.0). Bot bubble now USES kit layout: `cb_layout.rect` for background, `cb_layout.header_area` for "AI Агент" header, `cb_layout.text_area` for text body, `cb_layout.tool_call_rows[i]` for tool_call rows. `_cb_layout` is no longer discarded — fully consumed. Removed unused `bubble_x_inner` helper.
 - Tests: 589 passed canvas-app lib (incl. 15 agent_panel tests); 276 passed canvas-ui lib (incl. 8 chat_bubble tests — 6 updated + 2 new header tests).
 - Kit extensions: `chat_bubble(slot, n_lines, n_tool_calls, kind, palette)` → `chat_bubble(slot, n_lines, n_tool_calls, kind, palette, header: bool)`; `ChatBubbleLayout` gained `header_area: Option<UiRect>`; new `pub const CHAT_HEADER_H: f32 = 12.0`; `kit.rs` re-exports `CHAT_HEADER_H, CHAT_LINE_H, CHAT_TOOL_CALL_H`.
+
+---
+Task ID: UR-001-W1+W2 (сессия 2026-10-08, продолжение)
+Agent: Super Z (координатор) + W1-субагент (частично)
+Task: Реализация волн W1+W2 плана UR-001 (CR-026, CR-019, CR-023, CR-020, CR-024, CR-025) + правило учёта токенов в AGENTS.md
+
+Work Log:
+- AGENTS.md: раздел «Учёт токенов по задачам (трейсинг стоимости разработки)» (81ed223)
+- Инфраструктура: rustup stable 1.99 (clippy/rustfmt/wasm32-таргет), общий CARGO_TARGET_DIR, git-worktree ur-001-w1 / ur-001-w2
+- Субагент W1 (шлюз вернул таймаут на финальный ответ, работа выполнилась): A1 CR-026 (3748f66), A2 CR-019 (e1cb0ed); A3 не успел
+- Координатор — A3 CR-023 (9b6bba2): suppress-поля HintPopup (suppressed + pending_suppress; arm_suppress/dismiss), Esc = dismiss до смены токена, контракт FR-021 дополнен
+- Координатор — волна W2 (worktree w2 после вливания w1): B1 CR-020 (18958ee) — row_grid::row_is_explainable (константы-присваивания без триггера, Q1), text.rs row_explain_hits (единая точка геометрии/адресации мини-луп строк), рендер мини-луп, гейт result_band_root_at по node_shows_result_footer, тултип анкерён к лупе строки; B2 CR-024 (ac559e0) — PortTarget::Out удалён, control-порт без тултипа, value-стороны сохранены; B3 CR-025 (ce0d44e) — flow::source_line_name (единая точка резолва), приоритет ИМЯ > индекс во всех путях (edge_source_value, lineage::edge_target, dataref, port_label_for «Нода.имя = значение»), примечание в ADR-0003
+- Слияния: ur-001-w1 → ur-001-w2 (ff) → main (df168e1); origin/main 22e5be5 (ui-kit рефакторинг) влит без конфликтов (00fd640)
+- Гейты на main: canvas-core 492, canvas-render 394, canvas-app 594, integration_explain_x6 4/4, clippy -D warnings (core/render/app/scene/ui), fmt --check, wasm_gate --check — зелёные; запушено (00fd640)
+
+Stage Summary:
+- 6/6 задач волн W1+W2 реализованы; CR-019/020/023/024/025/026 — «реализовано (код+тесты), ожидает приёмки владельца»
+- Открытые вопросы владельцу: (1) зебра/подсветки ярче после блендинг-фикса — калибровка на скриншотах (план §4.3); (2) Ctrl+Space — ручное открытие подавленного попапа, кандидат в FR; (3) шум мини-луп на 5+ строках-результатах — порог LOD на приёмке; (4) Shift+drag-подсказка — вне v1 (CR-024 п.3); (5) заполнение from_output при drag — вне v1 (CR-025 п.4)
+- WASM L2 (браузерный стенд) не выполнялся (среда без Chromium/Xvfb-прогона) — приёмка по чек-листу плана §3 вручную
+- Tokens (estimate, правило AGENTS.md): A1 ≈135k, A2 ≈160k, A3 ≈175k, B1 ≈235k, B2 ≈135k, B3 ≈210k, W0+слияния+гейты ≈90k; итого ≈1.14M
