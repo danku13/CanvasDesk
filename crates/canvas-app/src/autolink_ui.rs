@@ -218,8 +218,10 @@ pub const BTN_W: f32 = 82.0;
 pub const FOOT_BTN_W: f32 = 118.0;
 /// Ширина главной кнопки «Создать связи (N)».
 pub const CREATE_W: f32 = 176.0;
-/// Ширина кнопки «Вернуть все» в баннере.
-pub const RESTORE_W: f32 = 110.0;
+// RESTORE_W (110 px) удалён — кнопка «Вернуть все» теперь рисуется
+// kit::banner's action_button (geometry = action_label_w + 2·BUTTON_PAD_H=24
+// × BUTTON_HEIGHT=30, FR-UI-BANNER). Прежняя константа 110 px фиксированной
+// ширины не нужна (consumer измеряет реальный текст через TextMeasurer).
 
 /// Прямоугольник диалога — `kit::modal` (FR-060): слот = вьюпорт,
 /// min = инвариант 320×240, max = потолки прототипа, desired = доли
@@ -280,14 +282,48 @@ pub fn banner_rect(win: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// Кнопка «Вернуть все» — правый край баннера.
-pub fn restore_rect(banner: [f32; 4]) -> [f32; 4] {
-    [
-        banner[0] + banner[2] - RESTORE_W - canvas_core::tokens::SPACING_MD,
-        banner[1] + 4.0,
-        RESTORE_W,
-        BANNER_H - 16.0,
-    ]
+/// FR-UI-BANNER: раскладка баннера отклонённых через `kit::banner`
+/// (Error kind — семантика «отклонено/ошибка»). Возвращает `BannerLayout`
+/// (rect, label_area, action_button) + `BannerStyle` (fill, border,
+/// label_color, action_color). Consumer рисует фон (`layout.rect` +
+/// `style.fill`/`border`/`radius` — через `kit::paint_banner` или
+/// `Painter::rect` напрямую), подпись (`layout.label_area` +
+/// `style.label_color`) и action_button отдельно (kit::paint_banner
+/// рисует ТОЛЬКО фон — action_button и её подпись забота потребителя).
+///
+/// `label_w` — измеренная ширина текста баннера (consumer измеряет через
+/// `TextMeasurer::width_of`; kit НЕ измеряет, чтобы оставаться pure).
+/// `action_label_w` — измеренная ширина подписи кнопки «Вернуть все».
+/// `palette` — `KitPalette` (consumer получает через `palette.kit_palette()`
+/// из `ThemeColors`).
+///
+/// Канонизация (FR-UI-BANNER): kit-слот `control_danger` для fill+border+
+/// label_color (rgb = `palette.error`, совпадает дословно); fill =
+/// tinted alpha 0.10 (новое: был transparent `[0,0,0,0]` — канонизация
+/// добавляет мягкую красную подложку под текстом, видимый shift);
+/// radius `RADIUS_PANEL=10` (был 8); action_button геометрия =
+/// `(action_label_w + 2·BUTTON_PAD_H=24) × BUTTON_HEIGHT=30` (было
+/// `RESTORE_W=110 × BANNER_H-16=26` — shift размеров кнопки).
+pub fn banner_layout(
+    win: [f32; 4],
+    label_w: f32,
+    action_label_w: f32,
+    palette: &canvas_ui::kit::KitPalette,
+) -> (canvas_ui::kit::BannerLayout, canvas_ui::kit::BannerStyle) {
+    let slot = UiRect::new(
+        win[0] + 16.0,
+        win[1] + HEADER_H + canvas_core::tokens::SPACING_SM,
+        (win[2] - 32.0).max(0.0),
+        BANNER_H - 8.0,
+    );
+    canvas_ui::kit::banner(
+        slot,
+        label_w,
+        action_label_w,
+        canvas_ui::kit::BannerKind::Error,
+        canvas_ui::kit::KitState::Normal,
+        palette,
+    )
 }
 
 /// Тело прокрутки — между шапкой/баннером и футером.

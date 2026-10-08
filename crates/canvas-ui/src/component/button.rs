@@ -331,14 +331,6 @@ pub fn icon_name(i: Icon) -> &'static str {
     }
 }
 
-/// Квадратная кнопка с иконкой в слоте — делегирует [`icon_button_rect`]
-/// (та же геометрия; иконка — отдельным вызовом [`icon_glyph`] для замера/
-/// отрисовки потребителем). `icon` зарезервирован для будущей текстовой
-/// раскладки (ширина глифа может варьироваться — v2 с TextMeasurer).
-pub fn icon_button(slot: UiRect, _icon: Icon, align: (HAlign, VAlign)) -> UiRect {
-    icon_button_rect(slot, align)
-}
-
 // --- StageCloseButton (FR-070) ----------------------------------------------
 
 /// Кнопка «×» в правом-верхнем углу панели/модали (FR-070, audit §6.1 —
@@ -812,29 +804,6 @@ mod tests {
         assert_eq!(icon_glyph(Icon::Gear), "⚙");
         assert_eq!(icon_glyph(Icon::Question), "?");
         assert_eq!(icon_glyph(Icon::Plus), "+");
-    }
-    #[test]
-    fn icon_button_delegates_to_icon_button_rect() {
-        let slot = UiRect::new(0.0, 0.0, 400.0, 300.0);
-        let align = (HAlign::End, VAlign::Start);
-        // icon_button возвращает тот же rect, что icon_button_rect
-        for icon in [
-            Icon::Close,
-            Icon::Gear,
-            Icon::Question,
-            Icon::Search,
-            Icon::Plus,
-            Icon::ArrowLeft,
-            Icon::ArrowRight,
-            Icon::Refresh,
-        ] {
-            let r = icon_button(slot, icon, align);
-            let expected = icon_button_rect(slot, align);
-            assert_eq!(
-                r, expected,
-                "{icon:?}: icon_button делегирует icon_button_rect"
-            );
-        }
     }
 
     // === FR-062 F-17: focus_order ===

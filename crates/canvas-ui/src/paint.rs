@@ -15,6 +15,16 @@
 use crate::geometry::{UiPoint, UiRect};
 use crate::kit::{ControlStyle, PanelStyle};
 
+/// Alpha-tint (rgb сохраняется, alpha заменяется) — именованный паттерн
+/// модуляции прозрачности существующего слота палитры. Не вычисляет новых
+/// цветов — только заменяет alpha-канал (контракт F-8: цвет — только слот).
+///
+/// Аудит 2026-10-06: была дублирована 3× (banner.rs, chat_bubble.rs,
+/// radio_card.rs) с идентичным телом — извлечена сюда как единый источник.
+pub fn tint(slot: [f32; 4], alpha: f32) -> [f32; 4] {
+    [slot[0], slot[1], slot[2], alpha]
+}
+
 /// Выравнивание текста внутри области (зеркало `TextAlign` рендера —
 /// крейт не знает о glyphon; конвертация на стороне потребителя).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
