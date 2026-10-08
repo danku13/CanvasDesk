@@ -2428,12 +2428,46 @@ impl App {
             self.close_autolink_review();
             return;
         }
-        // Баннер отклонённых: «Вернуть все» (У8/AC-5.2)
+        // Баннер отклонённых: «Вернуть все» (У8/AC-5.2).
+        // FR-UI-BANNER: kit::banner (через autolink_ui::banner_layout) —
+        // action_button = «Вернуть все», geometry = kit (text_w+24)×30;
+        // тот же layout, что в рендере (детерминизм hit ≡ кадр).
         if let Some(review) = self.autolink_review.as_ref() {
             let (_, rejected, _) = review.counts();
             if rejected > 0 {
-                let banner = autolink_ui::banner_rect(win);
-                if point_in_rect(autolink_ui::restore_rect(banner), self.cursor) {
+                let banner_text = self.trf(
+                    keys::AUTOLINK_BANNER,
+                    &[("{n}", rejected.to_string().as_str())],
+                );
+                let restore_text = self.tr(keys::AUTOLINK_RESTORE_ALL);
+                let mut m = canvas_ui::measure::TextMeasurer::new();
+                let mut fs = canvas_render::text::measure_font_system();
+                let label_w = m.width_of(
+                    &mut fs,
+                    &banner_text,
+                    canvas_render::text::SANS_FAMILY,
+                    11.5,
+                );
+                let action_w = m.width_of(
+                    &mut fs,
+                    restore_text,
+                    canvas_render::text::SANS_FAMILY,
+                    11.0,
+                );
+                drop(fs);
+                let (lay, _) = autolink_ui::banner_layout(
+                    win,
+                    label_w,
+                    action_w,
+                    &self.effective_palette().kit_palette(),
+                );
+                let restore_rect_arr = [
+                    lay.action_button.x,
+                    lay.action_button.y,
+                    lay.action_button.w,
+                    lay.action_button.h,
+                ];
+                if point_in_rect(restore_rect_arr, self.cursor) {
                     if let Some(review) = self.autolink_review.as_mut() {
                         review.set_all(ItemState::Pending);
                     }
@@ -2614,20 +2648,48 @@ impl App {
             // уровня обрезает путь AC-2.3; клик мимо чипов — ничего);
             // в защите крошки глушатся (вид зафиксирован на корне)
             if !defense_now && point_in_rect(explain_ui::meta_rect(win), self.cursor) {
+                // FR-UI-CRUMBS: kit::crumbs (через explain_ui::crumb_rects) —
+                // та же геометрия, что в рендере (детерминизм hit ≡ кадр);
+                // «…» crumb не кликабелен (crumb_path_index возвращает None).
                 let path_len = self
                     .explain
                     .as_ref()
                     .map(|s| s.view_path.len())
                     .unwrap_or(0);
                 if path_len > 1 {
-                    let (offset, rects) = explain_ui::crumb_rects(win, path_len);
-                    for (i, rect) in rects.iter().enumerate() {
-                        if point_in_rect(*rect, self.cursor) {
-                            if let Some(state) = self.explain.as_mut() {
-                                state.click_crumb(offset + i);
+                    // path_labels нужны kit::crumbs для измерения ширин чипов.
+                    let path_labels: Vec<String> = self
+                        .explain
+                        .as_ref()
+                        .and_then(|s| s.tree())
+                        .map(|tree| {
+                            self.explain
+                                .as_ref()
+                                .unwrap()
+                                .view_path
+                                .iter()
+                                .filter_map(|&i| tree.nodes.get(i).map(|n| n.title.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if !path_labels.is_empty() {
+                        let mut m = canvas_ui::measure::TextMeasurer::new();
+                        let mut fs = canvas_render::text::measure_font_system();
+                        let crumbs = explain_ui::crumb_rects(win, &path_labels, &mut m, &mut fs);
+                        drop(fs);
+                        for (i, (rect, _)) in crumbs.iter().enumerate() {
+                            let rect_arr = [rect.x, rect.y, rect.w, rect.h];
+                            if point_in_rect(rect_arr, self.cursor) {
+                                if let Some(level) =
+                                    explain_ui::crumb_path_index(i, path_len, &crumbs)
+                                {
+                                    if let Some(state) = self.explain.as_mut() {
+                                        state.click_crumb(level);
+                                    }
+                                    self.request_redraw();
+                                    return;
+                                }
                             }
-                            self.request_redraw();
-                            return;
                         }
                     }
                 }

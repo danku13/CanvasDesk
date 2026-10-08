@@ -59,6 +59,7 @@ use canvas_core::{LineageDelta, LineageError, LineageNodeKind, LineageTree, Line
 
 use canvas_ui::geometry::{UiRect, UiVec2};
 use canvas_ui::kit;
+use canvas_ui::measure::TextMeasurer;
 
 // --- геометрия окна (паттерн main stage: затемнение + плавающее окно) -----
 
@@ -158,51 +159,90 @@ pub fn meta_rect(win: [f32; 4]) -> [f32; 4] {
 
 // --- чипы-крошки (X6, AC-2.3) ----------------------------------------------
 
-/// Высота чипа-крошки пути вида.
-pub const CRUMB_H: f32 = 18.0;
-/// Зазор между чипами-крошками.
-pub const CRUMB_GAP: f32 = 4.0;
-/// Потолок ширины чипа (длинные заголовки обрезаются рендером текста).
-pub const CRUMB_W_MAX: f32 = 148.0;
-/// Пол ширины чипа (читаемость; уже — рендер обрезает хвост).
-pub const CRUMB_W_MIN: f32 = 48.0;
-/// Максимум одновременно показанных чипов (переполнение — показаны
-/// ПОСЛЕДНИЕ уровни: текущий фокус важнее корневых).
-pub const CRUMB_MAX_CHIPS: usize = 12;
+/// Высота чипа-крошки пути вида (паритет `kit::crumbs::CRUMB_H` = 18 px;
+/// меньше chip_height=24 т.к. крошки в шапке окна, плотнее основного
+/// контента).
+pub const CRUMB_H: f32 = canvas_ui::component::crumbs::CRUMB_H;
+/// Зазор между чипами-крошками (паритет `kit::crumbs::CRUMB_GAP` = 4 px).
+pub const CRUMB_GAP: f32 = canvas_ui::component::crumbs::CRUMB_GAP;
+/// Потолок ширины чипа (паритет `kit::crumbs::CRUMB_W_MAX`; длинные заголовки
+/// обрезаются рендером текста через `TextMeasurer::ellipsis`).
+pub const CRUMB_W_MAX: f32 = canvas_ui::component::crumbs::CRUMB_W_MAX;
+/// Пол ширины чипа (паритет `kit::crumbs::CRUMB_W_MIN`; читаемость; уже —
+/// рендер обрезает хвост).
+pub const CRUMB_W_MIN: f32 = canvas_ui::component::crumbs::CRUMB_W_MIN;
+/// Горизонтальный пад чипа-крошки (паритет `kit::CHIP_PAD_H` = 8 px;
+/// передаётся в `kit::crumbs` параметром `pad_x`).
+pub const CRUMB_PAD_X: f32 = canvas_ui::component::CHIP_PAD_H;
 
 /// Полные чипы-крошки пути вида (AC-2.3, UX-шлифовка X2): по чипу на
-/// уровень `view_path`, слева направо в мета-строке шапки; ширина делится
-/// поровну (потолок [`CRUMB_W_MAX`], пол [`CRUMB_W_MIN`]). Возвращает
-/// `(смещение, прямоугольники)`: смещение — индекс первой показанной
-/// крошки в `view_path` (0, пока все помещаются; при переполнении
-/// показаны последние [`CRUMB_MAX_CHIPS`]); чипы, не влезающие в мета-
-/// зону по ширине, обрезаются/опускаются (рендер и hit используют одну
-/// геометрию — детерминизм).
-pub fn crumb_rects(win: [f32; 4], count: usize) -> (usize, Vec<[f32; 4]>) {
+/// уровень `view_path`, слева направо в мета-строке шапки. Канон
+/// геометрии — `kit::crumbs` (FR-UI-CRUMBS): ширина чипа = измеренный
+/// текст + `2·CRUMB_PAD_X`, clamp `[CRUMB_W_MIN, CRUMB_W_MAX]`; переполнение
+/// — `take_while` по правому краю мета-зоны (чипы, не влезающие в зону,
+/// не отрисовываются и не кликабельны — детерминизм рендера и hit-теста,
+/// паттерн `token_before_caret` из FR-059). Если хотя бы один корневой
+/// уровень отброшен, kit prepend'ит «…» crumb (визуальная индикация
+/// усечения пути — канон kit, замена прежнего silent-drop `CRUMB_MAX_CHIPS`).
+///
+/// Возвращает `Vec<(rect, label)>` в порядке отображения (слева направо):
+/// если корень отброшен, первая запись — `("…", rect)`; остальные —
+/// `(level_title, rect)`. Потребитель рисует чип (rect + label) и
+/// hit-тестирует; для перевода индекса в выводе в индекс уровня `view_path`
+/// — [`crumb_path_index`] (учитывает «…» prepend).
+///
+/// `labels` — заголовки узлов пути вида (root первым); длиной > 0.
+/// `m`/`fs` — для измерения ширин чипов (CRUMB_FAMILY, CRUMB_FONT_SIZE
+/// — канон kit, паритет `sans_attrs` рендера CR-015).
+pub fn crumb_rects(
+    win: [f32; 4],
+    labels: &[String],
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> Vec<(UiRect, String)> {
     let meta = meta_rect(win);
-    if count == 0 {
-        return (0, Vec::new());
+    let slot = UiRect::new(meta[0], meta[1], meta[2].max(0.0), meta[3]);
+    kit::crumbs(slot, labels, CRUMB_GAP, CRUMB_PAD_X, m, fs)
+}
+
+/// Перевод индекса в выводе [`crumb_rects`] в индекс уровня `view_path`.
+///
+/// Kit `crumbs` prepend'ит «…» crumb, если корневые уровни отброшены —
+/// этот crumb не соответствует никакому уровню (`None`). Остальные crumbs
+/// соответствуют последним N уровням `view_path` (N = число не-«…» crumbs
+/// в выводе); первый не-«…» crumb = уровень `path_len - N`.
+///
+/// `output_idx` — индекс в `Vec` от [`crumb_rects`].
+/// `path_len` — длина `view_path` (число уровней).
+/// `output` — сам `Vec` от [`crumb_rects`] (для проверки «…» prepend).
+///
+/// Возвращает `Some(level)` для не-«…» crumbs, `None` для «…» crumb.
+pub fn crumb_path_index(
+    output_idx: usize,
+    path_len: usize,
+    output: &[(UiRect, String)],
+) -> Option<usize> {
+    if output_idx >= output.len() {
+        return None;
     }
-    let shown = count.min(CRUMB_MAX_CHIPS);
-    let offset = count - shown;
-    let avail = (meta[2] - CRUMB_GAP * (shown as f32 - 1.0)).max(0.0);
-    let width = (avail / shown as f32).clamp(CRUMB_W_MIN, CRUMB_W_MAX);
-    let meta_end = meta[0] + meta[2];
-    let y = meta[1] + (meta[3] - CRUMB_H) / 2.0;
-    let mut rects = Vec::with_capacity(shown);
-    // FR-060/G5: без break-выхода — отбор по мета-зоне через `take_while`
-    // (политика hide: чипы за зоной не отрисовываются и не кликабельны —
-    // семантика прежняя дословно, паттерн token_before_caret из FR-059)
-    rects.extend(
-        (0..shown)
-            .map(|index| meta[0] + (width + CRUMB_GAP) * index as f32)
-            .take_while(|&x| x < meta_end)
-            .map(|x| {
-                let w = width.min(meta_end - x);
-                [x, y, w, CRUMB_H]
-            }),
-    );
-    (offset, rects)
+    let has_ellipsis = output.first().map(|(_, l)| l == "…").unwrap_or(false);
+    // «…» crumb (если есть) — первый в выводе, не соответствует уровню.
+    if has_ellipsis && output_idx == 0 {
+        return None;
+    }
+    let non_ellipsis_count = if has_ellipsis {
+        output.len() - 1
+    } else {
+        output.len()
+    };
+    // path_len ≥ non_ellipsis_count (kit показывает последние N уровней).
+    let start_in_path = path_len.saturating_sub(non_ellipsis_count);
+    let offset_in_visible = if has_ellipsis {
+        output_idx - 1
+    } else {
+        output_idx
+    };
+    Some(start_in_path + offset_in_visible)
 }
 
 /// Тело окна — между шапкой и футером.
@@ -2588,42 +2628,80 @@ mod tests {
         assert!(st.edit.is_none(), "поле не переносится в защиту");
     }
 
-    /// X6 (AC-2.3): полные чипы-крошки — по чипу на уровень, без
-    /// переполнения смещение 0, ширины в [MIN, MAX], чипы стыкуются без
-    /// налезаний; при переполнении показаны последние уровни (смещение > 0).
+    /// X6 (AC-2.3): полные чипы-крошки — kit::crumbs (FR-UI-CRUMBS).
+    /// Без переполнения: все крошки видны, ни одной «…»; ширины в
+    /// [CRUMB_W_MIN, CRUMB_W_MAX]; чипы стыкуются без налезаний; «…» нет.
+    /// При переполнении (узкая мета-зона / много уровней): корневые
+    /// уровни отбрасываются, prepend'ится «…» crumb (визуальная
+    /// индикация усечения — канон kit, замена прежнего silent-drop
+    /// CRUMB_MAX_CHIPS); последний crumb — всегда текущий фокус пути.
     #[test]
     fn crumb_rects_layout_and_overflow() {
+        // `measure_font_system()` — canonical FontSystem с display-шрифтом
+        // рендера (CR-015: метрики теста = метрикам рендера, без эвристик).
+        let mut fs = canvas_render::text::measure_font_system();
+        let mut m = TextMeasurer::new();
+
         let win = window_rect([1600.0, 1000.0]);
         // Пустой путь — ничего.
-        let (offset, rects) = crumb_rects(win, 0);
-        assert_eq!((offset, rects.len()), (0, 0));
-        // Три уровня: смещение 0, геометрия согласована.
-        let (offset, rects) = crumb_rects(win, 3);
-        assert_eq!((offset, rects.len()), (0, 3));
+        let empty: Vec<String> = Vec::new();
+        let out = crumb_rects(win, &empty, &mut m, &mut fs);
+        assert!(out.is_empty());
+
+        // Три уровня: 3 крошки, без «…», геометрия согласована.
+        let labels3: Vec<String> = ["Root", "Child", "Grandchild"]
+            .iter()
+            .map(|&s| s.to_owned())
+            .collect();
+        let out = crumb_rects(win, &labels3, &mut m, &mut fs);
+        assert_eq!(out.len(), 3, "все 3 крошки видны (без переполнения)");
+        // Нет «…» — все крошки соответствуют уровням 0, 1, 2.
+        assert_eq!(out[0].1, "Root");
+        assert_eq!(out[2].1, "Grandchild");
+        assert_eq!(crumb_path_index(0, 3, &out), Some(0));
+        assert_eq!(crumb_path_index(1, 3, &out), Some(1));
+        assert_eq!(crumb_path_index(2, 3, &out), Some(2));
         let meta = meta_rect(win);
-        for pair in rects.windows(2) {
-            assert!((pair[0][0] + pair[0][2] + CRUMB_GAP - pair[1][0]).abs() < 1e-3);
+        // Стыкуются без налезаний: pair[i].right + CRUMB_GAP = pair[i+1].x.
+        for pair in out.windows(2) {
+            assert!((pair[0].0.right() + CRUMB_GAP - pair[1].0.x).abs() < 0.5);
         }
-        for r in &rects {
-            assert!(r[2] <= CRUMB_W_MAX + 1e-3);
-            assert!(r[2] >= CRUMB_W_MIN - 1e-3);
-            assert!(r[0] >= meta[0] - 1e-3);
-            assert!(r[0] + r[2] <= meta[0] + meta[2] + 1e-3);
-            assert!((r[1] - (meta[1] + (meta[3] - CRUMB_H) / 2.0)).abs() < 1e-3);
+        for (r, _) in &out {
+            assert!(r.w <= CRUMB_W_MAX + 1e-3);
+            assert!(r.w >= CRUMB_W_MIN - 1e-3);
+            assert!(r.x >= meta[0] - 1e-3);
+            assert!(r.right() <= meta[0] + meta[2] + 0.5);
+            assert!((r.y - (meta[1] + (meta[3] - CRUMB_H) / 2.0)).abs() < 0.5);
         }
-        // Переполнение: 20 уровней — показаны последние 12, смещение 8.
-        let (offset, rects) = crumb_rects(win, 20);
-        assert_eq!(offset, 8);
-        assert_eq!(rects.len(), CRUMB_MAX_CHIPS);
+
+        // Переполнение: 20 уровней — kit::crumbs отбрасывает корневые
+        // уровни (по измеренной ширине, поместилась только часть хвоста);
+        // «…» prepended (индикатор усечения). Последний crumb — всегда
+        // последний уровень пути (текущий фокус).
+        let labels20: Vec<String> = (0..20).map(|i| format!("Level{i}_long_label")).collect();
+        let out = crumb_rects(win, &labels20, &mut m, &mut fs);
+        // Хотя бы одна крошка показана (kit контракт).
+        assert!(!out.is_empty(), "хотя бы один crumb показан");
+        // Переполнение → «…» prepended.
+        assert_eq!(out[0].1, "…", "ellipsis prepended при переполнении");
+        // Последний crumb — последний уровень (текущий фокус).
+        assert_eq!(out.last().unwrap().1, *labels20.last().unwrap());
+        // «…» crumb не соответствует уровню (None).
+        assert_eq!(crumb_path_index(0, 20, &out), None);
+        // Последний crumb соответствует последнему уровню (19).
+        assert_eq!(
+            crumb_path_index(out.len() - 1, 20, &out),
+            Some(19),
+            "последний crumb = последний уровень"
+        );
+
         // Узкое окно: чипы обрезаются мета-зоной (рендер = hit).
         let narrow = window_rect([340.0, 250.0]);
-        let (_, rects) = crumb_rects(narrow, 6);
+        let labels6: Vec<String> = (0..6).map(|i| format!("Narrow{i}")).collect();
+        let out = crumb_rects(narrow, &labels6, &mut m, &mut fs);
         let meta = meta_rect(narrow);
-        for r in &rects {
-            assert!(
-                r[0] + r[2] <= meta[0] + meta[2] + 1e-3,
-                "чип шире мета-зоны"
-            );
+        for (r, _) in &out {
+            assert!(r.right() <= meta[0] + meta[2] + 0.5, "чип шире мета-зоны");
         }
     }
 

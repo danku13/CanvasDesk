@@ -11,7 +11,6 @@
 //! НЕ вводится: профиль W2 — reflow 1000 узлов на `FlexLayoutEngine`
 //! ~0.26 мс < 1 мс порога (KISS; порог §Гейты W2/§Контракт-8).
 
-pub mod autocomplete_popup;
 pub mod banner;
 pub mod button;
 pub mod chat_bubble;
@@ -22,17 +21,14 @@ pub mod footer;
 pub mod icon;
 pub mod list;
 pub mod modal;
-pub mod overflow_arrow;
 pub mod panel;
 pub mod panel_header;
 pub mod radio_card;
 pub mod row;
-pub mod search_panel;
 pub mod table;
 #[cfg(test)]
 pub mod test_support;
 pub mod text_field;
-pub mod tree_layout;
 pub mod two_column;
 
 use crate::geometry::{EdgeInsets, UiPoint, UiRect};
@@ -153,10 +149,11 @@ pub const BUTTON_HEIGHT: f32 = 30.0;
 pub const BUTTON_PAD_H: f32 = 12.0;
 /// Ширина кнопки футера по умолчанию (FR-UI-FOOTER): 100 px — значение
 /// онбординга (`ONBOARDING_BUTTON_W`); `graph_builder_ui` использует 130
-/// (передаёт свою `widths` через `footer_buttons_measured`). Используется
-/// [`crate::component::footer::footer_buttons`] (простой вариант с
-/// фиксированной шириной); измеряемый вариант `footer_buttons_measured`
-/// принимает `widths: &[f32]` явно.
+/// (передаёт свою `widths` через `footer_buttons_measured`). Ранее
+/// использовался простым вариантом `footer_buttons` (фиксированная ширина,
+/// удалён за отсутствием потребителей — FR-UI-FOOTER-R); оставлен как
+/// reference-default для потребителей `footer_buttons_measured`, желающих
+/// каноническую ширину кнопки 100 px (значение из спецификации T21).
 pub const BUTTON_WIDTH: f32 = 100.0;
 /// Сторона квадратной icon-кнопки (угловые кнопки ⚙/?).
 pub const ICON_BUTTON_SIZE: f32 = 26.0;
