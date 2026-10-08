@@ -4084,7 +4084,10 @@ impl App {
                 keys::TOOLTIP_PORT_PARAM,
                 &[("{path}", &format!("{obj}.{param}"))],
             ),
-            PortTarget::Out => self.trf(keys::STAGE_OUT_LABEL, &[("{name}", &obj)]),
+            // CR-024: ветки PortTarget::Out больше нет — сторонний порт
+            // без входящих value-рёбер тултипа не показывает (control-
+            // семантика); «out:» живёт только у футера шаблонной ноды
+            // (PortTarget::Line(None) — drag с него всегда value).
         })
     }
 
@@ -4157,9 +4160,12 @@ impl App {
 
     /// FR-045 F-5 v1/v2: лейблы порта канваса под курсором — приоритет как
     /// у drag-старта (CR-003/FR-050): построчный порт → якорь параметра →
-    /// сторонный порт. Сторонный порт читается по стороне (P1 «входы
-    /// слева»): есть входящие value-рёбра — qualified-истоки (v2,
-    /// In-чтение), нет — «out:» (drag-исток, v1). None — порта нет.
+    /// сторонный порт. Построчный порт/футер шаблона — value-выходы (drag
+    /// всегда value) — адресная подпись; входные слоты стороны —
+    /// qualified-истоки (v2, In-чтение). CR-024 (UR-001-09, Q7): у
+    /// стороннего порта БЕЗ входящих value-рёбер тултипа нет — обычный
+    /// drag создаёт контрольную связь, «out:» — дата-семантика value-связей
+    /// (эталон — stage-подписи stage_src_label_lines). None — порта нет.
     fn port_tooltip_at(&self, world: Vec2) -> Option<Vec<PortLabelLine>> {
         if let Some((node_index, port)) = self.line_port_hit(world) {
             return self
@@ -4192,14 +4198,14 @@ impl App {
             if let Some(lines) = self.inbound_label_lines(node_index, side) {
                 return Some(lines);
             }
-            return self
-                .port_label_for(node_index, &PortTarget::Out)
-                .map(|text| {
-                    vec![PortLabelLine {
-                        text,
-                        unmapped: false,
-                    }]
-                });
+            // CR-024 (UR-001-09, Q7, решение владельца «без тултипа»):
+            // сторонний порт без входящих value-рёбер — тултипа нет.
+            // Обычный drag с него — контрольная связь (value — только
+            // Shift+drag), прежний безусловный «out: <нода>» навязывал
+            // дата-семантику коннектору без передачи данных. Футер
+            // шаблонной ноды (Line(None), drag всегда value) — выше,
+            // в ветке line_port_hit.
+            return None;
         }
         None
     }
@@ -11768,11 +11774,6 @@ mod tests {
             Some("Заявки.строка 2".to_owned())
         );
         assert_eq!(
-            app.port_label_for(0, &PortTarget::Out),
-            Some("out: Заявки".to_owned()),
-            "сторонный порт — «out: <объект>» (F-5 «out:<имя>»)"
-        );
-        assert_eq!(
             app.port_label_for(0, &PortTarget::Line(None)),
             Some("out: Заявки".to_owned()),
             "футер шаблона — значение ноды целиком"
@@ -11819,7 +11820,7 @@ mod tests {
             "EN — «line N» (STAGE_LINE_LABEL)"
         );
         assert_eq!(
-            app_en.port_label_for(0, &PortTarget::Out),
+            app_en.port_label_for(0, &PortTarget::Line(None)),
             Some("out: Заявки".to_owned())
         );
     }
@@ -11844,7 +11845,7 @@ mod tests {
             "коллизия имён — дискриминатор node_id (§Q2)"
         );
         assert_eq!(
-            app.port_label_for(1, &PortTarget::Out),
+            app.port_label_for(1, &PortTarget::Line(None)),
             Some("out: Заявки (b)".to_owned())
         );
     }
@@ -11929,9 +11930,10 @@ mod tests {
         assert!(!lines[3].unmapped, "свёртка — нейтральный тон");
     }
 
-    /// FR-045 F-5 v2: сторонный порт читается по стороне (P1 «входы
-    /// слева») — с входами from-чтение (In-лейблы), без входов —
-    /// «out:» (drag-исток, v1); hit-тест — левый порт приёмника.
+    /// FR-045 F-5 v2 + CR-024 (UR-001-09, Q7): сторонный порт читается по
+    /// стороне (P1 «входы слева») — с входами from-чтение (In-лейблы),
+    /// без входов тултипа НЕТ (обычный drag — control-связь, «out:» —
+    /// дата-семантика value-связей); hit-тест — левый порт приёмника.
     #[test]
     fn port_tooltip_at_in_precedes_out_fallback() {
         let mut canvas = Canvas::default();
@@ -11956,7 +11958,8 @@ mod tests {
             lines[0].text, "from: Заявки.users",
             "входящая сторона — from-чтение (R-5 qualified-адрес)"
         );
-        // Одинокая нода без входов — прежнее v1-чтение («out:»)
+        // CR-024: одинокая нода без входов — тултипа нет (control-порт;
+        // прежнее v1-чтение «out:» убрано решением владельца)
         let mut canvas2 = Canvas::default();
         let mut solo = Node::text("src", "Заявки\nusers = 10", 0.0, 0.0);
         solo.width = 420.0;
@@ -11964,12 +11967,9 @@ mod tests {
         canvas2.nodes.push(solo);
         let mut app2 = stub_app_with_canvas(canvas2);
         app2.hovered = Some(0);
-        let lines2 = app2
-            .port_tooltip_at([0.0, 100.0])
-            .expect("левый порт src под курсором");
-        assert_eq!(
-            lines2[0].text, "out: Заявки",
-            "без входящих value-рёбер — drag-исток (v1)"
+        assert!(
+            app2.port_tooltip_at([0.0, 100.0]).is_none(),
+            "control-порт без тултипа (CR-024 Q7)"
         );
         assert!(
             app2.port_tooltip_at([5000.0, 5000.0]).is_none(),
@@ -13214,6 +13214,48 @@ mod suggest_flow_tests {
             .expect("футер виден — зона итога жива");
         assert_eq!(root.node_id, "qty");
         assert!(root.line.is_none(), "адрес итога ноды");
+    }
+
+    /// CR-024 (UR-001-09, Q7): сторонний порт БЕЗ входящих value-рёбер —
+    /// тултипа нет (обычный drag создаёт control-связь, «out:» —
+    /// дата-семантика value-связей); входные слоты value-стороны
+    /// (qualified-истоки) сохранены; адресная подпись построчного порта —
+    /// как прежде («Объект.строка N»).
+    #[test]
+    fn port_tooltip_control_port_silent_value_side_keeps_labels() {
+        let mut canvas = Canvas::default();
+        let mut src = Node::text("src", "qty = 10", 0.0, 0.0);
+        src.width = 200.0;
+        src.height = 100.0;
+        let mut dst = Node::text("dst", "итог", 400.0, 0.0);
+        dst.width = 200.0;
+        dst.height = 100.0;
+        canvas.nodes.push(src);
+        canvas.nodes.push(dst);
+        let mut edge = Edge::new("e", "src", None, "dst", None);
+        edge.set_flow_kind(FlowKind::Value);
+        canvas.edges.push(edge);
+        let mut app = suggest_stub_app(canvas);
+        // Сторонний порт правой стороны ноды-источника (без входящих value):
+        // world-точка порта [x+w, y+h/2]
+        app.hovered = Some(0);
+        let side_point: Vec2 = [200.0, 50.0];
+        assert!(
+            app.port_tooltip_at(side_point).is_none(),
+            "control-порт без тултипа (CR-024 Q7)"
+        );
+        // Value-сторона приёмника (левый край): qualified-истоки живы
+        app.hovered = Some(1);
+        let left_point: Vec2 = [400.0, 50.0];
+        let inbound = app
+            .port_tooltip_at(left_point)
+            .expect("value-сторона с входящим value-ребром — подпись есть");
+        assert!(!inbound.is_empty(), "входные слоты — qualified-истоки");
+        // Адресная подпись построчного порта — формат не изменился
+        let label = app
+            .port_label_for(0, &PortTarget::Line(Some(0)))
+            .expect("лейбл построчного порта");
+        assert!(label.contains("строка"), "«Объект.строка N»: {label}");
     }
 
     /// Домен-гейт C4: прозаический фреймворк-канвас — не предлагаем.
