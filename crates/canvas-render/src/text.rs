@@ -6949,7 +6949,7 @@ load = connections_per_sec / (servers * server_rate)\n";
         let outcomes = canvas_core::expr::eval_lines_in(text, &inbound);
         let rows = crate::row_grid::build_rows(text, Some(&outcomes), &[], &[], &[]);
         for (row, index) in rows.iter().zip([0usize, 1, 2]) {
-            let expected = if canvas_core::expr::line_role(&lines[index])
+            let expected = if canvas_core::expr::line_role(lines[index])
                 == canvas_core::expr::LineRole::Param
             {
                 crate::row_grid::RowKind::Param
