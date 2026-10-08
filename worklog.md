@@ -1275,3 +1275,24 @@ Stage Summary:
 - Открытые вопросы владельцу: (1) зебра/подсветки ярче после блендинг-фикса — калибровка на скриншотах (план §4.3); (2) Ctrl+Space — ручное открытие подавленного попапа, кандидат в FR; (3) шум мини-луп на 5+ строках-результатах — порог LOD на приёмке; (4) Shift+drag-подсказка — вне v1 (CR-024 п.3); (5) заполнение from_output при drag — вне v1 (CR-025 п.4)
 - WASM L2 (браузерный стенд) не выполнялся (среда без Chromium/Xvfb-прогона) — приёмка по чек-листу плана §3 вручную
 - Tokens (estimate, правило AGENTS.md): A1 ≈135k, A2 ≈160k, A3 ≈175k, B1 ≈235k, B2 ≈135k, B3 ≈210k, W0+слияния+гейты ≈90k; итого ≈1.14M
+
+---
+Task ID: click-to-edit (сессия 2026-10-08, вечер)
+Agent: Super Z (одиночная сессия, без субагентов)
+Task: Архитектурно-технологическая оценка и реализация инлайн-редактирования нод без перехода в режим правки двойным нажатием (click-to-edit)
+
+Work Log:
+- Разведка: canvas-render/edit.rs (EditingSession на cosmic-text), canvas-app/app.rs (begin_editing/begin_editing_title/begin_editing_edge, finish_editing), canvas-app/app/input.rs (on_left_button: даблклик T7, CR-018 v2 row-click, FR-072, что-если, тач-гейты FR-092/093)
+- Вердикт: «режим редактирования» как состояние отсутствует — правка уже инлайн (оверлей-сессия в общем кадре); привязан к даблклику только триггер. Прецедент прямого входа принят владельцем (CR-018 v2 — клик по строке таблицы)
+- UX-модель (tldraw/Sheets, защита мышечной памяти переноса): клик по телу text-ноды → правка с кареткой в точке клика; drag по телу → перенос (как раньше); drag внутри сессии → выделение текста; даблклик сохранён полностью (файлы/what-if/пустое место); Ctrl/Shift — выделение; тач — только двойной тап (виртуальная клавиатура по случайному тапу исключена)
+- Документ-вердикт: docs/dev-researches/inline-edit-single-click-analysis.md (§1 состояние/конфликты жестов, §2 оценка по слоям, §3 вне скоупа v1, §4 критерии приёмки)
+- Реализация (TDD): чистая click_edit_target() (5 гейтов: text-kind, файл, what-if, тач, модификаторы; зона по HEADER_HEIGHT) + click_edit_is_click() (порог SELECT_DRAG_THRESHOLD, общий с рамкой выделения) + ClickEditCandidate (press→release машина: ставится в on_left_button Pressed рядом с DragState, потребляется в Released ПОСЛЕ finish_interaction_undo — undo-дубли исключены) + begin_edit_at() (единая конверсия координат с CR-018 v2: session_area_offset + session.click)
+- Периферия: курсор I-beam над редактируемым текстом на hover (sync_cursor_icon); F2 — клавиатурный вход в правку выделенной ноды (Enter занят FR-011 mindmap); HOTKEYS (lib.rs) + i18n RU/EN (HKEY_F2/HK_F2) синхронизированы
+- Гейты: cargo test -p canvas-app --lib 599 passed (594 база + 5 новых), clippy -D warnings (app/core/render/scene/ui) — чисто, fmt --check — чисто, scripts/wasm_gate.sh --check — зелёный
+- WASM L2 (браузерный стенд) НЕ выполнялся: в среде сессии нет Chromium (Xvfb есть, браузера нет) — по правилу AGENTS.md ручная приёмка: web-версия Pages или trunk serve → клик по телу заметки (каретка в точке), drag по телу (перенос), F2 на выделенной ноде, Ctrl/Shift-клик (выделение без правки), Esc (откат), клик мимо (commit)
+
+Stage Summary:
+- Файлы: crates/canvas-app/src/app.rs (+~200: типы ClickEditZone/ClickEditCandidate, click_edit_target, click_edit_is_click, begin_edit_at, click_edit_hover_text, поле click_edit, 5 тестов), crates/canvas-app/src/app/input.rs (+42: очистка/установка/потребление кандидата, F2), crates/canvas-app/src/i18n.rs (+6: RU/EN), crates/canvas-app/src/lib.rs (+1 HOTKEYS), docs/dev-researches/inline-edit-single-click-analysis.md (новый)
+- canvas-render/canvas-core/web не тронуты — редактор и IME работают как есть
+- Открытые вопросы владельцу: (1) Notion-модель (drag по телу = выделение текста, перенос только за шапку) — поверх текущей по решению владельца; (2) click-to-edit для label групп и лейблов связей — вне v1; (3) онбординг/пользовательские доки — вопрос задан в итоговом отчёте
+- Tokens (estimate, правило AGENTS.md): in≈320k, out≈45k, total≈365k, model=GLM (Super Z), scope=click-to-edit
