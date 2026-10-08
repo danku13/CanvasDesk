@@ -156,8 +156,12 @@ impl OnboardingState {
 /// модали = окно минус поля (токен `SPACING_LG`); раньше карточка
 /// клампилась к кромкам вплотную.
 pub const ONBOARDING_VIEWPORT_MARGIN: f32 = canvas_core::tokens::SPACING_LG;
-/// Ширина карточки тура (логические px).
-pub const ONBOARDING_CARD_WIDTH: f32 = 460.0;
+/// Ширина карточки тура (логические px). CR-031/S2: 720 — двухколоночная
+/// вёрстка «50% иллюстрация / 50% текст с кнопками» (UR-002 п.4).
+pub const ONBOARDING_CARD_WIDTH: f32 = 720.0;
+/// Минимальная ширина карточки для двухколоночного режима (CR-031/S2):
+/// уже — одноколонный фолбэк без иллюстрации (узкие окна/стресс-viewport'ы).
+pub const ONBOARDING_SPLIT_MIN_W: f32 = 640.0;
 /// Внутренние поля карточки.
 pub const ONBOARDING_PAD: f32 = 24.0;
 /// Кегли строк карточки: заголовок/тело/кнопки.
@@ -202,16 +206,17 @@ pub const ONBOARDING_OPTION_GAP: f32 = kit::GAP_CONTROLS;
 pub const ONBOARDING_OPTION_ZONE: f32 = 10.0 + 2.0 * ONBOARDING_OPTION_H + ONBOARDING_OPTION_GAP;
 
 /// Rect'ы полноширинных CTA-опций финального шага (CR-031): две кнопки
-/// над футером, ширина — внутренняя ширина карточки. Порядок: «Открыть
-/// шаблонную схему» (primary), «Начать самому» (secondary).
+/// над футером, ширина — внутренняя ширина текстовой колонки (S2).
+/// Порядок: «Открыть шаблонную схему» (primary), «Начать самому» (secondary).
 pub fn option_rects(card: [f32; 4]) -> [[f32; 4]; 2] {
-    let w = (card[2] - ONBOARDING_PAD * 2.0).max(0.0);
-    let bottom = card[1] + card[3] - ONBOARDING_PAD - ONBOARDING_FOOTER_H;
+    let col = text_column(card);
+    let w = (col[2] - ONBOARDING_PAD * 2.0).max(0.0);
+    let bottom = col[1] + col[3] - ONBOARDING_PAD - ONBOARDING_FOOTER_H;
     let gallery_y = bottom - 2.0 * ONBOARDING_OPTION_H - ONBOARDING_OPTION_GAP;
     let empty_y = bottom - ONBOARDING_OPTION_H;
     [
-        [card[0] + ONBOARDING_PAD, gallery_y, w, ONBOARDING_OPTION_H],
-        [card[0] + ONBOARDING_PAD, empty_y, w, ONBOARDING_OPTION_H],
+        [col[0] + ONBOARDING_PAD, gallery_y, w, ONBOARDING_OPTION_H],
+        [col[0] + ONBOARDING_PAD, empty_y, w, ONBOARDING_OPTION_H],
     ]
 }
 
@@ -230,7 +235,10 @@ pub fn body_lines(
     let Some(step) = ONBOARDING_STEPS.get(step) else {
         return Vec::new();
     };
-    let avail = (width - ONBOARDING_PAD * 2.0).max(10.0);
+    // CR-031/S2: перенос считается по текстовой колонке (правая половина
+    // в двухколоночном режиме) — один источник с [`body_area`]/рендером.
+    let col_w = text_column([0.0, 0.0, width, 0.0])[2];
+    let avail = (col_w - ONBOARDING_PAD * 2.0).max(10.0);
     let wrapped = m.wrap(
         fs,
         i18n::tr(language, step.body_key),
@@ -271,20 +279,50 @@ pub fn body_top_offset() -> f32 {
     ONBOARDING_PAD + ONBOARDING_TITLE_LINE_H + ONBOARDING_DOTS_TOP + ONBOARDING_DOT + 10.0
 }
 
+/// Текстовая колонка карточки (CR-031/S2): в двухколоночном режиме — правая
+/// половина (иллюстрация — левая, см. [`illustration_rect`]); в фолбэке —
+/// вся карточка. Все текстово-кнопочные зоны (заголовок, точки, тело,
+/// футер, финальные CTA) считаются от этой колонки — «50% картинка,
+/// 50% текст с кнопками».
+pub fn text_column(card: [f32; 4]) -> [f32; 4] {
+    if card[2] >= ONBOARDING_SPLIT_MIN_W {
+        [card[0] + card[2] / 2.0, card[1], card[2] / 2.0, card[3]]
+    } else {
+        card
+    }
+}
+
+/// Зона иллюстрации шага (CR-031/S2): левая половина карточки минус пад —
+/// только в двухколоночном режиме ([`text_column`]); в фолбэке — None
+/// (карточка узка, иллюстрация не помещается).
+pub fn illustration_rect(card: [f32; 4]) -> Option<[f32; 4]> {
+    if card[2] >= ONBOARDING_SPLIT_MIN_W {
+        Some([
+            card[0] + ONBOARDING_PAD,
+            card[1] + ONBOARDING_PAD,
+            card[2] / 2.0 - ONBOARDING_PAD * 2.0,
+            (card[3] - ONBOARDING_PAD * 2.0).max(0.0),
+        ])
+    } else {
+        None
+    }
+}
+
 /// Зона тела шага в карточке: от якоря первой строки до футера с CTA
 /// (минус нижний пад). Общий источник высоты окна видимости скролла для
 /// раскладки ([`card_layout`]), колеса ввода и отрисовки (видимые строки).
 /// CR-031: на финальном шаге снизу резервируется зона CTA-опций
 /// ([`ONBOARDING_OPTION_ZONE`]) — опции всегда видимы, тело скроллится выше.
 pub fn body_area(card: [f32; 4], final_step: bool) -> [f32; 4] {
-    let mut h = (card[3] - body_top_offset() - ONBOARDING_PAD - ONBOARDING_FOOTER_H).max(0.0);
+    let col = text_column(card);
+    let mut h = (col[3] - body_top_offset() - ONBOARDING_PAD - ONBOARDING_FOOTER_H).max(0.0);
     if final_step {
         h = (h - ONBOARDING_OPTION_ZONE).max(0.0);
     }
     [
-        card[0] + ONBOARDING_PAD,
-        card[1] + body_top_offset(),
-        (card[2] - ONBOARDING_PAD * 2.0).max(0.0),
+        col[0] + ONBOARDING_PAD,
+        col[1] + body_top_offset(),
+        (col[2] - ONBOARDING_PAD * 2.0).max(0.0),
         h,
     ]
 }
@@ -351,14 +389,17 @@ pub fn card_layout(
 }
 
 /// Прогресс-точки: центры по горизонтали (рендер — квады-кружки).
+/// CR-031/S2: центрируются по текстовой колонке (правая половина), не по
+/// всей карточке.
 pub fn progress_dots(card: [f32; 4]) -> (Vec<f32>, f32) {
+    let col = text_column(card);
     let n = ONBOARDING_STEPS.len() as f32;
     let total = n * ONBOARDING_DOT + (n - 1.0) * ONBOARDING_DOT_GAP;
-    let start = card[0] + (card[2] - total) / 2.0;
+    let start = col[0] + (col[2] - total) / 2.0;
     let centers: Vec<f32> = (0..ONBOARDING_STEPS.len())
         .map(|i| start + i as f32 * (ONBOARDING_DOT + ONBOARDING_DOT_GAP) + ONBOARDING_DOT / 2.0)
         .collect();
-    let y = card[1] + ONBOARDING_PAD + ONBOARDING_TITLE_LINE_H + ONBOARDING_DOTS_TOP;
+    let y = col[1] + ONBOARDING_PAD + ONBOARDING_TITLE_LINE_H + ONBOARDING_DOTS_TOP;
     (centers, y)
 }
 
@@ -402,10 +443,13 @@ pub fn button_rect(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
     match button {
         OnboardingButton::Prev | OnboardingButton::Next => {
             // O2: split footer (Prev left / Next right) via kit.
+            // CR-031/S2: футер — в текстовой колонке (правая половина),
+            // не по всей карточке.
+            let col = text_column(card);
             let slot = UiRect::new(
-                card[0],
-                card[1] + card[3] - ONBOARDING_FOOTER_H,
-                card[2],
+                col[0],
+                col[1] + col[3] - ONBOARDING_FOOTER_H,
+                col[2],
                 ONBOARDING_FOOTER_H,
             );
             let btns = kit::split_footer_buttons(
@@ -451,12 +495,15 @@ pub fn button_at(
     state: &OnboardingState,
     point: [f32; 2],
 ) -> Option<OnboardingButton> {
+    // CR-031/S2: тач-расширение клампится в текстовую колонку (кнопки
+    // живут в колонке, а не во всей карточке).
+    let col = text_column(card);
     let coarse = crate::touch_targets::pointer_coarse();
     let hit = |rect: [f32; 4]| {
         let rect = if coarse {
             crate::touch_targets::intersect_xywh(
                 crate::touch_targets::expand_xywh(rect, crate::touch_targets::MIN_TOUCH_TARGET),
-                card,
+                col,
             )
         } else {
             rect
@@ -1028,7 +1075,10 @@ mod tests {
     fn body_lines_fit_measured_width() {
         for width in [ONBOARDING_CARD_WIDTH, 240.0, 216.0] {
             for step in 0..ONBOARDING_STEPS.len() {
-                let avail = width - ONBOARDING_PAD * 2.0;
+                // CR-031/S2: бюджет — текстовая колонка минус пад (как в
+                // card_layout/рендере).
+                let avail =
+                    (text_column([0.0, 0.0, width, 0.0])[2] - ONBOARDING_PAD * 2.0).max(10.0);
                 let (mut m, mut fs) = measurer();
                 for language in [Language::Ru, Language::En] {
                     for line in body_lines(step, width, language, &mut m, &mut fs) {
@@ -1041,6 +1091,43 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// CR-031/S2: двухколоночная вёрстка — карточка ≥ `ONBOARDING_SPLIT_MIN_W`
+    /// делится пополам: слева зона иллюстрации, справа текстовая колонка;
+    /// узкая карточка — фолбэк (колонка = карточка, иллюстрации нет).
+    #[test]
+    fn split_layout_illustration_and_column() {
+        let viewport = [1280.0, 800.0];
+        let card = layout(viewport, 0, Language::Ru).card;
+        assert_eq!(card[2], ONBOARDING_CARD_WIDTH, "полная ширина карточки");
+        let col = text_column(card);
+        assert_eq!(col[0], card[0] + card[2] / 2.0, "колонка — правая половина");
+        assert_eq!(col[2], card[2] / 2.0);
+        let (Some(zone), Some(_)) = (
+            illustration_rect(card),
+            illustration_rect(card).map(|z| {
+                assert_eq!(
+                    z[0] + z[2],
+                    card[0] + card[2] / 2.0 - ONBOARDING_PAD,
+                    "иллюстрация — левая половина"
+                )
+            }),
+        ) else {
+            panic!("иллюстрация обязана быть на широкой карточке");
+        };
+        assert!(
+            zone[2] > 100.0 && zone[3] > 100.0,
+            "зона иллюстрации содержательна"
+        );
+        // Кнопки футера — в колонке, не по всей карточке
+        let next = button_rect(card, OnboardingButton::Next);
+        assert!(next[0] >= col[0], "Next левее колонки");
+        // Фолбэк: узкое окно — колонка = карточка, иллюстрации нет
+        let narrow = layout([320.0, 240.0], 0, Language::Ru).card;
+        assert!(narrow[2] < ONBOARDING_SPLIT_MIN_W);
+        assert_eq!(text_column(narrow), narrow, "фолбэк: колонка = карточка");
+        assert_eq!(illustration_rect(narrow), None, "фолбэк: без иллюстрации");
     }
 
     /// Hit-тесты кнопок: Next/Skip кликабельны на каждом шаге; Prev —

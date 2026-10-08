@@ -3776,12 +3776,24 @@ impl App {
             canvas_ui::geometry::UiRect::new(card[0], card[1], card[2], card[3]),
             &kit::modal_style(&kit_palette),
         );
-        // Заголовок (слот title)
+        // CR-031/S2: двухколоночная вёрстка — слева иллюстрация шага
+        // (процедурная сцена в слотах темы), справа текстовый блок с
+        // кнопками. В фолбэке (узкая карточка) иллюстрации нет.
+        let col = onboarding_ui::text_column(card);
+        if let Some(zone) = onboarding_ui::illustration_rect(card) {
+            crate::onboarding_art::paint(
+                &mut d,
+                canvas_ui::geometry::UiRect::new(zone[0], zone[1], zone[2], zone[3]),
+                state.step,
+                &kit_palette,
+            );
+        }
+        // Заголовок (в текстовой колонке)
         d.label(
             canvas_ui::geometry::UiRect::new(
-                card[0] + onboarding_ui::ONBOARDING_PAD,
-                card[1] + onboarding_ui::ONBOARDING_PAD,
-                (card[2] - onboarding_ui::ONBOARDING_PAD * 2.0).max(0.0),
+                col[0] + onboarding_ui::ONBOARDING_PAD,
+                col[1] + onboarding_ui::ONBOARDING_PAD,
+                (col[2] - onboarding_ui::ONBOARDING_PAD * 2.0).max(0.0),
                 onboarding_ui::ONBOARDING_TITLE_LINE_H,
             ),
             self.tr(step.title_key),
