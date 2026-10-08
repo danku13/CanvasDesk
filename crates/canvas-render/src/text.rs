@@ -3097,6 +3097,86 @@ impl TextSystem {
     /// 2026-10-05 — выравнивание с зеброй/хромом строки; hit-тест — допуск
     /// CR-003). Текстовая нода якорей не имеет (toParam к ней не адресуется).
     /// Нет кэша/строк (нода вне экрана, виджет) — якорей нет.
+    ///
+    /// CR-027: точка data-порта ИСТОКА value-связи — геометрический якорь
+    /// ребра «от значения» (вместо семантической точки стороны). Условие
+    /// якорения: адресация строки/выхода или семантика потока значений.
+    /// Приоритет адресации — как в модели (FR-025/FR-029): `from_line` →
+    /// порт строки (`source_line`); `from_output` → шаблонная нода: порт
+    /// футера (имя валидируется по снапшоту `outputs`, пустой снапшот —
+    /// принимается); текстовая: последняя строка присваивания с этим
+    /// именем; без адресации (`flow = value`) — финальный порт значения
+    /// (последняя строка листа; шаблон — футер). Якорь не резолвится
+    /// (нет кэша, строка без результата/проза, имя неизвестно) — `None`,
+    /// вызывающий откатывается на точку стороны (плавная деградация:
+    /// визуал и hit-test ходят через один и тот же резолв).
+    pub fn edge_source_anchor(
+        &self,
+        index: usize,
+        node: &Node,
+        edge: &canvas_core::Edge,
+    ) -> Option<[f32; 2]> {
+        let entry = self.cache.get(&index);
+        let rows: &[CachedRow] = entry.map(|e| e.rows.as_slice()).unwrap_or(&[]);
+        let template = node.template();
+        let outputs = template.as_ref().map(|t| t.outputs.as_slice());
+        Self::edge_source_anchor_from_rows(rows, outputs, node, edge)
+    }
+
+    /// CR-027: чистое ядро [`TextSystem::edge_source_anchor`] — условность
+    /// якорения и выбор строки по адресации (тестируется на литералах
+    /// [`CachedRow`]; метод добавляет lookup кэша раскладки).
+    fn edge_source_anchor_from_rows(
+        rows: &[CachedRow],
+        template_outputs: Option<&[canvas_core::templates::OutputSpec]>,
+        node: &Node,
+        edge: &canvas_core::Edge,
+    ) -> Option<[f32; 2]> {
+        let addressed = edge.from_line.is_some() || edge.from_output.is_some();
+        if !addressed && edge.flow_kind() != canvas_core::FlowKind::Value {
+            return None;
+        }
+        let right = node.x + node.width;
+        // Порт строки: центр полосы строки результата (как у кружка FR-025)
+        let row_point = |row: &CachedRow| -> [f32; 2] {
+            [
+                right,
+                result_row_center_y(node, row.row_top, row.row_line_h),
+            ]
+        };
+        if let Some(line) = edge.from_line {
+            return rows
+                .iter()
+                .find(|row| row.source_line == Some(line))
+                .map(row_point);
+        }
+        if let Some(name) = edge.from_output.as_deref() {
+            if let Some(outputs) = template_outputs {
+                // FR-029: именованный выход шаблона — порт футера; имя
+                // сверяется со снапшотом outputs (пустой снапшот старых
+                // файлов — принимаем без проверки)
+                let known = outputs.is_empty() || outputs.iter().any(|out| out.name == name);
+                return known.then(|| [right, result_footer_y(node)]);
+            }
+            // FR-029: переменная Numi-листа — ПОСЛЕДНЕЕ определение
+            // (адресация живёт при сдвиге строк); авто-строки — мимо
+            return rows
+                .iter()
+                .rev()
+                .find(|row| row.source_line.is_some() && row.name == name)
+                .map(row_point);
+        }
+        // Без адресации: значение ноды — финальный порт (последняя строка
+        // листа; у шаблона — футер, формула и есть значение FR-023)
+        if template_outputs.is_some() {
+            return Some([right, result_footer_y(node)]);
+        }
+        rows.iter()
+            .rev()
+            .find(|row| row.source_line.is_some())
+            .map(row_point)
+    }
+
     pub fn param_ports(&self, index: usize, node: &Node) -> Vec<canvas_core::ParamPort> {
         let Some(template) = node.template() else {
             return Vec::new();
@@ -7894,6 +7974,117 @@ load = connections_per_sec / (servers * server_rate)\n";
         assert_eq!(
             measured, rendered,
             "measure = render при раскрытом описании"
+        );
+    }
+
+    /// CR-027: якорь истока value-связи — условие и выбор строки.
+    #[test]
+    fn edge_source_anchor_resolves_value_origins() {
+        let node = Node::text("a", "a", 10.0, 100.0);
+        let row = |top: f32, source_line: Option<usize>, name: &str| CachedRow {
+            kind: row_grid::RowKind::Calc,
+            source_line,
+            name: name.to_owned(),
+            row_top: top,
+            row_line_h: BODY_LINE_HEIGHT,
+            left_end: 0.0,
+            zebra: false,
+            badge_tone: None,
+            value: None,
+            unit: None,
+            badge: None,
+            error_message: None,
+            error_cell: None,
+            left_full: None,
+        };
+        let rows = vec![
+            row(0.0, Some(0), "qty"),
+            row(20.0, Some(1), "price"),
+            row(40.0, None, "auto"),
+        ];
+        let right = node.x + node.width;
+        let point_of = |top: f32| [right, result_row_center_y(&node, top, BODY_LINE_HEIGHT)];
+
+        // Контрольное ребро без адресации — семантическая точка, якоря нет
+        let control = canvas_core::Edge::new("e", "a", None, "b", None);
+        assert_eq!(
+            TextSystem::edge_source_anchor_from_rows(&rows, None, &node, &control),
+            None
+        );
+
+        // Value-ребро без адресации — финальный порт (последняя строка листа)
+        let mut value = canvas_core::Edge::new("e", "a", None, "b", None);
+        value.set_flow_kind(canvas_core::FlowKind::Value);
+        assert_eq!(
+            TextSystem::edge_source_anchor_from_rows(&rows, None, &node, &value),
+            Some(point_of(20.0)),
+            "значение ноды — последняя формульная строка"
+        );
+
+        // from_line — порт адресованной строки
+        let mut by_line = canvas_core::Edge::new("e", "a", None, "b", None);
+        by_line.from_line = Some(0);
+        assert_eq!(
+            TextSystem::edge_source_anchor_from_rows(&rows, None, &node, &by_line),
+            Some(point_of(0.0))
+        );
+
+        // from_output — ПОСЛЕДНЕЕ определение переменной (auto-строки мимо)
+        let mut by_name = canvas_core::Edge::new("e", "a", None, "b", None);
+        by_name.from_output = Some("qty".to_owned());
+        let dup = vec![
+            row(0.0, Some(0), "qty"),
+            row(20.0, Some(1), "other"),
+            row(40.0, Some(2), "qty"),
+            row(60.0, None, "qty"),
+        ];
+        assert_eq!(
+            TextSystem::edge_source_anchor_from_rows(&dup, None, &node, &by_name),
+            Some(point_of(40.0))
+        );
+
+        // Неизвестное имя — деградация к точке стороны
+        let mut unknown = canvas_core::Edge::new("e", "a", None, "b", None);
+        unknown.from_output = Some("nope".to_owned());
+        assert_eq!(
+            TextSystem::edge_source_anchor_from_rows(&rows, None, &node, &unknown),
+            None
+        );
+
+        // Адресованная строка без результата/проза — деградация
+        let mut prose = canvas_core::Edge::new("e", "a", None, "b", None);
+        prose.from_line = Some(2);
+        assert_eq!(
+            TextSystem::edge_source_anchor_from_rows(&rows, None, &node, &prose),
+            None
+        );
+
+        // Шаблонная нода: value-ребро и from_output — порт футера
+        let footer = [right, result_footer_y(&node)];
+        let mut tpl_value = canvas_core::Edge::new("e", "a", None, "b", None);
+        tpl_value.set_flow_kind(canvas_core::FlowKind::Value);
+        assert_eq!(
+            TextSystem::edge_source_anchor_from_rows(&rows, Some(&[]), &node, &tpl_value),
+            Some(footer)
+        );
+        // from_output вне снапшота outputs — деградация
+        let outputs = vec![canvas_core::templates::OutputSpec {
+            name: "total".to_owned(),
+            unit: None,
+            source: canvas_core::templates::OutputSource::Line(0),
+        }];
+        let mut tpl_unknown = canvas_core::Edge::new("e", "a", None, "b", None);
+        tpl_unknown.from_output = Some("nope".to_owned());
+        assert_eq!(
+            TextSystem::edge_source_anchor_from_rows(&rows, Some(&outputs), &node, &tpl_unknown),
+            None,
+            "имя вне снапшота outputs — точки нет"
+        );
+        let mut tpl_known = canvas_core::Edge::new("e", "a", None, "b", None);
+        tpl_known.from_output = Some("total".to_owned());
+        assert_eq!(
+            TextSystem::edge_source_anchor_from_rows(&rows, Some(&outputs), &node, &tpl_known),
+            Some(footer)
         );
     }
 }

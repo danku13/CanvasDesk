@@ -1328,6 +1328,7 @@ pub fn build_edge_instances(
         None,
         &std::collections::HashSet::new(),
         &SpillWaveView::EMPTY,
+        &[],
     )
 }
 
@@ -1368,9 +1369,16 @@ pub fn build_edge_instances_ctx(
     bundles: Option<&BundleContext<'_>>,
     unmapped_ids: &std::collections::HashSet<&str>,
     wave: &SpillWaveView,
+    anchors: &[canvas_core::EdgeAnchors],
 ) -> Vec<CardInstance> {
     let mut out = Vec::new();
     for (index, edge) in canvas.edges.iter().enumerate() {
+        // CR-027: якоря data-портов ребра — та же геометрия, что у hit-test'а
+        // и хэндлов (визуал = кликабельная область = хэндлы)
+        let edge_anchors = anchors
+            .get(index)
+            .copied()
+            .unwrap_or(canvas_core::EdgeAnchors::NONE);
         // CR-002: перепривязываемая связь скрыта — её место занимает
         // резиновая линия от неподвижного конца
         if hidden_edge == Some(index) {
@@ -1394,9 +1402,13 @@ pub fn build_edge_instances_ctx(
                             // Линию пучка рисует доминирующее ребро
                             continue;
                         }
-                        let Some(points) =
-                            canvas_core::edge_polyline(canvas, edge, avoid, EDGE_RENDER_SEGMENTS)
-                        else {
+                        let Some(points) = canvas_core::edge_polyline_anchored(
+                            canvas,
+                            edge,
+                            avoid,
+                            EDGE_RENDER_SEGMENTS,
+                            edge_anchors,
+                        ) else {
                             continue;
                         };
                         let in_selection = selected.is_some_and(|s| bundle.edges.contains(&s));
@@ -1446,8 +1458,13 @@ pub fn build_edge_instances_ctx(
                 }
             }
         }
-        let Some(points) = canvas_core::edge_polyline(canvas, edge, avoid, EDGE_RENDER_SEGMENTS)
-        else {
+        let Some(points) = canvas_core::edge_polyline_anchored(
+            canvas,
+            edge,
+            avoid,
+            EDGE_RENDER_SEGMENTS,
+            edge_anchors,
+        ) else {
             continue;
         };
         let is_selected = selected == Some(index);
@@ -1613,17 +1630,21 @@ pub fn build_port_instances(
 
 /// Хэндлы концов ВЫДЕЛЕННОЙ связи (CR-002): кружки на обоих концах —
 /// захват хэндла начинает drag перепривязки. Положения — резолв
-/// `edge_endpoint` (та же геометрия, что у линии). Диаметр — как у портов
-/// (`port_dot_diameter`); цвет — рамка выделения. Висячая/невалидная — пусто.
+/// `edge_endpoint_anchored` (та же геометрия, что у линии, CR-027).
+/// Диаметр — как у портов (`port_dot_diameter`); цвет — рамка выделения.
+/// Висячая/невалидная — пусто.
 pub fn build_edge_handle_instances(
     canvas: &canvas_core::Canvas,
     edge_index: usize,
     zone_px: f32,
+    anchors: canvas_core::EdgeAnchors,
 ) -> Vec<CardInstance> {
     let dot_d = port_dot_diameter(zone_px);
     let mut out = Vec::with_capacity(2);
     for end in [canvas_core::EdgeEnd::From, canvas_core::EdgeEnd::To] {
-        if let Some((_, point)) = canvas_core::edge_endpoint(canvas, edge_index, end) {
+        if let Some((_, point)) =
+            canvas_core::edge_endpoint_anchored(canvas, edge_index, end, anchors)
+        {
             out.push(dot(point, dot_d, SELECTION_BORDER));
         }
     }
@@ -3168,6 +3189,7 @@ mod fr042_tests {
             None,
             &no_unmapped(),
             &SpillWaveView::EMPTY,
+            &[],
         );
         assert_eq!(via_wrapper.len(), via_ctx.len());
         assert_eq!(via_wrapper[0].pos, via_ctx[0].pos);
@@ -3195,6 +3217,7 @@ mod fr042_tests {
             Some(&ctx),
             &no_unmapped(),
             &SpillWaveView::EMPTY,
+            &[],
         );
         assert!(
             aggregated.len() < baseline.len(),
@@ -3246,6 +3269,7 @@ mod fr042_tests {
             Some(&ctx),
             &no_unmapped(),
             &SpillWaveView::EMPTY,
+            &[],
         );
         // Доминанта — user-color ребро e2: цвет линии #ff8000
         assert!((plain[0].fill[0] - 1.0).abs() < 1e-3);
@@ -3262,6 +3286,7 @@ mod fr042_tests {
             Some(&ctx),
             &no_unmapped(),
             &SpillWaveView::EMPTY,
+            &[],
         );
         assert!(
             bumped[0].size[0] > plain[0].size[0],
@@ -3372,6 +3397,7 @@ mod fr050_stage_c_tests {
             None,
             &no_unmapped(),
             &SpillWaveView::EMPTY,
+            &[],
         );
         assert!(!plain.is_empty());
         assert_eq!(plain[0].fill, FLOW_EDGE_COLOR);
@@ -3387,6 +3413,7 @@ mod fr050_stage_c_tests {
             None,
             &unmapped,
             &SpillWaveView::EMPTY,
+            &[],
         );
         assert!(!amber.is_empty());
         assert_eq!(amber[0].fill, UNMAPPED_EDGE_COLOR);
@@ -3483,6 +3510,7 @@ mod fr050_stage_e_tests {
             None,
             &no_unmapped(),
             &SpillWaveView::EMPTY,
+            &[],
         );
         assert!(!plain.is_empty());
         assert_eq!(plain[0].fill, FLOW_EDGE_COLOR);
@@ -3504,6 +3532,7 @@ mod fr050_stage_e_tests {
             None,
             &no_unmapped(),
             &wave,
+            &[],
         );
         assert!(!wavy.is_empty());
         // Цвет потока, альфа на пике
@@ -3532,6 +3561,7 @@ mod fr050_stage_e_tests {
             None,
             &no_unmapped(),
             &wave,
+            &[],
         );
         assert_eq!(selected[0].fill, SELECTION_BORDER);
 
@@ -3553,6 +3583,7 @@ mod fr050_stage_e_tests {
             None,
             &no_unmapped(),
             &wave,
+            &[],
         );
         assert_eq!(focused[0].fill[..3], FOCUS_EDGE_COLOR[..3]);
         assert!((focused[0].fill[3] - 0.75).abs() < 1e-3);
