@@ -1416,6 +1416,23 @@ impl ApplicationHandler<AppEvent> for App {
             // при активном редакторе пан камеры вверх (курсор виден).
             // На нативе событие не приходит (источник — canvas-web).
             AppEvent::VisualViewport { bottom_inset } => self.on_visual_viewport(bottom_inset),
+            // FR-100 (web): модификаторы из DOM keydown/keyup — компенсация
+            // порядка событий winit-web (KeyboardInput раньше
+            // ModifiersChanged; blur сбрасывает набор). Приходит ПЕРЕД
+            // winit-батчем того же нажатия — см. комментарий варианта.
+            AppEvent::KeyboardModifiers {
+                control,
+                shift,
+                alt,
+                meta,
+            } => {
+                let mut state = ModifiersState::empty();
+                state.set(ModifiersState::SHIFT, shift);
+                state.set(ModifiersState::CONTROL, control);
+                state.set(ModifiersState::ALT, alt);
+                state.set(ModifiersState::SUPER, meta);
+                self.modifiers = state;
+            }
             // FR-096 (мобильный web): тик будильника long-press — валидность
             // удержания решает машина жеста (poll защищён от ложных срабатыв)
             #[cfg(target_arch = "wasm32")]
