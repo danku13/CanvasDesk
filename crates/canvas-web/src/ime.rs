@@ -129,7 +129,7 @@ fn focus_prevent_scroll(element: &web_sys::HtmlInputElement) {
 /// Канвас приложения (единственный `<canvas>` в документе — его создаёт
 /// winit и вставляет renderer_launch). Разрешение на каждый вызов: шим
 /// устанавливается до вставки канваса в DOM, кэшировать нечего.
-fn canvas_target(document: &web_sys::Document) -> Option<web_sys::Element> {
+pub(crate) fn canvas_target(document: &web_sys::Document) -> Option<web_sys::Element> {
     document.query_selector("canvas").ok().flatten()
 }
 
@@ -147,6 +147,40 @@ pub(crate) fn install(proxy: EventLoopProxy<AppEvent>) {
     install_visual_viewport(&window, proxy.clone());
     let document = window.document();
     let target = window.unchecked_ref::<web_sys::EventTarget>();
+
+    // FR-100: последний известный набор модификаторов — из DOM
+    // keydown/keyup (capture на document — раньше listener'а winit на
+    // канвасе, и раньше форвардера шима ниже) в App
+    // (AppEvent::KeyboardModifiers). Компенсация дефектов winit-web:
+    // (а) KeyboardInput уходит в App РАНЬШЕ ModifiersChanged — первая
+    // Ctrl-комбинация после смены фокуса видела старый набор и печатала
+    // символ; (б) blur сбрасывает набор winit в пустой. Здесь набор
+    // доставляется ПЕРЕД winit-батчем того же нажатия, а на blur НЕ
+    // сбрасывается — «залипание» гасится следующим keydown/keyup.
+    // Только trusted-события: синтетика форвардера (isTrusted=false)
+    // повторяет флаги оригинала — дубль не нужен.
+    if let Some(document) = document.as_ref() {
+        let modifiers_proxy = proxy.clone();
+        let modifiers: Closure<dyn FnMut(web_sys::KeyboardEvent)> =
+            Closure::new(move |event: web_sys::KeyboardEvent| {
+                if !event.is_trusted() {
+                    return;
+                }
+                let _ = modifiers_proxy.send_event(AppEvent::KeyboardModifiers {
+                    control: event.ctrl_key(),
+                    shift: event.shift_key(),
+                    alt: event.alt_key(),
+                    meta: event.meta_key(),
+                });
+            });
+        let cb = modifiers.as_ref().unchecked_ref();
+        for type_ in ["keydown", "keyup"] {
+            let _ = document.add_event_listener_with_callback_and_bool(type_, cb, true);
+        }
+        // Слушатель живёт весь процесс страницы — утечка осознана (как у
+        // остальных install* canvas-web).
+        std::mem::forget(modifiers);
+    }
 
     // Момент последнего одиночного символьного keydown (для дедупликации).
     let last_symbol_keydown: Rc<RefCell<Option<Instant>>> = Rc::new(RefCell::new(None));
@@ -298,6 +332,15 @@ fn install_shim(_window: &web_sys::Window, document: &web_sys::Document) {
             });
             if !is_shim {
                 return;
+            }
+            // FR-100: chord'ы (Ctrl/Meta/Alt) гасят default-действие браузера
+            // (подход шима Ctrl+P, index.html): иначе браузер параллельно с
+            // App исполняет акселератор — Ctrl+A делал select-all шима.
+            // preventDefault не мешает dispatch_event ниже — синтетика
+            // доходит до winit. Обычные клавиши не гасим: шим копит текст
+            // (значение никогда не читается, но input-семантика нужна IME).
+            if event.ctrl_key() || event.meta_key() || event.alt_key() {
+                event.prevent_default();
             }
             let Some(document) = web_sys::window().and_then(|window| window.document()) else {
                 return;

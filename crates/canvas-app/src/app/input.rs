@@ -377,6 +377,141 @@ impl App {
         }
     }
 
+    /// FR-054/FR-100: клавиатура активного редактора (T7). `true` — событие
+    /// поглощено редактором; `false` — редактору не нужно (незнакомая
+    /// Ctrl/Super-комбинация уходит в глобальную лестницу хоткеев).
+    /// Отдельная функция (не arm маршрута): принимает `&Key`/`ElementState`
+    /// вместо `KeyEvent` — KeyEvent нельзя собрать вне winit (приватное
+    /// поле platform_specific), а роутер-контракт тестируется headless.
+    pub(super) fn route_editor_key(
+        &mut self,
+        logical_key: &Key,
+        state: ElementState,
+        repeat: bool,
+    ) -> bool {
+        if self.editing.is_none() {
+            return false;
+        }
+        if state != ElementState::Pressed {
+            return true;
+        }
+        let ctrl = self.modifiers.control_key();
+        let shift = self.modifiers.shift_key();
+        // FR-100: Cmd-паритет — на macOS команды редактора доступны и
+        // через Cmd (Cmd+A печатал «a»)
+        let super_key = self.modifiers.super_key();
+        // FR-021: при открытом popup подсказок навигация/выбор
+        // перехватываются ДО команд редактора: Enter/Tab принимают
+        // подсказку (НЕ коммитят заметку), Esc закрывает только popup
+        // (повторный Esc — откат правки, прежнее поведение)
+        if self.hints.open {
+            match logical_key {
+                Key::Named(NamedKey::ArrowDown) if !repeat => {
+                    self.hints.move_selection(1);
+                    self.request_redraw();
+                    return true;
+                }
+                Key::Named(NamedKey::ArrowUp) if !repeat => {
+                    self.hints.move_selection(-1);
+                    self.request_redraw();
+                    return true;
+                }
+                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Tab) if !repeat => {
+                    self.accept_hint();
+                    return true;
+                }
+                Key::Named(NamedKey::Escape) if !repeat => {
+                    // CR-023 (UR-001-08): dismiss с подавлением до
+                    // смены токена — прежний reset возвращал попап
+                    // на том же токене при следующей правке
+                    self.hints.dismiss();
+                    self.request_redraw();
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        // FR-079 (S3): C3-карточки — Esc закрывает стопку до
+        // команд редактора (тот же приём, что у popup FR-021)
+        if self.suggest.cards.is_some() && *logical_key == Key::Named(NamedKey::Escape) && !repeat {
+            self.close_suggest_cards();
+            return true;
+        }
+        let Some(command) = map_key(logical_key, ctrl, shift, super_key).and_then(|command| {
+            match self.editing.as_ref() {
+                // FR-072: заголовок — однострочный (Enter — всегда
+                // коммит), маркеры стиля не применяются
+                Some(session) => session.adapt_command(command),
+                None => Some(command),
+            }
+        }) else {
+            // FR-100: незнакомые Ctrl/Super-комбинации НЕ глотаются —
+            // уходят в глобальную лестницу хоткеев (Ctrl+Z/Y были
+            // no-op'ом «глушителя»). Обычный ввод наружу не отдаётся:
+            // печать символов не должна триггерить канвас-хоткеи.
+            // Alt не считаем командным (AltGr — Ctrl+Alt+символ на
+            // части раскладок — не хоткей).
+            let chord = (ctrl || super_key) && !self.modifiers.alt_key();
+            return !chord;
+        };
+        match command {
+            KeyCommand::Commit => self.finish_editing(true),
+            KeyCommand::Cancel => self.finish_editing(false),
+            KeyCommand::Copy => {
+                if let Some(text) = self.editing.as_ref().and_then(|s| s.copy_selection()) {
+                    self.clipboard.set_text(text);
+                }
+            }
+            KeyCommand::Cut => {
+                let text = match (self.editing.as_mut(), self.renderer.as_mut()) {
+                    (Some(session), Some(renderer)) => {
+                        session.cut_selection(renderer.font_system_mut())
+                    }
+                    _ => None,
+                };
+                if let Some(text) = text {
+                    self.clipboard.set_text(text);
+                    self.request_redraw();
+                }
+            }
+            KeyCommand::Paste => {
+                let text = self.clipboard.get_text();
+                let pasted = if let (Some(text), Some(session), Some(renderer)) =
+                    (text, self.editing.as_mut(), self.renderer.as_mut())
+                {
+                    session.insert_text(renderer.font_system_mut(), &text);
+                    true
+                } else {
+                    false
+                };
+                if pasted {
+                    self.fit_note_size();
+                    self.update_hints();
+                    self.request_redraw();
+                }
+            }
+            other => {
+                let applied = if let (Some(session), Some(renderer)) =
+                    (self.editing.as_mut(), self.renderer.as_mut())
+                {
+                    session.apply(renderer.font_system_mut(), other);
+                    true
+                } else {
+                    false
+                };
+                if applied {
+                    // Текст мог вырасти (wrap/новые строки) — подгоняем
+                    // высоту заметки под контент прямо во время набора
+                    self.fit_note_size();
+                    // FR-021: popup подсказок — следом за правкой текста
+                    self.update_hints();
+                    self.request_redraw();
+                }
+            }
+        }
+        true
+    }
+
     /// FR-054 (Q4-a PRD-0009): обработчик клавиши владельцем-поверхностью —
     /// тела прежних head-веток on_key (FR-052) дословно; `true` — событие
     /// поглощено (доставка KeyboardRouter останавливается), `false` —
@@ -454,126 +589,7 @@ impl App {
             }
             ui_registry::KeyOwner::Editor => {
                 // Активное редактирование (T7): клавиатура уходит в редактор
-                if self.editing.is_some() {
-                    if event.state != ElementState::Pressed {
-                        return true;
-                    }
-                    let ctrl = self.modifiers.control_key();
-                    let shift = self.modifiers.shift_key();
-                    // FR-021: при открытом popup подсказок навигация/выбор
-                    // перехватываются ДО команд редактора: Enter/Tab принимают
-                    // подсказку (НЕ коммитят заметку), Esc закрывает только popup
-                    // (повторный Esc — откат правки, прежнее поведение)
-                    if self.hints.open {
-                        match &event.logical_key {
-                            Key::Named(NamedKey::ArrowDown) if !event.repeat => {
-                                self.hints.move_selection(1);
-                                self.request_redraw();
-                                return true;
-                            }
-                            Key::Named(NamedKey::ArrowUp) if !event.repeat => {
-                                self.hints.move_selection(-1);
-                                self.request_redraw();
-                                return true;
-                            }
-                            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Tab)
-                                if !event.repeat =>
-                            {
-                                self.accept_hint();
-                                return true;
-                            }
-                            Key::Named(NamedKey::Escape) if !event.repeat => {
-                                // CR-023 (UR-001-08): dismiss с подавлением до
-                                // смены токена — прежний reset возвращал попап
-                                // на том же токене при следующей правке
-                                self.hints.dismiss();
-                                self.request_redraw();
-                                return true;
-                            }
-                            _ => {}
-                        }
-                    }
-                    // FR-079 (S3): C3-карточки — Esc закрывает стопку до
-                    // команд редактора (тот же приём, что у popup FR-021)
-                    if self.suggest.cards.is_some()
-                        && event.logical_key == Key::Named(NamedKey::Escape)
-                        && !event.repeat
-                    {
-                        self.close_suggest_cards();
-                        return true;
-                    }
-                    let Some(command) =
-                        map_key(&event.logical_key, ctrl, shift).and_then(|command| {
-                            match self.editing.as_ref() {
-                                // FR-072: заголовок — однострочный (Enter — всегда
-                                // коммит), маркеры стиля не применяются
-                                Some(session) => session.adapt_command(command),
-                                None => Some(command),
-                            }
-                        })
-                    else {
-                        return true;
-                    };
-                    match command {
-                        KeyCommand::Commit => self.finish_editing(true),
-                        KeyCommand::Cancel => self.finish_editing(false),
-                        KeyCommand::Copy => {
-                            if let Some(text) =
-                                self.editing.as_ref().and_then(|s| s.copy_selection())
-                            {
-                                self.clipboard.set_text(text);
-                            }
-                        }
-                        KeyCommand::Cut => {
-                            let text = match (self.editing.as_mut(), self.renderer.as_mut()) {
-                                (Some(session), Some(renderer)) => {
-                                    session.cut_selection(renderer.font_system_mut())
-                                }
-                                _ => None,
-                            };
-                            if let Some(text) = text {
-                                self.clipboard.set_text(text);
-                                self.request_redraw();
-                            }
-                        }
-                        KeyCommand::Paste => {
-                            let text = self.clipboard.get_text();
-                            let pasted = if let (Some(text), Some(session), Some(renderer)) =
-                                (text, self.editing.as_mut(), self.renderer.as_mut())
-                            {
-                                session.insert_text(renderer.font_system_mut(), &text);
-                                true
-                            } else {
-                                false
-                            };
-                            if pasted {
-                                self.fit_note_size();
-                                self.update_hints();
-                                self.request_redraw();
-                            }
-                        }
-                        other => {
-                            let applied = if let (Some(session), Some(renderer)) =
-                                (self.editing.as_mut(), self.renderer.as_mut())
-                            {
-                                session.apply(renderer.font_system_mut(), other);
-                                true
-                            } else {
-                                false
-                            };
-                            if applied {
-                                // Текст мог вырасти (wrap/новые строки) — подгоняем
-                                // высоту заметки под контент прямо во время набора
-                                self.fit_note_size();
-                                // FR-021: popup подсказок — следом за правкой текста
-                                self.update_hints();
-                                self.request_redraw();
-                            }
-                        }
-                    }
-                    return true;
-                }
-                false
+                self.route_editor_key(&event.logical_key, event.state, event.repeat)
             }
             ui_registry::KeyOwner::Search => {
                 // Панель поиска (T14): открыта — клавиатура уходит в панель
