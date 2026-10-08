@@ -194,40 +194,59 @@ impl App {
             14.0,
             PaintAlign::Center,
         );
-        // Баннер отклонённых (У8): виден, пока есть отклонённые
+        // Баннер отклонённых (У8): виден, пока есть отклонённые.
+        // FR-UI-BANNER: kit::banner (через autolink_ui::banner_layout) —
+        // канон геометрии (rect, label_area, action_button) и стиля
+        // (control_danger tint fill, control_danger border, control_danger
+        // label_color). Канонизация: fill = tinted alpha 0.10 (был
+        // transparent); radius RADIUS_PANEL=10 (был 8); action_button =
+        // (text_w+24)×30 (было RESTORE_W×26). См. autolink_ui::banner_layout.
         if rejected > 0 {
-            let banner = autolink_ui::banner_rect(win);
-            d.rect(
-                canvas_ui::geometry::UiRect::new(banner[0], banner[1], banner[2], banner[3]),
-                [0.0; 4],
-                color_to_rgba(palette.error),
-                8.0,
+            let banner_text = self.trf(
+                keys::AUTOLINK_BANNER,
+                &[("{n}", rejected.to_string().as_str())],
             );
+            let restore_text = self.tr(keys::AUTOLINK_RESTORE_ALL);
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let label_w = m.width_of(
+                &mut fs,
+                &banner_text,
+                canvas_render::text::SANS_FAMILY,
+                11.5,
+            );
+            let action_w = m.width_of(
+                &mut fs,
+                restore_text,
+                canvas_render::text::SANS_FAMILY,
+                11.0,
+            );
+            drop(fs);
+            let (lay, style) =
+                autolink_ui::banner_layout(win, label_w, action_w, &palette.kit_palette());
+            // Фон баннера — kit::paint_banner вернул бы Vec<PaintItem> с 1
+            // Rect; здесь — d.rect напрямую с kit-style слотами.
+            d.rect(lay.rect, style.fill, style.border, style.radius);
+            // Подпись баннера (label_area + label_color kit-слот).
             d.label(
-                canvas_ui::geometry::UiRect::new(
-                    banner[0] + 10.0,
-                    banner[1] + 6.0,
-                    (banner[2] - autolink_ui::RESTORE_W - 30.0).max(0.0),
-                    16.0,
-                ),
-                &self.trf(
-                    keys::AUTOLINK_BANNER,
-                    &[("{n}", rejected.to_string().as_str())],
-                ),
-                color_to_rgba(palette.error),
+                lay.label_area,
+                &banner_text,
+                style.label_color,
                 11.5,
                 PaintAlign::Left,
             );
-            let restore = autolink_ui::restore_rect(banner);
-            d.rect(
-                canvas_ui::geometry::UiRect::new(restore[0], restore[1], restore[2], restore[3]),
-                [0.0; 4],
-                palette.palette_border,
-                6.0,
-            );
+            // Action button «Вернуть все» — geometry kit (action_button
+            // rect), стиль прежний (border-only + body-text): kit::paint_banner
+            // рисует ТОЛЬКО фон баннера, action_button — забота потребителя.
+            d.rect(lay.action_button, [0.0; 4], palette.palette_border, 6.0);
             d.label(
-                canvas_ui::geometry::UiRect::new(restore[0], restore[1] + 4.0, restore[2], 16.0),
-                self.tr(keys::AUTOLINK_RESTORE_ALL),
+                UiRect::new(
+                    lay.action_button.x,
+                    lay.action_button.y + 4.0,
+                    lay.action_button.w,
+                    16.0,
+                ),
+                restore_text,
                 color_to_rgba(palette.body),
                 11.0,
                 PaintAlign::Center,
@@ -602,11 +621,35 @@ impl App {
             let show_crumbs = state.is_ready() && !state.is_defense() && state.view_path.len() > 1;
             if show_crumbs {
                 let tree = state.tree().expect("готово");
-                let (offset, rects) = explain_ui::crumb_rects(win, state.view_path.len());
+                // FR-UI-CRUMBS: kit::crumbs (через explain_ui::crumb_rects) —
+                // измеряет ширины чипов по тексту, переполнение отбрасывает
+                // корневые уровни + prepend'ит «…» (канон kit, замена прежнего
+                // silent-drop CRUMB_MAX_CHIPS). path_labels собирается здесь
+                // (title узлов пути вида) — рендер использует label из tuple.
+                let path_labels: Vec<String> = state
+                    .view_path
+                    .iter()
+                    .filter_map(|&i| tree.nodes.get(i).map(|n| n.title.clone()))
+                    .collect();
+                let mut m = canvas_ui::measure::TextMeasurer::new();
+                let mut fs = canvas_render::text::measure_font_system();
+                let crumbs = explain_ui::crumb_rects(win, &path_labels, &mut m, &mut fs);
+                drop(fs);
                 let last = state.view_path.len().saturating_sub(1);
-                for (i, rect) in rects.iter().enumerate() {
-                    let level = offset + i;
-                    let Some(node) = tree.nodes.get(state.view_path[level]) else {
+                for (i, (rect, label)) in crumbs.iter().enumerate() {
+                    // «…» crumb — не соответствует уровню, только рисуется.
+                    let Some(level) =
+                        explain_ui::crumb_path_index(i, state.view_path.len(), &crumbs)
+                    else {
+                        // Рисуем «…» crumb (без акцентной подсветки).
+                        d.rect(*rect, [0.0; 4], palette.palette_border, 6.0);
+                        d.label(
+                            UiRect::new(rect.x, rect.y + 2.5, rect.w, 13.0),
+                            label,
+                            color_to_rgba(palette.body),
+                            10.5,
+                            PaintAlign::Center,
+                        );
                         continue;
                     };
                     // FR-060: текущая крошка — WidgetState::Selected
@@ -615,19 +658,14 @@ impl App {
                     crumb_state.set_selected(current);
                     let selected = crumb_state.kit_state() == kit::KitState::Selected;
                     d.rect(
-                        UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                        *rect,
                         if selected { palette.accent } else { [0.0; 4] },
                         palette.palette_border,
                         6.0,
                     );
                     d.label(
-                        UiRect::new(
-                            rect[0] + 6.0,
-                            rect[1] + 2.5,
-                            (rect[2] - 10.0).max(8.0),
-                            13.0,
-                        ),
-                        &node.title,
+                        UiRect::new(rect.x + 6.0, rect.y + 2.5, (rect.w - 10.0).max(8.0), 13.0),
+                        label,
                         if selected {
                             color_to_rgba(palette.text_on_accent)
                         } else {
@@ -1559,19 +1597,30 @@ impl App {
         let Some(ExprOutcome::Ok(_)) = self.scene.expr_results.get(&node.id) else {
             return;
         };
-        let band = [
-            node.x,
-            node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT,
-            node.width,
-            RESULT_LINE_HEIGHT,
-        ];
-        if !point_in_rect(band, world) {
-            return;
-        }
+        // CR-020 (Q2 «лупа на строку»): мини-лупа строки-результата —
+        // приоритет над полосой ИТОГ; тултип анкерён к иконке строки.
+        let btn = if let Some((_, rect)) = self.row_explain_hit_at(world) {
+            rect
+        } else {
+            // CR-020 (Q1): полоса «ИТОГ» — тултип только при видимом футере
+            // (у констант-присваиваний футер подавлен — зоны нет)
+            if !self.scene.node_shows_result_footer(index) {
+                return;
+            }
+            let band = [
+                node.x,
+                node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT,
+                node.width,
+                RESULT_LINE_HEIGHT,
+            ];
+            if !point_in_rect(band, world) {
+                return;
+            }
+            canvas_render::cards::explain_button_rect(node)
+        };
         let palette = ThemeColors::from_theme(self.settings.theme);
-        // Якорь — правый край кнопки (world → screen): тултип над полосой,
-        // выровнен по правому краю кнопки; клампы к вьюпорту.
-        let btn = canvas_render::cards::explain_button_rect(node);
+        // Якорь — правый край кнопки/лупы (world → screen): тултип над
+        // полосой/строкой, выровнен по правому краю; клампы к вьюпорту.
         let btn_top_right = self
             .camera
             .world_to_screen([btn[0] + btn[2], btn[1]], viewport);

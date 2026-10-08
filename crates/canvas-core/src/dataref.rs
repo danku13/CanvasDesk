@@ -140,29 +140,24 @@ pub fn display_ref_for_edge(
     counts: &BTreeMap<String, usize>,
 ) -> QualifiedRef {
     let obj = qualified_obj_name(canvas, &edge.from_node, counts);
-    // Приоритет адресации — как в flow::edge_source_value (FR-025/FR-029):
-    // fromLine → fromOutput → значение ноды целиком.
-    if let Some(line) = edge.from_line {
-        return QualifiedRef {
-            obj,
-            // Отображение 1-based (человек считает строки с единицы);
-            // в модели `from_line` — индекс листа (0-based).
-            field: format!("строка {}", line + 1),
-            tooltip: Some(format!("строка {}", line + 1)),
-        };
-    }
-    if let Some(name) = &edge.from_output {
-        return QualifiedRef {
-            obj,
-            field: name.clone(),
-            tooltip: None,
-        };
-    }
-    // Ребро без адресации: значение ноды целиком — fallback `edge.id`
-    // (FR-044 Р-3/инвариант 5: «безымянный выход → edge.id»).
+    // CR-025 (UR-001-10, ADR-0003: имя > индекс): единая точка резолва
+    // поля — `flow::spill_source_field`: fromOutput → имя строки-
+    // присваивания источника → «строка N» (только безымянные) → fallback
+    // edge.id (FR-044 Р-3/инвариант 5). Прежний приоритет fromLine над
+    // fromOutput противоречил ADR-0003 и давал «Нода.строка N» там, где
+    // движок знает имя («Трафик.peak_rps» в проливании vs «строка 3» здесь).
+    let field = crate::flow::spill_source_field(
+        canvas,
+        &edge.from_node,
+        edge.from_output.as_deref(),
+        edge.from_line,
+        &edge.id,
+    );
     QualifiedRef {
         obj,
-        field: edge.id.clone(),
+        field,
+        // Значение для тултипа «Нода.имя = значение» собирается на слое
+        // приложения (flow-исходы в core недоступны) — см. port_label_for.
         tooltip: None,
     }
 }
@@ -234,6 +229,11 @@ pub struct FormulaDisplay {
 /// - template-нода (снимок с непустым `expr`) — одна строка: формула снимка;
 /// - текстовая нода — строки тела с родом `Assignment`/`Expression`
 ///   ([`NumiLineKind`], детектор FR-021) в порядке тела; проза пропускается.
+///
+/// CR-021 (UR-001-04): классификация «параметр vs расчёт» — единая точка
+/// [`crate::expr::line_role`] (как в теле ноды): литеральные константы
+/// (`qty = 10`) — параметры, в «Расчёт · формулы» не входят; присваивания,
+/// чей RHS читает значения (`$N`/`$in`/qualified/переменные), — расчёт.
 ///
 /// Детерминировано; подстановка — display-level, исходник не меняется.
 ///
@@ -416,6 +416,10 @@ pub fn formula_displays(canvas: &Canvas, node_id: &str) -> Vec<FormulaDisplay> {
                 NumiLineKind::Assignment { .. } | NumiLineKind::Expression
             )
         })
+        // CR-021: классификация «параметр vs расчёт» — единая точка
+        // expr::line_role (как в теле ноды): литеральные константы
+        // (`qty = 10`) — параметры, в «Расчёт · формулы» не входят.
+        .filter(|(_, line)| crate::expr::line_role(line) == crate::expr::LineRole::Calc)
         .map(|(line, raw)| {
             let mut operands = Vec::new();
             let display = render(raw, &mut operands);
@@ -551,8 +555,10 @@ mod tests {
         assert_eq!(r.tooltip, None);
     }
 
-    /// FR-044 §Проверка: `fromLine` → поле «строка N» + полное в тултипе;
-    /// отображение 1-based.
+    /// FR-044 §Проверка: `fromLine` безымянной строки → поле «строка N»
+    /// (фолбэк; именованные строки резолвятся в имена — CR-025);
+    /// отображение 1-based. Тултип «Нода.имя = значение» собирается на
+    /// слое приложения (flow-исходы в core недоступны) — tooltip None.
     #[test]
     fn display_ref_from_line() {
         let mut canvas = Canvas::default();
@@ -564,7 +570,43 @@ mod tests {
         canvas.edges.push(edge);
         let r = display_ref(&canvas, 0);
         assert_eq!(r.path(), "заявки.строка 3");
-        assert_eq!(r.tooltip.as_deref(), Some("строка 3"));
+        assert_eq!(r.tooltip, None);
+    }
+
+    /// CR-025 (UR-001-10, ADR-0003: имя > индекс): строка-присваивание
+    /// источника резолвится в ИМЯ переменной (единая точка —
+    /// spill_source_field/source_line_name), а не «строка N».
+    #[test]
+    fn display_ref_from_line_resolves_assignment_name() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(text_node("a", "Цена\nprice = 100 rub", 0.0));
+        canvas.nodes.push(text_node("b", "x", 1.0));
+        let mut edge = Edge::new("e2", "a", None, "b", None);
+        edge.set_flow_kind(crate::flow::FlowKind::Value);
+        edge.from_line = Some(1);
+        canvas.edges.push(edge);
+        let r = display_ref(&canvas, 0);
+        assert_eq!(r.path(), "Цена.price", "имя присваивания сильнее индекса");
+        assert_eq!(r.field, "price");
+    }
+
+    /// CR-025 (п.3): при обоих полях (fromOutput + fromLine) показывается
+    /// ИМЯ (ADR-0003), даже если fromLine указывает на другую строку;
+    /// для data-нод колонка важнее записи — семантика не приоритетная.
+    #[test]
+    fn display_ref_both_fields_name_wins() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(text_node("a", "заявки\nusers = 10", 0.0));
+        canvas.nodes.push(text_node("b", "x", 1.0));
+        let mut edge = Edge::new("e3", "a", None, "b", None);
+        edge.set_flow_kind(crate::flow::FlowKind::Value);
+        edge.from_line = Some(0);
+        edge.from_output = Some("Средний_чек".to_owned());
+        canvas.edges.push(edge);
+        let r = display_ref(&canvas, 0);
+        assert_eq!(r.path(), "заявки.Средний_чек", "имя > индекс (ADR-0003)");
     }
 
     /// FR-044 §Проверка: безымянный выход (ребро без адресации) → `edge.id`.
@@ -775,6 +817,8 @@ mod tests {
     /// число с точкой, функция, неразрешённый путь — НЕ операнды;
     /// дефис-поле («Кол-во») — операнд; алиас коллизии «Имя (id).Поле»
     /// резолвится; дубль пути — один операнд (первое упоминание).
+    /// CR-021: литеральная константа `tmp = 2` — параметр, строкой
+    /// «Расчёт · формулы» не является (строк 2, не 3).
     #[test]
     fn formula_display_named_scanner_negatives() {
         let mut canvas = Canvas::default();
@@ -798,17 +842,38 @@ mod tests {
         e2.from_output = Some("users".to_owned());
         canvas.edges.push(e2);
         let rows = formula_displays(&canvas, "t");
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0].operand_edges, Vec::<usize>::new(), "локальная tmp");
-        // x: путь ×2 (дубль), число/функция/неразрешённый — мимо
-        assert_eq!(rows[1].operand_edges, vec![0], "Кол-во ×2 — один операнд");
+        assert_eq!(rows.len(), 2, "tmp = 2 — параметр (CR-021): {rows:?}");
         assert_eq!(
-            rows[1].display, rows[1].raw,
+            rows[0].raw,
+            "x = tmp * Заявки.Кол-во + util(2.5) + Нет.Поля + Заявки.Кол-во"
+        );
+        // x: путь ×2 (дубль), число/функция/неразрешённый — мимо
+        assert_eq!(rows[0].operand_edges, vec![0], "Кол-во ×2 — один операнд");
+        assert_eq!(
+            rows[0].display, rows[0].raw,
             "display без $-токенов не меняется"
         );
         // y: алиас «Заявки (z).users» — форма коллизии не нужна (имя
         // уникально), но допустима и резолвится через алиас-ключ
-        assert_eq!(rows[2].operand_edges, vec![1]);
+        assert_eq!(rows[1].operand_edges, vec![1]);
+    }
+
+    /// CR-021: литеральные присваивания-константы — параметры, в
+    /// «Расчёт · формулы» панели stage не входят (единая точка
+    /// `expr::line_role` с телом ноды); присваивание с RHS-входами —
+    /// расчёт (входит).
+    #[test]
+    fn formula_display_excludes_literal_params() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(text_node("s", "Данные", 0.0));
+        canvas
+            .nodes
+            .push(text_node("t", "qty = 10\nsum = $1 * 2\nзаметка", 1.0));
+        value_edge(&mut canvas, "e1", "s", "t");
+        let rows = formula_displays(&canvas, "t");
+        assert_eq!(rows.len(), 1, "константа qty не формула: {rows:?}");
+        assert_eq!(rows[0].raw, "sum = $1 * 2");
+        assert_eq!(rows[0].line, 1);
     }
 
     /// FR-044 Р-5: fromLine-ребро — поле пути = имя присваивания строки

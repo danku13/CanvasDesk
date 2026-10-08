@@ -1023,15 +1023,26 @@ impl App {
                 None => 1.0,
             }
         };
-        // 1) Затемнение фона (§7.5: тёмная 0.6 / светлая 0.5) — весь вьюпорт
-        quads.push(CardInstance {
-            pos: camera.screen_to_world([0.0, 0.0], viewport),
-            size: [viewport[0] / zoom, viewport[1] / zoom],
-            fill: palette.stage_dim,
-            border: [0.0; 4],
-            params: [0.0, 0.0, 0.0, 1.0],
-            corners: [0.0; 4],
-        });
+        // 1) Затемнение фона (§7.5: тёмная 0.6 / светлая 0.5) — весь вьюпорт.
+        // FR-070 (W-d): backdrop — kit::backdrop (paint_items_to_stage
+        // адаптирует PaintItem::Rect в world-квад: screen_to_world + /zoom,
+        // радиус/зум). Слот `stage_dim` темы — тот же, что у прежнего
+        // ручного push. 1:1 визуально (rect 0..viewport, fill, no border,
+        // radius 0 — те же слоты/значения и геометрия).
+        {
+            let backdrop = canvas_ui::kit::backdrop(
+                UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
+                &palette.kit_palette(),
+            );
+            paint_items_to_stage(
+                vec![backdrop],
+                camera,
+                viewport,
+                zoom,
+                &mut quads,
+                &mut texts,
+            );
+        }
         // 2) Подложка и рамка stage — стиль модалок FR-039 (радиус 14).
         // FR-068 (W3-продолжение): каркас stage — компонентный путь
         // (Painter + panel_style_of — явные слоты темы F-8); конвертация

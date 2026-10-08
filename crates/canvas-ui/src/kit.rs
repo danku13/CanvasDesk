@@ -25,15 +25,15 @@
 // сохранено 1:1 (§Контракт-1 PRD-0009 V-5: потребители не переписываются;
 // `crate::component` — канонический путь, `crate::kit` — совместимость).
 
-pub use crate::component::autocomplete_popup::{autocomplete_popup, AutocompleteLayout};
 pub use crate::component::banner::{banner, paint_banner, BannerKind, BannerLayout, BannerStyle};
 pub use crate::component::button::{
-    button_layout, button_size, button_style, chip_layout, chip_size, chip_style, icon_button,
-    icon_button_rect, icon_button_style, icon_glyph, icon_name, stage_close_button,
-    stage_close_button_lg, switch, ChipLayout, Icon, SwitchLayout,
+    button_layout, button_size, button_style, chip_layout, chip_size, chip_style, icon_button_rect,
+    icon_button_style, icon_glyph, icon_name, stage_close_button, stage_close_button_lg, switch,
+    ChipLayout, Icon, SwitchLayout,
 };
 pub use crate::component::chat_bubble::{
     chat_bubble, paint_chat_bubble, ChatBubbleKind, ChatBubbleLayout, ChatBubbleStyle,
+    CHAT_HEADER_H, CHAT_LINE_H, CHAT_TOOL_CALL_H,
 };
 pub use crate::component::chip::{
     chip_strip, chip_strip_wrap, CHIP_FAMILY, CHIP_FONT_SIZE, CHIP_GAP,
@@ -43,15 +43,10 @@ pub use crate::component::dropdown::{
     anchored_stack, dropdown_menu, toast_area, tooltip, tooltip_rect_anchored, viewport_clamp,
     AnchoredSide, DropdownLayout, TooltipLayout,
 };
-pub use crate::component::footer::{
-    footer_buttons, footer_buttons_measured, split_footer_buttons, FooterGroup,
-};
+pub use crate::component::footer::{footer_buttons_measured, split_footer_buttons, FooterGroup};
 pub use crate::component::icon::{icon_composition, IconKind};
 pub use crate::component::list::{list_rows, scroll_bar, ScrollState};
 pub use crate::component::modal::{focus_order, modal, modal_style, ModalLayout};
-pub use crate::component::overflow_arrow::{
-    overflow_arrows, paint_overflow_arrow, OverflowDir, OverflowDirs,
-};
 pub use crate::component::panel::{
     backdrop, card, control_style_of, panel_content, panel_rect, panel_style, panel_style_of,
     CardLayout,
@@ -69,10 +64,6 @@ pub use crate::component::row::{
     RowParts, RowStyle, ROW_BADGE_PAD_H, ROW_DOT, ROW_DOT_PAD, ROW_GLYPH_GAP, ROW_GLYPH_MIN_W,
     ROW_LINE_FRAC, ROW_TEXT_GAP,
 };
-pub use crate::component::search_panel::{
-    search_panel, SearchPanelLayout, SEARCH_PANEL_INPUT_HEIGHT, SEARCH_PANEL_ROW_H,
-    SEARCH_PANEL_WIDTH,
-};
 // FR-061 D-5 (аудит выравнивания 2026-09-26, docs/plans/
 // fr-061-template-node-kit-alignment.md): зебра-маска прогонов строк данных —
 // единое РЕШЕНИЕ с телом ноды (перенос 1:1 из canvas-render/text.rs); цвет
@@ -86,7 +77,6 @@ pub use crate::component::table::{
     table_layout_immediate, Table, TableOpts, TableProps, TableRow, TableRowStyle,
 };
 pub use crate::component::text_field::{text_field, TextFieldLayout, TextFieldModel};
-pub use crate::component::tree_layout::{tree_layout, TreeLayout, TreeNode};
 pub use crate::component::two_column::{two_column, two_column_right, TwoColumnLayout};
 pub use crate::component::{
     ButtonVariant, ControlStyle, KitPalette, KitState, PanelStyle, BUTTON_HEIGHT, BUTTON_PAD_H,

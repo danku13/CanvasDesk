@@ -93,11 +93,8 @@ pub struct BannerStyle {
     pub action_color: [f32; 4],
 }
 
-/// Alpha-tint (rgb сохраняется, alpha заменяется) — именованный паттерн
-/// `radio_card.rs`/`chat_bubble.rs`/`agent_panel.rs:443-451`.
-fn tint(slot: [f32; 4], alpha: f32) -> [f32; 4] {
-    [slot[0], slot[1], slot[2], alpha]
-}
+// tint() извлечена в `crate::paint::tint` (аудит 2026-10-06: была дублирована 3×).
+use crate::paint::tint;
 
 /// Layout a banner in `slot` with label + action button.
 ///

@@ -31,7 +31,9 @@ use crate::markdown;
 use crate::row_grid;
 use crate::theme::ThemeColors;
 use crate::zorder::ZPlan;
-use canvas_core::expr::{line_kind, ExprLineResults, ExprOutcome, ExprResults, NumiLineKind};
+use canvas_core::expr::{
+    line_role, param_line_count, ExprLineResults, ExprOutcome, ExprResults, LineRole,
+};
 
 /// Встроенные шрифты (SIL OFL 1.1 — см. assets/fonts/OFL-NotoSans*.txt).
 /// СТАТИЧЕСКИЕ инстансы (CR-009): cosmic-text 0.12 не инстанцирует вариации
@@ -331,6 +333,15 @@ pub struct RowHit {
     pub node: usize,
     pub row_ix: usize,
     pub line: Option<usize>,
+}
+
+/// CR-020: строка-результат с триггером explain — адрес строки исходного
+/// текста + world-rect иконки-лупы (единая геометрия рендера, hit-теста
+/// и тултипа приложения).
+#[derive(Debug, Clone, Copy)]
+pub struct RowExplainHit {
+    pub line: usize,
+    pub rect: [f32; 4],
 }
 
 /// FR-050 Н9-2 (этап D): вид проливаемой строки для тултипа источника —
@@ -1063,18 +1074,14 @@ fn body_items(
     let collapsed = header_plan.is_some() && !block_expanded;
     // FR-069 (этап F): подписи секций (прототип .mini-label/.grp) —
     // считаются по строкам С ИСХОДАМИ: присваивания → «параметры · N»,
-    // остальные → «расчёт · N». «Расчёт» вставляется только в режиме
-    // листа (header_plan.is_none()): в блоке-ведомости его роль играет
-    // заголовок «▾ расчёт · N строк». Свёрнутый блок расчётные строки
-    // скрывает — метка не нужна (проверка ниже, после continue).
-    let param_count = formula_lines
-        .iter()
-        .filter(|&i| {
-            lines
-                .get(*i)
-                .is_some_and(|line| matches!(line_kind(line), NumiLineKind::Assignment { .. }))
-        })
-        .count();
+    // остальные → «расчёт · N». CR-021: параметр — только присваивание с
+    // RHS-литералом (единая точка `param_line_count`); расчётные
+    // присваивания («sum = $1 * $2») в «параметры · N» не попадают.
+    // «Расчёт» вставляется только в режиме листа (header_plan.is_none()):
+    // в блоке-ведомости его роль играет заголовок «▾ расчёт · N строк».
+    // Свёрнутый блок расчётные строки скрывает — метка не нужна (проверка
+    // ниже, после continue).
+    let param_count = param_line_count(&lines, formula_lines);
     let calc_count = formula_lines.len() - param_count;
     let mut param_label_shown = false;
     let mut calc_label_shown = false;
@@ -1091,15 +1098,8 @@ fn body_items(
                     block_header_item(theme, calc_count, language, block_expanded),
                 );
                 if collapsed {
-                    // Превью свёрнутой ведомости: «параметры · P · формулы · K».
-                    let param_count = formula_lines
-                        .iter()
-                        .filter(|&i| {
-                            lines.get(*i).is_some_and(|line| {
-                                matches!(line_kind(line), NumiLineKind::Assignment { .. })
-                            })
-                        })
-                        .count();
+                    // Превью свёрнутой ведомости: «параметры · P · формулы · K»
+                    // (тот же счёт `param_line_count`, что у меток зон — CR-021).
                     push_item(
                         &mut out,
                         &mut prev,
@@ -1109,14 +1109,15 @@ fn body_items(
                 }
             }
         }
-        // Свёрнутый блок: расчётная строка (не-присваивание с исходной
-        // строкой) не рендерится — блок не создаётся (строки без блоков
-        // выбрасываются циклом привязки — ячейки и порты исчезают).
+        // Свёрнутый блок: расчётная строка (роль Calc — голое выражение ИЛИ
+        // присваивание с RHS-входами, CR-021) не рендерится — блок не
+        // создаётся (строки без блоков выбрасываются циклом привязки —
+        // ячейки и порты исчезают).
         if collapsed
             && source_line.is_some_and(|line| {
                 lines
                     .get(line)
-                    .is_some_and(|l| !matches!(line_kind(l), NumiLineKind::Assignment { .. }))
+                    .is_some_and(|l| line_role(l) == LineRole::Calc)
             })
         {
             continue;
@@ -1125,9 +1126,13 @@ fn body_items(
         // (см. комментарий выше). Сама метка — sans-строка без source_line
         // (порты/ячейки не даёт, I-1).
         if let Some(line) = source_line {
+            // CR-021: зона строки — по единой классификации `line_role`
+            // (присваивание с RHS-входами — расчёт, не «параметры»). Порог
+            // рендера считает только реальные параметры (RHS-литералы),
+            // включая расчётные присваивания в «РАСЧЁТ · N».
             let is_param = lines
                 .get(line)
-                .is_some_and(|l| matches!(line_kind(l), NumiLineKind::Assignment { .. }));
+                .is_some_and(|l| line_role(l) == LineRole::Param);
             if is_param && !param_label_shown {
                 param_label_shown = true;
                 push_item(
@@ -1187,10 +1192,13 @@ fn body_items(
             &mut prev,
             &mut list_id,
         );
+        // CR-021: расчётная строка — по единой классификации `line_role`
+        // (голое выражение или присваивание с RHS-входами — обе открывают
+        // Σ-строку, I-2 с оценкой сцены).
         if source_line.is_some_and(|line| {
             lines
                 .get(line)
-                .is_some_and(|l| !matches!(line_kind(l), NumiLineKind::Assignment { .. }))
+                .is_some_and(|l| line_role(l) == LineRole::Calc)
         }) {
             calc_rendered = true;
         }
@@ -2747,6 +2755,12 @@ struct CachedRow {
     badge_tone: Option<row_grid::BadgeTone>,
     /// Полный текст ошибки (тултип «!», механика FR-013 пр.4).
     error_message: Option<String>,
+    /// CR-020 (решение владельца Q1): строка-результат с триггером explain
+    /// («Проверка цепочки») — видимое значение и НЕ константа-присваивание
+    /// (вердикт [`row_grid::row_is_explainable`], посчитан при сборке кэша).
+    /// Потребители — рендер мини-луп (renderer.rs), hit-тест и тултип
+    /// приложения ([`TextSystem::row_explain_hits`]).
+    explainable: bool,
     /// CR-018 волна v2: зашейпленный инлайн-текст ошибки (красным в зоне
     /// значение/юнит, усечённый по ширине колонок); строится только у
     /// строк с пустыми ячейками результата (Err-исход без what-if).
@@ -3030,6 +3044,55 @@ impl TextSystem {
         self.cache
             .get(&index)
             .is_some_and(|entry| entry.result.is_some())
+    }
+
+    /// CR-020: адресная зона мини-лупы строки-результата. Иконка — правый
+    /// край полосы строки (колонка луп — одна вертикаль с кнопкой футера
+    /// FR-088 [`crate::cards::explain_button_rect`]), вертикаль — центр
+    /// полосы строки (инвариант 2026-10-05, [`result_row_center_y`]).
+    /// Правый отступ — [`BODY_PADDING`]. Ревизия 2026-10-08 (отчёт
+    /// владельца: лупа наезжала на значение/юнит «10 rub»): ячейки строк
+    /// НЕ тянутся до края тела — у не-шаблонной ноды правый край
+    /// направляющих зарезервирован под колонку луп
+    /// ([`row_grid::guides_right_edge`]), поэтому иконка стоит в своей
+    /// колонке, а не поверх ячеек.
+    fn row_explain_lupa_rect(node: &Node, row_top: f32, row_line_h: f32) -> [f32; 4] {
+        let cy = result_row_center_y(node, row_top, row_line_h);
+        let size = crate::cards::EXPLAIN_BTN_SIZE;
+        [
+            node.x + node.width - BODY_PADDING - size,
+            cy - size / 2.0,
+            size,
+            size,
+        ]
+    }
+
+    /// CR-020 (UR-001-03, Q2 «лупа на строку»): адресные зоны мини-луп
+    /// строк-результатов — ЕДИНАЯ точка истины для рендера иконок
+    /// (renderer.rs), hit-теста клика и тултипа приложения. Строка
+    /// объяснима по вердикту [`row_grid::row_is_explainable`] (кэш строк:
+    /// Calc/Param-формула со значением; константы-присваивания — нет).
+    /// Порядок — по строкам сверху вниз; шаблонным нодам лупы строк не
+    /// выдаются (триггер — футер FR-088, без регрессий).
+    pub fn row_explain_hits(&self, index: usize, node: &Node) -> Vec<RowExplainHit> {
+        if node.template().is_some() {
+            return Vec::new();
+        }
+        let Some(entry) = self.cache.get(&index) else {
+            return Vec::new();
+        };
+        entry
+            .rows
+            .iter()
+            .filter(|row| row.explainable)
+            .filter_map(|row| {
+                let line = row.source_line?;
+                Some(RowExplainHit {
+                    line,
+                    rect: Self::row_explain_lupa_rect(node, row.row_top, row.row_line_h),
+                })
+            })
+            .collect()
     }
 
     /// FR-025: построчные точки выхода ноды из кэша раскладки: для каждой
@@ -3902,13 +3965,16 @@ impl TextSystem {
                         }
                         // Проход A: направляющие + режим бейджей (детерминизм
                         // — входы уже в ключе кэша: текст/ширина/зум/исходы).
+                        // Правый край направляющих — с резервом колонки луп
+                        // (не-шаблонная нода — CR-020 ревизия, см.
+                        // row_grid::guides_right_edge).
                         let left_max = geo.iter().map(|g| g.2).fold(0.0f32, f32::max);
                         let mut pass = row_grid::pass_a(
                             &mut self.measurer,
                             &mut self.font_system,
                             &rows_data,
                             left_max,
-                            body_width,
+                            row_grid::guides_right_edge(body_width, node.template().is_some()),
                             MONO_FAMILY,
                             RESULT_FONT_SIZE,
                             BODY_FONT_SIZE,
@@ -3984,7 +4050,7 @@ impl TextSystem {
                                 &mut self.font_system,
                                 &rows_data,
                                 left_max,
-                                body_width,
+                                row_grid::guides_right_edge(body_width, node.template().is_some()),
                                 MONO_FAMILY,
                                 RESULT_FONT_SIZE,
                                 BODY_FONT_SIZE,
@@ -4069,6 +4135,8 @@ impl TextSystem {
                                 left_end: g.2,
                                 zebra: *z,
                                 badge_tone,
+                                // CR-020: вердикт «строка объяснима» — один раз
+                                explainable: row_grid::row_is_explainable(row),
                                 value: shape_row_cell(
                                     &mut self.font_system,
                                     &row.value,
@@ -5106,10 +5174,20 @@ impl TextSystem {
                         // FR-088: значение не заезжает в зону кнопки «Проверка
                         // цепочки» (иконка в правом конце полосы — рисуется
                         // при том же условии: итог без ошибки).
+                        // CR-020 ревизия: у НЕ-шаблонной ноды колонка луп уже
+                        // зарезервирована в направляющих (guides_right_edge) —
+                        // вычет здесь дважды смещал значение; остаётся
+                        // отсечка «не правее начала колонки луп» на случай
+                        // узкой таблицы. У шаблонной — вычет как раньше
+                        // (направляющие без резерва).
                         let right_world = if entry.result_error {
                             right_world
-                        } else {
+                        } else if node.template().is_some() {
                             right_world - crate::cards::EXPLAIN_BTN_ZONE
+                        } else {
+                            right_world.min(
+                                node.x + node.width - BODY_PADDING - crate::cards::EXPLAIN_BTN_ZONE,
+                            )
                         };
                         let right_phys = to_physical([right_world, top_world])[0];
                         let pos = to_physical([left_world, top_world]);
@@ -6633,6 +6711,7 @@ load = connections_per_sec / (servers * server_rate)\n";
             left_end: 0.0,
             zebra: false,
             badge_tone: None,
+            explainable: true,
             value: Some(cell(fs)),
             unit: None,
             badge: None,
@@ -6659,6 +6738,84 @@ load = connections_per_sec / (servers * server_rate)\n";
         assert_eq!(quads[1].rect[0], 520.0);
         // Пустой список строк — квадов нет
         assert!(guide_debug_quads(&guides, &[], 1.0).is_empty());
+    }
+
+    /// CR-020: геометрия мини-лупы строки-результата — правый край полосы
+    /// строки (x-право = node right − BODY_PADDING), размер — кнопки футера
+    /// ([`crate::cards::EXPLAIN_BTN_SIZE`]), вертикаль — центр полосы
+    /// строки (инвариант [`result_row_center_y`], единый с портами).
+    #[test]
+    fn row_explain_lupa_rect_pinned_to_row_strip_right_edge() {
+        let mut node = Node::text("n", "qty = 10", 100.0, 200.0);
+        node.width = 300.0;
+        node.height = 150.0;
+        let rect = TextSystem::row_explain_lupa_rect(&node, 40.0, 24.0);
+        assert_eq!(rect[2], crate::cards::EXPLAIN_BTN_SIZE);
+        assert_eq!(rect[3], crate::cards::EXPLAIN_BTN_SIZE);
+        let expected_right = node.x + node.width - BODY_PADDING;
+        assert!(
+            (rect[0] + rect[2] - expected_right).abs() < 0.01,
+            "иконка прижата к правому краю полосы строки"
+        );
+        let cy = result_row_center_y(&node, 40.0, 24.0);
+        assert!(
+            (rect[1] + rect[3] / 2.0 - cy).abs() < 0.01,
+            "вертикаль — центр полосы строки"
+        );
+    }
+
+    /// CR-020 ревизия (отчёт владельца 2026-10-08: лупа строки наезжала на
+    /// значение/юнит — «10 rub»): у не-шаблонной ноды правый край
+    /// направляющих зарезервирован под колонку луп — правый край ячейки
+    /// юнита не заходит за левый край иконки. Прежде юнит тянулся до
+    /// `body_width − badge_w − GUIDE_GAP` (при пустой бейдж-колонке — до
+    /// края тела) и попадал под иконку.
+    #[test]
+    fn row_lupa_column_reserved_in_guides() {
+        let body_width = 240.0;
+        // Не-шаблонная нода: колонка луп = EXPLAIN_BTN_ZONE (иконка + отступы).
+        assert_eq!(
+            row_grid::guides_right_edge(body_width, false),
+            body_width - crate::cards::EXPLAIN_BTN_ZONE
+        );
+        // Шаблонная (луп строк нет, решение владельца Q2): раскладка прежняя.
+        assert_eq!(row_grid::guides_right_edge(body_width, true), body_width);
+
+        // Инвариант «юнит левее лупы» на геометрии узкой ноды без бейджей.
+        let guides = canvas_ui::row_guides::RowGuides {
+            value_w: 40.0,
+            unit_w: 24.0, // «rub»
+            badge_w: 0.0,
+            value_x: 0.0,
+            unit_x: 0.0,
+        }
+        .with_right_edge(
+            row_grid::guides_right_edge(body_width, false),
+            row_grid::GUIDE_GAP,
+        );
+        let mut node = Node::text("n", "a = 10 rub", 0.0, 0.0);
+        node.width = body_width + BODY_PADDING * 2.0;
+        node.height = 120.0;
+        let lupa = TextSystem::row_explain_lupa_rect(&node, 0.0, BODY_LINE_HEIGHT);
+        let unit_right_world = node.x + BODY_PADDING + guides.unit_right();
+        assert!(
+            unit_right_world <= lupa[0] + 0.5,
+            "юнит ({unit_right_world}) левее иконки лупы ({})",
+            lupa[0]
+        );
+        // Контроль регресса: без резерва юнит заходил бы под иконку.
+        let old = canvas_ui::row_guides::RowGuides {
+            value_w: 40.0,
+            unit_w: 24.0,
+            badge_w: 0.0,
+            value_x: 0.0,
+            unit_x: 0.0,
+        }
+        .with_right_edge(body_width, row_grid::GUIDE_GAP);
+        assert!(
+            node.x + BODY_PADDING + old.unit_right() > lupa[0],
+            "пре-фиксная раскладка должна была наезжать (инвариант теста)"
+        );
     }
 
     /// FR-061 этап D (O-5): раскраска лексем формулы — функция (ident + «(»)
@@ -6887,6 +7044,70 @@ load = connections_per_sec / (servers * server_rate)\n";
             &[],
         );
         assert!(items[0].text.contains("шлюз обрабатывает"));
+    }
+
+    /// CR-021 (UR-001-04): метки зон считают только РЕАЛЬНЫЕ параметры —
+    /// единая точка `param_line_count`: репродуктор «Общая сумма корзины»
+    /// (`qty = 10`, `price = 100 руб`, `sum = $1 * $2`) — «ПАРАМЕТРЫ · 2»
+    /// (константы) и «РАСЧЁТ · 1» (расчётное присваивание, маркер ƒ — как
+    /// в панели stage); классификация строки совпадает с родом строк тела
+    /// (`row_grid::build_rows`, тот же `expr::line_role`).
+    #[test]
+    fn body_items_zone_labels_count_only_literal_params() {
+        let theme = ThemeColors::dark();
+        let text = "qty = 10\nprice = 100 руб\nsum = $1 * $2";
+        let formula_lines = [0, 1, 2];
+        let items = body_items(
+            &theme,
+            text,
+            &formula_lines,
+            &[],
+            canvas_core::Language::Ru,
+            true,
+            None,
+            None,
+            &[],
+        );
+        // Метки: «ПАРАМЕТРЫ · 2» перед qty, «РАСЧЁТ · 1» перед sum
+        let texts: Vec<&str> = items.iter().map(|item| item.text.as_str()).collect();
+        assert_eq!(items.len(), 5, "2 метки + 3 строки: {texts:?}");
+        assert!(
+            items[0].text.starts_with("ПАРАМЕТРЫ · 2"),
+            "{}",
+            items[0].text
+        );
+        assert_eq!(items[1].source_line, Some(0));
+        assert_eq!(items[2].source_line, Some(1));
+        assert!(
+            items[3].text.starts_with("РАСЧЁТ · 1"),
+            "sum = $1 * $2 — расчёт: {}",
+            items[3].text
+        );
+        assert_eq!(items[4].source_line, Some(2));
+        // Счёт зон идентичен единой точке ядра (иначе константы ушли бы
+        // в «РАСЧЁТ», и метка параметров была бы другой)
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            canvas_core::expr::param_line_count(&lines, &formula_lines),
+            2
+        );
+        // И с родом строк тела (canvas-render::row_grid) — один вердикт
+        let inbound = canvas_core::expr::Env::with_inbound(vec![
+            Some(canvas_core::Value::scalar(10.0)),
+            Some(canvas_core::Value::scalar(100.0)),
+        ]);
+        let outcomes = canvas_core::expr::eval_lines_in(text, &inbound);
+        let rows = crate::row_grid::build_rows(text, Some(&outcomes), &[], &[], &[]);
+        for (row, index) in rows.iter().zip([0usize, 1, 2]) {
+            let expected = if canvas_core::expr::line_role(lines[index])
+                == canvas_core::expr::LineRole::Param
+            {
+                crate::row_grid::RowKind::Param
+            } else {
+                crate::row_grid::RowKind::Calc
+            };
+            assert_eq!(row.kind, expected, "строка {index}: {}", lines[index]);
+        }
     }
 
     /// FR-069: супрессия внутри смешанного сегмента — соседние строки
