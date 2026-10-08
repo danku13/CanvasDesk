@@ -119,9 +119,11 @@ impl Language {
 #[serde(rename_all = "snake_case")]
 pub enum GridStyle {
     /// Линии (классическая сетка).
-    #[default]
     Lines,
-    /// Точки в узлах мелкой сетки.
+    /// Точки в узлах мелкой сетки. CR-031/S6: дефолт для новых
+    /// пользователей — точки средней плотности (сетка-линии «рябила
+    /// в глазах» — UR-002 п.6).
+    #[default]
     Dots,
 }
 
@@ -636,7 +638,9 @@ impl Default for Settings {
         Self {
             button_corner: Corner::TopRight,
             grid_visible: true,
-            grid_style: GridStyle::Lines,
+            // CR-031/S6 (UR-002 п.6): фон нового пользователя — точки
+            // средней плотности (сетка-линии рябила)
+            grid_style: GridStyle::Dots,
             grid_density: GridDensity::Medium,
             theme: Theme::Dark,
             edges_avoid_nodes: true,
@@ -1375,7 +1379,7 @@ platt_b = -0.814
             !settings.template_palette_open,
             "ревизия FR-025: дефолт — свёрнутая палитра"
         );
-        assert_eq!(settings.grid_style, GridStyle::Lines);
+        assert_eq!(settings.grid_style, GridStyle::Dots);
         assert_eq!(settings.grid_density, GridDensity::Medium);
         assert_eq!(settings.theme, Theme::Dark);
         assert!(settings.edges_avoid_nodes, "дефолт — огибать ноды");
