@@ -2137,6 +2137,14 @@ impl App {
             return;
         }
         // Контекст ноды: переменные выше, value-входы, параметры шаблона
+        let node_index = session.node_index().unwrap_or(usize::MAX);
+        let node_id = self
+            .scene
+            .canvas
+            .nodes
+            .get(node_index)
+            .map(|node| node.id.clone())
+            .unwrap_or_default();
         let vars: Vec<String> = full_text
             .split('\n')
             .take(line_i)
@@ -2145,33 +2153,82 @@ impl App {
                 _ => None,
             })
             .collect();
+        // FR-101 (фикс UR-001-05): счётчик позиционных входов — ЗЕРКАЛО
+        // фильтра слотов `flow::inbound_slots_with_lines` (flow.rs):
+        // рёбра с `to_param` проливаются в параметры и слоты `$1..$N`
+        // не занимают — прежний счётчик предлагал `$2`, которого в eval
+        // не существует (MissingInbound).
+        let inbound = self
+            .scene
+            .canvas
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.to_node == node_id
+                    && edge.flow_kind() == FlowKind::Value
+                    && edge.to_param.is_none()
+            })
+            .count();
+        // FR-101: именованные входы — рабочие ссылки на входящие
+        // value-рёбра. Имя спилла — `to_param` (`$имя` резолвится
+        // рантаймом, каскад `Env::with_param_map`); qualified-ключ
+        // адресного ребра — «Нода.имя_присваивания» (единая точка резолва
+        // имени строки-истока `flow::source_line_name`: `fromOutput` →
+        // имя присваивания; объект — display-имя с коллизионным
+        // суффиксом `dataref::qualified_obj_name` — тот же резолв, что в
+        // рантайме). Неадресованное ребро (без `fromOutput`/`fromLine` на
+        // присваивание) имени не даёт — значение адресуется позиционно.
+        let display_counts = canvas_core::dataref::display_name_counts(&self.scene.canvas);
+        let mut inbounds: Vec<hints_ui::InboundHint> = Vec::new();
+        for edge in &self.scene.canvas.edges {
+            if edge.to_node != node_id || edge.flow_kind() != FlowKind::Value {
+                continue;
+            }
+            let field = canvas_core::flow::source_line_name(
+                &self.scene.canvas,
+                &edge.from_node,
+                edge.from_output.as_deref(),
+                edge.from_line,
+            );
+            let source =
+                canvas_core::dataref::node_display_name(&self.scene.canvas, &edge.from_node);
+            let qualified = field.as_deref().map(|field| {
+                let obj = canvas_core::dataref::qualified_obj_name(
+                    &self.scene.canvas,
+                    &edge.from_node,
+                    &display_counts,
+                );
+                format!("{obj}.{field}")
+            });
+            if let Some(param) = &edge.to_param {
+                inbounds.push(hints_ui::InboundHint {
+                    name: param.clone(),
+                    qualified: qualified.clone().unwrap_or_default(),
+                    source: source.clone(),
+                    spill: true,
+                });
+            }
+            if let (Some(field), Some(qualified)) = (field, qualified) {
+                inbounds.push(hints_ui::InboundHint {
+                    name: field,
+                    qualified,
+                    source,
+                    spill: false,
+                });
+            }
+        }
         let ctx = hints_ui::HintContext {
             vars,
-            inbound: self
-                .scene
-                .canvas
-                .edges
-                .iter()
-                .filter(|edge| {
-                    edge.to_node
-                        == self
-                            .scene
-                            .canvas
-                            .nodes
-                            .get(session.node_index().unwrap_or(usize::MAX))
-                            .map(|node| node.id.clone())
-                            .unwrap_or_default()
-                        && edge.flow_kind() == FlowKind::Value
-                })
-                .count(),
+            inbound,
             params: self
                 .scene
                 .canvas
                 .nodes
-                .get(session.node_index().unwrap_or(usize::MAX))
+                .get(node_index)
                 .and_then(|node| node.template())
                 .map(|template| template.params.keys().cloned().collect())
                 .unwrap_or_default(),
+            inbounds,
         };
         let items = hints_ui::hint_items(prefix, &ctx, self.settings.language);
         let token = hints_ui::token_before_caret(prefix, prefix.len()).0;

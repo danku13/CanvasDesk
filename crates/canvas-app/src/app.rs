@@ -13556,6 +13556,109 @@ mod suggest_flow_tests {
             "show-гейт: без соседей карточек нет"
         );
     }
+
+    /// Репродуктор handtest (FR-101): «Корзина» с 1 позиционным value-ребром
+    /// (fromLine на присваивание) + 1 toParam-ребром (проливание). Контекст
+    /// подсказок: `$1` и имена входов (`Купон.купон`, `Скидка.скидка`),
+    /// `$2` НЕ предлагается (счётчик `inbound` исключает toParam-рёбра —
+    /// зеркало фильтра слотов flow::inbound_slots_with_lines).
+    fn fr101_canvas() -> Canvas {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("kup", "Купон\nкупон = 500 руб", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("skd", "Скидка\nскидка = 10", 0.0, 160.0));
+        canvas.nodes.push(Node::text(
+            "cart",
+            "Корзина\nитог = $1 - скидка",
+            320.0,
+            0.0,
+        ));
+        let mut e1 = Edge::new("e1", "kup", None, "cart", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_line = Some(1); // построчное ребро: имя присваивания «купон»
+        canvas.edges.push(e1);
+        let mut e2 = Edge::new("e2", "skd", None, "cart", None);
+        e2.set_flow_kind(FlowKind::Value);
+        e2.from_line = Some(1); // имя присваивания «скидка»
+        e2.to_param = Some("скидка".to_owned()); // проливание — НЕ слот
+        canvas.edges.push(e2);
+        canvas
+    }
+
+    #[test]
+    fn fr101_counter_excludes_to_param_and_names_inputs() {
+        let mut app = suggest_stub_app(fr101_canvas());
+        // Токен `$` — пустой токен показывает только переменные (FR-021),
+        // поэтому счётчик и имена проверяем на `$`-токене
+        suggest_start_editing(&mut app, 2, "итог = $");
+        app.update_hints();
+        assert!(app.hints.open, "попап подсказок на Numi-строке");
+        let labels: Vec<&str> = app
+            .hints
+            .items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect();
+        // Именованные входы: qualified-ключи построчных рёбер
+        assert!(labels.contains(&"Купон.купон"), "labels: {labels:?}");
+        assert!(labels.contains(&"Скидка.скидка"), "labels: {labels:?}");
+        // Позиционный слот один — `$in`/`$1`, ложного `$2` больше нет
+        assert!(labels.contains(&"$in"));
+        assert!(labels.contains(&"$1"));
+        assert!(!labels.contains(&"$2"), "toParam-ребро не слот: {labels:?}");
+    }
+
+    /// FR-101 (решение владельца Q4): триггер по имени ОБЯЗАТЕЛЕН — ввод
+    /// `купо` без `$` подсказывает `Купон.купон` (деталь — источник).
+    #[test]
+    fn fr101_name_trigger_without_dollar() {
+        let mut app = suggest_stub_app(fr101_canvas());
+        suggest_start_editing(&mut app, 2, "итог = купо");
+        app.update_hints();
+        assert!(app.hints.open, "ввод имени открывает попап");
+        let hint = app
+            .hints
+            .items
+            .iter()
+            .find(|item| item.insert == "Купон.купон")
+            .expect("подсказка Купон.купон по имени без $");
+        assert!(hint.detail.contains("Купон"), "деталь — источник: {hint:?}");
+        // Ввод `$купо` — тот же результат по имени (формат — по языку имени:
+        // кириллица → `Нода.параметр`, НЕ `$купон` — валюта)
+        suggest_start_editing(&mut app, 2, "итог = $купо");
+        app.update_hints();
+        let hint = app
+            .hints
+            .items
+            .iter()
+            .find(|item| item.insert == "Купон.купон")
+            .expect("подсказка по имени после $");
+        assert_eq!(hint.insert, "Купон.купон");
+    }
+
+    /// FR-101: вставка замещает только набранный хвост
+    /// (`replace_token_before_caret` — Backspace-семантика по токену
+    /// подсказок), каретка — после вставленного текста.
+    #[test]
+    fn fr101_insert_replaces_typed_tail_only() {
+        let mut app = suggest_stub_app(fr101_canvas());
+        suggest_start_editing(&mut app, 2, "итог = купо");
+        app.update_hints();
+        let (_, line_text, caret) = app.editing.as_ref().expect("правка").caret_line();
+        let (token, _) = hints_ui::token_before_caret(&line_text[..caret], caret);
+        assert_eq!(token, "купо", "хвост токена — только набранное имя");
+        let mut fs = cosmic_text::FontSystem::new();
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .replace_token_before_caret(&mut fs, &token, "Купон.купон");
+        let (_, line_text, caret) = app.editing.as_ref().expect("правка").caret_line();
+        assert_eq!(line_text, "итог = Купон.купон", "хвост заменён вставкой");
+        assert_eq!(caret, line_text.len(), "каретка после вставки");
+    }
 }
 
 /// W-e (миграция онбординга на кит, разморозка 03.10.2026): draw-сторона —

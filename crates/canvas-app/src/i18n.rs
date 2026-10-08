@@ -469,6 +469,9 @@ pub mod keys {
     pub const HINT_AI_DETAIL: &str = "hints.ai_detail";
     pub const HINT_AI_DETAIL_FUSION: &str = "hints.ai_detail_fusion";
     pub const HINT_DOLLAR_N: &str = "hints.dollar_n";
+    /// FR-101: деталь именованного входа — источник значения
+    /// («проливание из ноды X»).
+    pub const HINT_SPILL: &str = "hints.spill";
     /// FR-079 follow-up: empty-state карточек C3 — предложений нет,
     /// тултип рядом с якорем.
     pub const SUGGEST_EMPTY: &str = "suggest.empty";
@@ -1308,6 +1311,7 @@ const RU: &[(&str, &str)] = &[
     (keys::HINT_AI_DETAIL, "ИИ · заменит ноду шаблоном"),
     (keys::HINT_AI_DETAIL_FUSION, "ИИ+ · заменит ноду шаблоном"),
     (keys::HINT_DOLLAR_N, "вход №{i}"),
+    (keys::HINT_SPILL, "проливание из ноды «{node}»"),
     (keys::SUGGEST_EMPTY, "✦ AI-дополнений нет"),
     // --- Онбординг ---
     // --- Галерея схем (FR-049) ---
@@ -2532,6 +2536,7 @@ const EN: &[(&str, &str)] = &[
     (keys::HINT_AI_DETAIL, "AI · replaces node with template"),
     (keys::HINT_AI_DETAIL_FUSION, "AI+ · replaces node with template"),
     (keys::HINT_DOLLAR_N, "input #{i}"),
+    (keys::HINT_SPILL, "spill from node \"{node}\""),
     (keys::SUGGEST_EMPTY, "✦ No AI suggestions"),
     // --- Onboarding ---
     // --- Scheme gallery (FR-049) ---
@@ -3491,6 +3496,15 @@ mod tests {
         assert_eq!(
             trf(Language::Ru, keys::HINT_DOLLAR_N, &[("{i}", "2")]),
             "вход №2"
+        );
+        // FR-101: деталь именованного входа — источник значения
+        assert_eq!(
+            trf(Language::Ru, keys::HINT_SPILL, &[("{node}", "Купон")]),
+            "проливание из ноды «Купон»"
+        );
+        assert_eq!(
+            trf(Language::En, keys::HINT_SPILL, &[("{node}", "Купон")]),
+            "spill from node \"Купон\""
         );
         // Неизвестный плейсхолдер — текст без изменений
         assert_eq!(trf(Language::Ru, keys::DIALOG_YES, &[("{x}", "y")]), "Да");
