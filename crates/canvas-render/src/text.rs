@@ -31,7 +31,9 @@ use crate::markdown;
 use crate::row_grid;
 use crate::theme::ThemeColors;
 use crate::zorder::ZPlan;
-use canvas_core::expr::{line_kind, ExprLineResults, ExprOutcome, ExprResults, NumiLineKind};
+use canvas_core::expr::{
+    line_role, param_line_count, ExprLineResults, ExprOutcome, ExprResults, LineRole,
+};
 
 /// Встроенные шрифты (SIL OFL 1.1 — см. assets/fonts/OFL-NotoSans*.txt).
 /// СТАТИЧЕСКИЕ инстансы (CR-009): cosmic-text 0.12 не инстанцирует вариации
@@ -1072,18 +1074,14 @@ fn body_items(
     let collapsed = header_plan.is_some() && !block_expanded;
     // FR-069 (этап F): подписи секций (прототип .mini-label/.grp) —
     // считаются по строкам С ИСХОДАМИ: присваивания → «параметры · N»,
-    // остальные → «расчёт · N». «Расчёт» вставляется только в режиме
-    // листа (header_plan.is_none()): в блоке-ведомости его роль играет
-    // заголовок «▾ расчёт · N строк». Свёрнутый блок расчётные строки
-    // скрывает — метка не нужна (проверка ниже, после continue).
-    let param_count = formula_lines
-        .iter()
-        .filter(|&i| {
-            lines
-                .get(*i)
-                .is_some_and(|line| matches!(line_kind(line), NumiLineKind::Assignment { .. }))
-        })
-        .count();
+    // остальные → «расчёт · N». CR-021: параметр — только присваивание с
+    // RHS-литералом (единая точка `param_line_count`); расчётные
+    // присваивания («sum = $1 * $2») в «параметры · N» не попадают.
+    // «Расчёт» вставляется только в режиме листа (header_plan.is_none()):
+    // в блоке-ведомости его роль играет заголовок «▾ расчёт · N строк».
+    // Свёрнутый блок расчётные строки скрывает — метка не нужна (проверка
+    // ниже, после continue).
+    let param_count = param_line_count(&lines, formula_lines);
     let calc_count = formula_lines.len() - param_count;
     let mut param_label_shown = false;
     let mut calc_label_shown = false;
@@ -1100,15 +1098,8 @@ fn body_items(
                     block_header_item(theme, calc_count, language, block_expanded),
                 );
                 if collapsed {
-                    // Превью свёрнутой ведомости: «параметры · P · формулы · K».
-                    let param_count = formula_lines
-                        .iter()
-                        .filter(|&i| {
-                            lines.get(*i).is_some_and(|line| {
-                                matches!(line_kind(line), NumiLineKind::Assignment { .. })
-                            })
-                        })
-                        .count();
+                    // Превью свёрнутой ведомости: «параметры · P · формулы · K»
+                    // (тот же счёт `param_line_count`, что у меток зон — CR-021).
                     push_item(
                         &mut out,
                         &mut prev,
@@ -1118,14 +1109,15 @@ fn body_items(
                 }
             }
         }
-        // Свёрнутый блок: расчётная строка (не-присваивание с исходной
-        // строкой) не рендерится — блок не создаётся (строки без блоков
-        // выбрасываются циклом привязки — ячейки и порты исчезают).
+        // Свёрнутый блок: расчётная строка (роль Calc — голое выражение ИЛИ
+        // присваивание с RHS-входами, CR-021) не рендерится — блок не
+        // создаётся (строки без блоков выбрасываются циклом привязки —
+        // ячейки и порты исчезают).
         if collapsed
             && source_line.is_some_and(|line| {
                 lines
                     .get(line)
-                    .is_some_and(|l| !matches!(line_kind(l), NumiLineKind::Assignment { .. }))
+                    .is_some_and(|l| line_role(l) == LineRole::Calc)
             })
         {
             continue;
@@ -1134,9 +1126,13 @@ fn body_items(
         // (см. комментарий выше). Сама метка — sans-строка без source_line
         // (порты/ячейки не даёт, I-1).
         if let Some(line) = source_line {
+            // CR-021: зона строки — по единой классификации `line_role`
+            // (присваивание с RHS-входами — расчёт, не «параметры»). Порог
+            // рендера считает только реальные параметры (RHS-литералы),
+            // включая расчётные присваивания в «РАСЧЁТ · N».
             let is_param = lines
                 .get(line)
-                .is_some_and(|l| matches!(line_kind(l), NumiLineKind::Assignment { .. }));
+                .is_some_and(|l| line_role(l) == LineRole::Param);
             if is_param && !param_label_shown {
                 param_label_shown = true;
                 push_item(
@@ -1196,10 +1192,13 @@ fn body_items(
             &mut prev,
             &mut list_id,
         );
+        // CR-021: расчётная строка — по единой классификации `line_role`
+        // (голое выражение или присваивание с RHS-входами — обе открывают
+        // Σ-строку, I-2 с оценкой сцены).
         if source_line.is_some_and(|line| {
             lines
                 .get(line)
-                .is_some_and(|l| !matches!(line_kind(l), NumiLineKind::Assignment { .. }))
+                .is_some_and(|l| line_role(l) == LineRole::Calc)
         }) {
             calc_rendered = true;
         }
@@ -6895,6 +6894,70 @@ load = connections_per_sec / (servers * server_rate)\n";
             &[],
         );
         assert!(items[0].text.contains("шлюз обрабатывает"));
+    }
+
+    /// CR-021 (UR-001-04): метки зон считают только РЕАЛЬНЫЕ параметры —
+    /// единая точка `param_line_count`: репродуктор «Общая сумма корзины»
+    /// (`qty = 10`, `price = 100 руб`, `sum = $1 * $2`) — «ПАРАМЕТРЫ · 2»
+    /// (константы) и «РАСЧЁТ · 1» (расчётное присваивание, маркер ƒ — как
+    /// в панели stage); классификация строки совпадает с родом строк тела
+    /// (`row_grid::build_rows`, тот же `expr::line_role`).
+    #[test]
+    fn body_items_zone_labels_count_only_literal_params() {
+        let theme = ThemeColors::dark();
+        let text = "qty = 10\nprice = 100 руб\nsum = $1 * $2";
+        let formula_lines = [0, 1, 2];
+        let items = body_items(
+            &theme,
+            text,
+            &formula_lines,
+            &[],
+            canvas_core::Language::Ru,
+            true,
+            None,
+            None,
+            &[],
+        );
+        // Метки: «ПАРАМЕТРЫ · 2» перед qty, «РАСЧЁТ · 1» перед sum
+        let texts: Vec<&str> = items.iter().map(|item| item.text.as_str()).collect();
+        assert_eq!(items.len(), 5, "2 метки + 3 строки: {texts:?}");
+        assert!(
+            items[0].text.starts_with("ПАРАМЕТРЫ · 2"),
+            "{}",
+            items[0].text
+        );
+        assert_eq!(items[1].source_line, Some(0));
+        assert_eq!(items[2].source_line, Some(1));
+        assert!(
+            items[3].text.starts_with("РАСЧЁТ · 1"),
+            "sum = $1 * $2 — расчёт: {}",
+            items[3].text
+        );
+        assert_eq!(items[4].source_line, Some(2));
+        // Счёт зон идентичен единой точке ядра (иначе константы ушли бы
+        // в «РАСЧЁТ», и метка параметров была бы другой)
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            canvas_core::expr::param_line_count(&lines, &formula_lines),
+            2
+        );
+        // И с родом строк тела (canvas-render::row_grid) — один вердикт
+        let inbound = canvas_core::expr::Env::with_inbound(vec![
+            Some(canvas_core::Value::scalar(10.0)),
+            Some(canvas_core::Value::scalar(100.0)),
+        ]);
+        let outcomes = canvas_core::expr::eval_lines_in(text, &inbound);
+        let rows = crate::row_grid::build_rows(text, Some(&outcomes), &[], &[], &[]);
+        for (row, index) in rows.iter().zip([0usize, 1, 2]) {
+            let expected = if canvas_core::expr::line_role(&lines[index])
+                == canvas_core::expr::LineRole::Param
+            {
+                crate::row_grid::RowKind::Param
+            } else {
+                crate::row_grid::RowKind::Calc
+            };
+            assert_eq!(row.kind, expected, "строка {index}: {}", lines[index]);
+        }
     }
 
     /// FR-069: супрессия внутри смешанного сегмента — соседние строки
