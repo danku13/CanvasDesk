@@ -88,6 +88,9 @@ discovery моделей с кэшем. Всё — за существующим
    `anthropic.rs`, `health.rs::check_endpoint`, `chatgpt_oauth/*`
    (authorize/token exchange/refresh, proxy pass-through в `provider.rs`).
    Прямых вызовов `ureq` вне `UreqTransport` остаться не должно.
+   **Транспорт — единый шов для всех будущих вызовов моделей из wasm**
+   (панели, suggest, health, discovery) — именно он делает полноценные
+   LLM-вызовы из браузера возможными (через cloud-proxy, CORS).
 3. **Health-check высокоуровнево:** `health::check(provider_config) -> HealthReport`
    (Ok / Auth / RateLimit{retry_after} / Transport с человекочитаемой деталью);
    сохранить текущую семантику статусов (401/403 → Auth, 429 → RateLimit).
@@ -162,9 +165,21 @@ web-пути (их наполнит W3).
    wasm — заглушка, возвращающая понятное «недоступно до W3» (или callback-шим,
    который canvas-web наполнит `spawn_local`); поллинг результата — в
    `about_to_wait` (паттерн `oauth_poll`, `app.rs:9242`).
-8. **Тесты:** юнит-тесты на входы панелей (hit → open), гейт паузы/лимита,
-   cost-инкременты, health-состояния, discovery-fallback, OAuth-сим ветвление.
-   Регресс сценариев A–I (WASM-AI-FEATURES §6) вручную на `trunk serve`.
+8. **Suggest: LLM mm-источник в wasm (частичный ИИ в web без панелей):**
+   в 4 точках wasm-ветки `suggest::rank(..., None)` (`app.rs:6106/6112/6292/6298`)
+   вместо жёсткого `None` — remote-источник `LlmMmSource` (API готово в
+   canvas-suggest за `l1-llm`, сам крейт не трогаем) на провайдере из фабрики,
+   исполнение через executor-сим (п. 7): мгновенно показываем lex-результат,
+   LLM-ранжирование доезжает асинхронно (паттерн `suggest.pending`); ошибка /
+   нет провайдера / пауза / лимит → вырождение в lex (`fusion(lex, ∅) = lex` —
+   уже встроено). Cost LLM-запросов suggest — в `ai_cost_session/day` (п. 3).
+   На нативе поведение не меняется (worker с remote-источником как сейчас).
+   Генерация кастомных нод (F-2.7/F-2.12–F-2.16) — вне волн, бэклог (не
+   реализована и на нативе, см. §6).
+9. **Тесты:** юнит-тесты на входы панелей (hit → open), гейт паузы/лимита,
+   cost-инкременты, health-состояния, discovery-fallback, OAuth-сим ветвление,
+   suggest-деградация в lex (нет сети/провайдера/пауза). Регресс сценариев
+   A–I (WASM-AI-FEATURES §6) вручную на `trunk serve`.
 
 **Запрещено:** трогать `canvas-llm` (если не хватает мелочи в API W1 — в отчёт,
 не в код), `canvas-web`, `docs/**`, добавлять внешние зависимости.
@@ -196,7 +211,8 @@ PRD-0010.
    `canvas-app = { features = ["l1-llm"] }`, `canvas-llm` c `wasm-fetch`;
    поправить `wasm_gate.sh`/доки, если гейт предполагал полное отсутствие сети —
    теперь сеть только через `WasmFetchTransport` (браузерный fetch, CORS
-   cloud-proxy). Правку ADR-0011 см. п. 5.
+   cloud-proxy). Правку ADR-0011 см. п. 5. Флип активирует и suggest
+   mm-источник (W2 п. 8) — LLM-ранжирование подсказок в браузере.
 4. **OAuth web-флоу (F-5.10):** `js_glue.rs`/`index.html` — детект
    `?oauth_callback=` (редирект 302 воркера) / `canvasdesk://oauth/callback`
    deep-link; открытие popup логина на authorize-URL (через деплой прокси);
@@ -205,8 +221,10 @@ PRD-0010.
    существующими (W2)/новыми web-ключами (в `i18n.rs` не лезть — строки через
    бридж/JS-сторону либо согласовать в отчёте).
 5. **Документация (сводная, после волн 1–2):**
-   - `docs/WASM-AI-FEATURES.md` — обновить матрицу §1, снять актуальные
-     заглушки §4.6/4.7/§8, добавить сценарии проверки web-OAuth и панелей в web;
+   - `docs/WASM-AI-FEATURES.md` — обновить матрицу §1 (в т.ч. строка Suggest —
+     LLM-ранжирование в web, строки панелей/OAuth/health), снять актуальные
+     заглушки §4.6/4.7/§8, добавить сценарии проверки web-OAuth, панелей и
+     suggest-ранжирования в web;
    - `user-docs/ai-features.md` — раздел web (вход ChatGPT в браузере, BYOK
      через прокси, health-check, discovery моделей);
    - `docs/adr/adr-0011-wasm-build-gate.md` — amendment: сеть в wasm разрешена
@@ -270,5 +288,8 @@ W1 (canvas-llm) ──мерж──> W2 (canvas-app) ──мерж──> W3 (
 - Шифрование BYOK-ключа в localStorage (WebCrypto) — hardening после волн.
 - Адаптив статусной AI-панели для окон < 900px (сейчас скрывается by design).
 - Persist discovery-кэша моделей между сессиями (W1 делает in-memory).
+- Генерация кастомных вариантов нод LLM (F-2.7, F-2.12–F-2.16) — не реализована
+  ни на одной платформе (вне рамок Stream C этап 1, `custom_suggest.rs` — TODO
+  плана 4-streams); в волны не входит, отдельная задача после W3.
 - MCP-агентная композиция (ADR-0004/0009/0010/0012) — отдельный трек, в рамку
   этих волн не входит.
