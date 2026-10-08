@@ -5718,6 +5718,10 @@ impl App {
         };
         if applied {
             self.fit_note_size();
+            // CR-023 (UR-001-08): принятое автодополнение не всплывает
+            // повторно — подавление до смены токена перед кареткой
+            // (фактический токен после вставки зафиксирует sync)
+            self.hints.arm_suppress();
             self.update_hints();
             self.request_redraw();
         }
