@@ -230,6 +230,11 @@ pub struct FormulaDisplay {
 /// - текстовая нода — строки тела с родом `Assignment`/`Expression`
 ///   ([`NumiLineKind`], детектор FR-021) в порядке тела; проза пропускается.
 ///
+/// CR-021 (UR-001-04): классификация «параметр vs расчёт» — единая точка
+/// [`crate::expr::line_role`] (как в теле ноды): литеральные константы
+/// (`qty = 10`) — параметры, в «Расчёт · формулы» не входят; присваивания,
+/// чей RHS читает значения (`$N`/`$in`/qualified/переменные), — расчёт.
+///
 /// Детерминировано; подстановка — display-level, исходник не меняется.
 ///
 /// FR-044 Р-5 (именованный синтаксис, решение владельца 2026-09-22 —
@@ -411,6 +416,10 @@ pub fn formula_displays(canvas: &Canvas, node_id: &str) -> Vec<FormulaDisplay> {
                 NumiLineKind::Assignment { .. } | NumiLineKind::Expression
             )
         })
+        // CR-021: классификация «параметр vs расчёт» — единая точка
+        // expr::line_role (как в теле ноды): литеральные константы
+        // (`qty = 10`) — параметры, в «Расчёт · формулы» не входят.
+        .filter(|(_, line)| crate::expr::line_role(line) == crate::expr::LineRole::Calc)
         .map(|(line, raw)| {
             let mut operands = Vec::new();
             let display = render(raw, &mut operands);
@@ -808,6 +817,8 @@ mod tests {
     /// число с точкой, функция, неразрешённый путь — НЕ операнды;
     /// дефис-поле («Кол-во») — операнд; алиас коллизии «Имя (id).Поле»
     /// резолвится; дубль пути — один операнд (первое упоминание).
+    /// CR-021: литеральная константа `tmp = 2` — параметр, строкой
+    /// «Расчёт · формулы» не является (строк 2, не 3).
     #[test]
     fn formula_display_named_scanner_negatives() {
         let mut canvas = Canvas::default();
@@ -831,17 +842,38 @@ mod tests {
         e2.from_output = Some("users".to_owned());
         canvas.edges.push(e2);
         let rows = formula_displays(&canvas, "t");
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0].operand_edges, Vec::<usize>::new(), "локальная tmp");
-        // x: путь ×2 (дубль), число/функция/неразрешённый — мимо
-        assert_eq!(rows[1].operand_edges, vec![0], "Кол-во ×2 — один операнд");
+        assert_eq!(rows.len(), 2, "tmp = 2 — параметр (CR-021): {rows:?}");
         assert_eq!(
-            rows[1].display, rows[1].raw,
+            rows[0].raw,
+            "x = tmp * Заявки.Кол-во + util(2.5) + Нет.Поля + Заявки.Кол-во"
+        );
+        // x: путь ×2 (дубль), число/функция/неразрешённый — мимо
+        assert_eq!(rows[0].operand_edges, vec![0], "Кол-во ×2 — один операнд");
+        assert_eq!(
+            rows[0].display, rows[0].raw,
             "display без $-токенов не меняется"
         );
         // y: алиас «Заявки (z).users» — форма коллизии не нужна (имя
         // уникально), но допустима и резолвится через алиас-ключ
-        assert_eq!(rows[2].operand_edges, vec![1]);
+        assert_eq!(rows[1].operand_edges, vec![1]);
+    }
+
+    /// CR-021: литеральные присваивания-константы — параметры, в
+    /// «Расчёт · формулы» панели stage не входят (единая точка
+    /// `expr::line_role` с телом ноды); присваивание с RHS-входами —
+    /// расчёт (входит).
+    #[test]
+    fn formula_display_excludes_literal_params() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(text_node("s", "Данные", 0.0));
+        canvas
+            .nodes
+            .push(text_node("t", "qty = 10\nsum = $1 * 2\nзаметка", 1.0));
+        value_edge(&mut canvas, "e1", "s", "t");
+        let rows = formula_displays(&canvas, "t");
+        assert_eq!(rows.len(), 1, "константа qty не формула: {rows:?}");
+        assert_eq!(rows[0].raw, "sum = $1 * 2");
+        assert_eq!(rows[0].line, 1);
     }
 
     /// FR-044 Р-5: fromLine-ребро — поле пути = имя присваивания строки
