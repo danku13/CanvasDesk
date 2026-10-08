@@ -436,6 +436,22 @@ pub enum AppEvent {
     /// событие не конструируется (гейт и в матч-руке handler.rs).
     #[cfg(target_arch = "wasm32")]
     LongPressPoll,
+    /// FR-100 (web): последний известный набор модификаторов клавиатуры —
+    /// из DOM keydown/keyup (canvas-web, capture на document — раньше
+    /// listener'а winit на канвасе). Компенсация дефектов winit-web
+    /// (UR-001-02): KeyboardInput уходит в App РАНЬШЕ ModifiersChanged
+    /// (первая Ctrl-комбинация после смены фокуса видела старый набор и
+    /// печатала символ), а blur сбрасывает набор в пустой. Событие встаёт
+    /// в очередь раньше winit-батча того же нажатия; сброса на blur нет —
+    /// набор «живёт» до следующей клавиши (актуальность поддерживает
+    /// каждый keydown/keyup). На нативе не конструируется (источник —
+    /// только web-слой).
+    KeyboardModifiers {
+        control: bool,
+        shift: bool,
+        alt: bool,
+        meta: bool,
+    },
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -9750,9 +9766,73 @@ mod tests {
         assert_eq!(keyboard_shift_up(900.0, 700.0, 0.0), 0.0);
         assert_eq!(keyboard_shift_up(900.0, 700.0, -50.0), 0.0);
         assert_eq!(keyboard_shift_up(600.0, 0.0, 300.0), 0.0);
-        // Инсет больше вьюпорта (кламп видимой области в 0): сдвиг —
+        // Инсет больше вьюпорта (кламп видимой области в 0): сдвига нет —
         // до верхнего края (переполнение = node_bottom − 0 − MARGIN)
         assert!((keyboard_shift_up(600.0, 700.0, 800.0) - (600.0 - 12.0)).abs() < 1e-4);
+    }
+
+    // --- FR-100: роутер клавиатуры при активном редакторе -------------------
+
+    /// Роутер при активном редакторе (FR-100):
+    /// (а) незнакомые Ctrl/Super-комбинации НЕ глотаются — route_editor_key
+    /// возвращает false, событие уходит в глобальную лестницу хоткеев
+    /// (прежде «глушитель» возвращал true и Ctrl+Z/Y были no-op);
+    /// (б) обычный ввод глотается (печать символов не триггерит хоткеи);
+    /// (в) Super/Cmd-комбинации consumed (Cmd-паритет — как Ctrl).
+    /// Тест через route_editor_key(&Key, ElementState, repeat): KeyEvent
+    /// вне winit не собрать (приватное поле platform_specific).
+    #[test]
+    fn editor_router_super_parity_and_unknown_chords_fall_through() {
+        let mut app = stub_app_with_canvas(Canvas::default());
+        app.onboarding = None;
+        let mut font_system = cosmic_text::FontSystem::new();
+        app.editing = Some(EditingSession::new(
+            &mut font_system,
+            EditTarget::Node(0),
+            "текст",
+            300.0,
+            200.0,
+            1.0,
+        ));
+        let pressed = |key: Key| (key, winit::event::ElementState::Pressed, false);
+
+        // (а) Ctrl+Q — редактору не знаком: false → глобальная лестница
+        app.modifiers = ModifiersState::CONTROL;
+        let (key, state, repeat) = pressed(Key::Character("q".into()));
+        assert!(
+            !app.route_editor_key(&key, state, repeat),
+            "незнакомая Ctrl-комбинация не глотается"
+        );
+        // Super-аналог: тоже не глотается
+        app.modifiers = ModifiersState::SUPER;
+        let (key, state, repeat) = pressed(Key::Character("q".into()));
+        assert!(
+            !app.route_editor_key(&key, state, repeat),
+            "незнакомая Super-комбинация не глотается"
+        );
+
+        // (б) обычный символ глотается (уходит в редактор, не в лестницу).
+        // Применение Insert требует renderer (в заглушке None) — здесь
+        // проверяется только маршрутизация, вставка покрыта render-тестами.
+        app.modifiers = ModifiersState::empty();
+        let (key, state, repeat) = pressed(Key::Character("q".into()));
+        assert!(
+            app.route_editor_key(&key, state, repeat),
+            "печать символа глотается редактором"
+        );
+
+        // (в) Cmd/Ctrl+Z — знакомая команда: consumed (undo-стек применит
+        // сессия/приложение; renderer в заглушке None — ветка безопасна)
+        app.modifiers = ModifiersState::SUPER;
+        let (key, state, repeat) = pressed(Key::Character("z".into()));
+        assert!(
+            app.route_editor_key(&key, state, repeat),
+            "Super+Z — команда редактора: consumed, не уходит вниз"
+        );
+        // Ctrl-эквивалент той же команды — consumed (паритет)
+        app.modifiers = ModifiersState::CONTROL;
+        let (key, state, repeat) = pressed(Key::Character("z".into()));
+        assert!(app.route_editor_key(&key, state, repeat));
     }
 
     /// explain_chain_focus (F-4): узлы дерева → индексы канваса, рёбра

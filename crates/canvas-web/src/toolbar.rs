@@ -14,6 +14,8 @@ use winit::event_loop::EventLoopProxy;
 
 use canvas_app::app::AppEvent;
 
+use crate::ime::canvas_target;
+
 /// Привязать кнопки панели к web-действиям (вызывается после event loop).
 pub(crate) fn install(proxy: EventLoopProxy<AppEvent>) {
     let Some(window) = web_sys::window() else {
@@ -51,8 +53,11 @@ pub(crate) fn install(proxy: EventLoopProxy<AppEvent>) {
 }
 
 /// Повесить обработчик клика на кнопку по id (отсутствие кнопки — warn:
-/// битая разметка не должна валить запуск).
-fn bind(document: &web_sys::Document, id: &str, handler: impl FnMut() + 'static) {
+/// битая разметка не должна валить запуск). FR-100: после действия кнопки
+/// фокус возвращается канвасу — winit-web слушает keydown ТОЛЬКО на нём,
+/// фокус, оставшийся на кнопке, «убивает» клавиатуру до следующего клика
+/// по канвасу (UR-001-02: после клика по тулбару Ctrl+A печатал «a»).
+fn bind(document: &web_sys::Document, id: &str, mut handler: impl FnMut() + 'static) {
     let element = match document.get_element_by_id(id) {
         Some(element) => element,
         None => {
@@ -67,7 +72,16 @@ fn bind(document: &web_sys::Document, id: &str, handler: impl FnMut() + 'static)
             return;
         }
     };
-    let closure = Closure::wrap(Box::new(handler) as Box<dyn FnMut()>);
+    let return_focus: web_sys::Document = document.clone();
+    let closure = Closure::wrap(Box::new(move || {
+        handler();
+        // Синхронно в обработчике клика (жест): фокус обратно канвасу.
+        if let Some(canvas) = canvas_target(&return_focus) {
+            if let Some(html) = canvas.dyn_ref::<web_sys::HtmlElement>() {
+                let _ = html.focus();
+            }
+        }
+    }) as Box<dyn FnMut()>);
     let _ = button.add_event_listener_with_callback(
         "click",
         closure.as_ref().unchecked_ref::<js_sys::Function>(),
