@@ -5966,7 +5966,13 @@ impl App {
     /// FR-079: вмерджить актуальные ИИ-ответы в текущие L0-строки попапа
     /// (после пересинхронизации L0 — каретка двигалась без смены текста;
     /// ответ воркера — тот же путь из [`Self::on_suggest_ready`]).
+    /// CR-022: гейт флагом `suggest.c1_in_popup` (default false) — ИИ-строки
+    /// НЕ добавляются в попап редактора (решение владельца «вообще не надо
+    /// триггерить»); прежний контракт жив только при явном `true`.
     fn suggest_remerge(&mut self) {
+        if !self.settings.suggest.c1_in_popup {
+            return;
+        }
         let ai_items = self.suggest_ai_items();
         if ai_items.is_empty() {
             return;
@@ -13128,9 +13134,13 @@ mod suggest_flow_tests {
 
     /// Полный цикл C1: триггер → дебаунс-тик → sync-lex → мердж ИИ-строк;
     /// принятие заменяет ноду шаблоном (id/позиция живы, undo один шаг).
+    /// CR-022: путь снят из продукта (дефолт `c1_in_popup = false`) — тест
+    /// держит сохранённую за флагом поверхность живой для будущих решений.
     #[test]
     fn suggest_c1_flow_popup_and_acceptance() {
         let mut app = suggest_stub_app(suggest_calc_canvas());
+        // CR-022: код C1 сохранён за флагом — включаем явно
+        app.settings.suggest.c1_in_popup = true;
         let hole = 2;
         suggest_start_editing(&mut app, hole, "margin");
         app.update_hints();
@@ -13204,6 +13214,7 @@ mod suggest_flow_tests {
     #[test]
     fn suggest_c1_trigger_gated_by_config() {
         let mut app = suggest_stub_app(suggest_calc_canvas());
+        app.settings.suggest.c1_in_popup = true; // проверяем только off/disabled
         app.settings.suggest.engine = canvas_core::SuggestEngineKind::Off;
         suggest_start_editing(&mut app, 2, "margin");
         app.update_hints();
@@ -13212,6 +13223,95 @@ mod suggest_flow_tests {
         app.settings.suggest.enabled = false;
         app.update_hints();
         assert!(app.suggest.pending.is_none(), "disabled — триггер молчит");
+    }
+
+    /// CR-022 (UR-001-06, Q5): репродуктор владельца — редактирование
+    /// `price = 100 rub` при ВКЛЮЧЁННОМ suggest НЕ даёт ИИ-строк в попапе
+    /// ни на одном токене (значение, единица, проза); C1-триггер не
+    /// взводится, конвейер C1 не запускается. L0-подсказки живы (приём
+    /// единиц/переменных — прежний контракт FR-021).
+    #[test]
+    fn suggest_c1_not_armed_when_editing_price_rub() {
+        let mut app = suggest_stub_app(suggest_calc_canvas());
+        assert!(
+            app.suggest_active(),
+            "suggest включён (мастер-тумблер + lex) — гейтит только CR-022"
+        );
+        assert!(
+            !app.settings.suggest.c1_in_popup,
+            "дефолт флага CR-022 — false (старые конфиги получают снятое состояние)"
+        );
+        for text in [
+            "price = 100",         // значение
+            "price = 100 rub",     // единица
+            "Печатаю имя шаблона", // проза
+        ] {
+            suggest_start_editing(&mut app, 2, text);
+            app.update_hints();
+            assert!(
+                app.suggest.pending.is_none(),
+                "C1-триггер не взведён (CR-022): {text}"
+            );
+            assert!(
+                !app.hints
+                    .items
+                    .iter()
+                    .any(|i| i.kind == hints_ui::HintKind::Ai),
+                "ИИ-строк нет в попапе (CR-022): {text}"
+            );
+        }
+        // Тик дебаунса ничего не меняет: pending нет — конвейер не запускался
+        suggest_force_debounce(&mut app);
+        app.suggest_dispatch();
+        assert!(
+            app.suggest.answers.is_empty(),
+            "C1-запросы не ходили — ответов нет (лог shown/accepted от C1 не пишется)"
+        );
+    }
+
+    /// CR-022: `suggest_remerge` не добавляет ИИ-строки в попап (тот же
+    /// гейт-флаг): после снятия флага пересинхронизация L0 гасит
+    /// накопленные ответы и оставляет попап только с L0-строками.
+    #[test]
+    fn suggest_remerge_gated_by_c1_in_popup() {
+        let mut app = suggest_stub_app(suggest_calc_canvas());
+        // Реальный C1-конвейер под флагом: ответы + каталог + мердж в попапе
+        app.settings.suggest.c1_in_popup = true;
+        suggest_start_editing(&mut app, 2, "margin");
+        app.update_hints();
+        suggest_force_debounce(&mut app);
+        app.suggest_dispatch();
+        assert!(!app.suggest.answers.is_empty(), "конвейер дал ответы");
+        assert!(
+            app.hints
+                .items
+                .iter()
+                .any(|i| i.kind == hints_ui::HintKind::Ai),
+            "под флагом ИИ-строки мерджатся (поверхность сохранена)"
+        );
+        // CR-022: флаг снят — remerge не добавляет ИИ-строки
+        app.settings.suggest.c1_in_popup = false;
+        app.update_hints(); // пересинхронизация L0 (каретка/текст без правки)
+        assert!(
+            !app.hints
+                .items
+                .iter()
+                .any(|i| i.kind == hints_ui::HintKind::Ai),
+            "ИИ-строки не переживают пересинхронизацию L0 (CR-022)"
+        );
+        assert!(
+            app.suggest.answers.is_empty(),
+            "накопленные ответы погашены при снятом триггере"
+        );
+        // Прямой вызов remerge без ответов — no-op, ИИ-примесей нет
+        app.suggest_remerge();
+        assert!(
+            !app.hints
+                .items
+                .iter()
+                .any(|i| i.kind == hints_ui::HintKind::Ai),
+            "remerge при погашенных ответах не добавляет ИИ-строки"
+        );
     }
 
     /// CR-020 (UR-001-03, Q1): зона полосы «ИТОГ» — только при видимом
@@ -13303,6 +13403,7 @@ mod suggest_flow_tests {
     }
 
     /// Домен-гейт C4: прозаический фреймворк-канвас — не предлагаем.
+    /// CR-022: путь сохранён за флагом `c1_in_popup` (дефолт — снят).
     #[test]
     fn suggest_c1_framework_canvas_suppressed() {
         let mut canvas = Canvas::default();
@@ -13324,6 +13425,7 @@ mod suggest_flow_tests {
             ));
         }
         let mut app = suggest_stub_app(canvas);
+        app.settings.suggest.c1_in_popup = true; // CR-022: путь за флагом
         suggest_start_editing(&mut app, 0, "Шаг 0 пути пользователя");
         app.update_hints();
         suggest_force_debounce(&mut app);
@@ -13343,9 +13445,12 @@ mod suggest_flow_tests {
 
     /// S0-воронка: shown при мердже, dismissed при закрытии правки,
     /// accepted при принятии (файл-журнал песочницы теста).
+    /// CR-022: события пишутся только от явного `c1_in_popup = true` —
+    /// при дефолтном false C1 не ходит и shown/accepted не пишет.
     #[test]
     fn suggest_s0_events_written() {
         let mut app = suggest_stub_app(suggest_calc_canvas());
+        app.settings.suggest.c1_in_popup = true; // CR-022: путь за флагом
         let log_dir = std::env::temp_dir().join(format!("suggest-log-{}", std::process::id()));
         let journal = log_dir.join("suggest-log.jsonl");
         let _ = std::fs::remove_file(&journal);
@@ -13450,6 +13555,109 @@ mod suggest_flow_tests {
             app.suggest.cards.is_none(),
             "show-гейт: без соседей карточек нет"
         );
+    }
+
+    /// Репродуктор handtest (FR-101): «Корзина» с 1 позиционным value-ребром
+    /// (fromLine на присваивание) + 1 toParam-ребром (проливание). Контекст
+    /// подсказок: `$1` и имена входов (`Купон.купон`, `Скидка.скидка`),
+    /// `$2` НЕ предлагается (счётчик `inbound` исключает toParam-рёбра —
+    /// зеркало фильтра слотов flow::inbound_slots_with_lines).
+    fn fr101_canvas() -> Canvas {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("kup", "Купон\nкупон = 500 руб", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("skd", "Скидка\nскидка = 10", 0.0, 160.0));
+        canvas.nodes.push(Node::text(
+            "cart",
+            "Корзина\nитог = $1 - скидка",
+            320.0,
+            0.0,
+        ));
+        let mut e1 = Edge::new("e1", "kup", None, "cart", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_line = Some(1); // построчное ребро: имя присваивания «купон»
+        canvas.edges.push(e1);
+        let mut e2 = Edge::new("e2", "skd", None, "cart", None);
+        e2.set_flow_kind(FlowKind::Value);
+        e2.from_line = Some(1); // имя присваивания «скидка»
+        e2.to_param = Some("скидка".to_owned()); // проливание — НЕ слот
+        canvas.edges.push(e2);
+        canvas
+    }
+
+    #[test]
+    fn fr101_counter_excludes_to_param_and_names_inputs() {
+        let mut app = suggest_stub_app(fr101_canvas());
+        // Токен `$` — пустой токен показывает только переменные (FR-021),
+        // поэтому счётчик и имена проверяем на `$`-токене
+        suggest_start_editing(&mut app, 2, "итог = $");
+        app.update_hints();
+        assert!(app.hints.open, "попап подсказок на Numi-строке");
+        let labels: Vec<&str> = app
+            .hints
+            .items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect();
+        // Именованные входы: qualified-ключи построчных рёбер
+        assert!(labels.contains(&"Купон.купон"), "labels: {labels:?}");
+        assert!(labels.contains(&"Скидка.скидка"), "labels: {labels:?}");
+        // Позиционный слот один — `$in`/`$1`, ложного `$2` больше нет
+        assert!(labels.contains(&"$in"));
+        assert!(labels.contains(&"$1"));
+        assert!(!labels.contains(&"$2"), "toParam-ребро не слот: {labels:?}");
+    }
+
+    /// FR-101 (решение владельца Q4): триггер по имени ОБЯЗАТЕЛЕН — ввод
+    /// `купо` без `$` подсказывает `Купон.купон` (деталь — источник).
+    #[test]
+    fn fr101_name_trigger_without_dollar() {
+        let mut app = suggest_stub_app(fr101_canvas());
+        suggest_start_editing(&mut app, 2, "итог = купо");
+        app.update_hints();
+        assert!(app.hints.open, "ввод имени открывает попап");
+        let hint = app
+            .hints
+            .items
+            .iter()
+            .find(|item| item.insert == "Купон.купон")
+            .expect("подсказка Купон.купон по имени без $");
+        assert!(hint.detail.contains("Купон"), "деталь — источник: {hint:?}");
+        // Ввод `$купо` — тот же результат по имени (формат — по языку имени:
+        // кириллица → `Нода.параметр`, НЕ `$купон` — валюта)
+        suggest_start_editing(&mut app, 2, "итог = $купо");
+        app.update_hints();
+        let hint = app
+            .hints
+            .items
+            .iter()
+            .find(|item| item.insert == "Купон.купон")
+            .expect("подсказка по имени после $");
+        assert_eq!(hint.insert, "Купон.купон");
+    }
+
+    /// FR-101: вставка замещает только набранный хвост
+    /// (`replace_token_before_caret` — Backspace-семантика по токену
+    /// подсказок), каретка — после вставленного текста.
+    #[test]
+    fn fr101_insert_replaces_typed_tail_only() {
+        let mut app = suggest_stub_app(fr101_canvas());
+        suggest_start_editing(&mut app, 2, "итог = купо");
+        app.update_hints();
+        let (_, line_text, caret) = app.editing.as_ref().expect("правка").caret_line();
+        let (token, _) = hints_ui::token_before_caret(&line_text[..caret], caret);
+        assert_eq!(token, "купо", "хвост токена — только набранное имя");
+        let mut fs = cosmic_text::FontSystem::new();
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .replace_token_before_caret(&mut fs, &token, "Купон.купон");
+        let (_, line_text, caret) = app.editing.as_ref().expect("правка").caret_line();
+        assert_eq!(line_text, "итог = Купон.купон", "хвост заменён вставкой");
+        assert_eq!(caret, line_text.len(), "каретка после вставки");
     }
 }
 

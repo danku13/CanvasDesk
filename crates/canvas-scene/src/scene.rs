@@ -1432,18 +1432,11 @@ impl SceneState {
         let footer_reserve = self.node_shows_result_footer(index);
         // FR-069 (этап F): Σ-строка — итог есть (footer_reserve) и среди
         // строк с исходами есть расчётные; имя — общая функция ядра (I-2).
-        let params = formula_lines
-            .iter()
-            .copied()
-            .filter(|&i| {
-                display.lines().nth(i).is_some_and(|line| {
-                    matches!(
-                        canvas_core::expr::line_kind(line),
-                        canvas_core::expr::NumiLineKind::Assignment { .. }
-                    )
-                })
-            })
-            .count();
+        // CR-021: параметры — присваивания с RHS-литералом (единая точка
+        // `param_line_count`), расчётные присваивания открывают Σ-строку
+        // (зеркально calc_rendered рендера).
+        let lines: Vec<&str> = display.lines().collect();
+        let params = canvas_core::expr::param_line_count(&lines, &formula_lines);
         let sigma_name = if footer_reserve && formula_lines.len() > params {
             format!("Σ {}", self.canvas.nodes[index].sigma_row_name())
         } else {
@@ -1581,20 +1574,14 @@ impl SceneState {
         let desc_expanded = self.desc_expanded.contains(&self.canvas.nodes[index].id);
         let footer_reserve = self.node_shows_result_footer(index);
         // FR-069 (этап F): Σ-строка — как в ensure_reserve_at (префиксные
-        // индексы авто-строк — присваивания «путь = значение», в calcs не
-        // попадают, счёт согласован с рендером).
-        let params = formula_lines
-            .iter()
-            .copied()
-            .filter(|&i| {
-                display.lines().nth(i).is_some_and(|line| {
-                    matches!(
-                        canvas_core::expr::line_kind(line),
-                        canvas_core::expr::NumiLineKind::Assignment { .. }
-                    )
-                })
-            })
-            .count();
+        // индексы авто-строк — «путь = значение», параметрами не считаются
+        // ни здесь, ни в рендере; сами префиксные элементы Σ-строку не
+        // открывают — source_line нет, счёт согласован с рендером, I-2).
+        // CR-021: параметры — присваивания с RHS-литералом (единая точка
+        // `param_line_count`); расчётные присваивания тела открывают Σ-строку
+        // (зеркально calc_rendered рендера).
+        let lines: Vec<&str> = display.lines().collect();
+        let params = canvas_core::expr::param_line_count(&lines, &formula_lines);
         let sigma_name = if footer_reserve && formula_lines.len() > params {
             format!("Σ {}", self.canvas.nodes[index].sigma_row_name())
         } else {
@@ -1665,18 +1652,10 @@ impl SceneState {
         footer_reserve.hash(&mut hasher);
         // sigma_name — Σ-строка после расчётных строк; зависит от
         // footer_reserve + наличия расчётных строк (см. ensure_reserve_at).
-        let params = formula_lines
-            .iter()
-            .copied()
-            .filter(|&i| {
-                display.lines().nth(i).is_some_and(|line| {
-                    matches!(
-                        canvas_core::expr::line_kind(line),
-                        canvas_core::expr::NumiLineKind::Assignment { .. }
-                    )
-                })
-            })
-            .count();
+        // CR-021: параметры — присваивания с RHS-литералом (единая точка
+        // `param_line_count`).
+        let lines: Vec<&str> = display.lines().collect();
+        let params = canvas_core::expr::param_line_count(&lines, &formula_lines);
         let sigma_name = if footer_reserve && formula_lines.len() > params {
             format!("Σ {}", node.sigma_row_name())
         } else {
@@ -1797,18 +1776,11 @@ impl SceneState {
         let desc = self.node_desc_text(index);
         let desc_expanded = self.desc_expanded.contains(&node_id);
         let footer_reserve = self.node_shows_result_footer(index);
-        let params = formula_lines
-            .iter()
-            .copied()
-            .filter(|&i| {
-                display_body.lines().nth(i).is_some_and(|line| {
-                    matches!(
-                        canvas_core::expr::line_kind(line),
-                        canvas_core::expr::NumiLineKind::Assignment { .. }
-                    )
-                })
-            })
-            .count();
+        // CR-021: параметры — присваивания с RHS-литералом (единая точка
+        // `param_line_count`); расчётные присваивания открывают Σ-строку
+        // (зеркально calc_rendered рендера, I-2).
+        let lines: Vec<&str> = display_body.lines().collect();
+        let params = canvas_core::expr::param_line_count(&lines, &formula_lines);
         let sigma_name = if footer_reserve && formula_lines.len() > params {
             format!("Σ {}", self.canvas.nodes[index].sigma_row_name())
         } else {
