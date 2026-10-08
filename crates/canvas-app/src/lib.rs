@@ -147,6 +147,13 @@ pub mod suggest;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod suggest_worker;
 
+/// W2 п.7: LLM-executor — общий механизм запуска async LLM-вызовов
+/// (панели/health/discovery/suggest-choice). Натив — worker-потоки +
+/// pollster; wasm — шов `spawn_local` (инъекция canvas-web, W3).
+/// Опрос результатов — `about_to_wait` (`llm_poll`, паттерн oauth_poll).
+#[cfg(feature = "l1-llm")]
+pub mod llm_executor;
+
 /// FR-055 (этап U4 PRD-0009, F-8): витрина кита `kit_gallery` — модель
 /// раскладки + адаптер «кит → квад/текст кадра». Сборка кадра — в app.rs.
 pub mod kit_ui;
@@ -1307,6 +1314,10 @@ pub mod ui {
         /// PRD-0007 (FR-048 X4, AC-5.1): «Найти связи по именам» — немедленный
         /// запуск детектора автосвязи + диалог ревью (не переключатель).
         AutolinkFind,
+        /// W2 п.1 (PRD-0010 F-3): «Генератор графа (AI)…» — открыть диалог
+        /// генерации графа из текста (вход Graph Builder; второй вход —
+        /// диалоговый). Действие, не переключатель.
+        AiGraphBuilder,
         /// FR-038 п.16 (T-038.5): «Выровнять по горизонтали» — ряд по центрам
         /// (общая ось Y). Виден ТОЛЬКО при N≥3 выделенных нодах.
         AlignHorizontal,
@@ -1331,7 +1342,7 @@ pub mod ui {
     }
 
     /// Меню пустого канваса (базовые пункты — видны всегда).
-    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 10] = [
+    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 11] = [
         CanvasMenuItem::NewGroup,
         CanvasMenuItem::FocusMode,
         CanvasMenuItem::Hotkeys,
@@ -1341,6 +1352,7 @@ pub mod ui {
         CanvasMenuItem::WhatIf,
         CanvasMenuItem::FlowMap,
         CanvasMenuItem::AutolinkFind,
+        CanvasMenuItem::AiGraphBuilder,
         CanvasMenuItem::About,
     ];
 
@@ -1455,6 +1467,10 @@ pub mod ui {
             // PRD-0007 (FR-048 X4, AC-5.1): действие, не переключатель
             CanvasMenuItem::AutolinkFind => {
                 i18n::tr(language, crate::i18n::keys::MENU_AUTOLINK_FIND).to_owned()
+            }
+            // W2 п.1 (PRD-0010 F-3): действие, не переключатель
+            CanvasMenuItem::AiGraphBuilder => {
+                i18n::tr(language, crate::i18n::keys::AI_MENU_GRAPH_BUILDER).to_owned()
             }
             // FR-038 (T-038.5): batch-операции — действия, не переключатели
             // (галочек нет; видимость пунктов решает список меню, N≥3)
@@ -2687,8 +2703,11 @@ pub mod ui {
             // PRD-0007 (X4): пункт автосвязи — предпоследний (действие);
             // FR-050 Н9-4: перед ним — карта проливаний (действие)
             // FR-087: последний — «Об авторе» (всегда виден, opens DOM overlay)
-            assert_eq!(n, 10);
-            assert_eq!(CANVAS_MENU_ITEMS[9], CanvasMenuItem::About);
+            // W2 (PRD-0010 F-3): добавлен пункт «Генератор графа (AI)…»
+            // (предпоследний, действие) — меню выросло до 11.
+            assert_eq!(n, 11);
+            assert_eq!(CANVAS_MENU_ITEMS[10], CanvasMenuItem::About);
+            assert_eq!(CANVAS_MENU_ITEMS[9], CanvasMenuItem::AiGraphBuilder);
             assert_eq!(CANVAS_MENU_ITEMS[8], CanvasMenuItem::AutolinkFind);
             assert_eq!(CANVAS_MENU_ITEMS[7], CanvasMenuItem::FlowMap);
             // M5 (T20-F): четвёртый пункт — вход в подменю виджетов

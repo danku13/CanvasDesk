@@ -934,6 +934,14 @@ pub mod keys {
     pub const AI_OAUTH_ERR: &str = "ai.oauth.err";
     pub const AI_OAUTH_BTN_RETRY: &str = "ai.oauth.btn_retry";
     pub const AI_OAUTH_UNAVAILABLE: &str = "ai.oauth.unavailable";
+    // W2 (health/discovery/graph тосты + пункт меню Graph Builder).
+    pub const AI_HEALTH_OK: &str = "ai.health.ok";
+    pub const AI_HEALTH_FAIL: &str = "ai.health.fail";
+    pub const AI_HEALTH_NO_KEY: &str = "ai.health.no_key";
+    pub const AI_HEALTH_NO_ENDPOINT: &str = "ai.health.no_endpoint";
+    pub const AI_DISCOVERY_OK: &str = "ai.discovery.ok";
+    pub const AI_GRAPH_DONE: &str = "ai.graph.done";
+    pub const AI_MENU_GRAPH_BUILDER: &str = "ai.menu.graph_builder";
     pub const AI_OAUTH_TOAST_LOGOUT: &str = "ai.oauth.toast_logout";
     pub const AI_COST_LIMIT_LABEL: &str = "ai.cost_limit_label";
     pub const AI_CONF_THR_LABEL: &str = "ai.conf_thr_label";
@@ -2176,6 +2184,20 @@ const RU: &[(&str, &str)] = &[
         "OAuth-вход доступен только в нативной сборке с feature l1-llm-tls",
     ),
     (keys::AI_OAUTH_TOAST_LOGOUT, "Выход выполнен — токены удалены"),
+    // --- W2: health/discovery/graph тосты (RU) ---
+    (keys::AI_HEALTH_OK, "Ключ валиден — провайдер отвечает"),
+    (keys::AI_HEALTH_FAIL, "Проверка не прошла"),
+    (
+        keys::AI_HEALTH_NO_KEY,
+        "Ключ не задан — введите API-ключ в Настройках AI (9-й таб)",
+    ),
+    (
+        keys::AI_HEALTH_NO_ENDPOINT,
+        "Не задан self-hosted URL — укажите endpoint в Настройках AI",
+    ),
+    (keys::AI_DISCOVERY_OK, "Модели загружены: {n}"),
+    (keys::AI_GRAPH_DONE, "Граф сгенерирован: нод {n}"),
+    (keys::AI_MENU_GRAPH_BUILDER, "Генератор графа (AI)…"),
     // --- FR-LLM-B / PRD-0010 F-7.9: AI status panel (RU) ---
     (keys::AI_STATUS_PAUSED, "AI на паузе — нажмите ▶, чтобы возобновить"),
     (keys::AI_STATUS_SESSION, "Session: {v}"),
@@ -3390,6 +3412,20 @@ const EN: &[(&str, &str)] = &[
         "OAuth sign-in requires the native build with the l1-llm-tls feature",
     ),
     (keys::AI_OAUTH_TOAST_LOGOUT, "Signed out — tokens removed"),
+    // --- W2: health/discovery/graph toasts (EN) ---
+    (keys::AI_HEALTH_OK, "Key is valid — provider responds"),
+    (keys::AI_HEALTH_FAIL, "Health check failed"),
+    (
+        keys::AI_HEALTH_NO_KEY,
+        "API key is empty — enter a key in AI settings (tab 9)",
+    ),
+    (
+        keys::AI_HEALTH_NO_ENDPOINT,
+        "Self-hosted URL is empty — set the endpoint in AI settings",
+    ),
+    (keys::AI_DISCOVERY_OK, "Models loaded: {n}"),
+    (keys::AI_GRAPH_DONE, "Graph generated: {n} nodes"),
+    (keys::AI_MENU_GRAPH_BUILDER, "Graph builder (AI)…"),
     // --- FR-LLM-B / PRD-0010 F-7.9: AI status panel (EN) ---
     (keys::AI_STATUS_PAUSED, "AI is paused — press ▶ to resume"),
     (keys::AI_STATUS_SESSION, "Session: {v}"),

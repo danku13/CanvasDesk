@@ -1518,6 +1518,13 @@ impl ApplicationHandler<AppEvent> for App {
         if self.oauth_poll() {
             self.request_redraw();
         }
+        // W2 п.7: опрос инбокса LLM-executor'а (health/discovery/agent/
+        // graph/suggest-choice) — результаты worker-потоков/wasm-шва
+        // (паттерн oauth_poll; l1-llm — см. llm_executor.rs).
+        #[cfg(feature = "l1-llm")]
+        if self.llm_poll() {
+            self.request_redraw();
+        }
         // FR-PERF-C: rAF-петля автосейва. Прежняя логика (M8/W6) звала
         // `request_redraw` КАЖДЫЙ кадр пока `scene.dirty_since.is_some()`
         // (2 с после правки) — на web это 2 с непрерывного 98мс-рендера

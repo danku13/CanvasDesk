@@ -154,6 +154,57 @@ pub fn build_feature_provider(
     None
 }
 
+/// W2 п.4: провайдер для health-check «Проверить» (кнопки строк API-ключа
+/// и self-hosted). BYOK — пресет по умолчанию OpenRouter (или selfhost при
+/// непустом endpoint, ключ — selfhost_key); Selfhost — всегда пресет
+/// selfhost (base_url = endpoint). `None` — конфиг не задаёт ключ/endpoint:
+/// UI показывает подсказку вместо «пустого» Ok.
+#[cfg(feature = "l1-llm")]
+pub fn build_health_provider(
+    target: crate::llm_executor::HealthTarget,
+    settings: &LlmSettings,
+) -> Option<Box<dyn LlmProvider>> {
+    use crate::llm_executor::HealthTarget as HT;
+    match target {
+        HT::Byok => {
+            let key = settings.api_key.trim();
+            if key.is_empty() {
+                return None;
+            }
+            let endpoint = settings.endpoint.trim();
+            if endpoint.is_empty() {
+                Some(Box::new(canvas_llm::OpenAiCompatibleProvider::openrouter(
+                    key,
+                    &settings.model_suggest,
+                )))
+            } else {
+                // Selfhost-конфиг проверяем selfhost-ключом (F-5.9/Q5).
+                Some(Box::new(canvas_llm::OpenAiCompatibleProvider::new(
+                    "selfhost",
+                    "Self-hosted",
+                    endpoint,
+                    settings.selfhost_key.trim(),
+                    &settings.model_suggest,
+                    Vec::new(),
+                )))
+            }
+        }
+        HT::Selfhost => {
+            if settings.endpoint.trim().is_empty() {
+                return None;
+            }
+            Some(Box::new(canvas_llm::OpenAiCompatibleProvider::new(
+                "selfhost",
+                "Self-hosted",
+                settings.endpoint.trim(),
+                settings.selfhost_key.trim(),
+                &settings.model_suggest,
+                Vec::new(),
+            )))
+        }
+    }
+}
+
 /// FR-LLM-OAUTH-APP: обёртка `Arc<dyn TokenStore>` под `Box<dyn TokenStore>`
 /// (конструктор `ChatGptOAuthProvider::new` принимает Box; store живёт в
 /// `App::oauth_flow` и переиспользуется между запросами провайдера).

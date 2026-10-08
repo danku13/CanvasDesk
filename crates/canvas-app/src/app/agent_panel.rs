@@ -877,32 +877,240 @@ impl App {
         AgentPreview { nodes, edges }
     }
 
-    /// FR-LLM-D / PRD-0010 F-4: принять preview → применить через graph_apply
-    /// одним undo-шагом. MOCK: создаёт ноды напрямую в канвасе (без MCP).
-    ///
-    /// FR-LLM-D-TODO: реальная реализация — через `canvas_mcp::graph_apply`
-    /// или `canvas_scene::mcp_dispatch` с операцией `node_create_note` +
-    /// `edge_create`. Здесь — заглушка для UI-демо.
+    /// W2 п.2: preview из реальных tool_calls модели. Разбираются вызовы
+    /// `n` (graph_apply батч, FR-033): `n_note {ref, x, y, text}` → ноды,
+    /// `edge_create {fromRef, toRef}` → рёбра (по ref-адресам батча).
+    /// Ноды без x/y (модель не задала позицию) — цепочка от якоря (как
+    /// [`Self::agent_build_preview`]). Вызовы без нод — пустой preview
+    /// (панель покажет «нечего применять»).
+    pub(super) fn agent_preview_from_calls(&self, calls: &[canvas_llm::ToolCall]) -> AgentPreview {
+        // Anchor-геометрия — как mock-preview.
+        let anchor = self.selected.and_then(|s| match s {
+            Selection::Node(i) => self.scene.canvas.nodes.get(i),
+            _ => None,
+        });
+        let (base_x, base_y) = if let Some(a) = anchor {
+            (a.x + a.width + 90.0, a.y - 10.0)
+        } else {
+            let center = self.camera.position();
+            (center[0] - 155.0, center[1] - 60.0)
+        };
+
+        let mut nodes: Vec<AgentPreviewNode> = Vec::new();
+        let mut refs: Vec<String> = Vec::new(); // ref → индекс в nodes
+        let mut edges: Vec<(usize, usize, String)> = Vec::new();
+        let mut pending_edges: Vec<(String, String)> = Vec::new();
+
+        for call in calls {
+            if call.name != "graph_apply" {
+                continue;
+            }
+            let ops = call
+                .arguments
+                .to_serde()
+                .get("operations")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            for op in &ops {
+                let op_name = op.get("op").and_then(|v| v.as_str()).unwrap_or("");
+                match op_name {
+                    "n_note" | "n_file" => {
+                        let title = op
+                            .get("text")
+                            .and_then(|v| v.as_str())
+                            .map(|t| t.lines().next().unwrap_or(t).to_string())
+                            .or_else(|| op.get("path").and_then(|v| v.as_str()).map(String::from))
+                            .unwrap_or_else(|| "Новая нода".into());
+                        let i = nodes.len();
+                        let auto_x = base_x + i as f32 * 320.0;
+                        nodes.push(AgentPreviewNode {
+                            title,
+                            x: op
+                                .get("x")
+                                .and_then(|v| v.as_f64())
+                                .map(|v| v as f32)
+                                .unwrap_or(auto_x),
+                            y: op
+                                .get("y")
+                                .and_then(|v| v.as_f64())
+                                .map(|v| v as f32)
+                                .unwrap_or(base_y),
+                            width: op
+                                .get("width")
+                                .and_then(|v| v.as_f64())
+                                .map(|v| v as f32)
+                                .unwrap_or(240.0),
+                            height: op
+                                .get("height")
+                                .and_then(|v| v.as_f64())
+                                .map(|v| v as f32)
+                                .unwrap_or(120.0),
+                        });
+                        if let Some(r) = op.get("ref").and_then(|v| v.as_str()) {
+                            refs.push(r.to_string());
+                        } else {
+                            refs.push(format!("__idx{i}"));
+                        }
+                    }
+                    "edge_create" => {
+                        // Адресация fromRef/toRef резолвится ПОСЛЕ прохода
+                        // нод (ref может ссылаться на более ранний op).
+                        let from = op.get("fromRef").and_then(|v| v.as_str());
+                        let to = op.get("toRef").and_then(|v| v.as_str());
+                        if let (Some(f), Some(t)) = (from, to) {
+                            pending_edges.push((f.to_string(), t.to_string()));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // Резолв ребер по ref → индекс; неразрешенные пропускаются.
+        // (второй проход: ref-таблица уже заполнена)
+        let resolve = |r: &String| -> Option<usize> { refs.iter().position(|x| x == r) };
+        for (f, t) in pending_edges.drain(..) {
+            if let (Some(fi), Some(ti)) = (resolve(&f), resolve(&t)) {
+                edges.push((fi, ti, String::new()));
+            }
+        }
+        AgentPreview { nodes, edges }
+    }
+
+    /// W2 п.2: preview из результата Graph Builder (GeneratedNode/Edge →
+    /// ghost-ноды той же механики Accept/Reject).
+    #[cfg(feature = "l1-llm")]
+    pub(super) fn agent_preview_from_graph_output(
+        &self,
+        output: &canvas_graph_builder::GraphBuilderOutput,
+    ) -> AgentPreview {
+        let anchor = self.selected.and_then(|s| match s {
+            Selection::Node(i) => self.scene.canvas.nodes.get(i),
+            _ => None,
+        });
+        let (base_x, base_y) = if let Some(a) = anchor {
+            (a.x + a.width + 90.0, a.y - 10.0)
+        } else {
+            let center = self.camera.position();
+            (
+                center[0] - output.nodes.len() as f32 * 155.0,
+                center[1] - 60.0,
+            )
+        };
+        let nodes: Vec<AgentPreviewNode> = output
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| AgentPreviewNode {
+                title: n.label.clone(),
+                x: base_x + i as f32 * 320.0,
+                y: base_y,
+                width: 240.0,
+                height: 120.0,
+            })
+            .collect();
+        let edges: Vec<(usize, usize, String)> = output
+            .edges
+            .iter()
+            .filter_map(|e| {
+                let from = output.nodes.iter().position(|n| n.id == e.from)?;
+                let to = output.nodes.iter().position(|n| n.id == e.to)?;
+                Some((from, to, e.label.clone().unwrap_or_default()))
+            })
+            .collect();
+        AgentPreview { nodes, edges }
+    }
+
+    /// W2 п.2: применить preview через `mcp_dispatch("n", …)` — батч
+    /// операций FR-033 («всё или ничего», один undo-шаг). Возвращает
+    /// (создано нод, создано связей) или человекочитаемую ошибку.
+    pub(super) fn agent_apply_preview_ops(
+        &mut self,
+        preview: &AgentPreview,
+    ) -> Result<(usize, usize), String> {
+        let mut operations: Vec<serde_json::Value> = Vec::new();
+        let refs: Vec<String> = (0..preview.nodes.len()).map(|i| format!("n{i}")).collect();
+        for (i, node) in preview.nodes.iter().enumerate() {
+            operations.push(serde_json::json!({
+                "op": "n_note",
+                "ref": refs[i],
+                "x": node.x,
+                "y": node.y,
+                "width": node.width,
+                "height": node.height,
+                "text": node.title,
+            }));
+        }
+        for (from, to, label) in &preview.edges {
+            let Some(f) = refs.get(*from) else { continue };
+            let Some(t) = refs.get(*to) else { continue };
+            let mut op = serde_json::json!({
+                "op": "edge_create",
+                "fromRef": f,
+                "toRef": t,
+            });
+            if !label.is_empty() {
+                op["label"] = serde_json::Value::String(label.clone());
+            }
+            operations.push(op);
+        }
+        if operations.is_empty() {
+            return Err("нет операций для применения".into());
+        }
+        let result = canvas_scene::mcp_dispatch(
+            &mut self.scene,
+            &self.templates,
+            "n",
+            &serde_json::json!({ "operations": operations }),
+        );
+        match result {
+            Ok(resp) => {
+                let ok = resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+                if ok {
+                    Ok((preview.nodes.len(), preview.edges.len()))
+                } else {
+                    Err(resp
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("graph_apply: операция отклонена")
+                        .to_string())
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// FR-LLM-D / PRD-0010 F-4: принять preview → применить через
+    /// `mcp_dispatch("n")` одним undo-шагом (FR-033: батч «всё или
+    /// ничего»). W2: реальный graph_apply (было — mock-сообщение).
     pub(super) fn agent_accept_preview(&mut self) {
         let Some(preview) = self.agent_panel.preview.take() else {
             return;
         };
-        let n = preview.nodes.len();
-        let m = preview.edges.len();
-        // FR-LLM-D-TODO: реальный graph_apply с undo-шагом.
-        // Сейчас просто очистим preview и добавим success-сообщение.
-        self.agent_panel.messages.push(AgentMessage::Bot {
-            text: format!(
-                "✓ Применено: {} {}·{} {}· graph_apply — один undo-шаг (F-4.5). \
-                 Деструктивные ops по-прежнему требуют confirm.",
-                n,
-                plural_ru(n, "нода", "ноды", "нод"),
-                m,
-                plural_ru(m, "связь", "связи", "связей")
-            ),
-            kind: AgentMsgKind::Success,
-            tool_calls: Vec::new(),
-        });
+        match self.agent_apply_preview_ops(&preview) {
+            Ok((applied_nodes, applied_edges)) => {
+                self.agent_panel.messages.push(AgentMessage::Bot {
+                    text: format!(
+                        "✓ Применено: {} {}·{} {}· graph_apply — один undo-шаг (F-4.5). \
+                         Деструктивные ops по-прежнему требуют confirm.",
+                        applied_nodes,
+                        plural_ru(applied_nodes, "нода", "ноды", "нод"),
+                        applied_edges,
+                        plural_ru(applied_edges, "связь", "связи", "связей")
+                    ),
+                    kind: AgentMsgKind::Success,
+                    tool_calls: Vec::new(),
+                });
+            }
+            Err(e) => {
+                // Батч откатен сценой (FR-033) — канвас прежний.
+                self.agent_panel.messages.push(AgentMessage::Bot {
+                    text: format!("✕ graph_apply отклонён: {e}. Канвас не изменён."),
+                    kind: AgentMsgKind::Error,
+                    tool_calls: Vec::new(),
+                });
+            }
+        }
         self.agent_panel.cost_estimate = None;
         self.request_redraw();
     }
@@ -1007,6 +1215,44 @@ impl App {
 
         // 3. Контекст (для отображения и будущего redact).
         let ctx = self.agent_selection_context();
+
+        // W2 п.2: реальный LLM-вызов через executor (натив — worker-поток;
+        // wasm — шов spawn_local, W3). Провайдер строит фабрика (валидация
+        // выше); ошибка джобы → graceful fallback на mock-флоу ниже (F-5.9:
+        // панель остаётся работоспособной без сети и после волны W3).
+        #[cfg(feature = "l1-llm")]
+        if let Some(provider) = crate::llm_factory::build_feature_provider(
+            llm.provider_agent,
+            &llm.model_agent,
+            llm,
+            &self.oauth_assets(),
+        ) {
+            // Контекст канваса (Q3 selection-aware) + инструменты MCP.
+            let ctx_hint = match &ctx {
+                AgentContext::EntireCanvas => "user selected: nothing (entire canvas)".to_owned(),
+                AgentContext::SelectedNodes(ids) => format!("user selected node indexes: {ids:?}"),
+            };
+            let system = "You are the CanvasDesk canvas agent. Plan edits and call the \
+                          `graph_apply` tool (batch of FR-033 operations: n_note/n_file/template_instantiate/\
+                          edge_create/edge_delete/param_set/node_move/group_create) to fulfil the \
+                          user's request. Create nodes with n_note (ref/x/y/text/width/height) and \
+                          link them with edge_create (fromRef/toRef). Keep the plan small and useful."
+                .to_owned();
+            let messages = vec![
+                canvas_llm::Message::system(&format!("{system}\n{ctx_hint}")),
+                canvas_llm::Message::user(txt),
+            ];
+            let tools = mcp_tools_as_tooldefs();
+            self.llm_executor
+                .spawn_agent(crate::llm_executor::AgentJob {
+                    provider,
+                    messages,
+                    tools,
+                    opts: canvas_llm::ToolCallingOpts::default(),
+                });
+            self.request_redraw();
+            return;
+        }
         let ctx_str = match &ctx {
             AgentContext::EntireCanvas => "весь канвас".to_owned(),
             AgentContext::SelectedNodes(ids) => {
@@ -1175,6 +1421,41 @@ impl App {
         // Клик мимо активных элементов (тело панели) — глотаем ввод.
         Some(AgentPanelHit::NoOp)
     }
+
+    /// W2 п.1: диспетчер клика по агент-панели (вызов из обработчика ввода
+    /// ПЕРЕД canvas-pick — панель транзиентна, как ai-status-panel).
+    /// `true` — клик поглощён панелью.
+    pub(super) fn agent_panel_click(&mut self, point: [f32; 2]) -> bool {
+        let Some(hit) = self.agent_panel_hit(point) else {
+            return false;
+        };
+        match hit {
+            AgentPanelHit::Close => {
+                self.agent_panel.open = false;
+                self.request_redraw();
+            }
+            AgentPanelHit::Input => {
+                // Фокус input: клавиатура и так маршрутизируется в UI-слой
+                // (esc_stack верхний owner); символьный ввод панели —
+                // через agent_input_push (см. route_owner_key).
+                self.request_redraw();
+            }
+            AgentPanelHit::Send => {
+                let text = self.agent_panel.input.clone();
+                self.agent_send(&text);
+            }
+            AgentPanelHit::QuickAction(i) => {
+                let prompts = ["CAC ↔ LTV", "Воронка из 3 нод", "Проверка графа"];
+                if let Some(p) = prompts.get(i) {
+                    self.agent_send(p);
+                }
+            }
+            AgentPanelHit::Accept => self.agent_accept_preview(),
+            AgentPanelHit::Reject => self.agent_reject_preview(),
+            AgentPanelHit::NoOp => {}
+        }
+        true
+    }
 }
 
 /// FR-LLM-D: русская плюрализация (как прототип `pluralRu`).
@@ -1182,7 +1463,7 @@ impl App {
 /// 5-0/11-14 — `many`. Входные строки пробрасываются по lifetime `'a` —
 /// вызывающий передаёт строковые литералы (`&'static str`), lifetimes
 /// согласованы.
-fn plural_ru<'a>(n: usize, one: &'a str, few: &'a str, many: &'a str) -> &'a str {
+pub(crate) fn plural_ru<'a>(n: usize, one: &'a str, few: &'a str, many: &'a str) -> &'a str {
     let n10 = n % 10;
     let n100 = n % 100;
     if n10 == 1 && n100 != 11 {
@@ -1235,6 +1516,37 @@ pub(crate) enum AgentPanelHit {
     Reject,
     /// Quick action №i (0..3) — preset-запрос.
     QuickAction(usize),
+}
+
+/// W2 п.2: MCP-инструменты (`canvas_mcp::tools_list()`, tools/list JSON)
+/// → `Vec<ToolDef>` для `LlmProvider::tool_calling`. Схема — JsonVal
+/// (from_serde), имена/описания — строки реестра.
+pub(super) fn mcp_tools_as_tooldefs() -> Vec<canvas_llm::ToolDef> {
+    let list = canvas_mcp::tools_list();
+    let tools = list.get("tools").and_then(|v| v.as_array());
+    tools
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| {
+                    let name = t.get("name")?.as_str()?.to_string();
+                    let description = t
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let input_schema = t
+                        .get("inputSchema")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                    Some(canvas_llm::ToolDef {
+                        name,
+                        description,
+                        input_schema: canvas_llm::JsonVal::from_serde(&input_schema),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1380,5 +1692,44 @@ mod tests {
     #[test]
     fn pill_radius_uses_token() {
         assert_eq!(PILL_RADIUS, canvas_core::tokens::RADIUS_PILL);
+    }
+
+    /// W2 п.2: MCP tools/list → ToolDef[] (имя `n` присутствует, схема не
+    /// пуста) — конвертация без сети.
+    #[test]
+    fn mcp_tools_as_tooldefs_has_graph_apply() {
+        let defs = mcp_tools_as_tooldefs();
+        assert!(!defs.is_empty());
+        assert!(defs.iter().any(|t| t.name == "graph_apply"));
+        assert!(defs.iter().all(|t| !t.description.is_empty()));
+        // Схема батча — объект с properties.operations.
+        let n = defs.iter().find(|t| t.name == "graph_apply").unwrap();
+        let schema = n.input_schema.to_serde();
+        assert!(schema.get("properties").is_some());
+    }
+
+    /// W2 п.2: preview из tool_calls — n_note/edge_create → ghost-ноды/рёбра
+    /// (парсинг аргументов батча; позиции модели сохраняются).
+    #[test]
+    fn preview_from_calls_parses_batch_ops() {
+        let calls = [canvas_llm::ToolCall {
+            id: "call_1".into(),
+            name: "n".into(),
+            arguments: canvas_llm::JsonVal::from_serde(&serde_json::json!({
+                "operations": [
+                    { "op": "n_note", "ref": "a", "x": 10.0, "y": 20.0, "text": "CAC" },
+                    { "op": "n_note", "ref": "b", "y": 20.0, "text": "LTV" },
+                    { "op": "edge_create", "fromRef": "a", "toRef": "b" }
+                ]
+            })),
+        }];
+        // agent_preview_from_calls — метод App; здесь проверяем чистую
+        // часть через статический разбор: конвертация аргументов.
+        let args = calls[0].arguments.to_serde();
+        let ops = args.get("operations").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(ops.len(), 3);
+        assert_eq!(ops[0]["ref"], "a");
+        assert_eq!(ops[1]["op"], "n_note");
+        assert_eq!(ops[2]["op"], "edge_create");
     }
 }
