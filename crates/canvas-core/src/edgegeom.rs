@@ -38,7 +38,7 @@ pub struct CubicBezier {
     pub p1: [f32; 2],
 }
 
-/// CR-027: явные якоря концов связи — точки data-портов значения
+/// CR-030: явные якоря концов связи — точки data-портов значения
 /// (построчный порт строки FR-025, футер шаблонной ноды FR-023).
 /// `None` — конец на семантической точке стороны (`port_point`, прежнее
 /// поведение). Ресолвит якорь вызывающий (кэш раскладки рендера — core
@@ -48,7 +48,7 @@ pub struct CubicBezier {
 pub struct EdgeAnchors {
     /// Точка истока (value-ребро — от data-порта значения).
     pub from: Option<[f32; 2]>,
-    /// Точка стока (резерв — приёмник пока всегда на стороне, CR-027).
+    /// Точка стока (резерв — приёмник пока всегда на стороне, CR-030).
     pub to: Option<[f32; 2]>,
 }
 
@@ -132,7 +132,7 @@ pub fn bezier_between(a: &Node, sa: Side, b: &Node, sb: Side) -> CubicBezier {
     bezier_between_anchors(a, sa, b, sb, EdgeAnchors::NONE)
 }
 
-/// CR-027: кривая с явными якорями концов: якоренный конец стартует из
+/// CR-030: кривая с явными якорями концов: якоренный конец стартует из
 /// точки data-порта, нормаль контроля — от грани, на которой порт сидит
 /// (`anchor_side`); неякоренный — из центра стороны, нормаль стороны
 /// (прежнее поведение, `EdgeAnchors::NONE` = бит-в-бит [`bezier_between`]).
@@ -301,7 +301,7 @@ pub fn edge_curve(canvas: &Canvas, edge: &Edge) -> Option<CubicBezier> {
     edge_curve_anchored(canvas, edge, EdgeAnchors::NONE)
 }
 
-/// CR-027: кривая связи с якорями data-портов (см. [`EdgeAnchors`]):
+/// CR-030: кривая связи с якорями data-портов (см. [`EdgeAnchors`]):
 /// стороны — эффективные (CR-008), якоренный конец — точка порта данных.
 pub fn edge_curve_anchored(
     canvas: &Canvas,
@@ -333,7 +333,7 @@ pub fn edge_endpoint(canvas: &Canvas, edge_index: usize, end: EdgeEnd) -> Option
     edge_endpoint_anchored(canvas, edge_index, end, EdgeAnchors::NONE)
 }
 
-/// CR-027: конец связи с якорем data-порта: точка — якорь, сторона —
+/// CR-030: конец связи с якорем data-порта: точка — якорь, сторона —
 /// грань, на которой порт сидит (хэндл перепривязки CR-002 и резиновая
 /// линия стартуют там же, где нарисована линия).
 pub fn edge_endpoint_anchored(
@@ -431,7 +431,7 @@ pub fn distance_to_edge(canvas: &Canvas, edge: &Edge, point: [f32; 2], avoid: bo
     distance_to_edge_anchored(canvas, edge, point, avoid, EdgeAnchors::NONE)
 }
 
-/// CR-027: расстояние до связи с якорями data-портов — hit-test ходит по
+/// CR-030: расстояние до связи с якорями data-портов — hit-test ходит по
 /// той же полилинии, что нарисована (см. [`edge_polyline_anchored`]).
 pub fn distance_to_edge_anchored(
     canvas: &Canvas,
@@ -458,7 +458,7 @@ pub fn edge_polyline(
     edge_polyline_anchored(canvas, edge, avoid, segments, EdgeAnchors::NONE)
 }
 
-/// CR-027: полилиния связи с якорями data-портов — визуал и hit-test
+/// CR-030: полилиния связи с якорями data-портов — визуал и hit-test
 /// обязаны ходить по одной и той же линии (см. [`edge_curve_anchored`]).
 pub fn edge_polyline_anchored(
     canvas: &Canvas,
@@ -502,7 +502,7 @@ pub fn edge_midpoint(canvas: &Canvas, edge: &Edge, avoid: bool) -> Option<[f32; 
     edge_midpoint_anchored(canvas, edge, avoid, EdgeAnchors::NONE)
 }
 
-/// CR-027: середина связи с якорями data-портов — лейблы/бокс правки
+/// CR-030: середина связи с якорями data-портов — лейблы/бокс правки
 /// сидят на видимой (якоренной) линии.
 pub fn edge_midpoint_anchored(
     canvas: &Canvas,
@@ -841,7 +841,7 @@ pub fn edge_at(canvas: &Canvas, point: [f32; 2], avoid: bool) -> Option<usize> {
     edge_at_anchored(canvas, point, avoid, &[])
 }
 
-/// CR-027: ближайшая связь с якорями data-портов: `anchors[index]` — якоря
+/// CR-030: ближайшая связь с якорями data-портов: `anchors[index]` — якоря
 /// ребра (короткий срез/пропуск — семантические точки сторон). Hit-test
 /// и визуал ходят по одной полилинии — кликабельная область совпадает
 /// с нарисованной.
@@ -977,7 +977,7 @@ mod tests {
         );
     }
 
-    /// CR-027: якоренная кривая стартует из точки data-порта истока;
+    /// CR-030: якоренная кривая стартует из точки data-порта истока;
     /// сток без якоря — центр стороны приёмника.
     #[test]
     fn edge_curve_anchored_starts_at_from_anchor() {
@@ -1004,7 +1004,7 @@ mod tests {
         assert!(curve.c0[0] > curve.p0[0], "нормаль якоря — Right");
     }
 
-    /// CR-027: без якорей (`EdgeAnchors::NONE`) anchored-кривая бит-в-бит
+    /// CR-030: без якорей (`EdgeAnchors::NONE`) anchored-кривая бит-в-бит
     /// прежней (`edge_curve`).
     #[test]
     fn edge_curve_none_anchors_equal_legacy() {
@@ -1020,7 +1020,7 @@ mod tests {
         assert_eq!(legacy, anchored);
     }
 
-    /// CR-027: якорь на правом краю — сторона Right независимо от
+    /// CR-030: якорь на правом краю — сторона Right независимо от
     /// вертикали (у верхней строки `nearest_side` дал бы Top).
     #[test]
     fn edge_endpoint_anchored_reports_edge_side() {
@@ -1050,7 +1050,7 @@ mod tests {
         assert_eq!(point, top_row_anchor);
     }
 
-    /// CR-027: hit-test ходит по якоренной полилинии — у точки якоря
+    /// CR-030: hit-test ходит по якоренной полилинии — у точки якоря
     /// расстояние нулевое, точка старого старта дальше допуска.
     #[test]
     fn distance_to_edge_anchored_matches_anchored_line() {
@@ -1079,7 +1079,7 @@ mod tests {
         );
     }
 
-    /// CR-027: `edge_at_anchored` находит связь у якоренного старта;
+    /// CR-030: `edge_at_anchored` находит связь у якоренного старта;
     /// без якорей в этой точке — промах.
     #[test]
     fn edge_at_anchored_hits_anchor_zone() {

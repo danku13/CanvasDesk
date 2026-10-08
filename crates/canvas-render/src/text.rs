@@ -3161,7 +3161,7 @@ impl TextSystem {
     /// CR-003). Текстовая нода якорей не имеет (toParam к ней не адресуется).
     /// Нет кэша/строк (нода вне экрана, виджет) — якорей нет.
     ///
-    /// CR-027: точка data-порта ИСТОКА value-связи — геометрический якорь
+    /// CR-030: точка data-порта ИСТОКА value-связи — геометрический якорь
     /// ребра «от значения» (вместо семантической точки стороны). Условие
     /// якорения: адресация строки/выхода или семантика потока значений.
     /// Приоритет адресации — как в модели (FR-025/FR-029): `from_line` →
@@ -3186,7 +3186,7 @@ impl TextSystem {
         Self::edge_source_anchor_from_rows(rows, outputs, node, edge)
     }
 
-    /// CR-027: чистое ядро [`TextSystem::edge_source_anchor`] — условность
+    /// CR-030: чистое ядро [`TextSystem::edge_source_anchor`] — условие
     /// якорения и выбор строки по адресации (тестируется на литералах
     /// [`CachedRow`]; метод добавляет lookup кэша раскладки).
     fn edge_source_anchor_from_rows(
@@ -8198,7 +8198,7 @@ load = connections_per_sec / (servers * server_rate)\n";
         );
     }
 
-    /// CR-027: якорь истока value-связи — условие и выбор строки.
+    /// CR-030: якорь истока value-связи — условие и выбор строки.
     #[test]
     fn edge_source_anchor_resolves_value_origins() {
         let node = Node::text("a", "a", 10.0, 100.0);
@@ -8217,6 +8217,7 @@ load = connections_per_sec / (servers * server_rate)\n";
             error_message: None,
             error_cell: None,
             left_full: None,
+            explainable: false,
         };
         let rows = vec![
             row(0.0, Some(0), "qty"),

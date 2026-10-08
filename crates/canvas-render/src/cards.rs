@@ -1373,7 +1373,7 @@ pub fn build_edge_instances_ctx(
 ) -> Vec<CardInstance> {
     let mut out = Vec::new();
     for (index, edge) in canvas.edges.iter().enumerate() {
-        // CR-027: якоря data-портов ребра — та же геометрия, что у hit-test'а
+        // CR-030: якоря data-портов ребра — та же геометрия, что у hit-test'а
         // и хэндлов (визуал = кликабельная область = хэндлы)
         let edge_anchors = anchors
             .get(index)
@@ -1630,7 +1630,7 @@ pub fn build_port_instances(
 
 /// Хэндлы концов ВЫДЕЛЕННОЙ связи (CR-002): кружки на обоих концах —
 /// захват хэндла начинает drag перепривязки. Положения — резолв
-/// `edge_endpoint_anchored` (та же геометрия, что у линии, CR-027).
+/// `edge_endpoint_anchored` (та же геометрия, что у линии, CR-030).
 /// Диаметр — как у портов (`port_dot_diameter`); цвет — рамка выделения.
 /// Висячая/невалидная — пусто.
 pub fn build_edge_handle_instances(

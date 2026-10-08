@@ -2380,10 +2380,15 @@ impl App {
             ClickEditZone::Body => self.begin_editing(index),
         }
         let zoom_px = self.zoom_px();
+        // CR-030: якоря лейбла связи — ДО мутабельного заимствования
+        let session_anchors = self.editing_session_anchors();
         if let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut()) {
-            if let Some((origin, _, _)) =
-                session_area_offset(&self.scene.canvas, session, self.settings.edges_avoid_nodes)
-            {
+            if let Some((origin, _, _)) = session_area_offset(
+                &self.scene.canvas,
+                session,
+                self.settings.edges_avoid_nodes,
+                session_anchors,
+            ) {
                 let x = ((world[0] - origin[0]) * zoom_px) as i32;
                 let y = ((world[1] - origin[1]) * zoom_px) as i32;
                 // CR-018 v1.1: клик по стационарной зоне (выше буфера —
@@ -2543,7 +2548,7 @@ impl App {
             return;
         };
         let text = edge.label.clone().unwrap_or_default();
-        // CR-027: бокс лейбла — на якоренной линии связи
+        // CR-030: бокс лейбла — на якоренной линии связи
         let Some((_, width, height)) = edge_edit_area(
             &self.scene.canvas,
             index,
@@ -4100,7 +4105,7 @@ impl App {
         select_node_hit(&self.scene.canvas, &visible)
     }
 
-    /// CR-027: якоря data-портов ВСЕХ связей для hit-test'а — те же
+    /// CR-030: якоря data-портов ВСЕХ связей для hit-test'а — те же
     /// вертикали кэша раскладки, по которым рендер рисует линии (визуал =
     /// кликабельная область). Рендер недоступен (headless-тесты) — пустой
     /// срез (все концы на семантических точках, прежнее поведение).
@@ -4111,7 +4116,7 @@ impl App {
         }
     }
 
-    /// CR-027: якоря одной связи по индексу (хэндлы/rebind/палитра/пин).
+    /// CR-030: якоря одной связи по индексу (хэндлы/rebind/палитра/пин).
     pub(crate) fn edge_anchors_for(&self, edge_index: usize) -> canvas_core::EdgeAnchors {
         let Some(renderer) = self.renderer.as_ref() else {
             return canvas_core::EdgeAnchors::NONE;
@@ -4122,7 +4127,7 @@ impl App {
         }
     }
 
-    /// CR-027: якоря активной сессии правки (лейбл связи — та же линия,
+    /// CR-030: якоря активной сессии правки (лейбл связи — та же линия,
     /// что нарисована; нодовые цели — NONE). Вызывается ДО мутабельного
     /// заимствования `self.editing`.
     pub(crate) fn editing_session_anchors(&self) -> canvas_core::EdgeAnchors {
@@ -4751,7 +4756,7 @@ impl App {
     fn edge_handle_at(&self, edge_index: usize, world: Vec2) -> Option<canvas_core::EdgeEnd> {
         let tolerance = self.settings.port_zone_px / self.camera.zoom().max(1e-3);
         let dist = |p: &[f32; 2]| ((p[0] - world[0]).powi(2) + (p[1] - world[1]).powi(2)).sqrt();
-        // CR-027: хэндл сидит на той же точке, где нарисован конец линии
+        // CR-030: хэндл сидит на той же точке, где нарисован конец линии
         let anchors = self.edge_anchors_for(edge_index);
         [canvas_core::EdgeEnd::From, canvas_core::EdgeEnd::To]
             .into_iter()
@@ -7150,7 +7155,7 @@ impl App {
             return;
         }
         // Закрепление: текущая эффективная сторона конца (та же геометрия,
-        // по которой рисуется линия; CR-027 — с якорем data-порта)
+        // по которой рисуется линия; CR-030 — с якорем data-порта)
         let anchors = self.edge_anchors_for(edge_index);
         let Some((side, _)) =
             canvas_core::edge_endpoint_anchored(&self.scene.canvas, edge_index, end, anchors)

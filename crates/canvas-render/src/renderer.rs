@@ -1181,7 +1181,7 @@ impl Renderer {
         self.text.line_ports(index, node)
     }
 
-    /// CR-027: якоря концов одной связи — точка data-порта истока
+    /// CR-030: якоря концов одной связи — точка data-порта истока
     /// value-ребра (кэш раскладки — те же вертикали, что у кружков
     /// FR-025/футера FR-023), сток — семантическая точка стороны.
     /// Нода-исток не найдена — NONE (фолбэк вызывающего).
@@ -1199,7 +1199,7 @@ impl Renderer {
         EdgeAnchors { from, to: None }
     }
 
-    /// CR-027: якоря всех связей среза одним проходом (id → индекс —
+    /// CR-030: якоря всех связей среза одним проходом (id → индекс —
     /// карта, далее O(1) на связь); порядок — порядок `canvas.edges`
     /// (параллельный срез для рендера/hit-test'а).
     pub fn edge_anchors_all(&self, canvas: &Canvas) -> Vec<EdgeAnchors> {
@@ -1279,7 +1279,7 @@ impl Renderer {
         // нод в Canvas.nodes (zorder::groups_first)
         let indices = zorder::groups_first(&scene.spatial.query_rect(visible), scene.canvas);
 
-        // CR-027: якоря data-портов истоков value-рёбер — один резолв на
+        // CR-030: якоря data-портов истоков value-рёбер — один резолв на
         // кадр; все потребители геометрии этого кадра (линии, лейблы,
         // хэндлы, бокс правки) ходят по ОДНОЙ anchored-геометрии
         let edge_anchors = self.edge_anchors_all(scene.canvas);

@@ -1174,7 +1174,7 @@ impl ApplicationHandler<AppEvent> for App {
                 // Резиновая линия (T8/CR-002): от порта/неподвижного конца к
                 // курсору; исходная линия перепривязываемой связи скрыта
                 let edge_draft = self.edge_drag.as_ref().and_then(|drag| {
-                    // CR-027: неподвижный конец перепривязки — на якоре
+                    // CR-030: неподвижный конец перепривязки — на якоре
                     // data-порта (если исток value-ребра адресован строкой)
                     let anchors = match drag {
                         EdgeDrag::Rebind { edge_index, .. } => self.edge_anchors_for(*edge_index),
