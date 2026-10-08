@@ -4071,11 +4071,35 @@ impl App {
             &canvas_core::dataref::display_name_counts(canvas),
         );
         Some(match target {
-            // «Объект.строка N» — 1-based для отображения, как в dataref
-            // (поле собирается i18n-ключом: RU «строка N», EN «line N»)
+            // CR-025 (UR-001-10, Q8 «имя + значение»): имя строки-присваивания
+            // (ADR-0003: имя > индекс; единая точка — flow::source_line_name),
+            // i18n-фолбэк «строка N» — только безымянным; хвост — текущее
+            // значение строки из потока («Цена.price = 100 rub»), без исхода —
+            // только адрес
             PortTarget::Line(Some(line)) => {
-                let n = (line + 1).to_string();
-                format!("{obj}.{}", self.trf(keys::STAGE_LINE_LABEL, &[("{n}", &n)]))
+                let line = *line;
+                let field =
+                    match canvas_core::flow::source_line_name(canvas, &node_id, None, Some(line)) {
+                        Some(name) => name,
+                        None => {
+                            let n = (line + 1).to_string();
+                            self.trf(keys::STAGE_LINE_LABEL, &[("{n}", &n)])
+                        }
+                    };
+                let value = self
+                    .scene
+                    .expr_line_results
+                    .get(&node_id)
+                    .and_then(|lines| lines.get(line))
+                    .and_then(|outcome| outcome.as_ref())
+                    .map(|outcome| match outcome {
+                        ExprOutcome::Ok(value) => value.to_string(),
+                        ExprOutcome::Err(msg) => msg.clone(),
+                    });
+                match value {
+                    Some(v) => format!("{obj}.{field} = {v}"),
+                    None => format!("{obj}.{field}"),
+                }
             }
             // Футер шаблонной ноды — значение ноды целиком (F-5 «out:»)
             PortTarget::Line(None) => self.trf(keys::STAGE_OUT_LABEL, &[("{name}", &obj)]),
@@ -4084,7 +4108,10 @@ impl App {
                 keys::TOOLTIP_PORT_PARAM,
                 &[("{path}", &format!("{obj}.{param}"))],
             ),
-            PortTarget::Out => self.trf(keys::STAGE_OUT_LABEL, &[("{name}", &obj)]),
+            // CR-024: ветки PortTarget::Out больше нет — сторонний порт
+            // без входящих value-рёбер тултипа не показывает (control-
+            // семантика); «out:» живёт только у футера шаблонной ноды
+            // (PortTarget::Line(None) — drag с него всегда value).
         })
     }
 
@@ -4117,12 +4144,24 @@ impl App {
             if eff_to != side {
                 continue;
             }
-            // Поле: from_line → i18n «строка N»/«line N» (1-based);
-            // from_output/fallback edge.id — поле из единой точки dataref.
+            // Поле: CR-025 — имя строки резолвится (ADR-0003: имя > индекс,
+            // единая точка flow::source_line_name: fromOutput → имя
+            // присваивания); i18n «строка N»/«line N» — только безымянным;
+            // from_output/фолбэк edge.id — поле из единой точки dataref.
             let field = match edge.from_line {
                 Some(line) => {
-                    let n = (line + 1).to_string();
-                    self.trf(keys::STAGE_LINE_LABEL, &[("{n}", &n)])
+                    match canvas_core::flow::source_line_name(
+                        canvas,
+                        &edge.from_node,
+                        edge.from_output.as_deref(),
+                        Some(line),
+                    ) {
+                        Some(name) => name,
+                        None => {
+                            let n = (line + 1).to_string();
+                            self.trf(keys::STAGE_LINE_LABEL, &[("{n}", &n)])
+                        }
+                    }
                 }
                 None => r.r.field.clone(),
             };
@@ -4157,9 +4196,12 @@ impl App {
 
     /// FR-045 F-5 v1/v2: лейблы порта канваса под курсором — приоритет как
     /// у drag-старта (CR-003/FR-050): построчный порт → якорь параметра →
-    /// сторонный порт. Сторонный порт читается по стороне (P1 «входы
-    /// слева»): есть входящие value-рёбра — qualified-истоки (v2,
-    /// In-чтение), нет — «out:» (drag-исток, v1). None — порта нет.
+    /// сторонный порт. Построчный порт/футер шаблона — value-выходы (drag
+    /// всегда value) — адресная подпись; входные слоты стороны —
+    /// qualified-истоки (v2, In-чтение). CR-024 (UR-001-09, Q7): у
+    /// стороннего порта БЕЗ входящих value-рёбер тултипа нет — обычный
+    /// drag создаёт контрольную связь, «out:» — дата-семантика value-связей
+    /// (эталон — stage-подписи stage_src_label_lines). None — порта нет.
     fn port_tooltip_at(&self, world: Vec2) -> Option<Vec<PortLabelLine>> {
         if let Some((node_index, port)) = self.line_port_hit(world) {
             return self
@@ -4192,14 +4234,14 @@ impl App {
             if let Some(lines) = self.inbound_label_lines(node_index, side) {
                 return Some(lines);
             }
-            return self
-                .port_label_for(node_index, &PortTarget::Out)
-                .map(|text| {
-                    vec![PortLabelLine {
-                        text,
-                        unmapped: false,
-                    }]
-                });
+            // CR-024 (UR-001-09, Q7, решение владельца «без тултипа»):
+            // сторонний порт без входящих value-рёбер — тултипа нет.
+            // Обычный drag с него — контрольная связь (value — только
+            // Shift+drag), прежний безусловный «out: <нода>» навязывал
+            // дата-семантику коннектору без передачи данных. Футер
+            // шаблонной ноды (Line(None), drag всегда value) — выше,
+            // в ветке line_port_hit.
+            return None;
         }
         None
     }
@@ -5718,6 +5760,10 @@ impl App {
         };
         if applied {
             self.fit_note_size();
+            // CR-023 (UR-001-08): принятое автодополнение не всплывает
+            // повторно — подавление до смены токена перед кареткой
+            // (фактический токен после вставки зафиксирует sync)
+            self.hints.arm_suppress();
             self.update_hints();
             self.request_redraw();
         }
@@ -8284,6 +8330,14 @@ impl App {
             Some(ExprOutcome::Ok(_)) => {}
             _ => return None,
         }
+        // CR-020 (UR-001-03, Q1): полоса «ИТОГ» — зона только там, где футер
+        // реально виден (правило рендера text.rs has_result / scene.rs
+        // node_shows_result_footer). У констант-присваиваний («qty = 10»)
+        // футер подавлен построчными результатами — невидимой зоны нет:
+        // клик по строке — выделение/драг ноды.
+        if !self.scene.node_shows_result_footer(index) {
+            return None;
+        }
         let band = [
             node.x,
             node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT,
@@ -8291,6 +8345,23 @@ impl App {
             RESULT_LINE_HEIGHT,
         ];
         point_in_rect(band, world).then(|| LineageNodeId::total(node.id.clone()))
+    }
+
+    /// CR-020 (UR-001-03, Q2 «лупа на строку»): мини-лупа строки-результата
+    /// под world-точкой — корень explain-дерева этой строки. Единая точка
+    /// классификации строк (Calc/Param-формула vs константа-присваивание)
+    /// и геометрии — кэш строк рендера
+    /// ([`canvas_render::Renderer::row_explain_hits`]); шаблонные ноды —
+    /// футер FR-088 (луп строк нет). Возвращает (корень, rect иконки).
+    fn row_explain_hit_at(&self, world: Vec2) -> Option<(LineageNodeId, [f32; 4])> {
+        let index = self.hovered?;
+        let node = self.scene.canvas.nodes.get(index)?;
+        let renderer = self.renderer.as_ref()?;
+        let hit = renderer
+            .row_explain_hits(index, node)
+            .into_iter()
+            .find(|hit| point_in_rect(hit.rect, world))?;
+        Some((LineageNodeId::line(node.id.clone(), hit.line), hit.rect))
     }
 
     /// Системное контекстное меню десктопа (T17, план §3): нативное
@@ -10826,6 +10897,15 @@ mod tests {
         expect_ok(&live[1], "2", "b = 2");
         expect_ok(&live[2], "727", "a+b");
 
+        // CR-019 (UR-001-01): звёздочка умножения — набор без экранирования;
+        // каноника Numi-строки хранит живой `*`, значение считается
+        let (canonical, live) = run_session("sum = 10 * 2");
+        assert_eq!(
+            canonical, "sum = 10 * 2",
+            "emit не экранирует * на Numi-строке"
+        );
+        expect_ok(&live[0], "20", "звёздочка — умножение без экранирования");
+
         // COMMIT: канонический текст сессии попадает в модель, построчные
         // результаты совпадают с живыми (карточка после клика мимо ноды)
         let mut canvas = Canvas::default();
@@ -10858,6 +10938,16 @@ mod tests {
             .expect("результаты для старой каноники");
         expect_ok(&committed[0], "200", "старая заметка: присваивание с \\=");
         expect_ok(&committed[1], "400", "старая заметка: ссылка");
+        // CR-019 (UR-001-01): заметка прежних сборок с `\*` оживает
+        // (снятие экранирования симметрично `\=`)
+        scene.canvas.nodes[0].text = Some("sum = 10 \\* 2\n200".to_owned());
+        scene.recompute_expr("n1");
+        let committed = scene
+            .expr_line_results
+            .get("n1")
+            .expect("результаты для старой каноники \\*");
+        expect_ok(&committed[0], "20", "старая заметка: умножение с \\*");
+        expect_ok(&committed[1], "200", "старая заметка: соседняя строка");
     }
 
     /// FR-013 (правка 4): hit-тест зон наведения бейджей ошибок.
@@ -11712,17 +11802,12 @@ mod tests {
         let app = stub_app_with_canvas(canvas);
         assert_eq!(
             app.port_label_for(0, &PortTarget::Line(Some(0))),
-            Some("Заявки.строка 1".to_owned()),
-            "построчный порт — полный путь (R-5: полный путь в тултипе)"
+            Some("Заявки.users = 10".to_owned()),
+            "CR-025: имя присваивания + текущее значение строки"
         );
         assert_eq!(
             app.port_label_for(0, &PortTarget::Line(Some(1))),
-            Some("Заявки.строка 2".to_owned())
-        );
-        assert_eq!(
-            app.port_label_for(0, &PortTarget::Out),
-            Some("out: Заявки".to_owned()),
-            "сторонный порт — «out: <объект>» (F-5 «out:<имя>»)"
+            Some("Заявки.conv = 0.2".to_owned())
         );
         assert_eq!(
             app.port_label_for(0, &PortTarget::Line(None)),
@@ -11767,11 +11852,16 @@ mod tests {
         app_en.settings.language = Language::En;
         assert_eq!(
             app_en.port_label_for(0, &PortTarget::Line(Some(0))),
-            Some("Заявки.line 1".to_owned()),
-            "EN — «line N» (STAGE_LINE_LABEL)"
+            Some("Заявки.users = 10".to_owned()),
+            "EN: имя присваивания не локализуется (CR-025)"
         );
         assert_eq!(
-            app_en.port_label_for(0, &PortTarget::Out),
+            app_en.port_label_for(0, &PortTarget::Line(Some(5))),
+            Some("Заявки.line 6".to_owned()),
+            "EN: безымянная/несуществующая строка — фолбэк «line N»"
+        );
+        assert_eq!(
+            app_en.port_label_for(0, &PortTarget::Line(None)),
             Some("out: Заявки".to_owned())
         );
     }
@@ -11792,11 +11882,11 @@ mod tests {
         let app = stub_app_with_canvas(canvas);
         assert_eq!(
             app.port_label_for(0, &PortTarget::Line(Some(0))),
-            Some("Заявки (a).строка 1".to_owned()),
-            "коллизия имён — дискриминатор node_id (§Q2)"
+            Some("Заявки (a).x = 1".to_owned()),
+            "коллизия имён — дискриминатор node_id (§Q2); CR-025: имя+значение"
         );
         assert_eq!(
-            app.port_label_for(1, &PortTarget::Out),
+            app.port_label_for(1, &PortTarget::Line(None)),
             Some("out: Заявки (b)".to_owned())
         );
     }
@@ -11834,8 +11924,8 @@ mod tests {
             .expect("левый вход dst — 3 истока");
         assert_eq!(lines.len(), 3, "каждое входящее value-ребро — строка");
         assert_eq!(
-            lines[0].text, "from: Заявки.строка 1",
-            "fromLine — i18n «строка N», 1-based (R-5, как в v1)"
+            lines[0].text, "from: Заявки.users",
+            "CR-025: fromLine на строку-присваивание — имя (имя > индекс)"
         );
         assert!(!lines[0].unmapped);
         assert_eq!(
@@ -11881,9 +11971,10 @@ mod tests {
         assert!(!lines[3].unmapped, "свёртка — нейтральный тон");
     }
 
-    /// FR-045 F-5 v2: сторонный порт читается по стороне (P1 «входы
-    /// слева») — с входами from-чтение (In-лейблы), без входов —
-    /// «out:» (drag-исток, v1); hit-тест — левый порт приёмника.
+    /// FR-045 F-5 v2 + CR-024 (UR-001-09, Q7): сторонный порт читается по
+    /// стороне (P1 «входы слева») — с входами from-чтение (In-лейблы),
+    /// без входов тултипа НЕТ (обычный drag — control-связь, «out:» —
+    /// дата-семантика value-связей); hit-тест — левый порт приёмника.
     #[test]
     fn port_tooltip_at_in_precedes_out_fallback() {
         let mut canvas = Canvas::default();
@@ -11908,7 +11999,8 @@ mod tests {
             lines[0].text, "from: Заявки.users",
             "входящая сторона — from-чтение (R-5 qualified-адрес)"
         );
-        // Одинокая нода без входов — прежнее v1-чтение («out:»)
+        // CR-024: одинокая нода без входов — тултипа нет (control-порт;
+        // прежнее v1-чтение «out:» убрано решением владельца)
         let mut canvas2 = Canvas::default();
         let mut solo = Node::text("src", "Заявки\nusers = 10", 0.0, 0.0);
         solo.width = 420.0;
@@ -11916,12 +12008,9 @@ mod tests {
         canvas2.nodes.push(solo);
         let mut app2 = stub_app_with_canvas(canvas2);
         app2.hovered = Some(0);
-        let lines2 = app2
-            .port_tooltip_at([0.0, 100.0])
-            .expect("левый порт src под курсором");
-        assert_eq!(
-            lines2[0].text, "out: Заявки",
-            "без входящих value-рёбер — drag-исток (v1)"
+        assert!(
+            app2.port_tooltip_at([0.0, 100.0]).is_none(),
+            "control-порт без тултипа (CR-024 Q7)"
         );
         assert!(
             app2.port_tooltip_at([5000.0, 5000.0]).is_none(),
@@ -11956,8 +12045,8 @@ mod tests {
             .inbound_label_lines(1, Side::Left)
             .expect("левый вход dst — 4 истока");
         assert_eq!(
-            lines[0].text, "from: Заявки.line 1 · not mapped",
-            "EN: поле строки и маркер unmapped (Р-5 + Р-3)"
+            lines[0].text, "from: Заявки.f0 · not mapped",
+            "EN: имя fromOutput сильнее fromLine (CR-025/ADR-0003) + unmapped"
         );
         assert!(lines[0].unmapped);
         assert_eq!(lines[3].text, "+1 more", "EN: свёртка");
@@ -13123,6 +13212,94 @@ mod suggest_flow_tests {
         app.settings.suggest.enabled = false;
         app.update_hints();
         assert!(app.suggest.pending.is_none(), "disabled — триггер молчит");
+    }
+
+    /// CR-020 (UR-001-03, Q1): зона полосы «ИТОГ» — только при видимом
+    /// футере. У константы-присваивания («qty = 10») футер подавлен
+    /// построчным результатом присваивания — клик по строке НЕ открывает
+    /// explain (раньше там лежала невидимая hit-зона 16px). Без построчных
+    /// результатов зона итога возвращается. Мини-лупа строки без рендера
+    /// (headless-стаб) — None.
+    #[test]
+    fn result_band_zone_only_when_footer_visible() {
+        let mut canvas = Canvas::default();
+        let mut node = Node::text("qty", "qty = 10", 0.0, 0.0);
+        node.width = 240.0;
+        node.height = 120.0;
+        canvas.nodes.push(node);
+        let mut app = suggest_stub_app(canvas);
+        app.hovered = Some(0);
+        // Точка внутри зоны полосы D (нижние RESULT_LINE_HEIGHT px тела)
+        let world: Vec2 = [5.0, 120.0 - BODY_PADDING - RESULT_LINE_HEIGHT / 2.0];
+        // «qty = 10»: итог потока Ok(10) + построчный исход присваивания
+        let outcome = canvas_core::expr::eval_lines("10")[0].clone();
+        assert!(matches!(outcome, Some(ExprOutcome::Ok(_))));
+        app.scene
+            .expr_results
+            .insert("qty".to_owned(), outcome.clone().expect("Ok(10)"));
+        app.scene
+            .expr_line_results
+            .insert("qty".to_owned(), vec![outcome]);
+        assert!(
+            app.result_band_root_at(world).is_none(),
+            "константа-присваивание — невидимой зоны нет (CR-020 Q1)"
+        );
+        assert!(
+            app.row_explain_hit_at(world).is_none(),
+            "мини-лупа требует рендер-кэша строк (headless — None)"
+        );
+        // Без построчных результатов футер виден — зона итога возвращается
+        app.scene.expr_line_results.clear();
+        let root = app
+            .result_band_root_at(world)
+            .expect("футер виден — зона итога жива");
+        assert_eq!(root.node_id, "qty");
+        assert!(root.line.is_none(), "адрес итога ноды");
+    }
+
+    /// CR-024 (UR-001-09, Q7): сторонний порт БЕЗ входящих value-рёбер —
+    /// тултипа нет (обычный drag создаёт control-связь, «out:» —
+    /// дата-семантика value-связей); входные слоты value-стороны
+    /// (qualified-истоки) сохранены; адресная подпись построчного порта —
+    /// как прежде («Объект.строка N»).
+    #[test]
+    fn port_tooltip_control_port_silent_value_side_keeps_labels() {
+        let mut canvas = Canvas::default();
+        let mut src = Node::text("src", "Корзина\nqty = 10", 0.0, 0.0);
+        src.width = 200.0;
+        src.height = 100.0;
+        let mut dst = Node::text("dst", "итог", 400.0, 0.0);
+        dst.width = 200.0;
+        dst.height = 100.0;
+        canvas.nodes.push(src);
+        canvas.nodes.push(dst);
+        let mut edge = Edge::new("e", "src", None, "dst", None);
+        edge.set_flow_kind(FlowKind::Value);
+        canvas.edges.push(edge);
+        let mut app = suggest_stub_app(canvas);
+        // Сторонний порт правой стороны ноды-источника (без входящих value):
+        // world-точка порта [x+w, y+h/2]
+        app.hovered = Some(0);
+        let side_point: Vec2 = [200.0, 50.0];
+        assert!(
+            app.port_tooltip_at(side_point).is_none(),
+            "control-порт без тултипа (CR-024 Q7)"
+        );
+        // Value-сторона приёмника (левый край): qualified-истоки живы
+        app.hovered = Some(1);
+        let left_point: Vec2 = [400.0, 50.0];
+        let inbound = app
+            .port_tooltip_at(left_point)
+            .expect("value-сторона с входящим value-ребром — подпись есть");
+        assert!(!inbound.is_empty(), "входные слоты — qualified-истоки");
+        // Адресная подпись построчного порта — формат не изменился
+        let label = app
+            .port_label_for(0, &PortTarget::Line(Some(0)))
+            .expect("лейбл построчного порта");
+        assert_eq!(
+            label, "Корзина.qty = 10",
+            "CR-025 Q8: «Нода.параметр = значение» (имя + значение из потока)"
+        );
     }
 
     /// Домен-гейт C4: прозаический фреймворк-канвас — не предлагаем.

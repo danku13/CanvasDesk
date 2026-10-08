@@ -140,29 +140,24 @@ pub fn display_ref_for_edge(
     counts: &BTreeMap<String, usize>,
 ) -> QualifiedRef {
     let obj = qualified_obj_name(canvas, &edge.from_node, counts);
-    // Приоритет адресации — как в flow::edge_source_value (FR-025/FR-029):
-    // fromLine → fromOutput → значение ноды целиком.
-    if let Some(line) = edge.from_line {
-        return QualifiedRef {
-            obj,
-            // Отображение 1-based (человек считает строки с единицы);
-            // в модели `from_line` — индекс листа (0-based).
-            field: format!("строка {}", line + 1),
-            tooltip: Some(format!("строка {}", line + 1)),
-        };
-    }
-    if let Some(name) = &edge.from_output {
-        return QualifiedRef {
-            obj,
-            field: name.clone(),
-            tooltip: None,
-        };
-    }
-    // Ребро без адресации: значение ноды целиком — fallback `edge.id`
-    // (FR-044 Р-3/инвариант 5: «безымянный выход → edge.id»).
+    // CR-025 (UR-001-10, ADR-0003: имя > индекс): единая точка резолва
+    // поля — `flow::spill_source_field`: fromOutput → имя строки-
+    // присваивания источника → «строка N» (только безымянные) → fallback
+    // edge.id (FR-044 Р-3/инвариант 5). Прежний приоритет fromLine над
+    // fromOutput противоречил ADR-0003 и давал «Нода.строка N» там, где
+    // движок знает имя («Трафик.peak_rps» в проливании vs «строка 3» здесь).
+    let field = crate::flow::spill_source_field(
+        canvas,
+        &edge.from_node,
+        edge.from_output.as_deref(),
+        edge.from_line,
+        &edge.id,
+    );
     QualifiedRef {
         obj,
-        field: edge.id.clone(),
+        field,
+        // Значение для тултипа «Нода.имя = значение» собирается на слое
+        // приложения (flow-исходы в core недоступны) — см. port_label_for.
         tooltip: None,
     }
 }
@@ -551,8 +546,10 @@ mod tests {
         assert_eq!(r.tooltip, None);
     }
 
-    /// FR-044 §Проверка: `fromLine` → поле «строка N» + полное в тултипе;
-    /// отображение 1-based.
+    /// FR-044 §Проверка: `fromLine` безымянной строки → поле «строка N»
+    /// (фолбэк; именованные строки резолвятся в имена — CR-025);
+    /// отображение 1-based. Тултип «Нода.имя = значение» собирается на
+    /// слое приложения (flow-исходы в core недоступны) — tooltip None.
     #[test]
     fn display_ref_from_line() {
         let mut canvas = Canvas::default();
@@ -564,7 +561,43 @@ mod tests {
         canvas.edges.push(edge);
         let r = display_ref(&canvas, 0);
         assert_eq!(r.path(), "заявки.строка 3");
-        assert_eq!(r.tooltip.as_deref(), Some("строка 3"));
+        assert_eq!(r.tooltip, None);
+    }
+
+    /// CR-025 (UR-001-10, ADR-0003: имя > индекс): строка-присваивание
+    /// источника резолвится в ИМЯ переменной (единая точка —
+    /// spill_source_field/source_line_name), а не «строка N».
+    #[test]
+    fn display_ref_from_line_resolves_assignment_name() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(text_node("a", "Цена\nprice = 100 rub", 0.0));
+        canvas.nodes.push(text_node("b", "x", 1.0));
+        let mut edge = Edge::new("e2", "a", None, "b", None);
+        edge.set_flow_kind(crate::flow::FlowKind::Value);
+        edge.from_line = Some(1);
+        canvas.edges.push(edge);
+        let r = display_ref(&canvas, 0);
+        assert_eq!(r.path(), "Цена.price", "имя присваивания сильнее индекса");
+        assert_eq!(r.field, "price");
+    }
+
+    /// CR-025 (п.3): при обоих полях (fromOutput + fromLine) показывается
+    /// ИМЯ (ADR-0003), даже если fromLine указывает на другую строку;
+    /// для data-нод колонка важнее записи — семантика не приоритетная.
+    #[test]
+    fn display_ref_both_fields_name_wins() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(text_node("a", "заявки\nusers = 10", 0.0));
+        canvas.nodes.push(text_node("b", "x", 1.0));
+        let mut edge = Edge::new("e3", "a", None, "b", None);
+        edge.set_flow_kind(crate::flow::FlowKind::Value);
+        edge.from_line = Some(0);
+        edge.from_output = Some("Средний_чек".to_owned());
+        canvas.edges.push(edge);
+        let r = display_ref(&canvas, 0);
+        assert_eq!(r.path(), "заявки.Средний_чек", "имя > индекс (ADR-0003)");
     }
 
     /// FR-044 §Проверка: безымянный выход (ребро без адресации) → `edge.id`.

@@ -35,7 +35,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::expr::{self, line_kind, NumiLineKind, Value};
+use crate::expr::{self, line_kind, unescape_canonical, NumiLineKind, Value};
 use crate::flow::{
     edge_source_value_with_data, spill_source_title, CycleError, DataSnapshots, FlowKind,
     FlowSolutions, QualifiedNames,
@@ -333,7 +333,9 @@ pub(crate) struct Sheet {
 
 impl Sheet {
     pub(crate) fn build(node: &Node) -> Self {
-        let source = node.text.as_deref().unwrap_or_default().replace("\\=", "=");
+        // CR-019: экранирование каноники (`\=`, `\*`) снимается перед
+        // разбором, как в eval_lines_with_env
+        let source = unescape_canonical(node.text.as_deref().unwrap_or_default());
         let mut kinds = Vec::new();
         let mut texts = Vec::new();
         let mut in_fence = false;
@@ -922,13 +924,11 @@ impl<'a> Builder<'a> {
     }
 
     /// Цель value-ребра по адресации — зеркало приоритета движка
-    /// (`edge_source_value` `flow.rs:577`): `fromLine` → строка листа;
-    /// иначе `fromOutput` → именованный выход (шаблон: секция outputs;
-    /// текстовая нода: последняя присваивающая строка имени); иначе итог.
+    /// (`edge_source_value` flow.rs; CR-025/ADR-0003: имя > индекс):
+    /// `fromOutput` → именованный выход (шаблон: секция outputs;
+    /// текстовая нода: последняя присваивающая строка имени), сломанное
+    /// имя — фолбэк `fromLine` → строка листа; иначе итог.
     fn edge_target(&self, edge: &Edge) -> LineageNodeId {
-        if let Some(line) = edge.from_line {
-            return LineageNodeId::line(&edge.from_node, line);
-        }
         if let Some(name) = &edge.from_output {
             if let Some(node) = self.canvas.node(&edge.from_node) {
                 if let Some(tpl) = node.template() {
@@ -950,6 +950,14 @@ impl<'a> Builder<'a> {
             {
                 return LineageNodeId::line(&edge.from_node, i);
             }
+            // Имя сломано (не найдено) — тихая деградация: фолбэк на строку
+            if let Some(line) = edge.from_line {
+                return LineageNodeId::line(&edge.from_node, line);
+            }
+            return LineageNodeId::total(&edge.from_node);
+        }
+        if let Some(line) = edge.from_line {
+            return LineageNodeId::line(&edge.from_node, line);
         }
         LineageNodeId::total(&edge.from_node)
     }
@@ -1555,10 +1563,11 @@ mod tests {
         assert_eq!(shown(&tree, source), "0.92");
     }
 
-    /// Приоритет адресации — `fromLine` сильнее `fromOutput` (зеркало
-    /// `edge_source_value`, `flow.rs:583`).
+    /// CR-025 (п.3, ADR-0003): приоритет адресации — ИМЯ сильнее `fromLine`
+    /// (зеркало `edge_source_value`, flow.rs): при обоих полях значение —
+    /// именованного выхода, lineage ведёт к определяющей строке имени.
     #[test]
-    fn from_line_priority_over_output() {
+    fn from_output_priority_over_line() {
         let mut canvas = Canvas::default();
         sheet(&mut canvas, "s", "a = 5\nb = 7", 0.0);
         formula(&mut canvas, "t", "$in × 2", 1.0);
@@ -1568,10 +1577,14 @@ mod tests {
         edge.from_output = Some("a".to_owned());
         canvas.add_edge(edge);
         let tree = tree(&canvas, LineageNodeId::total("t"));
-        assert_eq!(shown(&tree, 0), "14");
+        assert_eq!(shown(&tree, 0), "10", "имя «a» (5) сильнее строки 1 (7)");
         let source = kids(&tree, 0)[0];
-        assert_eq!(tree.nodes[source].line, Some(1));
-        assert_eq!(shown(&tree, source), "7");
+        assert_eq!(
+            tree.nodes[source].line,
+            Some(0),
+            "lineage — к строке имени «a»"
+        );
+        assert_eq!(shown(&tree, source), "5");
     }
 
     /// §9.4, внешний источник данных (FR-045 R-2): колонка CSV — лист

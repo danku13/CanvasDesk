@@ -1559,19 +1559,30 @@ impl App {
         let Some(ExprOutcome::Ok(_)) = self.scene.expr_results.get(&node.id) else {
             return;
         };
-        let band = [
-            node.x,
-            node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT,
-            node.width,
-            RESULT_LINE_HEIGHT,
-        ];
-        if !point_in_rect(band, world) {
-            return;
-        }
+        // CR-020 (Q2 «лупа на строку»): мини-лупа строки-результата —
+        // приоритет над полосой ИТОГ; тултип анкерён к иконке строки.
+        let btn = if let Some((_, rect)) = self.row_explain_hit_at(world) {
+            rect
+        } else {
+            // CR-020 (Q1): полоса «ИТОГ» — тултип только при видимом футере
+            // (у констант-присваиваний футер подавлен — зоны нет)
+            if !self.scene.node_shows_result_footer(index) {
+                return;
+            }
+            let band = [
+                node.x,
+                node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT,
+                node.width,
+                RESULT_LINE_HEIGHT,
+            ];
+            if !point_in_rect(band, world) {
+                return;
+            }
+            canvas_render::cards::explain_button_rect(node)
+        };
         let palette = ThemeColors::from_theme(self.settings.theme);
-        // Якорь — правый край кнопки (world → screen): тултип над полосой,
-        // выровнен по правому краю кнопки; клампы к вьюпорту.
-        let btn = canvas_render::cards::explain_button_rect(node);
+        // Якорь — правый край кнопки/лупы (world → screen): тултип над
+        // полосой/строкой, выровнен по правому краю; клампы к вьюпорту.
         let btn_top_right = self
             .camera
             .world_to_screen([btn[0] + btn[2], btn[1]], viewport);
