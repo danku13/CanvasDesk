@@ -105,8 +105,8 @@ fn test_edit_edge_label_double_click() {
     assert_eq!(canvas.edges.len(), 1);
 
     // Позиция бокса редактирования — по центру кривой
-    let edit_area =
-        edge_edit_area(&canvas, 0, false).expect("область редактирования должна существовать");
+    let edit_area = edge_edit_area(&canvas, 0, false, canvas_core::EdgeAnchors::NONE)
+        .expect("область редактирования должна существовать");
     let (origin, width, height) = edit_area;
 
     // Проверяем размеры бокса
@@ -406,7 +406,8 @@ fn test_edge_edit_session_zoom() {
         Some(Side::Left),
     ));
 
-    let (_origin, width, height) = edge_edit_area(&canvas, 0, false).expect("area exists");
+    let (_origin, width, height) =
+        edge_edit_area(&canvas, 0, false, canvas_core::EdgeAnchors::NONE).expect("area exists");
 
     let mut font_system = FontSystem::new();
     let mut session = EditingSession::new(
