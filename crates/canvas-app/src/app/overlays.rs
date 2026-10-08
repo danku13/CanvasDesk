@@ -3764,6 +3764,9 @@ impl App {
         );
         let card = lay.card;
         let kit_palette = palette.kit_palette();
+        // CR-032/S1 (UR-003): масштаб поверхности — производная ширины карточки
+        // (единый с раскладкой/вводом/реестром); весь хром — ×k.
+        let k = onboarding_ui::card_scale(card[2]);
         // FR-057: draw-журнал кита — items конвертируются в инстансы полосы
         // одним проходом в конце (порядок = draw-порядок)
         let mut d = Painter::new();
@@ -3802,26 +3805,27 @@ impl App {
                 &mut d,
                 canvas_ui::geometry::UiRect::new(zone[0], zone[1], zone[2], zone[3]),
                 state.step,
+                k,
                 &kit_palette,
             );
         }
         // Заголовок (в текстовой колонке)
         d.label(
             canvas_ui::geometry::UiRect::new(
-                col[0] + onboarding_ui::ONBOARDING_PAD,
-                col[1] + onboarding_ui::ONBOARDING_PAD,
-                (col[2] - onboarding_ui::ONBOARDING_PAD * 2.0).max(0.0),
-                onboarding_ui::ONBOARDING_TITLE_LINE_H,
+                col[0] + onboarding_ui::pad(k),
+                col[1] + onboarding_ui::pad(k),
+                (col[2] - onboarding_ui::pad(k) * 2.0).max(0.0),
+                onboarding_ui::title_line_h(k),
             ),
             self.tr(step.title_key),
             color_to_rgba(palette.title),
-            onboarding_ui::ONBOARDING_TITLE_FONT,
+            onboarding_ui::title_font(k),
             PaintAlign::Left,
         );
         // Прогресс-точки: текущая — слот link (как прежде), остальные —
         // panel_border (бывший литерал [0.30, 0.33, 0.40, 0.9])
         let (centers, dots_y) = onboarding_ui::progress_dots(card);
-        let dot_r = onboarding_ui::ONBOARDING_DOT / 2.0;
+        let dot_r = onboarding_ui::dot(k) / 2.0;
         for (i, cx) in centers.iter().enumerate() {
             let fill = if i == state.step {
                 color_to_rgba(palette.link)
@@ -3845,7 +3849,7 @@ impl App {
         for (idx, row) in kit::list_rows(
             canvas_ui::geometry::UiRect::new(body[0], body[1], body[2], body[3]),
             &scroll,
-            onboarding_ui::ONBOARDING_BODY_LINE_H,
+            onboarding_ui::body_line_h(k),
             0.0,
             lay.lines.len(),
         ) {
@@ -3857,11 +3861,11 @@ impl App {
                     body[0],
                     row.y,
                     body[2],
-                    onboarding_ui::ONBOARDING_BODY_LINE_H,
+                    onboarding_ui::body_line_h(k),
                 ),
                 line,
                 color_to_rgba(palette.body),
-                onboarding_ui::ONBOARDING_BODY_FONT,
+                onboarding_ui::body_font(k),
                 PaintAlign::Left,
             );
         }
@@ -3878,7 +3882,7 @@ impl App {
                 OnboardingButton::Prev,
                 kit::ButtonVariant::Secondary,
                 self.tr(label).to_owned(),
-                13.0,
+                onboarding_ui::button_label_font(k),
             ));
         }
         if !is_last {
@@ -3886,7 +3890,7 @@ impl App {
                 OnboardingButton::Next,
                 kit::ButtonVariant::Primary,
                 self.tr(state.next_label_key()).to_owned(),
-                13.0,
+                onboarding_ui::button_label_font(k),
             ));
         } else {
             // CR-031: финальный шаг — две полноширинные CTA-опции вместо
@@ -3894,6 +3898,7 @@ impl App {
             // самому» (secondary). Обе завершают тур; галерею открывает
             // только первая (выбор пользователя, не перегружаем новичка).
             let [gallery_rect, empty_rect] = onboarding_ui::option_rects(card);
+            let opt_font = onboarding_ui::button_label_font(k);
             for (rect, variant, label_key) in [
                 (
                     gallery_rect,
@@ -3916,13 +3921,13 @@ impl App {
                 d.label(
                     canvas_ui::geometry::UiRect::new(
                         rect[0],
-                        rect[1] + (rect[3] - 13.0 * 1.3) / 2.0,
+                        rect[1] + (rect[3] - opt_font * 1.3) / 2.0,
                         rect[2],
-                        13.0 * 1.3,
+                        opt_font * 1.3,
                     ),
                     self.tr(label_key),
                     style.text,
-                    13.0,
+                    opt_font,
                     PaintAlign::Center,
                 );
             }
@@ -3931,7 +3936,7 @@ impl App {
             OnboardingButton::Skip,
             kit::ButtonVariant::Ghost,
             self.tr(keys::ONBOARDING_SKIP).to_owned(),
-            11.0,
+            onboarding_ui::skip_label_font(k),
         ));
         for (button, variant, label, font) in &buttons {
             let rect = onboarding_ui::button_rect(card, *button);

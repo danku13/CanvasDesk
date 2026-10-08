@@ -1463,3 +1463,22 @@ Work Log:
 Stage Summary:
 - UR-002 7/7 закрыт кодом и тестами (canvas-app 684 ok на этапе S5; финальный гейт — в этой записи); ожидает приёмки владельца на живом стенде
 - Tokens (estimate, правило AGENTS.md): in≈180k, out≈25k, total≈205k, model=GLM (Super Z), scope=CR-031
+
+---
+Task ID: CR-032 (сессия web-0a539c42-84fd-4916-9a97-970c8052c51d)
+Agent: Super Z (main)
+Task: UR-003 (скриншот владельца, 2K): поверхность онбординга крошечная, иллюстрации не заполняют слот — адаптивный масштаб ×вьюпорт и адекватность картинок
+
+Work Log:
+- Зарегистрирован UR-003 (2/2) + CR-032 (S1 масштаб, S2 иллюстрации), строка в index-cr-fr.md
+- TDD RED→GREEN: 9 новых тестов — adaptive_scale_table (2K→×2, 4K→×3, ноутбук→×1, ультравайд по высоте, кламп ×3), card_scales_two_x_on_2k_and_three_x_on_4k (ширина 1440/2160, кегли/пад/кнопки/точки ×k, карточка в слоте), scale_floor_keeps_legacy_geometry (≤1280×720 и узкие — бит-в-бит ×1), scale_grows_smoothly, body_lines_wrap_with_scaled_font (перенос кеглем ×k), scaled_chrome_on_2k; art — valid_contained_non_degenerate (примитивы в зоне, без вырожденных), scale_proportionally (×k == ×1·k — ловит забытые фикс-пиксели), fill_their_slot (bbox ≥80%w/≥40%h)
+- S1: onboarding_scale(viewport) + card_scale(card_w) — единый источник; масштабированные метрики-функции (pad/title/body/footer/button/skip/dot/option/option_zone/label fonts); body_top_offset(k); body_lines — кегль переноса ×k; card_layout — w = 720×k_view (кламп к слоту); button_rect Prev/Next — 1:1 правила split_footer_buttons с высотой ×k (кит не тронут — BUTTON_HEIGHT токен ×1)
+- S2: onboarding_art — paint(…, k, …), все примитивы ×k (ноды/порты/рёбра/стрелки/пунктир/строки/кегли), вырожденные хвостовые квады пунктира не рисуются; композиция: заметка 0.88×0.80, edge-ноды 0.42 слота по центру, value-flow ноды 0.84, финал 0.84 + доли высоты + вертикальное центрирование; Г-образная связь b→c с портами на нодах (не «висят»)
+- Рендер overlays — тот же k (заголовок/точки/тело/кнопки/CTA/illюстрация); ввод/реестр — сам через общие функции
+- Гейты: canvas-app 634 ok (+9), workspace 96 наборов ok, fmt, clippy -D warnings, wasm_gate --check OK
+- Доки: cr-032, ur-003, index, onboarding.md (раздел масштаба + инварианты)
+
+Stage Summary:
+- На 2K онбординг ровно ×2 (1440px, кегли 26/36), на 4K ×3 (2160px), узкие окна — прежнее ×1; иллюстрации масштабируются и заполняют слот, автотесты валидности/пропорциональности/заполнения — все 8 сцен
+- Открытое: AI-онбординг (F-8) остался на фикс-размерах 600px — кандидат на тот же масштаб при желании владельца
+- Tokens (estimate, правило AGENTS.md): in≈150k, out≈22k, total≈172k, model=GLM (Super Z), scope=CR-032

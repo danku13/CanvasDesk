@@ -212,6 +212,101 @@ pub const ONBOARDING_DOT_GAP: f32 = 10.0;
 /// Отступ прогресс-точек от заголовка.
 pub const ONBOARDING_DOTS_TOP: f32 = 12.0;
 
+// --- CR-032/S1 (UR-003): адаптивный масштаб поверхности ----------------------
+
+/// База масштаба по ширине (лог. px): вьюпорт 1280 → ×1.
+pub const ONBOARDING_SCALE_BASE_W: f32 = 1280.0;
+/// База масштаба по высоте (лог. px): вьюпорт 720 → ×1.
+pub const ONBOARDING_SCALE_BASE_H: f32 = 720.0;
+/// Потолок масштаба: 4K → ×3 (выше пропорция не нужна — кламп).
+pub const ONBOARDING_SCALE_MAX: f32 = 3.0;
+
+/// Масштаб поверхности онбординга от вьюпорта (CR-032/S1, UR-003):
+/// 2K (2560×1440) → ×2 («минимум в 2 раза» — слова владельца), 4K → ×3,
+/// ноутбук/узкие окна — ×1 (прежнее поведение). Ограничен меньшей стороной
+/// пропорции — ультравайд не раздувает карточку выше высотного лимита.
+pub fn onboarding_scale(viewport: [f32; 2]) -> f32 {
+    (viewport[0] / ONBOARDING_SCALE_BASE_W)
+        .min(viewport[1] / ONBOARDING_SCALE_BASE_H)
+        .clamp(1.0, ONBOARDING_SCALE_MAX)
+}
+
+/// Фактический масштаб карточки (CR-032/S1): производная ширины — единый
+/// источник для раскладки ([`card_layout`]), рендера (overlays), ввода и
+/// реестра («ввод = тому, что видно»). Узкие окна (карточка ужата слотом
+/// ниже базы) — ×1: кегли не ужимаются ниже базовых.
+pub fn card_scale(card_w: f32) -> f32 {
+    (card_w / ONBOARDING_CARD_WIDTH).clamp(1.0, ONBOARDING_SCALE_MAX)
+}
+
+/// Масштабированные метрики хрома карточки (база × [`card_scale`]); публичные
+/// — рендер (overlays) считает те же значения, константы выше остаются
+/// базой ×1. Кегли строк карточки: заголовок/тело.
+pub fn title_font(k: f32) -> f32 {
+    ONBOARDING_TITLE_FONT * k
+}
+pub fn body_font(k: f32) -> f32 {
+    ONBOARDING_BODY_FONT * k
+}
+/// Межстрочные: заголовок/тело.
+pub fn title_line_h(k: f32) -> f32 {
+    ONBOARDING_TITLE_LINE_H * k
+}
+pub fn body_line_h(k: f32) -> f32 {
+    ONBOARDING_BODY_LINE_H * k
+}
+/// Внутренние поля карточки.
+pub fn pad(k: f32) -> f32 {
+    ONBOARDING_PAD * k
+}
+/// Высота футера с кнопками.
+pub fn footer_h(k: f32) -> f32 {
+    ONBOARDING_FOOTER_H * k
+}
+/// Размер кнопок карточки.
+pub fn button_w(k: f32) -> f32 {
+    ONBOARDING_BUTTON_W * k
+}
+pub fn button_h(k: f32) -> f32 {
+    ONBOARDING_BUTTON_H * k
+}
+/// Skip: 64×22 база, отступ от верха 10.
+pub fn skip_w(k: f32) -> f32 {
+    64.0 * k
+}
+pub fn skip_h(k: f32) -> f32 {
+    22.0 * k
+}
+pub fn skip_top(k: f32) -> f32 {
+    10.0 * k
+}
+/// Кегль подписей кнопок футера (13) и Skip (11).
+pub fn button_label_font(k: f32) -> f32 {
+    13.0 * k
+}
+pub fn skip_label_font(k: f32) -> f32 {
+    11.0 * k
+}
+/// Диаметр прогресс-точки и зазор между точками.
+pub fn dot(k: f32) -> f32 {
+    ONBOARDING_DOT * k
+}
+pub fn dot_gap(k: f32) -> f32 {
+    ONBOARDING_DOT_GAP * k
+}
+/// Высота полноширинной CTA-опции финального шага и зазор между ними.
+pub fn option_h(k: f32) -> f32 {
+    ONBOARDING_OPTION_H * k
+}
+pub fn option_gap(k: f32) -> f32 {
+    kit::GAP_CONTROLS * k
+}
+/// Зона финальных CTA над футером: верхний зазор + 2 опции + зазор
+/// (резервируется из зоны тела — опции всегда видимы, тело скроллится выше).
+pub fn option_zone(k: f32) -> f32 {
+    10.0 * k + 2.0 * option_h(k) + option_gap(k)
+}
+
 /// Кнопка карточки тура (hit-тест/рендер).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnboardingButton {
@@ -228,26 +323,27 @@ pub enum OnboardingButton {
     FinalEmpty,
 }
 
-/// Высота полноширинной CTA-опции финального шага (CR-031).
+/// Высота полноширинной CTA-опции финального шага (база ×1).
 pub const ONBOARDING_OPTION_H: f32 = 34.0;
-/// Зазор между CTA-опциями финала.
-pub const ONBOARDING_OPTION_GAP: f32 = kit::GAP_CONTROLS;
-/// Зона финальных CTA над футером: верхний зазор + 2 опции + зазор
-/// (резервируется из зоны тела — опции всегда видимы, тело скроллится выше).
-pub const ONBOARDING_OPTION_ZONE: f32 = 10.0 + 2.0 * ONBOARDING_OPTION_H + ONBOARDING_OPTION_GAP;
+/// Зазор между CTA-опциями финала (база ×1).
+pub const ONBOARDING_OPTION_GAP_BASE: f32 = kit::GAP_CONTROLS;
+/// Зона финальных CTA над футером — база ×1 (масштаб — [`option_zone`]).
+pub const ONBOARDING_OPTION_ZONE_BASE: f32 =
+    10.0 + 2.0 * ONBOARDING_OPTION_H + ONBOARDING_OPTION_GAP_BASE;
 
 /// Rect'ы полноширинных CTA-опций финального шага (CR-031): две кнопки
 /// над футером, ширина — внутренняя ширина текстовой колонки (S2).
 /// Порядок: «Открыть шаблонную схему» (primary), «Начать самому» (secondary).
 pub fn option_rects(card: [f32; 4]) -> [[f32; 4]; 2] {
+    let k = card_scale(card[2]);
     let col = text_column(card);
-    let w = (col[2] - ONBOARDING_PAD * 2.0).max(0.0);
-    let bottom = col[1] + col[3] - ONBOARDING_PAD - ONBOARDING_FOOTER_H;
-    let gallery_y = bottom - 2.0 * ONBOARDING_OPTION_H - ONBOARDING_OPTION_GAP;
-    let empty_y = bottom - ONBOARDING_OPTION_H;
+    let w = (col[2] - pad(k) * 2.0).max(0.0);
+    let bottom = col[1] + col[3] - pad(k) - footer_h(k);
+    let gallery_y = bottom - 2.0 * option_h(k) - option_gap(k);
+    let empty_y = bottom - option_h(k);
     [
-        [col[0] + ONBOARDING_PAD, gallery_y, w, ONBOARDING_OPTION_H],
-        [col[0] + ONBOARDING_PAD, empty_y, w, ONBOARDING_OPTION_H],
+        [col[0] + pad(k), gallery_y, w, option_h(k)],
+        [col[0] + pad(k), empty_y, w, option_h(k)],
     ]
 }
 
@@ -269,14 +365,17 @@ pub fn body_lines(
     };
     // CR-031/S2: перенос считается по текстовой колонке (правая половина
     // в двухколоночном режиме) — один источник с [`body_area`]/рендером.
-    // CR-031/S3: тело шага 1 — по роли.
+    // CR-031/S3: тело шага 1 — по роли. CR-032: кегль переноса — ×k
+    // ([`body_font`]), бюджет — колонка минус пад ×k.
+    let k = card_scale(width);
     let col_w = text_column([0.0, 0.0, width, 0.0])[2];
-    let avail = (col_w - ONBOARDING_PAD * 2.0).max(10.0);
+    let avail = (col_w - pad(k) * 2.0).max(10.0);
+    let font = body_font(k);
     let wrapped = m.wrap(
         fs,
         i18n::tr(language, step_body_key(step, role)),
         FAMILY,
-        ONBOARDING_BODY_FONT,
+        font,
         avail,
     );
     // W-e follow-up (CI windows): сверхширокий токен без переносов
@@ -286,7 +385,7 @@ pub fn body_lines(
     // глиф за глифом (тексты онбординга — кириллица/латиница).
     let mut lines: Vec<String> = Vec::with_capacity(wrapped.len());
     for line in wrapped {
-        if m.width_of(fs, &line, FAMILY, ONBOARDING_BODY_FONT) <= avail {
+        if m.width_of(fs, &line, FAMILY, font) <= avail {
             lines.push(line);
             continue;
         }
@@ -294,7 +393,7 @@ pub fn body_lines(
         for ch in line.chars() {
             let mut next = cur.clone();
             next.push(ch);
-            if m.width_of(fs, &next, FAMILY, ONBOARDING_BODY_FONT) > avail && !cur.is_empty() {
+            if m.width_of(fs, &next, FAMILY, font) > avail && !cur.is_empty() {
                 lines.push(std::mem::take(&mut cur));
             }
             cur.push(ch);
@@ -307,9 +406,9 @@ pub fn body_lines(
 }
 
 /// Отступ от верха карточки до первой строки тела (заголовок +
-/// прогресс-точки + зазор) — общий для геометрии и рендера.
-pub fn body_top_offset() -> f32 {
-    ONBOARDING_PAD + ONBOARDING_TITLE_LINE_H + ONBOARDING_DOTS_TOP + ONBOARDING_DOT + 10.0
+/// прогресс-точки + зазор) — общий для геометрии и рендера. CR-032: ×k.
+pub fn body_top_offset(k: f32) -> f32 {
+    pad(k) + title_line_h(k) + ONBOARDING_DOTS_TOP * k + dot(k) + 10.0 * k
 }
 
 /// Текстовая колонка карточки (CR-031/S2): в двухколоночном режиме — правая
@@ -330,11 +429,12 @@ pub fn text_column(card: [f32; 4]) -> [f32; 4] {
 /// (карточка узка, иллюстрация не помещается).
 pub fn illustration_rect(card: [f32; 4]) -> Option<[f32; 4]> {
     if card[2] >= ONBOARDING_SPLIT_MIN_W {
+        let k = card_scale(card[2]);
         Some([
-            card[0] + ONBOARDING_PAD,
-            card[1] + ONBOARDING_PAD,
-            card[2] / 2.0 - ONBOARDING_PAD * 2.0,
-            (card[3] - ONBOARDING_PAD * 2.0).max(0.0),
+            card[0] + pad(k),
+            card[1] + pad(k),
+            card[2] / 2.0 - pad(k) * 2.0,
+            (card[3] - pad(k) * 2.0).max(0.0),
         ])
     } else {
         None
@@ -345,17 +445,18 @@ pub fn illustration_rect(card: [f32; 4]) -> Option<[f32; 4]> {
 /// (минус нижний пад). Общий источник высоты окна видимости скролла для
 /// раскладки ([`card_layout`]), колеса ввода и отрисовки (видимые строки).
 /// CR-031: на финальном шаге снизу резервируется зона CTA-опций
-/// ([`ONBOARDING_OPTION_ZONE`]) — опции всегда видимы, тело скроллится выше.
+/// ([`option_zone`]) — опции всегда видимы, тело скроллится выше.
 pub fn body_area(card: [f32; 4], final_step: bool) -> [f32; 4] {
+    let k = card_scale(card[2]);
     let col = text_column(card);
-    let mut h = (col[3] - body_top_offset() - ONBOARDING_PAD - ONBOARDING_FOOTER_H).max(0.0);
+    let mut h = (col[3] - body_top_offset(k) - pad(k) - footer_h(k)).max(0.0);
     if final_step {
-        h = (h - ONBOARDING_OPTION_ZONE).max(0.0);
+        h = (h - option_zone(k)).max(0.0);
     }
     [
-        col[0] + ONBOARDING_PAD,
-        col[1] + body_top_offset(),
-        (col[2] - ONBOARDING_PAD * 2.0).max(0.0),
+        col[0] + pad(k),
+        col[1] + body_top_offset(k),
+        (col[2] - pad(k) * 2.0).max(0.0),
         h,
     ]
 }
@@ -395,18 +496,19 @@ pub fn card_layout(
         (viewport[0] - margin * 2.0).max(0.0),
         (viewport[1] - margin * 2.0).max(0.0),
     );
-    let w = ONBOARDING_CARD_WIDTH.min(slot.w);
+    // CR-032/S1 (UR-003): ширина карточки — база × масштаб вьюпорта
+    // ([`onboarding_scale`], кламп к слоту; узкие окна — прежний кламп,
+    // фактический масштаб — [`card_scale`] от ширины).
+    let k_view = onboarding_scale(viewport);
+    let w = (ONBOARDING_CARD_WIDTH * k_view).min(slot.w);
+    let k = card_scale(w);
     let lines = body_lines(step, w, language, role, m, fs);
-    let body_h = lines.len() as f32 * ONBOARDING_BODY_LINE_H;
+    let body_h = lines.len() as f32 * body_line_h(k);
     // CR-031: финальный шаг несёт две полноширинные CTA-опции — зона
     // резервируется в желаемой высоте карточки.
     let final_step = step + 1 >= ONBOARDING_STEPS.len();
-    let options_h = if final_step {
-        ONBOARDING_OPTION_ZONE
-    } else {
-        0.0
-    };
-    let desired_h = body_top_offset() + body_h + ONBOARDING_PAD + ONBOARDING_FOOTER_H + options_h;
+    let options_h = if final_step { option_zone(k) } else { 0.0 };
+    let desired_h = body_top_offset(k) + body_h + pad(k) + footer_h(k) + options_h;
     // Кламп высоты к слоту: desired пре-клампнут, поэтому min-инвариант
     // модали (приоритетен — parity FR-060) не конфликтует с клампом FR-028.
     let h = desired_h.min(slot.h);
@@ -416,7 +518,7 @@ pub fn card_layout(
     // Скролл тела: при клампе высоты viewport_h < content_h — строки
     // прокручиваются (колесо ввода; видимые строки — `kit::list_rows`).
     let body = body_area(card, final_step);
-    scroll.content_h = lines.len() as f32 * ONBOARDING_BODY_LINE_H;
+    scroll.content_h = lines.len() as f32 * body_line_h(k);
     scroll.viewport_h = body[3];
     scroll.clamp();
     OnboardingLayout { card, lines }
@@ -426,14 +528,15 @@ pub fn card_layout(
 /// CR-031/S2: центрируются по текстовой колонке (правая половина), не по
 /// всей карточке.
 pub fn progress_dots(card: [f32; 4]) -> (Vec<f32>, f32) {
+    let k = card_scale(card[2]);
     let col = text_column(card);
     let n = ONBOARDING_STEPS.len() as f32;
-    let total = n * ONBOARDING_DOT + (n - 1.0) * ONBOARDING_DOT_GAP;
+    let total = n * dot(k) + (n - 1.0) * dot_gap(k);
     let start = col[0] + (col[2] - total) / 2.0;
     let centers: Vec<f32> = (0..ONBOARDING_STEPS.len())
-        .map(|i| start + i as f32 * (ONBOARDING_DOT + ONBOARDING_DOT_GAP) + ONBOARDING_DOT / 2.0)
+        .map(|i| start + i as f32 * (dot(k) + dot_gap(k)) + dot(k) / 2.0)
         .collect();
-    let y = col[1] + ONBOARDING_PAD + ONBOARDING_TITLE_LINE_H + ONBOARDING_DOTS_TOP;
+    let y = col[1] + pad(k) + title_line_h(k) + ONBOARDING_DOTS_TOP * k;
     (centers, y)
 }
 
@@ -474,40 +577,30 @@ pub fn progress_dots(card: [f32; 4]) -> (Vec<f32>, f32) {
 // (I-1: ноль скачка). Паритет с другими подписанными кнопками-призраками
 // в карточках (например suggest-cards).
 pub fn button_rect(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
+    let k = card_scale(card[2]);
     match button {
         OnboardingButton::Prev | OnboardingButton::Next => {
-            // O2: split footer (Prev left / Next right) via kit.
+            // O2: split footer (Prev left / Next right) — правила кита.
             // CR-031/S2: футер — в текстовой колонке (правая половина),
-            // не по всей карточке.
+            // не по всей карточке. CR-032: кнопки ×k — kit::split_footer_buttons
+            // держит каноническую высоту BUTTON_HEIGHT (токен ×1), поэтому
+            // сплит считается здесь 1:1 по тем же правилам (Prev слева /
+            // Next справа, inset — пад, вертикальный центр слота футера),
+            // но с масштабированной высотой; при k=1 — бит-в-бит прежний rect.
             let col = text_column(card);
-            let slot = UiRect::new(
-                col[0],
-                col[1] + col[3] - ONBOARDING_FOOTER_H,
-                col[2],
-                ONBOARDING_FOOTER_H,
-            );
-            let btns = kit::split_footer_buttons(
-                slot,
-                &[ONBOARDING_BUTTON_W],
-                &[ONBOARDING_BUTTON_W],
-                kit::GAP_CONTROLS,
-                ONBOARDING_PAD,
-            );
-            // btns[0] = (Prev rect, FooterGroup::Left, 0);
-            // btns[1] = (Next rect, FooterGroup::Right, 0).
-            let idx = match button {
-                OnboardingButton::Prev => 0,
-                OnboardingButton::Next => 1,
-                _ => unreachable!(),
-            };
-            let r = btns[idx].0;
-            [r.x, r.y, r.w, r.h]
+            let h = button_h(k);
+            let slot_top = col[1] + col[3] - footer_h(k);
+            let y = slot_top + (footer_h(k) - h).max(0.0) / 2.0;
+            match button {
+                OnboardingButton::Prev => [col[0] + pad(k), y, button_w(k), h],
+                _ => [col[0] + col[2] - pad(k) - button_w(k), y, button_w(k), h],
+            }
         }
         OnboardingButton::Skip => [
-            card[0] + card[2] - ONBOARDING_PAD - 64.0,
-            card[1] + 10.0,
-            64.0,
-            22.0,
+            card[0] + card[2] - pad(k) - skip_w(k),
+            card[1] + skip_top(k),
+            skip_w(k),
+            skip_h(k),
         ],
         // CR-031: финальные CTA-опции — полноширинные кнопки над футером
         // ([`option_rects`]; в футере их нет)
@@ -1304,5 +1397,143 @@ mod tests {
         // Узкое окно не даёт карточке вылезти
         let narrow = layout([320.0, 240.0], 0, Language::Ru).card;
         assert!(narrow[2] <= 320.0);
+    }
+
+    // === CR-032/S1 (UR-003): адаптивный масштаб поверхности ===
+
+    /// Таблица масштаба: 2K → ×2 («минимум в 2 раза» — UR-003), 4K → ×3,
+    /// ноутбук/узкие — ×1; ультравайд ограничен высотой, выше потолка —
+    /// кламп ×3.
+    #[test]
+    fn adaptive_scale_table() {
+        assert_eq!(onboarding_scale([2560.0, 1440.0]), 2.0);
+        assert_eq!(onboarding_scale([3840.0, 2160.0]), 3.0);
+        assert_eq!(onboarding_scale([1920.0, 1080.0]), 1.5);
+        assert_eq!(onboarding_scale([1600.0, 900.0]), 1.25);
+        assert_eq!(onboarding_scale([1280.0, 800.0]), 1.0);
+        assert_eq!(onboarding_scale([1024.0, 640.0]), 1.0);
+        assert_eq!(onboarding_scale([800.0, 560.0]), 1.0);
+        // Ультравайд: ограничен высотой (1080/720)
+        assert_eq!(onboarding_scale([3440.0, 1080.0]), 1.5);
+        // Выше потолка — кламп ×3
+        assert_eq!(onboarding_scale([7680.0, 4320.0]), 3.0);
+    }
+
+    /// На 2K карточка ровно ×2 (1440px), на 4K ×3 (2160px); кегли/паддинги/
+    /// кнопки/точки масштабируются тем же коэффициентом; карточка — в слоте
+    /// с полями.
+    #[test]
+    fn card_scales_two_x_on_2k_and_three_x_on_4k() {
+        for (viewport, factor) in [([2560.0, 1440.0], 2.0f32), ([3840.0, 2160.0], 3.0f32)] {
+            let card = layout(viewport, 0, Language::Ru).card;
+            assert!(
+                (card[2] - ONBOARDING_CARD_WIDTH * factor).abs() < 0.01,
+                "vp {viewport:?}: ширина {} != {}",
+                card[2],
+                ONBOARDING_CARD_WIDTH * factor
+            );
+            let margin = ONBOARDING_VIEWPORT_MARGIN;
+            assert!(card[0] >= margin - 0.01 && card[1] >= margin - 0.01);
+            assert!(card[0] + card[2] <= viewport[0] - margin + 0.01);
+            assert!(card[1] + card[3] <= viewport[1] - margin + 0.01);
+            // Один коэффициент на весь контент
+            let k = card_scale(card[2]);
+            assert_eq!(k, factor);
+            assert_eq!(body_font(k), ONBOARDING_BODY_FONT * factor);
+            assert_eq!(title_font(k), ONBOARDING_TITLE_FONT * factor);
+            assert_eq!(body_line_h(k), ONBOARDING_BODY_LINE_H * factor);
+            assert_eq!(title_line_h(k), ONBOARDING_TITLE_LINE_H * factor);
+            assert_eq!(pad(k), ONBOARDING_PAD * factor);
+            assert_eq!(footer_h(k), ONBOARDING_FOOTER_H * factor);
+            assert_eq!(button_w(k), ONBOARDING_BUTTON_W * factor);
+            assert_eq!(button_h(k), ONBOARDING_BUTTON_H * factor);
+            assert_eq!(dot(k), ONBOARDING_DOT * factor);
+            assert_eq!(dot_gap(k), ONBOARDING_DOT_GAP * factor);
+            assert_eq!(option_h(k), ONBOARDING_OPTION_H * factor);
+        }
+    }
+
+    /// Пол ×1: вьюпорты ≤ базовых и узкие окна — прежняя геометрия (кегль
+    /// 13, ширина 720/слот); масштаб не ужимается ниже базового.
+    #[test]
+    fn scale_floor_keeps_legacy_geometry() {
+        for viewport in [[1280.0, 800.0], [1024.0, 640.0], [800.0, 560.0]] {
+            let card = layout(viewport, 0, Language::Ru).card;
+            assert_eq!(
+                card[2],
+                ONBOARDING_CARD_WIDTH.min(viewport[0] - ONBOARDING_VIEWPORT_MARGIN * 2.0)
+            );
+            assert_eq!(card_scale(card[2]), 1.0, "vp {viewport:?}");
+            assert_eq!(body_font(card_scale(card[2])), ONBOARDING_BODY_FONT);
+        }
+        // Узкое окно: кламп по слоту, кегли базовые
+        let narrow = layout([500.0, 400.0], 0, Language::Ru).card;
+        assert_eq!(narrow[2], 500.0 - ONBOARDING_VIEWPORT_MARGIN * 2.0);
+        assert_eq!(card_scale(narrow[2]), 1.0);
+    }
+
+    /// Промежуточные вьюпорты: рост плавный (w = 720 × k_view).
+    #[test]
+    fn scale_grows_smoothly_between_base_and_max() {
+        for viewport in [[1500.0, 900.0], [1920.0, 1080.0], [2200.0, 1200.0]] {
+            let card = layout(viewport, 0, Language::Ru).card;
+            let k_view = onboarding_scale(viewport);
+            assert!(
+                (card[2] - ONBOARDING_CARD_WIDTH * k_view).abs() < 0.01,
+                "vp {viewport:?}: {} != {}",
+                card[2],
+                ONBOARDING_CARD_WIDTH * k_view
+            );
+        }
+    }
+
+    /// Перенос на масштабированной карточке считается кеглем ×k — строки
+    /// влезают в бюджет колонки (паритет [`body_lines_fit_measured_width`]).
+    #[test]
+    fn body_lines_wrap_with_scaled_font() {
+        let w = ONBOARDING_CARD_WIDTH * 2.0;
+        let k = card_scale(w);
+        let avail = (text_column([0.0, 0.0, w, 0.0])[2] - pad(k) * 2.0).max(10.0);
+        let (mut m, mut fs) = measurer();
+        for step in 0..ONBOARDING_STEPS.len() {
+            for language in [Language::Ru, Language::En] {
+                for line in body_lines(step, w, language, "default", &mut m, &mut fs) {
+                    let lw = m.width_of(&mut fs, &line, FAMILY, body_font(k));
+                    assert!(
+                        lw <= avail + 0.5,
+                        "строка {lw:.1} шире {avail:.1}: {line:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Хром карточки на 2K: точки/кнопки/Skip/CTA-опции — ×k и в своих зонах
+    /// (колонка/карточка).
+    #[test]
+    fn scaled_chrome_on_2k() {
+        let viewport = [2560.0, 1440.0];
+        let card = layout(viewport, 0, Language::Ru).card;
+        let k = card_scale(card[2]);
+        let (centers, _) = progress_dots(card);
+        assert!(
+            (centers[1] - centers[0] - (dot(k) + dot_gap(k))).abs() < 1e-3,
+            "зазор точек масштабирован"
+        );
+        let next = button_rect(card, OnboardingButton::Next);
+        assert!((next[3] - button_h(k)).abs() < 1e-3, "высота кнопки ×k");
+        let skip = button_rect(card, OnboardingButton::Skip);
+        assert!((skip[2] - 64.0 * k).abs() < 0.01 && (skip[3] - 22.0 * k).abs() < 0.01);
+        let col = text_column(card);
+        assert!(next[0] >= col[0], "Next в колонке");
+        assert!(skip[0] + skip[2] <= card[0] + card[2], "Skip в карточке");
+        // Финал: CTA-опции ×k, галерея выше «самому»
+        let last = OnboardingState {
+            step: ONBOARDING_STEPS.len() - 1,
+        };
+        let lcard = layout(viewport, last.step, Language::Ru).card;
+        let [g, e] = option_rects(lcard);
+        assert!((g[3] - option_h(k)).abs() < 1e-3 && (e[3] - option_h(k)).abs() < 1e-3);
+        assert!(g[1] < e[1], "галерея выше «самому»");
     }
 }
