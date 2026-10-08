@@ -1444,24 +1444,27 @@ impl App {
             let card = lay.card;
             match onboarding_ui::button_at(card, state, self.cursor) {
                 Some(OnboardingButton::Next) => {
+                    // CR-031: на финальном шаге «Далее» не рисуется
+                    // (hit-тест возвращает None) — ветка defensive
                     if state.is_last() {
-                        // «Готово»: тур пройден — флаг + сохранение
                         self.complete_onboarding();
-                    } else if onboarding_ui::ONBOARDING_STEPS
-                        .get(state.step)
-                        .and_then(|step| step.action_key)
-                        .is_some()
-                    {
-                        // FR-049: CTA шага («Попробовать») — тур
-                        // пройден, галерея схем открыта
-                        self.complete_onboarding();
-                        self.scheme_gallery.open();
                     } else if let Some(state) = self.onboarding.as_mut() {
                         state.next();
                         // W-e: новый шаг — скролл тела в начало (кит
                         // ScrollState; у нового шага другой контент)
                         self.onboarding_scroll.offset = 0.0;
                     }
+                }
+                Some(OnboardingButton::FinalGallery) => {
+                    // CR-031: финальный CTA «Открыть шаблонную схему» —
+                    // тур пройден, галерея схем открыта (выбор пользователя)
+                    self.complete_onboarding();
+                    self.scheme_gallery.open();
+                }
+                Some(OnboardingButton::FinalEmpty) => {
+                    // CR-031: финальный CTA «Начать самому» — тур пройден,
+                    // чистый холст
+                    self.complete_onboarding();
                 }
                 Some(OnboardingButton::Prev) => {
                     if let Some(state) = self.onboarding.as_mut() {
@@ -4186,7 +4189,7 @@ impl App {
                 &mut m,
                 &mut fs,
             );
-            let body = onboarding_ui::body_area(lay.card);
+            let body = onboarding_ui::body_area(lay.card, state.is_last());
             let dy = match delta {
                 MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
                 MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),

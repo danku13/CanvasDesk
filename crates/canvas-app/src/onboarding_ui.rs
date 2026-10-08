@@ -37,69 +37,54 @@ pub fn should_show_onboarding(settings: &Settings) -> bool {
 }
 
 /// Шаг тура: заголовок и абзац тела (короткие тексты, перенос по ширине
-/// карточки — измеренный `TextMeasurer::wrap`). Зарезервированный
-/// `action` для v2 — интерактивная чек-точка демо-канваса (машина состояний
-/// не переписывается).
+/// карточки — измеренный `TextMeasurer::wrap`). CR-031: CTA-механика
+/// `action_key` («Попробовать» на шаге «Шаблоны нод») удалена — шаг ведёт
+/// «Далее» до финала; финальный шаг предлагает выбор двумя полноширинными
+/// CTA ([`OnboardingButton::FinalGallery`] / [`OnboardingButton::FinalEmpty`]).
 pub struct OnboardingStep {
     /// Ключ заголовка (таблица [`crate::i18n`] — FR-040).
     pub title_key: &'static str,
     /// Ключ тела (полная фраза, перенос на стороне [`body_lines`]).
     pub body_key: &'static str,
-    /// FR-049: опциональное действие шага — CTA-кнопка «Далее» превращается
-    /// в действие (резервация v1 `onboarding_ui.rs:27` задействована).
-    /// `Some(keys::GALLERY_TRY)` — открыть галерею схем (тур закрывается).
-    pub action_key: Option<&'static str>,
 }
 
 /// Шаги тура (FR-028, скоуп владельца — база + расчёты + шаблоны; NN/g:
 /// 8±2 шага, «один шаг = одна мысль», выход виден всегда). Порядок
-/// стабилен; «Готово» — на последнем.
-pub const ONBOARDING_STEPS: [OnboardingStep; 9] = [
+/// стабилен; последний шаг — финал с выбором «шаблонная схема / самому».
+/// CR-031: шаг «UI-консоль» выведен из тура (владельческий инструмент —
+/// остался в меню «?») — не перегружаем новичка служебным экраном.
+pub const ONBOARDING_STEPS: [OnboardingStep; 8] = [
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP1_TITLE,
         body_key: keys::ONBOARDING_STEP1_BODY,
-        action_key: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP2_TITLE,
         body_key: keys::ONBOARDING_STEP2_BODY,
-        action_key: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP3_TITLE,
         body_key: keys::ONBOARDING_STEP3_BODY,
-        action_key: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP4_TITLE,
         body_key: keys::ONBOARDING_STEP4_BODY,
-        action_key: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP5_TITLE,
         body_key: keys::ONBOARDING_STEP5_BODY,
-        action_key: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP6_TITLE,
         body_key: keys::ONBOARDING_STEP6_BODY,
-        action_key: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP7_TITLE,
         body_key: keys::ONBOARDING_STEP7_BODY,
-        action_key: Some(keys::GALLERY_TRY),
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP8_TITLE,
         body_key: keys::ONBOARDING_STEP8_BODY,
-        action_key: None,
-    },
-    // FR-070: шаг 9 — UI-консоль (приёмка/баг-репорты, доступна всегда)
-    OnboardingStep {
-        title_key: keys::ONBOARDING_STEP9_TITLE,
-        body_key: keys::ONBOARDING_STEP9_BODY,
-        action_key: None,
     },
 ];
 
@@ -149,16 +134,11 @@ impl OnboardingState {
     }
 
     /// Ключ подписи правой кнопки: «Далее» / «Готово» на последнем шаге
-    /// (текст — таблица [`crate::i18n`], FR-040).
+    /// (текст — таблица [`crate::i18n`], FR-040). CR-031: на финальном шаге
+    /// «Далее» не рисуется (футер — только «Назад»), выбор — CTA-опции.
     pub fn next_label_key(&self) -> &'static str {
         if self.is_last() {
             keys::ONBOARDING_DONE
-        } else if let Some(action) = ONBOARDING_STEPS
-            .get(self.step)
-            .and_then(|step| step.action_key)
-        {
-            // FR-049: шаг с действием — CTA «Попробовать» (галерея схем)
-            action
         } else {
             keys::ONBOARDING_NEXT
         }
@@ -206,6 +186,33 @@ pub enum OnboardingButton {
     Next,
     /// «Пропустить» — отложить до следующего запуска (Esc — то же).
     Skip,
+    /// CR-031: финальный CTA «Открыть шаблонную схему» — тур завершён
+    /// (флаг пройден), галерея схем открыта.
+    FinalGallery,
+    /// CR-031: финальный CTA «Начать самому» — тур завершён, чистый холст.
+    FinalEmpty,
+}
+
+/// Высота полноширинной CTA-опции финального шага (CR-031).
+pub const ONBOARDING_OPTION_H: f32 = 34.0;
+/// Зазор между CTA-опциями финала.
+pub const ONBOARDING_OPTION_GAP: f32 = kit::GAP_CONTROLS;
+/// Зона финальных CTA над футером: верхний зазор + 2 опции + зазор
+/// (резервируется из зоны тела — опции всегда видимы, тело скроллится выше).
+pub const ONBOARDING_OPTION_ZONE: f32 = 10.0 + 2.0 * ONBOARDING_OPTION_H + ONBOARDING_OPTION_GAP;
+
+/// Rect'ы полноширинных CTA-опций финального шага (CR-031): две кнопки
+/// над футером, ширина — внутренняя ширина карточки. Порядок: «Открыть
+/// шаблонную схему» (primary), «Начать самому» (secondary).
+pub fn option_rects(card: [f32; 4]) -> [[f32; 4]; 2] {
+    let w = (card[2] - ONBOARDING_PAD * 2.0).max(0.0);
+    let bottom = card[1] + card[3] - ONBOARDING_PAD - ONBOARDING_FOOTER_H;
+    let gallery_y = bottom - 2.0 * ONBOARDING_OPTION_H - ONBOARDING_OPTION_GAP;
+    let empty_y = bottom - ONBOARDING_OPTION_H;
+    [
+        [card[0] + ONBOARDING_PAD, gallery_y, w, ONBOARDING_OPTION_H],
+        [card[0] + ONBOARDING_PAD, empty_y, w, ONBOARDING_OPTION_H],
+    ]
 }
 
 /// Строки тела шага после переноса по ширине карточки — измеренный
@@ -267,12 +274,18 @@ pub fn body_top_offset() -> f32 {
 /// Зона тела шага в карточке: от якоря первой строки до футера с CTA
 /// (минус нижний пад). Общий источник высоты окна видимости скролла для
 /// раскладки ([`card_layout`]), колеса ввода и отрисовки (видимые строки).
-pub fn body_area(card: [f32; 4]) -> [f32; 4] {
+/// CR-031: на финальном шаге снизу резервируется зона CTA-опций
+/// ([`ONBOARDING_OPTION_ZONE`]) — опции всегда видимы, тело скроллится выше.
+pub fn body_area(card: [f32; 4], final_step: bool) -> [f32; 4] {
+    let mut h = (card[3] - body_top_offset() - ONBOARDING_PAD - ONBOARDING_FOOTER_H).max(0.0);
+    if final_step {
+        h = (h - ONBOARDING_OPTION_ZONE).max(0.0);
+    }
     [
         card[0] + ONBOARDING_PAD,
         card[1] + body_top_offset(),
         (card[2] - ONBOARDING_PAD * 2.0).max(0.0),
-        (card[3] - body_top_offset() - ONBOARDING_PAD - ONBOARDING_FOOTER_H).max(0.0),
+        h,
     ]
 }
 
@@ -313,7 +326,15 @@ pub fn card_layout(
     let w = ONBOARDING_CARD_WIDTH.min(slot.w);
     let lines = body_lines(step, w, language, m, fs);
     let body_h = lines.len() as f32 * ONBOARDING_BODY_LINE_H;
-    let desired_h = body_top_offset() + body_h + ONBOARDING_PAD + ONBOARDING_FOOTER_H;
+    // CR-031: финальный шаг несёт две полноширинные CTA-опции — зона
+    // резервируется в желаемой высоте карточки.
+    let final_step = step + 1 >= ONBOARDING_STEPS.len();
+    let options_h = if final_step {
+        ONBOARDING_OPTION_ZONE
+    } else {
+        0.0
+    };
+    let desired_h = body_top_offset() + body_h + ONBOARDING_PAD + ONBOARDING_FOOTER_H + options_h;
     // Кламп высоты к слоту: desired пре-клампнут, поэтому min-инвариант
     // модали (приоритетен — parity FR-060) не конфликтует с клампом FR-028.
     let h = desired_h.min(slot.h);
@@ -322,7 +343,7 @@ pub fn card_layout(
     let card = [panel.x, panel.y, panel.w, panel.h];
     // Скролл тела: при клампе высоты viewport_h < content_h — строки
     // прокручиваются (колесо ввода; видимые строки — `kit::list_rows`).
-    let body = body_area(card);
+    let body = body_area(card, final_step);
     scroll.content_h = lines.len() as f32 * ONBOARDING_BODY_LINE_H;
     scroll.viewport_h = body[3];
     scroll.clamp();
@@ -410,14 +431,21 @@ pub fn button_rect(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
             64.0,
             22.0,
         ],
+        // CR-031: финальные CTA-опции — полноширинные кнопки над футером
+        // ([`option_rects`]; в футере их нет)
+        OnboardingButton::FinalGallery => option_rects(card)[0],
+        OnboardingButton::FinalEmpty => option_rects(card)[1],
     }
 }
 
 /// Hit-test кнопки карточки. «Назад» на первом шаге отсутствует (None),
 /// «Далее»/«Готово» и «Пропустить» доступны всегда (инвариант карусели).
-/// FR-097: на coarse-указателе тач-цели кнопок дотягиваются до 44 лог. px
-/// (hit-only, кламп в карточку — расширенная зона не выходит за оверлей;
-/// на точном указателе — прежние зоны).
+/// CR-031: на финальном шаге «Далее» отсутствует (футер — только «Назад»),
+/// вместо него — полноширинные CTA-опции «Открыть шаблонную схему» /
+/// «Начать самому» (нижняя зона карточки). FR-097: на coarse-указателе
+/// тач-цели кнопок дотягиваются до 44 лог. px (hit-only, кламп в карточку —
+/// расширенная зона не выходит за оверлей; на точном указателе — прежние
+/// зоны).
 pub fn button_at(
     card: [f32; 4],
     state: &OnboardingState,
@@ -438,7 +466,16 @@ pub fn button_at(
             && point[1] >= rect[1]
             && point[1] <= rect[1] + rect[3]
     };
-    if hit(button_rect(card, OnboardingButton::Next)) {
+    // CR-031: финальный шаг — CTA-опции вместо «Далее»
+    if state.is_last() {
+        let [gallery, empty] = option_rects(card);
+        if hit(gallery) {
+            return Some(OnboardingButton::FinalGallery);
+        }
+        if hit(empty) {
+            return Some(OnboardingButton::FinalEmpty);
+        }
+    } else if hit(button_rect(card, OnboardingButton::Next)) {
         return Some(OnboardingButton::Next);
     }
     if hit(button_rect(card, OnboardingButton::Skip)) {
@@ -909,15 +946,18 @@ mod tests {
 
     /// Стресс 240×180 (W-e): при клампе высоты контент ужимается, футер с
     /// CTA НЕ перекрывается телом и остаётся достижим; тело прокручивается
-    /// до конца (последняя строка достижима скроллом).
+    /// до конца (последняя строка достижима скроллом). CR-031: на финальном
+    /// шаге CTA — полноширинные опции (FinalGallery), зона тела уже на
+    /// [`ONBOARDING_OPTION_ZONE`].
     #[test]
     fn stress_240x180_footer_visible_and_body_reachable() {
         let viewport = [240.0, 180.0];
         for step in 0..ONBOARDING_STEPS.len() {
+            let final_step = step + 1 == ONBOARDING_STEPS.len();
             let lay = layout(viewport, step, Language::Ru);
             let card = lay.card;
             // Футер (кнопки) прибит к низу карточки и НЕ входит в скролл-зону
-            let body = body_area(card);
+            let body = body_area(card, final_step);
             let footer_top = card[1] + card[3] - ONBOARDING_FOOTER_H;
             assert!(
                 body[1] + body[3] <= footer_top + 0.01,
@@ -957,12 +997,17 @@ mod tests {
                     "хвост контента не влез после прокрутки до конца"
                 );
             }
-            // Кнопки кликабельны (hit-тест работает при клампе)
-            let next = button_rect(card, OnboardingButton::Next);
+            // Кнопки кликабельны (hit-тест работает при клампе); на финале
+            // CTA — опция «Открыть шаблонную схему»
+            let (cta_rect, cta) = if final_step {
+                (option_rects(card)[0], OnboardingButton::FinalGallery)
+            } else {
+                (next, OnboardingButton::Next)
+            };
             let state = OnboardingState { step };
             assert_eq!(
-                button_at(card, &state, [next[0] + 5.0, next[1] + 10.0]),
-                Some(OnboardingButton::Next),
+                button_at(card, &state, [cta_rect[0] + 5.0, cta_rect[1] + 10.0]),
+                Some(cta),
                 "CTA достижим на шаге {step}"
             );
         }
@@ -1000,6 +1045,8 @@ mod tests {
 
     /// Hit-тесты кнопок: Next/Skip кликабельны на каждом шаге; Prev —
     /// только со 2-го; мимо кнопок — None; клик в теле карточки глотается.
+    /// CR-031: на финальном шаге Next отсутствует — вместо него CTA-опции
+    /// «Открыть шаблонную схему» (primary) и «Начать самому» (secondary).
     #[test]
     fn button_hit_tests() {
         let viewport = [1600.0, 900.0];
@@ -1036,6 +1083,28 @@ mod tests {
         assert_eq!(button_at(card, &state, body_point), None);
         // Мимо карточки — не в карточке
         assert!(!point_in_card(card, [10.0, 10.0]));
+
+        // CR-031: финальный шаг — CTA-опции вместо «Далее»
+        let last = OnboardingState {
+            step: ONBOARDING_STEPS.len() - 1,
+        };
+        let card = layout(viewport, last.step, Language::Ru).card;
+        let [gallery, empty] = option_rects(card);
+        assert_eq!(
+            button_at(card, &last, [gallery[0] + 5.0, gallery[1] + 10.0]),
+            Some(OnboardingButton::FinalGallery),
+            "CTA «Открыть шаблонную схему» достижим на финале"
+        );
+        assert_eq!(
+            button_at(card, &last, [empty[0] + 5.0, empty[1] + 10.0]),
+            Some(OnboardingButton::FinalEmpty),
+            "CTA «Начать самому» достижим на финале"
+        );
+        assert_eq!(
+            button_at(card, &last, [next[0] + 5.0, next[1] + 10.0]),
+            None,
+            "«Далее» на финальном шаге отсутствует"
+        );
     }
 
     /// Прогресс-точки: по числу шагов, в пределах карточки по ширине.
