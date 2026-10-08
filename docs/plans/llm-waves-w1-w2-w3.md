@@ -16,7 +16,21 @@
 >
 > **Статус исполнения** (исполнитель волны отмечает здесь):
 > - Волна 1 — ☐ не начата
-> - Волна 2 — ☐ не начата
+> - Волна 2 — ☑ выполнена 2026-10-09 (ветка `feature/llm-w2-app-inject`,
+>   коммиты `4fc1dd4`→`506bc00`+; владение `crates/canvas-app/**` соблюдено,
+>   чужие крейты/docs не тронуты). Все 9 задач §3 реализованы; гейты §0.6
+>   зелёные (fmt/clippy `-D warnings`/test 660+/wasm-check canvas-web).
+>   Примечание: W1 не выполнена — реальные вызовы идут через текущий
+>   API canvas-llm (health()/models()/check_endpoint через трейт);
+>   executor-сим (`app/llm_executor.rs`) — натив worker+pollster, wasm —
+>   стаб-шов `from_driver` для W3. Пробелы W1 для W3: `discovery::list_models`
+>   (кэш моделей сейчас из статического списка провайдера),
+>   высокоуровневый `health::check(provider_config) -> HealthReport`;
+>   canvas-llm с l1-llm не собирается под wasm32 (ureq) — нужен транспорт
+>   W1. Найденный баг W1-территории: `cargo clippy -p canvas-llm
+>   --all-targets --features l1-llm -- -D warnings` падает в тестах
+>   `oauth_e2e.rs` (dead_code `SharedStore::empty`, useless_format) — на
+>   main, не тронуто волной.
 > - Волна 3 — ☐ не начата
 
 ---
