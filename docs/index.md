@@ -70,6 +70,9 @@ user stories → решение → non-goals → roadmap). CJM с трасси�
   дефектов, статусы, история изменений.
 - [`plans/wasm-port.html`](plans/wasm-port.html) — план wasm-порта (M8);
   рядом — кроссплатформенность (M7) и продуктовый роадмап.
+- [`plans/llm-waves-w1-w2-w3.html`](plans/llm-waves-w1-w2-w3.html) — файл-задание
+  трёх волн LLM-доработок (ядро → вживление → web-путь/доки/PoC) с матрицей
+  владения файлами для бесконфликтных слияний.
 - [`architecture/math-computing-stack.html`](architecture/math-computing-stack.html) —
   архитектурный обзор стека математических вычислений.
 - [`architecture/shell-world-space.html`](architecture/shell-world-space.html) —
