@@ -1444,3 +1444,22 @@ Work Log:
 Stage Summary:
 - Единственный падающий на mac/win тест исправлен; поведение продукта не менялось
 - Известный риск (не блокер): ubuntu CI пропускает все GPU-headless тесты — реальное исполнение только на mac/win/локальных машинах разработчика; при желании — отдельный шаг (mesa/lavapipe) в ci.yml
+
+---
+Task ID: CR-031 (сессия web-0a539c42-84fd-4916-9a97-970c8052c51d)
+Agent: Super Z (main)
+Task: Обратная связь владельца по онбордингу (7 пунктов, UR-002) — финал тура с выбором, вёрстка 50/50, ролевое value, ревизия текстов, галерея на ui-kit, фон-точки
+
+Work Log:
+- Зарегистрирован UR-002 (docs/user-reporting/ur-002-onboarding-v2.md, 7/7) + CR-031 (cr-031-onboarding-final-and-value.md), строка в index-cr-fr.md
+- S1 (2c70593): шаг «Шаблоны нод» ведёт «Далее» до финала — CTA action_key/GALLERY_TRY удалён (досрочно завершал тур и открывал галерею схем вместо шаблонов нод); финальный шаг — две полноширинные CTA «Открыть шаблонную схему»/«Начать самому» (OnboardingButton::{FinalGallery,FinalEmpty}, option_rects); шаг 9 «UI-консоль» выведен из тура — карусель 9 → 8 шагов; hit-тест финала — только опции
+- S2 (54e362c): карточка тура двухколоночная 720px — иллюстрация слева / текст с кнопками справа (text_column, ONBOARDING_SPLIT_MIN_W 640, одноколонный фолбэк); onboarding_art.rs — процедурные векторные сцены 8 шагов примитивами Painter (без растровых ассетов), паритет тем
+- S3 (0097eaf): ролевое value-приветствие — welcome_body_key(role): 8 ролей FR-087 + универсальный fallback onboarding.value.default; step_body_key(step, role) — единственный источник тела для раскладки/рендера/hit-rect'ов
+- S4 (c8d1223): ревизия текстов — «Заметки» без markdown/Ctrl+Enter/Esc; «Связи» — два типа (logical/data); «Поток значений» согласован; RU/EN синхронно
+- S5 (3e26bd2): панель галереи на ките — kit::modal_style + RADIUS_PANEL, «×» через icon_button_style (Ghost/WidgetState), чипы RADIUS_PILL/palette_selected_fill, фильтр RADIUS_CHIP
+- S6 (99fce1f): GridStyle::#[default] Dots (был Lines), плотность Medium; существующие конфиги не тронуты
+- Финализация: статусы CR-031/UR-002/index → «реализовано (ожидает приёмки)»; слияние origin/main (docs: LLM-волны, readme); полный гейт workspace + wasm_gate; push
+
+Stage Summary:
+- UR-002 7/7 закрыт кодом и тестами (canvas-app 684 ok на этапе S5; финальный гейт — в этой записи); ожидает приёмки владельца на живом стенде
+- Tokens (estimate, правило AGENTS.md): in≈180k, out≈25k, total≈205k, model=GLM (Super Z), scope=CR-031
