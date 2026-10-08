@@ -23,6 +23,7 @@ value-связям (DAG-движок), а ИИ-агент строит и про
 | [RECIPES.md](RECIPES.html) | Рецепты встраивания в десктоп (R1–R17) |
 | [DEMO.md](DEMO.html) | Демо-стенд под Linux: скриншоты и GIF |
 | [BYOK.md](BYOK.html) | Подключение своей LLM-модели (BYOK) |
+| [WASM-AI-FEATURES.md](WASM-AI-FEATURES.html) | ИИ в wasm-версии (кроме MCP): матрица доступности функций, отличия от desktop и пошаговые сценарии проверки в браузере |
 | [DEPENDENCIES.md](DEPENDENCIES.html) | Заметки о зависимостях |
 | [ui-kit.md](ui-kit.html) | UI-кит `canvas-ui`: слои и реестр поверхностей, layout-движок `FlexLayoutEngine` (подмножество CSS Flexbox/Grid — auto/minmax-треки, sticky, rotate, z-index), компонентный слой, гайд «поверхность за 3 шага» |
 | [ENVIRONMENT.md](ENVIRONMENT.html) | Окружение разработки и сборки |
@@ -69,6 +70,9 @@ user stories → решение → non-goals → roadmap). CJM с трасси�
   дефектов, статусы, история изменений.
 - [`plans/wasm-port.html`](plans/wasm-port.html) — план wasm-порта (M8);
   рядом — кроссплатформенность (M7) и продуктовый роадмап.
+- [`plans/llm-waves-w1-w2-w3.html`](plans/llm-waves-w1-w2-w3.html) — файл-задание
+  трёх волн LLM-доработок (ядро → вживление → web-путь/доки/PoC) с матрицей
+  владения файлами для бесконфликтных слияний.
 - [`architecture/math-computing-stack.html`](architecture/math-computing-stack.html) —
   архитектурный обзор стека математических вычислений.
 - [`architecture/shell-world-space.html`](architecture/shell-world-space.html) —
