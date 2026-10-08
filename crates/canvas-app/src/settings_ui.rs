@@ -885,7 +885,13 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
 /// ручная правка `config.toml` между пресетами всё равно получает отметку.
 /// Язык (FR-040): названия — в собственной локали
 /// ([`Language::native_label`], конвенция Obsidian/VS Code).
-pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, bool)> {
+/// FR-LLM-D-W2 (llm-waves §3.5): `ai_models` — кэш моделей App (заполняется
+/// успешным health-check; пуст → модель-строки без опций — свободный ввод).
+pub fn dropdown_options(
+    row: SettingsRow,
+    settings: &Settings,
+    ai_models: &[String],
+) -> Vec<(String, bool)> {
     let language = settings.language;
     match row {
         SettingsRow::ButtonCorner => [
@@ -1142,14 +1148,24 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         .into_iter()
         .map(|p| (ai_provider_label(language, p), settings.llm.provider_agent == p))
         .collect(),
-        // FR-LLM-FIX (task FIX-TEXT-INPUT): per-feature BYOK-модель —
-        // теперь редактируемое текстовое поле (RowKind::TextInput), не
-        // dropdown. Список опций пуст (меню не открывается). Раньше список
-        // подгружался из `/v1/models` после health-check ключа — теперь
-        // пользователь вводит имя модели вручную (дефолт «glm-5.3-flash»).
-        SettingsRow::AiModelSuggest => Vec::new(),
-        SettingsRow::AiModelGraph => Vec::new(),
-        SettingsRow::AiModelAgent => Vec::new(),
+        // FR-LLM-D-W2 (llm-waves §3.5): per-feature BYOK-модель — TextInput
+        // (свободный ввод) + advisory-dropdown из кэша моделей App
+        // (`ai_models`, заполняется успешным health-check — сейчас
+        // статический список провайдера; живой /v1/models discovery — API
+        // W1, подключит W3). Кэш пуст → опций нет, меню не открывается
+        // (fallback на свободный ввод — текущее поведение).
+        SettingsRow::AiModelSuggest => ai_model_options(
+            ai_models,
+            &settings.llm.model_suggest,
+        ),
+        SettingsRow::AiModelGraph => ai_model_options(
+            ai_models,
+            &settings.llm.model_graph,
+        ),
+        SettingsRow::AiModelAgent => ai_model_options(
+            ai_models,
+            &settings.llm.model_agent,
+        ),
         SettingsRow::AiResidency => [
             canvas_llm::DataResidency::Local,
             canvas_llm::DataResidency::Cloud,
@@ -1170,6 +1186,15 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
 }
 
 // FR-LLM-B / PRD-0010 F-7: вспомогательные типы/функции для таба «AI и модели».
+
+/// FR-LLM-D-W2 (llm-waves §3.5): опции модель-строки из кэша App: (id,
+/// текущая). Кэш пуст → пусто (свободный ввод, меню не открывается).
+fn ai_model_options(ai_models: &[String], current: &str) -> Vec<(String, bool)> {
+    ai_models
+        .iter()
+        .map(|m| (m.clone(), m == current))
+        .collect()
+}
 
 // FR-LLM-FIX: хардкод-список BYOK-моделей (AiByokModel/AI_BYOK_MODELS) удалён —
 // список моделей подгружается из `/v1/models` после health-check ключа.
@@ -1478,9 +1503,9 @@ impl DropdownState {
 
     /// Открыть меню строки; выделение — на текущем значении (первая
     /// отметка), чтобы Enter сразу применял видимое состояние.
-    pub fn open(&mut self, row: SettingsRow, settings: &Settings) {
+    pub fn open(&mut self, row: SettingsRow, settings: &Settings, ai_models: &[String]) {
         self.open_row = Some(row);
-        self.selected = dropdown_options(row, settings)
+        self.selected = dropdown_options(row, settings, ai_models)
             .iter()
             .position(|(_, current)| *current)
             .unwrap_or(0);
@@ -2796,7 +2821,7 @@ mod tests {
         // Реестр ролей: dropdown = ROLES по порядку, отметка — по id
         let mut settings = Settings::default();
         assert_eq!(settings.role, canvas_core::roles::DEFAULT_ROLE);
-        let options = dropdown_options(SettingsRow::Role, &settings);
+        let options = dropdown_options(SettingsRow::Role, &settings, &[]);
         assert_eq!(options.len(), canvas_core::roles::ROLES.len());
         assert!(options[0].1, "отмечен default");
         assert_eq!(options[0].0, "Не выбрана");
@@ -2851,7 +2876,7 @@ mod tests {
             SettingsRow::SchemeCatOnboarding,
         ] {
             assert_eq!(row_kind(row), RowKind::Toggle);
-            assert_eq!(dropdown_options(row, &settings), Vec::new());
+            assert_eq!(dropdown_options(row, &settings, &[]), Vec::new());
             assert_eq!(dropdown_value(row, &settings), None);
         }
     }
@@ -2866,7 +2891,7 @@ mod tests {
         let mut settings = Settings::default();
 
         // Дефолт: классика отмечена, пресетов в реестре 7
-        let options = dropdown_options(SettingsRow::ThemePreset, &settings);
+        let options = dropdown_options(SettingsRow::ThemePreset, &settings, &[]);
         assert_eq!(options.len(), 1 + theme_presets::PRESETS.len());
         assert_eq!(options.iter().filter(|(_, cur)| *cur).count(), 1);
         assert!(
@@ -2882,7 +2907,7 @@ mod tests {
             "индекс 2 == второй пресет реестра"
         );
         assert_eq!(settings.active_preset(), Some(theme_presets::PRESETS[1].id));
-        let options = dropdown_options(SettingsRow::ThemePreset, &settings);
+        let options = dropdown_options(SettingsRow::ThemePreset, &settings, &[]);
         assert_eq!(options.iter().filter(|(_, cur)| *cur).count(), 1);
         assert!(options[2].1, "выбранный пресет отмечен");
         // Значение на контроле — метка пресета (без i18n: имена собственные)
@@ -2916,6 +2941,35 @@ mod tests {
 
     /// Инвариант значений: у каждого dropdown полный перечень значений
     /// (4 угла / 2 вида / 3 плотности / 5 пресетов / 2 языка), текущее
+    /// FR-LLM-D-W2 (llm-waves §3.5): модель-строки — опции из кэша моделей;
+    /// пустой кэш → пусто (свободный ввод); текущая модель отмечена.
+    #[test]
+    fn dropdown_options_model_rows_use_cache() {
+        let settings = Settings::default();
+        // Пустой кэш — fallback на свободный ввод (меню нет).
+        assert!(dropdown_options(SettingsRow::AiModelSuggest, &settings, &[]).is_empty());
+        assert!(dropdown_options(SettingsRow::AiModelGraph, &settings, &[]).is_empty());
+        assert!(dropdown_options(SettingsRow::AiModelAgent, &settings, &[]).is_empty());
+        // Кэш из health-check — опции = модели, текущая отмечена.
+        let cache = vec![
+            "glm-5.3-flash".to_owned(),
+            "glm-5.3-air".to_owned(),
+            "glm-5.3-pro".to_owned(),
+        ];
+        let options = dropdown_options(SettingsRow::AiModelSuggest, &settings, &cache);
+        assert_eq!(options.len(), 3);
+        // Деффолтная model_suggest — «glm-5.3-flash» → пункт 0 текущий.
+        assert!(options[0].1);
+        assert!(!options[1].1);
+        // Другая текущая модель — другая отметка (graph/agent).
+        let mut custom = settings.clone();
+        custom.llm.model_graph = "glm-5.3-air".to_owned();
+        let options = dropdown_options(SettingsRow::AiModelGraph, &custom, &cache);
+        assert!(!options[0].1);
+        assert!(options[1].1);
+        assert!(!options[2].1);
+    }
+
     /// отмечено ровно один раз; у тумблеров список пуст; язык подписан
     /// собственной локалью.
     #[test]
@@ -2929,7 +2983,7 @@ mod tests {
             ..Settings::default()
         };
 
-        let corners = dropdown_options(SettingsRow::ButtonCorner, &settings);
+        let corners = dropdown_options(SettingsRow::ButtonCorner, &settings, &[]);
         assert_eq!(corners.len(), 4);
         assert_eq!(corners.iter().filter(|(_, cur)| *cur).count(), 1);
         assert_eq!(
@@ -2940,7 +2994,7 @@ mod tests {
             Some("bottom left")
         );
 
-        let styles = dropdown_options(SettingsRow::GridStyle, &settings);
+        let styles = dropdown_options(SettingsRow::GridStyle, &settings, &[]);
         assert_eq!(styles.len(), 2);
         assert_eq!(
             styles
@@ -2950,7 +3004,7 @@ mod tests {
             Some("dots")
         );
 
-        let densities = dropdown_options(SettingsRow::GridDensity, &settings);
+        let densities = dropdown_options(SettingsRow::GridDensity, &settings, &[]);
         assert_eq!(densities.len(), 3);
         assert_eq!(
             densities
@@ -2960,7 +3014,7 @@ mod tests {
             Some("sparse")
         );
 
-        let zones = dropdown_options(SettingsRow::PortZone, &settings);
+        let zones = dropdown_options(SettingsRow::PortZone, &settings, &[]);
         assert_eq!(zones.len(), PORT_ZONE_PRESETS.len());
         assert_eq!(
             zones
@@ -2974,7 +3028,7 @@ mod tests {
             port_zone_px: 22.0,
             ..Settings::default()
         };
-        let zones = dropdown_options(SettingsRow::PortZone, &between);
+        let zones = dropdown_options(SettingsRow::PortZone, &between, &[]);
         assert_eq!(
             zones
                 .iter()
@@ -2984,7 +3038,7 @@ mod tests {
         );
 
         // Язык — названия в собственной локали независимо от языка UI
-        let languages = dropdown_options(SettingsRow::Language, &settings);
+        let languages = dropdown_options(SettingsRow::Language, &settings, &[]);
         assert_eq!(languages.len(), 2);
         assert_eq!(languages[0].0, "русский");
         assert_eq!(languages[1].0, "English");
@@ -2997,7 +3051,7 @@ mod tests {
             SettingsRow::HudOnStart,
         ] {
             assert!(
-                dropdown_options(row, &settings).is_empty(),
+                dropdown_options(row, &settings, &[]).is_empty(),
                 "{row:?}: тумблер без меню"
             );
             assert!(
@@ -3076,7 +3130,7 @@ mod tests {
                 // индекс в перечне — по отметке dropdown_options
                 let mut base = Settings::default();
                 cycle(&mut base, start);
-                let current_index = dropdown_options(row, &base)
+                let current_index = dropdown_options(row, &base, &[])
                     .iter()
                     .position(|(_, current)| *current)
                     .expect("текущее значение отмечено");
@@ -3734,7 +3788,7 @@ mod tests {
         };
         let mut state = DropdownState::default();
         assert!(!state.is_open());
-        state.open(SettingsRow::ButtonCorner, &settings);
+        state.open(SettingsRow::ButtonCorner, &settings, &[]);
         assert!(state.is_open());
         assert_eq!(state.open_row, Some(SettingsRow::ButtonCorner));
         // BottomRight — третий пункт цикла (TopLeft, TopRight, BottomRight, …)
@@ -3751,7 +3805,7 @@ mod tests {
         assert!(!state.move_selection(1, 0), "пустой список — сдвига нет");
         // Язык: дефолт Ru — выделение на пункте 0
         let mut state = DropdownState::default();
-        state.open(SettingsRow::Language, &Settings::default());
+        state.open(SettingsRow::Language, &Settings::default(), &[]);
         assert_eq!(state.selected, 0);
     }
 }

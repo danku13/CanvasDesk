@@ -991,7 +991,7 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 .hit_rects
                 .push(HitRect::interactive(rect(layout.rect), "settings-modal"));
             if let Some(row) = app.settings_dropdown.open_row {
-                let items = dropdown_options(row, &app.settings);
+                let items = dropdown_options(row, &app.settings, &app.ai_models_cache);
                 let anchor = layout
                     .row_rect(row)
                     .map(|r| control_rect(r, RowKind::Dropdown))

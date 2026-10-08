@@ -197,12 +197,13 @@ pub struct GraphBuildResult {
     pub cost_usd: f64,
 }
 
-/// Health-отчёт: флаги бейджей + число моделей (для подсказки у строки).
+/// Health-отчёт: флаги бейджей + список моделей (для кэша §3.5).
 #[derive(Debug, Clone)]
 pub struct HealthReport {
-    /// Число моделей, известное провайдеру (статический список `models()`;
-    /// живой `/v1/models`-discovery — API W1, подключит W3).
-    pub models_count: Option<usize>,
+    /// Список моделей, известный провайдеру (статический `models()`;
+    /// живой `/v1/models`-discovery — API W1, подключит W3). Питает
+    /// `App::ai_models_cache` (advisory-dropdown модель-строк).
+    pub models: Vec<String>,
 }
 
 /// Цель health-check — строка настроек, чью кнопку «Проверить» нажали.
@@ -340,9 +341,16 @@ impl App {
         result: Result<HealthReport, String>,
     ) {
         let state = match result {
-            Ok(report) => LlmCheckState::Ok {
-                models: report.models_count,
-            },
+            Ok(report) => {
+                // §3.5: кэш моделей — из отчёта (провайдер, чьё здоровье
+                // подтвердили). Пустой список честного Ok кэш не затирает.
+                if !report.models.is_empty() {
+                    self.ai_models_cache = report.models.clone();
+                }
+                LlmCheckState::Ok {
+                    models: Some(report.models.len()),
+                }
+            }
             Err(err) => LlmCheckState::Error(err),
         };
         match target {
@@ -356,6 +364,137 @@ impl App {
             }
         }
         self.request_redraw();
+    }
+
+    /// FR-LLM-D-W2 (llm-waves §3.4): кнопка «Проверить» строк настроек AI —
+    /// запуск health-check в фоне. Натив+l1-llm: `provider.health()` в
+    /// executor-симе (worker-поток), ответ → [`LlmTaskOutcome::Health`] →
+    /// `llm_check_finished` (флаги бейджей + число моделей). Иначе (дефолтная
+    /// сборка без сети / executor-стаб wasm до W3) — прежний mock-toggle
+    /// (UI-демо поведение, сохранено для тестов).
+    pub(crate) fn ai_health_check_start(&mut self, target: HealthCheckTarget) {
+        let already_running = match target {
+            HealthCheckTarget::ApiKey => self.ai_key_check == LlmCheckState::Checking,
+            HealthCheckTarget::Selfhost => self.ai_selfhost_check == LlmCheckState::Checking,
+        };
+        if already_running {
+            return;
+        }
+        // FR-LLM-D-W2: реальный путь — executor-сим (натив, feature l1-llm).
+        #[cfg(feature = "l1-llm")]
+        if self.ai_health_check_submit(target) {
+            self.request_redraw();
+            return;
+        }
+        // Mock-toggle (прежнее поведение дефолтной сборки).
+        match target {
+            HealthCheckTarget::ApiKey => self.ai_key_ok = !self.ai_key_ok,
+            HealthCheckTarget::Selfhost => self.ai_selfhost_ok = !self.ai_selfhost_ok,
+        }
+        self.request_redraw();
+    }
+
+    /// FR-LLM-D-W2: постановка health-check задания в executor. `true` —
+    /// задание принято (состояние Checking) либо конфиг отклонён явно
+    /// (пустой ключ/endpoint — Error-состояние, НЕ mock-toggle).
+    #[cfg(feature = "l1-llm")]
+    fn ai_health_check_submit(&mut self, target: HealthCheckTarget) -> bool {
+        let llm = self.settings.llm.clone();
+        // Selfhost-чек требует endpoint (пустой — явная ошибка, не toggle).
+        if matches!(target, HealthCheckTarget::Selfhost) && llm.endpoint.trim().is_empty() {
+            let text = self.tr(keys::AI_CHECK_NO_ENDPOINT).to_owned();
+            self.ai_selfhost_ok = false;
+            self.ai_selfhost_check = LlmCheckState::Error(text);
+            return true;
+        }
+        // Провайдер — фабрика по конфигу BYOK (endpoint непустой → selfhost-
+        // пресет — проверяется фактическая конфигурация пользователя).
+        let Some(provider) = crate::llm_factory::build_feature_provider(
+            canvas_llm::LlmProviderId::Byok,
+            &llm.model_suggest,
+            &llm,
+            &self.oauth_assets(),
+        ) else {
+            // Пустой BYOK-ключ — честная ошибка (не toggle).
+            let text = self.tr(keys::AI_PROV_BYOK_NOKEY).to_owned();
+            match target {
+                HealthCheckTarget::ApiKey => {
+                    self.ai_key_ok = false;
+                    self.ai_key_check = LlmCheckState::Error(text);
+                }
+                HealthCheckTarget::Selfhost => {
+                    self.ai_selfhost_ok = false;
+                    self.ai_selfhost_check = LlmCheckState::Error(text);
+                }
+            }
+            return true;
+        };
+        // §3.5: список моделей для кэша App — статический список провайдера
+        // (живой /v1/models discovery — API W1; подключит W3 при наличии).
+        let model_ids: Vec<String> = provider.models().iter().map(|m| m.id.clone()).collect();
+        let job: LlmJob = Box::new(move || {
+            let result = pollster::block_on(async { provider.health().await })
+                .map(|_| HealthReport { models: model_ids })
+                .map_err(|err| err.to_string());
+            AppEvent::LlmTask(Arc::new(LlmTaskOutcome::Health { target, result }))
+        });
+        if self.llm_executor.submit(job) {
+            match target {
+                HealthCheckTarget::ApiKey => self.ai_key_check = LlmCheckState::Checking,
+                HealthCheckTarget::Selfhost => self.ai_selfhost_check = LlmCheckState::Checking,
+            }
+            true
+        } else {
+            // Executor недоступен (wasm до W3 / спавн не удался) — mock.
+            false
+        }
+    }
+
+    /// FR-LLM-D-W2: бейдж строки health-check по состоянию
+    /// [`LlmCheckState`]: Idle → «не проверен», Checking → «Проверяется…»,
+    /// Ok → «ключ валиден · N моделей»/«endpoint отвечает» (зелёный),
+    /// Error → «Ошибка: …» (янтарный, обрезка под ширину бейджа).
+    pub(crate) fn ai_check_badge(
+        &self,
+        target: HealthCheckTarget,
+    ) -> (String, canvas_render::Color) {
+        let palette = self.effective_palette();
+        let success = crate::kit_ui::color4(palette.control_success);
+        let neutral = palette.icon;
+        let warning = crate::kit_ui::color4(palette.control_warning);
+        let (state, ok_key, idle_key) = match target {
+            HealthCheckTarget::ApiKey => (
+                &self.ai_key_check,
+                keys::AI_KEY_VALID,
+                keys::AI_KEY_NOT_CHECKED,
+            ),
+            HealthCheckTarget::Selfhost => (
+                &self.ai_selfhost_check,
+                keys::AI_SH_OK,
+                keys::AI_SH_NOT_CHECKED,
+            ),
+        };
+        match state {
+            LlmCheckState::Idle => (self.tr(idle_key).to_owned(), neutral),
+            LlmCheckState::Checking => (self.tr(keys::AI_CHECK_RUNNING).to_owned(), neutral),
+            LlmCheckState::Ok { models } => {
+                if matches!(target, HealthCheckTarget::ApiKey) {
+                    let n = models.map(|m| m.to_string()).unwrap_or_else(|| "…".into());
+                    (self.trf(ok_key, &[("n", &n)]), success)
+                } else {
+                    (self.tr(ok_key).to_owned(), success)
+                }
+            }
+            LlmCheckState::Error(err) => {
+                let mut text = self.trf(keys::AI_CHECK_FAIL, &[("err", err)]);
+                // Бейдж узкий (~110-120px): длинные детали LlmError режем.
+                if text.chars().count() > 26 {
+                    let trimmed: String = text.chars().take(23).collect();
+                    text = format!("{trimmed}…");
+                }
+                (text, warning)
+            }
+        }
     }
 }
 

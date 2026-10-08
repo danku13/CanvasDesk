@@ -1049,7 +1049,7 @@ impl App {
             && !event.repeat
         {
             let row = self.settings_dropdown.open_row.expect("меню открыто");
-            let count = dropdown_options(row, &self.settings).len();
+            let count = dropdown_options(row, &self.settings, &self.ai_models_cache).len();
             match &event.logical_key {
                 Key::Named(NamedKey::ArrowDown) => {
                     self.settings_dropdown.move_selection(1, count);
@@ -2096,7 +2096,7 @@ impl App {
             // ТОЛЬКО меню (модалка остаётся открытой — двухэтапный
             // dismiss), клик по другой строке обработается ниже
             if let Some(open_row) = self.settings_dropdown.open_row {
-                let items = dropdown_options(open_row, &self.settings);
+                let items = dropdown_options(open_row, &self.settings, &self.ai_models_cache);
                 let anchor = layout
                     .row_rect(open_row)
                     .map(|rect| control_rect(rect, RowKind::Dropdown))
@@ -2165,7 +2165,8 @@ impl App {
                         if self.settings_dropdown.open_row == Some(row) {
                             self.settings_dropdown.reset();
                         } else {
-                            self.settings_dropdown.open(row, &self.settings);
+                            self.settings_dropdown
+                                .open(row, &self.settings, &self.ai_models_cache);
                         }
                     }
                     // FR-LLM-FIX (task FIX-TEXT-INPUT): split hit-test —
@@ -2194,6 +2195,24 @@ impl App {
                             // pop). Для модель-строк кликабельна вся строка
                             // (кнопки нет); для строк с кнопкой — лейбл и поле.
                             self.settings_text_edit = Some(row);
+                            // FR-LLM-D-W2 (llm-waves §3.5): модель-строка с
+                            // непустым кэшем — advisory-dropdown подсказок
+                            // (клик по пункту применяет; свободный ввод
+                            // остаётся: символы идут в поле). Пустой кэш —
+                            // меню нет (fallback на свободный ввод).
+                            if matches!(
+                                row,
+                                SettingsRow::AiModelSuggest
+                                    | SettingsRow::AiModelGraph
+                                    | SettingsRow::AiModelAgent
+                            ) && !self.ai_models_cache.is_empty()
+                            {
+                                self.settings_dropdown.open(
+                                    row,
+                                    &self.settings,
+                                    &self.ai_models_cache,
+                                );
+                            }
                         }
                     }
                 }

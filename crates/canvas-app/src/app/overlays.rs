@@ -4820,11 +4820,10 @@ impl App {
         self.save_settings();
     }
 
-    // FR-LLM-FIX: применить клик по Button-строке (API-ключ BYOK /
-    // self-hosted URL / self-hosted key) — mock health-check, переключает
-    // бейдж. Реальный health-check (/v1/models) — Stream C/D TODO,
-    // помечен `// FR-LLM-FIX-TODO:`. Сохранение конфига не нужно (флаги
-    // in-memory only, как и ai_paused).
+    // FR-LLM-D-W2 (llm-waves §3.4): клик по Button-строке настроек AI —
+    // запуск health-check (натив+l1-llm: provider.health() в executor-симе,
+    // состояния idle→проверяется→ok/ошибка; дефолтная сборка — прежний
+    // mock-toggle). Сохранение конфига не нужно (флаги/состояния in-memory).
     pub(super) fn apply_button_row(&mut self, row: SettingsRow) {
         match row {
             // FR-LLM-OAUTH-APP / PRD-0010 F-5.8: строка «Вход ChatGPT» —
@@ -4835,21 +4834,16 @@ impl App {
                 self.oauth_button_click();
                 return;
             }
-            // FR-LLM-FIX: mock health-check BYOK-ключа — toggle ai_key_ok.
-            // FR-LLM-FIX-TODO: реальный health-check — GET /v1/models с
-            // api_key, при 200 заполнить список моделей (модель-строки
-            // получат dropdown_options не пустой), при 4xx — бейдж «ключ
-            // невалиден». Stream C/D.
+            // FR-LLM-D-W2: «Проверить ключ» — health-check BYOK-ключа;
+            // успех → бейдж валидности + число моделей (AI_KEY_VALID {n}),
+            // ошибка → текст LlmError (красный бейдж).
             SettingsRow::AiApiKey => {
-                self.ai_key_ok = !self.ai_key_ok;
+                self.ai_health_check_start(llm_executor::HealthCheckTarget::ApiKey);
             }
-            // FR-LLM-FIX: mock health-check self-hosted endpoint — toggle
-            // ai_selfhost_ok. FR-LLM-FIX-TODO: реальный health-check —
-            // GET {endpoint}/v1/models с api_key, при 200 — бейдж «endpoint
-            // отвечает», при ошибке — «неверный URL»/«endpoint не отвечает».
-            // Stream C/D.
+            // FR-LLM-D-W2: «Проверить» — health-check selfhost endpoint
+            // (фабрика строит selfhost-пресет по endpoint+selfhost_key).
             SettingsRow::AiSelfhostUrl | SettingsRow::AiSelfhostKey => {
-                self.ai_selfhost_ok = !self.ai_selfhost_ok;
+                self.ai_health_check_start(llm_executor::HealthCheckTarget::Selfhost);
             }
             _ => {
                 debug_assert!(false, "не Button-строка: {row:?}");
@@ -5312,7 +5306,7 @@ impl App {
         // (состояние не хранит список — вычисляется из настроек, устареть
         // не может); ширина меню = ширине контрола строки (FR-039 §1)
         let menu = self.settings_dropdown.open_row.map(|row| {
-            let items = dropdown_options(row, &self.settings);
+            let items = dropdown_options(row, &self.settings, &self.ai_models_cache);
             let anchor = layout
                 .row_rect(row)
                 .map(|rect| control_rect(rect, RowKind::Dropdown))
@@ -5757,68 +5751,42 @@ impl App {
                     // ноль визуального скачка I-1, но теперь через слот темы).
                     let (field_text, badge_text, badge_color) = match row {
                         SettingsRow::AiApiKey => {
-                            // FR-LLM-FIX: masked ключ — «•» длиной как ключ
-                            // (или плейсхолдер «sk-…» если ключ пустой).
+                            // FR-LLM-D-W2: masked ключ + бейдж состояния
+                            // health-check (idle/проверяется/ok{модели}/error).
                             let key = &self.settings.llm.api_key;
                             let shown = if key.is_empty() {
                                 "sk-…".to_owned()
                             } else {
                                 "•".repeat(key.chars().count().min(20))
                             };
-                            let badge = if self.ai_key_ok {
-                                // FR-LLM-FIX-TODO: реальный health-check заменит
-                                // «0» на число моделей из /v1/models (Stream C/D).
-                                self.tr(keys::AI_KEY_VALID).replace("{n}", "0")
-                            } else {
-                                self.tr(keys::AI_KEY_NOT_CHECKED).to_owned()
-                            };
-                            let color: canvas_render::Color = if self.ai_key_ok {
-                                crate::kit_ui::color4(palette.control_success)
-                            } else {
-                                palette.icon
-                            };
+                            let (badge, color) =
+                                self.ai_check_badge(llm_executor::HealthCheckTarget::ApiKey);
                             (shown, badge, color)
                         }
                         SettingsRow::AiSelfhostUrl => {
-                            // FR-LLM-FIX: URL endpoint'а или плейсхолдер.
+                            // FR-LLM-D-W2: URL endpoint'а или плейсхолдер +
+                            // бейдж состояния health-check.
                             let url = &self.settings.llm.endpoint;
                             let shown = if url.is_empty() {
                                 "https://llm.corp.local/v1".to_owned()
                             } else {
                                 url.clone()
                             };
-                            let badge = if self.ai_selfhost_ok {
-                                self.tr(keys::AI_SH_OK).to_owned()
-                            } else {
-                                self.tr(keys::AI_SH_NOT_CHECKED).to_owned()
-                            };
-                            let color: canvas_render::Color = if self.ai_selfhost_ok {
-                                crate::kit_ui::color4(palette.control_success)
-                            } else {
-                                palette.icon
-                            };
+                            let (badge, color) =
+                                self.ai_check_badge(llm_executor::HealthCheckTarget::Selfhost);
                             (shown, badge, color)
                         }
                         SettingsRow::AiSelfhostKey => {
-                            // FR-LLM-FIX: masked ключ endpoint'а (поле
-                            // переиспользует api_key, как в прототипе — один
-                            // ключ на endpoint); плейсхолдер если пустой.
+                            // FR-LLM-D-W2: masked ключ endpoint'а + бейдж
+                            // состояния health-check (Selfhost-цель).
                             let key = &self.settings.llm.api_key;
                             let shown = if key.is_empty() {
                                 "API key endpoint'а".to_owned()
                             } else {
                                 "•".repeat(key.chars().count().min(20))
                             };
-                            let badge = if self.ai_selfhost_ok {
-                                self.tr(keys::AI_SH_OK).to_owned()
-                            } else {
-                                self.tr(keys::AI_SH_NOT_CHECKED).to_owned()
-                            };
-                            let color: canvas_render::Color = if self.ai_selfhost_ok {
-                                crate::kit_ui::color4(palette.control_success)
-                            } else {
-                                palette.icon
-                            };
+                            let (badge, color) =
+                                self.ai_check_badge(llm_executor::HealthCheckTarget::Selfhost);
                             (shown, badge, color)
                         }
                         // FR-LLM-FIX: другие Button-строки (если появятся) —
@@ -6039,30 +6007,11 @@ impl App {
                     if text_input_has_button(*row) {
                         let (badge_text, badge_color) = match row {
                             SettingsRow::AiApiKey => {
-                                let badge = if self.ai_key_ok {
-                                    self.tr(keys::AI_KEY_VALID).replace("{n}", "0")
-                                } else {
-                                    self.tr(keys::AI_KEY_NOT_CHECKED).to_owned()
-                                };
-                                let color: canvas_render::Color = if self.ai_key_ok {
-                                    crate::kit_ui::color4(palette.control_success)
-                                } else {
-                                    palette.icon
-                                };
-                                (badge, color)
+                                // FR-LLM-D-W2: бейдж состояния health-check.
+                                self.ai_check_badge(llm_executor::HealthCheckTarget::ApiKey)
                             }
                             SettingsRow::AiSelfhostUrl | SettingsRow::AiSelfhostKey => {
-                                let badge = if self.ai_selfhost_ok {
-                                    self.tr(keys::AI_SH_OK).to_owned()
-                                } else {
-                                    self.tr(keys::AI_SH_NOT_CHECKED).to_owned()
-                                };
-                                let color: canvas_render::Color = if self.ai_selfhost_ok {
-                                    crate::kit_ui::color4(palette.control_success)
-                                } else {
-                                    palette.icon
-                                };
-                                (badge, color)
+                                self.ai_check_badge(llm_executor::HealthCheckTarget::Selfhost)
                             }
                             _ => (String::new(), palette.icon),
                         };

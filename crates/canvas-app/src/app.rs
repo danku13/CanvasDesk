@@ -1289,6 +1289,11 @@ pub struct App {
     // рендера бейджей; тексты деталей — в этих состояниях.
     ai_key_check: llm_executor::LlmCheckState,
     ai_selfhost_check: llm_executor::LlmCheckState,
+    /// FR-LLM-D-W2 (llm-waves §3.5): кэш моделей BYOK/selfhost — заполняется
+    /// успешным health-check (сейчас статический список провайдера;
+    /// живой /v1/models — API W1 discovery, подключит W3). Питает advisory-
+    /// dropdown модель-строк (§3.5); пустой — свободный ввод (как сейчас).
+    ai_models_cache: Vec<String>,
     /// FR-LLM-D-W2 (llm-waves §3.7): executor-сим LLM-футур — worker-поток
     /// (натив, инъекция в main.rs) / стаб (wasm до W3). Деградация при
     /// недоступности — mock-флоу панелей / lex-режим suggest (как сейчас).
@@ -1816,10 +1821,11 @@ impl App {
             ai_key_ok: false,
             ai_selfhost_ok: false,
             // FR-LLM-D-W2: health-чеки стартуют idle; executor — стаб до
-            // инъекции в main.rs (натив) / W3 (wasm).
+            // инъекции в main.rs (натив) / W3 (wasm); кэш моделей пуст.
             ai_key_check: llm_executor::LlmCheckState::default(),
             ai_selfhost_check: llm_executor::LlmCheckState::default(),
             llm_executor: Arc::new(llm_executor::LlmExecutor::stub()),
+            ai_models_cache: Vec::new(),
             // FR-LLM-OAUTH-APP: OAuth-флоу — store читает oauth_tokens.json
             // из каталога конфига (None — memory-фолбэк); если токены на
             // месте, старт в Connected (флаги синхронизирует oauth_poll в
@@ -7870,6 +7876,25 @@ impl App {
     /// общим хвостом. Смена угла кнопки перепривязывает панель — открытое
     /// меню закрывает вызывающий (состояние привязано к строке, не к точке).
     fn apply_dropdown_choice(&mut self, row: SettingsRow, index: usize) {
+        // FR-LLM-D-W2 (llm-waves §3.5): модель-строки — advisory-dropdown:
+        // индекс в `ai_models_cache` (не в Settings — свободный ввод
+        // валидацию по списку не делает; выбор пункта — прямое присваивание).
+        if matches!(
+            row,
+            SettingsRow::AiModelSuggest | SettingsRow::AiModelGraph | SettingsRow::AiModelAgent
+        ) {
+            if let Some(model) = self.ai_models_cache.get(index) {
+                match row {
+                    SettingsRow::AiModelSuggest => self.settings.llm.model_suggest = model.clone(),
+                    SettingsRow::AiModelGraph => self.settings.llm.model_graph = model.clone(),
+                    SettingsRow::AiModelAgent => self.settings.llm.model_agent = model.clone(),
+                    _ => unreachable!("выше matches! отфильтровал"),
+                }
+                self.save_settings();
+                self.request_redraw();
+            }
+            return;
+        }
         apply_dropdown_value(&mut self.settings, row, index);
         // FR-047: смена пресета темы — рендер + виджеты сразу
         if row == SettingsRow::ThemePreset {
