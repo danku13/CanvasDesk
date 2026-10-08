@@ -36,6 +36,35 @@ pub fn should_show_onboarding(settings: &Settings) -> bool {
     !settings.onboarding_done && settings.onboarding_defers < ONBOARDING_MAX_DEFERS
 }
 
+/// CR-031/S3 (UR-002 п.5): i18n-ключ value-приветствия по роли, выбранной
+/// при входе (FR-087, `Settings::role`). Неизвестная/не выбранная роль —
+/// универсальное описание ценности. Роли — `canvas_core::roles::ROLES`.
+pub fn welcome_body_key(role: &str) -> &'static str {
+    match role {
+        "architect" => keys::ONBOARDING_VALUE_ARCHITECT,
+        "developer" => keys::ONBOARDING_VALUE_DEVELOPER,
+        "product-manager" => keys::ONBOARDING_VALUE_PRODUCT,
+        "analyst" => keys::ONBOARDING_VALUE_ANALYST,
+        "cio" => keys::ONBOARDING_VALUE_CIO,
+        "cto" => keys::ONBOARDING_VALUE_CTO,
+        "founder" => keys::ONBOARDING_VALUE_FOUNDER,
+        _ => keys::ONBOARDING_VALUE_DEFAULT,
+    }
+}
+
+/// Ключ тела шага с учётом роли (CR-031/S3): шаг 0 — ролевое value,
+/// остальные — статичный ключ шага. Один источник для раскладки
+/// ([`card_layout`]) и рендера — тексты не разъезжаются.
+pub fn step_body_key(step: usize, role: &str) -> &'static str {
+    if step == 0 {
+        welcome_body_key(role)
+    } else {
+        ONBOARDING_STEPS
+            .get(step)
+            .map_or(keys::ONBOARDING_VALUE_DEFAULT, |s| s.body_key)
+    }
+}
+
 /// Шаг тура: заголовок и абзац тела (короткие тексты, перенос по ширине
 /// карточки — измеренный `TextMeasurer::wrap`). CR-031: CTA-механика
 /// `action_key` («Попробовать» на шаге «Шаблоны нод») удалена — шаг ведёт
@@ -56,7 +85,9 @@ pub struct OnboardingStep {
 pub const ONBOARDING_STEPS: [OnboardingStep; 8] = [
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP1_TITLE,
-        body_key: keys::ONBOARDING_STEP1_BODY,
+        // CR-031/S3: базовый ключ тела шага 1 — универсальное value; при
+        // показе заменяется по роли ([`welcome_body_key`] в [`step_body_key`]).
+        body_key: keys::ONBOARDING_VALUE_DEFAULT,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP2_TITLE,
@@ -229,19 +260,21 @@ pub fn body_lines(
     step: usize,
     width: f32,
     language: Language,
+    role: &str,
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> Vec<String> {
-    let Some(step) = ONBOARDING_STEPS.get(step) else {
+    if ONBOARDING_STEPS.get(step).is_none() {
         return Vec::new();
     };
     // CR-031/S2: перенос считается по текстовой колонке (правая половина
     // в двухколоночном режиме) — один источник с [`body_area`]/рендером.
+    // CR-031/S3: тело шага 1 — по роли.
     let col_w = text_column([0.0, 0.0, width, 0.0])[2];
     let avail = (col_w - ONBOARDING_PAD * 2.0).max(10.0);
     let wrapped = m.wrap(
         fs,
-        i18n::tr(language, step.body_key),
+        i18n::tr(language, step_body_key(step, role)),
         FAMILY,
         ONBOARDING_BODY_FONT,
         avail,
@@ -350,6 +383,7 @@ pub fn card_layout(
     viewport: [f32; 2],
     step: usize,
     language: Language,
+    role: &str,
     scroll: &mut ScrollState,
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
@@ -362,7 +396,7 @@ pub fn card_layout(
         (viewport[1] - margin * 2.0).max(0.0),
     );
     let w = ONBOARDING_CARD_WIDTH.min(slot.w);
-    let lines = body_lines(step, w, language, m, fs);
+    let lines = body_lines(step, w, language, role, m, fs);
     let body_h = lines.len() as f32 * ONBOARDING_BODY_LINE_H;
     // CR-031: финальный шаг несёт две полноширинные CTA-опции — зона
     // резервируется в желаемой высоте карточки.
@@ -869,20 +903,63 @@ mod tests {
     }
 
     /// Раскладка шага со свежим скролл-состоянием (тесты геометрии).
+    /// `role` — роль владельца (CR-031/S3: влияет на тело шага 1).
     fn layout(viewport: [f32; 2], step: usize, language: Language) -> OnboardingLayout {
         let mut scroll = ScrollState::default();
-        layout_sync(viewport, step, language, &mut scroll)
+        layout_sync(viewport, step, language, "default", &mut scroll)
     }
 
-    /// Раскладка шага с внешним скролл-состоянием (тесты скролла).
+    /// Раскладка шага с внешним скролл-состоянием и ролью (тесты скролла).
     fn layout_sync(
         viewport: [f32; 2],
         step: usize,
         language: Language,
+        role: &str,
         scroll: &mut ScrollState,
     ) -> OnboardingLayout {
         let (mut m, mut fs) = measurer();
-        card_layout(viewport, step, language, scroll, &mut m, &mut fs)
+        card_layout(viewport, step, language, role, scroll, &mut m, &mut fs)
+    }
+
+    /// CR-031/S3: value-приветствие по роли — у каждой роли свой ключ,
+    /// неизвестная/не выбранная — универсальный; все тексты непусты (RU/EN).
+    #[test]
+    fn welcome_value_by_role() {
+        let roles = [
+            "default",
+            "architect",
+            "developer",
+            "product-manager",
+            "analyst",
+            "cio",
+            "cto",
+            "founder",
+        ];
+        let mut keys: Vec<&'static str> = roles.iter().map(|&r| welcome_body_key(r)).collect();
+        // Все ключи различны (8 ролей — 8 разных текстов)
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), roles.len(), "у каждой роли свой value-текст");
+        // Неизвестная роль и пустая — универсальное
+        assert_eq!(welcome_body_key("unknown"), keys::ONBOARDING_VALUE_DEFAULT);
+        assert_eq!(welcome_body_key(""), keys::ONBOARDING_VALUE_DEFAULT);
+        // Тексты разрешаются на обоих языках и содержательны
+        for role in roles {
+            let key = welcome_body_key(role);
+            for language in [Language::Ru, Language::En] {
+                assert!(
+                    i18n::tr(language, key).len() > 60,
+                    "value-текст роли {role} слишком короткий"
+                );
+            }
+        }
+        // step_body_key: только шаг 1 ролевой, остальные — статичные
+        assert_eq!(step_body_key(0, "analyst"), welcome_body_key("analyst"));
+        assert_eq!(
+            step_body_key(1, "analyst"),
+            ONBOARDING_STEPS[1].body_key,
+            "шаг 2 не зависит от роли"
+        );
     }
 
     /// Инвариант триггера (таблица решений FR-028): показ = не пройден И
@@ -1028,7 +1105,7 @@ mod tests {
             // полный контент достижим (offset ≤ max_offset показывает низ)
             let content_h = lay.lines.len() as f32 * ONBOARDING_BODY_LINE_H;
             let mut scroll = ScrollState::default();
-            let relaid = layout_sync(viewport, step, Language::Ru, &mut scroll);
+            let relaid = layout_sync(viewport, step, Language::Ru, "default", &mut scroll);
             assert!((relaid.lines.len() as f32 * ONBOARDING_BODY_LINE_H - content_h).abs() < 0.01);
             assert!(
                 (scroll.viewport_h - body[3]).abs() < 0.01,
@@ -1081,7 +1158,7 @@ mod tests {
                     (text_column([0.0, 0.0, width, 0.0])[2] - ONBOARDING_PAD * 2.0).max(10.0);
                 let (mut m, mut fs) = measurer();
                 for language in [Language::Ru, Language::En] {
-                    for line in body_lines(step, width, language, &mut m, &mut fs) {
+                    for line in body_lines(step, width, language, "default", &mut m, &mut fs) {
                         let w = m.width_of(&mut fs, &line, FAMILY, ONBOARDING_BODY_FONT);
                         assert!(
                             w <= avail + 0.5,
@@ -1176,6 +1253,9 @@ mod tests {
             step: ONBOARDING_STEPS.len() - 1,
         };
         let card = layout(viewport, last.step, Language::Ru).card;
+        // Rect «Далее» — от финальной карточки (высота карточки зависит от
+        // шага — карточка центрируется, rect со шага 0 сюда не годится)
+        let next = button_rect(card, OnboardingButton::Next);
         let [gallery, empty] = option_rects(card);
         assert_eq!(
             button_at(card, &last, [gallery[0] + 5.0, gallery[1] + 10.0]),

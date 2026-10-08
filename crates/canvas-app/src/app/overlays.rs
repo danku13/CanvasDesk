@@ -3741,6 +3741,7 @@ impl App {
             viewport,
             state.step,
             self.settings.language,
+            &self.settings.role,
             &mut scroll,
             &mut m,
             &mut fs,

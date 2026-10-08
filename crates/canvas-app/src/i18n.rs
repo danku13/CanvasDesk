@@ -658,7 +658,17 @@ pub mod keys {
     pub const ONBOARDING_DONE: &str = "onboarding.done";
     pub const ONBOARDING_SKIP: &str = "onboarding.skip";
     pub const ONBOARDING_STEP1_TITLE: &str = "onboarding.step1.title";
-    pub const ONBOARDING_STEP1_BODY: &str = "onboarding.step1.body";
+    /// CR-031/S3: тело шага 1 — динамическое, по роли (см.
+    /// [`onboarding_ui::welcome_body_key`]); базовый ключ — универсальное
+    /// value без роли.
+    pub const ONBOARDING_VALUE_DEFAULT: &str = "onboarding.value.default";
+    pub const ONBOARDING_VALUE_ARCHITECT: &str = "onboarding.value.architect";
+    pub const ONBOARDING_VALUE_DEVELOPER: &str = "onboarding.value.developer";
+    pub const ONBOARDING_VALUE_PRODUCT: &str = "onboarding.value.product";
+    pub const ONBOARDING_VALUE_ANALYST: &str = "onboarding.value.analyst";
+    pub const ONBOARDING_VALUE_CIO: &str = "onboarding.value.cio";
+    pub const ONBOARDING_VALUE_CTO: &str = "onboarding.value.cto";
+    pub const ONBOARDING_VALUE_FOUNDER: &str = "onboarding.value.founder";
     pub const ONBOARDING_STEP2_TITLE: &str = "onboarding.step2.title";
     pub const ONBOARDING_STEP2_BODY: &str = "onboarding.step2.body";
     pub const ONBOARDING_STEP3_TITLE: &str = "onboarding.step3.title";
@@ -1566,9 +1576,39 @@ const RU: &[(&str, &str)] = &[
         keys::ONBOARDING_STEP1_TITLE,
         "Добро пожаловать в CanvasDesk",
     ),
+    // CR-031/S3: value-приветствие по роли, выбранной при входе (FR-087);
+    // без роли — универсальное описание ценности
     (
-        keys::ONBOARDING_STEP1_BODY,
-        "Это бесконечный зумируемый канвас для вашего рабочего стола: файловые карточки, заметки, связи и расчёты. Панорамируйте мышью со Space, средней кнопкой или тачпадом; зум — Ctrl+колесо. Всё сохраняется в файл .canvas рядом с приложением.",
+        keys::ONBOARDING_VALUE_DEFAULT,
+        "CanvasDesk — бесконечный зумируемый канвас, где заметки, файлы и расчёты живут рядом: собирайте идеи в схемы, а схемы считаются сами.",
+    ),
+    (
+        keys::ONBOARDING_VALUE_ARCHITECT,
+        "Проектируйте архитектуру на живом канвасе: сервисы, очереди и базы — готовые ноды-шаблоны, связи показывают зависимости, а расчёты с единицами измеряют нагрузки и стоимость.",
+    ),
+    (
+        keys::ONBOARDING_VALUE_DEVELOPER,
+        "Архитектура и потоки данных всегда перед глазами: ноды-сервисы, связи-зависимости и живые расчёты единиц (ms, MB/s) — вместо статичных диаграмм.",
+    ),
+    (
+        keys::ONBOARDING_VALUE_PRODUCT,
+        "Сценарии продукта и unit-экономика считаются сами: формулы прямо в заметках, what-if-подмены отвечают на «а что если», схемой легко поделиться.",
+    ),
+    (
+        keys::ONBOARDING_VALUE_ANALYST,
+        "Разбирайте процессы и метрики на одном канвасе: ноды-этапы, связи-потоки, расчёты конверсий и unit-экономики с единицами измерения.",
+    ),
+    (
+        keys::ONBOARDING_VALUE_CIO,
+        "ИТ-ландшафт как живая схема: системы и интеграции — на канвасе, расчёты стоимости и нагрузок — рядом с диаграммой, изменения — в два клика.",
+    ),
+    (
+        keys::ONBOARDING_VALUE_CTO,
+        "Технологическая карта продукта вместо статичных слайдов: архитектура, потоки данных и узкие места — на одном канвасе с живыми расчётами.",
+    ),
+    (
+        keys::ONBOARDING_VALUE_FOUNDER,
+        "От идеи к работающей схеме: unit-экономика, воронки и архитектура MVP считаются сами, меняются в два клика и сохраняются в файл.",
     ),
     (keys::ONBOARDING_STEP2_TITLE, "Заметки"),
     (
@@ -2805,9 +2845,38 @@ const EN: &[(&str, &str)] = &[
     (keys::ONBOARDING_DONE, "Done"),
     (keys::ONBOARDING_SKIP, "Skip"),
     (keys::ONBOARDING_STEP1_TITLE, "Welcome to CanvasDesk"),
+    // CR-031/S3: role-based value welcome (FR-087); universal without a role
     (
-        keys::ONBOARDING_STEP1_BODY,
-        "This is an infinite zoomable canvas for your desktop: file cards, notes, edges and calculations. Pan with Space, the middle mouse button or a touchpad; zoom with Ctrl+wheel. Everything is saved to a .canvas file next to the app.",
+        keys::ONBOARDING_VALUE_DEFAULT,
+        "CanvasDesk is an infinite zoomable canvas where notes, files and calculations live side by side: turn ideas into schemes, and the schemes compute themselves.",
+    ),
+    (
+        keys::ONBOARDING_VALUE_ARCHITECT,
+        "Design architecture on a living canvas: services, queues and databases as ready node templates, edges show dependencies, and calculations with units measure load and cost.",
+    ),
+    (
+        keys::ONBOARDING_VALUE_DEVELOPER,
+        "Keep the architecture and data flows in sight: service nodes, dependency edges and live unit calculations (ms, MB/s) — instead of static diagrams.",
+    ),
+    (
+        keys::ONBOARDING_VALUE_PRODUCT,
+        "Product scenarios and unit economics compute themselves: formulas right in notes, what-if overrides answer “what if”, and schemes are easy to share.",
+    ),
+    (
+        keys::ONBOARDING_VALUE_ANALYST,
+        "Break down processes and metrics on one canvas: stage nodes, flow edges, conversion and unit-economics calculations with units of measure.",
+    ),
+    (
+        keys::ONBOARDING_VALUE_CIO,
+        "The IT landscape as a living scheme: systems and integrations on the canvas, cost and load calculations next to the diagram, changes in two clicks.",
+    ),
+    (
+        keys::ONBOARDING_VALUE_CTO,
+        "A technology map of your product instead of static slides: architecture, data flows and bottlenecks — on one canvas with live calculations.",
+    ),
+    (
+        keys::ONBOARDING_VALUE_FOUNDER,
+        "From idea to a working scheme: unit economics, funnels and MVP architecture compute themselves, change in two clicks and save to a file.",
     ),
     (keys::ONBOARDING_STEP2_TITLE, "Notes"),
     (

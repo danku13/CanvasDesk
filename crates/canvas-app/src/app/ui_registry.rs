@@ -1269,6 +1269,7 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                     viewport,
                     state.step,
                     app.settings.language,
+                    &app.settings.role,
                     &mut canvas_ui::kit::ScrollState::default(),
                     &mut m,
                     &mut fs,
