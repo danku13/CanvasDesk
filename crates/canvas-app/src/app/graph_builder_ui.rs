@@ -67,6 +67,11 @@ pub struct GraphBuilderState {
     pub busy: bool,
     /// Каретка в textarea.
     pub caret: usize,
+    /// W2 п.2: результат последней реальной генерации (GeneratedNode/Edge).
+    /// `None` — preview от mock-эвристик. За l1-llm (тип из сетевого
+    /// движка builder; дефолтная сборка — тонкая обёртка без GraphBuilder).
+    #[cfg(feature = "l1-llm")]
+    pub generated: Option<Box<canvas_graph_builder::GraphBuilderOutput>>,
 }
 
 impl App {
@@ -486,6 +491,35 @@ impl App {
         Some(GraphBuilderHit::NoOp)
     }
 
+    /// W2 п.1: диспетчер клика по диалогу Graph Builder (транзиентный
+    /// блок-модал — ввод глотается внутри диалога и по затемнению).
+    /// `true` — клик поглощён.
+    pub(super) fn graph_builder_click(&mut self, point: [f32; 2]) -> bool {
+        let Some(hit) = self.graph_builder_hit(point) else {
+            return false;
+        };
+        match hit {
+            GraphBuilderHit::Backdrop => {
+                // Клик по затемнению — закрыть диалог (как Cancel).
+                self.graph_builder.open = false;
+                self.request_redraw();
+            }
+            GraphBuilderHit::Cancel => {
+                self.graph_builder.open = false;
+                self.request_redraw();
+            }
+            GraphBuilderHit::Generate => self.graph_builder_generate(),
+            GraphBuilderHit::Accept => self.graph_builder_accept(),
+            GraphBuilderHit::Reject => self.graph_builder_reject(),
+            GraphBuilderHit::Textarea | GraphBuilderHit::Mode(_) | GraphBuilderHit::NoOp => {
+                // Режим/textarea управляются своими путями (клик фокус —
+                // будущая волна kit); ввод глотается.
+                self.request_redraw();
+            }
+        }
+        true
+    }
+
     /// FR-LLM-D / PRD-0010 F-3.4: генерация графа (mock).
     ///
     /// Шаги:
@@ -538,21 +572,34 @@ impl App {
         self.graph_builder.cost_estimate = Some(0.04);
         self.graph_builder.busy = true;
 
-        // 3. Mock preview (без LLM).
+        // W2 п.2: реальная генерация через executor (GraphBuilder::build —
+        // nатив: worker-поток; wasm: шов spawn_local, W3). Ошибка джобы →
+        // graceful fallback на mock-эвристики ниже (F-5.9).
+        #[cfg(feature = "l1-llm")]
+        if let Some(provider) = crate::llm_factory::build_feature_provider(
+            self.settings.llm.provider_graph,
+            &self.settings.llm.model_graph,
+            &self.settings.llm,
+            &self.oauth_assets(),
+        ) {
+            self.llm_executor
+                .spawn_graph(crate::llm_executor::GraphJob {
+                    provider: crate::llm_executor::BoxedProvider(provider),
+                    text: self.graph_builder.text.clone(),
+                    mode: self.graph_builder.mode,
+                    privacy: self.settings.llm.data_residency,
+                });
+            self.request_redraw();
+            return;
+        }
+
+        // 3. Mock preview (без LLM) — fallback и тестовая поверхность.
         let preview = self.graph_builder_build_preview(&self.graph_builder.text);
         self.graph_builder.preview = Some(preview);
-
-        // FR-LLM-D-TODO: реальный LLM-вызов:
-        //   let provider = ...;  // из settings.llm.provider_graph
-        //   let privacy = self.settings.llm.data_residency.privacy_mode();
-        //   let builder = canvas_graph_builder::GraphBuilder::new(provider, privacy);
-        //   let input = canvas_graph_builder::GraphBuilderInput::new(
-        //       &self.graph_builder.text,
-        //       self.graph_builder.mode,
-        //   );
-        //   let output = pollster::block_on(builder.build(&input))?;
-        //   let canvas = canvas_graph_builder::GraphBuilder::<P>::to_canvas(&output);
-        //   // применить canvas через graph_apply, обновить cost.
+        #[cfg(feature = "l1-llm")]
+        {
+            self.graph_builder.generated = None;
+        }
 
         self.graph_builder.busy = false;
         // ChatGPT rate counter.
@@ -603,18 +650,27 @@ impl App {
         AgentPreview { nodes, edges }
     }
 
-    /// FR-LLM-D / PRD-0010 F-3: принять preview графа.
+    /// FR-LLM-D / PRD-0010 F-3: принять preview графа. W2: реальный
+    /// graph_apply через `mcp_dispatch("n")` — один undo-шаг (FR-033).
     pub(super) fn graph_builder_accept(&mut self) {
         let Some(preview) = self.graph_builder.preview.take() else {
             return;
         };
-        // FR-LLM-D-TODO: реальный graph_apply с undo-шагом.
-        let n = preview.nodes.len();
-        let m = preview.edges.len();
-        self.show_toast(format!(
-            "Граф сгенерирован: {}×{} · применён одним undo-шагом",
-            n, m
-        ));
+        match self.agent_apply_preview_ops(&preview) {
+            Ok((nodes, edges)) => {
+                self.show_toast(format!(
+                    "Граф сгенерирован: {}×{} · применён одним undo-шагом",
+                    nodes, edges
+                ));
+            }
+            Err(e) => {
+                self.show_toast(format!("graph_apply отклонён: {e}. Канвас не изменён."));
+            }
+        }
+        #[cfg(feature = "l1-llm")]
+        {
+            self.graph_builder.generated = None;
+        }
         self.graph_builder.cost_estimate = None;
         self.graph_builder.open = false;
         self.request_redraw();
@@ -623,6 +679,10 @@ impl App {
     /// FR-LLM-D / PRD-0010 F-3: отклонить preview графа.
     pub(super) fn graph_builder_reject(&mut self) {
         self.graph_builder.preview = None;
+        #[cfg(feature = "l1-llm")]
+        {
+            self.graph_builder.generated = None;
+        }
         self.graph_builder.cost_estimate = None;
         self.request_redraw();
     }

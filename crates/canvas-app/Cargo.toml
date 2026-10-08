@@ -55,6 +55,14 @@ winit.workspace = true
 # M8/W4 (wasm-port §3.4): pollster ушёл из app — блокировка Renderer::new
 # переехала в инъектируемую стратегию canvas-render::renderer_init
 # (натив — BlockOnRendererLaunch внутри canvas-render, web — spawn_local)
+# W2 п.7 (LLM-executor): pollster вернулся как optional — дожим async LLM-
+# вызовов в worker-потоках (натив). Уже в дереве (canvas-llm) — НЕ новая
+# внешняя зависимость; включается только за l1-llm.
+pollster = { workspace = true, optional = true }
+# W2 п.7 (LLM-executor): макрос для локальной делегации LlmProvider
+# (BoxedProvider — обёртка Box<dyn LlmProvider> для GraphBuilder<P>).
+# Уже в дереве (canvas-llm) — не новая внешняя зависимость.
+async-trait = { version = "0.1", optional = true }
 
 # M8/W3 (wasm-port §3.1): нативная shell-платформа — только для нативных
 # целей (её использует бинарь main.rs); wasm-сборка библиотеки (для
@@ -74,7 +82,13 @@ l1-laya = ["canvas-suggest/l1-laya"]
 # canvas-graph-builder/l1-llm → canvas-llm/l1-llm). OFF по умолчанию —
 # сетевых зависимостей в дефолтном дереве нет (wasm-гейт ADR-0011);
 # подключается в нативной (desktop) сборке.
-l1-llm = ["canvas-graph-builder/l1-llm", "canvas-llm/l1-llm"]
+l1-llm = [
+    "canvas-graph-builder/l1-llm",
+    "canvas-llm/l1-llm",
+    # W2 п.7 (LLM-executor): дожим async-вызовов в worker-потоках (натив).
+    "dep:pollster",
+    "dep:async-trait",
+]
 # FR-LLM-OAUTH-APP / PRD-0010 F-5.1–F-5.8: OAuth-эндпоинты Sign-in-with-
 # ChatGPT HTTPS (auth.openai.com / api.openai.com) — TLS нужен только в
 # нативной сборке (ureq/rustls); wasm не трогаем (ADR-0011: web-путь —
