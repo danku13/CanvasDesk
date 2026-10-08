@@ -29,7 +29,8 @@ pub mod keys {
     pub const TAB_CANVAS: &str = "settings.tab.canvas";
     pub const TAB_EDGES: &str = "settings.tab.edges";
     pub const TAB_APPEARANCE: &str = "settings.tab.appearance";
-    /// FR-079 (S3): таб «Подсказки» — ИИ-подсказки шаблонов.
+    /// FR-079 (S3): таб «Подсказки» — ИИ-карточки шаблонов (CR-022:
+    /// попап при вводе — только L0, карточки C3 — после создания ноды).
     pub const TAB_SUGGEST: &str = "settings.tab.suggest";
     /// FR-087: таб «Профиль» — роль и фильтры подсказок.
     pub const TAB_PROFILE: &str = "settings.tab.profile";
@@ -1863,8 +1864,13 @@ const RU: &[(&str, &str)] = &[
     ),
     (keys::ROW_AUTOLINK, "Автосвязь по именам (фон)"),
     // FR-079 (S3): таб «Подсказки»
-    (keys::ROW_SUGGEST_ENABLED, "ИИ-подсказки шаблонов"),
-    (keys::DESC_SUGGEST_ENABLED, "Предложения по мере ввода и карточки «что дальше»"),
+    // CR-022: формулировка тумблера уточнена — ИИ-строки в попапе сняты
+    // (c1_in_popup=false), тумблер управляет C3-карточками после создания ноды
+    (keys::ROW_SUGGEST_ENABLED, "ИИ-карточки шаблонов (после создания ноды)"),
+    (
+        keys::DESC_SUGGEST_ENABLED,
+        "Карточки «что дальше» у новой шаблонной ноды; попап при вводе — только L0-подсказки",
+    ),
     (keys::ROW_SUGGEST_ENGINE, "Движок"),
     (keys::DESC_SUGGEST_ENGINE, "Локальная лексика или гибрид с Laya (sidecar)"),
     (keys::SUGGEST_ENGINE_LEX, "Лексика (локально)"),
@@ -3059,8 +3065,13 @@ const EN: &[(&str, &str)] = &[
     ),
     (keys::ROW_AUTOLINK, "Background autolink by names"),
     // FR-079 (S3): suggestions tab
-    (keys::ROW_SUGGEST_ENABLED, "AI template suggestions"),
-    (keys::DESC_SUGGEST_ENABLED, "As-you-type proposals and \u{201c}what goes next\u{201d} cards"),
+    // CR-022: reworded — AI lines removed from the typing popup
+    // (c1_in_popup=false); the toggle drives C3 cards after node creation
+    (keys::ROW_SUGGEST_ENABLED, "AI template cards (after node creation)"),
+    (
+        keys::DESC_SUGGEST_ENABLED,
+        "\u{201c}What comes next\u{201d} cards on a new template node; the typing popup shows L0 hints only",
+    ),
     (keys::ROW_SUGGEST_ENGINE, "Engine"),
     (keys::DESC_SUGGEST_ENGINE, "Local lexics or Laya hybrid (sidecar)"),
     (keys::SUGGEST_ENGINE_LEX, "Lexics (local)"),
