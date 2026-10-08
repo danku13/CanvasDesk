@@ -539,9 +539,13 @@ impl ApplicationHandler<AppEvent> for App {
                         && self.choice_menu.is_none()
                     {
                         let world = self.cursor_world();
-                        if let Some(index) =
-                            edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes)
-                        {
+                        let anchors = self.edge_anchors_all();
+                        if let Some(index) = edge_at_anchored(
+                            &self.scene.canvas,
+                            world,
+                            self.settings.edges_avoid_nodes,
+                            &anchors,
+                        ) {
                             let edge = &self.scene.canvas.edges[index];
                             if self.scene.unmapped_edges.iter().any(|id| id == &edge.id) {
                                 let text = if let (Some(param), Some(output)) =
@@ -1155,7 +1159,13 @@ impl ApplicationHandler<AppEvent> for App {
                 // Резиновая линия (T8/CR-002): от порта/неподвижного конца к
                 // курсору; исходная линия перепривязываемой связи скрыта
                 let edge_draft = self.edge_drag.as_ref().and_then(|drag| {
-                    let (port, side) = drag.draft_origin(&self.scene.canvas)?;
+                    // CR-027: неподвижный конец перепривязки — на якоре
+                    // data-порта (если исток value-ребра адресован строкой)
+                    let anchors = match drag {
+                        EdgeDrag::Rebind { edge_index, .. } => self.edge_anchors_for(*edge_index),
+                        _ => canvas_core::EdgeAnchors::NONE,
+                    };
+                    let (port, side) = drag.draft_origin(&self.scene.canvas, anchors)?;
                     Some((port, side, self.cursor_world()))
                 });
                 let hidden_edge = match self.edge_drag.as_ref() {

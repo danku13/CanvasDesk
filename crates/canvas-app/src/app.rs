@@ -76,7 +76,7 @@ use canvas_core::expr::{self, ExprOutcome};
 use canvas_core::flow::{self, FlowKind};
 use canvas_core::time::{Instant, SystemTime, UNIX_EPOCH};
 use canvas_core::{
-    analyze, apply_file_events, bundle_thickness, edge_at, focus_set, main_stage_rect,
+    analyze, apply_file_events, bundle_thickness, edge_at_anchored, focus_set, main_stage_rect,
     nearest_side, path_matches, port_at, resolve_node_path, stage_edge_at_lines,
     stage_edge_geometry, stage_layout, watched_dirs, AnalysisState, Canvas, CanvasStorage,
     ClipboardBackend, DragPushParams, DragPushState, Edge, FileEvent, FocusSeed, FocusSet,
@@ -2408,9 +2408,13 @@ impl App {
             return;
         };
         let text = edge.label.clone().unwrap_or_default();
-        let Some((_, width, height)) =
-            edge_edit_area(&self.scene.canvas, index, self.settings.edges_avoid_nodes)
-        else {
+        // CR-027: бокс лейбла — на якоренной линии связи
+        let Some((_, width, height)) = edge_edit_area(
+            &self.scene.canvas,
+            index,
+            self.settings.edges_avoid_nodes,
+            self.edge_anchors_for(index),
+        ) else {
             return;
         };
         // FR-006: отложенный снапшот «до» правки лейбла (паттерн begin_editing)
@@ -3961,6 +3965,38 @@ impl App {
         select_node_hit(&self.scene.canvas, &visible)
     }
 
+    /// CR-027: якоря data-портов ВСЕХ связей для hit-test'а — те же
+    /// вертикали кэша раскладки, по которым рендер рисует линии (визуал =
+    /// кликабельная область). Рендер недоступен (headless-тесты) — пустой
+    /// срез (все концы на семантических точках, прежнее поведение).
+    pub(crate) fn edge_anchors_all(&self) -> Vec<canvas_core::EdgeAnchors> {
+        match self.renderer.as_ref() {
+            Some(renderer) => renderer.edge_anchors_all(&self.scene.canvas),
+            None => Vec::new(),
+        }
+    }
+
+    /// CR-027: якоря одной связи по индексу (хэндлы/rebind/палитра/пин).
+    pub(crate) fn edge_anchors_for(&self, edge_index: usize) -> canvas_core::EdgeAnchors {
+        let Some(renderer) = self.renderer.as_ref() else {
+            return canvas_core::EdgeAnchors::NONE;
+        };
+        match self.scene.canvas.edges.get(edge_index) {
+            Some(edge) => renderer.edge_anchors(&self.scene.canvas, edge),
+            None => canvas_core::EdgeAnchors::NONE,
+        }
+    }
+
+    /// CR-027: якоря активной сессии правки (лейбл связи — та же линия,
+    /// что нарисована; нодовые цели — NONE). Вызывается ДО мутабельного
+    /// заимствования `self.editing`.
+    pub(crate) fn editing_session_anchors(&self) -> canvas_core::EdgeAnchors {
+        match self.editing.as_ref().map(|session| session.target()) {
+            Some(EditTarget::Edge(index)) => self.edge_anchors_for(index),
+            _ => canvas_core::EdgeAnchors::NONE,
+        }
+    }
+
     /// FR-025 (правка 2): построчная точка выхода под world-точкой.
     /// Кандидаты — ноды из spatial-индекса в прямоугольнике допуска зоны
     /// портов (CR-003) вокруг курсора; хост под курсором проверяется первым.
@@ -4538,10 +4574,12 @@ impl App {
     fn edge_handle_at(&self, edge_index: usize, world: Vec2) -> Option<canvas_core::EdgeEnd> {
         let tolerance = self.settings.port_zone_px / self.camera.zoom().max(1e-3);
         let dist = |p: &[f32; 2]| ((p[0] - world[0]).powi(2) + (p[1] - world[1]).powi(2)).sqrt();
+        // CR-027: хэндл сидит на той же точке, где нарисован конец линии
+        let anchors = self.edge_anchors_for(edge_index);
         [canvas_core::EdgeEnd::From, canvas_core::EdgeEnd::To]
             .into_iter()
             .filter_map(|end| {
-                canvas_core::edge_endpoint(&self.scene.canvas, edge_index, end)
+                canvas_core::edge_endpoint_anchored(&self.scene.canvas, edge_index, end, anchors)
                     .map(|(_, point)| (end, dist(&point)))
             })
             .filter(|(_, distance)| *distance <= tolerance)
@@ -6805,7 +6843,12 @@ impl App {
             PaletteTarget::Edge(edge_index) => {
                 let edge = self.scene.canvas.edges.get(*edge_index)?;
                 let avoid = self.settings.edges_avoid_nodes;
-                let mid = canvas_core::edge_midpoint(&self.scene.canvas, edge, avoid)?;
+                let mid = canvas_core::edge_midpoint_anchored(
+                    &self.scene.canvas,
+                    edge,
+                    avoid,
+                    self.edge_anchors_for(*edge_index),
+                )?;
                 let screen = self.camera.world_to_screen(mid, viewport);
                 Some([screen[0], screen[1] + gap])
             }
@@ -6918,8 +6961,10 @@ impl App {
             return;
         }
         // Закрепление: текущая эффективная сторона конца (та же геометрия,
-        // по которой рисуется линия)
-        let Some((side, _)) = canvas_core::edge_endpoint(&self.scene.canvas, edge_index, end)
+        // по которой рисуется линия; CR-027 — с якорем data-порта)
+        let anchors = self.edge_anchors_for(edge_index);
+        let Some((side, _)) =
+            canvas_core::edge_endpoint_anchored(&self.scene.canvas, edge_index, end, anchors)
         else {
             return;
         };

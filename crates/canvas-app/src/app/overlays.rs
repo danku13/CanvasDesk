@@ -2193,9 +2193,17 @@ impl App {
             None
         };
         if let (Some(session), Some(rect)) = (self.editing.as_ref(), caret_rect) {
-            if let Some((origin, _, _)) =
-                session_area_offset(&self.scene.canvas, session, self.settings.edges_avoid_nodes)
-            {
+            // CR-027: якоря лейбла связи — та же линия, что нарисована
+            let session_anchors = match session.target() {
+                EditTarget::Edge(index) => self.edge_anchors_for(index),
+                _ => canvas_core::EdgeAnchors::NONE,
+            };
+            if let Some((origin, _, _)) = session_area_offset(
+                &self.scene.canvas,
+                session,
+                self.settings.edges_avoid_nodes,
+                session_anchors,
+            ) {
                 let screen = self.camera.world_to_screen(origin, self.viewport_logical());
                 let scale = self.scale_factor();
                 self.hints.anchor = [

@@ -7,9 +7,9 @@
 //! дублировались в `main.rs` копипастой — теперь источник один.
 
 pub use canvas_core::{
-    edge_at, focus_set, nearest_side, next_port_zone, port_at, port_point, Canvas, Corner, Edge,
-    EdgeLineStyle, EdgeThickness, FocusSeed, FocusSet, Language, Node, NodeKind, Settings, Side,
-    SpatialIndex,
+    edge_at, edge_at_anchored, focus_set, nearest_side, next_port_zone, port_at, port_point,
+    Canvas, Corner, Edge, EdgeLineStyle, EdgeThickness, FocusSeed, FocusSet, Language, Node,
+    NodeKind, Settings, Side, SpatialIndex,
 };
 pub use canvas_render::camera::Vec2;
 pub use canvas_render::cards::{preset_color, CardInstance, HEADER_HEIGHT};
@@ -422,7 +422,11 @@ pub mod ui {
         /// для новой связи — порт ноды-истока; для перепривязки —
         /// НЕПОДВИЖНЫЙ (противоположный) конец связи. None — данных нет
         /// (нода удалена/связь висячая) — линию не рисуем.
-        pub fn draft_origin(&self, canvas: &Canvas) -> Option<([f32; 2], Side)> {
+        pub fn draft_origin(
+            &self,
+            canvas: &Canvas,
+            anchors: canvas_core::EdgeAnchors,
+        ) -> Option<([f32; 2], Side)> {
             match self {
                 EdgeDrag::New {
                     from_node,
@@ -444,7 +448,14 @@ pub mod ui {
                         canvas_core::EdgeEnd::From => canvas_core::EdgeEnd::To,
                         canvas_core::EdgeEnd::To => canvas_core::EdgeEnd::From,
                     };
-                    let (side, point) = canvas_core::edge_endpoint(canvas, *edge_index, opposite)?;
+                    // CR-027: неподвижный конец — на якоре data-порта (для
+                    // From-истока value-ребра), сторона — грань порта
+                    let (side, point) = canvas_core::edge_endpoint_anchored(
+                        canvas,
+                        *edge_index,
+                        opposite,
+                        anchors,
+                    )?;
                     Some((point, side))
                 }
             }
@@ -1809,7 +1820,9 @@ pub mod ui {
                 value_flow: false,
                 from_port: None,
             };
-            let (point, side) = drag.draft_origin(&canvas).expect("порт истока");
+            let (point, side) = drag
+                .draft_origin(&canvas, canvas_core::EdgeAnchors::NONE)
+                .expect("порт истока");
             assert_eq!(side, Side::Right);
             approx(point, [100.0, 50.0]);
             // FR-025: построчный исток — резинка от ТОЧКИ порта строки
@@ -1823,7 +1836,9 @@ pub mod ui {
                     is_final: false,
                 }),
             };
-            let (point, side) = drag.draft_origin(&canvas).expect("построчный порт");
+            let (point, side) = drag
+                .draft_origin(&canvas, canvas_core::EdgeAnchors::NONE)
+                .expect("построчный порт");
             assert_eq!(side, Side::Right, "построчный порт — правый край");
             approx(point, [100.0, 37.0]);
             // Перепривязка ИСТОКА: резинка от СТОКА (left-порт b)
@@ -1831,7 +1846,9 @@ pub mod ui {
                 edge_index: 0,
                 end: canvas_core::EdgeEnd::From,
             };
-            let (point, side) = drag.draft_origin(&canvas).expect("неподвижный конец");
+            let (point, side) = drag
+                .draft_origin(&canvas, canvas_core::EdgeAnchors::NONE)
+                .expect("неподвижный конец");
             assert_eq!(side, Side::Left, "неподвижный — противоположный конец");
             approx(point, [400.0, 50.0]);
             // Перепривязка СТОКА: резинка от ИСТОКА (right-порт a)
@@ -1839,7 +1856,9 @@ pub mod ui {
                 edge_index: 0,
                 end: canvas_core::EdgeEnd::To,
             };
-            let (point, side) = drag.draft_origin(&canvas).expect("неподвижный конец");
+            let (point, side) = drag
+                .draft_origin(&canvas, canvas_core::EdgeAnchors::NONE)
+                .expect("неподвижный конец");
             assert_eq!(side, Side::Right);
             approx(point, [100.0, 50.0]);
             // Несуществующая нода/индекс — None (линию не рисуем)
@@ -1849,12 +1868,16 @@ pub mod ui {
                 value_flow: true,
                 from_port: None,
             };
-            assert!(drag.draft_origin(&canvas).is_none());
+            assert!(drag
+                .draft_origin(&canvas, canvas_core::EdgeAnchors::NONE)
+                .is_none());
             let drag = EdgeDrag::Rebind {
                 edge_index: 9,
                 end: canvas_core::EdgeEnd::To,
             };
-            assert!(drag.draft_origin(&canvas).is_none());
+            assert!(drag
+                .draft_origin(&canvas, canvas_core::EdgeAnchors::NONE)
+                .is_none());
         }
 
         /// Хэндлы концов выделенной связи (CR-002, рендер): кружки в портах
@@ -1862,7 +1885,12 @@ pub mod ui {
         #[test]
         fn edge_handle_instances_at_endpoints() {
             let canvas = rebind_canvas();
-            let handles = canvas_render::cards::build_edge_handle_instances(&canvas, 0, 14.0);
+            let handles = canvas_render::cards::build_edge_handle_instances(
+                &canvas,
+                0,
+                14.0,
+                canvas_core::EdgeAnchors::NONE,
+            );
             assert_eq!(handles.len(), 2, "хэндлы обоих концов");
             let centers: Vec<[f32; 2]> = handles
                 .iter()
@@ -1878,9 +1906,13 @@ pub mod ui {
             // Висячая связь — пусто
             let mut dangling = rebind_canvas();
             dangling.nodes.remove(1);
-            assert!(
-                canvas_render::cards::build_edge_handle_instances(&dangling, 0, 14.0).is_empty()
-            );
+            assert!(canvas_render::cards::build_edge_handle_instances(
+                &dangling,
+                0,
+                14.0,
+                canvas_core::EdgeAnchors::NONE
+            )
+            .is_empty());
         }
 
         // --- CR-001: множественное выделение ---

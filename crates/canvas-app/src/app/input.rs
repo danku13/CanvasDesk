@@ -2891,22 +2891,36 @@ impl App {
                                     && world[1] >= origin[1]
                                     && world[1] <= origin[1] + height
                             }),
-                        EditTarget::Edge(index) => edge_edit_area(&self.scene.canvas, index, avoid)
+                        EditTarget::Edge(index) => {
+                            // CR-027: зона лейбла — на якоренной линии
+                            edge_edit_area(
+                                &self.scene.canvas,
+                                index,
+                                avoid,
+                                self.edge_anchors_for(index),
+                            )
                             .is_some_and(|(origin, width, height)| {
                                 world[0] >= origin[0]
                                     && world[0] <= origin[0] + width
                                     && world[1] >= origin[1]
                                     && world[1] <= origin[1] + height
-                            }),
+                            })
+                        }
                     };
                     if inside {
                         let zoom_px = self.zoom_px();
+                        // CR-027: якоря лейбла связи — ДО мутабельного
+                        // заимствования self.editing
+                        let session_anchors = self.editing_session_anchors();
                         if let (Some(session), Some(renderer)) =
                             (self.editing.as_mut(), self.renderer.as_mut())
                         {
-                            if let Some((origin, _, _)) =
-                                session_area_offset(&self.scene.canvas, session, avoid)
-                            {
+                            if let Some((origin, _, _)) = session_area_offset(
+                                &self.scene.canvas,
+                                session,
+                                avoid,
+                                session_anchors,
+                            ) {
                                 let x = ((world[0] - origin[0]) * zoom_px) as i32;
                                 let y = ((world[1] - origin[1]) * zoom_px) as i32;
                                 // CR-018 v1.1 (вариант B): клик по стационарной
@@ -2987,7 +3001,13 @@ impl App {
                 // Нода/связь под курсором — обычная обработка выше.
                 if self.modifiers.shift_key()
                     && hit.is_none()
-                    && edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes).is_none()
+                    && edge_at_anchored(
+                        &self.scene.canvas,
+                        world,
+                        self.settings.edges_avoid_nodes,
+                        &self.edge_anchors_all(),
+                    )
+                    .is_none()
                 {
                     self.wheel_menu = Some(template_ui::WheelMenu {
                         screen: self.cursor,
@@ -3019,7 +3039,12 @@ impl App {
                 {
                     let avoid = self.settings.edges_avoid_nodes;
                     match hit {
-                        None => match edge_at(&self.scene.canvas, world, avoid) {
+                        None => match edge_at_anchored(
+                            &self.scene.canvas,
+                            world,
+                            avoid,
+                            &self.edge_anchors_all(),
+                        ) {
                             Some(edge_index) => {
                                 // FR-042 (E3): двойной клик по пучку — main
                                 // stage (лейбл-редактор у пучка неопределён;
@@ -3154,6 +3179,9 @@ impl App {
                                 if row_hit.node == index && row_hit.line.is_some() {
                                     self.begin_editing(index);
                                     let zoom_px = self.zoom_px();
+                                    // CR-027: якоря лейбла связи — ДО
+                                    // мутабельного заимствования
+                                    let session_anchors = self.editing_session_anchors();
                                     if let (Some(session), Some(renderer)) =
                                         (self.editing.as_mut(), self.renderer.as_mut())
                                     {
@@ -3161,6 +3189,7 @@ impl App {
                                             &self.scene.canvas,
                                             session,
                                             self.settings.edges_avoid_nodes,
+                                            session_anchors,
                                         ) {
                                             let x = ((world[0] - origin[0]) * zoom_px) as i32;
                                             let y = ((world[1] - origin[1]) * zoom_px) as i32;
@@ -3218,9 +3247,12 @@ impl App {
                     // действием «Удалить пучок» (все N рёбер сразу). Stage
                     // открывается ПКМ — см. on_right_button.
                     None => {
-                        if let Some(edge_index) =
-                            edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes)
-                        {
+                        if let Some(edge_index) = edge_at_anchored(
+                            &self.scene.canvas,
+                            world,
+                            self.settings.edges_avoid_nodes,
+                            &self.edge_anchors_all(),
+                        ) {
                             self.selected = Some(Selection::Edge(edge_index));
                         } else {
                             self.selected = None;
@@ -3533,7 +3565,7 @@ impl App {
             // Одиночное ребро — выделение + палитра (как раньше).
             None => {
                 let avoid = self.settings.edges_avoid_nodes;
-                match edge_at(&self.scene.canvas, world, avoid) {
+                match edge_at_anchored(&self.scene.canvas, world, avoid, &self.edge_anchors_all()) {
                     Some(edge_index) => {
                         if self.try_open_main_stage(edge_index) {
                             self.request_redraw();
@@ -3708,12 +3740,15 @@ impl App {
         if self.editor_dragging && !self.space_pressed {
             let world = self.cursor_world();
             let zoom_px = self.zoom_px();
+            // CR-027: якоря лейбла связи — ДО мутабельного заимствования
+            let session_anchors = self.editing_session_anchors();
             if let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut())
             {
                 if let Some((origin, _, _)) = session_area_offset(
                     &self.scene.canvas,
                     session,
                     self.settings.edges_avoid_nodes,
+                    session_anchors,
                 ) {
                     let x = ((world[0] - origin[0]) * zoom_px) as i32;
                     let y = ((world[1] - origin[1]) * zoom_px) as i32;
@@ -3854,14 +3889,18 @@ impl App {
                         && self.settings.edge_aggregation
                         && hovered.is_none()
                     {
-                        edge_at(&self.scene.canvas, world, self.settings.edges_avoid_nodes).filter(
-                            |&i| {
-                                self.scene
-                                    .bundles
-                                    .bundle_of_edge(i)
-                                    .is_some_and(|b| b.weight >= 2)
-                            },
+                        edge_at_anchored(
+                            &self.scene.canvas,
+                            world,
+                            self.settings.edges_avoid_nodes,
+                            &self.edge_anchors_all(),
                         )
+                        .filter(|&i| {
+                            self.scene
+                                .bundles
+                                .bundle_of_edge(i)
+                                .is_some_and(|b| b.weight >= 2)
+                        })
                     } else {
                         None
                     };
