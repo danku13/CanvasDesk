@@ -214,6 +214,19 @@ fn qualified_form_is_lexable(qualified: &str) -> bool {
     obj_ok && field_ok
 }
 
+/// CR-029-A: совпадает ли префикс с ИМЕНЕМ ОБЪЕКТА qualified-ключа
+/// («Корзина» в «Корзина.sum»). Имя поля может не совпадать с именем
+/// ноды-источника (латиница под кириллицей) — а пользователь вводит
+/// именно то, что видит в теле ноды («Корзина . sum»). Объект — часть
+/// до первой точки; пустой объект (qualified без точки) не матчится.
+fn inbound_object_matches_prefix(inbound: &InboundHint, lower: &str) -> bool {
+    inbound
+        .qualified
+        .split_once('.')
+        .map(|(obj, _)| !obj.is_empty() && obj.to_lowercase().starts_with(lower))
+        .unwrap_or(false)
+}
+
 /// Один именованный вход в список (если есть рабочая форма вставки).
 fn push_inbound(inbound: &InboundHint, language: Language, push: &mut dyn FnMut(HintItem)) {
     let Some(insert) = inbound_insert(inbound) else {
@@ -252,9 +265,19 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> V
     if let Some(name) = token.strip_prefix('$') {
         let lower = name.to_lowercase();
         // FR-101: именованные входы — раньше `$in`/номеров (ввод `$куп`
-        // находит `Купон.купон`); форма вставки — по языку имени
+        // находит `Купон.купон`); форма вставки — по языку имени.
+        // CR-029-A: второй проход — по имени ОБЪЕКТА («$Корз» →
+        // «Корзина.sum»); матч по полю ранжируется раньше, дедуп по
+        // вставке отсекает вход, найденный обоими проходами.
         for inbound in &ctx.inbounds {
             if inbound.name.to_lowercase().starts_with(&lower) {
+                push_inbound(inbound, language, &mut push);
+            }
+        }
+        for inbound in &ctx.inbounds {
+            if !inbound.name.to_lowercase().starts_with(&lower)
+                && inbound_object_matches_prefix(inbound, &lower)
+            {
                 push_inbound(inbound, language, &mut push);
             }
         }
@@ -343,9 +366,22 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> V
         }
     }
     // FR-101: имена входов без `$` — триггер по имени обязателен
-    // (решение владельца Q4); вставка — рабочая форма
+    // (решение владельца Q4); вставка — рабочая форма.
+    // CR-029-A: второй проход — триггер по префиксу ИМЕНИ ОБЪЕКТА
+    // qualified-ключа («Корз» → «Корзина.sum»): у части входов имя поля
+    // не совпадает с именем ноды-источника, и до фикса попап молчал
+    // ровно на них (у «Купон.купон» совпадает — отсюда «иногда»).
+    // Матч по полю ранжируется раньше объекта; дедуп по вставке
+    // отсекает вход, найденный обоими проходами.
     for inbound in &ctx.inbounds {
         if inbound.name.to_lowercase().starts_with(&lower) {
+            push_inbound(inbound, language, &mut push);
+        }
+    }
+    for inbound in &ctx.inbounds {
+        if !inbound.name.to_lowercase().starts_with(&lower)
+            && inbound_object_matches_prefix(inbound, &lower)
+        {
             push_inbound(inbound, language, &mut push);
         }
     }
@@ -455,6 +491,16 @@ impl HintPopup {
         self.pending_suppress = false;
         self.suppressed = Some(self.token.clone());
         self.open = false;
+    }
+
+    /// CR-029-B: снять подавление попапа — явная вставка (Paste) является
+    /// новым пользовательским действием, отличным от вставки принятой
+    /// подсказки: после неё попап оценивается заново, даже если токен
+    /// перед кареткой совпал с подавленным (принятие/Esc). Вызывается
+    /// приложением в ветке `KeyCommand::Paste` перед `update_hints`.
+    pub fn lift_suppression(&mut self) {
+        self.suppressed = None;
+        self.pending_suppress = false;
     }
 
     /// Обновить список после правки текста: выделение сохраняется, если

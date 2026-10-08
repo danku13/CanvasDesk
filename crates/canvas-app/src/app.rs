@@ -13976,6 +13976,246 @@ mod suggest_flow_tests {
         assert_eq!(line_text, "итог = Купон.купон", "хвост заменён вставкой");
         assert_eq!(caret, line_text.len(), "каретка после вставки");
     }
+
+    /// Репродуктор CR-029 (репорт владельца): нода-источник «Корзина» с
+    /// ЛАТИНСКИМ именем поля «sum» — вид строки входа в теле ноды
+    /// («Корзина . sum») не совпадает с именем поля. Точное окружение
+    /// скриншота репорта: цель — «Корзина за вычетом всех скидок и
+    /// купонов», входы «Купон.купон» и «Корзина.sum».
+    fn cr029_canvas() -> Canvas {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("korz", "Корзина\nsum = 1200 руб", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("kup", "Купон\nкупон = 500 руб", 0.0, 160.0));
+        canvas.nodes.push(Node::text(
+            "cart",
+            "Корзина за вычетом всех скидок и купонов\nитог = ",
+            320.0,
+            0.0,
+        ));
+        let mut e1 = Edge::new("e1", "korz", None, "cart", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_line = Some(1); // имя присваивания «sum» → qualified «Корзина.sum»
+        canvas.edges.push(e1);
+        let mut e2 = Edge::new("e2", "kup", None, "cart", None);
+        e2.set_flow_kind(FlowKind::Value);
+        e2.from_line = Some(1); // qualified «Купон.купон»
+        canvas.edges.push(e2);
+        canvas
+    }
+
+    // --- CR-029: автодополнение входящих значений «иногда молчит» ---------
+    // Путь Paste-команды приложения (input.rs KeyCommand::Paste):
+    // session.insert_text + update_hints. Каждый сценарий — форма
+    // вставки/ввода, с которой владелец сталкивается в реальности.
+
+    /// CR-029-A: триггер по префиксу ОБЪЕКТА qualified-имени — ввод «Корз»
+    /// предлагает «Корзина.sum». До фикса матчинг шёл только по имени поля
+    /// («sum») — попап молчал ровно на тех входах, чьё имя объекта не
+    /// совпадает с именем поля (у «Купон.купон» совпадает — отсюда «иногда»).
+    #[test]
+    fn cr029_object_prefix_triggers_inbound_hint() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        suggest_start_editing(&mut app, 2, "итог = Корз");
+        app.update_hints();
+        assert!(app.hints.open, "ввод имени объекта открывает попап");
+        let hint = app
+            .hints
+            .items
+            .iter()
+            .find(|item| item.insert == "Корзина.sum")
+            .expect("подсказка Корзина.sum по имени объекта");
+        assert_eq!(hint.insert, "Корзина.sum");
+    }
+
+    /// CR-029-A: то же в `$`-ветке — ввод `$Корз` предлагает рабочую форму
+    /// (кириллический объект → qualified, НЕ `$`-форма — валюта FR-013).
+    #[test]
+    fn cr029_object_prefix_in_dollar_branch() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        suggest_start_editing(&mut app, 2, "итог = $Корз");
+        app.update_hints();
+        assert!(app.hints.open, "$-ветка: имя объекта открывает попап");
+        let hint = app
+            .hints
+            .items
+            .iter()
+            .find(|item| item.insert == "Корзина.sum")
+            .expect("подсказка Корзина.sum по имени объекта после $");
+        assert_eq!(hint.insert, "Корзина.sum");
+    }
+
+    /// CR-029-A: приоритет прежний — матч по имени поля раньше матча по
+    /// имени объекта (токен «к»: Купон.купон — поле, затем Корзина.sum —
+    /// объект; дедуп не даёт Купону второй строки).
+    #[test]
+    fn cr029_field_match_ranks_before_object_match() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        suggest_start_editing(&mut app, 2, "итог = к");
+        app.update_hints();
+        assert!(app.hints.open);
+        let inserts: Vec<&str> = app
+            .hints
+            .items
+            .iter()
+            .map(|item| item.insert.as_str())
+            .collect();
+        let field = inserts
+            .iter()
+            .position(|insert| *insert == "Купон.купон")
+            .expect("поле-матч Купон.купон в списке");
+        let object = inserts
+            .iter()
+            .position(|insert| *insert == "Корзина.sum")
+            .expect("объект-матч Корзина.sum в списке");
+        assert!(
+            field < object,
+            "поле-матч раньше объект-матча; inserts={inserts:?}"
+        );
+    }
+
+    /// CR-029-B: явная вставка (Paste) снимает CR-023-подавление —
+    /// после вставки попап оценивается заново, даже если токен совпал
+    /// с подавленным принятием/Esc. Принятие эмулируется вручную
+    /// (replace_token + arm_suppress + sync) — `accept_hint` в стабе без
+    /// рендера молча не применяется.
+    #[test]
+    fn cr029_paste_lifts_suppression() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        let mut fs = cosmic_text::FontSystem::new();
+        suggest_start_editing(&mut app, 2, "итог = купо");
+        app.update_hints();
+        assert!(app.hints.open, "попап по имени без $");
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .replace_token_before_caret(&mut fs, "купо", "Купон.купон");
+        app.hints.arm_suppress();
+        app.update_hints();
+        assert!(!app.hints.open, "после принятия попап закрыт (CR-023)");
+        // Вставка того же входа следом (токен после вставки — «купон») —
+        // путь Paste-команды: снятие подавления ПЕРЕД пересчётом
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .insert_text(&mut fs, "Купон.купон");
+        app.hints.lift_suppression();
+        app.update_hints();
+        assert!(
+            app.hints.open,
+            "после вставки попап открыт; token={:?} items={:?}",
+            app.hints.token, app.hints.items
+        );
+    }
+
+    /// CR-029 (регресс чистого пути): вставка qualified-имени «Купон.купон»
+    /// открывает попап с подсказкой входа — как при наборе «купон».
+    #[test]
+    fn cr029_paste_qualified_name_opens_popup() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        let mut fs = cosmic_text::FontSystem::new();
+        suggest_start_editing(&mut app, 2, "итог = ");
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .insert_text(&mut fs, "Купон.купон");
+        app.update_hints();
+        assert!(
+            app.hints.open,
+            "попап после вставки Купон.купон; items={:?}",
+            app.hints.items
+        );
+        assert!(
+            app.hints
+                .items
+                .iter()
+                .any(|item| item.insert == "Купон.купон"),
+            "подсказка Купон.купон в попапе; items={:?}",
+            app.hints.items
+        );
+    }
+
+    /// CR-029 (регресс): вставка qualified-имени С ПРОБЕЛАМИ вокруг точки —
+    /// вид строк входящих значений в теле ноды; пользователь копирует
+    /// видимый текст как есть. Попап открывается (токен-хвост «купон»).
+    #[test]
+    fn cr029_paste_spaced_qualified_name() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        let mut fs = cosmic_text::FontSystem::new();
+        suggest_start_editing(&mut app, 2, "итог = ");
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .insert_text(&mut fs, "Купон . купон");
+        app.update_hints();
+        assert!(
+            app.hints.open,
+            "попап после вставки «Купон . купон»; items={:?}",
+            app.hints.items
+        );
+    }
+
+    /// CR-029 (класс «вставка с \n», ТЕКУЩЕЕ поведение задокументировано):
+    /// хвостовой перевод строки уводит каретку на пустую строку — префикс
+    /// Prose, попап молчит; подсказка не нужна — вставленное значение
+    /// уже полное. Смена этого контракта — отдельное решение владельца.
+    #[test]
+    fn cr029_paste_with_trailing_newline_caret_on_empty_line() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        let mut fs = cosmic_text::FontSystem::new();
+        suggest_start_editing(&mut app, 2, "итог = ");
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .insert_text(&mut fs, "Купон.купон\n");
+        app.update_hints();
+        let (_, line_text, _) = app.editing.as_ref().expect("правка").caret_line();
+        assert_eq!(line_text, "", "каретка на новой пустой строке");
+        assert!(
+            !app.hints.open,
+            "пустая строка — попапа нет; items={:?}",
+            app.hints.items
+        );
+    }
+
+    /// CR-029 (регресс): вставка второго входа после принятия первого —
+    /// типовая сборка выражения из входящих значений.
+    #[test]
+    fn cr029_paste_second_inbound_after_accept() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        let mut fs = cosmic_text::FontSystem::new();
+        suggest_start_editing(&mut app, 2, "итог = купо");
+        app.update_hints();
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .replace_token_before_caret(&mut fs, "купо", "Купон.купон");
+        app.hints.arm_suppress();
+        app.update_hints();
+        // « - Корзина.sum» одной вставкой
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .insert_text(&mut fs, " - Корзина.sum");
+        app.hints.lift_suppression();
+        app.update_hints();
+        assert!(
+            app.hints.open,
+            "попап после вставки второго входа; token={:?} items={:?}",
+            app.hints.token, app.hints.items
+        );
+        assert!(
+            app.hints
+                .items
+                .iter()
+                .any(|item| item.insert == "Корзина.sum"),
+            "подсказка Корзина.sum; items={:?}",
+            app.hints.items
+        );
+    }
 }
 
 /// W-e (миграция онбординга на кит, разморозка 03.10.2026): draw-сторона —
