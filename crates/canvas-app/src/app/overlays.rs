@@ -3458,17 +3458,17 @@ impl App {
         let content = docs_ui::viewer_content_rect(panel);
         // Затемнение канваса вокруг панели (паттерн wheel FR-022)
         if panel[0] > 0.0 {
-            instances.push(CardInstance {
-                pos: [0.0, 0.0],
-                size: [viewport[0], viewport[1]],
-                // FR-070 (W-d): слот `stage_dim` темы (бывший инлайн-литерал
-                // `[0.02, 0.02, 0.04, 0.85]` — alpha 0.6 канонич. коридора
-                // PRD 0.55–0.65, не переопределяем — single source of truth).
-                fill: palette.stage_dim,
-                border: [0.0; 4],
-                params: [0.0, 0.0, 0.0, 1.0],
-                corners: [0.0; 4],
-            });
+            // FR-070 (W-d): backdrop — kit::backdrop (paint_items_to_cards
+            // адаптирует PaintItem::Rect в CardInstance). Слот `stage_dim`
+            // темы (бывший инлайн-литерал `[0.02, 0.02, 0.04, 0.85]` — alpha
+            // 0.6 канонич. коридора PRD 0.55–0.65, не переопределяем — single
+            // source of truth). 1:1 визуально (rect 0..viewport, fill, no
+            // border, radius 0 — те же слоты/значения).
+            let backdrop = canvas_ui::kit::backdrop(
+                canvas_ui::UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
+                &palette.kit_palette(),
+            );
+            instances.extend(crate::app::paint_items_to_cards(vec![backdrop]));
         }
         // Панель
         instances.push(CardInstance {
@@ -3675,12 +3675,23 @@ impl App {
         // Затемнение (паттерн wheel FR-022): тур поверх неинтерактивного
         // канваса — фокус на карточке. Слот stage_dim (бывший литерал
         // [0.02, 0.02, 0.04, 0.85] — та же триада RGB, альфа слота темы).
-        d.rect(
-            canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
-            palette.stage_dim,
-            [0.0; 4],
-            0.0,
+        // FR-070: backdrop — kit::backdrop (возвращает PaintItem::Rect;
+        // Painter не имеет публичного push-примитива, декструкурируем
+        // поля и передаём в d.rect — семантически эквивалентно прямому
+        // пушу PaintItem в журнал, но через публичный API Painter'а).
+        let backdrop = canvas_ui::kit::backdrop(
+            canvas_ui::UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
+            &kit_palette,
         );
+        if let canvas_ui::paint::PaintItem::Rect {
+            rect,
+            fill,
+            border,
+            radius,
+        } = backdrop
+        {
+            d.rect(rect, fill, border, radius);
+        }
         // Карточка — kit-панель модали (слоты panel_fill/panel_border,
         // радиус RADIUS_PANEL = прежний литерал 10; как dialog/autolink)
         d.panel(
@@ -3822,14 +3833,13 @@ impl App {
         let lay = onboarding_ui::ai_onboarding_layout(viewport, state);
         let card = lay.card;
         // Затемнение канваса (паттерн FR-022/FR-028) — фокус на карточке.
-        quads.push(CardInstance {
-            pos: [0.0, 0.0],
-            size: [viewport[0], viewport[1]],
-            fill: palette.stage_dim,
-            border: [0.0; 4],
-            params: [0.0, 0.0, 0.0, 1.0],
-            corners: [0.0; 4],
-        });
+        // FR-070: backdrop — kit::backdrop (paint_items_to_cards адаптирует
+        // PaintItem::Rect в CardInstance; те же слоты/значения — 1:1).
+        let backdrop = canvas_ui::kit::backdrop(
+            canvas_ui::UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
+            &kit_palette,
+        );
+        quads.extend(crate::app::paint_items_to_cards(vec![backdrop]));
         // Карточка — kit-панель модали (слоты panel_fill/panel_border).
         quads.push(CardInstance {
             pos: [card[0], card[1]],
@@ -5050,17 +5060,17 @@ impl App {
         }
         // FR-039: затемнение канваса под модалкой (паттерн онбординга
         // FR-028) — фокус на диалоге настроек, ввод под ним глушится
-        instances.push(CardInstance {
-            pos: [0.0, 0.0],
-            size: [viewport[0], viewport[1]],
-            // FR-070 (W-d): слот `stage_dim` темы (бывший инлайн-литерал
-            // `[0.02, 0.02, 0.04, 0.85]` — alpha 0.6 канонич. коридора
-            // PRD 0.55–0.65, не переопределяем — single source of truth).
-            fill: palette.stage_dim,
-            border: [0.0; 4],
-            params: [0.0, 0.0, 0.0, 1.0],
-            corners: [0.0; 4],
-        });
+        // FR-070 (W-d): backdrop — kit::backdrop (paint_items_to_cards
+        // адаптирует PaintItem::Rect в CardInstance). Слот `stage_dim`
+        // темы (бывший инлайн-литерал `[0.02, 0.02, 0.04, 0.85]` — alpha
+        // 0.6 канонич. коридора PRD 0.55–0.65, не переопределяем — single
+        // source of truth). 1:1 визуально (rect 0..viewport, fill, no
+        // border, radius 0 — те же слоты/значения).
+        let backdrop = canvas_ui::kit::backdrop(
+            canvas_ui::UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
+            &palette.kit_palette(),
+        );
+        instances.extend(crate::app::paint_items_to_cards(vec![backdrop]));
         // FR-039: модалка по центру — layout несёт rect'ы навигации,
         // заголовка раздела, строк активного таба и карточек темы.
         // W-a: контент правой панели — со скроллом (тот же offset, что
