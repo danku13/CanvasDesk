@@ -364,6 +364,17 @@ pub mod keys {
     pub const HK_SETTINGS: &str = "hotkeys.desc.settings";
     pub const HK_WHATIF: &str = "hotkeys.desc.whatif";
     pub const HK_EDGE_FOCUS: &str = "hotkeys.desc.edge_focus";
+    // FR-100: полный набор команд редактора ноды (UR-001-02) — F1-оверлей
+    pub const HKEY_CTRL_BACKSPACE: &str = "hotkeys.key.ctrl_backspace";
+    pub const HKEY_PAGE_UP_DOWN: &str = "hotkeys.key.page_up_down";
+    pub const HKEY_TAB_INDENT: &str = "hotkeys.key.tab_indent";
+    pub const HKEY_HOME_SMART: &str = "hotkeys.key.home_smart";
+    pub const HKEY_CMD_EDITOR: &str = "hotkeys.key.cmd_editor";
+    pub const HK_WORD_DELETE: &str = "hotkeys.desc.word_delete";
+    pub const HK_EDITOR_PAGE: &str = "hotkeys.desc.editor_page";
+    pub const HK_EDITOR_TAB: &str = "hotkeys.desc.editor_tab";
+    pub const HK_EDITOR_HOME: &str = "hotkeys.desc.editor_home";
+    pub const HK_CMD_PARITY: &str = "hotkeys.desc.cmd_parity";
 
     // --- Палитра шаблонов (FR-024/030) ---
     pub const TEMPLATES_TITLE: &str = "templates.title";
@@ -1203,6 +1214,26 @@ const RU: &[(&str, &str)] = &[
         keys::HK_EXPLAIN_STEP,
         "проверка цепочки, режим защиты: раскрыть следующий уровень",
     ),
+    // FR-100: команды редактора ноды
+    (keys::HKEY_CTRL_BACKSPACE, "Ctrl+Backspace / Ctrl+Delete"),
+    (keys::HKEY_PAGE_UP_DOWN, "PageUp / PageDown"),
+    (keys::HKEY_TAB_INDENT, "Tab / Shift+Tab"),
+    (keys::HKEY_HOME_SMART, "Home ×2"),
+    (keys::HKEY_CMD_EDITOR, "Cmd+клавиша (macOS)"),
+    (keys::HK_WORD_DELETE, "в редакторе текста: удалить слово слева / справа"),
+    (
+        keys::HK_EDITOR_PAGE,
+        "в редакторе текста: страница строк (Shift — с выделением)",
+    ),
+    (
+        keys::HK_EDITOR_TAB,
+        "в редакторе текста: индент / убрать индент строк",
+    ),
+    (
+        keys::HK_EDITOR_HOME,
+        "в редакторе текста: первый непробельный строки, повторно — начало строки",
+    ),
+    (keys::HK_CMD_PARITY, "команды редактора — как с Ctrl"),
     // --- Палитра шаблонов ---
     (keys::TEMPLATES_TITLE, "Шаблоны"),
     (keys::TEMPLATES_SEARCH, "Поиск шаблонов…"),
@@ -2428,6 +2459,26 @@ const EN: &[(&str, &str)] = &[
         keys::HK_EXPLAIN_STEP,
         "calc-chain defense mode: reveal the next level",
     ),
+    // FR-100: editor commands of a note
+    (keys::HKEY_CTRL_BACKSPACE, "Ctrl+Backspace / Ctrl+Delete"),
+    (keys::HKEY_PAGE_UP_DOWN, "PageUp / PageDown"),
+    (keys::HKEY_TAB_INDENT, "Tab / Shift+Tab"),
+    (keys::HKEY_HOME_SMART, "Home ×2"),
+    (keys::HKEY_CMD_EDITOR, "Cmd+key (macOS)"),
+    (keys::HK_WORD_DELETE, "in the editor: delete word left / right"),
+    (
+        keys::HK_EDITOR_PAGE,
+        "in the editor: page of lines (Shift — extend selection)",
+    ),
+    (
+        keys::HK_EDITOR_TAB,
+        "in the editor: indent / unindent lines",
+    ),
+    (
+        keys::HK_EDITOR_HOME,
+        "in the editor: first non-space of the line, again — line start",
+    ),
+    (keys::HK_CMD_PARITY, "editor commands — same as Ctrl"),
     // --- Template palette ---
     (keys::TEMPLATES_TITLE, "Templates"),
     (keys::TEMPLATES_SEARCH, "Search templates…"),

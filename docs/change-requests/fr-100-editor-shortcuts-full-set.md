@@ -1,6 +1,6 @@
 # FR-100: Полный набор шорткатов редактора ноды (word-delete, undo/redo, Super-паритет, web-слой)
 
-- **Статус:** выявлено
+- **Статус:** реализовано (код+тесты), ожидает приёмки владельца
 - **Тип:** FR
 - **Приоритет:** критично
 - **Владелец:** danku13 (симптом, решение), агент (анализ)
@@ -72,6 +72,7 @@
 ## История изменений (Changelog)
 
 - `2026-10-08` — агент: документ создан по UR-001-02; платформа владельца — web; объём — полный набор; статус `выявлено`.
+- `2026-10-08` — агент: реализовано в три коммита волны W4-D1 (render 1/3 f044440 — `KeyCommand` word-delete/undo-redo/страницы/Tab-индент/SmartHome; app,web 2/3 — `route_editor_key` с Super-паритетом и фоллбэком незнакомых chord'ов, web-шим `preventDefault` для chord'ов, `AppEvent::KeyboardModifiers` из DOM keydown/keyup, возврат фокуса канвасу в toolbar; доки 3/3 — hotkeys.md, HOTKEYS (28 записей), node.md, WASM-TESTING.md, web_smoke.py секция 2b). Гейты: wasm-check зелёный, canvas-app --lib 605 passed, canvas-render 21×ok (408+), fmt/clippy `-D warnings` чисто. Статус `реализовано (код+тесты), ожидает приёмки владельца` — web-смоук в среде агента не прогонялся.
 
 ## Источники истины (References)
 

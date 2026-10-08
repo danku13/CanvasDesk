@@ -432,43 +432,43 @@ fn test_edge_edit_session_zoom() {
 fn test_key_mapping_for_edge_editing() {
     // Enter без Shift — Commit
     assert_eq!(
-        map_key(&Key::Named(NamedKey::Enter), false, false),
+        map_key(&Key::Named(NamedKey::Enter), false, false, false),
         Some(KeyCommand::Commit)
     );
 
     // Shift+Enter — новая строка (Action::Enter)
     assert_eq!(
-        map_key(&Key::Named(NamedKey::Enter), false, true),
+        map_key(&Key::Named(NamedKey::Enter), false, true, false),
         Some(KeyCommand::Action(cosmic_text::Action::Enter))
     );
 
     // Esc — Cancel
     assert_eq!(
-        map_key(&Key::Named(NamedKey::Escape), false, false),
+        map_key(&Key::Named(NamedKey::Escape), false, false, false),
         Some(KeyCommand::Cancel)
     );
 
     // Ctrl+Enter — новая строка (как Shift+Enter; Т9-UX)
     assert_eq!(
-        map_key(&Key::Named(NamedKey::Enter), true, false),
+        map_key(&Key::Named(NamedKey::Enter), true, false, false),
         Some(KeyCommand::Action(cosmic_text::Action::Enter))
     );
 
     // Backspace/Delete
     assert_eq!(
-        map_key(&Key::Named(NamedKey::Backspace), false, false),
+        map_key(&Key::Named(NamedKey::Backspace), false, false, false),
         Some(KeyCommand::Action(cosmic_text::Action::Backspace))
     );
 
     // Навигация
     assert_eq!(
-        map_key(&Key::Named(NamedKey::ArrowLeft), true, false),
+        map_key(&Key::Named(NamedKey::ArrowLeft), true, false, false),
         Some(KeyCommand::Motion(cosmic_text::Motion::LeftWord, false))
     );
 
     // Форматирование (Ctrl+B/I/H)
     assert_eq!(
-        map_key(&Key::Character("b".into()), true, false),
+        map_key(&Key::Character("b".into()), true, false, false),
         Some(KeyCommand::ToggleMarker(Marker::Bold))
     );
 }
