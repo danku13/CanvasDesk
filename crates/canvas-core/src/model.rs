@@ -1963,6 +1963,25 @@ mod tests {
         );
     }
 
+    /// CR-019 (UR-001-01): текст со звёздочкой умножения переживает
+    /// round-trip `.canvas` без потерь — как живая каноника Numi-строки
+    /// (`10 * 2`, фикс markdown-маски), так и старая с экранированием
+    /// (`10 \* 2`, заметки прежних сборок) — сериализация текст не трогает.
+    #[test]
+    fn text_node_star_multiplication_round_trip() {
+        for text in ["sum = 10 * 2\nитог 20", "sum = 10 \\* 2\nитог 20"] {
+            let node = Node::text("sum1", text, 0.0, 0.0);
+            let json = serde_json::to_string(&node).expect("сериализация");
+            let back: Node = serde_json::from_str(&json).expect("десериализация");
+            assert_eq!(back, node, "round-trip без потерь: {text}");
+            assert_eq!(
+                back.text.as_deref(),
+                Some(text),
+                "звёздочка не потеряна и не задублирована: {text}"
+            );
+        }
+    }
+
     /// Виджет-строка из JSON-сырца: парсинг поля `canvasdesk` и строки
     /// `type: "widget"` (формат SPEC §5.1).
     #[test]

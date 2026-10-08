@@ -12,6 +12,8 @@
 //! Модуль — чистая CPU-логика (без GPU), offsets спанов — байтовые, в системе
 //! координат «чистого» текста (без маркеров) — так их принимает set_rich_text.
 
+use canvas_core::expr::{line_kind, NumiLineKind};
+
 /// Спан стиля в «чистом» тексте (байтовые offsets, end эксклюзивен).
 /// Флаги комбинируются: `**==текст==**` — bold + highlight одним спаном.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -40,9 +42,34 @@ impl Style {
 }
 
 /// Есть ли маркер `marker` в `text` начиная с позиции `from` (проверка
-/// «незакрытый маркер — литерал»).
+/// «незакрытый маркер — литерал»). НЕ ограничен строкой — для парных
+/// маркеров `**`/`==`/`~~` (их пары могут легально пересекать soft-перенос).
 fn has_marker_ahead(text: &str, from: usize, marker: &str) -> bool {
     text.get(from..).is_some_and(|rest| rest.contains(marker))
+}
+
+/// CR-019 (UR-001-01): то же, но поиск НЕ пересекает `\n` — парный
+/// italic-тоггл ограничен строкой: две `*` в разных строках Numi-листа —
+/// два умножения, а не курсивная пара (прежде обе съедались при рендере).
+fn has_marker_ahead_same_line(text: &str, from: usize, marker: &str) -> bool {
+    text.get(from..).is_some_and(|rest| {
+        let line_end = rest.find('\n').unwrap_or(rest.len());
+        rest[..line_end].contains(marker)
+    })
+}
+
+/// CR-019 (UR-001-01): одиночный `*` на Numi-строке (детект [`line_kind`] —
+/// тот же, что в маске эмита `escape_mask`) — умножение, не italic-маркер:
+/// тоггл подавляется, звёздочки литеральны. Пара `*` одной Numi-строки —
+/// два умножения (`x = 2 * 3 * 4`), прежде parse съедал её в курсив
+/// «2  3  4» — тот же симптом владельца, что и с экранированием эмита.
+/// Код-фенсы не отслеживаются: их `*` канонизируется экранированием
+/// (`\*` → литерал в parse), а подавление внутри фенса даёт тот же
+/// видимый результат.
+fn star_is_multiplication(text: &str, i: usize) -> bool {
+    let line_start = text[..i].rfind('\n').map_or(0, |pos| pos + 1);
+    let line_end = text[i..].find('\n').map_or(text.len(), |pos| i + pos);
+    !matches!(line_kind(&text[line_start..line_end]), NumiLineKind::Prose)
 }
 
 /// Разобрать текст с маркерами: вернуть чистый текст и спаны стилей.
@@ -92,7 +119,9 @@ pub fn parse(text: &str) -> (String, Vec<StyleSpan>) {
                     i += 2;
                     continue;
                 }
-            } else if style.italic || has_marker_ahead(text, i + 1, "*") {
+            } else if !star_is_multiplication(text, i)
+                && (style.italic || has_marker_ahead_same_line(text, i + 1, "*"))
+            {
                 flush!();
                 style.italic = !style.italic;
                 span_start = plain.len();
@@ -418,24 +447,48 @@ pub fn emit(plain: &str, spans: &[StyleSpan]) -> String {
     out
 }
 
-/// Байтовая маска экранирования литеральных маркеров диалекта. `*` —
-/// одиночный маркер (italic) — экранируется всегда. `=` и `~` — маркеры
-/// ТОЛЬКО ПАРАМИ (`==` подсветка, `~~` strike), поэтому экранируется пара
-/// целиком; одиночные `=` (`x = 200` Numi-листа, FR-013) остаются живыми —
-/// иначе экранирование ломало expr-парсер (`x \= 200` — «неподдерживаемый
-/// символ») и все строки с присваиваниями молчали (правка 5).
+/// Байтовая маска экранирования литеральных маркеров диалекта — ПОСТРОЧНАЯ
+/// (CR-019, UR-001-01). `=` и `~` — маркеры ТОЛЬКО ПАРАМИ (`==` подсветка,
+/// `~~` strike), поэтому экранируется пара целиком; одиночные `=` (`x = 200`
+/// Numi-листа, FR-013) остаются живыми — иначе экранирование ломало
+/// expr-парсер (`x \= 200` — «неподдерживаемый символ») и все строки с
+/// присваиваниями молчали (правка 5).
+/// Звёздочка (симметрично `=`): в прозе `*` — одиночный italic-маркер —
+/// экранируется; на Numi-строках (детект [`line_kind`]) одиночный `*` —
+/// умножение — живой: `\*` ломал expr-парсер (UR-001-01). Внутри
+/// код-фенсов формулы не считаются, но парсер маркеров фенсы не знает —
+/// звёздочка там экранируется как в прозе (иначе пара `*` в фенсе
+/// съедалась бы italic-тогглом parse'а).
 fn escape_mask(plain: &str) -> Vec<bool> {
     let bytes = plain.as_bytes();
     let mut mask = vec![false; bytes.len()];
-    for (i, &byte) in bytes.iter().enumerate() {
-        match byte {
-            b'*' => mask[i] = true,
-            b'=' | b'~' if i + 1 < bytes.len() && bytes[i + 1] == byte => {
-                mask[i] = true;
-                mask[i + 1] = true;
-            }
-            _ => {}
+    // Тоггл фенсов — тот же, что в expr::eval_lines
+    let mut in_fence = false;
+    let mut line_start = 0usize;
+    loop {
+        let line_end = plain[line_start..]
+            .find('\n')
+            .map_or(bytes.len(), |pos| line_start + pos);
+        let line = &plain[line_start..line_end];
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
         }
+        // Numi-строка (вне фенса): присваивание или выражение → `*` живой
+        let numi = !in_fence && !matches!(line_kind(line), NumiLineKind::Prose);
+        for i in line_start..line_end {
+            match bytes[i] {
+                b'*' if !numi => mask[i] = true,
+                b'=' | b'~' if i + 1 < line_end && bytes[i + 1] == bytes[i] => {
+                    mask[i] = true;
+                    mask[i + 1] = true;
+                }
+                _ => {}
+            }
+        }
+        if line_end >= bytes.len() {
+            break;
+        }
+        line_start = line_end + 1;
     }
     mask
 }
@@ -760,17 +813,77 @@ mod tests {
     }
 
     /// Round-trip: литеральные маркеры в plain экранируются и не
-    /// превращаются в маркеры при повторном parse. `*` — одиночный
-    /// маркер — экранируется всегда; одиночное `=` — НЕ маркер (маркер
-    /// — пара `==`) — остаётся живым (Numi-лист, FR-013 правка 5).
+    /// превращаются в маркеры при повторном parse. `*` в ПРОЗЕ —
+    /// одиночный маркер — экранируется; одиночное `=` — НЕ маркер
+    /// (маркер — пара `==`) — остаётся живым (Numi-лист, FR-013 правка 5).
+    /// Фикстура — заведомая проза: `a*b=c` после CR-019 — Numi-строка
+    /// (похоже на присваивание — ошибка неизвестного имени видима),
+    /// там звёздочка живая (см. emit_keeps_star_on_numi_lines_escaping_prose).
     #[test]
     fn emit_escapes_literal_markers() {
-        let plain = "a*b=c";
+        let plain = "a*b — сноска";
         let text = emit(plain, &[]);
-        assert_eq!(text, r"a\*b=c");
+        assert_eq!(text, "a\\*b — сноска");
         let (back, spans) = parse(&text);
         assert_eq!(back, plain);
         assert!(spans.is_empty());
+    }
+
+    /// CR-019 (UR-001-01): маска экранирования построчная — на Numi-строках
+    /// (присваивание/выражение, детект `expr::line_kind`) звёздочка
+    /// умножения НЕ экранируется (`\*` ломал expr-парсер: «неподдерживаемый
+    /// символ '\'»), в прозе — экранируется как раньше. Код-фенсы формулы
+    /// не считают — звёздочка там экранируется (парсер маркеров фенсы не
+    /// знает — иначе пара `*` в фенсе съедалась бы italic-тогглом).
+    #[test]
+    fn emit_keeps_star_on_numi_lines_escaping_prose() {
+        let plain = "sum = 10 * 2\nсноска a*b в прозе\n2 * 3\n```\nкод 2 * 3\n```";
+        let text = emit(plain, &[]);
+        assert!(text.contains("sum = 10 * 2"), "Numi-присваивание: {text}");
+        assert!(text.contains("2 * 3\n"), "Numi-выражение живо: {text}");
+        assert!(text.contains(r"a\*b"), "проза экранируется: {text}");
+        assert!(text.contains(r"код 2 \* 3"), "фенс экранируется: {text}");
+        let (back, spans) = parse(&text);
+        assert_eq!(back, plain, "round-trip: {text}");
+        assert!(spans.is_empty(), "звёздочки не стали курсивом: {text}");
+    }
+
+    /// CR-019 (UR-001-01): пара звёздочек ОДНОЙ Numi-строки — два умножения,
+    /// а не italic-пара: parse не съедает их (повторное открытие редактора
+    /// показывает `x = 2 * 3 * 4` дословно; прежде — «2  3  4» с курсивным
+    /// «3», тот же симптом владельца, что и с экранированием). Проза с
+    /// парой в границах строки курсивится как раньше.
+    #[test]
+    fn numi_line_star_pair_is_not_italic() {
+        let (plain, spans) = parse("x = 2 * 3 * 4");
+        assert_eq!(plain, "x = 2 * 3 * 4", "звёздочки Numi-строки — литералы");
+        assert!(spans.is_empty());
+        // Полный круг каноники: emit не экранирует Numi-звёздочки,
+        // parse не парит их — повторное редактирование стабильно
+        let text = emit("x = 2 * 3 * 4", &[]);
+        assert_eq!(text, "x = 2 * 3 * 4", "emit: Numi-звёздочки живые");
+        let (back, spans) = parse(&text);
+        assert_eq!(back, "x = 2 * 3 * 4", "round-trip: {text}");
+        assert!(spans.is_empty());
+        // Строка-репродуктор handtest: ссылка, умноженная на ссылку
+        let (plain, spans) = parse("sum = $1 * $2");
+        assert_eq!(plain, "sum = $1 * $2");
+        assert!(spans.is_empty());
+    }
+
+    /// CR-019 (UR-001-01): парный italic-тоггл не пересекает `\n` — две `*`
+    /// в РАЗНЫХ строках Numi-листа — два умножения, а не курсивная пара
+    /// (прежде обе съедались: `10 * 2\n3 * 4` → `10  2\n3  4`). Пара в
+    /// одной строке работает как раньше.
+    #[test]
+    fn italic_pair_does_not_cross_newline() {
+        let (plain, spans) = parse("10 * 2\n3 * 4");
+        assert_eq!(plain, "10 * 2\n3 * 4", "звёздочки разных строк не пара");
+        assert!(spans.is_empty());
+        let (plain, spans) = parse("а *б* в");
+        assert_eq!(plain, "а б в", "курсив в границах строки жив");
+        assert_eq!(spans.len(), 1);
+        assert!(spans[0].italic);
     }
 
     /// FR-013 (правка 5): одиночные `=` в plain НЕ экранируются — строки

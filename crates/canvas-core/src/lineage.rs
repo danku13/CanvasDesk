@@ -35,7 +35,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use crate::expr::{self, line_kind, NumiLineKind, Value};
+use crate::expr::{self, line_kind, unescape_canonical, NumiLineKind, Value};
 use crate::flow::{
     edge_source_value_with_data, spill_source_title, CycleError, DataSnapshots, FlowKind,
     FlowSolutions, QualifiedNames,
@@ -333,7 +333,9 @@ pub(crate) struct Sheet {
 
 impl Sheet {
     pub(crate) fn build(node: &Node) -> Self {
-        let source = node.text.as_deref().unwrap_or_default().replace("\\=", "=");
+        // CR-019: экранирование каноники (`\=`, `\*`) снимается перед
+        // разбором, как в eval_lines_with_env
+        let source = unescape_canonical(node.text.as_deref().unwrap_or_default());
         let mut kinds = Vec::new();
         let mut texts = Vec::new();
         let mut in_fence = false;
