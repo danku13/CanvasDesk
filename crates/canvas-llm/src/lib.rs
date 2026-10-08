@@ -60,9 +60,17 @@ pub mod redact;
 pub mod settings;
 pub mod types;
 
-/// Health-check helper (feature `l1-llm` only).
+/// Health-check helper + HealthReport (feature `l1-llm` only).
 #[cfg(feature = "l1-llm")]
 pub mod health;
+
+/// W1 (wave-1): транспортная абстракция HttpTransport (feature `l1-llm` only).
+#[cfg(feature = "l1-llm")]
+pub mod transport;
+
+/// W1 (wave-1): discovery моделей `GET /v1/models` + TTL-кэш (feature `l1-llm`).
+#[cfg(feature = "l1-llm")]
+pub mod discovery;
 
 /// OpenAI-compatible адаптер для 5 провайдеров (feature `l1-llm` only).
 #[cfg(feature = "l1-llm")]
@@ -94,6 +102,16 @@ pub use types::{
 pub use anthropic::AnthropicClaudeProvider;
 #[cfg(feature = "l1-llm")]
 pub use openai_compat::OpenAiCompatibleProvider;
+
+// W1 (wave-1): транспорт + discovery — публичный API для W2/W3.
+#[cfg(feature = "l1-llm")]
+pub use discovery::{DiscoveredModel, ModelCache};
+#[cfg(all(feature = "wasm-fetch", target_arch = "wasm32"))]
+pub use transport::WasmFetchTransport;
+#[cfg(feature = "l1-llm")]
+pub use transport::{
+    HttpMethod, HttpRequest, HttpResponse, HttpTransport, MockTransport, UreqTransport,
+};
 
 // FR-LLM-OAUTH (Stream D): re-export рядом с OpenAiCompatibleProvider.
 // pkce публичных типов не имеет (только функции) — доступ через

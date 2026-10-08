@@ -16,16 +16,18 @@
 //!   приходит из `GET /v1/models` (discovery, F-5.5) — приложение может
 //!   закэшировать через [`ChatGptOAuthProvider::discover_models`].
 //!
-//! Образец реализации — `openai_compat.rs` (ureq + async-trait, парсинг
-//! JSON, никакой сети в тестах).
+//! Образец реализации — `openai_compat.rs` (HttpTransport W1 + async-trait,
+//! парсинг JSON, никакой сети в тестах).
 
 use crate::error::LlmError;
+use crate::transport::{HttpRequest, HttpTransport, UreqTransport};
 use crate::types::{
     ChatOpts, ChoiceAnswer, JsonVal, Message, ModelInfo, OptionDesc, Pricing, ProviderCaps, Role,
     ToolCall, ToolCallingOpts, ToolChoice, ToolDef,
 };
 use crate::LlmProvider;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::auth::OAuthClient;
@@ -65,6 +67,9 @@ pub struct ChatGptOAuthProvider {
     timeout: Duration,
     /// Base URL Responses API: `RESOURCE` или `{proxy_url}/v1` (F-5.10).
     api_base: String,
+    /// W1: HTTP-транспорт (натив — UreqTransport; тесты — MockTransport;
+    /// wasm — WasmFetchTransport, волна W3).
+    transport: Arc<dyn HttpTransport>,
 }
 
 impl ChatGptOAuthProvider {
@@ -95,7 +100,16 @@ impl ChatGptOAuthProvider {
             models: default_models(),
             timeout: Duration::from_secs(60),
             api_base,
+            transport: Arc::new(UreqTransport::new()),
         }
+    }
+
+    /// W1: подменить HTTP-транспорт (builder-стиль; прокидывается и в
+    /// OAuth-клиент — refresh/exchange идут через тот же транспорт).
+    pub fn with_transport(mut self, transport: Arc<dyn HttpTransport>) -> Self {
+        self.transport = Arc::clone(&transport);
+        self.client = self.client.with_transport(transport);
+        self
     }
 
     /// Задать активную модель (builder-стиль, как `with_timeout`).
@@ -160,7 +174,8 @@ impl ChatGptOAuthProvider {
             .ok_or_else(|| LlmError::Auth("нет сохранённой сессии ChatGPT — требуется вход".into()))
     }
 
-    /// Свежий access_token: если `expires_at` близко — refresh + сохранение.
+    /// Свежий access_token: если `expires_at` близко — refresh + сохранение
+    /// (синхронный вариант, desktop). Async-путь — [`Self::ensure_access_token_async`].
     fn ensure_access_token(&self, tokens: &OAuthTokens) -> Result<String, LlmError> {
         let now = super::auth::now_unix()?;
         if tokens.expires_at > now.saturating_add(REFRESH_MARGIN_SECS) {
@@ -169,10 +184,20 @@ impl ChatGptOAuthProvider {
         self.refresh_and_save(tokens)
     }
 
+    /// Async-двойник [`Self::ensure_access_token`] (web/wasm путь, W3).
+    async fn ensure_access_token_async(&self, tokens: &OAuthTokens) -> Result<String, LlmError> {
+        let now = super::auth::now_unix()?;
+        if tokens.expires_at > now.saturating_add(REFRESH_MARGIN_SECS) {
+            return Ok(tokens.access_token.clone());
+        }
+        self.refresh_and_save_async(tokens).await
+    }
+
     /// Refresh flow (F-5.7): `grant_type=refresh_token` → новые токены →
     /// в store. Ответ без ротации refresh_token/id_token → сохраняются
     /// прежние (RFC 6749 §6: сервер может не выдавать новый refresh).
     /// Ошибка refresh (invalid_grant и т.п.) → `LlmError::Auth`.
+    /// Синхронный вариант (desktop: worker-поток).
     fn refresh_and_save(&self, old: &OAuthTokens) -> Result<String, LlmError> {
         if old.refresh_token.is_empty() {
             return Err(LlmError::Auth(
@@ -180,28 +205,20 @@ impl ChatGptOAuthProvider {
             ));
         }
         let fresh = self.client.refresh_tokens(&old.refresh_token)?;
-        let merged = OAuthTokens {
-            refresh_token: if fresh.refresh_token.is_empty() {
-                old.refresh_token.clone()
-            } else {
-                fresh.refresh_token.clone()
-            },
-            id_token: if fresh.id_token.is_empty() {
-                old.id_token.clone()
-            } else {
-                fresh.id_token.clone()
-            },
-            account_email: if fresh.id_token.is_empty() {
-                old.account_email.clone()
-            } else {
-                // Свежий id_token — попробовать вытащить email (не критично).
-                super::jwt::parse_id_token(&fresh.id_token)
-                    .ok()
-                    .and_then(|c| c.email)
-                    .or_else(|| old.account_email.clone())
-            },
-            ..fresh
-        };
+        let merged = merged_tokens(old, fresh);
+        self.store.save(&merged)?;
+        Ok(merged.access_token)
+    }
+
+    /// Async-двойник [`Self::refresh_and_save`] (web/wasm путь, W3).
+    async fn refresh_and_save_async(&self, old: &OAuthTokens) -> Result<String, LlmError> {
+        if old.refresh_token.is_empty() {
+            return Err(LlmError::Auth(
+                "нет refresh_token — требуется повторный вход".into(),
+            ));
+        }
+        let fresh = self.client.refresh_tokens_async(&old.refresh_token).await?;
+        let merged = merged_tokens(old, fresh);
         self.store.save(&merged)?;
         Ok(merged.access_token)
     }
@@ -212,102 +229,82 @@ impl ChatGptOAuthProvider {
 
     /// POST /v1/responses с Bearer-токеном; 401 → refresh + ОДНА повторная
     /// попытка (токен мог быть отозван раньше `expires_at`). Ошибка
-    /// refresh → `LlmError::Auth` (F-5.9).
-    fn post_responses(&self, body: serde_json::Value) -> Result<serde_json::Value, LlmError> {
+    /// refresh → `LlmError::Auth` (F-5.9). Async (W1-транспорт).
+    async fn post_responses(&self, body: serde_json::Value) -> Result<serde_json::Value, LlmError> {
         let tokens = self.load_tokens()?;
-        let access = self.ensure_access_token(&tokens)?;
-        match self.send_responses(&access, &body) {
+        let access = self.ensure_access_token_async(&tokens).await?;
+        match self.send_responses(&access, &body).await {
             Ok(resp) => Ok(resp),
             Err(LlmError::Auth(_)) => {
-                let access = self.refresh_and_save(&tokens)?;
-                self.send_responses(&access, &body)
+                let access = self.refresh_and_save_async(&tokens).await?;
+                self.send_responses(&access, &body).await
             }
             Err(e) => Err(e),
         }
     }
 
-    /// Один HTTP-вызов Responses API с готовым access_token.
-    fn send_responses(
+    /// Один HTTP-вызов Responses API с готовым access_token (async, W1).
+    async fn send_responses(
         &self,
         access_token: &str,
         body: &serde_json::Value,
     ) -> Result<serde_json::Value, LlmError> {
         let url = format!("{}{RESPONSES_PATH}", self.api_base.trim_end_matches('/'));
-        let agent = ureq::AgentBuilder::new().timeout(self.timeout).build();
-        let req = agent
-            .post(&url)
-            .set("Authorization", &format!("Bearer {access_token}"))
-            .set("content-type", "application/json");
-        match req.send_json(body.clone()) {
-            Ok(resp) => {
-                let text = resp
-                    .into_string()
-                    .map_err(|e| LlmError::Transport(format!("responses: {e}")))?;
-                serde_json::from_str(&text)
-                    .map_err(|e| LlmError::Protocol(format!("responses: битый JSON: {e}")))
-            }
-            Err(ureq::Error::Status(code, resp)) => {
-                let retry_after_secs = resp
-                    .header("retry-after")
-                    .and_then(|v| v.trim().parse::<u32>().ok());
-                let body_text = resp.into_string().unwrap_or_default();
-                match code {
-                    401 | 403 => Err(LlmError::Auth(format!("HTTP {code}: {body_text}"))),
-                    429 => Err(LlmError::RateLimit { retry_after_secs }),
-                    _ => Err(LlmError::Transport(format!("HTTP {code}: {body_text}"))),
-                }
-            }
-            Err(ureq::Error::Transport(t)) => Err(LlmError::Transport(t.to_string())),
+        let req = HttpRequest::post_json(&url, body, self.timeout)
+            .with_header("Authorization", format!("Bearer {access_token}"));
+        let resp = self.transport.execute(req).await?;
+        if let Some(err) = resp.map_status("responses") {
+            return Err(err);
         }
+        serde_json::from_str(&resp.body_str())
+            .map_err(|e| LlmError::Protocol(format!("responses: битый JSON: {e}")))
     }
 
     /// GET `{api_base}/models` — discovery моделей подписки (F-5.5).
     /// 200 → список id; 401 → `LlmError::Auth` (провоцирует refresh);
-    /// 429 → `RateLimit` c `Retry-After`.
-    fn get_models_json(&self) -> Result<serde_json::Value, LlmError> {
+    /// 429 → `RateLimit` c `Retry-After`. Async (W1-транспорт).
+    async fn get_models_json(&self) -> Result<serde_json::Value, LlmError> {
         let tokens = self.load_tokens()?;
-        let access = self.ensure_access_token(&tokens)?;
-        let url = format!("{}/models", self.api_base.trim_end_matches('/'));
-        let agent = ureq::AgentBuilder::new().timeout(self.timeout).build();
-        let req = agent
-            .get(&url)
-            .set("Authorization", &format!("Bearer {access}"));
-        match req.call() {
-            Ok(resp) => {
-                let text = resp
-                    .into_string()
-                    .map_err(|e| LlmError::Transport(format!("models: {e}")))?;
-                serde_json::from_str(&text)
-                    .map_err(|e| LlmError::Protocol(format!("models: битый JSON: {e}")))
-            }
-            Err(ureq::Error::Status(code, resp)) => {
-                let retry_after_secs = resp
-                    .header("retry-after")
-                    .and_then(|v| v.trim().parse::<u32>().ok());
-                let _ = resp.into_string();
-                match code {
-                    401 | 403 => Err(LlmError::Auth(format!("HTTP {code}"))),
-                    429 => Err(LlmError::RateLimit { retry_after_secs }),
-                    _ => Err(LlmError::Transport(format!("HTTP {code}"))),
-                }
-            }
-            Err(ureq::Error::Transport(t)) => Err(LlmError::Transport(t.to_string())),
+        let access = self.ensure_access_token_async(&tokens).await?;
+        let resp = self.transport.execute(self.models_request(&access)).await?;
+        if let Some(err) = resp.map_status("models") {
+            return Err(err);
         }
+        serde_json::from_str(&resp.body_str())
+            .map_err(|e| LlmError::Protocol(format!("models: битый JSON: {e}")))
+    }
+
+    /// Построить GET-запрос discovery (общее для sync/async вариантов).
+    fn models_request(&self, access: &str) -> HttpRequest {
+        HttpRequest::get(
+            format!("{}/models", self.api_base.trim_end_matches('/')),
+            self.timeout,
+        )
+        .with_header("Authorization", format!("Bearer {access}"))
     }
 
     /// Discovery реального списка моделей подписки (`GET /v1/models`,
     /// F-5.5). Приложение может закэшировать результат в Settings.
+    /// Синхронный вариант (desktop; WasmFetchTransport вернёт NotSupported —
+    /// web использует [`Self::discover_models_async`]).
     pub fn discover_models(&self) -> Result<Vec<String>, LlmError> {
-        let json = self.get_models_json()?;
-        let data = json
-            .get("data")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| LlmError::Protocol("models: нет data[]".into()))?;
-        Ok(data
-            .iter()
-            .filter_map(|m| m.get("id").and_then(|v| v.as_str()))
-            .map(str::to_string)
-            .collect())
+        let tokens = self.load_tokens()?;
+        let access = self.ensure_access_token(&tokens)?;
+        let resp = self
+            .transport
+            .execute_blocking(&self.models_request(&access))?;
+        if let Some(err) = resp.map_status("models") {
+            return Err(err);
+        }
+        let json: serde_json::Value = serde_json::from_str(&resp.body_str())
+            .map_err(|e| LlmError::Protocol(format!("models: битый JSON: {e}")))?;
+        models_ids_from_json(&json)
+    }
+
+    /// Async-двойник [`Self::discover_models`] (web/wasm путь, W3).
+    pub async fn discover_models_async(&self) -> Result<Vec<String>, LlmError> {
+        let json = self.get_models_json().await?;
+        models_ids_from_json(&json)
     }
 
     // ------------------------------------------------------------------
@@ -450,6 +447,47 @@ fn default_models() -> Vec<ModelInfo> {
     ]
 }
 
+/// Слияние старых токенов с полученными при refresh (отсутствие ротации
+/// поля — сохраняется прежнее; RFC 6749 §6). Общее для sync/async путей.
+fn merged_tokens(old: &OAuthTokens, fresh: OAuthTokens) -> OAuthTokens {
+    OAuthTokens {
+        refresh_token: if fresh.refresh_token.is_empty() {
+            old.refresh_token.clone()
+        } else {
+            fresh.refresh_token.clone()
+        },
+        id_token: if fresh.id_token.is_empty() {
+            old.id_token.clone()
+        } else {
+            fresh.id_token.clone()
+        },
+        account_email: if fresh.id_token.is_empty() {
+            old.account_email.clone()
+        } else {
+            // Свежий id_token — попробовать вытащить email (не критично).
+            super::jwt::parse_id_token(&fresh.id_token)
+                .ok()
+                .and_then(|c| c.email)
+                .or_else(|| old.account_email.clone())
+        },
+        ..fresh
+    }
+}
+
+/// Разобрать JSON-ответ discovery (`{"data": [{"id": …}]}`) в список id
+/// (чистая функция — тесты без сети; общее для sync/async путей).
+fn models_ids_from_json(json: &serde_json::Value) -> Result<Vec<String>, LlmError> {
+    let data = json
+        .get("data")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| LlmError::Protocol("models: нет data[]".into()))?;
+    Ok(data
+        .iter()
+        .filter_map(|m| m.get("id").and_then(|v| v.as_str()))
+        .map(str::to_string)
+        .collect())
+}
+
 #[async_trait::async_trait]
 impl LlmProvider for ChatGptOAuthProvider {
     fn id(&self) -> &str {
@@ -492,7 +530,7 @@ impl LlmProvider for ChatGptOAuthProvider {
             opts.temperature,
             opts.max_tokens,
         );
-        let resp = self.post_responses(body)?;
+        let resp = self.post_responses(body).await?;
         parse_output_text(&resp)
     }
 
@@ -549,7 +587,7 @@ impl LlmProvider for ChatGptOAuthProvider {
             0.0,
             None,
         );
-        let resp = self.post_responses(body)?;
+        let resp = self.post_responses(body).await?;
         let calls = parse_function_calls(&resp)?;
         let call = calls.first().ok_or_else(|| {
             LlmError::Protocol("нет function_call в ответе (forced choice failed)".into())
@@ -597,7 +635,7 @@ impl LlmProvider for ChatGptOAuthProvider {
             opts.temperature,
             opts.max_tokens,
         );
-        let resp = self.post_responses(body)?;
+        let resp = self.post_responses(body).await?;
         parse_function_calls(&resp)
     }
 
@@ -612,7 +650,7 @@ impl LlmProvider for ChatGptOAuthProvider {
         // GET /v1/models: 200 → Ok; 401 → Auth (провоцирует refresh/UI
         // «войти снова»); 429 → RateLimit с Retry-After. Discovery-тело
         // здесь не нужно — достаточно статуса.
-        self.get_models_json().map(|_| ())
+        self.get_models_json().await.map(|_| ())
     }
 }
 

@@ -19,8 +19,14 @@ runner = "wasmtime run -S inherit-env --dir .::/ --dir /tmp::/tmp"
 # FilePickerAcceptType, OpenFilePickerOptions — нужны canvas-web/fs_access.rs).
 # FR-068 W2 (commit 1d1944c) случайно удалил эту секцию — wasm-check
 # сломался на main (CI #301..); восстановлено в fix-коммите.
+# W1 (wave-1): getrandom 0.3 (PKCE-энтропия, feature l1-llm) на
+# wasm32-unknown-unknown требует явного выбора бэкенда — JS
+# crypto.getRandomValues через wasm-bindgen. Без cfg — compile_error
+# в getrandom/backends.rs (браузерная цель не поддерживается «из коробки»).
+# Пара к фиче wasm_js у optional dep getrandom (crates/canvas-llm/Cargo.toml).
+# Скоуп — только wasm32-unknown-unknown (нативным сборкам cfg не виден).
 [target.wasm32-unknown-unknown]
-rustflags = ["--cfg=web_sys_unstable_apis"]
+rustflags = ["--cfg=web_sys_unstable_apis", '--cfg=getrandom_backend="wasm_js"']
 
 # FR-068 W2: диск dev-машины ограничен — инкрементальные сессии
 # раздувает target (гигабайты на прогон тестов). Отключено локально,

@@ -15,7 +15,9 @@
 > `AI_OAUTH_UNAVAILABLE`, `OPFS — TODO`, `fetch-транспорт F-5.10`.
 >
 > **Статус исполнения** (исполнитель волны отмечает здесь):
-> - Волна 1 — ☐ не начата
+> - Волна 1 — ✅ реализована (2026-10-09: HttpTransport/Ureq/Mock, wasm-fetch
+>   за фичей, health::check + HealthReport, discovery + ModelCache TTL,
+>   getrandom wasm_js-гейт; тесты 2736 workspace + 232 canvas-llm/features)
 > - Волна 2 — ☐ не начата
 > - Волна 3 — ☐ не начата
 

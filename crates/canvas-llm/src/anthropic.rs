@@ -10,16 +10,20 @@
 //!   `tool_choice={type:"tool", name:"rank"}`).
 //! - Embeddings: **не поддерживаются** (`embed()` → `NotSupported`).
 //!
+//! **Transport (W1):** все HTTP-вызовы через [`crate::transport::HttpTransport`]
+//! (натив — UreqTransport; wasm — WasmFetchTransport за `wasm-fetch`, W3).
 //! **Модели:** claude-3-5-sonnet, claude-3-5-haiku, claude-3-opus
 //! (hardcoded список, тарифы из открытого прайса Anthropic).
 
 use crate::error::LlmError;
+use crate::transport::{HttpRequest, HttpTransport, UreqTransport};
 use crate::types::{
     ChatOpts, ChoiceAnswer, JsonVal, Message, ModelInfo, OptionDesc, Pricing, ProviderCaps, Role,
     ToolCall, ToolCallingOpts, ToolChoice, ToolDef,
 };
 use crate::LlmProvider;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Anthropic Claude адаптер (`/v1/messages`, `x-api-key`, `tool_use`).
@@ -28,6 +32,9 @@ pub struct AnthropicClaudeProvider {
     model: String,
     models: Vec<ModelInfo>,
     timeout: Duration,
+    /// W1: HTTP-транспорт (натив — UreqTransport; тесты — MockTransport;
+    /// wasm — WasmFetchTransport, волна W3).
+    transport: Arc<dyn HttpTransport>,
 }
 
 impl AnthropicClaudeProvider {
@@ -74,12 +81,20 @@ impl AnthropicClaudeProvider {
             model: model.into(),
             models,
             timeout: Duration::from_secs(30),
+            transport: Arc::new(UreqTransport::new()),
         }
     }
 
     /// Timeout запроса (для suggest — 10с, для graph/agent — больше).
     pub fn with_timeout(mut self, secs: u64) -> Self {
         self.timeout = Duration::from_secs(secs);
+        self
+    }
+
+    /// W1: подменить HTTP-транспорт (builder-стиль; по умолчанию —
+    /// UreqTransport, существующие вызовы не меняются).
+    pub fn with_transport(mut self, transport: Arc<dyn HttpTransport>) -> Self {
+        self.transport = transport;
         self
     }
 
@@ -98,43 +113,18 @@ impl AnthropicClaudeProvider {
     /// Базовый URL Anthropic API (constexpr для тестов).
     const BASE_URL: &'static str = "https://api.anthropic.com/v1";
 
-    fn agent(&self) -> ureq::Agent {
-        ureq::AgentBuilder::new().timeout(self.timeout).build()
-    }
-
-    /// POST к `/v1/messages` с auth-заголовками Anthropic.
-    fn post_messages(&self, body: serde_json::Value) -> Result<serde_json::Value, LlmError> {
+    /// POST к `/v1/messages` с auth-заголовками Anthropic (async — W1).
+    async fn post_messages(&self, body: serde_json::Value) -> Result<serde_json::Value, LlmError> {
         let url = format!("{}/messages", Self::BASE_URL);
-        let agent = self.agent();
-        let req = agent
-            .post(&url)
-            .set("x-api-key", &self.api_key)
-            .set("anthropic-version", "2023-06-01")
-            .set("content-type", "application/json");
-        match req.send_json(body) {
-            Ok(resp) => {
-                let text = resp
-                    .into_string()
-                    .map_err(|e| LlmError::Transport(e.to_string()))?;
-                serde_json::from_str(&text)
-                    .map_err(|e| LlmError::Protocol(format!("битый JSON ответа: {e}")))
-            }
-            Err(ureq::Error::Status(401, resp)) | Err(ureq::Error::Status(403, resp)) => {
-                let _ = resp.into_string();
-                Err(LlmError::Auth("HTTP 401/403".into()))
-            }
-            Err(ureq::Error::Status(429, resp)) => {
-                let _ = resp.into_string();
-                Err(LlmError::RateLimit {
-                    retry_after_secs: None,
-                })
-            }
-            Err(ureq::Error::Status(code, resp)) => {
-                let body_text = resp.into_string().unwrap_or_default();
-                Err(LlmError::Transport(format!("HTTP {code}: {body_text}")))
-            }
-            Err(ureq::Error::Transport(t)) => Err(LlmError::Transport(t.to_string())),
+        let req = HttpRequest::post_json(&url, &body, self.timeout)
+            .with_header("x-api-key", &self.api_key)
+            .with_header("anthropic-version", "2023-06-01");
+        let resp = self.transport.execute(req).await?;
+        if let Some(err) = resp.map_status("anthropic") {
+            return Err(err);
         }
+        serde_json::from_str(&resp.body_str())
+            .map_err(|e| LlmError::Protocol(format!("битый JSON ответа: {e}")))
     }
 
     /// Разделить messages на system-промпт (отдельное поле у Anthropic)
@@ -245,7 +235,7 @@ impl LlmProvider for AnthropicClaudeProvider {
             ),
         );
 
-        let resp = self.post_messages(serde_json::Value::Object(body))?;
+        let resp = self.post_messages(serde_json::Value::Object(body)).await?;
         // resp.content[0].text (type=="text")
         let content = resp
             .get("content")
@@ -317,7 +307,7 @@ impl LlmProvider for AnthropicClaudeProvider {
             "tool_choice": { "type": "tool", "name": "rank" },
         });
 
-        let resp = self.post_messages(body)?;
+        let resp = self.post_messages(body).await?;
         // Найти content-блок type=="tool_use" с name=="rank".
         let content = resp
             .get("content")
@@ -409,7 +399,7 @@ impl LlmProvider for AnthropicClaudeProvider {
         };
         body.insert("tool_choice".into(), tool_choice);
 
-        let resp = self.post_messages(serde_json::Value::Object(body))?;
+        let resp = self.post_messages(serde_json::Value::Object(body)).await?;
         let content = resp
             .get("content")
             .and_then(|v| v.as_array())
@@ -442,27 +432,21 @@ impl LlmProvider for AnthropicClaudeProvider {
         // Делаем минимальный запрос /v1/messages с 1 токеном — если 200/400
         // (валидация модели), ключ валиден. 401/403 — нет.
         let url = format!("{}/messages", Self::BASE_URL);
-        let agent = self.agent();
         let body = serde_json::json!({
             "model": self.model,
             "max_tokens": 1,
             "messages": [{ "role": "user", "content": "ping" }],
         });
-        let req = agent
-            .post(&url)
-            .set("x-api-key", &self.api_key)
-            .set("anthropic-version", "2023-06-01")
-            .set("content-type", "application/json");
-        match req.send_json(body) {
-            Ok(_) => Ok(()),
-            Err(ureq::Error::Status(401, resp)) | Err(ureq::Error::Status(403, resp)) => {
-                let _ = resp.into_string();
-                Err(LlmError::Auth("HTTP 401/403".into()))
-            }
-            Err(ureq::Error::Status(400, resp)) => {
+        let req = HttpRequest::post_json(&url, &body, self.timeout)
+            .with_header("x-api-key", &self.api_key)
+            .with_header("anthropic-version", "2023-06-01");
+        let resp = self.transport.execute(req).await?;
+        match resp.status {
+            200..=299 => Ok(()),
+            400 => {
                 // 400 — модель не существует / неверный формат, но ключ
                 // валиден. Для health-check это ОК.
-                let body_text = resp.into_string().unwrap_or_default();
+                let body_text = resp.body_str();
                 if body_text.contains("model")
                     || body_text.contains("invalid")
                     || body_text.contains("not_found")
@@ -472,17 +456,7 @@ impl LlmProvider for AnthropicClaudeProvider {
                     Err(LlmError::Transport(format!("HTTP 400: {body_text}")))
                 }
             }
-            Err(ureq::Error::Status(429, resp)) => {
-                let _ = resp.into_string();
-                Err(LlmError::RateLimit {
-                    retry_after_secs: None,
-                })
-            }
-            Err(ureq::Error::Status(code, resp)) => {
-                let body_text = resp.into_string().unwrap_or_default();
-                Err(LlmError::Transport(format!("HTTP {code}: {body_text}")))
-            }
-            Err(ureq::Error::Transport(t)) => Err(LlmError::Transport(t.to_string())),
+            _ => resp.map_status("anthropic health").map_or(Ok(()), Err),
         }
     }
 }

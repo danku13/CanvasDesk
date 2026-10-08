@@ -14,9 +14,10 @@
 //!   храня `Box<dyn LlmProvider>` как тип-заглушку.
 
 // FR-LLM-A: фиксированный API из ADR-0016 §4.5. Методы async только за
-// feature `l1-llm` (нужен `async-trait` макрос + `ureq::Agent` для
-// блокирующего HTTP, обёрнутого в `spawn_blocking`). Без флага — трейт
-// становится stub с дефолтами, зависимые крейты компилируются без сети.
+// feature `l1-llm` (нужен `async-trait` макрос + сетевой транспорт
+// `HttpTransport` из W1 — натив UreqTransport / wasm WasmFetchTransport).
+// Без флага — трейт становится stub с дефолтами, зависимые крейты
+// компилируются без сети.
 
 // FR-LLM-A: stub-трейт использует только `ModelInfo` + `ProviderCaps`
 // (для дефолтных реализаций). Полный async-трейт (за `l1-llm`) — все типы.

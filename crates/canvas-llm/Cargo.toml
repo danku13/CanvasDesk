@@ -25,11 +25,30 @@ async-trait = { version = "0.1", optional = true }
 # (минимальный стандартный источник CSPRNG; time/address-хаки запрещены).
 # На нативе — getentropy/BCryptGenRandom/urandom; версия 0.3 уже в дереве
 # (транзитивно). Включается только за `l1-llm` — дефолтное дерево не растёт.
-getrandom = { version = "0.3", optional = true }
+# W1 (wave-1): feature wasm_js — выбор JS-бэкенда (crypto.getRandomValues)
+# под wasm32-unknown-unknown; активируется только на браузерной цели в паре
+# с --cfg=getrandom_backend="wasm_js" (.cargo/config.toml, wasm32-секция).
+# На нативных целях фича инертна (выбор бэкенда гейтится по target).
+getrandom = { version = "0.3", optional = true, features = ["wasm_js"] }
 # FR-LLM-OAUTH (Stream D): unix-время для expires_at — web-time вместо
 # std::time::SystemTime (M8/W1: wasm32-безопасный alias через JS Date;
 # wasm-гейт времени FR-079 S3-fix). Уже в дереве через winit.
 web-time = { workspace = true, optional = true }
+
+# W1 (wave-1): wasm-fetch — браузерный fetch-транспорт (F-5.10). Optional
+# deps включаются ТОЛЬКО за feature `wasm-fetch` (не в default!): дефолтная
+# wasm-сборка canvas-web остаётся без сети (ADR-0011), реальное включение
+# фичи — волна W3. Версии — из workspace-дерева (уже зафоршенены через winit/trunk).
+web-sys = { workspace = true, optional = true, features = [
+    "Window",
+    "Request",
+    "RequestInit",
+    "Response",
+    "Headers",
+] }
+js-sys = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
 
 [dev-dependencies]
 # только для тестовых фикстур: разбор JSON-ответов провайдеров
@@ -62,3 +81,14 @@ l1-llm = [
 # который тянет rustls/webpki-roots. wasm-сборка TLS не использует
 # (web-sys::fetch + cloud-proxy).
 l1-llm-tls = ["l1-llm", "ureq/tls"]
+# W1 (wave-1): браузерный fetch-транспорт для web-пути (F-5.10). Подразумевает
+# `l1-llm` (типы транспорта за ней). ВАЖНО (ADR-0011): фича легальна только
+# под wasm32-целью — на нативных сборках compile_error! (см. transport.rs);
+# в default НЕ включена — canvas-web активирует её в волне W3.
+wasm-fetch = [
+    "l1-llm",
+    "dep:web-sys",
+    "dep:js-sys",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+]
