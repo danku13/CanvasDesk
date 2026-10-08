@@ -228,6 +228,19 @@ impl PendingStyle {
     }
 }
 
+/// FR-100: глубина стека undo редактора (шагов правки в пределах сессии).
+const UNDO_LIMIT: usize = 100;
+
+/// FR-100: снимок правки для undo/redo — чистый текст, стили и
+/// каретка/выделение (plain-координаты, как поля сессии).
+#[derive(Debug, Clone)]
+struct EditSnapshot {
+    plain: String,
+    spans: Vec<StyleSpan>,
+    cursor: Cursor,
+    selection: Selection,
+}
+
 /// Цель инлайн-редактирования: тело текстовой ноды (T7), лейбл связи (T8)
 /// или заголовок ноды (FR-072 — однострочная правка в шапке карточки).
 /// Индексы — позиции в `canvas.nodes` / `canvas.edges`.
@@ -320,15 +333,42 @@ pub enum KeyCommand {
     SelectAll,
     /// Тоггл маркера форматирования на выделении (Ctrl+B/I/H).
     ToggleMarker(Marker),
+    /// FR-100: Ctrl+Backspace — удалить слово слева от каретки.
+    DeleteWordBackward,
+    /// FR-100: Ctrl+Delete — удалить слово справа от каретки.
+    DeleteWordForward,
+    /// FR-100: Ctrl+Z — откат последнего шага правки (в пределах сессии).
+    Undo,
+    /// FR-100: Ctrl+Y — повтор отменённого шага правки.
+    Redo,
+    /// FR-100: PageUp — страница видимых строк вверх; `true` (Shift) —
+    /// расширить выделение.
+    PageUp(bool),
+    /// FR-100: PageDown — страница видимых строк вниз; `true` (Shift) —
+    /// расширить выделение.
+    PageDown(bool),
+    /// FR-100: Tab — индент пробелами строк выделения (без выделения —
+    /// текущей строки, до позиции таб-стопа).
+    Tab,
+    /// FR-100: Shift+Tab — убрать один уровень индента.
+    ShiftTab,
+    /// FR-100: Home — «умное начало строки»: первый вызов — к первому
+    /// непробельному символу строки, повторный (каретка уже там) — к
+    /// самому началу строки; `true` (Shift) — расширить выделение.
+    SmartHome(bool),
 }
 
-/// Маппинг клавиши winit в команду редактирования (T7).
-/// `ctrl`/`shift` — состояние модификаторов. None — клавиша не для редактора.
-pub fn map_key(key: &Key, ctrl: bool, shift: bool) -> Option<KeyCommand> {
+/// Маппинг клавиши winit в команду редактирования (T7, FR-100).
+/// `ctrl`/`shift` — состояние модификаторов; `super_key` — Cmd (macOS)/Win:
+/// для команд редактора равнозначен Ctrl (Cmd-паритет, UR-001-02 —
+/// Cmd+A на macOS печатал «a»). None — клавиша не для редактора.
+pub fn map_key(key: &Key, ctrl: bool, shift: bool, super_key: bool) -> Option<KeyCommand> {
+    // FR-100: командный модификатор — Ctrl ИЛИ Cmd/Super (паритет)
+    let cmd = ctrl || super_key;
     match key {
         // Enter — завершить редактирование; Shift+Enter и Ctrl+Enter —
         // новая строка (карточка растёт по высоте через fit_note_size)
-        Key::Named(NamedKey::Enter) => Some(if shift || ctrl {
+        Key::Named(NamedKey::Enter) => Some(if shift || cmd {
             KeyCommand::Action(Action::Enter)
         } else {
             KeyCommand::Commit
@@ -336,33 +376,58 @@ pub fn map_key(key: &Key, ctrl: bool, shift: bool) -> Option<KeyCommand> {
         // Пробел приходит как Named(Space), а не Character(" ") — без
         // отдельного руки в текст не вставлялся (заметка «не дышит»)
         Key::Named(NamedKey::Space) => {
-            if ctrl {
+            if cmd {
                 None
             } else {
                 Some(KeyCommand::Insert(" ".to_string()))
             }
         }
         Key::Named(NamedKey::Escape) => Some(KeyCommand::Cancel),
-        Key::Named(NamedKey::Backspace) => Some(KeyCommand::Action(Action::Backspace)),
-        Key::Named(NamedKey::Delete) => Some(KeyCommand::Action(Action::Delete)),
+        // Стрелки: Ctrl/Cmd — прыжок по словам, Shift — расширение выделения
+        // (восстановлено после FR-100: ветки нельзя терять при расширении
+        // набора команд)
         Key::Named(NamedKey::ArrowLeft) => Some(KeyCommand::Motion(
-            if ctrl { Motion::LeftWord } else { Motion::Left },
+            if cmd { Motion::LeftWord } else { Motion::Left },
             shift,
         )),
         Key::Named(NamedKey::ArrowRight) => Some(KeyCommand::Motion(
-            if ctrl {
-                Motion::RightWord
-            } else {
-                Motion::Right
-            },
+            if cmd { Motion::RightWord } else { Motion::Right },
             shift,
         )),
         Key::Named(NamedKey::ArrowUp) => Some(KeyCommand::Motion(Motion::Up, shift)),
         Key::Named(NamedKey::ArrowDown) => Some(KeyCommand::Motion(Motion::Down, shift)),
-        Key::Named(NamedKey::Home) => Some(KeyCommand::Motion(Motion::Home, shift)),
+        // FR-100: Ctrl/Cmd+Backspace/Delete — удаление слова (эвристика
+        // слова — та же, что у Ctrl+стрелок: Motion::LeftWord/RightWord)
+        Key::Named(NamedKey::Backspace) => Some(if cmd {
+            KeyCommand::DeleteWordBackward
+        } else {
+            KeyCommand::Action(Action::Backspace)
+        }),
+        Key::Named(NamedKey::Delete) => Some(if cmd {
+            KeyCommand::DeleteWordForward
+        } else {
+            KeyCommand::Action(Action::Delete)
+        }),
+        // FR-100: Tab — индент (Shift+Tab — аутдент); Ctrl+Tab — не для
+        // редактора (смена вкладок браузера/окна)
+        Key::Named(NamedKey::Tab) => {
+            if cmd {
+                None
+            } else if shift {
+                Some(KeyCommand::ShiftTab)
+            } else {
+                Some(KeyCommand::Tab)
+            }
+        }
+        // FR-100: постраничная навигация по видимым строкам редактора
+        Key::Named(NamedKey::PageUp) => Some(KeyCommand::PageUp(shift)),
+        Key::Named(NamedKey::PageDown) => Some(KeyCommand::PageDown(shift)),
+        // FR-100: Home — «умное начало строки» (двойное нажатие);
+        // End — прежнее поведение
+        Key::Named(NamedKey::Home) => Some(KeyCommand::SmartHome(shift)),
         Key::Named(NamedKey::End) => Some(KeyCommand::Motion(Motion::End, shift)),
         Key::Character(text) => {
-            if ctrl {
+            if cmd {
                 // Буфер обмена/выделение: латиница и кириллическая раскладка,
                 // плюс control-коды, которые winit может выдать с Ctrl
                 return match text.as_str() {
@@ -370,6 +435,10 @@ pub fn map_key(key: &Key, ctrl: bool, shift: bool) -> Option<KeyCommand> {
                     "x" | "X" | "ч" | "Ч" | "\u{18}" => Some(KeyCommand::Cut),
                     "v" | "V" | "м" | "М" | "\u{16}" => Some(KeyCommand::Paste),
                     "a" | "A" | "ф" | "Ф" | "\u{1}" => Some(KeyCommand::SelectAll),
+                    // FR-100: undo/redo правки сессии — латиница, кириллица
+                    // (йцукен: z→я, y→н) и control-коды Ctrl+Z/Ctrl+Y
+                    "z" | "Z" | "я" | "Я" | "\u{1a}" => Some(KeyCommand::Undo),
+                    "y" | "Y" | "н" | "Н" | "\u{19}" => Some(KeyCommand::Redo),
                     // Форматирование (Ctrl+B/I/H), латиница и кириллица
                     "b" | "B" | "и" | "И" | "\u{2}" => {
                         Some(KeyCommand::ToggleMarker(Marker::Bold))
@@ -439,6 +508,14 @@ pub struct EditingSession {
     /// строка не ряд (проза/заголовок/лейбл связи). Учитывается в
     /// [`session_area_offset`].
     pub origin_pad_px: f32,
+    /// FR-100: стек шагов undo (снимки «до мутации», хвост — последний).
+    undo_stack: Vec<EditSnapshot>,
+    /// FR-100: стек отменённых шагов для redo.
+    redo_stack: Vec<EditSnapshot>,
+    /// FR-100: предыдущая мутация была посимвольной печатью (Insert без
+    /// пробела в начале) — соседние вставки сливаются в один шаг undo
+    /// («один шаг на слово»); пробел/иная мутация группу закрывает.
+    typing_open: bool,
 }
 
 impl EditingSession {
@@ -461,6 +538,9 @@ impl EditingSession {
         // WordOrGlyph: перенос по словам, но одно длинное слово, не
         // влезающее в карточку, рвётся по глифам, а не уходит за край
         buffer.set_wrap(font_system, Wrap::WordOrGlyph);
+        // FR-100: таб-стоп индента — 4 пробела (космический дефолт 8 давал
+        // двойной индент; эталон — код-стайл заметок)
+        buffer.set_tab_width(font_system, 4);
         buffer.set_size(font_system, Some(width_px), Some(height_px));
         // CR-009: базис посемейственно — Numi-строки моноширинные (для
         // лейблов связей mono не применяется), прочее — sans medium.
@@ -504,6 +584,9 @@ impl EditingSession {
             body_offset_px: 0.0,
             formula_lines,
             origin_pad_px,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            typing_open: false,
         }
     }
 
@@ -523,6 +606,9 @@ impl EditingSession {
         let line_height = TITLE_LINE_HEIGHT * zoom_px;
         let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
         buffer.set_wrap(font_system, Wrap::None);
+        // FR-100: единый таб-стоп с телом заметки (в заголовке Tab глушится
+        // adapt_command — ширина нужна только для шейпа таб-глифов)
+        buffer.set_tab_width(font_system, 4);
         buffer.set_size(font_system, Some(width_px), Some(height_px));
         buffer.set_text(font_system, text, sans_attrs(), Shaping::Advanced);
         buffer.shape_until_scroll(font_system, false);
@@ -542,6 +628,9 @@ impl EditingSession {
             // CR-018 v1.2: у заголовка Numi-семантики нет — рядов нет, пад 0
             formula_lines: Vec::new(),
             origin_pad_px: 0.0,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            typing_open: false,
         }
     }
 
@@ -582,12 +671,13 @@ impl EditingSession {
 
     /// FR-072: адаптация команды под цель. Заголовок — однострочный:
     /// Enter (в любой комбинации) завершает правку (новых строк нет);
-    /// маркеры форматирования не применяются (заголовок — чистый текст).
+    /// маркеры форматирования и индент не применяются (заголовок —
+    /// чистый однострочный текст).
     pub fn adapt_command(&self, command: KeyCommand) -> Option<KeyCommand> {
         match self.target {
             EditTarget::NodeTitle(_) => match command {
                 KeyCommand::Commit | KeyCommand::Action(Action::Enter) => Some(KeyCommand::Commit),
-                KeyCommand::ToggleMarker(_) => None,
+                KeyCommand::ToggleMarker(_) | KeyCommand::Tab | KeyCommand::ShiftTab => None,
                 other => Some(other),
             },
             _ => Some(command),
@@ -766,6 +856,11 @@ impl EditingSession {
         match &command {
             KeyCommand::Action(action) => {
                 let action = *action;
+                // FR-100: мутующие действия — отдельные шаги undo
+                // (навигация/клик снимок не пишут)
+                if matches!(action, Action::Backspace | Action::Delete | Action::Enter) {
+                    self.push_undo(false);
+                }
                 self.with_editor(|editor| editor.action(font_system, action));
                 self.sync_from_buffer(font_system);
             }
@@ -787,6 +882,11 @@ impl EditingSession {
             }
             KeyCommand::Insert(text) => {
                 let text = text.clone();
+                // FR-100 (группировка): посимвольная печать — один шаг undo
+                // на слово; вставка, начинающаяся пробелом, начинает новый
+                // шаг (следующие буквы сливаются с ним)
+                let word_start = !text.starts_with(char::is_whitespace);
+                self.push_undo(word_start);
                 self.insert_and_sync(font_system, &text);
             }
             KeyCommand::SelectAll => {
@@ -804,14 +904,181 @@ impl EditingSession {
                 let marker = *marker;
                 self.toggle_marker(font_system, marker);
             }
+            // FR-100: Ctrl+Backspace/Delete — слово слева/справа. Эвристика
+            // слова — cosmic-text (та же, что у Ctrl+стрелок — сессия не
+            // держит вторую правду); при активном выделении удаляется само
+            // выделение (как у обычных Backspace/Delete).
+            KeyCommand::DeleteWordBackward => {
+                self.push_undo(false);
+                self.with_editor(|editor| {
+                    if let Selection::None = editor.selection() {
+                        editor.set_selection(Selection::Normal(editor.cursor()));
+                        editor.action(font_system, Action::Motion(Motion::LeftWord));
+                    }
+                    editor.delete_selection();
+                });
+                self.sync_from_buffer(font_system);
+            }
+            KeyCommand::DeleteWordForward => {
+                self.push_undo(false);
+                self.with_editor(|editor| {
+                    if let Selection::None = editor.selection() {
+                        editor.set_selection(Selection::Normal(editor.cursor()));
+                        editor.action(font_system, Action::Motion(Motion::RightWord));
+                    }
+                    editor.delete_selection();
+                });
+                self.sync_from_buffer(font_system);
+            }
+            // FR-100: undo/redo в пределах сессии (стек снимков)
+            KeyCommand::Undo => {
+                self.undo(font_system);
+            }
+            KeyCommand::Redo => {
+                self.redo(font_system);
+            }
+            // FR-100: постраничная навигация — своя (не Motion::PageUp
+            // cosmic-text): каретка ходит на число ПОЛНОСТЬЮ видимых строк и
+            // приземляется в начало строки — выделение Shift'ом покрывает
+            // ровно страницу строк, без зависимости от колонки/зума
+            KeyCommand::PageUp(extend) => {
+                let extend = *extend;
+                self.page_motion(font_system, true, extend);
+            }
+            KeyCommand::PageDown(extend) => {
+                let extend = *extend;
+                self.page_motion(font_system, false, extend);
+            }
+            // FR-100: индент — готовые Action::Indent/Unindent cosmic-text
+            // (пробелы до таб-стопа, строки выделения, коррекция каретки)
+            KeyCommand::Tab => {
+                self.push_undo(false);
+                self.with_editor(|editor| editor.action(font_system, Action::Indent));
+                self.sync_from_buffer(font_system);
+            }
+            KeyCommand::ShiftTab => {
+                self.push_undo(false);
+                self.with_editor(|editor| editor.action(font_system, Action::Unindent));
+                self.sync_from_buffer(font_system);
+            }
+            KeyCommand::SmartHome(extend) => {
+                let extend = *extend;
+                // FR-100: «умное начало строки» — первое нажатие ведёт к
+                // первому непробельному символу строки, повторное (каретка
+                // уже там) — к самому началу строки (тоггл).
+                let line = self.cursor.line;
+                let text = self.buffer.lines.get(line).map(|l| l.text()).unwrap_or("");
+                let first_text = text.len() - text.trim_start().len();
+                let target = if self.cursor.index == first_text {
+                    0
+                } else {
+                    first_text
+                };
+                self.with_editor(|editor| {
+                    if extend {
+                        if let Selection::None = editor.selection() {
+                            editor.set_selection(Selection::Normal(editor.cursor()));
+                        }
+                    } else {
+                        editor.set_selection(Selection::None);
+                    }
+                    editor.set_cursor(Cursor::new(line, target));
+                });
+                self.buffer.shape_until_scroll(font_system, false);
+            }
             // Обрабатываются приложением
             _ => {}
         }
         command
     }
 
-    /// Вставить строку (паста из буфера обмена).
+    /// FR-100: постраничная навигация — каретка ходит на число полностью
+    /// видимых строк буфера (высота области / шаг строки); приземление —
+    /// в начало строки (колонка 0): Shift-вариант выделяет ровно страницу
+    /// строк. `up` — страница вверх, `extend` — расширить выделение.
+    fn page_motion(&mut self, font_system: &mut FontSystem, up: bool, extend: bool) {
+        let line_height = self.line_height_px.max(1.0);
+        let page = (self.layout.1 / line_height).floor().max(1.0) as usize;
+        let last = self.buffer.lines.len().saturating_sub(1);
+        let target = if up {
+            self.cursor.line.saturating_sub(page)
+        } else {
+            (self.cursor.line + page).min(last)
+        };
+        self.with_editor(|editor| {
+            if extend {
+                if let Selection::None = editor.selection() {
+                    editor.set_selection(Selection::Normal(editor.cursor()));
+                }
+            } else {
+                editor.set_selection(Selection::None);
+            }
+            editor.set_cursor(Cursor::new(target, 0));
+        });
+        self.buffer.shape_until_scroll(font_system, false);
+    }
+
+    /// FR-100: снять текущее состояние (перед мутацией) для стека undo.
+    fn snapshot(&self) -> EditSnapshot {
+        EditSnapshot {
+            plain: self.plain.clone(),
+            spans: self.spans.clone(),
+            cursor: self.cursor,
+            selection: self.selection,
+        }
+    }
+
+    /// FR-100: записать шаг undo. `group` — мутация продолжает предыдущую
+    /// группу (посимвольная печать): снимок не пишется, шаг сольётся с
+    /// предыдущим. Любая групповая запись очищает redo (ветвление истории).
+    fn push_undo(&mut self, group: bool) {
+        if !(group && self.typing_open) {
+            self.undo_stack.push(self.snapshot());
+            if self.undo_stack.len() > UNDO_LIMIT {
+                self.undo_stack.remove(0);
+            }
+            self.redo_stack.clear();
+        }
+        self.typing_open = group;
+    }
+
+    /// FR-100: восстановить состояние из снимка (пересборка rich-буфера;
+    /// refresh_styles сам выравнивает линии/каретку).
+    fn restore(&mut self, font_system: &mut FontSystem, snapshot: EditSnapshot) {
+        self.plain = snapshot.plain;
+        self.spans = snapshot.spans;
+        self.cursor = snapshot.cursor;
+        self.selection = snapshot.selection;
+        self.refresh_styles(font_system);
+    }
+
+    /// FR-100: откат последнего шага правки (Ctrl+Z). true — состояние
+    /// изменилось (на пустом стеке — нет).
+    pub fn undo(&mut self, font_system: &mut FontSystem) -> bool {
+        let Some(snapshot) = self.undo_stack.pop() else {
+            return false;
+        };
+        self.redo_stack.push(self.snapshot());
+        self.restore(font_system, snapshot);
+        self.typing_open = false;
+        true
+    }
+
+    /// FR-100: повтор отменённого шага (Ctrl+Y). true — состояние изменилось.
+    pub fn redo(&mut self, font_system: &mut FontSystem) -> bool {
+        let Some(snapshot) = self.redo_stack.pop() else {
+            return false;
+        };
+        self.undo_stack.push(self.snapshot());
+        self.restore(font_system, snapshot);
+        self.typing_open = false;
+        true
+    }
+
+    /// Вставить строку (паста из буфера обмена). FR-100: вставка —
+    /// один шаг undo независимо от длины.
     pub fn insert_text(&mut self, font_system: &mut FontSystem, text: &str) {
+        self.push_undo(false);
         self.insert_and_sync(font_system, text);
     }
 
@@ -831,6 +1098,8 @@ impl EditingSession {
         };
         match selection {
             Some((start, end)) if start < end => {
+                // FR-100: тоггл стиля — шаг undo (спаны входят в снимок)
+                self.push_undo(false);
                 self.spans =
                     markdown::toggle_style(self.plain.len(), &self.spans, start, end, flag);
                 self.refresh_styles(font_system);
@@ -924,6 +1193,9 @@ impl EditingSession {
         token: &str,
         text: &str,
     ) {
+        // FR-100: замена токена подсказкой — один шаг undo (удаление
+        // хвоста и вставка не разъезжаются)
+        self.push_undo(false);
         let chars = token.chars().count();
         self.with_editor(|editor| {
             editor.set_selection(Selection::None);
@@ -1070,13 +1342,13 @@ mod tests {
     #[test]
     fn space_inserts_gap() {
         let (mut fs, mut session) = session("слово");
-        let cmd = map_key(&Key::Named(NamedKey::Space), false, false);
+        let cmd = map_key(&Key::Named(NamedKey::Space), false, false, false);
         assert_eq!(cmd, Some(KeyCommand::Insert(" ".to_string())));
         session.apply(&mut fs, cmd.unwrap());
         session.insert_text(&mut fs, "два");
         assert_eq!(session.text(), "слово два");
         assert_eq!(
-            map_key(&Key::Named(NamedKey::Space), true, false),
+            map_key(&Key::Named(NamedKey::Space), true, false, false),
             None,
             "Ctrl+Space не вставляет пробел"
         );
@@ -1551,77 +1823,374 @@ mod tests {
     #[test]
     fn key_mapping() {
         let enter = Key::Named(NamedKey::Enter);
-        assert_eq!(map_key(&enter, false, false), Some(KeyCommand::Commit));
+        assert_eq!(map_key(&enter, false, false, false), Some(KeyCommand::Commit));
         assert_eq!(
-            map_key(&enter, false, true),
+            map_key(&enter, false, true, false),
             Some(KeyCommand::Action(Action::Enter))
         );
         // Ctrl+Enter — тоже новая строка (Т9-UX): привычный жест из мессенджеров
         assert_eq!(
-            map_key(&enter, true, false),
+            map_key(&enter, true, false, false),
             Some(KeyCommand::Action(Action::Enter))
         );
         assert_eq!(
-            map_key(&Key::Named(NamedKey::Escape), false, false),
+            map_key(&Key::Named(NamedKey::Escape), false, false, false),
             Some(KeyCommand::Cancel)
         );
         for key in ["c", "с"] {
             assert_eq!(
-                map_key(&Key::Character(key.into()), true, false),
+                map_key(&Key::Character(key.into()), true, false, false),
                 Some(KeyCommand::Copy)
             );
         }
         assert_eq!(
-            map_key(&Key::Character("v".into()), true, false),
+            map_key(&Key::Character("v".into()), true, false, false),
             Some(KeyCommand::Paste)
         );
         assert_eq!(
-            map_key(&Key::Character("м".into()), true, false),
+            map_key(&Key::Character("м".into()), true, false, false),
             Some(KeyCommand::Paste)
         );
         assert_eq!(
-            map_key(&Key::Character("ф".into()), true, false),
+            map_key(&Key::Character("ф".into()), true, false, false),
             Some(KeyCommand::SelectAll)
         );
         // Форматирование: Ctrl+B/I/H, латиница и кириллица
         assert_eq!(
-            map_key(&Key::Character("b".into()), true, false),
+            map_key(&Key::Character("b".into()), true, false, false),
             Some(KeyCommand::ToggleMarker(Marker::Bold))
         );
         assert_eq!(
-            map_key(&Key::Character("и".into()), true, false),
+            map_key(&Key::Character("и".into()), true, false, false),
             Some(KeyCommand::ToggleMarker(Marker::Bold))
         );
         assert_eq!(
-            map_key(&Key::Character("ш".into()), true, false),
+            map_key(&Key::Character("ш".into()), true, false, false),
             Some(KeyCommand::ToggleMarker(Marker::Italic))
         );
         assert_eq!(
-            map_key(&Key::Character("р".into()), true, false),
+            map_key(&Key::Character("р".into()), true, false, false),
             Some(KeyCommand::ToggleMarker(Marker::Highlight))
         );
         // Без Ctrl эти буквы — обычная вставка
         assert_eq!(
-            map_key(&Key::Character("b".into()), false, false),
+            map_key(&Key::Character("b".into()), false, false, false),
             Some(KeyCommand::Insert("b".into()))
         );
         assert_eq!(
-            map_key(&Key::Character("я".into()), false, false),
+            map_key(&Key::Character("я".into()), false, false, false),
             Some(KeyCommand::Insert("я".into()))
         );
         // Control-символы без Ctrl не вставляются
-        assert_eq!(map_key(&Key::Character("\t".into()), false, false), None);
+        assert_eq!(map_key(&Key::Character("\t".into()), false, false, false), None);
         // Ctrl+Left — word jump, Shift+Left — расширение выделения
         assert_eq!(
-            map_key(&Key::Named(NamedKey::ArrowLeft), true, false),
+            map_key(&Key::Named(NamedKey::ArrowLeft), true, false, false),
             Some(KeyCommand::Motion(Motion::LeftWord, false))
         );
         assert_eq!(
-            map_key(&Key::Named(NamedKey::ArrowLeft), false, true),
+            map_key(&Key::Named(NamedKey::ArrowLeft), false, true, false),
             Some(KeyCommand::Motion(Motion::Left, true))
         );
         // Прочие клавиши редактору не нужны
-        assert_eq!(map_key(&Key::Named(NamedKey::F5), false, false), None);
+        assert_eq!(map_key(&Key::Named(NamedKey::F5), false, false, false), None);
+    }
+
+    // --- FR-100: полный набор шорткатов редактора ---
+
+    /// Маппинг новых команд: Ctrl+Backspace/Delete — слово, Ctrl+Z/Y —
+    /// undo/redo (латиница/кириллица/control-коды), Home — SmartHome,
+    /// PageUp/Down, Tab/Shift+Tab; Ctrl+Tab не для редактора.
+    #[test]
+    fn key_mapping_fr100() {
+        assert_eq!(
+            map_key(&Key::Named(NamedKey::Backspace), true, false, false),
+            Some(KeyCommand::DeleteWordBackward)
+        );
+        assert_eq!(
+            map_key(&Key::Named(NamedKey::Delete), true, false, false),
+            Some(KeyCommand::DeleteWordForward)
+        );
+        assert_eq!(
+            map_key(&Key::Named(NamedKey::Backspace), false, false, false),
+            Some(KeyCommand::Action(Action::Backspace)),
+            "без Ctrl Backspace — обычное удаление"
+        );
+        for key in ["z", "я"] {
+            assert_eq!(
+                map_key(&Key::Character(key.into()), true, false, false),
+                Some(KeyCommand::Undo),
+                "Ctrl+{key} — undo"
+            );
+        }
+        for key in ["y", "н"] {
+            assert_eq!(
+                map_key(&Key::Character(key.into()), true, false, false),
+                Some(KeyCommand::Redo),
+                "Ctrl+{key} — redo"
+            );
+        }
+        assert_eq!(
+            map_key(&Key::Character("\u{1a}".into()), true, false, false),
+            Some(KeyCommand::Undo),
+            "control-код Ctrl+Z"
+        );
+        assert_eq!(
+            map_key(&Key::Named(NamedKey::Home), false, false, false),
+            Some(KeyCommand::SmartHome(false))
+        );
+        assert_eq!(
+            map_key(&Key::Named(NamedKey::Home), false, true, false),
+            Some(KeyCommand::SmartHome(true))
+        );
+        assert_eq!(
+            map_key(&Key::Named(NamedKey::PageUp), false, false, false),
+            Some(KeyCommand::PageUp(false))
+        );
+        assert_eq!(
+            map_key(&Key::Named(NamedKey::PageDown), false, true, false),
+            Some(KeyCommand::PageDown(true))
+        );
+        assert_eq!(
+            map_key(&Key::Named(NamedKey::Tab), false, false, false),
+            Some(KeyCommand::Tab)
+        );
+        assert_eq!(
+            map_key(&Key::Named(NamedKey::Tab), false, true, false),
+            Some(KeyCommand::ShiftTab)
+        );
+        assert_eq!(
+            map_key(&Key::Named(NamedKey::Tab), true, false, false),
+            None,
+            "Ctrl+Tab — не команда редактора"
+        );
+    }
+
+    /// FR-100 (Cmd-паритет): map_key с super=true эквивалентен ctrl=true
+    /// на командных клавишах (Cmd+A/Backspace/Z на macOS).
+    #[test]
+    fn super_parity_in_map_key() {
+        let cases = [
+            (Key::Named(NamedKey::Backspace), Some(KeyCommand::DeleteWordBackward)),
+            (Key::Named(NamedKey::Delete), Some(KeyCommand::DeleteWordForward)),
+            (Key::Named(NamedKey::Enter), Some(KeyCommand::Action(Action::Enter))),
+            (Key::Character("a".into()), Some(KeyCommand::SelectAll)),
+            (Key::Character("z".into()), Some(KeyCommand::Undo)),
+            (Key::Character("y".into()), Some(KeyCommand::Redo)),
+            (Key::Character("c".into()), Some(KeyCommand::Copy)),
+            (Key::Named(NamedKey::Tab), None),
+        ];
+        for (key, expected) in cases {
+            assert_eq!(
+                map_key(&key, false, false, true),
+                expected,
+                "super=true ≡ ctrl=true для {key:?}"
+            );
+            assert_eq!(map_key(&key, true, false, false), expected, "ctrl для {key:?}");
+        }
+    }
+
+    /// FR-100: Ctrl+Backspace удаляет слово слева (хвостовые разделители
+    /// остаются — семантика Motion::LeftWord, как у Ctrl+Left), Ctrl+Delete —
+    /// слово справа; на пустом направлении — no-op.
+    #[test]
+    fn word_delete_backward_forward() {
+        let (mut fs, mut s) = session("привет мир");
+        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false)
+            .expect("команда");
+        s.apply(&mut fs, cmd);
+        assert_eq!(s.text(), "привет ", "удалено «мир», пробел остался");
+        let cmd = map_key(&Key::Named(NamedKey::Delete), true, false, false).expect("команда");
+        s.apply(&mut fs, cmd);
+        assert_eq!(s.text(), "привет ", "Ctrl+Delete в конце строки — no-op");
+        // Ctrl+Delete от начала строки — слово справа (свежая сессия:
+        // в текущей «мир» уже удалён первым шагом)
+        let (mut fs, mut s) = session("привет мир");
+        s.apply(&mut fs, KeyCommand::Motion(Motion::Home, false));
+        let cmd = map_key(&Key::Named(NamedKey::Delete), true, false, false).expect("команда");
+        s.apply(&mut fs, cmd);
+        assert_eq!(s.text(), " мир", "удалено «привет», пробел остался");
+        // Ctrl+Backspace в начале строки — no-op
+        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false)
+            .expect("команда");
+        s.apply(&mut fs, cmd);
+        assert_eq!(s.text(), " мир", "слева от каретки слова нет");
+    }
+
+    /// FR-100: Ctrl+Backspace с активным выделением удаляет само выделение
+    /// (как обычный Backspace), а не слово от активного конца.
+    #[test]
+    fn word_delete_with_selection_removes_selection() {
+        let (mut fs, mut s) = session("привет мир");
+        s.apply(&mut fs, KeyCommand::SelectAll);
+        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false)
+            .expect("команда");
+        s.apply(&mut fs, cmd);
+        assert_eq!(s.text(), "", "удалено выделение целиком");
+    }
+
+    /// FR-100: Ctrl+Backspace через границу строки удаляет перенос
+    /// (Motion::LeftWord от начала строки — в конец предыдущей).
+    #[test]
+    fn word_delete_joins_lines() {
+        let (mut fs, mut s) = session("раз\nдва");
+        s.apply(&mut fs, KeyCommand::Motion(Motion::Down, false));
+        s.apply(&mut fs, KeyCommand::Motion(Motion::Home, false));
+        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false)
+            .expect("команда");
+        s.apply(&mut fs, cmd);
+        assert_eq!(s.text(), "раздва", "перенос удалён вместе с переходом");
+    }
+
+    /// FR-100: undo/redo с группировкой посимвольной печати — один шаг
+    /// на слово («привет мир» тремя командами вставки: буквы сливаются,
+    /// пробел начинает новый шаг).
+    #[test]
+    fn undo_redo_grouped_typing() {
+        let (mut fs, mut s) = session("");
+        for ch in "привет".chars() {
+            s.apply(&mut fs, KeyCommand::Insert(ch.to_string()));
+        }
+        s.apply(&mut fs, KeyCommand::Insert(" ".into()));
+        s.apply(&mut fs, KeyCommand::Insert("мир".into()));
+        assert_eq!(s.text(), "привет мир");
+        // Три шага: «мир» → « » → «привет»
+        assert!(s.undo(&mut fs), "шаг 1");
+        assert_eq!(s.text(), "привет ");
+        assert!(s.undo(&mut fs), "шаг 2");
+        assert_eq!(s.text(), "привет");
+        assert!(s.undo(&mut fs), "шаг 3 (вся печать слова одной командой)");
+        assert_eq!(s.text(), "");
+        assert!(!s.undo(&mut fs), "пустой стек — false");
+        // Redo в обратном порядке
+        assert!(s.redo(&mut fs));
+        assert_eq!(s.text(), "привет");
+        assert!(s.redo(&mut fs));
+        assert_eq!(s.text(), "привет ");
+        assert!(s.redo(&mut fs));
+        assert_eq!(s.text(), "привет мир");
+        assert!(!s.redo(&mut fs), "пустой redo — false");
+    }
+
+    /// FR-100: undo/redo через команды клавиатуры (Ctrl+Z/Y) — apply
+    /// маршрутизирует сам; правки после undo открывают новую ветку.
+    #[test]
+    fn undo_redo_via_key_commands() {
+        let (mut fs, mut s) = session("текст");
+        s.apply(&mut fs, KeyCommand::Action(Action::Backspace));
+        assert_eq!(s.text(), "текс");
+        let undo = map_key(&Key::Character("z".into()), true, false, false).expect("команда");
+        s.apply(&mut fs, undo);
+        assert_eq!(s.text(), "текст", "Ctrl+Z вернул символ");
+        // Новая правка после undo — redo сбрасывается
+        s.apply(&mut fs, KeyCommand::Insert("!".into()));
+        assert_eq!(s.text(), "текст!");
+        let redo = map_key(&Key::Character("y".into()), true, false, false).expect("команда");
+        s.apply(&mut fs, redo);
+        assert_eq!(s.text(), "текст!", "redo пуст после новой правки");
+        assert!(s.undo(&mut fs));
+        assert_eq!(s.text(), "текст", "откат вставки после undo");
+    }
+
+    /// FR-100: word-delete и паста — отдельные шаги undo; снимок берётся
+    /// ДО мутации.
+    #[test]
+    fn undo_covers_word_delete_and_paste() {
+        let (mut fs, mut s) = session("абв годы");
+        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false)
+            .expect("команда");
+        s.apply(&mut fs, cmd);
+        assert_eq!(s.text(), "абв ");
+        assert!(s.undo(&mut fs));
+        assert_eq!(s.text(), "абв годы", "word-delete откачен");
+        // Паста (insert_text) — один шаг на вставку любой длины
+        s.insert_text(&mut fs, " и хвост");
+        assert_eq!(s.text(), "абв годы и хвост");
+        assert!(s.undo(&mut fs));
+        assert_eq!(s.text(), "абв годы", "паста откачена целиком");
+    }
+
+    /// FR-100: PageUp/PageDown — каретка ходит страницей видимых строк
+    /// (высота буфера 200 px / шаг строки 20 = 10 строк); Shift-вариант
+    /// расширяет выделение.
+    #[test]
+    fn page_up_down_navigation() {
+        let text = (1..=12)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (mut fs, mut s) = session(&text);
+        assert_eq!(s.caret_line().0, 11, "каретка новой сессии — в конце");
+        s.apply(&mut fs, KeyCommand::PageUp(false));
+        assert_eq!(s.caret_line().0, 1, "страница вверх — 10 строк");
+        s.apply(&mut fs, KeyCommand::PageDown(false));
+        assert_eq!(s.caret_line().0, 11, "страница вниз — обратно в конец");
+        // Shift+PageUp — выделение страницы
+        s.apply(&mut fs, KeyCommand::PageUp(true));
+        let copied = s.copy_selection().expect("выделение после Shift+PageUp");
+        assert_eq!(copied.lines().count(), 10, "выделена страница строк");
+    }
+
+    /// FR-100: Tab — индент пробелами (строки выделения или текущая строка
+    /// до таб-стопа), Shift+Tab — убирает уровень; тоггл — шаг undo.
+    #[test]
+    fn tab_indent_and_outdent() {
+        // Выделение всех строк — индент каждой
+        let (mut fs, mut s) = session("раз\nдва");
+        s.apply(&mut fs, KeyCommand::SelectAll);
+        s.apply(&mut fs, KeyCommand::Tab);
+        assert_eq!(s.text(), "    раз\n    два", "Tab по выделению");
+        // Shift+Tab снимает уровень
+        s.apply(&mut fs, KeyCommand::ShiftTab);
+        assert_eq!(s.text(), "раз\nдва", "Shift+Tab убирает индент");
+        // Без выделения — индент текущей строки, каретка следует за текстом
+        let (mut fs, mut s) = session("абв");
+        s.apply(&mut fs, KeyCommand::Tab);
+        assert_eq!(s.text(), "    абв");
+        assert_eq!(s.caret_line().2, 10, "каретка сдвинулась на индент (4 байта пробела + «абв» = 10)");
+        // Частичный индент добивается до таб-стопа (4)
+        let (mut fs, mut s) = session("  абв");
+        s.apply(&mut fs, KeyCommand::Tab);
+        assert_eq!(s.text(), "    абв", "2 пробела → 4 (таб-стоп)");
+        // Индент — один шаг undo
+        let (mut fs, mut s) = session("раз\nдва");
+        s.apply(&mut fs, KeyCommand::SelectAll);
+        s.apply(&mut fs, KeyCommand::Tab);
+        assert!(s.undo(&mut fs));
+        assert_eq!(s.text(), "раз\nдва", "индент откачен одним шагом");
+    }
+
+    /// FR-100: SmartHome — двойное Home: первое — к первому непробельному
+    /// символу строки, повторное — к началу строки (тоггл); Shift —
+    /// выделение до цели.
+    #[test]
+    fn smart_home_double_press() {
+        let (mut fs, mut s) = session("  привет");
+        assert_eq!(s.caret_line().2, 14, "каретка в конце строки");
+        s.apply(&mut fs, KeyCommand::SmartHome(false));
+        assert_eq!(s.caret_line().2, 2, "первое Home — начало текста");
+        s.apply(&mut fs, KeyCommand::SmartHome(false));
+        assert_eq!(s.caret_line().2, 0, "второе Home — начало строки");
+        s.apply(&mut fs, KeyCommand::SmartHome(false));
+        assert_eq!(s.caret_line().2, 2, "третье Home — снова текст (тоггл)");
+        // Shift+Home — выделение от каретки до цели
+        s.apply(&mut fs, KeyCommand::Motion(Motion::End, false));
+        s.apply(&mut fs, KeyCommand::SmartHome(true));
+        let copied = s.copy_selection().expect("выделение Shift+Home");
+        assert_eq!(copied, "привет", "выделен текст до начала строки");
+    }
+
+    /// FR-100: заголовок — Tab/ShiftTab не применяются (однострочный
+    /// чистый текст), навигация и undo живут.
+    #[test]
+    fn title_adapts_fr100_commands() {
+        let mut fs = FontSystem::new();
+        let s = EditingSession::new_title(&mut fs, 0, "Имя", 300.0, 22.0, 1.0);
+        let tab = map_key(&Key::Named(NamedKey::Tab), false, false, false).expect("команда");
+        assert_eq!(s.adapt_command(tab), None, "Tab в заголовке не индентит");
+        let page = map_key(&Key::Named(NamedKey::PageUp), false, false, false)
+            .expect("команда");
+        assert!(s.adapt_command(page).is_some(), "навигация не глушится");
     }
 }
 
@@ -1675,29 +2244,29 @@ fn title_adapt_command() {
     use winit::keyboard::{Key, NamedKey};
     let mut fs = FontSystem::new();
     let s = EditingSession::new_title(&mut fs, 0, "Имя", 300.0, 22.0, 1.0);
-    let enter = map_key(&Key::Named(NamedKey::Enter), false, false).expect("команда");
+    let enter = map_key(&Key::Named(NamedKey::Enter), false, false, false).expect("команда");
     assert_eq!(
         s.adapt_command(enter),
         Some(KeyCommand::Commit),
         "Enter — коммит"
     );
-    let shift_enter = map_key(&Key::Named(NamedKey::Enter), false, true).expect("команда");
+    let shift_enter = map_key(&Key::Named(NamedKey::Enter), false, true, false).expect("команда");
     assert_eq!(
         s.adapt_command(shift_enter),
         Some(KeyCommand::Commit),
         "Shift+Enter в заголовке — тоже коммит (однострочность)"
     );
-    let bold = map_key(&Key::Character("b".into()), true, false).expect("команда");
+    let bold = map_key(&Key::Character("b".into()), true, false, false).expect("команда");
     assert_eq!(
         s.adapt_command(bold),
         None,
         "маркеры форматирования в заголовке не применяются"
     );
-    let left = map_key(&Key::Named(NamedKey::ArrowLeft), false, false).expect("команда");
+    let left = map_key(&Key::Named(NamedKey::ArrowLeft), false, false, false).expect("команда");
     assert!(s.adapt_command(left).is_some(), "навигация не глушится");
     // Тело — поведение прежнее (Shift+Enter — новая строка)
     let body = EditingSession::new(&mut fs, EditTarget::Node(0), "", 300.0, 100.0, 1.0);
-    let shift_enter_body = map_key(&Key::Named(NamedKey::Enter), false, true).expect("команда");
+    let shift_enter_body = map_key(&Key::Named(NamedKey::Enter), false, true, false).expect("команда");
     let expected = shift_enter_body.clone();
     assert_eq!(
         body.adapt_command(shift_enter_body),
