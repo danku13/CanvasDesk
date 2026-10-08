@@ -436,6 +436,22 @@ pub enum AppEvent {
     /// событие не конструируется (гейт и в матч-руке handler.rs).
     #[cfg(target_arch = "wasm32")]
     LongPressPoll,
+    /// FR-100 (web): последний известный набор модификаторов клавиатуры —
+    /// из DOM keydown/keyup (canvas-web, capture на document — раньше
+    /// listener'а winit на канвасе). Компенсация дефектов winit-web
+    /// (UR-001-02): KeyboardInput уходит в App РАНЬШЕ ModifiersChanged
+    /// (первая Ctrl-комбинация после смены фокуса видела старый набор и
+    /// печатала символ), а blur сбрасывает набор в пустой. Событие встаёт
+    /// в очередь раньше winit-батча того же нажатия; сброса на blur нет —
+    /// набор «живёт» до следующей клавиши (актуальность поддерживает
+    /// каждый keydown/keyup). На нативе не конструируется (источник —
+    /// только web-слой).
+    KeyboardModifiers {
+        control: bool,
+        shift: bool,
+        alt: bool,
+        meta: bool,
+    },
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -725,6 +741,75 @@ struct SettleAnim {
 /// Длительность settle-анимации вставки в группу (FR-012), мс.
 const SETTLE_ANIM_MS: f32 = 250.0;
 
+/// Зона нажатия по text-ноде, которая на «клик без движения» откроет правку
+/// (click-to-edit, docs/dev-researches/inline-edit-single-click-analysis.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ClickEditZone {
+    /// Тело заметки — правка текста (T7).
+    Body,
+    /// Шапка — правка заголовка (FR-072).
+    Title,
+}
+
+/// Отложенный кандидат click-to-edit: ставится на нажатии по text-ноде,
+/// потребляется на отпускании без движения за порог клик/драг (модель
+/// tldraw/Sheets — analysis §1.3: drag по телу остаётся переносом, клик
+/// открывает правку с кареткой в точке нажатия).
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ClickEditCandidate {
+    /// Индекс text-ноды в `canvas.nodes`.
+    index: usize,
+    /// Зона нажатия — тело или шапка.
+    zone: ClickEditZone,
+    /// World-точка нажатия — в неё ставится каретка (конверсия как CR-018 v2).
+    world: [f32; 2],
+    /// Экранный курсор на нажатии — по нему считается порог клик/драг.
+    press_cursor: [f32; 2],
+}
+
+/// Решает, открывает ли нажатие по ноде кандидат click-to-edit (клик без
+/// движения → правка с кареткой в точке). `None` — нажатие ведёт себя как
+/// раньше (drag-перенос, клик — только выделение).
+///
+/// Гейты (analysis §1.3):
+/// - правка — только text-ноды: файловые карточки открываются ассоциацией
+///   (T17), виджеты держат ввод в WebView, группы правят label двойным
+///   кликом (v1 — вне скоупа);
+/// - what-if — клик по строке расчёта тостит, override на даблклике (FR-017 Q8);
+/// - тач — правка по двойному тапу (FR-092/093): виртуальная клавиатура
+///   не должна всплывать по случайному тапу;
+/// - Ctrl/Shift+нажатие — выделение (CR-001), приоритет над правкой.
+pub(super) fn click_edit_target(
+    node: &Node,
+    world: Vec2,
+    whatif_active: bool,
+    press_from_touch: bool,
+    modifier_selection: bool,
+) -> Option<ClickEditZone> {
+    if node.kind() != NodeKind::Text
+        || node.file.is_some()
+        || whatif_active
+        || press_from_touch
+        || modifier_selection
+    {
+        return None;
+    }
+    // FR-072: шапка (верхние HEADER_HEIGHT world-px) — заголовок, ниже — тело
+    Some(if world[1] < node.y + HEADER_HEIGHT {
+        ClickEditZone::Title
+    } else {
+        ClickEditZone::Body
+    })
+}
+
+/// Отпускание кандидата — «клик» (движение в пороге клик/драг, тот же
+/// `SELECT_DRAG_THRESHOLD`, что у рамки выделения): открывает правку.
+/// Движение сильнее порога — это был drag-перенос, кандидат сбрасывается.
+fn click_edit_is_click(candidate: &ClickEditCandidate, cursor: [f32; 2]) -> bool {
+    (cursor[0] - candidate.press_cursor[0]).abs() <= SELECT_DRAG_THRESHOLD
+        && (cursor[1] - candidate.press_cursor[1]).abs() <= SELECT_DRAG_THRESHOLD
+}
+
 /// FR-027: меню помощи кнопки «?» — колонка screen-space у кнопки (кламп
 /// к окну) + флаг раскрытого подменю разделов документации (двухэтапный
 /// Esc: подменю → меню → закрыто — семантика FR-026).
@@ -973,6 +1058,11 @@ pub struct App {
     editor_dragging: bool,
     /// Детектор двойного клика ЛКМ (T7).
     double_click: DoubleClick,
+    /// Click-to-edit (см. docs/dev-researches/inline-edit-single-click-analysis.md):
+    /// кандидат «клик без движения по text-ноде откроет правку» — ставится на
+    /// нажатии, потребляется на отпускании за порогом клик/драг (модель
+    /// tldraw/Sheets: drag по телу остаётся переносом, клик — каретка).
+    click_edit: Option<ClickEditCandidate>,
     /// FR-093: нажатие пришло от тача (on_touch, wasm32) — двойной тап
     /// сверяется с расширенным допуском сдвига (палец гуляет сильнее
     /// курсора). Ставится в on_touch перед Pressed, гасится в on_left_button.
@@ -1611,6 +1701,7 @@ impl App {
             title_then_body: None,
             editor_dragging: false,
             double_click: DoubleClick::new(),
+            click_edit: None,
             press_from_touch: false,
             clipboard,
             menu: None,
@@ -2277,6 +2368,50 @@ impl App {
     /// zoom * scale_factor — перевод world-px в физические (для буфера редактора).
     fn zoom_px(&self) -> f32 {
         self.camera.zoom() * self.scale_factor()
+    }
+
+    /// Click-to-edit: открыть правку зоны ноды и поставить каретку в
+    /// world-точку клика. Конверсия координат — единая с CR-018 v2 (клик по
+    /// строке таблицы): `session_area_offset` + `session.click`. Без рендера
+    /// (stub-тесты) сессия не открывается — no-op без паники.
+    fn begin_edit_at(&mut self, index: usize, zone: ClickEditZone, world: Vec2) {
+        match zone {
+            ClickEditZone::Title => self.begin_editing_title(index),
+            ClickEditZone::Body => self.begin_editing(index),
+        }
+        let zoom_px = self.zoom_px();
+        if let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut()) {
+            if let Some((origin, _, _)) =
+                session_area_offset(&self.scene.canvas, session, self.settings.edges_avoid_nodes)
+            {
+                let x = ((world[0] - origin[0]) * zoom_px) as i32;
+                let y = ((world[1] - origin[1]) * zoom_px) as i32;
+                // CR-018 v1.1: клик по стационарной зоне (выше буфера —
+                // desc/метки) каретку не двигает — редактор просто живёт
+                if y >= 0 {
+                    session.click(renderer.font_system_mut(), x, y);
+                }
+            }
+        }
+    }
+
+    /// Курсор-«луч» над редактируемым текстом text-ноды (тело или шапка) на
+    /// hover — видовая подсказка, что клик откроет правку (click-to-edit).
+    fn click_edit_hover_text(&self) -> bool {
+        let Some(index) = self.hovered else {
+            return false;
+        };
+        let Some(node) = self.scene.canvas.nodes.get(index) else {
+            return false;
+        };
+        click_edit_target(
+            node,
+            self.cursor_world(),
+            self.scene.whatif_active,
+            false,
+            false,
+        )
+        .is_some()
     }
 
     /// Начать редактирование текстовой ноды (T7) или подписи группы:
@@ -4107,11 +4242,35 @@ impl App {
             &canvas_core::dataref::display_name_counts(canvas),
         );
         Some(match target {
-            // «Объект.строка N» — 1-based для отображения, как в dataref
-            // (поле собирается i18n-ключом: RU «строка N», EN «line N»)
+            // CR-025 (UR-001-10, Q8 «имя + значение»): имя строки-присваивания
+            // (ADR-0003: имя > индекс; единая точка — flow::source_line_name),
+            // i18n-фолбэк «строка N» — только безымянным; хвост — текущее
+            // значение строки из потока («Цена.price = 100 rub»), без исхода —
+            // только адрес
             PortTarget::Line(Some(line)) => {
-                let n = (line + 1).to_string();
-                format!("{obj}.{}", self.trf(keys::STAGE_LINE_LABEL, &[("{n}", &n)]))
+                let line = *line;
+                let field =
+                    match canvas_core::flow::source_line_name(canvas, &node_id, None, Some(line)) {
+                        Some(name) => name,
+                        None => {
+                            let n = (line + 1).to_string();
+                            self.trf(keys::STAGE_LINE_LABEL, &[("{n}", &n)])
+                        }
+                    };
+                let value = self
+                    .scene
+                    .expr_line_results
+                    .get(&node_id)
+                    .and_then(|lines| lines.get(line))
+                    .and_then(|outcome| outcome.as_ref())
+                    .map(|outcome| match outcome {
+                        ExprOutcome::Ok(value) => value.to_string(),
+                        ExprOutcome::Err(msg) => msg.clone(),
+                    });
+                match value {
+                    Some(v) => format!("{obj}.{field} = {v}"),
+                    None => format!("{obj}.{field}"),
+                }
             }
             // Футер шаблонной ноды — значение ноды целиком (F-5 «out:»)
             PortTarget::Line(None) => self.trf(keys::STAGE_OUT_LABEL, &[("{name}", &obj)]),
@@ -4120,7 +4279,10 @@ impl App {
                 keys::TOOLTIP_PORT_PARAM,
                 &[("{path}", &format!("{obj}.{param}"))],
             ),
-            PortTarget::Out => self.trf(keys::STAGE_OUT_LABEL, &[("{name}", &obj)]),
+            // CR-024: ветки PortTarget::Out больше нет — сторонний порт
+            // без входящих value-рёбер тултипа не показывает (control-
+            // семантика); «out:» живёт только у футера шаблонной ноды
+            // (PortTarget::Line(None) — drag с него всегда value).
         })
     }
 
@@ -4153,12 +4315,24 @@ impl App {
             if eff_to != side {
                 continue;
             }
-            // Поле: from_line → i18n «строка N»/«line N» (1-based);
-            // from_output/fallback edge.id — поле из единой точки dataref.
+            // Поле: CR-025 — имя строки резолвится (ADR-0003: имя > индекс,
+            // единая точка flow::source_line_name: fromOutput → имя
+            // присваивания); i18n «строка N»/«line N» — только безымянным;
+            // from_output/фолбэк edge.id — поле из единой точки dataref.
             let field = match edge.from_line {
                 Some(line) => {
-                    let n = (line + 1).to_string();
-                    self.trf(keys::STAGE_LINE_LABEL, &[("{n}", &n)])
+                    match canvas_core::flow::source_line_name(
+                        canvas,
+                        &edge.from_node,
+                        edge.from_output.as_deref(),
+                        Some(line),
+                    ) {
+                        Some(name) => name,
+                        None => {
+                            let n = (line + 1).to_string();
+                            self.trf(keys::STAGE_LINE_LABEL, &[("{n}", &n)])
+                        }
+                    }
                 }
                 None => r.r.field.clone(),
             };
@@ -4193,9 +4367,12 @@ impl App {
 
     /// FR-045 F-5 v1/v2: лейблы порта канваса под курсором — приоритет как
     /// у drag-старта (CR-003/FR-050): построчный порт → якорь параметра →
-    /// сторонный порт. Сторонный порт читается по стороне (P1 «входы
-    /// слева»): есть входящие value-рёбра — qualified-истоки (v2,
-    /// In-чтение), нет — «out:» (drag-исток, v1). None — порта нет.
+    /// сторонный порт. Построчный порт/футер шаблона — value-выходы (drag
+    /// всегда value) — адресная подпись; входные слоты стороны —
+    /// qualified-истоки (v2, In-чтение). CR-024 (UR-001-09, Q7): у
+    /// стороннего порта БЕЗ входящих value-рёбер тултипа нет — обычный
+    /// drag создаёт контрольную связь, «out:» — дата-семантика value-связей
+    /// (эталон — stage-подписи stage_src_label_lines). None — порта нет.
     fn port_tooltip_at(&self, world: Vec2) -> Option<Vec<PortLabelLine>> {
         if let Some((node_index, port)) = self.line_port_hit(world) {
             return self
@@ -4228,14 +4405,14 @@ impl App {
             if let Some(lines) = self.inbound_label_lines(node_index, side) {
                 return Some(lines);
             }
-            return self
-                .port_label_for(node_index, &PortTarget::Out)
-                .map(|text| {
-                    vec![PortLabelLine {
-                        text,
-                        unmapped: false,
-                    }]
-                });
+            // CR-024 (UR-001-09, Q7, решение владельца «без тултипа»):
+            // сторонний порт без входящих value-рёбер — тултипа нет.
+            // Обычный drag с него — контрольная связь (value — только
+            // Shift+drag), прежний безусловный «out: <нода>» навязывал
+            // дата-семантику коннектору без передачи данных. Футер
+            // шаблонной ноды (Line(None), drag всегда value) — выше,
+            // в ветке line_port_hit.
+            return None;
         }
         None
     }
@@ -4659,6 +4836,8 @@ impl App {
                 CursorIcon::NwseResize
             } else if body_pointer {
                 CursorIcon::Pointer
+            } else if self.click_edit_hover_text() {
+                CursorIcon::Text
             } else {
                 CursorIcon::Default
             }
@@ -5756,6 +5935,10 @@ impl App {
         };
         if applied {
             self.fit_note_size();
+            // CR-023 (UR-001-08): принятое автодополнение не всплывает
+            // повторно — подавление до смены токена перед кареткой
+            // (фактический токен после вставки зафиксирует sync)
+            self.hints.arm_suppress();
             self.update_hints();
             self.request_redraw();
         }
@@ -5958,7 +6141,13 @@ impl App {
     /// FR-079: вмерджить актуальные ИИ-ответы в текущие L0-строки попапа
     /// (после пересинхронизации L0 — каретка двигалась без смены текста;
     /// ответ воркера — тот же путь из [`Self::on_suggest_ready`]).
+    /// CR-022: гейт флагом `suggest.c1_in_popup` (default false) — ИИ-строки
+    /// НЕ добавляются в попап редактора (решение владельца «вообще не надо
+    /// триггерить»); прежний контракт жив только при явном `true`.
     fn suggest_remerge(&mut self) {
+        if !self.settings.suggest.c1_in_popup {
+            return;
+        }
         let ai_items = self.suggest_ai_items();
         if ai_items.is_empty() {
             return;
@@ -8329,6 +8518,14 @@ impl App {
             Some(ExprOutcome::Ok(_)) => {}
             _ => return None,
         }
+        // CR-020 (UR-001-03, Q1): полоса «ИТОГ» — зона только там, где футер
+        // реально виден (правило рендера text.rs has_result / scene.rs
+        // node_shows_result_footer). У констант-присваиваний («qty = 10»)
+        // футер подавлен построчными результатами — невидимой зоны нет:
+        // клик по строке — выделение/драг ноды.
+        if !self.scene.node_shows_result_footer(index) {
+            return None;
+        }
         let band = [
             node.x,
             node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT,
@@ -8336,6 +8533,23 @@ impl App {
             RESULT_LINE_HEIGHT,
         ];
         point_in_rect(band, world).then(|| LineageNodeId::total(node.id.clone()))
+    }
+
+    /// CR-020 (UR-001-03, Q2 «лупа на строку»): мини-лупа строки-результата
+    /// под world-точкой — корень explain-дерева этой строки. Единая точка
+    /// классификации строк (Calc/Param-формула vs константа-присваивание)
+    /// и геометрии — кэш строк рендера
+    /// ([`canvas_render::Renderer::row_explain_hits`]); шаблонные ноды —
+    /// футер FR-088 (луп строк нет). Возвращает (корень, rect иконки).
+    fn row_explain_hit_at(&self, world: Vec2) -> Option<(LineageNodeId, [f32; 4])> {
+        let index = self.hovered?;
+        let node = self.scene.canvas.nodes.get(index)?;
+        let renderer = self.renderer.as_ref()?;
+        let hit = renderer
+            .row_explain_hits(index, node)
+            .into_iter()
+            .find(|hit| point_in_rect(hit.rect, world))?;
+        Some((LineageNodeId::line(node.id.clone(), hit.line), hit.rect))
     }
 
     /// Системное контекстное меню десктопа (T17, план §3): нативное
@@ -9718,9 +9932,73 @@ mod tests {
         assert_eq!(keyboard_shift_up(900.0, 700.0, 0.0), 0.0);
         assert_eq!(keyboard_shift_up(900.0, 700.0, -50.0), 0.0);
         assert_eq!(keyboard_shift_up(600.0, 0.0, 300.0), 0.0);
-        // Инсет больше вьюпорта (кламп видимой области в 0): сдвиг —
+        // Инсет больше вьюпорта (кламп видимой области в 0): сдвига нет —
         // до верхнего края (переполнение = node_bottom − 0 − MARGIN)
         assert!((keyboard_shift_up(600.0, 700.0, 800.0) - (600.0 - 12.0)).abs() < 1e-4);
+    }
+
+    // --- FR-100: роутер клавиатуры при активном редакторе -------------------
+
+    /// Роутер при активном редакторе (FR-100):
+    /// (а) незнакомые Ctrl/Super-комбинации НЕ глотаются — route_editor_key
+    /// возвращает false, событие уходит в глобальную лестницу хоткеев
+    /// (прежде «глушитель» возвращал true и Ctrl+Z/Y были no-op);
+    /// (б) обычный ввод глотается (печать символов не триггерит хоткеи);
+    /// (в) Super/Cmd-комбинации consumed (Cmd-паритет — как Ctrl).
+    /// Тест через route_editor_key(&Key, ElementState, repeat): KeyEvent
+    /// вне winit не собрать (приватное поле platform_specific).
+    #[test]
+    fn editor_router_super_parity_and_unknown_chords_fall_through() {
+        let mut app = stub_app_with_canvas(Canvas::default());
+        app.onboarding = None;
+        let mut font_system = cosmic_text::FontSystem::new();
+        app.editing = Some(EditingSession::new(
+            &mut font_system,
+            EditTarget::Node(0),
+            "текст",
+            300.0,
+            200.0,
+            1.0,
+        ));
+        let pressed = |key: Key| (key, winit::event::ElementState::Pressed, false);
+
+        // (а) Ctrl+Q — редактору не знаком: false → глобальная лестница
+        app.modifiers = ModifiersState::CONTROL;
+        let (key, state, repeat) = pressed(Key::Character("q".into()));
+        assert!(
+            !app.route_editor_key(&key, state, repeat),
+            "незнакомая Ctrl-комбинация не глотается"
+        );
+        // Super-аналог: тоже не глотается
+        app.modifiers = ModifiersState::SUPER;
+        let (key, state, repeat) = pressed(Key::Character("q".into()));
+        assert!(
+            !app.route_editor_key(&key, state, repeat),
+            "незнакомая Super-комбинация не глотается"
+        );
+
+        // (б) обычный символ глотается (уходит в редактор, не в лестницу).
+        // Применение Insert требует renderer (в заглушке None) — здесь
+        // проверяется только маршрутизация, вставка покрыта render-тестами.
+        app.modifiers = ModifiersState::empty();
+        let (key, state, repeat) = pressed(Key::Character("q".into()));
+        assert!(
+            app.route_editor_key(&key, state, repeat),
+            "печать символа глотается редактором"
+        );
+
+        // (в) Cmd/Ctrl+Z — знакомая команда: consumed (undo-стек применит
+        // сессия/приложение; renderer в заглушке None — ветка безопасна)
+        app.modifiers = ModifiersState::SUPER;
+        let (key, state, repeat) = pressed(Key::Character("z".into()));
+        assert!(
+            app.route_editor_key(&key, state, repeat),
+            "Super+Z — команда редактора: consumed, не уходит вниз"
+        );
+        // Ctrl-эквивалент той же команды — consumed (паритет)
+        app.modifiers = ModifiersState::CONTROL;
+        let (key, state, repeat) = pressed(Key::Character("z".into()));
+        assert!(app.route_editor_key(&key, state, repeat));
     }
 
     /// explain_chain_focus (F-4): узлы дерева → индексы канваса, рёбра
@@ -10871,6 +11149,15 @@ mod tests {
         expect_ok(&live[1], "2", "b = 2");
         expect_ok(&live[2], "727", "a+b");
 
+        // CR-019 (UR-001-01): звёздочка умножения — набор без экранирования;
+        // каноника Numi-строки хранит живой `*`, значение считается
+        let (canonical, live) = run_session("sum = 10 * 2");
+        assert_eq!(
+            canonical, "sum = 10 * 2",
+            "emit не экранирует * на Numi-строке"
+        );
+        expect_ok(&live[0], "20", "звёздочка — умножение без экранирования");
+
         // COMMIT: канонический текст сессии попадает в модель, построчные
         // результаты совпадают с живыми (карточка после клика мимо ноды)
         let mut canvas = Canvas::default();
@@ -10903,6 +11190,16 @@ mod tests {
             .expect("результаты для старой каноники");
         expect_ok(&committed[0], "200", "старая заметка: присваивание с \\=");
         expect_ok(&committed[1], "400", "старая заметка: ссылка");
+        // CR-019 (UR-001-01): заметка прежних сборок с `\*` оживает
+        // (снятие экранирования симметрично `\=`)
+        scene.canvas.nodes[0].text = Some("sum = 10 \\* 2\n200".to_owned());
+        scene.recompute_expr("n1");
+        let committed = scene
+            .expr_line_results
+            .get("n1")
+            .expect("результаты для старой каноники \\*");
+        expect_ok(&committed[0], "20", "старая заметка: умножение с \\*");
+        expect_ok(&committed[1], "200", "старая заметка: соседняя строка");
     }
 
     /// FR-013 (правка 4): hit-тест зон наведения бейджей ошибок.
@@ -11757,17 +12054,12 @@ mod tests {
         let app = stub_app_with_canvas(canvas);
         assert_eq!(
             app.port_label_for(0, &PortTarget::Line(Some(0))),
-            Some("Заявки.строка 1".to_owned()),
-            "построчный порт — полный путь (R-5: полный путь в тултипе)"
+            Some("Заявки.users = 10".to_owned()),
+            "CR-025: имя присваивания + текущее значение строки"
         );
         assert_eq!(
             app.port_label_for(0, &PortTarget::Line(Some(1))),
-            Some("Заявки.строка 2".to_owned())
-        );
-        assert_eq!(
-            app.port_label_for(0, &PortTarget::Out),
-            Some("out: Заявки".to_owned()),
-            "сторонный порт — «out: <объект>» (F-5 «out:<имя>»)"
+            Some("Заявки.conv = 0.2".to_owned())
         );
         assert_eq!(
             app.port_label_for(0, &PortTarget::Line(None)),
@@ -11812,11 +12104,16 @@ mod tests {
         app_en.settings.language = Language::En;
         assert_eq!(
             app_en.port_label_for(0, &PortTarget::Line(Some(0))),
-            Some("Заявки.line 1".to_owned()),
-            "EN — «line N» (STAGE_LINE_LABEL)"
+            Some("Заявки.users = 10".to_owned()),
+            "EN: имя присваивания не локализуется (CR-025)"
         );
         assert_eq!(
-            app_en.port_label_for(0, &PortTarget::Out),
+            app_en.port_label_for(0, &PortTarget::Line(Some(5))),
+            Some("Заявки.line 6".to_owned()),
+            "EN: безымянная/несуществующая строка — фолбэк «line N»"
+        );
+        assert_eq!(
+            app_en.port_label_for(0, &PortTarget::Line(None)),
             Some("out: Заявки".to_owned())
         );
     }
@@ -11837,11 +12134,11 @@ mod tests {
         let app = stub_app_with_canvas(canvas);
         assert_eq!(
             app.port_label_for(0, &PortTarget::Line(Some(0))),
-            Some("Заявки (a).строка 1".to_owned()),
-            "коллизия имён — дискриминатор node_id (§Q2)"
+            Some("Заявки (a).x = 1".to_owned()),
+            "коллизия имён — дискриминатор node_id (§Q2); CR-025: имя+значение"
         );
         assert_eq!(
-            app.port_label_for(1, &PortTarget::Out),
+            app.port_label_for(1, &PortTarget::Line(None)),
             Some("out: Заявки (b)".to_owned())
         );
     }
@@ -11879,8 +12176,8 @@ mod tests {
             .expect("левый вход dst — 3 истока");
         assert_eq!(lines.len(), 3, "каждое входящее value-ребро — строка");
         assert_eq!(
-            lines[0].text, "from: Заявки.строка 1",
-            "fromLine — i18n «строка N», 1-based (R-5, как в v1)"
+            lines[0].text, "from: Заявки.users",
+            "CR-025: fromLine на строку-присваивание — имя (имя > индекс)"
         );
         assert!(!lines[0].unmapped);
         assert_eq!(
@@ -11926,9 +12223,10 @@ mod tests {
         assert!(!lines[3].unmapped, "свёртка — нейтральный тон");
     }
 
-    /// FR-045 F-5 v2: сторонный порт читается по стороне (P1 «входы
-    /// слева») — с входами from-чтение (In-лейблы), без входов —
-    /// «out:» (drag-исток, v1); hit-тест — левый порт приёмника.
+    /// FR-045 F-5 v2 + CR-024 (UR-001-09, Q7): сторонный порт читается по
+    /// стороне (P1 «входы слева») — с входами from-чтение (In-лейблы),
+    /// без входов тултипа НЕТ (обычный drag — control-связь, «out:» —
+    /// дата-семантика value-связей); hit-тест — левый порт приёмника.
     #[test]
     fn port_tooltip_at_in_precedes_out_fallback() {
         let mut canvas = Canvas::default();
@@ -11953,7 +12251,8 @@ mod tests {
             lines[0].text, "from: Заявки.users",
             "входящая сторона — from-чтение (R-5 qualified-адрес)"
         );
-        // Одинокая нода без входов — прежнее v1-чтение («out:»)
+        // CR-024: одинокая нода без входов — тултипа нет (control-порт;
+        // прежнее v1-чтение «out:» убрано решением владельца)
         let mut canvas2 = Canvas::default();
         let mut solo = Node::text("src", "Заявки\nusers = 10", 0.0, 0.0);
         solo.width = 420.0;
@@ -11961,12 +12260,9 @@ mod tests {
         canvas2.nodes.push(solo);
         let mut app2 = stub_app_with_canvas(canvas2);
         app2.hovered = Some(0);
-        let lines2 = app2
-            .port_tooltip_at([0.0, 100.0])
-            .expect("левый порт src под курсором");
-        assert_eq!(
-            lines2[0].text, "out: Заявки",
-            "без входящих value-рёбер — drag-исток (v1)"
+        assert!(
+            app2.port_tooltip_at([0.0, 100.0]).is_none(),
+            "control-порт без тултипа (CR-024 Q7)"
         );
         assert!(
             app2.port_tooltip_at([5000.0, 5000.0]).is_none(),
@@ -12001,8 +12297,8 @@ mod tests {
             .inbound_label_lines(1, Side::Left)
             .expect("левый вход dst — 4 истока");
         assert_eq!(
-            lines[0].text, "from: Заявки.line 1 · not mapped",
-            "EN: поле строки и маркер unmapped (Р-5 + Р-3)"
+            lines[0].text, "from: Заявки.f0 · not mapped",
+            "EN: имя fromOutput сильнее fromLine (CR-025/ADR-0003) + unmapped"
         );
         assert!(lines[0].unmapped);
         assert_eq!(lines[3].text, "+1 more", "EN: свёртка");
@@ -12688,6 +12984,122 @@ mod tests {
         app.insert_committed_text("-paste");
         assert_eq!(app.settings.llm.api_key, "sk-test-123xyz-paste");
     }
+
+    // --- Click-to-edit: правка ноды одиночным кликом (analysis §4) --------
+
+    /// Зоны по Y: шапка (верхние HEADER_HEIGHT world-px) — заголовок,
+    /// ниже — тело (та же развилка, что у двойного клика FR-072).
+    #[test]
+    fn click_edit_target_zones_by_y() {
+        let mut node = Node::text("n", "текст", 100.0, 50.0);
+        node.width = 300.0;
+        node.height = 200.0;
+        let title = click_edit_target(
+            &node,
+            [150.0, 50.0 + HEADER_HEIGHT - 1.0],
+            false,
+            false,
+            false,
+        );
+        assert_eq!(
+            title,
+            Some(ClickEditZone::Title),
+            "клик в шапке — заголовок"
+        );
+        let body = click_edit_target(
+            &node,
+            [150.0, 50.0 + HEADER_HEIGHT + 10.0],
+            false,
+            false,
+            false,
+        );
+        assert_eq!(body, Some(ClickEditZone::Body), "клик в теле — правка тела");
+    }
+
+    /// Гейты объекта: только text-ноды без файла — файловые карточки
+    /// открываются ассоциацией (T17), группы правят label даблкликом (v1).
+    #[test]
+    fn click_edit_target_object_gates() {
+        let mut file_node = Node::text("f", "", 0.0, 0.0);
+        file_node.file = Some("report.txt".to_owned());
+        assert_eq!(
+            click_edit_target(&file_node, [10.0, 60.0], false, false, false),
+            None,
+            "файловая карточка не правится по клику"
+        );
+        let group = Node::group("g", 0.0, 0.0, 200.0, 200.0);
+        assert_eq!(
+            click_edit_target(&group, [50.0, 60.0], false, false, false),
+            None,
+            "группа — вне скоупа click-to-edit v1"
+        );
+    }
+
+    /// Гейты контекста: what-if (override на даблклике, FR-017 Q8), тач
+    /// (двойной тап, FR-092/093) и модификаторы выделения (CR-001)
+    /// запрещают click-to-edit.
+    #[test]
+    fn click_edit_target_context_gates() {
+        let node = Node::text("n", "текст", 0.0, 0.0);
+        let point = [10.0, 60.0];
+        assert_eq!(
+            click_edit_target(&node, point, true, false, false),
+            None,
+            "what-if — правка строки только через override даблклика"
+        );
+        assert_eq!(
+            click_edit_target(&node, point, false, true, false),
+            None,
+            "тач — правка только двойным тапом"
+        );
+        assert_eq!(
+            click_edit_target(&node, point, false, false, true),
+            None,
+            "Ctrl/Shift+клик — выделение (CR-001)"
+        );
+    }
+
+    /// Порог клик/драг: движение в пределах SELECT_DRAG_THRESHOLD — клик
+    /// (правка), сильнее — drag-перенос (кандидат сбрасывается без правки).
+    #[test]
+    fn click_edit_is_click_threshold() {
+        let candidate = ClickEditCandidate {
+            index: 0,
+            zone: ClickEditZone::Body,
+            world: [0.0, 0.0],
+            press_cursor: [500.0, 300.0],
+        };
+        assert!(
+            click_edit_is_click(&candidate, [502.0, 301.0]),
+            "в пороге — клик"
+        );
+        assert!(
+            !click_edit_is_click(&candidate, [506.0, 300.0]),
+            "за порогом — drag, правка не открывается"
+        );
+    }
+
+    /// Потребление кандидата на отпускании: без рендера (stub) правка не
+    /// открывается (graceful no-op — сессию создаёт только живой рендер),
+    /// но кандидат всегда снимается — жест не протекает в следующий клик.
+    #[test]
+    fn click_edit_candidate_consumed_on_release() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("n", "текст", 0.0, 0.0));
+        let mut app = stub_app_with_canvas(canvas);
+        app.click_edit = Some(ClickEditCandidate {
+            index: 0,
+            zone: ClickEditZone::Body,
+            world: [10.0, 60.0],
+            press_cursor: app.cursor,
+        });
+        app.on_left_button(ElementState::Released);
+        assert!(app.click_edit.is_none(), "кандидат потреблён/снят");
+        assert!(
+            app.editing.is_none(),
+            "без рендера сессия не открывается (no-op без паники)"
+        );
+    }
 }
 
 // --- FR-050 (этап C): чистые функции UI-механизма toParam ---
@@ -13084,9 +13496,13 @@ mod suggest_flow_tests {
 
     /// Полный цикл C1: триггер → дебаунс-тик → sync-lex → мердж ИИ-строк;
     /// принятие заменяет ноду шаблоном (id/позиция живы, undo один шаг).
+    /// CR-022: путь снят из продукта (дефолт `c1_in_popup = false`) — тест
+    /// держит сохранённую за флагом поверхность живой для будущих решений.
     #[test]
     fn suggest_c1_flow_popup_and_acceptance() {
         let mut app = suggest_stub_app(suggest_calc_canvas());
+        // CR-022: код C1 сохранён за флагом — включаем явно
+        app.settings.suggest.c1_in_popup = true;
         let hole = 2;
         suggest_start_editing(&mut app, hole, "margin");
         app.update_hints();
@@ -13160,6 +13576,7 @@ mod suggest_flow_tests {
     #[test]
     fn suggest_c1_trigger_gated_by_config() {
         let mut app = suggest_stub_app(suggest_calc_canvas());
+        app.settings.suggest.c1_in_popup = true; // проверяем только off/disabled
         app.settings.suggest.engine = canvas_core::SuggestEngineKind::Off;
         suggest_start_editing(&mut app, 2, "margin");
         app.update_hints();
@@ -13170,7 +13587,185 @@ mod suggest_flow_tests {
         assert!(app.suggest.pending.is_none(), "disabled — триггер молчит");
     }
 
+    /// CR-022 (UR-001-06, Q5): репродуктор владельца — редактирование
+    /// `price = 100 rub` при ВКЛЮЧЁННОМ suggest НЕ даёт ИИ-строк в попапе
+    /// ни на одном токене (значение, единица, проза); C1-триггер не
+    /// взводится, конвейер C1 не запускается. L0-подсказки живы (приём
+    /// единиц/переменных — прежний контракт FR-021).
+    #[test]
+    fn suggest_c1_not_armed_when_editing_price_rub() {
+        let mut app = suggest_stub_app(suggest_calc_canvas());
+        assert!(
+            app.suggest_active(),
+            "suggest включён (мастер-тумблер + lex) — гейтит только CR-022"
+        );
+        assert!(
+            !app.settings.suggest.c1_in_popup,
+            "дефолт флага CR-022 — false (старые конфиги получают снятое состояние)"
+        );
+        for text in [
+            "price = 100",         // значение
+            "price = 100 rub",     // единица
+            "Печатаю имя шаблона", // проза
+        ] {
+            suggest_start_editing(&mut app, 2, text);
+            app.update_hints();
+            assert!(
+                app.suggest.pending.is_none(),
+                "C1-триггер не взведён (CR-022): {text}"
+            );
+            assert!(
+                !app.hints
+                    .items
+                    .iter()
+                    .any(|i| i.kind == hints_ui::HintKind::Ai),
+                "ИИ-строк нет в попапе (CR-022): {text}"
+            );
+        }
+        // Тик дебаунса ничего не меняет: pending нет — конвейер не запускался
+        suggest_force_debounce(&mut app);
+        app.suggest_dispatch();
+        assert!(
+            app.suggest.answers.is_empty(),
+            "C1-запросы не ходили — ответов нет (лог shown/accepted от C1 не пишется)"
+        );
+    }
+
+    /// CR-022: `suggest_remerge` не добавляет ИИ-строки в попап (тот же
+    /// гейт-флаг): после снятия флага пересинхронизация L0 гасит
+    /// накопленные ответы и оставляет попап только с L0-строками.
+    #[test]
+    fn suggest_remerge_gated_by_c1_in_popup() {
+        let mut app = suggest_stub_app(suggest_calc_canvas());
+        // Реальный C1-конвейер под флагом: ответы + каталог + мердж в попапе
+        app.settings.suggest.c1_in_popup = true;
+        suggest_start_editing(&mut app, 2, "margin");
+        app.update_hints();
+        suggest_force_debounce(&mut app);
+        app.suggest_dispatch();
+        assert!(!app.suggest.answers.is_empty(), "конвейер дал ответы");
+        assert!(
+            app.hints
+                .items
+                .iter()
+                .any(|i| i.kind == hints_ui::HintKind::Ai),
+            "под флагом ИИ-строки мерджатся (поверхность сохранена)"
+        );
+        // CR-022: флаг снят — remerge не добавляет ИИ-строки
+        app.settings.suggest.c1_in_popup = false;
+        app.update_hints(); // пересинхронизация L0 (каретка/текст без правки)
+        assert!(
+            !app.hints
+                .items
+                .iter()
+                .any(|i| i.kind == hints_ui::HintKind::Ai),
+            "ИИ-строки не переживают пересинхронизацию L0 (CR-022)"
+        );
+        assert!(
+            app.suggest.answers.is_empty(),
+            "накопленные ответы погашены при снятом триггере"
+        );
+        // Прямой вызов remerge без ответов — no-op, ИИ-примесей нет
+        app.suggest_remerge();
+        assert!(
+            !app.hints
+                .items
+                .iter()
+                .any(|i| i.kind == hints_ui::HintKind::Ai),
+            "remerge при погашенных ответах не добавляет ИИ-строки"
+        );
+    }
+
+    /// CR-020 (UR-001-03, Q1): зона полосы «ИТОГ» — только при видимом
+    /// футере. У константы-присваивания («qty = 10») футер подавлен
+    /// построчным результатом присваивания — клик по строке НЕ открывает
+    /// explain (раньше там лежала невидимая hit-зона 16px). Без построчных
+    /// результатов зона итога возвращается. Мини-лупа строки без рендера
+    /// (headless-стаб) — None.
+    #[test]
+    fn result_band_zone_only_when_footer_visible() {
+        let mut canvas = Canvas::default();
+        let mut node = Node::text("qty", "qty = 10", 0.0, 0.0);
+        node.width = 240.0;
+        node.height = 120.0;
+        canvas.nodes.push(node);
+        let mut app = suggest_stub_app(canvas);
+        app.hovered = Some(0);
+        // Точка внутри зоны полосы D (нижние RESULT_LINE_HEIGHT px тела)
+        let world: Vec2 = [5.0, 120.0 - BODY_PADDING - RESULT_LINE_HEIGHT / 2.0];
+        // «qty = 10»: итог потока Ok(10) + построчный исход присваивания
+        let outcome = canvas_core::expr::eval_lines("10")[0].clone();
+        assert!(matches!(outcome, Some(ExprOutcome::Ok(_))));
+        app.scene
+            .expr_results
+            .insert("qty".to_owned(), outcome.clone().expect("Ok(10)"));
+        app.scene
+            .expr_line_results
+            .insert("qty".to_owned(), vec![outcome]);
+        assert!(
+            app.result_band_root_at(world).is_none(),
+            "константа-присваивание — невидимой зоны нет (CR-020 Q1)"
+        );
+        assert!(
+            app.row_explain_hit_at(world).is_none(),
+            "мини-лупа требует рендер-кэша строк (headless — None)"
+        );
+        // Без построчных результатов футер виден — зона итога возвращается
+        app.scene.expr_line_results.clear();
+        let root = app
+            .result_band_root_at(world)
+            .expect("футер виден — зона итога жива");
+        assert_eq!(root.node_id, "qty");
+        assert!(root.line.is_none(), "адрес итога ноды");
+    }
+
+    /// CR-024 (UR-001-09, Q7): сторонний порт БЕЗ входящих value-рёбер —
+    /// тултипа нет (обычный drag создаёт control-связь, «out:» —
+    /// дата-семантика value-связей); входные слоты value-стороны
+    /// (qualified-истоки) сохранены; адресная подпись построчного порта —
+    /// как прежде («Объект.строка N»).
+    #[test]
+    fn port_tooltip_control_port_silent_value_side_keeps_labels() {
+        let mut canvas = Canvas::default();
+        let mut src = Node::text("src", "Корзина\nqty = 10", 0.0, 0.0);
+        src.width = 200.0;
+        src.height = 100.0;
+        let mut dst = Node::text("dst", "итог", 400.0, 0.0);
+        dst.width = 200.0;
+        dst.height = 100.0;
+        canvas.nodes.push(src);
+        canvas.nodes.push(dst);
+        let mut edge = Edge::new("e", "src", None, "dst", None);
+        edge.set_flow_kind(FlowKind::Value);
+        canvas.edges.push(edge);
+        let mut app = suggest_stub_app(canvas);
+        // Сторонний порт правой стороны ноды-источника (без входящих value):
+        // world-точка порта [x+w, y+h/2]
+        app.hovered = Some(0);
+        let side_point: Vec2 = [200.0, 50.0];
+        assert!(
+            app.port_tooltip_at(side_point).is_none(),
+            "control-порт без тултипа (CR-024 Q7)"
+        );
+        // Value-сторона приёмника (левый край): qualified-истоки живы
+        app.hovered = Some(1);
+        let left_point: Vec2 = [400.0, 50.0];
+        let inbound = app
+            .port_tooltip_at(left_point)
+            .expect("value-сторона с входящим value-ребром — подпись есть");
+        assert!(!inbound.is_empty(), "входные слоты — qualified-истоки");
+        // Адресная подпись построчного порта — формат не изменился
+        let label = app
+            .port_label_for(0, &PortTarget::Line(Some(0)))
+            .expect("лейбл построчного порта");
+        assert_eq!(
+            label, "Корзина.qty = 10",
+            "CR-025 Q8: «Нода.параметр = значение» (имя + значение из потока)"
+        );
+    }
+
     /// Домен-гейт C4: прозаический фреймворк-канвас — не предлагаем.
+    /// CR-022: путь сохранён за флагом `c1_in_popup` (дефолт — снят).
     #[test]
     fn suggest_c1_framework_canvas_suppressed() {
         let mut canvas = Canvas::default();
@@ -13192,6 +13787,7 @@ mod suggest_flow_tests {
             ));
         }
         let mut app = suggest_stub_app(canvas);
+        app.settings.suggest.c1_in_popup = true; // CR-022: путь за флагом
         suggest_start_editing(&mut app, 0, "Шаг 0 пути пользователя");
         app.update_hints();
         suggest_force_debounce(&mut app);
@@ -13211,9 +13807,12 @@ mod suggest_flow_tests {
 
     /// S0-воронка: shown при мердже, dismissed при закрытии правки,
     /// accepted при принятии (файл-журнал песочницы теста).
+    /// CR-022: события пишутся только от явного `c1_in_popup = true` —
+    /// при дефолтном false C1 не ходит и shown/accepted не пишет.
     #[test]
     fn suggest_s0_events_written() {
         let mut app = suggest_stub_app(suggest_calc_canvas());
+        app.settings.suggest.c1_in_popup = true; // CR-022: путь за флагом
         let log_dir = std::env::temp_dir().join(format!("suggest-log-{}", std::process::id()));
         let journal = log_dir.join("suggest-log.jsonl");
         let _ = std::fs::remove_file(&journal);
@@ -13317,6 +13916,349 @@ mod suggest_flow_tests {
         assert!(
             app.suggest.cards.is_none(),
             "show-гейт: без соседей карточек нет"
+        );
+    }
+
+    /// Репродуктор handtest (FR-101): «Корзина» с 1 позиционным value-ребром
+    /// (fromLine на присваивание) + 1 toParam-ребром (проливание). Контекст
+    /// подсказок: `$1` и имена входов (`Купон.купон`, `Скидка.скидка`),
+    /// `$2` НЕ предлагается (счётчик `inbound` исключает toParam-рёбра —
+    /// зеркало фильтра слотов flow::inbound_slots_with_lines).
+    fn fr101_canvas() -> Canvas {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("kup", "Купон\nкупон = 500 руб", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("skd", "Скидка\nскидка = 10", 0.0, 160.0));
+        canvas.nodes.push(Node::text(
+            "cart",
+            "Корзина\nитог = $1 - скидка",
+            320.0,
+            0.0,
+        ));
+        let mut e1 = Edge::new("e1", "kup", None, "cart", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_line = Some(1); // построчное ребро: имя присваивания «купон»
+        canvas.edges.push(e1);
+        let mut e2 = Edge::new("e2", "skd", None, "cart", None);
+        e2.set_flow_kind(FlowKind::Value);
+        e2.from_line = Some(1); // имя присваивания «скидка»
+        e2.to_param = Some("скидка".to_owned()); // проливание — НЕ слот
+        canvas.edges.push(e2);
+        canvas
+    }
+
+    #[test]
+    fn fr101_counter_excludes_to_param_and_names_inputs() {
+        let mut app = suggest_stub_app(fr101_canvas());
+        // Токен `$` — пустой токен показывает только переменные (FR-021),
+        // поэтому счётчик и имена проверяем на `$`-токене
+        suggest_start_editing(&mut app, 2, "итог = $");
+        app.update_hints();
+        assert!(app.hints.open, "попап подсказок на Numi-строке");
+        let labels: Vec<&str> = app
+            .hints
+            .items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect();
+        // Именованные входы: qualified-ключи построчных рёбер
+        assert!(labels.contains(&"Купон.купон"), "labels: {labels:?}");
+        assert!(labels.contains(&"Скидка.скидка"), "labels: {labels:?}");
+        // Позиционный слот один — `$in`/`$1`, ложного `$2` больше нет
+        assert!(labels.contains(&"$in"));
+        assert!(labels.contains(&"$1"));
+        assert!(!labels.contains(&"$2"), "toParam-ребро не слот: {labels:?}");
+    }
+
+    /// FR-101 (решение владельца Q4): триггер по имени ОБЯЗАТЕЛЕН — ввод
+    /// `купо` без `$` подсказывает `Купон.купон` (деталь — источник).
+    #[test]
+    fn fr101_name_trigger_without_dollar() {
+        let mut app = suggest_stub_app(fr101_canvas());
+        suggest_start_editing(&mut app, 2, "итог = купо");
+        app.update_hints();
+        assert!(app.hints.open, "ввод имени открывает попап");
+        let hint = app
+            .hints
+            .items
+            .iter()
+            .find(|item| item.insert == "Купон.купон")
+            .expect("подсказка Купон.купон по имени без $");
+        assert!(hint.detail.contains("Купон"), "деталь — источник: {hint:?}");
+        // Ввод `$купо` — тот же результат по имени (формат — по языку имени:
+        // кириллица → `Нода.параметр`, НЕ `$купон` — валюта)
+        suggest_start_editing(&mut app, 2, "итог = $купо");
+        app.update_hints();
+        let hint = app
+            .hints
+            .items
+            .iter()
+            .find(|item| item.insert == "Купон.купон")
+            .expect("подсказка по имени после $");
+        assert_eq!(hint.insert, "Купон.купон");
+    }
+
+    /// FR-101: вставка замещает только набранный хвост
+    /// (`replace_token_before_caret` — Backspace-семантика по токену
+    /// подсказок), каретка — после вставленного текста.
+    #[test]
+    fn fr101_insert_replaces_typed_tail_only() {
+        let mut app = suggest_stub_app(fr101_canvas());
+        suggest_start_editing(&mut app, 2, "итог = купо");
+        app.update_hints();
+        let (_, line_text, caret) = app.editing.as_ref().expect("правка").caret_line();
+        let (token, _) = hints_ui::token_before_caret(&line_text[..caret], caret);
+        assert_eq!(token, "купо", "хвост токена — только набранное имя");
+        let mut fs = cosmic_text::FontSystem::new();
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .replace_token_before_caret(&mut fs, &token, "Купон.купон");
+        let (_, line_text, caret) = app.editing.as_ref().expect("правка").caret_line();
+        assert_eq!(line_text, "итог = Купон.купон", "хвост заменён вставкой");
+        assert_eq!(caret, line_text.len(), "каретка после вставки");
+    }
+
+    /// Репродуктор CR-029 (репорт владельца): нода-источник «Корзина» с
+    /// ЛАТИНСКИМ именем поля «sum» — вид строки входа в теле ноды
+    /// («Корзина . sum») не совпадает с именем поля. Точное окружение
+    /// скриншота репорта: цель — «Корзина за вычетом всех скидок и
+    /// купонов», входы «Купон.купон» и «Корзина.sum».
+    fn cr029_canvas() -> Canvas {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(Node::text("korz", "Корзина\nsum = 1200 руб", 0.0, 0.0));
+        canvas
+            .nodes
+            .push(Node::text("kup", "Купон\nкупон = 500 руб", 0.0, 160.0));
+        canvas.nodes.push(Node::text(
+            "cart",
+            "Корзина за вычетом всех скидок и купонов\nитог = ",
+            320.0,
+            0.0,
+        ));
+        let mut e1 = Edge::new("e1", "korz", None, "cart", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_line = Some(1); // имя присваивания «sum» → qualified «Корзина.sum»
+        canvas.edges.push(e1);
+        let mut e2 = Edge::new("e2", "kup", None, "cart", None);
+        e2.set_flow_kind(FlowKind::Value);
+        e2.from_line = Some(1); // qualified «Купон.купон»
+        canvas.edges.push(e2);
+        canvas
+    }
+
+    // --- CR-029: автодополнение входящих значений «иногда молчит» ---------
+    // Путь Paste-команды приложения (input.rs KeyCommand::Paste):
+    // session.insert_text + update_hints. Каждый сценарий — форма
+    // вставки/ввода, с которой владелец сталкивается в реальности.
+
+    /// CR-029-A: триггер по префиксу ОБЪЕКТА qualified-имени — ввод «Корз»
+    /// предлагает «Корзина.sum». До фикса матчинг шёл только по имени поля
+    /// («sum») — попап молчал ровно на тех входах, чьё имя объекта не
+    /// совпадает с именем поля (у «Купон.купон» совпадает — отсюда «иногда»).
+    #[test]
+    fn cr029_object_prefix_triggers_inbound_hint() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        suggest_start_editing(&mut app, 2, "итог = Корз");
+        app.update_hints();
+        assert!(app.hints.open, "ввод имени объекта открывает попап");
+        let hint = app
+            .hints
+            .items
+            .iter()
+            .find(|item| item.insert == "Корзина.sum")
+            .expect("подсказка Корзина.sum по имени объекта");
+        assert_eq!(hint.insert, "Корзина.sum");
+    }
+
+    /// CR-029-A: то же в `$`-ветке — ввод `$Корз` предлагает рабочую форму
+    /// (кириллический объект → qualified, НЕ `$`-форма — валюта FR-013).
+    #[test]
+    fn cr029_object_prefix_in_dollar_branch() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        suggest_start_editing(&mut app, 2, "итог = $Корз");
+        app.update_hints();
+        assert!(app.hints.open, "$-ветка: имя объекта открывает попап");
+        let hint = app
+            .hints
+            .items
+            .iter()
+            .find(|item| item.insert == "Корзина.sum")
+            .expect("подсказка Корзина.sum по имени объекта после $");
+        assert_eq!(hint.insert, "Корзина.sum");
+    }
+
+    /// CR-029-A: приоритет прежний — матч по имени поля раньше матча по
+    /// имени объекта (токен «к»: Купон.купон — поле, затем Корзина.sum —
+    /// объект; дедуп не даёт Купону второй строки).
+    #[test]
+    fn cr029_field_match_ranks_before_object_match() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        suggest_start_editing(&mut app, 2, "итог = к");
+        app.update_hints();
+        assert!(app.hints.open);
+        let inserts: Vec<&str> = app
+            .hints
+            .items
+            .iter()
+            .map(|item| item.insert.as_str())
+            .collect();
+        let field = inserts
+            .iter()
+            .position(|insert| *insert == "Купон.купон")
+            .expect("поле-матч Купон.купон в списке");
+        let object = inserts
+            .iter()
+            .position(|insert| *insert == "Корзина.sum")
+            .expect("объект-матч Корзина.sum в списке");
+        assert!(
+            field < object,
+            "поле-матч раньше объект-матча; inserts={inserts:?}"
+        );
+    }
+
+    /// CR-029-B: явная вставка (Paste) снимает CR-023-подавление —
+    /// после вставки попап оценивается заново, даже если токен совпал
+    /// с подавленным принятием/Esc. Принятие эмулируется вручную
+    /// (replace_token + arm_suppress + sync) — `accept_hint` в стабе без
+    /// рендера молча не применяется.
+    #[test]
+    fn cr029_paste_lifts_suppression() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        let mut fs = cosmic_text::FontSystem::new();
+        suggest_start_editing(&mut app, 2, "итог = купо");
+        app.update_hints();
+        assert!(app.hints.open, "попап по имени без $");
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .replace_token_before_caret(&mut fs, "купо", "Купон.купон");
+        app.hints.arm_suppress();
+        app.update_hints();
+        assert!(!app.hints.open, "после принятия попап закрыт (CR-023)");
+        // Вставка того же входа следом (токен после вставки — «купон») —
+        // путь Paste-команды: снятие подавления ПЕРЕД пересчётом
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .insert_text(&mut fs, "Купон.купон");
+        app.hints.lift_suppression();
+        app.update_hints();
+        assert!(
+            app.hints.open,
+            "после вставки попап открыт; token={:?} items={:?}",
+            app.hints.token, app.hints.items
+        );
+    }
+
+    /// CR-029 (регресс чистого пути): вставка qualified-имени «Купон.купон»
+    /// открывает попап с подсказкой входа — как при наборе «купон».
+    #[test]
+    fn cr029_paste_qualified_name_opens_popup() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        let mut fs = cosmic_text::FontSystem::new();
+        suggest_start_editing(&mut app, 2, "итог = ");
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .insert_text(&mut fs, "Купон.купон");
+        app.update_hints();
+        assert!(
+            app.hints.open,
+            "попап после вставки Купон.купон; items={:?}",
+            app.hints.items
+        );
+        assert!(
+            app.hints
+                .items
+                .iter()
+                .any(|item| item.insert == "Купон.купон"),
+            "подсказка Купон.купон в попапе; items={:?}",
+            app.hints.items
+        );
+    }
+
+    /// CR-029 (регресс): вставка qualified-имени С ПРОБЕЛАМИ вокруг точки —
+    /// вид строк входящих значений в теле ноды; пользователь копирует
+    /// видимый текст как есть. Попап открывается (токен-хвост «купон»).
+    #[test]
+    fn cr029_paste_spaced_qualified_name() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        let mut fs = cosmic_text::FontSystem::new();
+        suggest_start_editing(&mut app, 2, "итог = ");
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .insert_text(&mut fs, "Купон . купон");
+        app.update_hints();
+        assert!(
+            app.hints.open,
+            "попап после вставки «Купон . купон»; items={:?}",
+            app.hints.items
+        );
+    }
+
+    /// CR-029 (класс «вставка с \n», ТЕКУЩЕЕ поведение задокументировано):
+    /// хвостовой перевод строки уводит каретку на пустую строку — префикс
+    /// Prose, попап молчит; подсказка не нужна — вставленное значение
+    /// уже полное. Смена этого контракта — отдельное решение владельца.
+    #[test]
+    fn cr029_paste_with_trailing_newline_caret_on_empty_line() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        let mut fs = cosmic_text::FontSystem::new();
+        suggest_start_editing(&mut app, 2, "итог = ");
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .insert_text(&mut fs, "Купон.купон\n");
+        app.update_hints();
+        let (_, line_text, _) = app.editing.as_ref().expect("правка").caret_line();
+        assert_eq!(line_text, "", "каретка на новой пустой строке");
+        assert!(
+            !app.hints.open,
+            "пустая строка — попапа нет; items={:?}",
+            app.hints.items
+        );
+    }
+
+    /// CR-029 (регресс): вставка второго входа после принятия первого —
+    /// типовая сборка выражения из входящих значений.
+    #[test]
+    fn cr029_paste_second_inbound_after_accept() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        let mut fs = cosmic_text::FontSystem::new();
+        suggest_start_editing(&mut app, 2, "итог = купо");
+        app.update_hints();
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .replace_token_before_caret(&mut fs, "купо", "Купон.купон");
+        app.hints.arm_suppress();
+        app.update_hints();
+        // « - Корзина.sum» одной вставкой
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .insert_text(&mut fs, " - Корзина.sum");
+        app.hints.lift_suppression();
+        app.update_hints();
+        assert!(
+            app.hints.open,
+            "попап после вставки второго входа; token={:?} items={:?}",
+            app.hints.token, app.hints.items
+        );
+        assert!(
+            app.hints
+                .items
+                .iter()
+                .any(|item| item.insert == "Корзина.sum"),
+            "подсказка Корзина.sum; items={:?}",
+            app.hints.items
         );
     }
 }

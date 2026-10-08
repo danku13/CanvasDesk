@@ -1903,6 +1903,19 @@ pub struct CardsPipeline {
     instance_capacity: usize,
 }
 
+/// CR-026 (UR-001-11): блендинг cards-пайплайна. Шейдер cards.wgsl
+/// композитит слои (тень → заливка → рамка) в premultiplied-форме
+/// (`color = Σ αᵢ·rgbᵢ·остаток`), поэтому блендинг обязан быть
+/// PREMULTIPLIED_ALPHA_BLENDING (src = One). Прежний ALPHA_BLENDING
+/// (straight, src = SrcAlpha) поверх premultiplied-вывода давал
+/// фактическую непрозрачность α² вместо α: выделение текста в тёмной
+/// теме (α0.35 → эффективно 0.12) было невидимым, зебра/подсветки —
+/// тусклее авторских α. Вынесено в чистую функцию — GPU-состояние
+/// в юнит-тест не поднять, пин `cards_pipeline_blend_is_premultiplied`.
+fn cards_blend_state() -> wgpu::BlendState {
+    wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING
+}
+
 impl CardsPipeline {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1957,7 +1970,9 @@ impl CardsPipeline {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    // CR-026: premultiplied-блендинг под premultiplied-вывод
+                    // шейдера (см. cards_blend_state).
+                    blend: Some(cards_blend_state()),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -2059,6 +2074,26 @@ impl CardsPipeline {
 mod tests {
     use super::*;
     use canvas_core::{Canvas, Node};
+
+    /// CR-026 (UR-001-11): блендинг cards-пайплайна обязан быть
+    /// premultiplied. Шейдер cards.wgsl композитит слои (тень → заливка →
+    /// рамка) в premultiplied-форме (color = Σ αᵢ·rgbᵢ·остаток), поэтому
+    /// финальный цвет квада приходит в GPU уже умноженным на альфу.
+    /// При straight-блендинге (ALPHA_BLENDING, src = SrcAlpha) фактическая
+    /// непрозрачность полупрозрачных квадов = α² вместо α: выделение
+    /// текста в тёмной теме (α0.35 → эффективно 0.12) становилось
+    /// невидимым. GPU-состояние в юнит-тест не поднять — выбор блендинга
+    /// вынесен в чистую функцию `cards_blend_state`, здесь пиним его.
+    #[test]
+    fn cards_pipeline_blend_is_premultiplied() {
+        let blend = cards_blend_state();
+        assert_eq!(
+            blend,
+            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+            "cards-пайплайн обязан блендить premultiplied-вывод шейдера \
+             (src = One): straight-блендинг даёт α² вместо α (UR-001-11)"
+        );
+    }
 
     /// Ревизия владельца 2026-09-30 («тэг прижми вправо»): чип у ПРАВОГО
     /// края шапки; у шаблонной ноды — вплотную слева от квад-иконки роли

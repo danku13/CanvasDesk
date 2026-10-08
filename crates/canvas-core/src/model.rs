@@ -628,8 +628,10 @@ pub struct Edge {
     /// текстовой ноды (последнее определение — адресация живёт при сдвиге
     /// строк). `None` — значение ноды целиком (или по `fromLine`).
     /// Взаимное исключение с `fromLine` проверяется в MCP `edge_create`
-    /// (схема); на уровне модели при обоих полях приоритет — `fromLine`
-    /// (сохранение поведения FR-025 для рукописных файлов).
+    /// (схема); на уровне модели при обоих полях приоритет — ИМЯ
+    /// (ADR-0003:51-52, CR-025 п.3: имя > индекс), сломанная адресация
+    /// имени — фолбэк на `fromLine` (тихая деградация, flow.rs
+    /// `edge_source_value`).
     #[serde(
         rename = "fromOutput",
         skip_serializing_if = "Option::is_none",
@@ -1961,6 +1963,25 @@ mod tests {
             Some(&Value::Bool(true)),
             "unknown-поле рядом с canvasdesk не потеряно"
         );
+    }
+
+    /// CR-019 (UR-001-01): текст со звёздочкой умножения переживает
+    /// round-trip `.canvas` без потерь — как живая каноника Numi-строки
+    /// (`10 * 2`, фикс markdown-маски), так и старая с экранированием
+    /// (`10 \* 2`, заметки прежних сборок) — сериализация текст не трогает.
+    #[test]
+    fn text_node_star_multiplication_round_trip() {
+        for text in ["sum = 10 * 2\nитог 20", "sum = 10 \\* 2\nитог 20"] {
+            let node = Node::text("sum1", text, 0.0, 0.0);
+            let json = serde_json::to_string(&node).expect("сериализация");
+            let back: Node = serde_json::from_str(&json).expect("десериализация");
+            assert_eq!(back, node, "round-trip без потерь: {text}");
+            assert_eq!(
+                back.text.as_deref(),
+                Some(text),
+                "звёздочка не потеряна и не задублирована: {text}"
+            );
+        }
     }
 
     /// Виджет-строка из JSON-сырца: парсинг поля `canvasdesk` и строки

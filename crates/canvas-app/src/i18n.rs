@@ -29,7 +29,8 @@ pub mod keys {
     pub const TAB_CANVAS: &str = "settings.tab.canvas";
     pub const TAB_EDGES: &str = "settings.tab.edges";
     pub const TAB_APPEARANCE: &str = "settings.tab.appearance";
-    /// FR-079 (S3): таб «Подсказки» — ИИ-подсказки шаблонов.
+    /// FR-079 (S3): таб «Подсказки» — ИИ-карточки шаблонов (CR-022:
+    /// попап при вводе — только L0, карточки C3 — после создания ноды).
     pub const TAB_SUGGEST: &str = "settings.tab.suggest";
     /// FR-087: таб «Профиль» — роль и фильтры подсказок.
     pub const TAB_PROFILE: &str = "settings.tab.profile";
@@ -327,6 +328,7 @@ pub mod keys {
     pub const HKEY_LMB_PORT: &str = "hotkeys.key.lmb_port";
     pub const HKEY_LMB_HANDLE: &str = "hotkeys.key.lmb_handle";
     pub const HKEY_DOUBLE_CLICK: &str = "hotkeys.key.double_click";
+    pub const HKEY_F2: &str = "hotkeys.key.f2";
     pub const HKEY_RMB: &str = "hotkeys.key.rmb";
     pub const HKEY_SPACE_DRAG: &str = "hotkeys.key.space_drag";
     pub const HKEY_CTRL_WHEEL: &str = "hotkeys.key.ctrl_wheel";
@@ -356,6 +358,7 @@ pub mod keys {
     pub const HK_DRAG_EDGE: &str = "hotkeys.desc.drag_edge";
     pub const HK_REBIND_EDGE: &str = "hotkeys.desc.rebind_edge";
     pub const HK_DOUBLE_CLICK: &str = "hotkeys.desc.double_click";
+    pub const HK_F2: &str = "hotkeys.desc.f2";
     pub const HK_CONTEXT_MENU: &str = "hotkeys.desc.context_menu";
     pub const HK_PAN: &str = "hotkeys.desc.pan";
     pub const HK_ZOOM: &str = "hotkeys.desc.zoom";
@@ -363,6 +366,17 @@ pub mod keys {
     pub const HK_SETTINGS: &str = "hotkeys.desc.settings";
     pub const HK_WHATIF: &str = "hotkeys.desc.whatif";
     pub const HK_EDGE_FOCUS: &str = "hotkeys.desc.edge_focus";
+    // FR-100: полный набор команд редактора ноды (UR-001-02) — F1-оверлей
+    pub const HKEY_CTRL_BACKSPACE: &str = "hotkeys.key.ctrl_backspace";
+    pub const HKEY_PAGE_UP_DOWN: &str = "hotkeys.key.page_up_down";
+    pub const HKEY_TAB_INDENT: &str = "hotkeys.key.tab_indent";
+    pub const HKEY_HOME_SMART: &str = "hotkeys.key.home_smart";
+    pub const HKEY_CMD_EDITOR: &str = "hotkeys.key.cmd_editor";
+    pub const HK_WORD_DELETE: &str = "hotkeys.desc.word_delete";
+    pub const HK_EDITOR_PAGE: &str = "hotkeys.desc.editor_page";
+    pub const HK_EDITOR_TAB: &str = "hotkeys.desc.editor_tab";
+    pub const HK_EDITOR_HOME: &str = "hotkeys.desc.editor_home";
+    pub const HK_CMD_PARITY: &str = "hotkeys.desc.cmd_parity";
 
     // --- Палитра шаблонов (FR-024/030) ---
     pub const TEMPLATES_TITLE: &str = "templates.title";
@@ -468,6 +482,9 @@ pub mod keys {
     pub const HINT_AI_DETAIL: &str = "hints.ai_detail";
     pub const HINT_AI_DETAIL_FUSION: &str = "hints.ai_detail_fusion";
     pub const HINT_DOLLAR_N: &str = "hints.dollar_n";
+    /// FR-101: деталь именованного входа — источник значения
+    /// («проливание из ноды X»).
+    pub const HINT_SPILL: &str = "hints.spill";
     /// FR-079 follow-up: empty-state карточек C3 — предложений нет,
     /// тултип рядом с якорем.
     pub const SUGGEST_EMPTY: &str = "suggest.empty";
@@ -1160,6 +1177,7 @@ const RU: &[(&str, &str)] = &[
     (keys::HKEY_LMB_PORT, "ЛКМ от порта"),
     (keys::HKEY_LMB_HANDLE, "ЛКМ за хэндл"),
     (keys::HKEY_DOUBLE_CLICK, "2× клик"),
+    (keys::HKEY_F2, "F2"),
     (keys::HKEY_RMB, "ПКМ"),
     (keys::HKEY_SPACE_DRAG, "Space+drag"),
     (keys::HKEY_CTRL_WHEEL, "Ctrl+колесо"),
@@ -1188,6 +1206,7 @@ const RU: &[(&str, &str)] = &[
     (keys::HK_DRAG_EDGE, "протянуть связь"),
     (keys::HK_REBIND_EDGE, "перепривязать связь"),
     (keys::HK_DOUBLE_CLICK, "заметка / открыть файл"),
+    (keys::HK_F2, "правка выделенной ноды"),
     (keys::HK_CONTEXT_MENU, "меню объекта"),
     (keys::HK_PAN, "панорамирование"),
     (keys::HK_ZOOM, "масштаб"),
@@ -1199,6 +1218,26 @@ const RU: &[(&str, &str)] = &[
         keys::HK_EXPLAIN_STEP,
         "проверка цепочки, режим защиты: раскрыть следующий уровень",
     ),
+    // FR-100: команды редактора ноды
+    (keys::HKEY_CTRL_BACKSPACE, "Ctrl+Backspace / Ctrl+Delete"),
+    (keys::HKEY_PAGE_UP_DOWN, "PageUp / PageDown"),
+    (keys::HKEY_TAB_INDENT, "Tab / Shift+Tab"),
+    (keys::HKEY_HOME_SMART, "Home ×2"),
+    (keys::HKEY_CMD_EDITOR, "Cmd+клавиша (macOS)"),
+    (keys::HK_WORD_DELETE, "в редакторе текста: удалить слово слева / справа"),
+    (
+        keys::HK_EDITOR_PAGE,
+        "в редакторе текста: страница строк (Shift — с выделением)",
+    ),
+    (
+        keys::HK_EDITOR_TAB,
+        "в редакторе текста: индент / убрать индент строк",
+    ),
+    (
+        keys::HK_EDITOR_HOME,
+        "в редакторе текста: первый непробельный строки, повторно — начало строки",
+    ),
+    (keys::HK_CMD_PARITY, "команды редактора — как с Ctrl"),
     // --- Палитра шаблонов ---
     (keys::TEMPLATES_TITLE, "Шаблоны"),
     (keys::TEMPLATES_SEARCH, "Поиск шаблонов…"),
@@ -1307,6 +1346,7 @@ const RU: &[(&str, &str)] = &[
     (keys::HINT_AI_DETAIL, "ИИ · заменит ноду шаблоном"),
     (keys::HINT_AI_DETAIL_FUSION, "ИИ+ · заменит ноду шаблоном"),
     (keys::HINT_DOLLAR_N, "вход №{i}"),
+    (keys::HINT_SPILL, "проливание из ноды «{node}»"),
     (keys::SUGGEST_EMPTY, "✦ AI-дополнений нет"),
     // --- Онбординг ---
     // --- Галерея схем (FR-049) ---
@@ -1863,8 +1903,13 @@ const RU: &[(&str, &str)] = &[
     ),
     (keys::ROW_AUTOLINK, "Автосвязь по именам (фон)"),
     // FR-079 (S3): таб «Подсказки»
-    (keys::ROW_SUGGEST_ENABLED, "ИИ-подсказки шаблонов"),
-    (keys::DESC_SUGGEST_ENABLED, "Предложения по мере ввода и карточки «что дальше»"),
+    // CR-022: формулировка тумблера уточнена — ИИ-строки в попапе сняты
+    // (c1_in_popup=false), тумблер управляет C3-карточками после создания ноды
+    (keys::ROW_SUGGEST_ENABLED, "ИИ-карточки шаблонов (после создания ноды)"),
+    (
+        keys::DESC_SUGGEST_ENABLED,
+        "Карточки «что дальше» у новой шаблонной ноды; попап при вводе — только L0-подсказки",
+    ),
     (keys::ROW_SUGGEST_ENGINE, "Движок"),
     (keys::DESC_SUGGEST_ENGINE, "Локальная лексика или гибрид с Laya (sidecar)"),
     (keys::SUGGEST_ENGINE_LEX, "Лексика (локально)"),
@@ -2379,6 +2424,7 @@ const EN: &[(&str, &str)] = &[
     (keys::HKEY_LMB_PORT, "LMB from port"),
     (keys::HKEY_LMB_HANDLE, "LMB on handle"),
     (keys::HKEY_DOUBLE_CLICK, "Double-click"),
+    (keys::HKEY_F2, "F2"),
     (keys::HKEY_RMB, "RMB"),
     (keys::HKEY_SPACE_DRAG, "Space+drag"),
     (keys::HKEY_CTRL_WHEEL, "Ctrl+wheel"),
@@ -2407,6 +2453,7 @@ const EN: &[(&str, &str)] = &[
     (keys::HK_DRAG_EDGE, "drag an edge"),
     (keys::HK_REBIND_EDGE, "rebind an edge"),
     (keys::HK_DOUBLE_CLICK, "note / open file"),
+    (keys::HK_F2, "edit selected node"),
     (keys::HK_CONTEXT_MENU, "object menu"),
     (keys::HK_PAN, "panning"),
     (keys::HK_ZOOM, "zoom"),
@@ -2418,6 +2465,26 @@ const EN: &[(&str, &str)] = &[
         keys::HK_EXPLAIN_STEP,
         "calc-chain defense mode: reveal the next level",
     ),
+    // FR-100: editor commands of a note
+    (keys::HKEY_CTRL_BACKSPACE, "Ctrl+Backspace / Ctrl+Delete"),
+    (keys::HKEY_PAGE_UP_DOWN, "PageUp / PageDown"),
+    (keys::HKEY_TAB_INDENT, "Tab / Shift+Tab"),
+    (keys::HKEY_HOME_SMART, "Home ×2"),
+    (keys::HKEY_CMD_EDITOR, "Cmd+key (macOS)"),
+    (keys::HK_WORD_DELETE, "in the editor: delete word left / right"),
+    (
+        keys::HK_EDITOR_PAGE,
+        "in the editor: page of lines (Shift — extend selection)",
+    ),
+    (
+        keys::HK_EDITOR_TAB,
+        "in the editor: indent / unindent lines",
+    ),
+    (
+        keys::HK_EDITOR_HOME,
+        "in the editor: first non-space of the line, again — line start",
+    ),
+    (keys::HK_CMD_PARITY, "editor commands — same as Ctrl"),
     // --- Template palette ---
     (keys::TEMPLATES_TITLE, "Templates"),
     (keys::TEMPLATES_SEARCH, "Search templates…"),
@@ -2526,6 +2593,7 @@ const EN: &[(&str, &str)] = &[
     (keys::HINT_AI_DETAIL, "AI · replaces node with template"),
     (keys::HINT_AI_DETAIL_FUSION, "AI+ · replaces node with template"),
     (keys::HINT_DOLLAR_N, "input #{i}"),
+    (keys::HINT_SPILL, "spill from node \"{node}\""),
     (keys::SUGGEST_EMPTY, "✦ No AI suggestions"),
     // --- Onboarding ---
     // --- Scheme gallery (FR-049) ---
@@ -3059,8 +3127,13 @@ const EN: &[(&str, &str)] = &[
     ),
     (keys::ROW_AUTOLINK, "Background autolink by names"),
     // FR-079 (S3): suggestions tab
-    (keys::ROW_SUGGEST_ENABLED, "AI template suggestions"),
-    (keys::DESC_SUGGEST_ENABLED, "As-you-type proposals and \u{201c}what goes next\u{201d} cards"),
+    // CR-022: reworded — AI lines removed from the typing popup
+    // (c1_in_popup=false); the toggle drives C3 cards after node creation
+    (keys::ROW_SUGGEST_ENABLED, "AI template cards (after node creation)"),
+    (
+        keys::DESC_SUGGEST_ENABLED,
+        "\u{201c}What comes next\u{201d} cards on a new template node; the typing popup shows L0 hints only",
+    ),
     (keys::ROW_SUGGEST_ENGINE, "Engine"),
     (keys::DESC_SUGGEST_ENGINE, "Local lexics or Laya hybrid (sidecar)"),
     (keys::SUGGEST_ENGINE_LEX, "Lexics (local)"),
@@ -3480,6 +3553,15 @@ mod tests {
         assert_eq!(
             trf(Language::Ru, keys::HINT_DOLLAR_N, &[("{i}", "2")]),
             "вход №2"
+        );
+        // FR-101: деталь именованного входа — источник значения
+        assert_eq!(
+            trf(Language::Ru, keys::HINT_SPILL, &[("{node}", "Купон")]),
+            "проливание из ноды «Купон»"
+        );
+        assert_eq!(
+            trf(Language::En, keys::HINT_SPILL, &[("{node}", "Купон")]),
+            "spill from node \"Купон\""
         );
         // Неизвестный плейсхолдер — текст без изменений
         assert_eq!(trf(Language::Ru, keys::DIALOG_YES, &[("{x}", "y")]), "Да");

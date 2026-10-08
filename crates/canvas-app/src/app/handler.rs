@@ -732,24 +732,39 @@ impl ApplicationHandler<AppEvent> for App {
                     // CR-016: при активном what-if бар занимает низ окна
                     // [viewport−BAR_MARGIN−BAR_HEIGHT, viewport−BAR_MARGIN] —
                     // toast поднимаем над ним, чтобы не перекрывать чипы.
-                    let ty = if self.scene.whatif_active {
-                        viewport[1] - whatif_ui::BAR_MARGIN - whatif_ui::BAR_HEIGHT - 26.0
+                    // FR-068 W0/T21: toast — kit::toast_area (единый
+                    // контракт избегания what-if бара: avoid-rect + lift).
+                    // Math эквивалент: viewport.bottom()-44 = viewport[1]-44;
+                    // если bar.bottom()+26 > y && bar.y < y (истина при
+                    // BAR_MARGIN+BAR_HEIGHT=56 > 44 и BAR_MARGIN=12 < 44+26=70),
+                    // y поднимается до bar.y-26 = viewport[1]-82 = прежний ty.
+                    let avoid = if self.scene.whatif_active {
+                        Some(canvas_ui::UiRect::new(
+                            0.0,
+                            viewport[1] - whatif_ui::BAR_MARGIN - whatif_ui::BAR_HEIGHT,
+                            viewport[0],
+                            whatif_ui::BAR_HEIGHT,
+                        ))
                     } else {
-                        viewport[1] - 44.0
+                        None
                     };
+                    let vp_rect = canvas_ui::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
+                    let mut toast_clip = canvas_ui::kit::toast_area(vp_rect, avoid);
+                    // kit возвращает высоту 20.0 (высота строки текста);
+                    // consumer-клип тоста — 28.0 (padding-полоса под текст
+                    // с интерлиньяжем) — сохраняем прежний визуал.
+                    toast_clip.h = 28.0;
                     // CR-015: origin — левый край области (контракт ScreenText):
                     // область [40, viewport−40] по центру окна, текст в её центре.
                     // FR-CLIP: тост — узкая полоса внизу центра, tight clip
                     // = rect области текста (текст не выходит за [40, vp-40]).
-                    let toast_clip =
-                        canvas_ui::UiRect::new(40.0, ty, (viewport[0] - 80.0).max(0.0), 28.0);
                     screen_bands.push(
                         UiLayer::Toasts,
                         toast_clip,
                         Vec::new(),
                         vec![OwnedScreenText {
                             text: text.clone(),
-                            origin: [40.0, ty],
+                            origin: [40.0, toast_clip.y],
                             width: viewport[0] - 80.0,
                             font_size: 14.0,
                             color: token_color(canvas_core::tokens::TOAST_TEXT),
@@ -1411,6 +1426,23 @@ impl ApplicationHandler<AppEvent> for App {
             // при активном редакторе пан камеры вверх (курсор виден).
             // На нативе событие не приходит (источник — canvas-web).
             AppEvent::VisualViewport { bottom_inset } => self.on_visual_viewport(bottom_inset),
+            // FR-100 (web): модификаторы из DOM keydown/keyup — компенсация
+            // порядка событий winit-web (KeyboardInput раньше
+            // ModifiersChanged; blur сбрасывает набор). Приходит ПЕРЕД
+            // winit-батчем того же нажатия — см. комментарий варианта.
+            AppEvent::KeyboardModifiers {
+                control,
+                shift,
+                alt,
+                meta,
+            } => {
+                let mut state = ModifiersState::empty();
+                state.set(ModifiersState::SHIFT, shift);
+                state.set(ModifiersState::CONTROL, control);
+                state.set(ModifiersState::ALT, alt);
+                state.set(ModifiersState::SUPER, meta);
+                self.modifiers = state;
+            }
             // FR-096 (мобильный web): тик будильника long-press — валидность
             // удержания решает машина жеста (poll защищён от ложных срабатыв)
             #[cfg(target_arch = "wasm32")]

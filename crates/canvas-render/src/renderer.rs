@@ -1124,6 +1124,30 @@ impl Renderer {
         self.text.line_row_hits()
     }
 
+    /// CR-020 (UR-001-03, Q2 «лупа на строку»): адресные зоны мини-луп
+    /// строк-результатов ноды — делегация в текстовый рендер (единая
+    /// точка классификации Calc/литерал — кэш строк).
+    pub fn row_explain_hits(&self, index: usize, node: &Node) -> Vec<crate::text::RowExplainHit> {
+        self.text.row_explain_hits(index, node)
+    }
+
+    /// CR-020/FR-088: tint иконок explain-триггеров (кнопка футера и
+    /// мини-лупы строк) — hover ноды акцентом (аффорданс нажатия), покой —
+    /// приглушённый тон иконок темы (α ×0.62); dim — альфа × фактор.
+    fn explain_icon_tint(&self, hovered: bool, dim_it: bool, dim_factor: f32) -> [f32; 4] {
+        let mut tint = if hovered {
+            self.theme.accent
+        } else {
+            let mut t = color_rgba(self.theme.icon);
+            t[3] *= 0.62;
+            t
+        };
+        if dim_it {
+            tint[3] *= dim_factor;
+        }
+        tint
+    }
+
     /// CR-018 волна v2: задать строку таблицы под hover (состояние на
     /// следующий кадр) — делегация в текстовый рендер.
     pub fn set_hover_row(&mut self, hover: Option<(usize, usize)>) {
@@ -1880,25 +1904,39 @@ impl Renderer {
                                 let rect = crate::cards::explain_button_rect(node);
                                 // hover ноды — акцент (аффорданс нажатия), покой —
                                 // приглушённый тон иконок темы; dim — альфа × фактор
-                                let mut tint_rgba = if scene.hovered == Some(index) {
-                                    self.theme.accent
-                                } else {
-                                    let icon = self.theme.icon;
-                                    let mut t = [
-                                        icon.r() as f32 / 255.0,
-                                        icon.g() as f32 / 255.0,
-                                        icon.b() as f32 / 255.0,
-                                        icon.a() as f32 / 255.0,
-                                    ];
-                                    t[3] *= 0.62;
-                                    t
-                                };
-                                if dim_it {
-                                    tint_rgba[3] *= dim_factor;
-                                }
+                                // (CR-020: единый helper с мини-лупами строк)
+                                let tint_rgba = self.explain_icon_tint(
+                                    scene.hovered == Some(index),
+                                    dim_it,
+                                    dim_factor,
+                                );
                                 world_icon_instances.push(WorldIconInstance {
                                     pos: [rect[0], rect[1]],
                                     size: [rect[2], rect[3]],
+                                    uv_min,
+                                    uv_max,
+                                    tint: tint_rgba,
+                                });
+                            }
+                        }
+                    }
+                    // CR-020 (Q2 «лупа на строку»): мини-лупы строк-результатов
+                    // (Calc/Param-формула со значением; константы-присваивания —
+                    // нет, вердикт row_grid::row_is_explainable в кэше строк).
+                    // Шаблонные ноды — только футер FR-088 (без регрессий).
+                    // Зоны hit-теста/тултипа — те же rect (text.rs
+                    // row_explain_hits — единая точка геометрии).
+                    if node.template().is_none() {
+                        for hit in self.text.row_explain_hits(index, node) {
+                            if let Some((uv_min, uv_max)) = crate::icon_uv("lucide", "search") {
+                                let tint_rgba = self.explain_icon_tint(
+                                    scene.hovered == Some(index),
+                                    dim_it,
+                                    dim_factor,
+                                );
+                                world_icon_instances.push(WorldIconInstance {
+                                    pos: [hit.rect[0], hit.rect[1]],
+                                    size: [hit.rect[2], hit.rect[3]],
                                     uv_min,
                                     uv_max,
                                     tint: tint_rgba,

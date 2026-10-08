@@ -45,7 +45,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-use crate::expr::{self, EvalError, Expr};
+use crate::expr::{self, unescape_canonical, EvalError, Expr};
 use crate::flow::{self, FlowKind};
 use crate::model::{Canvas, Edge, Node};
 
@@ -343,13 +343,18 @@ fn port_contract_issues(canvas: &Canvas, solutions: &flow::FlowSolutions) -> Vec
         if edge.flow_kind() != FlowKind::Value {
             continue;
         }
-        // E-PORT-UNKNOWN (исток)
+        // E-PORT-UNKNOWN (исток). Если имя неизвестно, ниже E-UNIT для этого
+        // ребра не проверяется: проливаемого значения нет — фолбэк резолва
+        // (итог ноды; приоритет имени — CR-025) диагностике единиц не
+        // подлежит (одна проблема на одно ребро — гейт A2 эталона FR-029).
+        let mut src_port_unknown = false;
         if let Some(name) = &edge.from_output {
             let known = known_outputs
                 .get(edge.from_node.as_str())
                 .map(|set| set.contains(name.as_str()))
                 .unwrap_or(false);
             if !known {
+                src_port_unknown = true;
                 issues.push(ValidationIssue {
                     severity: Severity::Error,
                     code: IssueCode::EPortUnknown,
@@ -413,27 +418,30 @@ fn port_contract_issues(canvas: &Canvas, solutions: &flow::FlowSolutions) -> Vec
                 });
             }
             // E-UNIT: размерность проливаемого значения против параметра
-            if let Some(value) = flow::edge_source_value(
-                edge,
-                &solutions.outputs,
-                &solutions.lines,
-                &solutions.named,
-            ) {
-                let expected = expr::unit_value(0.0, param_spec.unit.as_deref()).unit;
-                if !dimensions_compatible(&value.unit, &expected) {
-                    issues.push(ValidationIssue {
-                        severity: Severity::Error,
-                        code: IssueCode::EUnit,
-                        node_id: Some(edge.to_node.clone()),
-                        edge_id: Some(edge.id.clone()),
-                        message: format!(
-                            "несовместимость единиц: ребро несёт \"{}\", параметр {param:?} \\
+            // (порт истока неизвестен — проверка пропущена, см. выше)
+            if !src_port_unknown {
+                if let Some(value) = flow::edge_source_value(
+                    edge,
+                    &solutions.outputs,
+                    &solutions.lines,
+                    &solutions.named,
+                ) {
+                    let expected = expr::unit_value(0.0, param_spec.unit.as_deref()).unit;
+                    if !dimensions_compatible(&value.unit, &expected) {
+                        issues.push(ValidationIssue {
+                            severity: Severity::Error,
+                            code: IssueCode::EUnit,
+                            node_id: Some(edge.to_node.clone()),
+                            edge_id: Some(edge.id.clone()),
+                            message: format!(
+                                "несовместимость единиц: ребро несёт \"{}\", параметр {param:?} \\
                              ожидает \"{}\" (шаблон {})",
-                            value.unit.display(),
-                            param_spec.unit.as_deref().unwrap_or("скаляр"),
-                            tpl.id
-                        ),
-                    });
+                                value.unit.display(),
+                                param_spec.unit.as_deref().unwrap_or("скаляр"),
+                                tpl.id
+                            ),
+                        });
+                    }
                 }
             }
         }
@@ -499,7 +507,8 @@ pub(crate) fn slot_references(node: &Node) -> SlotRefs {
             collect_slot_refs(&parsed, &mut refs);
         }
     }
-    let text = node.text.clone().unwrap_or_default().replace("\\=", "=");
+    // CR-019: экранирование каноники (`\=`, `\*`) снимается перед разбором
+    let text = unescape_canonical(node.text.clone().unwrap_or_default().as_str());
     let mut in_fence = false;
     for line in text.split('\n') {
         if line.trim_start().starts_with("```") {
@@ -901,6 +910,25 @@ mod tests {
         assert_eq!(codes(&issues), vec!["E-PORT-UNKNOWN"]);
         assert_eq!(issues[0].node_id.as_deref(), Some("cdn"));
         assert!(issues[0].edge_id.is_some());
+    }
+
+    /// E-PORT-UNKNOWN подавляет E-UNIT на том же ребре: имя выхода
+    /// неизвестно — проливаемого значения нет, фолбэк резолва (итог ноды;
+    /// приоритет имени — CR-025) не диагносцируется вторым кодом
+    /// (одна проблема на одно ребро — гейт A2 эталона FR-029).
+    #[test]
+    fn unknown_output_port_suppresses_unit_check() {
+        let mut canvas = Canvas::default();
+        // Итог истока существует (100 rps) — без подавления E-UNIT сработал бы
+        sheet(&mut canvas, "s", "v = 100 rps", 0.0);
+        template_node(&mut canvas, "recv", &[("t", Some("ms"))], &[]);
+        ported_edge(&mut canvas, "s", "recv", Some("no_such"), Some("t"));
+        let issues = validate(&canvas);
+        assert_eq!(
+            codes(&issues),
+            vec!["E-PORT-UNKNOWN"],
+            "ровно один код на ребро: {issues:?}"
+        );
     }
 
     /// E-PORT-UNKNOWN: toParam на несуществующий параметр шаблона и на

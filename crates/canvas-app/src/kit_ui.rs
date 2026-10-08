@@ -748,9 +748,8 @@ pub fn gallery_layout(
                 kit::ICON_BUTTON_SIZE,
                 kit::ICON_BUTTON_SIZE,
             );
-            let rect = kit::icon_button(
+            let rect = kit::icon_button_rect(
                 cell,
-                icon,
                 (
                     canvas_ui::layout::HAlign::Start,
                     canvas_ui::layout::VAlign::Center,

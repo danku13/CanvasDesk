@@ -1,4 +1,23 @@
 ---
+Task ID: CR-029 (сессия web-c1430de8-9dcf-4130-9380-b5107677d30c)
+Agent: Super Z (main)
+Task: Репорт владельца «иногда не отрабатывает автодополнение при вставке входящих значений» (скриншот: нода «Корзина за вычетом…», входы «Скидка . скидка / Корзина . sum / Купон . купон») — диагностика, фикс, гейты, доки
+
+Work Log:
+- Диагностика репродукторами на стенде suggest_stub_app: чистая вставка qualified-имени попап ОТКРЫВАЕТ; подтверждены 2 дефектных класса + 1 семантика: (A) hint_items матчит входы только по имени поля — «Корз» не находит «Корзина.sum» (у «Купон.купон»/«Скидка.скидка» объект=поле — отсюда «иногда»); (B) CR-023-подавление переживает явную вставку (accept/Esc → Paste того же токена → open=false при непустом списке); (C) вставка с хвостовым \n — каретка на пустой строке, гейт line_kind гасит попап (семантика пустой строки — правка не требуется, зафиксировано тестом)
+- TDD: RED — 3 теста объект-триггера падают; фикс A: hints_ui.rs — inbound_object_matches_prefix (объект = часть qualified до точки) + вторые проходы в обеих ветках hint_items ($ и идентификатор), ранжирование «поле → объект», дедуп по вставке; фикс B: HintPopup::lift_suppression + вызов в KeyCommand::Paste (input.rs) перед update_hints (IME/набор — семантика CR-023 прежняя)
+- GREEN: 8 тестов cr029_* (триггер по объекту в обеих ветках, ранжирование поле→объект, снятие подавления вставкой, регрессы чистой вставки/пробелов вокруг точки/второго входа после принятия, документированное поведение «\n»)
+- Гейты: cargo test -p canvas-app --lib 613 ok; fmt OK; clippy -D warnings OK; wasm_gate.sh --check OK (L2-стенд недоступен — нет Chromium/Xvfb; изменение логики подсказок, раскладка/рендер не тронуты)
+- Доки: cr-029-inbound-hint-trigger.md (шаблон CR: анализ/изменения/проверка/changelog), index-cr-fr.md (+строка CR-029, статус «реализовано, ожидает приёмки»)
+- Telegram-протокол (чат 274002630, URL сессии в шапке): план работ → этот отчёт → финальное саммари
+
+Stage Summary:
+- Причины «иногда не отрабатывает» устранены: префикс имени объекта теперь триггерит подсказку («Корз» → «Корзина.sum»), явная вставка снимает CR-023-подавление
+- Открытые вопросы владельцу: (1) подсказка ПОЛЕЙ после точки («Корзина.» → sum/купон) — токен рвётся на точке, требуется расширение грамматики token_before_caret (отдельный FR); (2) менять ли семантику «вставка с \n»; (3) user-docs/calculations.md — дописать «по имени ноды или поля»? (обязательный вопрос по AGENTS.md, не правилось без подтверждения)
+- Статус CR-029: реализовано (код+тесты), ожидает приёмки владельца
+Tokens: in≈75k, out≈16k, total≈91k (estimate), model=GLM-4.7 (Super Z main), scope=CR-029
+
+---
 Task ID: PRD-0010-UI-прототип
 Agent: Super Z (main)
 Task: Спроектировать UI 5 новых AI-компонентов LLM-интеграции (PRD-0010/ADR-0016) и доработать docs/prototypes/prototype-unified.html: статусная панель AI, custom-node suggest, агент-панель, таб настроек «AI and Models», онбординг AI-режима
@@ -1189,3 +1208,188 @@ Stage Summary:
 - Новая папка docs/user-reporting/ — теперь единственное место отчётов владельца (правила в README папки)
 - Реализация НЕ начата — план ждёт ревью владельца; критичный путь: CR-019 (звёздочка), CR-026 (блендинг), FR-100 (шорткаты)
 - Владельцу на заметку: строка «Финальная корзина = $Купон.купон» из handtest молча является прозой (двухсловная LHS невозможна грамматикой) — зафиксировано как открытый вопрос (кандидат в FR)
+
+---
+Task ID: P
+Agent: Agent P (backdrop + toast_area migration)
+Task: Migrate 4 backdrop sites to kit::backdrop + toast rect to kit::toast_area
+
+Work Log:
+- Read worklog tail + kit API surface: `kit::backdrop(rect, &KitPalette) -> PaintItem` at `crates/canvas-ui/src/component/panel.rs:108`; `kit::toast_area(viewport, avoid: Option<UiRect>) -> UiRect` at `crates/canvas-ui/src/component/dropdown.rs:256`; `paint_items_to_cards(items: Vec<PaintItem>) -> Vec<CardInstance>` at `crates/canvas-app/src/app/support.rs:133` (pub(crate) re-export via `crate::app::paint_items_to_cards`); `paint_items_to_stage(items, camera, viewport, zoom, &mut quads, &mut texts)` at `support.rs:152` for stage-space world conversion; `Painter::items` field is private — Painter has no public `push(PaintItem)` primitive, only field-by-field `rect(r, fill, border, radius)`.
+- Read all 5 backdrop sites + handler.rs toast site to confirm scope.
+- P1-Site1 (`overlays.rs::docs_overlay` ~3461): pushed to `Vec<CardInstance>` (variable `instances`). Replaced `instances.push(CardInstance {...})` with `kit::backdrop(UiRect::new(0,0,vp[0],vp[1]), &palette.kit_palette())` + `instances.extend(crate::app::paint_items_to_cards(vec![backdrop]))`. Palette confirmed as `ThemeColors` from `self.effective_palette()`, so `palette.kit_palette()` provides the kit palette. Visual 1:1 (rect 0..viewport, fill=palette.stage_dim, border=[0;4], radius=0).
+- P1-Site2 (`overlays.rs::ai_onboarding_overlay` ~3678): Painter-based (`d = Painter::new()`). Replaced `d.rect(UiRect::new(0,0,vp[0],vp[1]), palette.stage_dim, [0;4], 0.0)` with `kit::backdrop(...)` + `if let PaintItem::Rect { rect, fill, border, radius } = backdrop { d.rect(rect, fill, border, radius); }`. Painter has no public `push` for arbitrary `PaintItem` (its `items` field is private), so destructure-and-`d.rect` is the canonical pattern (semantically equivalent — `Painter::rect` itself just pushes `PaintItem::Rect` to `items`). Palette was already `kit_palette = palette.kit_palette()` in scope.
+- P1-Site3 (`overlays.rs::ai_onboarding_overlay` ~3828 — different function from Site2: this is the version with `kit_palette` set up but still pushing to `Vec<CardInstance>` (`quads`)). Replaced `quads.push(CardInstance {...})` with `kit::backdrop(...)` + `quads.extend(crate::app::paint_items_to_cards(vec![backdrop]))`. `kit_palette` already in scope.
+- P1-Site4 (`overlays.rs::settings_overlay` ~5053): pushed to `Vec<CardInstance>` (variable `instances`). Same pattern as Site1 — `kit::backdrop(...)` + `instances.extend(crate::app::paint_items_to_cards(vec![backdrop]))`. Palette is `ThemeColors` (`self.effective_palette()`), use `palette.kit_palette()`.
+- P1-Site5 (`stage.rs::stage_frame` ~1027): pushed to `Vec<CardInstance>` BUT in world coordinates (via `camera.screen_to_world` + `/zoom`). Existing code: `quads.push(CardInstance { pos: camera.screen_to_world([0,0], viewport), size: [vp[0]/zoom, vp[1]/zoom], ... })`. Migration: `kit::backdrop(UiRect::new(0,0,vp[0],vp[1]), &palette.kit_palette())` (returns PaintItem::Rect in screen coords) + `paint_items_to_stage(vec![backdrop], camera, viewport, zoom, &mut quads, &mut texts)` (which does the same `screen_to_world` + `/zoom` conversion as the original — verified by reading support.rs:160-175). Visual 1:1.
+- P2 (`handler.rs::toast_clip` ~731): replaced inline avoid-whatif-bar math with `kit::toast_area(viewport, avoid)`. The `avoid` rect is `Some(UiRect::new(0, vp[1]-BAR_MARGIN-BAR_HEIGHT, vp[0], BAR_HEIGHT))` when whatif_active, else None. Kit's logic: `y = viewport.bottom() - 44.0`; if avoid-rect exists and `bar.bottom()+26 > y && bar.y < y`, lift `y = bar.y - 26.0`. Verified math equivalence with BAR_MARGIN=12.0, BAR_HEIGHT=44.0: bar.bottom()+26 = vp[1]-12+26 = vp[1]+14 > vp[1]-44 ✓; bar.y = vp[1]-56 < vp[1]-44 ✓; result y = vp[1]-56-26 = vp[1]-82 = original `ty` ✓. Kit returns height 20.0 (text height), handler uses 28.0 for clip band (padding) — preserved by `toast_clip.h = 28.0;` after the call. Also updated `OwnedScreenText.origin` from `[40.0, ty]` to `[40.0, toast_clip.y]` to keep semantics (y comes from kit now).
+- P3 verification: (1) `cargo build -p canvas-app` — compiles clean ✓; (2) `cargo test -p canvas-app --lib` — 589 passed, 0 failed, 0 ignored ✓ (0 regressions vs 589 baseline); (3) `cargo clippy -p canvas-app --all-targets -- -D warnings` — clean ✓; (4) `cargo fmt --all -- --check` — pre-existing fmt issues in OTHER agents' WIP files (`agent_panel.rs` Agent Q ×5, `explain_ui.rs` Agent R ×5, `explain.rs` ×2) and in HEAD-baseline code (`overlays.rs:2740` FR-025 comment alignment, `stage.rs:1894` `parts: Vec<String>` line-wrap) — NONE in my migration code (verified by `rustfmt --check` direct on handler.rs clean / overlays.rs only line 2740 outside my edit regions / stage.rs only line 1894 outside my edit regions).
+
+Stage Summary:
+- Files changed: 3 (mine) — `crates/canvas-app/src/app/overlays.rs` (+51 / -37 across 4 sites), `crates/canvas-app/src/app/stage.rs` (+15 / -9 site 5), `crates/canvas-app/src/app/handler.rs` (+27 / -7 toast).
+- Backdrop sites migrated: 5 (P1-Site1 docs_overlay, P1-Site2 ai_onboarding_overlay Painter-path, P1-Site3 ai_onboarding_overlay Vec-path, P1-Site4 settings_overlay, P1-Site5 stage_frame world-space) — task said "4 backdrop sites" but listed 5 in detail; all 5 migrated.
+- Toast migrated: yes (handler.rs ~731 — `kit::toast_area(viewport, avoid)` + height preserve 28.0).
+- Tests: 589 passed (canvas-app lib, 0 regressions vs 589 baseline).
+- Issues:
+  - **Painter vs Vec<CardInstance> split**: P1-Site2 uses `Painter` (private `items` field, no public `push(PaintItem)`); migrated via `if let PaintItem::Rect { rect, fill, border, radius } = backdrop { d.rect(...) }` — semantically equivalent to direct push (Painter::rect internally just pushes `PaintItem::Rect` to `items`). P1-Site3/Site4/Site5 push to `Vec<CardInstance>` (via `paint_items_to_cards`) or `Vec<CardInstance>` in world-space (via `paint_items_to_stage`).
+  - **Stage-space quirk**: P1-Site5 (stage_frame) is in world coordinates (camera.screen_to_world + /zoom), unlike Sites 1/3/4 which are screen-space. Used `paint_items_to_stage` adapter (same world-conversion as original) — verified visually 1:1 by reading `support.rs:160-175` (matches original `pos = camera.screen_to_world([0,0], viewport)`, `size = [vp[0]/zoom, vp[1]/zoom]`, `params = [0/zoom=0, 0, 0, 1]`).
+  - **Toast height difference**: kit returns h=20.0 (text height); handler uses h=28.0 (padding band). Task instruction anticipated this — preserved by `toast_clip.h = 28.0;` after kit call.
+  - **Build env pre-existing break**: at start of session, `cargo build -p canvas-app` failed once on `chat_bubble` arg-count mismatch (canvas-ui Agent Q's signature change with new `header: bool` param, agent_panel.rs caller not yet updated) — but this was a transient state; subsequent builds compile clean (Agent Q's caller is now updated to pass `true`). `cargo test -p canvas-app --lib` clean at 589 passed. Other agents' WIP files (`agent_panel.rs`, `explain_ui.rs`, `explain.rs`) have pre-existing fmt issues — NOT mine.
+
+---
+Task ID: Q
+Agent: Agent Q (CR-015 fix + chat_bubble force-fit)
+Task: Fix 2 CR-015 text-measurement regressions in agent_panel + resolve chat_bubble force-fit (kit called only for style, layout discarded)
+
+Work Log:
+- Read worklog tail (Tasks A/B/C/D/G/H/I/J/K + Agent P backdrop/toast migration) + agent_panel.rs render path (lines 340-620, message log loop), chat_bubble.rs kit API (signature `chat_bubble(slot, n_lines, n_tool_calls, kind, palette) -> (ChatBubbleLayout, ChatBubbleStyle)` — NO `header` param, layout only `rect + text_area + tool_call_rows`), TextMeasurer API (measure.rs — `width_of(fs, text, family, size) -> f32`, `wrap(fs, text, family, size, max_w) -> Vec<String>`), app.rs:2881-2882 TextMeasurer+FontSystem creation pattern (`canvas_ui::measure::TextMeasurer::new()` + `canvas_render::text::measure_font_system()`), `canvas_render::text::SANS_FAMILY = "Noto Sans Display"`. Confirmed agent_panel_overlay called from handler.rs:314 (render path — no nested FontSystem lock risk).
+- Read bot bubble code lines 414-576 — confirmed audit finding: kit::chat_bubble called for STYLE only (`_cb_layout` discarded); geometry hand-rolled: bubble_slot at `log_rect.x+8, msg_y, bubble_w, bubble_h`; header "AI Агент" at `bubble_x_inner(bubble_slot), msg_y+4, bubble_w-16, 14`; text at `bubble_x_inner(bubble_slot), msg_y+16, bubble_w-16, bubble_h-20`; tool_calls loop advancing msg_y by 14.0 each; bubble_h = `24 + n_lines*14 + tool_calls*14 + (preview? 26+8)` with magic 24/14.
+- **Q2 kit extension (chat_bubble.rs)**: extended kit `chat_bubble` API to support a header line above text_area:
+  - Added `pub const CHAT_HEADER_H: f32 = 12.0;` — line-height for header (кegль 9 · SCREEN_LINE_FACTOR 1.3 ≈ 11.7 → 12; was magic 14 in agent_panel hand-rolled, equals CHAT_LINE_H — visually stretched header under text-row).
+  - Added `pub header_area: Option<UiRect>` field to `ChatBubbleLayout` — header rect above text_area (`None` when `header=false`).
+  - Added `header: bool` param to `chat_bubble()` — when `true`, header_area occupies `slot.x + pad, slot.y + pad/2, text_area_w, CHAT_HEADER_H` (half-pad top — historical `msg_y + 4.0` offset of «AI Агент» header); text_area.y = `header.bottom()` (no extra gap — header flows into text via line-height of CHAT_HEADER_H=12 + кегль 9 → ~3px visual gap). When `false`, header_area = None and text_area.y = `slot.y + pad` (unchanged historical behaviour).
+  - Updated 6 existing tests to pass `false` (no header — backward-compat behaviour).
+  - Added 2 new tests: `header_area_stacks_above_text_area` (header.x/y/w/h + text_area.y = header.bottom() + tool_call_rows position), `header_with_no_tool_calls` (header + 0 tool_calls → tool_call_rows empty, header_area + text_area valid).
+  - Re-exported `CHAT_HEADER_H, CHAT_LINE_H, CHAT_TOOL_CALL_H` from `kit.rs` (was missing — only types/fns were re-exported).
+- **Q1 fix (agent_panel.rs:379-382, user bubble)**:
+  - BEFORE (CR-015): `bubble_w = (log_rect.w - 16.0).min(text.len() as f32 * 6.0 + 16.0)` (byte_count × 6.0 heuristic — breaks on Cyrillic/emoji: multi-byte UTF-8 over-estimates width); `bubble_h = 28.0.max((text.len() as f32 / 32.0).ceil() * 16.0 + 12.0)` (byte_count / 32 line-count heuristic).
+  - AFTER: created `TextMeasurer::new()` + `measure_font_system()` once before message loop (reused by both user and bot bubbles — cache shared); `bubble_w = max_bubble_w.min(measurer.width_of(&mut fs, text, SANS_FAMILY, 11.0) + 16.0)`; `bubble_h = 28.0.max(measurer.wrap(&mut fs, text, SANS_FAMILY, 11.0, bubble_w - 16.0).len() as f32 * 16.0 + 12.0)`. Семейство/кегль — те же, что у `d.label_left` рендера bubble (FR-053: метрики раскладки = метрики рендера).
+- **Q2 fix + migration (agent_panel.rs:414-576, bot bubble)**:
+  - CR-015 fix: `n_lines = (text.len() / 48).max(1)` → `n_lines = measurer.wrap(&mut fs, text, SANS_FAMILY, 11.0, max_text_w).len().max(1)` (wrap to kit's `text_area.w = bubble_w - 2·SPACING_SM`).
+  - Geometry migration: replaced hand-rolled `bubble_slot + bubble_x_inner + msg_y+4 (header) + msg_y+16 (text) + msg_y advances per tool_call` with kit layout:
+    - `bubble_h` now computed from kit-canonical metrics: `pad_half + CHAT_HEADER_H + n_lines·CHAT_LINE_H + (SPACING_S + n_tool_calls·CHAT_TOOL_CALL_H)? + (SPACING_S + PREVIEW_BTN_H)? + pad_half`. Visual delta vs hand-rolled: -4..+2 px (no preview), -6 px (with preview) — tighter bubble, less wasted space.
+    - Call `kit::chat_bubble(bubble_slot, n_lines, tool_calls.len(), kind_kit, &kit_palette, true)` (header=true for «AI Агент»).
+    - Use `cb_layout.rect` for bubble background (was `bubble_slot` direct).
+    - Use `cb_layout.header_area` (Option<UiRect>, Some when header=true) for "AI Агент" header label — replaces hand-rolled `UiRect::new(bubble_x_inner(bubble_slot), msg_y + 4.0, bubble_w - 16.0, 14.0)`.
+    - Use `cb_layout.text_area` for text body label — replaces hand-rolled `UiRect::new(bubble_x_inner(bubble_slot), msg_y + 16.0, bubble_w - 16.0, bubble_h - 20.0)`.
+    - Use `cb_layout.tool_call_rows[i]` for each tool_call rect — replaces hand-rolled `UiRect::new(bubble_x_inner(bubble_slot), msg_y, bubble_w - 16.0, 14.0)` with msg_y advancing.
+    - Preview Accept/Reject buttons computed below `last tool_call_row.bottom() + SPACING_S` (or `text_area.bottom() + SPACING_S` if no tool_calls) — replaces hand-rolled `msg_y += 4.0` gap.
+    - Advance msg_y past bubble: `msg_y = cb_layout.rect.bottom() + SPACING_SM` (was `msg_y += 8.0` — same value, kit-canonical).
+  - Removed now-unused helper `bubble_x_inner(bubble: UiRect) -> f32` (was `bubble.x + 8.0` = SPACING_SM; all callers migrated to `cb_layout.{text_area,tool_call_rows[i],rect}` which already encode the pad).
+- P3 verification: (1) `cargo build -p canvas-app -p canvas-ui` — compiles clean ✓; (2) `cargo test -p canvas-app --lib` — 589 passed, 0 failed, 0 ignored ✓ (0 regressions vs baseline; 15 agent_panel tests pass); (3) `cargo test -p canvas-ui --lib` — 276 passed, 0 failed, 0 ignored ✓ (8 chat_bubble tests: 6 updated + 2 new header tests); (4) `cargo clippy -p canvas-app -p canvas-ui --all-targets -- -D warnings` — clean ✓; (5) `cargo fmt --all -- --check` — my files clean ✓ (agent_panel.rs, chat_bubble.rs, kit.rs); pre-existing fmt issues in other agents' WIP files (explain.rs ×4, input.rs ×2, explain_ui.rs ×5) NOT in my territory — left untouched per task instructions.
+
+Stage Summary:
+- Files changed: 3 (mine) — `crates/canvas-ui/src/component/chat_bubble.rs` (+120 / -34), `crates/canvas-ui/src/kit.rs` (+3 / -2), `crates/canvas-app/src/app/agent_panel.rs` (+127 / -76).
+- CR-015 fixes: 2 — (1) user bubble width/height (`text.len() × 6.0` and `text.len() / 32.0` heuristics → `TextMeasurer::width_of` + `TextMeasurer::wrap`); (2) bot bubble n_lines (`text.len() / 48` heuristic → `TextMeasurer::wrap`).
+- chat_bubble force-fit: resolved — kit extended with `header: bool` param + `ChatBubbleLayout.header_area: Option<UiRect>` + `CHAT_HEADER_H` constant (12.0). Bot bubble now USES kit layout: `cb_layout.rect` for background, `cb_layout.header_area` for "AI Агент" header, `cb_layout.text_area` for text body, `cb_layout.tool_call_rows[i]` for tool_call rows. `_cb_layout` is no longer discarded — fully consumed. Removed unused `bubble_x_inner` helper.
+- Tests: 589 passed canvas-app lib (incl. 15 agent_panel tests); 276 passed canvas-ui lib (incl. 8 chat_bubble tests — 6 updated + 2 new header tests).
+- Kit extensions: `chat_bubble(slot, n_lines, n_tool_calls, kind, palette)` → `chat_bubble(slot, n_lines, n_tool_calls, kind, palette, header: bool)`; `ChatBubbleLayout` gained `header_area: Option<UiRect>`; new `pub const CHAT_HEADER_H: f32 = 12.0`; `kit.rs` re-exports `CHAT_HEADER_H, CHAT_LINE_H, CHAT_TOOL_CALL_H`.
+
+---
+Task ID: UR-001-W1+W2 (сессия 2026-10-08, продолжение)
+Agent: Super Z (координатор) + W1-субагент (частично)
+Task: Реализация волн W1+W2 плана UR-001 (CR-026, CR-019, CR-023, CR-020, CR-024, CR-025) + правило учёта токенов в AGENTS.md
+
+Work Log:
+- AGENTS.md: раздел «Учёт токенов по задачам (трейсинг стоимости разработки)» (81ed223)
+- Инфраструктура: rustup stable 1.99 (clippy/rustfmt/wasm32-таргет), общий CARGO_TARGET_DIR, git-worktree ur-001-w1 / ur-001-w2
+- Субагент W1 (шлюз вернул таймаут на финальный ответ, работа выполнилась): A1 CR-026 (3748f66), A2 CR-019 (e1cb0ed); A3 не успел
+- Координатор — A3 CR-023 (9b6bba2): suppress-поля HintPopup (suppressed + pending_suppress; arm_suppress/dismiss), Esc = dismiss до смены токена, контракт FR-021 дополнен
+- Координатор — волна W2 (worktree w2 после вливания w1): B1 CR-020 (18958ee) — row_grid::row_is_explainable (константы-присваивания без триггера, Q1), text.rs row_explain_hits (единая точка геометрии/адресации мини-луп строк), рендер мини-луп, гейт result_band_root_at по node_shows_result_footer, тултип анкерён к лупе строки; B2 CR-024 (ac559e0) — PortTarget::Out удалён, control-порт без тултипа, value-стороны сохранены; B3 CR-025 (ce0d44e) — flow::source_line_name (единая точка резолва), приоритет ИМЯ > индекс во всех путях (edge_source_value, lineage::edge_target, dataref, port_label_for «Нода.имя = значение»), примечание в ADR-0003
+- Слияния: ur-001-w1 → ur-001-w2 (ff) → main (df168e1); origin/main 22e5be5 (ui-kit рефакторинг) влит без конфликтов (00fd640)
+- Гейты на main: canvas-core 492, canvas-render 394, canvas-app 594, integration_explain_x6 4/4, clippy -D warnings (core/render/app/scene/ui), fmt --check, wasm_gate --check — зелёные; запушено (00fd640)
+
+Stage Summary:
+- 6/6 задач волн W1+W2 реализованы; CR-019/020/023/024/025/026 — «реализовано (код+тесты), ожидает приёмки владельца»
+- Открытые вопросы владельцу: (1) зебра/подсветки ярче после блендинг-фикса — калибровка на скриншотах (план §4.3); (2) Ctrl+Space — ручное открытие подавленного попапа, кандидат в FR; (3) шум мини-луп на 5+ строках-результатах — порог LOD на приёмке; (4) Shift+drag-подсказка — вне v1 (CR-024 п.3); (5) заполнение from_output при drag — вне v1 (CR-025 п.4)
+- WASM L2 (браузерный стенд) не выполнялся (среда без Chromium/Xvfb-прогона) — приёмка по чек-листу плана §3 вручную
+- Tokens (estimate, правило AGENTS.md): A1 ≈135k, A2 ≈160k, A3 ≈175k, B1 ≈235k, B2 ≈135k, B3 ≈210k, W0+слияния+гейты ≈90k; итого ≈1.14M
+
+---
+Task ID: click-to-edit (сессия 2026-10-08, вечер)
+Agent: Super Z (одиночная сессия, без субагентов)
+Task: Архитектурно-технологическая оценка и реализация инлайн-редактирования нод без перехода в режим правки двойным нажатием (click-to-edit)
+
+Work Log:
+- Разведка: canvas-render/edit.rs (EditingSession на cosmic-text), canvas-app/app.rs (begin_editing/begin_editing_title/begin_editing_edge, finish_editing), canvas-app/app/input.rs (on_left_button: даблклик T7, CR-018 v2 row-click, FR-072, что-если, тач-гейты FR-092/093)
+- Вердикт: «режим редактирования» как состояние отсутствует — правка уже инлайн (оверлей-сессия в общем кадре); привязан к даблклику только триггер. Прецедент прямого входа принят владельцем (CR-018 v2 — клик по строке таблицы)
+- UX-модель (tldraw/Sheets, защита мышечной памяти переноса): клик по телу text-ноды → правка с кареткой в точке клика; drag по телу → перенос (как раньше); drag внутри сессии → выделение текста; даблклик сохранён полностью (файлы/what-if/пустое место); Ctrl/Shift — выделение; тач — только двойной тап (виртуальная клавиатура по случайному тапу исключена)
+- Документ-вердикт: docs/dev-researches/inline-edit-single-click-analysis.md (§1 состояние/конфликты жестов, §2 оценка по слоям, §3 вне скоупа v1, §4 критерии приёмки)
+- Реализация (TDD): чистая click_edit_target() (5 гейтов: text-kind, файл, what-if, тач, модификаторы; зона по HEADER_HEIGHT) + click_edit_is_click() (порог SELECT_DRAG_THRESHOLD, общий с рамкой выделения) + ClickEditCandidate (press→release машина: ставится в on_left_button Pressed рядом с DragState, потребляется в Released ПОСЛЕ finish_interaction_undo — undo-дубли исключены) + begin_edit_at() (единая конверсия координат с CR-018 v2: session_area_offset + session.click)
+- Периферия: курсор I-beam над редактируемым текстом на hover (sync_cursor_icon); F2 — клавиатурный вход в правку выделенной ноды (Enter занят FR-011 mindmap); HOTKEYS (lib.rs) + i18n RU/EN (HKEY_F2/HK_F2) синхронизированы
+- Гейты: cargo test -p canvas-app --lib 599 passed (594 база + 5 новых), clippy -D warnings (app/core/render/scene/ui) — чисто, fmt --check — чисто, scripts/wasm_gate.sh --check — зелёный
+- WASM L2 (браузерный стенд) НЕ выполнялся: в среде сессии нет Chromium (Xvfb есть, браузера нет) — по правилу AGENTS.md ручная приёмка: web-версия Pages или trunk serve → клик по телу заметки (каретка в точке), drag по телу (перенос), F2 на выделенной ноде, Ctrl/Shift-клик (выделение без правки), Esc (откат), клик мимо (commit)
+
+Stage Summary:
+- Файлы: crates/canvas-app/src/app.rs (+~200: типы ClickEditZone/ClickEditCandidate, click_edit_target, click_edit_is_click, begin_edit_at, click_edit_hover_text, поле click_edit, 5 тестов), crates/canvas-app/src/app/input.rs (+42: очистка/установка/потребление кандидата, F2), crates/canvas-app/src/i18n.rs (+6: RU/EN), crates/canvas-app/src/lib.rs (+1 HOTKEYS), docs/dev-researches/inline-edit-single-click-analysis.md (новый)
+- canvas-render/canvas-core/web не тронуты — редактор и IME работают как есть
+- Открытые вопросы владельцу: (1) Notion-модель (drag по телу = выделение текста, перенос только за шапку) — поверх текущей по решению владельца; (2) click-to-edit для label групп и лейблов связей — вне v1; (3) онбординг/пользовательские доки — вопрос задан в итоговом отчёте
+- Tokens (estimate, правило AGENTS.md): in≈320k, out≈45k, total≈365k, model=GLM (Super Z), scope=click-to-edit
+Task ID: W3-C3-finish
+Agent: субагент (general-purpose, сессия W3-C3)
+Task: Завершение FR-101 (подсказки входящих параметров по имени без `$`, формат вставки по языку токена, фикс счётчика inbound) — сверка реализации с ТЗ, добор тестов, гейты, доки, коммит в worktree w3-c3 (ветка ur-001-w3)
+
+Work Log:
+- Сверка `git diff` с ТЗ fr-101-inbound-param-name-hints.md: код предыдущего агента покрывал все 5 пунктов Changes — HintContext.inbounds (InboundHint: имя/qualified/источник/спилл; имена to_param-спиллов + qualified-ключи построчных рёбер через единую точку flow::source_line_name + dataref::qualified_obj_name), inbound исключает to_param-рёбра (зеркало фильтра слотов), $-ветка с матчингом по имени без `$`, идентификаторный токен с триггером по имени, i18n hints.spill RU/EN — дополнено мной (см. ниже)
+- Исправлено 2 красных теста (TDD-спека важнее текущего кода): (1) hints_dollar_numbers_collapse_after_four — параметры манифеста в $-ветке переставлены ПОСЛЕ $in/$N (порядок FR-021 v1, как в doc-комментарии): при полном списке HINT_LIMIT=8 срезал $4; (2) fr101_counter_excludes_to_param_and_names_inputs — текст «итог = » → «итог = $» (пустой токен показывает только переменные — FR-021, попап не открывался); комментарии в тестах обновлены
+- Тесты FR-101 на месте/проверены: hints_dollar_refs (расширен кириллицей $купо → Купон.купон, порядок имена→$in→номера), hints_inbound_by_name_without_dollar (купо → Купон.купон, peak → $peak_rps, service → $service_rate), hints_dollar_numbers_collapse_after_four (N=6 → $1..$4, $5/$6 нет), hints_named_inputs_dedup (дедуп по вставке), hints_inbound_unusable_forms_skipped (зеркало грамматики: ASCII-only $имя, префикс in — валюта FR-013, qualified без пробелов, позиционное ребро — только qualified); app: fr101_counter_excludes_to_param_and_names_inputs (1 позиционное + 1 toParam → есть $1, НЕТ $2), fr101_name_trigger_without_dollar (купо и $купо → Купон.купон, деталь — источник), fr101_insert_replaces_typed_tail_only (replace_token_before_caret, каретка после вставки)
+- Гейты (общий тёплый кэш): cargo test -p canvas-app --lib — 603 passed / 0 failed; canvas-suggest — 56 passed (45 lib + 11 golden/integration, golden целы); canvas-core --lib — 493 passed / 0 failed; cargo fmt --all + --check — чисто; cargo clippy -p canvas-app -p canvas-core --all-targets -- -D warnings — чисто
+- Доки: fr-021-numi-input-hints.md — Обновлён + Changelog v2 (2026-10-08, именованные входы, ссылка на FR-101); user-docs/calculations.md — §Автодополнение: новый пункт «Входы по имени» (кириллица → Нода.параметр, латиница → $имя, деталь-источник), $-ссылки дополнены (toParam-рёбра номеров не занимают, матчинг без $), §FR-050 — триггер по имени без $; docs/interface-objects/node.md — строка таблицы «Подсказки ввода (FR-021, FR-101)»; fr-101-...md — статус «реализовано (код+тесты), ожидает приёмки владельца» + Changelog 2026-10-08 с полным перечнем
+- Коммит: 88e2873 «feat(app): FR-101 — подсказки входов по имени без $ (кириллица → Нода.параметр, ASCII → $имя), фикс счётчика inbound» (код + доки, один коммит); НЕ пушено
+
+Stage Summary:
+- FR-101 завершён: все пункты ТЗ реализованы и покрыты тестами (8 тестов FR-101: 5 hints_ui + 3 app), гейты зелёные, доки обновлены, один коммит в ur-001-w3
+- Владельцу на приёмку: репродуктор handtest — «Корзина за вычетом…»: ввод «купо» (без $) и «$купо» → Купон.купон с деталью-источником; ввод «$» → именованные входы, $in/$1 (ложного $2 нет); вставка — только хвост токена
+- Открытые вопросы владельцу: (1) $Объект.Поле — грамматика не менялась (кандидат в отдельный FR, риск конфликта с валютой $); (2) порядок параметров манифеста в $-ветке — после $in/$N (как во FR-021 v1), если нужен раньше номеров — правка тривиальна; (3) алиасы коллизий с пробелом («Имя (id)») не подсказываются — только ручной ввод
+- Telegram НЕ отправлялся (по инструкции)
+
+Tokens (estimate, правило AGENTS.md): in ≈70k, out ≈18k, total ≈88k, model=claude-sonnet-4-5-20250929, scope=FR-101
+
+Task ID: W3-C1
+Agent: W3-C1 субагент (CR-021 — фикс регрессии CJM-теста, подтаска UR-001)
+Task: Fix `scheme_cjm_tests::geometry_clean_after_autogrow` (FAIL: OVERLAP text/text note-8 × note-9, investment-case) после C1; закоммитить незакоммиченный набор CR-021 + фикс + доки
+
+Work Log:
+- Унаследовано (кратко, от C1-агента): CR-021 реализован в worktree — входящие строки видимы всегда (авто-строки для всех позиционных value-входов независимо от читаемости слота, пересмотр fr-050 Р-4), расчётные присваивания — маркер ƒ, единая точка классификации `expr::{line_role, param_line_count}` (core) с потребителями row_grid/text/calc_panel_ui/dataref/measure/scene; пиннеры обновлены; все гейты зелёные КРОМЕ CJM-геометрии. Диагноз координатора подтверждён временным debug-тестом (scratch_debug.rs): irr 280×200 (манифест) → 368 после recompute_flow (5 авто-строк приёмника + зона «РАСЧЁТ» после переклассификации `irr_rate = irr(...)`), growth 180 → 224; раскладка FR-071 ставит ряды по МАНИФЕСТНЫМ высотам (шаг = max_h + ROW_GAP 80) → низ irr (−100+368=268) налезал на growth (y=220), перекрытие 48 px.
+- **Фикс (системный, canvas-scene/scheme_apply.rs, функция `presize_text_heights`)**: ПЕРЕД `plan_scheme_layout` каждая text-нода инстанса предразмеривается: `height = max(манифест, estimated_result_reserve_height(...))` — консервативная оценка уровня 1 (тот же слой canvas-scene + canvas-core, БЕЗ canvas-render). Входы оценки зеркалят recompute-путь сцены (I-2: мера = рендер): (1) авто-строки приёмника — позиционные value-рёбра в ноду (зеркало `flow::auto_rows_with_data` после CR-021: `to_node`/`FlowKind::Value`/`to_param.is_none()`, решения не нужны — после CR-021 строки создаются независимо от читаемости); строки-проекции «путь = значение» препендятся display-тексту, их индексы входят в formula_lines (зеркало `SceneState::refit_inputs`); путь — общие функции ядра `dataref::qualified_obj_name` + `flow::spill_source_field`, значение — заглушка `000 NBSP 000 руб` (форма разбора как у реального `Value::display_parts`, «150 000 руб» не длиннее); (2) formula_lines тела — текстовый хелпер `formula_line_indices(expr::eval_lines(text))` (как в `fit_template_node_height`), со сдвигом на длину авто-префикса; (3) desc — `canvasdesk.desc` ноды (инстансы схем его не несут — пусто; читается из ноды для верности по построению); (4) footer_reserve/sigma_name — текстовое зеркало `node_shows_result_footer`: у заметки без шаблона/`canvasdesk.expr` футер требует «нет построчных И есть итог», итог заметки — последняя формульная строка → при пустых построчных итога нет → false (доказано в доке функции). Завышение безопасно: рост grow-only, ROW_GAP=80 поглощает остаточную дельту L2-шейпинга над L1-оценкой (~4 px на корпусе). Право на «первую встречу» (`refit_node_to_content_if_changed`: prev=None → доверяем текущей высоте) гарантирует, что предразмеренные высоты не усаживаются при первом recompute.
+- Гигиена: `crates/canvas-app/src/scratch_debug.rs` удалён, `mod scratch_debug;` убран из `canvas-app/src/lib.rs` (lib.rs вернулся к HEAD-состоянию).
+- Доки (предыдущий агент их не сделал — сделано): `cr-021-...md` — статус «реализовано (код+тесты), ожидает приёмки владельца» + Changelog 2026-10-08 (реализация W3-C1) + Changes п.6 (геометрия) + Verification (CJM 3/3); `fr-050-spill-visibility-ui.md` — примечание о пересмотре в Р-4 + Changelog «Р-4 пересмотрено CR-021», Обновлён 2026-10-08; `node.md` §5 — строка «Зоны тела и метки секций (FR-069/CR-021)».
+
+Stage Summary:
+- Фикс: 1 файл кода (`crates/canvas-scene/src/scheme_apply.rs`, +119/-1: `presize_text_heights` + `AUTO_ROW_VALUE_STUB` + вызов перед раскладкой) поверх унаследованного diff CR-021 (10 файлов); доки — 3 файла; scratch_debug удалён.
+- Верификация (числа): canvas-app --lib 595 passed / 0 failed (scheme_cjm_tests 3/3, вкл. geometry_clean_after_autogrow); canvas-scene 145+6+0 passed / 0 failed (oracle-инварианты FR-071 — smart_layout ×5 — зелёные БЕЗ правок ожиданий); canvas-core --lib 501 passed / 0 failed; canvas-render 396+1+15 passed / 0 failed. `cargo fmt --all` + `--check` — чисто; `cargo clippy -p canvas-scene -p canvas-core -p canvas-app --all-targets -- -D warnings` — чисто.
+- Коммит: `feat(core,render,scene,app): CR-021 — входящие строки видимы всегда, расчёт с маркером ƒ, единая точка классификации` (716a8c6, ветка ur-001-w3-c1; НЕ запушено — по инструкции).
+- Открытое: приёмка владельцем (репродуктор handtest CR-021 + визуал раскладки схем с предразмеренными высотами — шаг рядов стал честнее/крупнее); «сворачивание входов чипом-счётчиком при 4+» — деталь приёмки, не блокер v1.
+- Tokens (estimate, правило AGENTS.md): in≈118k, out≈19k, total≈137k, model=gpt-5.2-codex, scope=CR-021 (estimate)
+
+Task ID: W4-D1-final
+Agent: W4-D1-final субагент (финализация FR-100, подтаска UR-001)
+Task: сверка и коммит этапа 2 (app,web), верификация, этап 3 (доки), коммит 3, worklog
+
+Work Log:
+- Сверка этапа 2 (diff 5 файлов, +296/−124): целостен, заглушек/TODO нет. Состав: (1) `route_editor_key` выделен из руки `KeyOwner::Editor` в тестируемую функцию (принимает &Key/ElementState/repeat — KeyEvent вне winit не собрать); (2) Super-паритет — `map_key(key, ctrl, shift, super_key)`; (3) незнакомые Ctrl/Super-комбинации НЕ глотаются: `chord = (ctrl||super) && !alt` → return !chord (Alt не командный — AltGr); (4) web-шим ime.rs — preventDefault для ctrl/meta/alt-событий шима (браузерный select-all подавлен, синтетика доходит до winit); (5) capture-listener keydown/keyup на document → новый `AppEvent::KeyboardModifiers` (только trusted-события; приходит раньше winit-батча; на blur НЕ сбрасывается) — компенсация дефектов winit-web (KeyboardInput раньше ModifiersChanged); (6) toolbar.rs — после клика кнопки фокус синхронно возвращается канвасу (winit-web слушает keydown только на нём); (7) новый app-тест `editor_router_super_parity_and_unknown_chords_fall_through`.
+- Выловлен и исправлен дефект этапа 2, не пойманный координаторской проверкой: `toolbar.rs bind()` — вызов `handler()` внутри wrapping-Closure требует `mut handler` (E0596, только wasm-цель — нативный clippy --all-targets это пропустил бы? нет: ошибка всплывала на wasm-check canvas-web; фикс — `mut handler: impl FnMut() + 'static`, вошёл в коммит 2).
+- Нюанс верификации: `cargo check --target wasm32 -p canvas-app` (с бином canvasdesk) падает ВСЕГДА (main.rs тянет canvas_shell — dep под cfg(not(wasm32)) по дизайну M8/W3) → wasm-гейт для app = `--lib` (это и прогонялось; на HEAD до этапа 2 lib тоже красная — E0061 map_key 3-арг → фикс только этапом 2).
+- Верификация (числа, CARGO_TARGET_DIR=target-shared): wasm-check canvas-web ok + canvas-app --lib ok; `cargo test -p canvas-app --lib` → 605 passed / 0 failed (вкл. новый роутер-тест, повторно после док-правок — 605/0); `cargo test -p canvas-render` → 21× «test result: ok» (408+15+…, 0 failed); `cargo fmt --all` + `-- --check` → чисто; `cargo clippy -p canvas-render -p canvas-app -p canvas-web --all-targets -- -D warnings` → чисто.
+- Этап 3 (доки): `user-docs/hotkeys.md` — 5 новых строк §Ноды (Ctrl+Backspace/Delete слово, PageUp/PageDown, Tab/Shift+Tab, Home ×2 SmartHome, Cmd-паритет macOS) + переписана строка Ctrl+Z/Y (глобальная глубина 50 vs редакторский undo/redo сессии); `crates/canvas-app/src/lib.rs` HOTKEYS + 5 записей (28 всего) с новыми ключами i18n (i18n.rs: ключи + RU + EN — тест полноты зелёный); `docs/interface-objects/node.md` — новая строка «Команды редактора текста (FR-100)», счётчик F1-панели 23→28; `docs/WASM-TESTING.md` §5 — запись 2026-10-08 (клавиатурный смоук, прогон не выполнялся — ручная приёмка); `scripts/web_smoke.py` — секция 2b Control+Backspace/Control+a с оракулом «поиск замены rows≥1 + нет pageerror» (py_compile ok, НЕ запускался — по инструкции); CR-док fr-100 — статус «реализовано (код+тесты), ожидает приёмки владельца» + Changelog 2026-10-08.
+- Хвост fmt: у коммита 1/3 (f044440) edit.rs был незакоммиченно-неформатирован — отдельный style-коммит 286fd86 (только whitespace), дерево чистое.
+
+Stage Summary:
+- Коммиты (ветка ur-001-w4, НЕ запушено): 2/3 `e503842` feat(app,web) — Super-паритет/фоллбэк chord'ов/web-шим/фокус/модификаторы (5 файлов, +296/−125 вкл. фикс mut); 3/3 `70ac302` docs — hotkeys/HOTKEYS/node.md/WASM-TESTING/web_smoke/CR-статус (7 файлов, +144/−3); добор `286fd86` style(render) fmt-хвост коммита 1. FR-100 полностью закодирован: 3/3.
+- Верификация: см. Work Log — все гейты зелёные (605 app-тестов, 21×ok render, wasm-check, fmt, clippy -D warnings).
+- Ручная web-приёмка владельцем (не автоматизируется в этой среде): (а) браузерная: после клика по ноде Ctrl+A выделяет всё без браузерного select-all, Ctrl+Backspace/Delete режет слово, Ctrl+Z/Y — undo/redo, PageUp/PageDown, Tab/Shift+Tab, Home ×2; (б) macOS: те же через Cmd (Cmd+A/C/Z/Y/стрелки/Backspace); (в) после клика по кнопке тулбара клавиатура сразу живёт (фокус вернулся канвасу); (г) прогон scripts/web_smoke.py (секция 2b) на стенде; (д) F1-оверлей — 5 новых строк в обоих языках.
+- Открытые вопросы: (1) бин canvasdesk под wasm — принципиально не собирается (canvas_shell за cfg(not(wasm32))) — гейт формулировать как `-p canvas-app --lib`; (2) Super-модификатор на web = Meta (Cmd) — на Windows-браузерах Win-клавиша системная, Cmd-паритет фактически macOS-only (поведение корректно, ограничение платформы); (3) первый Ctrl-chord после загрузки страницы полагается на capture-listener шима — если winit сменит порядок событий, компенсацию можно снимать (помечено в комментариях).
+- Telegram НЕ отправлялся (по инструкции)
+
+Tokens (estimate, правило AGENTS.md): in≈95k, out≈16k, total≈111k, model=glm-4.6, scope=FR-100 (estimate)
+---
+Task ID: UR-001-W3+W4 (сессия 2026-10-08, продолжение)
+Agent: Super Z (координатор) + субагенты W3-C1/W3-C1-fix, W3-C2, W3-C3-finish, W4-D1/W4-D1-cont/W4-D1-final
+Task: Реализация волн W3+W4 плана UR-001 (CR-021, CR-022, FR-101, FR-100, D2-приёмка)
+
+Work Log:
+- W3 запущена параллельно: C1 (worktree ur-001-w3-c1) ∥ C2 (ur-001-w3-c2) — крейты не пересекаются; C3 — после слияния C2 (общие файлы overlays.rs/hints_ui.rs). Три субагент-запуска прервались таймаутом шлюза — работа продолжена инкрементально (continuation-агенты с фиксацией состояния); потери нет
+- C1 (CR-021, 716a8c6): авто-строки для всех value-входов независимо от читаемости слота (пересмотр fr-050 Р-4; валидация W-UNUSED-SLOT не тронута); классификация Calc по RHS-входам (маркер ƒ); единая точка expr::{line_role, param_line_count} — потребители row_grid/text/calc_panel_ui/measure/scene; пиннеры flow/validate/scene обновлены. Попутный системный фикс (по красному CJM-тесту geometry_clean_after_autogrow: overlap note-8×note-9 investment-case): presize_text_heights в scheme_apply — консервативное предразмеривание высот text-нод ПЕРЕД раскладкой FR-071 (диагноз координатора debug-тестом: irr 200→368 после переклассификации/авто-строк)
+- C2 (CR-022, d1e353f): ИИ-предложения шаблонов сняты из попапа полностью — гейт-флаг suggest.c1_in_popup (serde default false), триггер update_hints + suggest_remerge за флагом; merge_ai_items сохранена (недостижима из пользовательского пути); тумблер «ИИ-карточки шаблонов (после создания ноды)» i18n RU/EN; план FR-079 §4.2 помечен «снят решением владельца»
+- C3 (FR-101, 88e2873): HintContext.inbounds — имена to_param-спиллов + qualified-ключи (единая точка flow::source_line_name + dataref::qualified_obj_name); счётчик inbound без to_param (фикс ложного $N); $-ветка и идентификаторный токен матчат по имени; вставка по языку токена (кириллица → Нода.параметр, ASCII → $имя); деталь «проливание из ноды X» i18n; 8 тестов FR-101
+- D1 (FR-100, f044440 + e503842 + 70ac302 + 286fd86): KeyCommand DeleteWordBackward/Forward, Undo/Redo (стек снимков с группировкой), PageUp/Down, Tab/Shift+Tab, SmartHome (edit.rs); Super-паритет + незнакомые Ctrl/Super-комбинации не глотаются (route_editor_key, тест); web-слой: preventDefault chord'ов шима FR-095, возврат фокуса канваса (toolbar), компенсация winit-web — capture-listener шлёт AppEvent::KeyboardModifiers из DOM без сброса на blur; доки hotkeys.md/HOTKEYS(28)/node.md/WASM-TESTING.md, web_smoke.py секция 2b
+- D2 (a2e7479): ACCEPTANCE.md — сквозной чек-лист UR-001.1–8 (план §3) с автоматическими доказательствами и пунктами ручной приёмки; синхрон index-cr-fr (CR-021/FR-100/FR-101 → «реализовано (ожидает приёмки)»)
+- Слияния: ur-001-w3-c2/c1 → ur-001-w3 → main (466e04b); ur-001-w4 → main (56f3566); origin/main параллельной сессии (ревизии CR-020/025, CR-027/028) влит бесконфликтно (c4c8d17)
+- Гейты на main (после всех слияний): fmt; clippy -D warnings (core/render/scene/app/ui/suggest/web); canvas-core 503, canvas-app 605, canvas-render 22 бинарника ok, canvas-scene 3 ok, canvas-suggest 56 (golden целы), integration_explain_x6 4/4; wasm_gate --check — зелёные; запушено (c4c8d17)
+
+Stage Summary:
+- 5/5 задач волн W3+W4 реализованы; CR-021/CR-022/FR-101/FR-100 — «реализовано (код+тесты), ожидает приёмки владельца»; план UR-001 закрыт целиком (11/11 дефектов: W1+W2 — прошлая сессия, W3+W4 — эта)
+- Открытые вопросы владельцу: (1) user-docs/ai-features.md описывает старый концепт Suggest — нужна ли ревизия страницы; (2) UI-тумблер для suggest.c1_in_popup или config-only; (3) $Объект.Поле — кандидат в отдельный FR (конфликт с валютой $); (4) порядок параметров манифеста в $-ветке (сейчас после $in/$N — как во FR-021 v1); (5) визуал схем после предразмеривания высот — на приёмку; (6) чип-свертка входов при 4+ строках — деталь приёмки, не блокер v1; (7) зебра/подсветки после CR-026 — калибровка на скриншотах (из W1+W2)
+- Онбординг: шаги тура не затронуты изменениями W3+W4 (попап-подсказки в онбординге не упоминаются; вопрос владельцу — по правилу AGENTS.md, задан в итоговом отчёте)
+- WASM L2 (браузерный стенд) не выполнялся (среда без Chromium/Xvfb) — web-часть FR-100 приёмке по §5 WASM-TESTING.md + web_smoke.py 2b вручную
+- Tokens (estimate, правило AGENTS.md): C1 ≈137k (+повторные запуски ~60k), C2 ≈113k, C3 ≈88k (+повтор ~30k), D1 ≈111k (+повторы ~100k), D2 ≈50k, координатор (слияния/гейты/пуши/отчёты) ≈90k; итого ≈0.68M

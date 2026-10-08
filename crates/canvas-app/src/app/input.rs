@@ -377,6 +377,148 @@ impl App {
         }
     }
 
+    /// FR-054/FR-100: клавиатура активного редактора (T7). `true` — событие
+    /// поглощено редактором; `false` — редактору не нужно (незнакомая
+    /// Ctrl/Super-комбинация уходит в глобальную лестницу хоткеев).
+    /// Отдельная функция (не arm маршрута): принимает `&Key`/`ElementState`
+    /// вместо `KeyEvent` — KeyEvent нельзя собрать вне winit (приватное
+    /// поле platform_specific), а роутер-контракт тестируется headless.
+    pub(super) fn route_editor_key(
+        &mut self,
+        logical_key: &Key,
+        state: ElementState,
+        repeat: bool,
+    ) -> bool {
+        if self.editing.is_none() {
+            return false;
+        }
+        if state != ElementState::Pressed {
+            return true;
+        }
+        let ctrl = self.modifiers.control_key();
+        let shift = self.modifiers.shift_key();
+        // FR-100: Cmd-паритет — на macOS команды редактора доступны и
+        // через Cmd (Cmd+A печатал «a»)
+        let super_key = self.modifiers.super_key();
+        // FR-021: при открытом popup подсказок навигация/выбор
+        // перехватываются ДО команд редактора: Enter/Tab принимают
+        // подсказку (НЕ коммитят заметку), Esc закрывает только popup
+        // (повторный Esc — откат правки, прежнее поведение)
+        if self.hints.open {
+            match logical_key {
+                Key::Named(NamedKey::ArrowDown) if !repeat => {
+                    self.hints.move_selection(1);
+                    self.request_redraw();
+                    return true;
+                }
+                Key::Named(NamedKey::ArrowUp) if !repeat => {
+                    self.hints.move_selection(-1);
+                    self.request_redraw();
+                    return true;
+                }
+                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Tab) if !repeat => {
+                    self.accept_hint();
+                    return true;
+                }
+                Key::Named(NamedKey::Escape) if !repeat => {
+                    // CR-023 (UR-001-08): dismiss с подавлением до
+                    // смены токена — прежний reset возвращал попап
+                    // на том же токене при следующей правке
+                    self.hints.dismiss();
+                    self.request_redraw();
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        // FR-079 (S3): C3-карточки — Esc закрывает стопку до
+        // команд редактора (тот же приём, что у popup FR-021)
+        if self.suggest.cards.is_some() && *logical_key == Key::Named(NamedKey::Escape) && !repeat {
+            self.close_suggest_cards();
+            return true;
+        }
+        let Some(command) = map_key(logical_key, ctrl, shift, super_key).and_then(|command| {
+            match self.editing.as_ref() {
+                // FR-072: заголовок — однострочный (Enter — всегда
+                // коммит), маркеры стиля не применяются
+                Some(session) => session.adapt_command(command),
+                None => Some(command),
+            }
+        }) else {
+            // FR-100: незнакомые Ctrl/Super-комбинации НЕ глотаются —
+            // уходят в глобальную лестницу хоткеев (Ctrl+Z/Y были
+            // no-op'ом «глушителя»). Обычный ввод наружу не отдаётся:
+            // печать символов не должна триггерить канвас-хоткеи.
+            // Alt не считаем командным (AltGr — Ctrl+Alt+символ на
+            // части раскладок — не хоткей).
+            let chord = (ctrl || super_key) && !self.modifiers.alt_key();
+            return !chord;
+        };
+        match command {
+            KeyCommand::Commit => self.finish_editing(true),
+            KeyCommand::Cancel => self.finish_editing(false),
+            KeyCommand::Copy => {
+                if let Some(text) = self.editing.as_ref().and_then(|s| s.copy_selection()) {
+                    self.clipboard.set_text(text);
+                }
+            }
+            KeyCommand::Cut => {
+                let text = match (self.editing.as_mut(), self.renderer.as_mut()) {
+                    (Some(session), Some(renderer)) => {
+                        session.cut_selection(renderer.font_system_mut())
+                    }
+                    _ => None,
+                };
+                if let Some(text) = text {
+                    self.clipboard.set_text(text);
+                    self.request_redraw();
+                }
+            }
+            KeyCommand::Paste => {
+                let text = self.clipboard.get_text();
+                let pasted = if let (Some(text), Some(session), Some(renderer)) =
+                    (text, self.editing.as_mut(), self.renderer.as_mut())
+                {
+                    session.insert_text(renderer.font_system_mut(), &text);
+                    true
+                } else {
+                    false
+                };
+                if pasted {
+                    self.fit_note_size();
+                    // CR-029-B: явная вставка — новое пользовательское
+                    // действие, отличное от вставки принятой подсказки:
+                    // CR-023-подавление снимается, попап оценивается
+                    // заново (иначе вставка значения сразу после
+                    // принятия/Esc на том же токене выглядела как
+                    // «автодополнение не отработало»)
+                    self.hints.lift_suppression();
+                    self.update_hints();
+                    self.request_redraw();
+                }
+            }
+            other => {
+                let applied = if let (Some(session), Some(renderer)) =
+                    (self.editing.as_mut(), self.renderer.as_mut())
+                {
+                    session.apply(renderer.font_system_mut(), other);
+                    true
+                } else {
+                    false
+                };
+                if applied {
+                    // Текст мог вырасти (wrap/новые строки) — подгоняем
+                    // высоту заметки под контент прямо во время набора
+                    self.fit_note_size();
+                    // FR-021: popup подсказок — следом за правкой текста
+                    self.update_hints();
+                    self.request_redraw();
+                }
+            }
+        }
+        true
+    }
+
     /// FR-054 (Q4-a PRD-0009): обработчик клавиши владельцем-поверхностью —
     /// тела прежних head-веток on_key (FR-052) дословно; `true` — событие
     /// поглощено (доставка KeyboardRouter останавливается), `false` —
@@ -454,123 +596,7 @@ impl App {
             }
             ui_registry::KeyOwner::Editor => {
                 // Активное редактирование (T7): клавиатура уходит в редактор
-                if self.editing.is_some() {
-                    if event.state != ElementState::Pressed {
-                        return true;
-                    }
-                    let ctrl = self.modifiers.control_key();
-                    let shift = self.modifiers.shift_key();
-                    // FR-021: при открытом popup подсказок навигация/выбор
-                    // перехватываются ДО команд редактора: Enter/Tab принимают
-                    // подсказку (НЕ коммитят заметку), Esc закрывает только popup
-                    // (повторный Esc — откат правки, прежнее поведение)
-                    if self.hints.open {
-                        match &event.logical_key {
-                            Key::Named(NamedKey::ArrowDown) if !event.repeat => {
-                                self.hints.move_selection(1);
-                                self.request_redraw();
-                                return true;
-                            }
-                            Key::Named(NamedKey::ArrowUp) if !event.repeat => {
-                                self.hints.move_selection(-1);
-                                self.request_redraw();
-                                return true;
-                            }
-                            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Tab)
-                                if !event.repeat =>
-                            {
-                                self.accept_hint();
-                                return true;
-                            }
-                            Key::Named(NamedKey::Escape) if !event.repeat => {
-                                self.hints.reset();
-                                self.request_redraw();
-                                return true;
-                            }
-                            _ => {}
-                        }
-                    }
-                    // FR-079 (S3): C3-карточки — Esc закрывает стопку до
-                    // команд редактора (тот же приём, что у popup FR-021)
-                    if self.suggest.cards.is_some()
-                        && event.logical_key == Key::Named(NamedKey::Escape)
-                        && !event.repeat
-                    {
-                        self.close_suggest_cards();
-                        return true;
-                    }
-                    let Some(command) =
-                        map_key(&event.logical_key, ctrl, shift).and_then(|command| {
-                            match self.editing.as_ref() {
-                                // FR-072: заголовок — однострочный (Enter — всегда
-                                // коммит), маркеры стиля не применяются
-                                Some(session) => session.adapt_command(command),
-                                None => Some(command),
-                            }
-                        })
-                    else {
-                        return true;
-                    };
-                    match command {
-                        KeyCommand::Commit => self.finish_editing(true),
-                        KeyCommand::Cancel => self.finish_editing(false),
-                        KeyCommand::Copy => {
-                            if let Some(text) =
-                                self.editing.as_ref().and_then(|s| s.copy_selection())
-                            {
-                                self.clipboard.set_text(text);
-                            }
-                        }
-                        KeyCommand::Cut => {
-                            let text = match (self.editing.as_mut(), self.renderer.as_mut()) {
-                                (Some(session), Some(renderer)) => {
-                                    session.cut_selection(renderer.font_system_mut())
-                                }
-                                _ => None,
-                            };
-                            if let Some(text) = text {
-                                self.clipboard.set_text(text);
-                                self.request_redraw();
-                            }
-                        }
-                        KeyCommand::Paste => {
-                            let text = self.clipboard.get_text();
-                            let pasted = if let (Some(text), Some(session), Some(renderer)) =
-                                (text, self.editing.as_mut(), self.renderer.as_mut())
-                            {
-                                session.insert_text(renderer.font_system_mut(), &text);
-                                true
-                            } else {
-                                false
-                            };
-                            if pasted {
-                                self.fit_note_size();
-                                self.update_hints();
-                                self.request_redraw();
-                            }
-                        }
-                        other => {
-                            let applied = if let (Some(session), Some(renderer)) =
-                                (self.editing.as_mut(), self.renderer.as_mut())
-                            {
-                                session.apply(renderer.font_system_mut(), other);
-                                true
-                            } else {
-                                false
-                            };
-                            if applied {
-                                // Текст мог вырасти (wrap/новые строки) — подгоняем
-                                // высоту заметки под контент прямо во время набора
-                                self.fit_note_size();
-                                // FR-021: popup подсказок — следом за правкой текста
-                                self.update_hints();
-                                self.request_redraw();
-                            }
-                        }
-                    }
-                    return true;
-                }
-                false
+                self.route_editor_key(&event.logical_key, event.state, event.repeat)
             }
             ui_registry::KeyOwner::Search => {
                 // Панель поиска (T14): открыта — клавиатура уходит в панель
@@ -1162,6 +1188,12 @@ impl App {
                     match &event.logical_key {
                         Key::Named(NamedKey::Tab) => self.mindmap_add_child(index),
                         Key::Named(NamedKey::Enter) if !ctrl => self.mindmap_add_sibling(index),
+                        // Click-to-edit: клавиатурный вход в правку выделенной
+                        // text-ноды — та же цель по точке, что у даблклика
+                        // (курсор в шапке — заголовок, ниже — тело)
+                        Key::Named(NamedKey::F2) => {
+                            self.begin_edit_node(index, self.cursor_world())
+                        }
                         Key::Named(NamedKey::ArrowLeft) if ctrl => {
                             self.mindmap_set_collapsed(index, true);
                         }
@@ -2425,12 +2457,46 @@ impl App {
             self.close_autolink_review();
             return;
         }
-        // Баннер отклонённых: «Вернуть все» (У8/AC-5.2)
+        // Баннер отклонённых: «Вернуть все» (У8/AC-5.2).
+        // FR-UI-BANNER: kit::banner (через autolink_ui::banner_layout) —
+        // action_button = «Вернуть все», geometry = kit (text_w+24)×30;
+        // тот же layout, что в рендере (детерминизм hit ≡ кадр).
         if let Some(review) = self.autolink_review.as_ref() {
             let (_, rejected, _) = review.counts();
             if rejected > 0 {
-                let banner = autolink_ui::banner_rect(win);
-                if point_in_rect(autolink_ui::restore_rect(banner), self.cursor) {
+                let banner_text = self.trf(
+                    keys::AUTOLINK_BANNER,
+                    &[("{n}", rejected.to_string().as_str())],
+                );
+                let restore_text = self.tr(keys::AUTOLINK_RESTORE_ALL);
+                let mut m = canvas_ui::measure::TextMeasurer::new();
+                let mut fs = canvas_render::text::measure_font_system();
+                let label_w = m.width_of(
+                    &mut fs,
+                    &banner_text,
+                    canvas_render::text::SANS_FAMILY,
+                    11.5,
+                );
+                let action_w = m.width_of(
+                    &mut fs,
+                    restore_text,
+                    canvas_render::text::SANS_FAMILY,
+                    11.0,
+                );
+                drop(fs);
+                let (lay, _) = autolink_ui::banner_layout(
+                    win,
+                    label_w,
+                    action_w,
+                    &self.effective_palette().kit_palette(),
+                );
+                let restore_rect_arr = [
+                    lay.action_button.x,
+                    lay.action_button.y,
+                    lay.action_button.w,
+                    lay.action_button.h,
+                ];
+                if point_in_rect(restore_rect_arr, self.cursor) {
                     if let Some(review) = self.autolink_review.as_mut() {
                         review.set_all(ItemState::Pending);
                     }
@@ -2611,20 +2677,48 @@ impl App {
             // уровня обрезает путь AC-2.3; клик мимо чипов — ничего);
             // в защите крошки глушатся (вид зафиксирован на корне)
             if !defense_now && point_in_rect(explain_ui::meta_rect(win), self.cursor) {
+                // FR-UI-CRUMBS: kit::crumbs (через explain_ui::crumb_rects) —
+                // та же геометрия, что в рендере (детерминизм hit ≡ кадр);
+                // «…» crumb не кликабелен (crumb_path_index возвращает None).
                 let path_len = self
                     .explain
                     .as_ref()
                     .map(|s| s.view_path.len())
                     .unwrap_or(0);
                 if path_len > 1 {
-                    let (offset, rects) = explain_ui::crumb_rects(win, path_len);
-                    for (i, rect) in rects.iter().enumerate() {
-                        if point_in_rect(*rect, self.cursor) {
-                            if let Some(state) = self.explain.as_mut() {
-                                state.click_crumb(offset + i);
+                    // path_labels нужны kit::crumbs для измерения ширин чипов.
+                    let path_labels: Vec<String> = self
+                        .explain
+                        .as_ref()
+                        .and_then(|s| s.tree())
+                        .map(|tree| {
+                            self.explain
+                                .as_ref()
+                                .unwrap()
+                                .view_path
+                                .iter()
+                                .filter_map(|&i| tree.nodes.get(i).map(|n| n.title.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if !path_labels.is_empty() {
+                        let mut m = canvas_ui::measure::TextMeasurer::new();
+                        let mut fs = canvas_render::text::measure_font_system();
+                        let crumbs = explain_ui::crumb_rects(win, &path_labels, &mut m, &mut fs);
+                        drop(fs);
+                        for (i, (rect, _)) in crumbs.iter().enumerate() {
+                            let rect_arr = [rect.x, rect.y, rect.w, rect.h];
+                            if point_in_rect(rect_arr, self.cursor) {
+                                if let Some(level) =
+                                    explain_ui::crumb_path_index(i, path_len, &crumbs)
+                                {
+                                    if let Some(state) = self.explain.as_mut() {
+                                        state.click_crumb(level);
+                                    }
+                                    self.request_redraw();
+                                    return;
+                                }
                             }
-                            self.request_redraw();
-                            return;
                         }
                     }
                 }
@@ -2784,6 +2878,10 @@ impl App {
         }
         match state {
             ElementState::Pressed => {
+                // Click-to-edit: новое нажатие — новый жест; кандидат с
+                // предыдущего (не потреблённый, например поверхностью UI)
+                // не переживает следующее нажатие
+                self.click_edit = None;
                 // FR-079 (S3): C3-карточки — клик до диспетчера поверхностей:
                 // стопка транзиентна (паттерн тултипа, не реестр FR-052);
                 // клик по карточке глотается, мимо — закрывает и проходит
@@ -2836,10 +2934,18 @@ impl App {
                     None => self.dismiss_transients_on_miss(),
                 }
                 let world = self.cursor_world();
-                // PRD-0007 (F-1/AC-1.1): клик по цифре результата (полоса D)
-                // — фолбэк-триггер окна проверки цепочки; у константы —
-                // панель одного узла (AC-1.4)
                 if self.explain.is_none() {
+                    // CR-020 (Q2 «лупа на строку»): мини-лупа строки-результата
+                    // — приоритет над полосой ИТОГ (адресация по строке)
+                    if let Some((root, _)) = self.row_explain_hit_at(world) {
+                        self.open_explain(root);
+                        self.request_redraw();
+                        return;
+                    }
+                    // PRD-0007 (F-1/AC-1.1): клик по цифре результата (полоса
+                    // D) — фолбэк-триггер окна проверки цепочки; у константы —
+                    // панель одного узла (AC-1.4). CR-020: зона только при
+                    // видимом футере (у констант-присваиваний её нет)
                     if let Some(root) = self.result_band_root_at(world) {
                         self.open_explain(root);
                         self.request_redraw();
@@ -3230,6 +3336,23 @@ impl App {
                         // текущие позиции (внешние сдвиги между драгами
                         // поглощаются)
                         self.drag_push_begin();
+                        // Click-to-edit: нажатие по text-ноде — кандидат на
+                        // правку; откроется на отпускании без движения за
+                        // порог (drag по телу остаётся переносом, analysis §1.3)
+                        if let Some(zone) = click_edit_target(
+                            &self.scene.canvas.nodes[index],
+                            world,
+                            self.scene.whatif_active,
+                            press_from_touch,
+                            self.modifiers.control_key() || self.modifiers.shift_key(),
+                        ) {
+                            self.click_edit = Some(ClickEditCandidate {
+                                index,
+                                zone,
+                                world,
+                                press_cursor: self.cursor,
+                            });
+                        }
                         self.dragging = Some(DragState {
                             primary: index,
                             grab_world: world,
@@ -3456,6 +3579,21 @@ impl App {
                     // FR-006: закрытие отложенного drag/resize — undo-шаг при
                     // фактическом изменении (клик без движения не шаг)
                     self.finish_interaction_undo();
+                }
+                // Click-to-edit: отпускание без движения за порог по
+                // text-ноде — правка с кареткой в точке клика. ПОСЛЕ
+                // finish_interaction_undo: пустой drag не создаёт undo-шаг,
+                // а сессия ставит свой отложенный снапшот (begin_pending_undo
+                // в begin_editing) — двойного шага не образуется. Повторный
+                // what-if-гейт: candidate мог простоять через смену режима.
+                if let Some(candidate) = self.click_edit.take() {
+                    if !self.scene.whatif_active && click_edit_is_click(&candidate, self.cursor) {
+                        self.begin_edit_at(
+                            candidate.index,
+                            candidate.zone,
+                            Vec2::from(candidate.world),
+                        );
+                    }
                 }
                 // FR-038 (п.9): направляющие не переживают отпускание
                 if let Some(renderer) = self.renderer.as_mut() {
