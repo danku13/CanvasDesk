@@ -9,7 +9,10 @@ use winit::window::Window;
 
 use canvas_core::analyze::AnalysisState;
 use canvas_core::expr::{ExprLineResults, ExprOutcome, ExprResults};
-use canvas_core::{edge_midpoint, Canvas, FlowKind, Node, NodeKind, Side, SpatialIndex, Thumbnail};
+use canvas_core::{
+    edge_midpoint_anchored, Canvas, EdgeAnchors, FlowKind, Node, NodeKind, Side, SpatialIndex,
+    Thumbnail,
+};
 
 use crate::camera::{Camera, Vec2};
 use crate::cards::{
@@ -1154,6 +1157,52 @@ impl Renderer {
         self.text.line_ports(index, node)
     }
 
+    /// CR-027: якоря концов одной связи — точка data-порта истока
+    /// value-ребра (кэш раскладки — те же вертикали, что у кружков
+    /// FR-025/футера FR-023), сток — семантическая точка стороны.
+    /// Нода-исток не найдена — NONE (фолбэк вызывающего).
+    pub fn edge_anchors(&self, canvas: &Canvas, edge: &canvas_core::Edge) -> EdgeAnchors {
+        let from = canvas
+            .nodes
+            .iter()
+            .position(|node| node.id == edge.from_node)
+            .and_then(|index| {
+                canvas
+                    .nodes
+                    .get(index)
+                    .and_then(|node| self.text.edge_source_anchor(index, node, edge))
+            });
+        EdgeAnchors { from, to: None }
+    }
+
+    /// CR-027: якоря всех связей среза одним проходом (id → индекс —
+    /// карта, далее O(1) на связь); порядок — порядок `canvas.edges`
+    /// (параллельный срез для рендера/hit-test'а).
+    pub fn edge_anchors_all(&self, canvas: &Canvas) -> Vec<EdgeAnchors> {
+        let index_of: HashMap<&str, usize> = canvas
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (node.id.as_str(), index))
+            .collect();
+        canvas
+            .edges
+            .iter()
+            .map(|edge| {
+                let from = index_of
+                    .get(edge.from_node.as_str())
+                    .copied()
+                    .and_then(|index| {
+                        canvas
+                            .nodes
+                            .get(index)
+                            .and_then(|node| self.text.edge_source_anchor(index, node, edge))
+                    });
+                EdgeAnchors { from, to: None }
+            })
+            .collect()
+    }
+
     /// FR-050 Н2 (этап C): входные якоря параметров шаблонной ноды из
     /// кэша раскладки — те же данные, по которым рисуются кружки якорей
     /// (инвариант вертикали со строками-присваиваниями). Приложение зовёт
@@ -1206,13 +1255,30 @@ impl Renderer {
         // нод в Canvas.nodes (zorder::groups_first)
         let indices = zorder::groups_first(&scene.spatial.query_rect(visible), scene.canvas);
 
+        // CR-027: якоря data-портов истоков value-рёбер — один резолв на
+        // кадр; все потребители геометрии этого кадра (линии, лейблы,
+        // хэндлы, бокс правки) ходят по ОДНОЙ anchored-геометрии
+        let edge_anchors = self.edge_anchors_all(scene.canvas);
+        let edge_anchor_of = |session: &EditingSession| -> EdgeAnchors {
+            match session.target() {
+                EditTarget::Edge(index) => edge_anchors
+                    .get(index)
+                    .copied()
+                    .unwrap_or(EdgeAnchors::NONE),
+                EditTarget::Node(_) | EditTarget::NodeTitle(_) => EdgeAnchors::NONE,
+            }
+        };
+
         // Актуальные метрики буфера редактирования под текущий зум (T7/T8) —
         // до вычисления каретки/выделения ниже
         let zoom_px = camera.zoom() * self.scale_factor;
         if let Some(session) = editing.as_deref_mut() {
-            if let Some((_, width, height)) =
-                session_area_offset(scene.canvas, session, scene.edges_avoid)
-            {
+            if let Some((_, width, height)) = session_area_offset(
+                scene.canvas,
+                session,
+                scene.edges_avoid,
+                edge_anchor_of(session),
+            ) {
                 session.set_layout(
                     self.text.font_system_mut(),
                     width * zoom_px,
@@ -1307,7 +1373,13 @@ impl Renderer {
                         None => continue,
                     },
                 };
-                let Some(center) = edge_midpoint(scene.canvas, edge, scene.edges_avoid) else {
+                let anchors = edge_anchors
+                    .get(index)
+                    .copied()
+                    .unwrap_or(EdgeAnchors::NONE);
+                let Some(center) =
+                    edge_midpoint_anchored(scene.canvas, edge, scene.edges_avoid, anchors)
+                else {
                     continue;
                 };
                 let label_dimmed = scene.focus.dim > 0.0
@@ -1370,12 +1442,22 @@ impl Renderer {
                     continue;
                 }
                 // Сдвиг по нормали локального сегмента вокруг середины дуги
-                let Some(mid) = edge_midpoint(scene.canvas, edge, scene.edges_avoid) else {
+                let anchors = edge_anchors
+                    .get(index)
+                    .copied()
+                    .unwrap_or(EdgeAnchors::NONE);
+                let Some(mid) =
+                    edge_midpoint_anchored(scene.canvas, edge, scene.edges_avoid, anchors)
+                else {
                     continue;
                 };
-                let Some(points) =
-                    canvas_core::edge_polyline(scene.canvas, edge, scene.edges_avoid, 24)
-                else {
+                let Some(points) = canvas_core::edge_polyline_anchored(
+                    scene.canvas,
+                    edge,
+                    scene.edges_avoid,
+                    24,
+                    anchors,
+                ) else {
                     continue;
                 };
                 // Сегмент полилинии, ближайший к midpoint (избегает вырожденных
@@ -1465,9 +1547,12 @@ impl Renderer {
                     // СМЕЩЁННОГО origin (ниже desc-зоны), как и сам буфер
                     // (editing_buffer) — иначе каретка уезжает в desc.
                     let zoom_px = camera.zoom() * self.scale_factor;
-                    if let Some((origin, _, _)) =
-                        session_area_offset(scene.canvas, session, scene.edges_avoid)
-                    {
+                    if let Some((origin, _, _)) = session_area_offset(
+                        scene.canvas,
+                        session,
+                        scene.edges_avoid,
+                        edge_anchor_of(session),
+                    ) {
                         for rect in session.selection_rects(self.text.font_system_mut()) {
                             editing_quads.push(Self::overlay_quad_snapped(
                                 origin,
@@ -1493,9 +1578,12 @@ impl Renderer {
                     }
                 }
                 EditTarget::Edge(_) => {
-                    if let Some((origin, width, height)) =
-                        session_area_offset(scene.canvas, session, scene.edges_avoid)
-                    {
+                    if let Some((origin, width, height)) = session_area_offset(
+                        scene.canvas,
+                        session,
+                        scene.edges_avoid,
+                        edge_anchor_of(session),
+                    ) {
                         // У лейбла связи нет карточки — бокс-подложка с рамкой
                         edge_edit_quads.push(CardInstance {
                             pos: origin,
@@ -1533,9 +1621,12 @@ impl Renderer {
                 // FR-072: правка заголовка — каретка/выделение в зоне шапки
                 // (origin title_edit_area), на z-позиции ноды (editing_node).
                 EditTarget::NodeTitle(_) => {
-                    if let Some((origin, _, _)) =
-                        session_area_offset(scene.canvas, session, scene.edges_avoid)
-                    {
+                    if let Some((origin, _, _)) = session_area_offset(
+                        scene.canvas,
+                        session,
+                        scene.edges_avoid,
+                        edge_anchor_of(session),
+                    ) {
                         let zoom_px = camera.zoom() * self.scale_factor;
                         for rect in session.selection_rects(self.text.font_system_mut()) {
                             editing_quads.push(Self::overlay_quad_snapped(
@@ -1636,6 +1727,7 @@ impl Renderer {
             scene.bundles,
             &unmapped_ids,
             &scene.spill_wave,
+            &edge_anchors,
         ));
         let edges_end = instances.len() as u32;
         // (диапазон инстансов карточек, диапазон тамбнейлов, текст-группа).
@@ -1985,6 +2077,10 @@ impl Renderer {
                 scene.canvas,
                 edge_index,
                 scene.port_zone_px,
+                edge_anchors
+                    .get(edge_index)
+                    .copied()
+                    .unwrap_or(EdgeAnchors::NONE),
             ));
         }
         if let Some((port, side, cursor)) = scene.edge_draft {
@@ -2100,8 +2196,13 @@ impl Renderer {
         let editing_buffer = editing_ref.and_then(|session| {
             // (origin, ширина, высота) — clip тексту редактора: тело ноды
             // или бокс лейбла связи (оба таргета, T7/T8)
-            session_area_offset(scene.canvas, session, scene.edges_avoid)
-                .map(|(origin, w, h)| (session.buffer(), origin, w, h))
+            session_area_offset(
+                scene.canvas,
+                session,
+                scene.edges_avoid,
+                edge_anchor_of(session),
+            )
+            .map(|(origin, w, h)| (session.buffer(), origin, w, h))
         });
         if let Err(err) = self.text.prepare_titles(
             &self.gpu.device,

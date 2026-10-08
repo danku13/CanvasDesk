@@ -12,7 +12,7 @@
 //! (физические px относительно левого верхнего угла области редактирования).
 
 use canvas_core::expr;
-use canvas_core::{edge_midpoint, Canvas};
+use canvas_core::{edge_midpoint_anchored, Canvas, EdgeAnchors};
 use cosmic_text::{
     Action, AttrsList, Buffer, BufferLine, Cursor, Edit, Editor, FontSystem, LineEnding, Metrics,
     Motion, Selection,
@@ -244,15 +244,17 @@ pub const EDGE_EDIT_WIDTH: f32 = 240.0;
 pub const EDGE_EDIT_HEIGHT: f32 = BODY_LINE_HEIGHT + 8.0;
 
 /// Область редактирования лейбла связи: бокс EDGE_EDIT_WIDTH × EDGE_EDIT_HEIGHT
-/// по центру связи (середина дуги; при avoid — по видимой огибающей линии).
+/// по центру связи (середина дуги; при avoid — по видимой огибающей линии;
+/// CR-027 — с якорями data-портов, та же линия, что нарисована).
 /// None — связи нет или она висячая.
 pub fn edge_edit_area(
     canvas: &Canvas,
     edge_index: usize,
     avoid: bool,
+    anchors: EdgeAnchors,
 ) -> Option<([f32; 2], f32, f32)> {
     let edge = canvas.edges.get(edge_index)?;
-    let mid = edge_midpoint(canvas, edge, avoid)?;
+    let mid = edge_midpoint_anchored(canvas, edge, avoid, anchors)?;
     let origin = [
         mid[0] - EDGE_EDIT_WIDTH / 2.0,
         mid[1] - EDGE_EDIT_HEIGHT / 2.0,
@@ -263,14 +265,17 @@ pub fn edge_edit_area(
 /// Область редактирования сессии в world-координатах (левый верхний угол,
 /// ширина, высота): тело карточки для ноды, бокс у середины связи — для
 /// лейбла связи (T8), строка внутри шапки — для заголовка (FR-072).
+/// CR-027: для edge-сессии якоря data-портов истока — та же геометрия,
+/// по которой нарисована линия (у нодовых целей якоря игнорируются).
 pub fn session_area(
     canvas: &Canvas,
     session: &EditingSession,
     avoid: bool,
+    anchors: EdgeAnchors,
 ) -> Option<([f32; 2], f32, f32)> {
     match session.target() {
         EditTarget::Node(index) => canvas.nodes.get(index).map(body_area),
-        EditTarget::Edge(index) => edge_edit_area(canvas, index, avoid),
+        EditTarget::Edge(index) => edge_edit_area(canvas, index, avoid, anchors),
         EditTarget::NodeTitle(index) => canvas.nodes.get(index).map(crate::text::title_edit_area),
     }
 }
@@ -285,8 +290,9 @@ pub fn session_area_offset(
     canvas: &Canvas,
     session: &EditingSession,
     avoid: bool,
+    anchors: EdgeAnchors,
 ) -> Option<([f32; 2], f32, f32)> {
-    session_area(canvas, session, avoid).map(|(origin, width, height)| {
+    session_area(canvas, session, avoid, anchors).map(|(origin, width, height)| {
         // CR-018 v1.2: origin_pad_px — половина зазора абзаца вверх, когда
         // первая строка буфера — Numi-ряд (чернила 1:1 с рядом таблицы)
         let off = session.body_offset_px + session.origin_pad_px;
@@ -1222,7 +1228,8 @@ mod tests {
             1.0,
         );
         s.body_offset_px = 22.0;
-        let (origin, _, height) = session_area_offset(&canvas, &s, false).expect("зона есть");
+        let (origin, _, height) =
+            session_area_offset(&canvas, &s, false, EdgeAnchors::NONE).expect("зона есть");
         let base = body_area(canvas.nodes.first().unwrap());
         assert!(
             (origin[1] - (base.0[1] + 22.0 - BODY_PARA_GAP / 2.0)).abs() < 1e-5,
@@ -1527,7 +1534,8 @@ mod tests {
         ));
         let mut fs = FontSystem::new();
         let node_session = EditingSession::new(&mut fs, EditTarget::Node(0), "", 100.0, 50.0, 1.0);
-        let area = session_area(&canvas, &node_session, false).expect("нода есть");
+        let area =
+            session_area(&canvas, &node_session, false, EdgeAnchors::NONE).expect("нода есть");
         assert_eq!(area, {
             let (origin, w, h) = body_area(&canvas.nodes[0]);
             (origin, w, h)
@@ -1535,7 +1543,8 @@ mod tests {
         assert_eq!(node_session.node_index(), Some(0));
 
         let edge_session = EditingSession::new(&mut fs, EditTarget::Edge(0), "", 100.0, 50.0, 1.0);
-        let (origin, w, h) = session_area(&canvas, &edge_session, false).expect("связь есть");
+        let (origin, w, h) =
+            session_area(&canvas, &edge_session, false, EdgeAnchors::NONE).expect("связь есть");
         assert_eq!((w, h), (EDGE_EDIT_WIDTH, EDGE_EDIT_HEIGHT));
         // Центр бокса — середина кривой (Node::text высотой 120: порты на y = 60)
         assert!((origin[1] + h / 2.0 - 60.0).abs() < 1e-3);
@@ -1543,7 +1552,7 @@ mod tests {
 
         // Висячая/несуществующая связь — None
         let dangling = EditingSession::new(&mut fs, EditTarget::Edge(9), "", 100.0, 50.0, 1.0);
-        assert!(session_area(&canvas, &dangling, false).is_none());
+        assert!(session_area(&canvas, &dangling, false, EdgeAnchors::NONE).is_none());
     }
 
     /// Маппинг клавиш: Enter — commit, Shift+Enter/Ctrl+Enter — новая строка,
@@ -1639,7 +1648,8 @@ fn session_area_title_target() {
     canvas.nodes[0].height = 140.0;
     let mut fs = FontSystem::new();
     let session = EditingSession::new_title(&mut fs, 0, "Смета", 200.0, 22.0, 1.0);
-    let (origin, width, height) = session_area(&canvas, &session, false).expect("нода есть");
+    let (origin, width, height) =
+        session_area(&canvas, &session, false, EdgeAnchors::NONE).expect("нода есть");
     assert_eq!(height, TITLE_LINE_HEIGHT, "высота зоны — строка заголовка");
     assert_eq!(
         origin[1], canvas.nodes[0].y,
