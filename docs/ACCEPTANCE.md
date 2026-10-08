@@ -1110,3 +1110,27 @@ ADR-0015, конечная цель — своя UI-библиотека с zero
 | FR-099.2 | Аудит-матрица: +844×390 (телефон ландшафт), +820×1180 (iPad Air) | ✅ |
 | FR-099.3 | Онбординг: не заморожен (should_show_onboarding без изменений), тач-цели — FR-097 | ✅ |
 | P1.gates | fmt + clippy -D warnings (натив, wasm32) + test --workspace + wasm_gate --check | ✅ |
+
+### UR-001 — сквозная приёмка ручного теста handtest.canvas: волны W1–W4 (2026-10-08)
+
+> Источник — `docs/plans/ur-001-handtest-rework-plan.md` (чек-лист §3) и
+> `docs/user-reporting/ur-001-handtest-canvas.md` (11/11 дефектов).
+> Реализация: W1 (CR-026/019/023), W2 (CR-020/024/025) — сессия 2026-10-08
+> (коммиты 3748f66, e1cb0ed, 9b6bba2, 18958ee, ac559e0, ce0d44e);
+> W3 (CR-021, CR-022, FR-101) — коммиты 716a8c6, d1e353f, 88e2873;
+> W4 (FR-100, D2) — коммиты f044440, e503842, 70ac302. Автоматические
+> гейты каждой волны зелёные (fmt, clippy -D warnings, тесты крейтов
+> натив + wasm32-гейт). Пункты с визуальной/платформенной составляющей
+> (тёмная тема, web-браузер, macOS) — за ручной приёмкой владельца по
+> репродуктору `handtest.canvas`.
+
+| # | Сценарий (план §3) | Автоматическое доказательство | Ручная приёмка |
+|---|---|---|---|
+| UR-001.1 (A2) | `sum = $1 * $2` вводится звёздочкой без экранирования, значение считается | Тесты CR-019 (markdown-маска построчная, `\*`-снятие в expr, round-trip с `*`) | Ввести формулу с `*` в репродукторе |
+| UR-001.2 (C1) | Нода «Общая сумма корзины»: 2 входящих строки (qty=10, price=100 rub) + строка расчёта с маркером ƒ; «ПАРАМЕТРЫ» — только константы | Тесты CR-021: `auto_rows_present_even_when_slot_read`, `handtest_cart_total_shows_inbound_rows_with_calc_formula`, единая точка `line_role`/`param_line_count` (row_grid = text = calc_panel); CJM-геометрия схем 3/3 | Открыть handtest, проверить зоны тела ноды |
+| UR-001.3 (B1) | Клик по `qty = 10` — выделение/драг, explain не открывается; у строки-результата `sum` — своя мини-лупа | Тесты CR-020: `row_is_explainable` (константы без триггера), `row_explain_hits` (геометрия мини-луп), пиннеры `integration_explain_x6` 4/4 | Клик/драг по строкам, hover мини-лупы |
+| UR-001.4 (C3+A3+C2) | Ввод `купо` предлагает `Купон.купон`; ввод `$` — имена и `$N` без ложных номеров; принятие не возвращает попап до смены токена; ИИ-строк «заменит ноду шаблоном» нет | FR-101: 8 тестов (купо→Купон.купон, $купо→по имени, счётчик без toParam, дедуп, вставка хвоста); CR-023: suppress до смены токена; CR-022: `suggest_c1_not_armed_when_editing_price_rub` (0 ИИ-строк на любом токене), golden suggest целы | Прогнать ввод в ноде-приёмнике репродуктора |
+| UR-001.5 (B2+B3) | Hover у контрольной связи — без тултипа; hover у value-связи — `Цена.price = 100 rub` | CR-024: `PortTarget::Out` удалён, control-порт без тултипа (тесты); CR-025: `flow::source_line_name` — приоритет имя > индекс (тесты lineage/dataref) | Hover обоих типов связей |
+| UR-001.6 (A1) | Тёмная тема: выделение текста светло-синее, видимое (~20–30% непрозрачности) | CR-026: premultiplied-блендинг cards-пайплайна (фикс + дельта-тест); пиксельные тесты скипаются без GPU | Тёмная тема: выделение текста, зебра/подсветки (калибровка яркости — открытый вопрос плана §4.3) |
+| UR-001.7 (D1) | Web: Ctrl+A выделяет текст в редакторе сразу после клика по ноде; Ctrl+Backspace удаляет слово | FR-100: натив-тесты команд (word-delete, undo/redo, PageUp/Down, Tab, SmartHome, Super-паритет, «не глотать» — роутер-тест `editor_router_super_parity_and_unknown_chords_fall_through`); web-слой: preventDefault chord'ов шима, возврат фокуса тулбара, модификаторы DOM-моста без сброса на blur; wasm-check зелёный | Браузер: сценарии §5 WASM-TESTING.md + `scripts/web_smoke.py` (секция 2b); macOS Cmd-паритет |
+| UR-001.8 | Round-trip `.canvas` зелёный на всех шагах; гейты fmt/check/clippy/test (натив+wasm32) зелёные | Round-trip тесты W1–W4 (вкл. `auto_rows_roundtrip_canvas_unchanged` CR-021); workspace-гейты волны: canvas-core 502, canvas-app 605, canvas-render 408+, canvas-scene 145+, canvas-suggest 56, explain 4/4; wasm_gate --check | — |
