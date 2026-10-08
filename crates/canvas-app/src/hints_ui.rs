@@ -244,6 +244,10 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> V
 /// (источник виден пользователю), общий лимит [`HINT_LIMIT`]. Дедуп по
 /// `insert` (ИИ-шаблон не дублирует совпавшую L0-строку). Пустой итог —
 /// попап закрыт (семантика [`HintPopup::sync`]).
+/// CR-022: из пользовательского пути НЕДОСТИЖИМА — [`crate::app`]
+/// `suggest_remerge` гейтится флагом `suggest.c1_in_popup` (default false,
+/// решение владельца «вообще не надо триггерить»). Функция СОХРАНЕНА для
+/// тестов и будущих поверхностей — контракт не трогать без CR.
 pub fn merge_ai_items(l0: Vec<HintItem>, ai: Vec<HintItem>) -> Vec<HintItem> {
     let mut items = l0;
     for item in ai {
