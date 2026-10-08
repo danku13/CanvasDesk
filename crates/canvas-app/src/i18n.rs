@@ -1613,12 +1613,12 @@ const RU: &[(&str, &str)] = &[
     (keys::ONBOARDING_STEP2_TITLE, "Заметки"),
     (
         keys::ONBOARDING_STEP2_BODY,
-        "Двойной клик по пустому месту создаёт заметку с markdown-разметкой (списки, заголовки, ссылки). Цвет — через контекстное меню выделения. Ctrl+Enter фиксирует текст, Esc — откат правки.",
+        "Двойной клик по пустому месту создаёт заметку — фиксируйте мысль, пока она не потерялась. Цвет и действия — через контекстное меню.",
     ),
     (keys::ONBOARDING_STEP3_TITLE, "Связи"),
     (
         keys::ONBOARDING_STEP3_BODY,
-        "Наведите курсор на ноду — по краям появятся порты. Протяните связь от порта к другой ноде; конец существующей связи можно перепривязать перетаскиванием за хэндл.",
+        "Наведите курсор на ноду — по краям появятся порты. Протяните от порта к порту: обычная (logical) связь показывает отношение «А связано с Б», а data-связь передаёт значение между нодами.",
     ),
     (keys::ONBOARDING_STEP4_TITLE, "Группы и отмена"),
     (
@@ -1633,12 +1633,12 @@ const RU: &[(&str, &str)] = &[
     (keys::ONBOARDING_STEP6_TITLE, "Поток значений"),
     (
         keys::ONBOARDING_STEP6_BODY,
-        "Протяните связь с зажатым Shift — это value-связь: значение вышестоящей формулы приходит во вход $in нижестоящей и пересчитывается на живую.",
+        "Свяжите формулу с другой нодой data-связью (с зажатым Shift): значение придёт во вход $in и пересчитается на живую — цепочка всегда актуальна.",
     ),
     (keys::ONBOARDING_STEP7_TITLE, "Шаблоны нод"),
     (
         keys::ONBOARDING_STEP7_BODY,
-        "Ctrl+P открывает палитру готовых архитектурных ролей (сервис, очередь, база данных) с параметрами и доменными типами. Shift+клик по пустому месту — радиальное wheel-меню.",
+        "Ctrl+P открывает палитру готовых нод — сервис, очередь, база данных — с параметрами и доменными типами. Shift+клик по пустому месту — то же колесом.",
     ),
     (keys::ONBOARDING_STEP8_TITLE, "Что дальше"),
     (
@@ -2881,12 +2881,12 @@ const EN: &[(&str, &str)] = &[
     (keys::ONBOARDING_STEP2_TITLE, "Notes"),
     (
         keys::ONBOARDING_STEP2_BODY,
-        "Double-click empty space to create a note with markdown markup (lists, headings, links). Color — via the selection context menu. Ctrl+Enter commits the text, Esc reverts the edit.",
+        "Double-click empty space to create a note — capture a thought before it slips away. Color and actions live in the context menu.",
     ),
     (keys::ONBOARDING_STEP3_TITLE, "Edges"),
     (
         keys::ONBOARDING_STEP3_BODY,
-        "Hover a node — ports appear on its sides. Drag from a port to another node to connect; the end of an existing edge can be rebinded by dragging its handle.",
+        "Hover a node — ports appear on its sides. Drag from port to port: a regular (logical) edge shows that “A relates to B”, while a data edge passes a value between nodes.",
     ),
     (keys::ONBOARDING_STEP4_TITLE, "Groups and undo"),
     (
@@ -2901,12 +2901,12 @@ const EN: &[(&str, &str)] = &[
     (keys::ONBOARDING_STEP6_TITLE, "Value flow"),
     (
         keys::ONBOARDING_STEP6_BODY,
-        "Drag an edge with Shift held — that is a value edge: the upstream formula's value feeds the downstream $in input and recalculates live.",
+        "Connect a formula to another node with a data edge (hold Shift): the value feeds the $in input and recalculates live — the chain always stays current.",
     ),
     (keys::ONBOARDING_STEP7_TITLE, "Node templates"),
     (
         keys::ONBOARDING_STEP7_BODY,
-        "Ctrl+P opens the palette of ready architectural roles (service, queue, database) with parameters and domain types. Shift+click on empty space — the radial wheel menu.",
+        "Ctrl+P opens the palette of ready nodes — service, queue, database — with parameters and domain types. Shift+click on empty space — the same as a radial wheel menu.",
     ),
     (keys::ONBOARDING_STEP8_TITLE, "What's next"),
     (
