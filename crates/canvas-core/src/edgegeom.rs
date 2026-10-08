@@ -38,6 +38,52 @@ pub struct CubicBezier {
     pub p1: [f32; 2],
 }
 
+/// CR-027: явные якоря концов связи — точки data-портов значения
+/// (построчный порт строки FR-025, футер шаблонной ноды FR-023).
+/// `None` — конец на семантической точке стороны (`port_point`, прежнее
+/// поведение). Ресолвит якорь вызывающий (кэш раскладки рендера — core
+/// не знает вертикалей строк); при несовпадении визуала и hit-test'а
+/// все потребители обязаны ходить по одним anchored-функциям.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct EdgeAnchors {
+    /// Точка истока (value-ребро — от data-порта значения).
+    pub from: Option<[f32; 2]>,
+    /// Точка стока (резерв — приёмник пока всегда на стороне, CR-027).
+    pub to: Option<[f32; 2]>,
+}
+
+impl EdgeAnchors {
+    /// Оба конца на семантических точках сторон (прежнее поведение).
+    pub const NONE: Self = Self {
+        from: None,
+        to: None,
+    };
+}
+
+/// Сторона ноды, на которой сидит якорь: порт данных лежит НА границе
+/// прямоугольника (правый край для построчных портов FR-025) — сторона
+/// определяется совпадением с гранью, а не доминантой от центра
+/// (`nearest_side` у угла дал бы неверную нормаль). Внутри границы —
+/// фолбэк на доминанту.
+fn anchor_side(node: &Node, anchor: [f32; 2]) -> Side {
+    const EDGE_EPS: f32 = 0.5;
+    let right = node.x + node.width;
+    let bottom = node.y + node.height;
+    if (anchor[0] - right).abs() <= EDGE_EPS {
+        return Side::Right;
+    }
+    if (anchor[0] - node.x).abs() <= EDGE_EPS {
+        return Side::Left;
+    }
+    if (anchor[1] - bottom).abs() <= EDGE_EPS {
+        return Side::Bottom;
+    }
+    if (anchor[1] - node.y).abs() <= EDGE_EPS {
+        return Side::Top;
+    }
+    nearest_side(node, anchor)
+}
+
 /// Точка порта — центр соответствующей стороны ноды.
 pub fn port_point(node: &Node, side: Side) -> [f32; 2] {
     let cx = node.x + node.width / 2.0;
@@ -83,12 +129,32 @@ pub fn nearest_side(node: &Node, point: [f32; 2]) -> Side {
 /// Кривая между портами двух нод. Контрольные точки смещены от портов
 /// по нормалям сторон на max(MIN_CONTROL_OFFSET, 40% расстояния).
 pub fn bezier_between(a: &Node, sa: Side, b: &Node, sb: Side) -> CubicBezier {
-    let p0 = port_point(a, sa);
-    let p1 = port_point(b, sb);
+    bezier_between_anchors(a, sa, b, sb, EdgeAnchors::NONE)
+}
+
+/// CR-027: кривая с явными якорями концов: якоренный конец стартует из
+/// точки data-порта, нормаль контроля — от грани, на которой порт сидит
+/// (`anchor_side`); неякоренный — из центра стороны, нормаль стороны
+/// (прежнее поведение, `EdgeAnchors::NONE` = бит-в-бит [`bezier_between`]).
+pub fn bezier_between_anchors(
+    a: &Node,
+    sa: Side,
+    b: &Node,
+    sb: Side,
+    anchors: EdgeAnchors,
+) -> CubicBezier {
+    let p0 = anchors.from.unwrap_or_else(|| port_point(a, sa));
+    let p1 = anchors.to.unwrap_or_else(|| port_point(b, sb));
+    let n0 = anchors
+        .from
+        .map(|p| side_normal(anchor_side(a, p)))
+        .unwrap_or_else(|| side_normal(sa));
+    let n1 = anchors
+        .to
+        .map(|p| side_normal(anchor_side(b, p)))
+        .unwrap_or_else(|| side_normal(sb));
     let dist = ((p1[0] - p0[0]).powi(2) + (p1[1] - p0[1]).powi(2)).sqrt();
     let offset = (dist * 0.4).max(MIN_CONTROL_OFFSET);
-    let n0 = side_normal(sa);
-    let n1 = side_normal(sb);
     CubicBezier {
         p0,
         c0: [p0[0] + n0[0] * offset, p0[1] + n0[1] * offset],
@@ -232,10 +298,22 @@ pub fn effective_sides(edge: &Edge, from: &Node, to: &Node) -> (Side, Side) {
 /// и загрузка идут через один путь). None, если хотя бы одна нода не найдена
 /// (висячая связь).
 pub fn edge_curve(canvas: &Canvas, edge: &Edge) -> Option<CubicBezier> {
+    edge_curve_anchored(canvas, edge, EdgeAnchors::NONE)
+}
+
+/// CR-027: кривая связи с якорями data-портов (см. [`EdgeAnchors`]):
+/// стороны — эффективные (CR-008), якоренный конец — точка порта данных.
+pub fn edge_curve_anchored(
+    canvas: &Canvas,
+    edge: &Edge,
+    anchors: EdgeAnchors,
+) -> Option<CubicBezier> {
     let from = canvas.node(&edge.from_node)?;
     let to = canvas.node(&edge.to_node)?;
     let (from_side, to_side) = effective_sides(edge, from, to);
-    Some(bezier_between(from, from_side, to, to_side))
+    Some(bezier_between_anchors(
+        from, from_side, to, to_side, anchors,
+    ))
 }
 
 /// Конец связи для перепривязки (CR-002).
@@ -252,17 +330,39 @@ pub enum EdgeEnd {
 /// рисуется/ловится там же, где линия фактически начинается. None — связь
 /// висячая (ноды нет) или индекс невалиден.
 pub fn edge_endpoint(canvas: &Canvas, edge_index: usize, end: EdgeEnd) -> Option<(Side, [f32; 2])> {
+    edge_endpoint_anchored(canvas, edge_index, end, EdgeAnchors::NONE)
+}
+
+/// CR-027: конец связи с якорем data-порта: точка — якорь, сторона —
+/// грань, на которой порт сидит (хэндл перепривязки CR-002 и резиновая
+/// линия стартуют там же, где нарисована линия).
+pub fn edge_endpoint_anchored(
+    canvas: &Canvas,
+    edge_index: usize,
+    end: EdgeEnd,
+    anchors: EdgeAnchors,
+) -> Option<(Side, [f32; 2])> {
     let edge = canvas.edges.get(edge_index)?;
     let from = canvas.node(&edge.from_node)?;
     let to = canvas.node(&edge.to_node)?;
     // CR-008: сторона хэндла — та же эффективная сторона, по которой
     // рисуется линия (пин учитывается, авто следует геометрии)
     let (eff_from, eff_to) = effective_sides(edge, from, to);
-    let (node, side) = match end {
-        EdgeEnd::From => (from, eff_from),
-        EdgeEnd::To => (to, eff_to),
-    };
-    Some((side, port_point(node, side)))
+    match end {
+        EdgeEnd::From => {
+            let side = anchors
+                .from
+                .map(|p| anchor_side(from, p))
+                .unwrap_or(eff_from);
+            let point = anchors.from.unwrap_or_else(|| port_point(from, eff_from));
+            Some((side, point))
+        }
+        EdgeEnd::To => {
+            let side = anchors.to.map(|p| anchor_side(to, p)).unwrap_or(eff_to);
+            let point = anchors.to.unwrap_or_else(|| port_point(to, eff_to));
+            Some((side, point))
+        }
+    }
 }
 
 /// Перепривязать конец связи к ноде `target_node_id` со стороной `side`
@@ -328,7 +428,19 @@ pub fn retarget_edge(
 /// посторонних нод (глобальная настройка): рендер и hit-test ходят по одной
 /// и той же полилинии, чтобы кликабельная область совпадала с нарисованным.
 pub fn distance_to_edge(canvas: &Canvas, edge: &Edge, point: [f32; 2], avoid: bool) -> Option<f32> {
-    let points = edge_polyline(canvas, edge, avoid, TESSELLATION_SEGMENTS)?;
+    distance_to_edge_anchored(canvas, edge, point, avoid, EdgeAnchors::NONE)
+}
+
+/// CR-027: расстояние до связи с якорями data-портов — hit-test ходит по
+/// той же полилинии, что нарисована (см. [`edge_polyline_anchored`]).
+pub fn distance_to_edge_anchored(
+    canvas: &Canvas,
+    edge: &Edge,
+    point: [f32; 2],
+    avoid: bool,
+    anchors: EdgeAnchors,
+) -> Option<f32> {
+    let points = edge_polyline_anchored(canvas, edge, avoid, TESSELLATION_SEGMENTS, anchors)?;
     Some(distance_point_to_polyline(point, &points))
 }
 
@@ -343,7 +455,19 @@ pub fn edge_polyline(
     avoid: bool,
     segments: usize,
 ) -> Option<Vec<[f32; 2]>> {
-    let curve = edge_curve(canvas, edge)?;
+    edge_polyline_anchored(canvas, edge, avoid, segments, EdgeAnchors::NONE)
+}
+
+/// CR-027: полилиния связи с якорями data-портов — визуал и hit-test
+/// обязаны ходить по одной и той же линии (см. [`edge_curve_anchored`]).
+pub fn edge_polyline_anchored(
+    canvas: &Canvas,
+    edge: &Edge,
+    avoid: bool,
+    segments: usize,
+    anchors: EdgeAnchors,
+) -> Option<Vec<[f32; 2]>> {
+    let curve = edge_curve_anchored(canvas, edge, anchors)?;
     let points = tessellate(&curve, segments.max(1));
     if !avoid {
         return Some(points);
@@ -375,7 +499,18 @@ pub fn edge_polyline(
 /// Середина связи по длине дуги (для лейбла и бокса редактирования):
 /// при avoid совпадает с видимой огибающей линией.
 pub fn edge_midpoint(canvas: &Canvas, edge: &Edge, avoid: bool) -> Option<[f32; 2]> {
-    let points = edge_polyline(canvas, edge, avoid, TESSELLATION_SEGMENTS)?;
+    edge_midpoint_anchored(canvas, edge, avoid, EdgeAnchors::NONE)
+}
+
+/// CR-027: середина связи с якорями data-портов — лейблы/бокс правки
+/// сидят на видимой (якоренной) линии.
+pub fn edge_midpoint_anchored(
+    canvas: &Canvas,
+    edge: &Edge,
+    avoid: bool,
+    anchors: EdgeAnchors,
+) -> Option<[f32; 2]> {
+    let points = edge_polyline_anchored(canvas, edge, avoid, TESSELLATION_SEGMENTS, anchors)?;
     let total: f32 = points
         .windows(2)
         .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
@@ -703,12 +838,26 @@ pub fn param_port_at(
 /// Возвращает индекс в `canvas.edges`; None — промах (или все связи висячие).
 /// `avoid` — обход посторонних нод (см. `edge_polyline`).
 pub fn edge_at(canvas: &Canvas, point: [f32; 2], avoid: bool) -> Option<usize> {
+    edge_at_anchored(canvas, point, avoid, &[])
+}
+
+/// CR-027: ближайшая связь с якорями data-портов: `anchors[index]` — якоря
+/// ребра (короткий срез/пропуск — семантические точки сторон). Hit-test
+/// и визуал ходят по одной полилинии — кликабельная область совпадает
+/// с нарисованной.
+pub fn edge_at_anchored(
+    canvas: &Canvas,
+    point: [f32; 2],
+    avoid: bool,
+    anchors: &[EdgeAnchors],
+) -> Option<usize> {
     canvas
         .edges
         .iter()
         .enumerate()
         .filter_map(|(index, edge)| {
-            distance_to_edge(canvas, edge, point, avoid).map(|d| (index, d))
+            let a = anchors.get(index).copied().unwrap_or(EdgeAnchors::NONE);
+            distance_to_edge_anchored(canvas, edge, point, avoid, a).map(|d| (index, d))
         })
         .filter(|(_, dist)| *dist < EDGE_HIT_TOLERANCE)
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
@@ -825,6 +974,136 @@ mod tests {
         assert_eq!(
             canvas.edges[0].from_line, None,
             "v1: сброс построчного истока"
+        );
+    }
+
+    /// CR-027: якоренная кривая стартует из точки data-порта истока;
+    /// сток без якоря — центр стороны приёмника.
+    #[test]
+    fn edge_curve_anchored_starts_at_from_anchor() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(node_a());
+        canvas.nodes.push(Node::text("b", "b", 400.0, 0.0));
+        let mut edge = Edge::new("e1", "a", Some(Side::Right), "b", Some(Side::Left));
+        edge.from_line = Some(0);
+        canvas.add_edge(edge);
+        let anchor = [node_a().x + node_a().width, 42.0];
+        let curve = edge_curve_anchored(
+            &canvas,
+            &canvas.edges[0],
+            EdgeAnchors {
+                from: Some(anchor),
+                to: None,
+            },
+        )
+        .expect("кривая");
+        assert_eq!(curve.p0, anchor, "исток — точка data-порта строки");
+        let to = canvas.node("b").unwrap();
+        assert_eq!(curve.p1, port_point(to, Side::Left), "сток — без изменений");
+        // Контроль смещён от якоря по нормали правой грани (вправо)
+        assert!(curve.c0[0] > curve.p0[0], "нормаль якоря — Right");
+    }
+
+    /// CR-027: без якорей (`EdgeAnchors::NONE`) anchored-кривая бит-в-бит
+    /// прежней (`edge_curve`).
+    #[test]
+    fn edge_curve_none_anchors_equal_legacy() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(node_a());
+        canvas.nodes.push(Node::text("b", "b", 400.0, 0.0));
+        let mut edge = Edge::new("e1", "a", Some(Side::Right), "b", Some(Side::Left));
+        edge.set_flow_kind(crate::FlowKind::Value);
+        canvas.add_edge(edge);
+        let legacy = edge_curve(&canvas, &canvas.edges[0]).expect("кривая");
+        let anchored =
+            edge_curve_anchored(&canvas, &canvas.edges[0], EdgeAnchors::NONE).expect("кривая");
+        assert_eq!(legacy, anchored);
+    }
+
+    /// CR-027: якорь на правом краю — сторона Right независимо от
+    /// вертикали (у верхней строки `nearest_side` дал бы Top).
+    #[test]
+    fn edge_endpoint_anchored_reports_edge_side() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(node_a());
+        canvas.nodes.push(Node::text("b", "b", 400.0, 0.0));
+        canvas.add_edge(Edge::new(
+            "e1",
+            "a",
+            Some(Side::Right),
+            "b",
+            Some(Side::Left),
+        ));
+        let a = node_a();
+        let top_row_anchor = [a.x + a.width, a.y + 2.0];
+        let (side, point) = edge_endpoint_anchored(
+            &canvas,
+            0,
+            EdgeEnd::From,
+            EdgeAnchors {
+                from: Some(top_row_anchor),
+                to: None,
+            },
+        )
+        .expect("конец");
+        assert_eq!(side, Side::Right, "порт сидит на правой грани");
+        assert_eq!(point, top_row_anchor);
+    }
+
+    /// CR-027: hit-test ходит по якоренной полилинии — у точки якоря
+    /// расстояние нулевое, точка старого старта дальше допуска.
+    #[test]
+    fn distance_to_edge_anchored_matches_anchored_line() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(node_a());
+        canvas.nodes.push(Node::text("b", "b", 400.0, 0.0));
+        let mut edge = Edge::new("e1", "a", Some(Side::Right), "b", Some(Side::Left));
+        edge.set_flow_kind(crate::FlowKind::Value);
+        canvas.add_edge(edge);
+        let a = node_a();
+        let anchor = [a.x + a.width, a.y + 4.0];
+        let anchors = EdgeAnchors {
+            from: Some(anchor),
+            to: None,
+        };
+        let d = distance_to_edge_anchored(&canvas, &canvas.edges[0], anchor, false, anchors)
+            .expect("связь резолвится");
+        assert!(d < 1e-3, "якорь лежит на линии");
+        let legacy_start = port_point(&a, Side::Right);
+        let d_legacy =
+            distance_to_edge_anchored(&canvas, &canvas.edges[0], legacy_start, false, anchors)
+                .expect("связь резолвится");
+        assert!(
+            d_legacy > 2.0,
+            "старая точка старта — не на якоренной линии (d={d_legacy})"
+        );
+    }
+
+    /// CR-027: `edge_at_anchored` находит связь у якоренного старта;
+    /// без якорей в этой точке — промах.
+    #[test]
+    fn edge_at_anchored_hits_anchor_zone() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(node_a());
+        canvas.nodes.push(Node::text("b", "b", 400.0, 0.0));
+        let mut edge = Edge::new("e1", "a", Some(Side::Right), "b", Some(Side::Left));
+        edge.set_flow_kind(crate::FlowKind::Value);
+        canvas.add_edge(edge);
+        let a = node_a();
+        let near_anchor = [a.x + a.width + 3.0, a.y + 4.0];
+        let anchors = [EdgeAnchors {
+            from: Some([a.x + a.width, a.y + 4.0]),
+            to: None,
+        }];
+        assert_eq!(
+            edge_at_anchored(&canvas, near_anchor, false, &anchors),
+            Some(0),
+            "клик у data-порта ловит связь"
+        );
+        assert_eq!(
+            edge_at(&canvas, near_anchor, false),
+            None,
+            "семантическая геометрия в этой зоне не рисуется"
         );
     }
 }
