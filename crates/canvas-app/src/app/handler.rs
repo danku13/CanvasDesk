@@ -1523,6 +1523,14 @@ impl ApplicationHandler<AppEvent> for App {
         if self.oauth_poll() {
             self.request_redraw();
         }
+        // FR-LLM-D-W2 (llm-waves §3.6): поллинг web-бриджа OAuth на wasm
+        // (натив — desktop-флоу выше). Waiting держит цикл пробуждённым,
+        // Connected/Idle синхронизируют персистентные флаги + save —
+        // паттерн oauth_poll (бридж — W3-инъекция, до неё — тихий false).
+        #[cfg(all(feature = "l1-llm", target_arch = "wasm32"))]
+        if self.web_bridge_poll() {
+            self.request_redraw();
+        }
         // FR-PERF-C: rAF-петля автосейва. Прежняя логика (M8/W6) звала
         // `request_redraw` КАЖДЫЙ кадр пока `scene.dirty_since.is_some()`
         // (2 с после правки) — на web это 2 с непрерывного 98мс-рендера

@@ -128,14 +128,13 @@ impl App {
                 self.graph_builder.caret = self.graph_builder.text.len();
                 self.request_redraw();
             }
-            Key::Character(text) => {
-                if !self.graph_builder.busy {
-                    self.graph_builder
-                        .text
-                        .insert_str(self.graph_builder.caret, text);
-                    self.graph_builder.caret += text.len();
-                    self.request_redraw();
-                }
+            // busy — ввод блокирован (LLM-запрос в полёте).
+            Key::Character(text) if !self.graph_builder.busy => {
+                self.graph_builder
+                    .text
+                    .insert_str(self.graph_builder.caret, text);
+                self.graph_builder.caret += text.len();
+                self.request_redraw();
             }
             _ => {}
         }

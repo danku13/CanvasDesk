@@ -186,11 +186,7 @@ impl App {
     /// Открытие сразу фокусирует input (запрос можно печатать).
     pub(crate) fn agent_panel_toggle(&mut self) {
         self.agent_panel.open = !self.agent_panel.open;
-        if self.agent_panel.open {
-            self.agent_panel.input_focused = true;
-        } else {
-            self.agent_panel.input_focused = false;
-        }
+        self.agent_panel.input_focused = self.agent_panel.open;
         self.request_redraw();
     }
 
@@ -244,14 +240,13 @@ impl App {
                 self.agent_panel.caret = self.agent_panel.input.len();
                 self.request_redraw();
             }
-            Key::Character(text) => {
-                if !self.agent_panel.busy {
-                    self.agent_panel
-                        .input
-                        .insert_str(self.agent_panel.caret, text);
-                    self.agent_panel.caret += text.len();
-                    self.request_redraw();
-                }
+            // busy — ввод блокирован (LLM-запрос в полёте).
+            Key::Character(text) if !self.agent_panel.busy => {
+                self.agent_panel
+                    .input
+                    .insert_str(self.agent_panel.caret, text);
+                self.agent_panel.caret += text.len();
+                self.request_redraw();
             }
             _ => {}
         }
@@ -1403,7 +1398,7 @@ impl App {
         let opts = canvas_llm::ToolCallingOpts::default();
         // Cost estimate до запроса (по тарифу активной модели, Q4).
         let model_name = provider.active_model().to_owned();
-        let est_in = canvas_llm::estimate_tokens(&Self::AGENT_SYSTEM_PROMPT)
+        let est_in = canvas_llm::estimate_tokens(Self::AGENT_SYSTEM_PROMPT)
             + canvas_llm::estimate_tokens(txt)
             + tools.iter().map(|t| t.description.len() / 4).sum::<usize>();
         let est_out = 600usize;
@@ -2007,7 +2002,7 @@ mod tests {
     #[test]
     fn format_number_compact_int_and_frac() {
         assert_eq!(format_number_compact(100.0), "100");
-        assert_eq!(format_number_compact(3.14159), "3.14");
+        assert_eq!(format_number_compact(1.23456), "1.23");
     }
 
     /// FR-LLM-D-W2: preview из tool_calls — creation-вызовы + рёбра по ref.
@@ -2015,7 +2010,7 @@ mod tests {
     fn preview_from_calls_nodes_and_edges() {
         // Требует App (камера/сцена) — тестируем через чистую логику полей:
         // здесь проверяем конверсию аргументов (title/text/ref адресация).
-        let calls = vec![
+        let calls = [
             canvas_llm::ToolCall {
                 id: "c1".into(),
                 name: "node_create_note".into(),

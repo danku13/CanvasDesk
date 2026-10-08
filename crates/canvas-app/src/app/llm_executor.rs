@@ -29,6 +29,8 @@
 // FR-LLM-D-W2: маркер для поиска (grep): файлы волны W2 помечены
 // `// FR-LLM-D-W2:` в комментариях.
 
+// FR-LLM-D-W2: mpsc — только натив-воркер (wasm-стаб канала не имеет).
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
 use std::sync::Arc;
 
@@ -493,6 +495,97 @@ impl App {
                     text = format!("{trimmed}…");
                 }
                 (text, warning)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FR-LLM-D-W2 (llm-waves §3.6): OAuth web-сим — runtime-шов для W3
+// ---------------------------------------------------------------------------
+
+/// FR-LLM-D-W2 (llm-waves §3.6): web-бридж OAuth — runtime-шов.
+/// Натив: desktop-флоу (`oauth_flow.rs`) работает как сейчас, бридж не
+/// задействован. Wasm+`l1-llm` (сборка W3): `canvas-web` инъектирует
+/// реализацию через [`App::set_llm_web_bridge`] — OPFS token-store +
+/// popup-флоу через cloud-proxy (F-5.10). Бриджа нет — прежний тост
+/// недоступности (`AI_OAUTH_UNAVAILABLE`), кнопка честно «не работает
+/// до W3». Трейт — контракт инъекции: сигнатуры фиксированы волной W2,
+/// наполнение — W3 (llm-waves §3.6).
+#[cfg(feature = "l1-llm")]
+pub trait LlmWebBridge: Send + Sync {
+    /// Token store для фабрики провайдеров (натив — `FileTokenStore`;
+    /// W3/wasm — OPFS, origin-scoped). `None` — вход не выполнялся
+    /// (memory-store провайдера вернёт Auth → F-5.9 fallback на BYOK).
+    fn token_store(&self) -> Option<Arc<dyn canvas_llm::TokenStore>>;
+
+    /// Запустить web-флоу входа (W3: popup на authorize-URL + exchange
+    /// через pass-through прокси + сохранение токенов). `Err` —
+    /// человекочитаемая причина (прокси не задеплоен и т.п.).
+    fn start_login(&self) -> Result<(), String>;
+
+    /// Отменить ожидающий флоу (кнопка «Отменить» в Waiting).
+    fn cancel(&self);
+
+    /// Состояние флоу для UI-бейджа (поллинг `web_bridge_poll`).
+    fn flow_state(&self) -> WebOAuthState;
+}
+
+/// FR-LLM-D-W2: состояние web-OAuth флоу (зеркало `OAuthFlowState`
+/// натива; отдельный тип — canvas-app не тянет oauth_flow на wasm).
+#[cfg(feature = "l1-llm")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebOAuthState {
+    /// Не запускали / сброшено.
+    Idle,
+    /// Флоу в полёте (popup открыт, ждём callback).
+    Waiting,
+    /// Вход выполнен (email из id_token).
+    Connected(String),
+    /// Ошибка флоу.
+    Failed(String),
+}
+
+impl App {
+    /// FR-LLM-D-W2 (llm-waves §3.6): инъекция web-бриджа OAuth (W3,
+    /// canvas-web: OPFS store + popup-флоу). Натив — бридж не нужен
+    /// (desktop-флоу); вызов до/после — безвреден (бридж просто не читается).
+    #[cfg(feature = "l1-llm")]
+    pub fn set_llm_web_bridge(&mut self, bridge: Arc<dyn LlmWebBridge>) {
+        self.llm_web_bridge = Some(bridge);
+    }
+
+    /// FR-LLM-D-W2: поллинг web-бриджа (wasm+`l1-llm`, вызов из
+    /// `about_to_wait` — паттерн `oauth_poll`). Возвращает `true` —
+    /// нужно перерисовать/продолжить опрос. Синхронизирует персистентные
+    /// флаги `chatgpt_connected/email` (ground truth — бридж/store).
+    #[cfg(all(feature = "l1-llm", target_arch = "wasm32"))]
+    pub(crate) fn web_bridge_poll(&mut self) -> bool {
+        let Some(bridge) = self.llm_web_bridge.clone() else {
+            return false;
+        };
+        match bridge.flow_state() {
+            WebOAuthState::Waiting => true,
+            WebOAuthState::Connected(email) => {
+                if !self.settings.llm.chatgpt_connected || self.settings.llm.chatgpt_email != email
+                {
+                    self.settings.llm.chatgpt_connected = true;
+                    self.settings.llm.chatgpt_email = email;
+                    self.save_settings();
+                    true
+                } else {
+                    false
+                }
+            }
+            WebOAuthState::Idle | WebOAuthState::Failed(_) => {
+                if self.settings.llm.chatgpt_connected {
+                    self.settings.llm.chatgpt_connected = false;
+                    self.settings.llm.chatgpt_email.clear();
+                    self.save_settings();
+                    true
+                } else {
+                    false
+                }
             }
         }
     }

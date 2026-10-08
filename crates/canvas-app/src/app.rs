@@ -1298,6 +1298,12 @@ pub struct App {
     /// (натив, инъекция в main.rs) / стаб (wasm до W3). Деградация при
     /// недоступности — mock-флоу панелей / lex-режим suggest (как сейчас).
     llm_executor: Arc<llm_executor::LlmExecutor>,
+    /// FR-LLM-D-W2 (llm-waves §3.6): web-бридж OAuth — runtime-шов для W3
+    /// (canvas-web инъектирует через `set_llm_web_bridge`: OPFS store +
+    /// popup-флоу). Натив — `None` (desktop-флоу oauth_flow.rs как сейчас);
+    /// wasm без бриджа — кнопка «Войти» даёт прежний тост недоступности.
+    #[cfg(feature = "l1-llm")]
+    llm_web_bridge: Option<Arc<dyn llm_executor::LlmWebBridge>>,
     /// FR-LLM-OAUTH-APP / PRD-0010 F-5.8: OAuth-флоу «Вход ChatGPT» —
     /// состояние (Idle/Waiting/Connected/Failed), token store
     /// (oauth_tokens.json 0600 рядом с config.toml) и воркер desktop-login.
@@ -1826,6 +1832,9 @@ impl App {
             ai_selfhost_check: llm_executor::LlmCheckState::default(),
             llm_executor: Arc::new(llm_executor::LlmExecutor::stub()),
             ai_models_cache: Vec::new(),
+            // FR-LLM-D-W2: web-бридж OAuth — None до инъекции W3.
+            #[cfg(feature = "l1-llm")]
+            llm_web_bridge: None,
             // FR-LLM-OAUTH-APP: OAuth-флоу — store читает oauth_tokens.json
             // из каталога конфига (None — memory-фолбэк); если токены на
             // месте, старт в Connected (флаги синхронизирует oauth_poll в
@@ -6142,6 +6151,99 @@ impl App {
         {
             let answers = suggest::rank(&document, &options, &settings, None);
             self.on_suggest_ready(generation, answers);
+            // FR-LLM-D-W2 (llm-waves §3.8): LLM mm-доезд — lex показан
+            // мгновенно, LLM-ранжирование доезжает асинхронно через
+            // executor-сим (драйвер активирует W3; до него — тихий no-op).
+            #[cfg(feature = "l1-llm")]
+            self.suggest_submit_llm_mm(
+                suggest::SuggestTarget::Popup,
+                generation,
+                document,
+                std::sync::Arc::new(options),
+                settings,
+            );
+        }
+    }
+
+    /// FR-LLM-D-W2 (llm-waves §3.8): LLM mm-задание для suggest (wasm-ветка):
+    /// `LlmMmSource` (redact + cache + `provider.choice`, canvas-suggest за
+    /// `l1-llm` — крейт не трогаем) на провайдере из фабрики; ответ →
+    /// MmProbe → re-rank тем же конвейером (`fusion(lex, mm)`) → доставка
+    /// `LlmTaskOutcome::SuggestMm` (устаревшее поколение отбрасывается в
+    /// on_suggest_ready). Гейты (пауза/фича/лимит/провайдер) → тихий no-op —
+    /// вырождение в lex (fusion(lex, ∅) = lex, встроено). Cost успешного
+    /// запроса — в ai_cost_session/day (инкремент в on_llm_task).
+    /// Натив НЕ вызывает (worker с mm-пробой как сейчас — план §3.8).
+    #[cfg(feature = "l1-llm")]
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    fn suggest_submit_llm_mm(
+        &mut self,
+        target: suggest::SuggestTarget,
+        generation: u64,
+        document: String,
+        options: Arc<Vec<canvas_suggest::types::OptionDesc>>,
+        settings: canvas_core::SuggestSettings,
+    ) {
+        // Гейты F-5.9/продукта: пауза / фича off / дневной лимит — тихий
+        // no-op (lex-ответ уже показан, деградация прозрачна).
+        if self.ai_paused || !self.ai_suggest_enabled {
+            return;
+        }
+        if self.ai_cost_day >= self.settings.llm.cost_limit_daily {
+            return;
+        }
+        let llm = self.settings.llm.clone();
+        let privacy = llm.data_residency.privacy_mode();
+        // Провайдер suggest-фичи из фабрики; Off/Laya/пустой ключ → None —
+        // lex остаётся (как сейчас), запроса нет.
+        let Some(provider) = crate::llm_factory::build_feature_provider(
+            llm.provider_suggest,
+            &llm.model_suggest,
+            &llm,
+            &self.oauth_assets(),
+        ) else {
+            return;
+        };
+        let pricing = llm_executor::provider_pricing(provider.as_ref());
+        let job: llm_executor::LlmJob = Box::new(move || {
+            // LlmMmSource: redact (Q1) + cache TTL 5 мин + provider.choice.
+            let mut mm = canvas_suggest::llm::LlmMmSource::new(
+                llm_executor::BoxedProvider(provider),
+                privacy,
+            );
+            let outcome = pollster::block_on(async { mm.choice(&document, &options).await });
+            let result = match outcome {
+                Ok(answer) => {
+                    // ChoiceAnswer → MmProbe → re-rank (тот же конвейер,
+                    // что у натив-воркера с Laya-пробой).
+                    let probe = suggest::MmProbe {
+                        probs: answer.probs,
+                        confidence: answer.confidence,
+                    };
+                    let answers = suggest::rank(&document, &options, &settings, Some(&probe));
+                    // Q4: cost — оценка токенов (usage не возвращается).
+                    let input_tokens = canvas_llm::estimate_tokens(&document);
+                    let output_tokens = (options.len() * 8).max(1);
+                    let cost_usd = pricing
+                        .map(|p| canvas_llm::actual_cost(&p, input_tokens, output_tokens))
+                        .unwrap_or(0.0);
+                    Ok(llm_executor::SuggestMmResult {
+                        answers: Arc::new(answers),
+                        cost_usd,
+                    })
+                }
+                // Ошибка/таймаут — тихая деградация в lex (ответ уже показан).
+                Err(err) => Err(err.to_string()),
+            };
+            AppEvent::LlmTask(Arc::new(llm_executor::LlmTaskOutcome::SuggestMm {
+                target,
+                generation,
+                result,
+            }))
+        });
+        if !self.llm_executor.submit(job) {
+            // Executor недоступен (wasm до W3) — тихо: lex остаётся.
+            tracing::debug!("suggest mm: executor недоступен — lex остаётся");
         }
     }
 
@@ -6328,6 +6430,16 @@ impl App {
         {
             let answers = suggest::rank(&document, &options, &settings, None);
             self.on_cards_ready(generation, answers);
+            // FR-LLM-D-W2 (llm-waves §3.8): C3-карточки — тот же LLM
+            // mm-доезд (lex мгновенно, LLM асинхронно, executor-сим).
+            #[cfg(feature = "l1-llm")]
+            self.suggest_submit_llm_mm(
+                suggest::SuggestTarget::Cards,
+                generation,
+                document,
+                std::sync::Arc::new(options),
+                settings,
+            );
         }
     }
 
@@ -9246,10 +9358,34 @@ impl App {
         }
     }
 
-    /// Stub-вариант для wasm/сборок без `l1-llm`: OAuth-флоу нет, показываем
+    /// FR-LLM-D-W2 (llm-waves §3.6): wasm+l1-llm — состояние из web-бриджа
+    /// (runtime-шов W3: popup-флоу); бриджа нет — персистентный флаг
+    /// (как в stub-варианте ниже; кнопка при этом даёт тост недоступности).
+    #[cfg(all(feature = "l1-llm", target_arch = "wasm32"))]
+    pub(crate) fn oauth_ui_state(&self) -> crate::settings_ui::OAuthUiState {
+        if let Some(bridge) = &self.llm_web_bridge {
+            return match bridge.flow_state() {
+                llm_executor::WebOAuthState::Idle => crate::settings_ui::OAuthUiState::Idle,
+                llm_executor::WebOAuthState::Waiting => crate::settings_ui::OAuthUiState::Waiting,
+                llm_executor::WebOAuthState::Connected(email) => {
+                    crate::settings_ui::OAuthUiState::Connected(email)
+                }
+                llm_executor::WebOAuthState::Failed(error) => {
+                    crate::settings_ui::OAuthUiState::Failed(error)
+                }
+            };
+        }
+        if self.settings.llm.chatgpt_connected {
+            crate::settings_ui::OAuthUiState::Connected(self.settings.llm.chatgpt_email.clone())
+        } else {
+            crate::settings_ui::OAuthUiState::Idle
+        }
+    }
+
+    /// Stub-вариант для сборок без `l1-llm`: OAuth-флоу нет, показываем
     /// персистентный флаг (Connected мог сохраниться в config.toml с
     /// desktop-сборки — бейдж честный, кнопка недоступна).
-    #[cfg(any(not(feature = "l1-llm"), target_arch = "wasm32"))]
+    #[cfg(not(feature = "l1-llm"))]
     pub(crate) fn oauth_ui_state(&self) -> crate::settings_ui::OAuthUiState {
         if self.settings.llm.chatgpt_connected {
             crate::settings_ui::OAuthUiState::Connected(self.settings.llm.chatgpt_email.clone())
@@ -9269,13 +9405,17 @@ impl App {
                 ext_agent_host_id: self.settings.llm.ext_agent_host_id.clone(),
             }
         }
-        // wasm + l1-llm (web-сборка с сетью): файлового store нет (OPFS —
-        // TODO дизайн-дока §4.4) → провайдер с memory-store вернёт Auth при
-        // первом запросе → F-5.9 (fallback на BYOK).
+        // wasm + l1-llm (web-сборка с сетью): FR-LLM-D-W2 (llm-waves §3.6) —
+        // token store из runtime-бриджа (W3: OPFS, инъекция через
+        // `set_llm_web_bridge`); бриджа нет → None (memory-store → Auth при
+        // первом запросе → F-5.9 fallback на BYOK — прежнее поведение).
         #[cfg(all(feature = "l1-llm", target_arch = "wasm32"))]
         {
             crate::llm_factory::OAuthAssets {
-                token_store: None,
+                token_store: self
+                    .llm_web_bridge
+                    .as_ref()
+                    .and_then(|bridge| bridge.token_store()),
                 ext_agent_host_id: self.settings.llm.ext_agent_host_id.clone(),
             }
         }
@@ -9316,10 +9456,32 @@ impl App {
         }
     }
 
+    /// FR-LLM-D-W2 (llm-waves §3.6): доступность OAuth-кнопки в рантайме —
+    /// замена компайл-тайм `cfg!` в рендере: натив+l1-llm — да (desktop-флоу);
+    /// wasm+l1-llm — есть web-бридж (инъекция W3); без l1-llm — нет.
+    pub(crate) fn oauth_runtime_available(&self) -> bool {
+        #[cfg(all(feature = "l1-llm", not(target_arch = "wasm32")))]
+        {
+            true
+        }
+        #[cfg(all(feature = "l1-llm", target_arch = "wasm32"))]
+        {
+            self.llm_web_bridge.is_some()
+        }
+        #[cfg(not(feature = "l1-llm"))]
+        {
+            false
+        }
+    }
+
     /// Клик по кнопке строки «Вход ChatGPT» (вызов из `apply_button_row`,
     /// строка `SettingsRow::AiOAuth`): dispatch по состоянию флоу —
     /// Idle/Failed → «Войти»/«Повторить», Waiting → «Отменить»,
     /// Connected → «Выйти» (чистит store + флаги).
+    /// FR-LLM-D-W2 (llm-waves §3.6): на wasm+l1-llm — runtime-проверка
+    /// бриджа вместо компайл-тайм запрета: бридж есть (W3 инъекция) —
+    /// делегируем флоу (`start_login`/`cancel`); бриджа нет — прежний
+    /// тост недоступности (AI_OAUTH_UNAVAILABLE).
     pub(crate) fn oauth_button_click(&mut self) {
         #[cfg(all(feature = "l1-llm", not(target_arch = "wasm32")))]
         {
@@ -9331,11 +9493,50 @@ impl App {
             }
             self.request_redraw();
         }
-        #[cfg(any(not(feature = "l1-llm"), target_arch = "wasm32"))]
+        // FR-LLM-D-W2 (§3.6): wasm+l1-llm — web-бридж (runtime-шов).
+        #[cfg(all(feature = "l1-llm", target_arch = "wasm32"))]
         {
-            // FR-LLM-OAUTH-APP: кнопка задизейблена (рендер — приглушённый
-            // цвет + бейдж-подсказка); у строк настроек hover-тултипов нет —
-            // объясняем тостом (механика тостов панелей).
+            match self.llm_web_bridge.clone() {
+                Some(bridge) => match self.oauth_ui_state() {
+                    crate::settings_ui::OAuthUiState::Idle
+                    | crate::settings_ui::OAuthUiState::Failed(_) => match bridge.start_login() {
+                        Ok(()) => {
+                            self.show_toast(self.tr(keys::AI_OAUTH_WEB_STARTED).to_owned());
+                        }
+                        Err(err) => {
+                            self.show_toast(self.trf(keys::AI_OAUTH_BRIDGE_ERR, &[("err", &err)]));
+                        }
+                    },
+                    crate::settings_ui::OAuthUiState::Waiting => bridge.cancel(),
+                    crate::settings_ui::OAuthUiState::Connected(_) => {
+                        // Выход: чистим store через бридж + флаги (поллинг
+                        // web_bridge_poll подхватит сброс Connected).
+                        if let Some(store) = bridge.token_store() {
+                            if let Err(err) = store.clear() {
+                                self.show_toast(
+                                    self.trf(
+                                        keys::AI_OAUTH_BRIDGE_ERR,
+                                        &[("err", &err.to_string())],
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                },
+                // Бриджа нет (до W3) — прежний тост недоступности.
+                None => {
+                    self.show_toast(crate::i18n::tr(
+                        self.settings.language,
+                        crate::i18n::keys::AI_OAUTH_UNAVAILABLE,
+                    ));
+                }
+            }
+            self.request_redraw();
+        }
+        // Без feature l1-llm — кнопка задизейблена рендером; тост объясняет
+        // (механика прежняя).
+        #[cfg(not(feature = "l1-llm"))]
+        {
             self.show_toast(crate::i18n::tr(
                 self.settings.language,
                 crate::i18n::keys::AI_OAUTH_UNAVAILABLE,
@@ -11523,8 +11724,9 @@ mod tests {
 
     /// Хелпер FR-044: App на заглушках с готовым канвасом и тестовым
     /// вьюпортом (клики по screen-space UI без winit-окна).
+    /// FR-LLM-D-W2: pub(crate) — переиспользуется тестами llm_w2_tests.
     #[cfg(test)]
-    fn stub_app_with_canvas(canvas: Canvas) -> App {
+    pub(crate) fn stub_app_with_canvas(canvas: Canvas) -> App {
         let scene = SceneState::new(canvas, PathBuf::from("target/tmp/fr044-stage.canvas"));
         let cache_dir =
             std::env::temp_dir().join(format!("canvasdesk-fr044-{}", std::process::id()));
@@ -14536,5 +14738,246 @@ mod we_onboarding_draw_tests {
             quads.iter().any(|q| q.fill == palette.stage_dim),
             "затемнение не слотом stage_dim"
         );
+    }
+}
+
+/// FR-LLM-D-W2 (llm-waves §3.9): юнит-тесты живых LLM-путей волны —
+/// гейты панелей, cost-инкременты, health-состояния + кэш моделей,
+/// OAuth-runtime-доступность, suggest-mm деградация.
+#[cfg(test)]
+mod llm_w2_tests {
+    use super::*;
+
+    /// Заготовка App с BYOK-конфигом (панели готовы к реальному пути,
+    /// executor — стаб: submit провалится → mock-fallback, как на wasm).
+    fn w2_app() -> App {
+        let mut app = super::tests::stub_app_with_canvas(Canvas::default());
+        app.settings.llm.provider_agent = canvas_llm::LlmProviderId::Byok;
+        app.settings.llm.provider_graph = canvas_llm::LlmProviderId::Byok;
+        app.settings.llm.api_key = "sk-test-123".to_owned();
+        app
+    }
+
+    /// §3.1: agent_send при паузе — сообщение об ошибке, запрос не уходит
+    /// (журнал растёт, busy не ставится).
+    #[test]
+    fn agent_send_paused_gate() {
+        let mut app = w2_app();
+        app.ai_paused = true;
+        let before = app.agent_panel.messages.len();
+        app.agent_send("создай CAC");
+        assert!(!app.agent_panel.busy, "пауза: busy не ставится");
+        assert_eq!(app.agent_panel.messages.len(), before + 1);
+        assert!(matches!(
+            app.agent_panel.messages.last(),
+            Some(crate::app::agent_panel::AgentMessage::Bot {
+                kind: crate::app::agent_panel::AgentMsgKind::Error,
+                ..
+            })
+        ));
+    }
+
+    /// §3.3: дневной лимит исчерпан — отказ до построения провайдера.
+    #[test]
+    fn agent_send_cost_limit_gate() {
+        let mut app = w2_app();
+        app.ai_cost_day = app.settings.llm.cost_limit_daily;
+        let before = app.agent_panel.messages.len();
+        app.agent_send("создай LTV");
+        assert!(!app.agent_panel.busy);
+        assert_eq!(app.agent_panel.messages.len(), before + 1);
+    }
+
+    /// §3.3: cost-инкременты — успешные исходы on_llm_task растят
+    /// ai_cost_session/ai_cost_day.
+    #[test]
+    fn llm_task_cost_increments() {
+        let mut app = w2_app();
+        app.agent_panel.busy = true;
+        let outcome = llm_executor::LlmTaskOutcome::SuggestMm {
+            target: suggest::SuggestTarget::Popup,
+            generation: app.suggest.generation,
+            result: Ok(llm_executor::SuggestMmResult {
+                answers: Arc::new(Vec::new()),
+                cost_usd: 0.0123,
+            }),
+        };
+        app.on_llm_task(Arc::new(outcome));
+        assert!((app.ai_cost_session - 0.0123).abs() < 1e-9);
+        assert!((app.ai_cost_day - 0.0123).abs() < 1e-9);
+    }
+
+    /// §3.4: health-исход Ok — флаг ai_key_ok, состояние Ok{models}, кэш
+    /// моделей заполнен (§3.5).
+    #[test]
+    fn llm_task_health_ok_fills_cache() {
+        let mut app = w2_app();
+        let outcome = llm_executor::LlmTaskOutcome::Health {
+            target: llm_executor::HealthCheckTarget::ApiKey,
+            result: Ok(llm_executor::HealthReport {
+                models: vec!["glm-5.3-flash".into(), "glm-5.3-pro".into()],
+            }),
+        };
+        app.on_llm_task(Arc::new(outcome));
+        assert!(app.ai_key_ok);
+        assert_eq!(
+            app.ai_key_check,
+            llm_executor::LlmCheckState::Ok { models: Some(2) }
+        );
+        assert_eq!(app.ai_models_cache.len(), 2);
+    }
+
+    /// §3.4: health-исход Error — флаг сброшен, текст в состоянии.
+    #[test]
+    fn llm_task_health_error_state() {
+        let mut app = w2_app();
+        let outcome = llm_executor::LlmTaskOutcome::Health {
+            target: llm_executor::HealthCheckTarget::Selfhost,
+            result: Err("HTTP 401".into()),
+        };
+        app.on_llm_task(Arc::new(outcome));
+        assert!(!app.ai_selfhost_ok);
+        assert!(matches!(
+            app.ai_selfhost_check,
+            llm_executor::LlmCheckState::Error(ref e) if e.contains("401")
+        ));
+    }
+
+    /// §3.2: ошибка agent-запроса — busy снят, сообщение об ошибке в журнале.
+    #[test]
+    fn llm_task_agent_error_resets_busy() {
+        let mut app = w2_app();
+        app.agent_panel.busy = true;
+        let before = app.agent_panel.messages.len();
+        let outcome = llm_executor::LlmTaskOutcome::Agent(Err("network down".into()));
+        app.on_llm_task(Arc::new(outcome));
+        assert!(!app.agent_panel.busy);
+        assert_eq!(app.agent_panel.messages.len(), before + 1);
+    }
+
+    /// §3.7: паника задания — сброс busy-флагов панелей.
+    #[test]
+    fn llm_task_panicked_resets_busy() {
+        let mut app = w2_app();
+        app.agent_panel.busy = true;
+        app.graph_builder.busy = true;
+        app.on_llm_task(Arc::new(llm_executor::LlmTaskOutcome::Panicked));
+        assert!(!app.agent_panel.busy);
+        assert!(!app.graph_builder.busy);
+    }
+
+    /// §3.6: OAuth-доступность в рантайме — натив без бриджа: по фиче
+    /// (default-сборка — false; l1-llm-сборка проверена компиляцией
+    /// отдельного gate-прогона, тут — семантика дефолта).
+    #[test]
+    fn oauth_runtime_available_default() {
+        let app = w2_app();
+        #[cfg(feature = "l1-llm")]
+        {
+            // натив + l1-llm — доступен (desktop-флоу).
+            if !cfg!(target_arch = "wasm32") {
+                assert!(app.oauth_runtime_available());
+            }
+        }
+        #[cfg(not(feature = "l1-llm"))]
+        {
+            assert!(!app.oauth_runtime_available());
+        }
+    }
+
+    /// §3.8: suggest-mm провал (ошибка) — тихая деградация: cost не растёт,
+    /// на_suggest_ready не вызывается (answers не мутированы).
+    #[test]
+    fn suggest_mm_error_degrades_to_lex() {
+        let mut app = w2_app();
+        let session_before = app.ai_cost_session;
+        let answers_before = app.suggest.answers.len();
+        let outcome = llm_executor::LlmTaskOutcome::SuggestMm {
+            target: suggest::SuggestTarget::Popup,
+            generation: app.suggest.generation,
+            result: Err("timeout".into()),
+        };
+        app.on_llm_task(Arc::new(outcome));
+        assert_eq!(app.ai_cost_session, session_before);
+        assert_eq!(app.suggest.answers.len(), answers_before);
+    }
+
+    /// §3.4: повторный «Проверить» в Checking — игнор (не дублирует запрос).
+    #[test]
+    fn health_check_start_ignores_when_checking() {
+        let mut app = w2_app();
+        app.ai_key_check = llm_executor::LlmCheckState::Checking;
+        app.ai_key_ok = false;
+        app.ai_health_check_start(llm_executor::HealthCheckTarget::ApiKey);
+        // Checking не сброшен (запрос в полёте), флаг не потроган.
+        assert_eq!(app.ai_key_check, llm_executor::LlmCheckState::Checking);
+        assert!(!app.ai_key_ok);
+    }
+
+    /// §3.2 (FR-033): agent_apply_preview — батч graph_apply: ноды+рёбра
+    /// создаются, ОДИН undo-шаг, заголовок пост-фиксом, откат возвращает
+    /// канвас к исходному состоянию.
+    #[test]
+    fn agent_apply_preview_graph_apply_single_undo() {
+        use crate::app::agent_panel::{AgentPreview, AgentPreviewNode};
+        let mut app = w2_app();
+        let undo_before = app.scene.undo_stack.len();
+        let nodes_before = app.scene.canvas.nodes.len();
+        let edges_before = app.scene.canvas.edges.len();
+        let preview = AgentPreview {
+            nodes: vec![
+                AgentPreviewNode {
+                    title: "CAC".to_owned(),
+                    text: "= 1200 / 12".to_owned(),
+                    x: 0.0,
+                    y: 0.0,
+                    width: 240.0,
+                    height: 120.0,
+                },
+                AgentPreviewNode {
+                    title: "LTV".to_owned(),
+                    text: String::new(),
+                    x: 320.0,
+                    y: 0.0,
+                    width: 240.0,
+                    height: 120.0,
+                },
+            ],
+            edges: vec![(0, 1, "приводит к".to_owned())],
+        };
+        app.agent_apply_preview(&preview).expect("батч применяется");
+        // Ноды и рёбра созданы.
+        assert_eq!(app.scene.canvas.nodes.len(), nodes_before + 2);
+        assert_eq!(app.scene.canvas.edges.len(), edges_before + 1);
+        // РОВНО один undo-шаг на весь батч.
+        assert_eq!(app.scene.undo_stack.len(), undo_before + 1);
+        // Заголовок — пост-фиксом (batch-op title не читает, FR-072).
+        let cac = app
+            .scene
+            .canvas
+            .nodes
+            .iter()
+            .find(|n| n.text.as_deref() == Some("= 1200 / 12"))
+            .expect("нода CAC");
+        assert_eq!(cac.title(), Some("CAC"));
+        // Подпись ребра — пост-фиксом.
+        let edge = app.scene.canvas.edges.last().expect("ребро создано");
+        assert_eq!(edge.label.as_deref(), Some("приводит к"));
+        // Откат: один undo возвращает исходный канвас.
+        app.undo_action();
+        assert_eq!(app.scene.canvas.nodes.len(), nodes_before);
+        assert_eq!(app.scene.canvas.edges.len(), edges_before);
+        assert_eq!(app.scene.undo_stack.len(), undo_before);
+    }
+
+    /// §3.2: пустой preview — отказ без мутаций.
+    #[test]
+    fn agent_apply_preview_empty_rejected() {
+        use crate::app::agent_panel::AgentPreview;
+        let mut app = w2_app();
+        let nodes_before = app.scene.canvas.nodes.len();
+        let result = app.agent_apply_preview(&AgentPreview::default());
+        assert!(result.is_err());
+        assert_eq!(app.scene.canvas.nodes.len(), nodes_before);
     }
 }

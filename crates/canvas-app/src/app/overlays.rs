@@ -5594,9 +5594,10 @@ impl App {
                 // «Повторить»). В wasm/без feature l1-llm — задизейблена:
                 // приглушённая подпись + бейдж-подсказка (тултип-замена).
                 RowKind::Button if *row == SettingsRow::AiOAuth => {
-                    // Доступен ли OAuth-рантайм (натив + feature l1-llm).
-                    let oauth_available =
-                        cfg!(all(feature = "l1-llm", not(target_arch = "wasm32")));
+                    // FR-LLM-D-W2 (llm-waves §3.6): доступность OAuth —
+                    // runtime-проверка (натив+l1-llm — да; wasm+l1-llm —
+                    // есть бридж W3; без l1-llm — нет) вместо cfg!.
+                    let oauth_available = self.oauth_runtime_available();
                     let state = self.oauth_ui_state();
                     let (button_label, badge_text, badge_color) = match &state {
                         crate::settings_ui::OAuthUiState::Idle => {
