@@ -14401,6 +14401,7 @@ mod we_onboarding_draw_tests {
                     [240.0, 180.0],
                     step,
                     app.settings.language,
+                    &app.settings.role,
                     &mut canvas_ui::kit::ScrollState::default(),
                     &mut m,
                     &mut fs,
