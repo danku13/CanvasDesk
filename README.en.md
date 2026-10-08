@@ -21,7 +21,7 @@ Change one parameter — see what happens to P&L, runway or service capacity.
 [**❓ FAQ**](#-faq) ·
 [**🤝 Contributing**](#-contributing)
 
-**English** · [Русский](README.ru.md)
+**English** · [Русский](README.md)
 
 </div>
 
@@ -79,7 +79,7 @@ Platform specifics — see [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 ## 💡 What you can do right now
 
 - **Open a reference model** — the [example gallery](#-example-models) in the repo and in the app: unit economics, capacity service, project budget, what-if. Twist the parameters, watch the downstream recalculate.
-- **Use 45+ built-in templates** — palette on the left or the ring menu: infrastructure, unit economics, product analytics.
+- **Use 60+ built-in templates** — palette on the left or the ring menu: infrastructure, unit economics, product analytics.
 - **Run what-if** — swap one calculation line and see deltas across the whole graph; compare up to 3 scenarios in a table.
 - **Collaborate in a single file** — a model is a `.canvas` file: commit it to git, review it as a diff, open it anywhere.
 
@@ -103,7 +103,7 @@ Platform specifics — see [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).
 
 ## 🗂 Example models
 
-15 reference models in [`assets/canvas-schemes/`](assets/canvas-schemes/) — open them right in the app (gallery on start or File → Open):
+14 reference models in [`assets/canvas-schemes/`](assets/canvas-schemes/) — open them right in the app (gallery on start or File → Open):
 
 | Category | Models |
 |---|---|
@@ -133,11 +133,11 @@ CanvasDesk ships with an MCP bridge (`canvasdesk mcp`): any AI client speaking t
 
 Rust · wgpu (WebGPU) · winit · cosmic-text · rstar (spatial index) · rusqlite · serde · MCP protocol. The UI stack is proprietary: surface layers, a component kit and the FlexLayoutEngine layout engine (a CSS Flexbox/Grid subset: auto/minmax tracks, sticky, rotate, z-index) with no external layout dependencies. One binary — the whole stack: GUI + MCP bridge for AI clients.
 
-**Canvas features:** infinite canvas (panning, cursor zoom, pinch, grid) · Obsidian-compatible markdown notes (`**bold**`, `*italic*`, `==highlight==`) · file cards with system thumbnails · minimap and full-text search · undo/redo 50 deep · node grouping and color palette · 7 themes (tokyo-night, dracula, nord, gruvbox, catppuccin, solarized…) · "desktop wallpaper" mode on Windows · autosave with debounce and a `.bak` copy · **5000 nodes at 60 fps**.
+**Canvas features:** infinite canvas (panning, cursor zoom, pinch, grid) · Obsidian-compatible markdown notes (`**bold**`, `*italic*`, `==highlight==`) · file cards with system thumbnails · minimap and full-text search · click-to-edit: clicking a note places the caret right at the click point (no double-click) · undo/redo 50 deep · node grouping and color palette · 7 themes (tokyo-night, dracula, nord, gruvbox, catppuccin, solarized…) · "desktop wallpaper" mode on Windows · autosave with debounce and a `.bak` copy · **5000 nodes at 60 fps**.
 
 ## 🗺 Status
 
-Canvas, renderer, notes, edges, minimap, search, undo, MCP, the Numi engine, value flow, 45 templates, what-if, AI agent, web version — **working and actively used**.
+Canvas, renderer, notes, edges, click-to-edit, minimap, search, undo, MCP, the Numi engine, value flow, 60 templates, what-if, AI agent, web version — **working and actively used**.
 
 | Platform | State |
 |---|---|
