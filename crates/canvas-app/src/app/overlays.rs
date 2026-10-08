@@ -2075,6 +2075,12 @@ impl App {
     /// Текст изменился (префикс новый) → поколение растёт, устаревшие
     /// ответы тонут; каретка двигалась без правки — поколение стабильно,
     /// ИИ-строки переживают пересинхронизацию L0 без мигания.
+    /// CR-022 (решение владельца Q5, «вообще не надо триггерить»):
+    /// триггер C1 по умолчанию НЕ взводится — ИИ-предложения шаблонов
+    /// не триггерятся при редактировании ноды ни на Numi-строках, ни на
+    /// прозе; попап содержит только L0-подсказки. Код сохранён за флагом
+    /// `suggest.c1_in_popup` (serde default = false — старые конфиги
+    /// получают снятое состояние).
     pub(super) fn update_hints(&mut self) {
         let Some(session) = self.editing.as_ref() else {
             self.hints.reset();
@@ -2099,8 +2105,11 @@ impl App {
             });
         // FR-079 (S3): триггер C1 — любой ввод в тексте ноды вне фенсов
         // (включая прозу — это и есть сценарий «печатаю имя шаблона»);
-        // выключенный движок гасит и накопленные ответы
-        if self.suggest_active() && !in_fence {
+        // выключенный движок гасит и накопленные ответы.
+        // CR-022: гейт-флаг `c1_in_popup` (default false) снимает триггер —
+        // при редактировании ноды ИИ-запросы не ходят, накопленные ответы
+        // гасятся (попап без ИИ-примесей на любом токене)
+        if self.settings.suggest.c1_in_popup && self.suggest_active() && !in_fence {
             if prefix != self.suggest.last_prefix {
                 self.suggest.generation += 1;
                 self.suggest.last_prefix = prefix.to_owned();
@@ -2122,11 +2131,20 @@ impl App {
             )
         {
             self.hints.reset();
-            // Актуальные ИИ-строки переживают закрытие L0 (AI-only-попап)
+            // Актуальные ИИ-строки переживают закрытие L0 (AI-only-попап);
+            // CR-022: гейт флагом — при снятом C1 мерджа нет (no-op)
             self.suggest_remerge();
             return;
         }
         // Контекст ноды: переменные выше, value-входы, параметры шаблона
+        let node_index = session.node_index().unwrap_or(usize::MAX);
+        let node_id = self
+            .scene
+            .canvas
+            .nodes
+            .get(node_index)
+            .map(|node| node.id.clone())
+            .unwrap_or_default();
         let vars: Vec<String> = full_text
             .split('\n')
             .take(line_i)
@@ -2135,38 +2153,88 @@ impl App {
                 _ => None,
             })
             .collect();
+        // FR-101 (фикс UR-001-05): счётчик позиционных входов — ЗЕРКАЛО
+        // фильтра слотов `flow::inbound_slots_with_lines` (flow.rs):
+        // рёбра с `to_param` проливаются в параметры и слоты `$1..$N`
+        // не занимают — прежний счётчик предлагал `$2`, которого в eval
+        // не существует (MissingInbound).
+        let inbound = self
+            .scene
+            .canvas
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.to_node == node_id
+                    && edge.flow_kind() == FlowKind::Value
+                    && edge.to_param.is_none()
+            })
+            .count();
+        // FR-101: именованные входы — рабочие ссылки на входящие
+        // value-рёбра. Имя спилла — `to_param` (`$имя` резолвится
+        // рантаймом, каскад `Env::with_param_map`); qualified-ключ
+        // адресного ребра — «Нода.имя_присваивания» (единая точка резолва
+        // имени строки-истока `flow::source_line_name`: `fromOutput` →
+        // имя присваивания; объект — display-имя с коллизионным
+        // суффиксом `dataref::qualified_obj_name` — тот же резолв, что в
+        // рантайме). Неадресованное ребро (без `fromOutput`/`fromLine` на
+        // присваивание) имени не даёт — значение адресуется позиционно.
+        let display_counts = canvas_core::dataref::display_name_counts(&self.scene.canvas);
+        let mut inbounds: Vec<hints_ui::InboundHint> = Vec::new();
+        for edge in &self.scene.canvas.edges {
+            if edge.to_node != node_id || edge.flow_kind() != FlowKind::Value {
+                continue;
+            }
+            let field = canvas_core::flow::source_line_name(
+                &self.scene.canvas,
+                &edge.from_node,
+                edge.from_output.as_deref(),
+                edge.from_line,
+            );
+            let source =
+                canvas_core::dataref::node_display_name(&self.scene.canvas, &edge.from_node);
+            let qualified = field.as_deref().map(|field| {
+                let obj = canvas_core::dataref::qualified_obj_name(
+                    &self.scene.canvas,
+                    &edge.from_node,
+                    &display_counts,
+                );
+                format!("{obj}.{field}")
+            });
+            if let Some(param) = &edge.to_param {
+                inbounds.push(hints_ui::InboundHint {
+                    name: param.clone(),
+                    qualified: qualified.clone().unwrap_or_default(),
+                    source: source.clone(),
+                    spill: true,
+                });
+            }
+            if let (Some(field), Some(qualified)) = (field, qualified) {
+                inbounds.push(hints_ui::InboundHint {
+                    name: field,
+                    qualified,
+                    source,
+                    spill: false,
+                });
+            }
+        }
         let ctx = hints_ui::HintContext {
             vars,
-            inbound: self
-                .scene
-                .canvas
-                .edges
-                .iter()
-                .filter(|edge| {
-                    edge.to_node
-                        == self
-                            .scene
-                            .canvas
-                            .nodes
-                            .get(session.node_index().unwrap_or(usize::MAX))
-                            .map(|node| node.id.clone())
-                            .unwrap_or_default()
-                        && edge.flow_kind() == FlowKind::Value
-                })
-                .count(),
+            inbound,
             params: self
                 .scene
                 .canvas
                 .nodes
-                .get(session.node_index().unwrap_or(usize::MAX))
+                .get(node_index)
                 .and_then(|node| node.template())
                 .map(|template| template.params.keys().cloned().collect())
                 .unwrap_or_default(),
+            inbounds,
         };
         let items = hints_ui::hint_items(prefix, &ctx, self.settings.language);
         let token = hints_ui::token_before_caret(prefix, prefix.len()).0;
         self.hints.sync(token, items);
-        // FR-079 (S3): мердж актуальных ИИ-строк под L0 (триггер — выше)
+        // FR-079 (S3): мердж актуальных ИИ-строк под L0 (триггер — выше);
+        // CR-022: гейт флагом — попап только L0 (no-op при дефолте)
         self.suggest_remerge();
         // Якорь — низ каретки (screen logical px) — см. sync_hints_anchor.
         self.sync_hints_anchor();
@@ -2181,6 +2249,8 @@ impl App {
     /// перевод в логические px.
     /// FR-079 (S3): якорь живёт и при закрытом L0-попапе — AI-only-открытие
     /// по SuggestReady (пока взведён debounce-триггер C1).
+    /// CR-022: при дефолтном `c1_in_popup = false` триггер C1 не взводится —
+    /// якорь обновляется только пока попап открыт.
     pub(super) fn sync_hints_anchor(&mut self) {
         if !self.hints.open && self.suggest.pending.is_none() {
             return;

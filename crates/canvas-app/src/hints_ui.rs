@@ -27,6 +27,10 @@ use crate::i18n::{self, keys};
 /// Максимум элементов в popup (читабельность, стандарт автокомплитов) —
 /// именованный лимит списка, не кламп раскладки (срезов «хвоста» нет).
 pub const HINT_LIMIT: usize = 8;
+/// FR-101: номера `$1..$N` свёрнуто при N больше этой границы — имена
+/// входов главнее номеров (приоритизация под [`HINT_LIMIT`]); `$in`
+/// покрывает агрегат, прямой ввод `$5` работает и без подсказки.
+const HINT_NUMBER_CAP: usize = 4;
 /// Ширина popup (логические px; у узкого окна зажимается во вьюпорт —
 /// `constrain`-семантика `dropdown_menu`).
 pub const HINT_WIDTH: f32 = 300.0;
@@ -93,11 +97,43 @@ impl HintItem {
 pub struct HintContext {
     /// Переменные листа (присваивания ВЫШЕ строки каретки).
     pub vars: Vec<String>,
-    /// Число value-рёбер на ноде (`$in`/`$1..$N` — FR-014).
+    /// Число позиционных value-рёбер на ноде (`$in`/`$1..$N` — FR-014;
+    /// FR-101: рёбра с `to_param` НЕ считаются — зеркало фильтра слотов
+    /// `flow::inbound_slots_with_lines`, иначе попап предлагал `$N`,
+    /// которого в eval не существует).
     pub inbound: usize,
     /// Имена параметров шаблона (`$rps`… — FR-018); нешаблонная нода —
     /// пусто.
     pub params: Vec<String>,
+    /// FR-101: именованные входы — ссылки на входящие value-рёбра по
+    /// имени (и в `$`-ветке, и по имени без `$`). Собирается в
+    /// `update_hints`: имена `to_param`-спиллов и qualified-ключи
+    /// адресных рёбер (`Нода.имя_присваивания`, единая точка
+    /// `flow::source_line_name`).
+    pub inbounds: Vec<InboundHint>,
+}
+
+/// FR-101: именованный вход ноды — единица подсказок входящих параметров.
+/// Один вход = одна строка popup с рабочей формой вставки: формат — по
+/// языку имени (совпадает с языком набранного хвоста: кириллический
+/// префикс матчит только кириллическое имя) — ASCII → `$имя`, кириллица →
+/// `Нода.параметр` (грамматика FR-050 Р-6; `$`+кириллица = валюта,
+/// FR-013 — такая вставка не может быть предложена).
+#[derive(Debug, Clone, PartialEq)]
+pub struct InboundHint {
+    /// Имя для матчинга: имя параметра спилла (`toParam`) или поле
+    /// qualified-ключа (имя присваивания строки-истока / `fromOutput`).
+    pub name: String,
+    /// Qualified-форма «Нода.поле» — запасная (для кириллицы — рабочая)
+    /// форма вставки; пустая строка — адресованного имени у ребра нет.
+    pub qualified: String,
+    /// Заголовок ноды-источника — деталь подсказки «проливание из ноды X».
+    pub source: String,
+    /// Ребро проливает в параметр (`toParam`): `$имя` резолвится
+    /// рантаймом (каскад параметров `Env::with_param_map`, flow.rs).
+    /// Для позиционного ребра имя в `$`-форме не резолвится — только
+    /// qualified-форма.
+    pub spill: bool,
 }
 
 /// Токен слева от каретки: `(токен, байтовая позиция начала токена)`.
@@ -122,21 +158,106 @@ pub fn token_before_caret(line: &str, caret: usize) -> (String, usize) {
     (prefix[start..].to_owned(), start)
 }
 
+/// FR-101: рабочая форма вставки именованного входа — `Some(текст)` или
+/// `None` (ни одной грамматически валидной формы — подсказка не
+/// показывается: битая вставка хуже тишины).
+fn inbound_insert(inbound: &InboundHint) -> Option<String> {
+    // Спилл: `$имя` — основная форма (ASCII-имена резолвятся рантаймом)
+    if inbound.spill {
+        if let Some(form) = dollar_form(&inbound.name) {
+            return Some(form);
+        }
+    }
+    // Qualified «Нода.поле» — рабочая форма кириллицы и позиционных рёбер
+    if qualified_form_is_lexable(&inbound.qualified) {
+        return Some(inbound.qualified.clone());
+    }
+    None
+}
+
+/// FR-101: форма `$имя` — зеркало грамматики `dollar_param_ident`
+/// (`expr.rs`: ASCII-идентификатор `[a-zA-Z_][a-zA-Z0-9_]*`; имя с
+/// префиксом `in` зарезервировано валютной семантикой FR-013 — `$inn`).
+fn dollar_form(name: &str) -> Option<String> {
+    let first = name.chars().next()?;
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    if !name
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return None;
+    }
+    if name.starts_with("in") {
+        return None;
+    }
+    Some(format!("${name}"))
+}
+
+/// FR-101: вставляется ли qualified-строка лексером движка (FR-050 Р-6):
+/// объект — лексический идентификатор без пробелов (алиасы коллизий
+/// «Имя (id)» с пробелом не подсказываются — ручной ввод), поле —
+/// идентификатор с внутренними дефисами («Кол-во», `lex_qualified_field`).
+fn qualified_form_is_lexable(qualified: &str) -> bool {
+    let Some((obj, field)) = qualified.split_once('.') else {
+        return false;
+    };
+    let obj_ok = !obj.is_empty() && obj.chars().all(|ch| ch.is_alphanumeric() || ch == '_');
+    let field_ok = !field.is_empty()
+        && !field.starts_with('-')
+        && !field.ends_with('-')
+        && !field.contains("--")
+        && field
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || ch == '_' || ch == '-');
+    obj_ok && field_ok
+}
+
+/// Один именованный вход в список (если есть рабочая форма вставки).
+fn push_inbound(inbound: &InboundHint, language: Language, push: &mut dyn FnMut(HintItem)) {
+    let Some(insert) = inbound_insert(inbound) else {
+        return;
+    };
+    push(HintItem::text(
+        HintKind::DollarRef,
+        insert.clone(),
+        insert,
+        i18n::trf(
+            language,
+            keys::HINT_SPILL,
+            &[("{node}", inbound.source.as_str())],
+        ),
+    ));
+}
+
 /// Элементы подсказок для строки каретки (префикс ДО каретки) и контекста
-/// ноды. Порядок (proposal FR-021): переменные → `$`-ссылки → функции →
-/// единицы; лимит [`HINT_LIMIT`]. Единицы — после числа (токен-число или
-/// число+пробел); `$`-токен — только `$`-ссылки; пустой токен — переменные.
+/// ноды. Порядок (proposal FR-021, FR-101): переменные → именованные
+/// входы → параметры шаблона → функции → единицы; лимит
+/// [`HINT_LIMIT`]. Единицы — после числа (токен-число или число+пробел);
+/// `$`-токен: именованные входы (матчинг по имени без `$`) → `$in`/`$N`
+/// → параметры; пустой токен — переменные. Дедуп по вставке: спилл и
+/// параметр манифеста с одним именем — одна строка.
 pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> Vec<HintItem> {
     let (token, _start) = token_before_caret(line_prefix, line_prefix.len());
     let mut items: Vec<HintItem> = Vec::with_capacity(HINT_LIMIT);
     let mut push = |item: HintItem| {
-        if items.len() < HINT_LIMIT {
+        // FR-101: дедуп по вставке — одна строка на одну рабочую ссылку
+        if items.len() < HINT_LIMIT && !items.iter().any(|existing| existing.insert == item.insert)
+        {
             items.push(item);
         }
     };
-    // `$`-контекст: входы value-рёбер и параметры шаблона
+    // `$`-контекст: именованные входы, входы value-рёбер, параметры шаблона
     if let Some(name) = token.strip_prefix('$') {
         let lower = name.to_lowercase();
+        // FR-101: именованные входы — раньше `$in`/номеров (ввод `$куп`
+        // находит `Купон.купон`); форма вставки — по языку имени
+        for inbound in &ctx.inbounds {
+            if inbound.name.to_lowercase().starts_with(&lower) {
+                push_inbound(inbound, language, &mut push);
+            }
+        }
         if ctx.inbound > 0 && "in".starts_with(&lower) {
             push(HintItem::text(
                 HintKind::DollarRef,
@@ -145,7 +266,8 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> V
                 i18n::tr(language, keys::HINT_DOLLAR_IN).to_owned(),
             ));
         }
-        for i in 1..=ctx.inbound {
+        // FR-101: номера свёрнуто при N > [`HINT_NUMBER_CAP`]
+        for i in 1..=ctx.inbound.min(HINT_NUMBER_CAP) {
             let label = format!("${i}");
             if label.starts_with(&token) {
                 push(HintItem::text(
@@ -156,6 +278,8 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> V
                 ));
             }
         }
+        // Параметры манифеста — после `$in`/`$N` (порядок FR-021 v1): при
+        // полном списке лимит срезает хвост, а не номера слотов
         for param in &ctx.params {
             let label = format!("${param}");
             if label.to_lowercase().starts_with(&token.to_lowercase()) {
@@ -205,7 +329,8 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> V
         }
         return items;
     }
-    // Идентификатор: переменные → функции → единицы (регистр не важен)
+    // Идентификатор: переменные → именованные входы (FR-101) → параметры
+    // шаблона → функции → единицы (регистр не важен)
     let lower = token.to_lowercase();
     for var in &ctx.vars {
         if var.to_lowercase().starts_with(&lower) {
@@ -214,6 +339,24 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> V
                 var.clone(),
                 var.clone(),
                 i18n::tr(language, keys::HINT_VAR).to_owned(),
+            ));
+        }
+    }
+    // FR-101: имена входов без `$` — триггер по имени обязателен
+    // (решение владельца Q4); вставка — рабочая форма
+    for inbound in &ctx.inbounds {
+        if inbound.name.to_lowercase().starts_with(&lower) {
+            push_inbound(inbound, language, &mut push);
+        }
+    }
+    // FR-101: параметры манифеста — тоже по имени (вставка `$имя`)
+    for param in &ctx.params {
+        if param.to_lowercase().starts_with(&lower) {
+            push(HintItem::text(
+                HintKind::DollarRef,
+                format!("${param}"),
+                param.clone(),
+                i18n::tr(language, keys::HINT_PARAM).to_owned(),
             ));
         }
     }
@@ -244,6 +387,10 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> V
 /// (источник виден пользователю), общий лимит [`HINT_LIMIT`]. Дедуп по
 /// `insert` (ИИ-шаблон не дублирует совпавшую L0-строку). Пустой итог —
 /// попап закрыт (семантика [`HintPopup::sync`]).
+/// CR-022: из пользовательского пути НЕДОСТИЖИМА — [`crate::app`]
+/// `suggest_remerge` гейтится флагом `suggest.c1_in_popup` (default false,
+/// решение владельца «вообще не надо триггерить»). Функция СОХРАНЕНА для
+/// тестов и будущих поверхностей — контракт не трогать без CR.
 pub fn merge_ai_items(l0: Vec<HintItem>, ai: Vec<HintItem>) -> Vec<HintItem> {
     let mut items = l0;
     for item in ai {
@@ -415,9 +562,32 @@ mod tests {
 
     fn ctx() -> HintContext {
         HintContext {
-            vars: vec!["rps".to_owned(), "rate".to_owned()],
+            vars: vec!["rps".to_owned(), "rate".to_owned(), "купон_лок".to_owned()],
             inbound: 2,
             params: vec!["service_rate".to_owned()],
+            inbounds: vec![
+                // спилл (toParam): кириллическое имя — рабочая форма qualified
+                InboundHint {
+                    name: "купон".to_owned(),
+                    qualified: "Купон.купон".to_owned(),
+                    source: "Купон".to_owned(),
+                    spill: true,
+                },
+                // позиционное построчное ребро: только qualified-форма
+                InboundHint {
+                    name: "скидка".to_owned(),
+                    qualified: "Скидка.скидка".to_owned(),
+                    source: "Скидка".to_owned(),
+                    spill: false,
+                },
+                // ASCII-спилл: рабочая форма `$имя`
+                InboundHint {
+                    name: "peak_rps".to_owned(),
+                    qualified: "Профиль.peak_rps".to_owned(),
+                    source: "Профиль трафика".to_owned(),
+                    spill: true,
+                },
+            ],
         }
     }
 
@@ -461,23 +631,173 @@ mod tests {
         assert!(items.len() <= HINT_LIMIT);
     }
 
-    /// Токен `$` → `$in`/`$1..$N`/параметры шаблона; без inbound — `$in`
-    /// нет.
+    /// Токен `$` → именованные входы (FR-101) → `$in`/`$1..$N`/параметры
+    /// шаблона; без inbound — `$in` нет.
     #[test]
     fn hints_dollar_refs() {
         let items = hint_items("w = $", &ctx(), Language::Ru);
         let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+        // FR-101: именованные входы — qualified-форма спилла и построчного
+        // ребра, параметры манифеста, `$`-форма ASCII-спилла
+        assert!(labels.contains(&"Купон.купон"));
+        assert!(labels.contains(&"Скидка.скидка"));
+        assert!(labels.contains(&"$peak_rps"));
+        assert!(labels.contains(&"service_rate"));
         assert!(labels.contains(&"$in"));
         assert!(labels.contains(&"$1"));
         assert!(labels.contains(&"$2"));
-        assert!(labels.contains(&"service_rate"));
+        // Порядок FR-101: имена входов раньше `$in`, `$in` раньше номеров
+        let pos = |label: &str| labels.iter().position(|l| *l == label).expect(label);
+        assert!(pos("Купон.купон") < pos("$in"), "имена раньше $in");
+        assert!(pos("$in") < pos("$1"), "$in раньше номеров");
         // Фильтр по префиксу после `$`
         let items = hint_items("w = $se", &ctx(), Language::Ru);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].insert, "$service_rate");
+        // FR-101 (кириллический кейс): `$купо` матчит по имени без учёта
+        // регистра; вставка — рабочая qualified-форма (НЕ `$купон`:
+        // `$`+кириллица = валюта, грамматика FR-013)
+        let items = hint_items("w = $купо", &ctx(), Language::Ru);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].insert, "Купон.купон");
+        assert_eq!(items[0].label, "Купон.купон");
+        assert!(items[0].detail.contains("Купон"), "деталь — источник");
         // Без inbound и шаблона — `$`-подсказок нет
         let empty = HintContext::default();
         assert!(hint_items("w = $", &empty, Language::Ru).is_empty());
+    }
+
+    /// FR-101: триггер по имени без `$` — идентификаторный токен матчит
+    /// имена входов; вставка — рабочая форма (кириллица → `Нода.параметр`,
+    /// ASCII → `$имя`); порядок: переменные → входы → параметры → функции.
+    #[test]
+    fn hints_inbound_by_name_without_dollar() {
+        // Кириллический ввод: переменная-тёзка раньше, вход — с qualified-
+        // вставкой и источником в детали (репродуктор UR-001-05/07: «купо»)
+        let items = hint_items("итог = купо", &ctx(), Language::Ru);
+        assert_eq!(items.len(), 2, "переменная + именованный вход");
+        assert_eq!(items[0].label, "купон_лок", "переменные раньше входов");
+        assert_eq!(items[1].insert, "Купон.купон");
+        assert_eq!(items[1].label, "Купон.купон");
+        assert!(items[1].detail.contains("Купон"), "деталь — источник");
+        // ASCII-ввод: спилл вставляется `$имя`-формой
+        let items = hint_items("w = peak", &ctx(), Language::Ru);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].insert, "$peak_rps");
+        assert!(items[0].detail.contains("Профиль"));
+        // Параметр манифеста тоже матчится по имени (вставка `$имя`)
+        let items = hint_items("w = service", &ctx(), Language::Ru);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].insert, "$service_rate");
+    }
+
+    /// FR-101: номера `$1..$N` свёрнуто при N > 4 — имена входов главнее
+    /// номеров (приоритизация под [`HINT_LIMIT`]); при N ≤ 4 — все.
+    #[test]
+    fn hints_dollar_numbers_collapse_after_four() {
+        let mut wide = ctx();
+        wide.inbound = 6;
+        let wide_labels: Vec<String> = hint_items("w = $", &wide, Language::Ru)
+            .iter()
+            .map(|item| item.label.clone())
+            .collect();
+        let labels: Vec<&str> = wide_labels.iter().map(|label| label.as_str()).collect();
+        assert!(labels.contains(&"$1"));
+        assert!(labels.contains(&"$4"));
+        assert!(!labels.contains(&"$5"), "номера свёрнуто при N > 4");
+        assert!(!labels.contains(&"$6"));
+        // Малое N — без свёртывания
+        let small_labels: Vec<String> = hint_items("w = $", &ctx(), Language::Ru)
+            .iter()
+            .map(|item| item.label.clone())
+            .collect();
+        assert!(small_labels.iter().any(|label| label == "$2"));
+    }
+
+    /// FR-101: дедуп именованных входов по вставке — спилл и параметр
+    /// манифеста с одним именем дают одну строку попапа.
+    #[test]
+    fn hints_named_inputs_dedup() {
+        let mut dup = ctx();
+        dup.inbounds.push(InboundHint {
+            name: "service_rate".to_owned(),
+            qualified: "Профиль.service_rate".to_owned(),
+            source: "Профиль".to_owned(),
+            spill: true,
+        });
+        let dup_items = hint_items("w = $", &dup, Language::Ru);
+        let inserts: Vec<&str> = dup_items.iter().map(|item| item.insert.as_str()).collect();
+        assert_eq!(
+            inserts.iter().filter(|i| **i == "$service_rate").count(),
+            1,
+            "одна строка на одну вставку"
+        );
+    }
+
+    /// FR-101: невставляемые формы отсеиваются (битая вставка хуже
+    /// тишины): `$имя` — зеркало `dollar_param_ident` (ASCII, не с
+    /// префикса `in` — валюта FR-013); qualified — лексер «Объект.Поле»
+    /// (объект без пробелов; алиас коллизии «Имя (id)» не вставляется).
+    #[test]
+    fn hints_inbound_unusable_forms_skipped() {
+        let guarded = HintContext {
+            vars: vec![],
+            inbound: 1,
+            params: vec![],
+            inbounds: vec![
+                // ASCII-имя + неlexable qualified (пробел в объекте) — `$форма`
+                InboundHint {
+                    name: "peak".to_owned(),
+                    qualified: "Профиль (n1).peak".to_owned(),
+                    source: "Профиль".to_owned(),
+                    spill: true,
+                },
+                // кириллическое имя + неlexable qualified — формы нет
+                InboundHint {
+                    name: "купон".to_owned(),
+                    qualified: "Финальная корзина.купон".to_owned(),
+                    source: "Корзина".to_owned(),
+                    spill: true,
+                },
+                // имя с префикса `in` — `$`-форма зарезервирована валютой
+                InboundHint {
+                    name: "inn".to_owned(),
+                    qualified: "Налоги.inn".to_owned(),
+                    source: "Налоги".to_owned(),
+                    spill: true,
+                },
+                // позиционное ребро: qualified-форма ДАЖЕ для ASCII-имени
+                // (`$имя` в рантайме не резолвится — имя не параметр)
+                InboundHint {
+                    name: "users".to_owned(),
+                    qualified: "Спрос.users".to_owned(),
+                    source: "Спрос".to_owned(),
+                    spill: false,
+                },
+            ],
+        };
+        let guarded_items = hint_items("w = $", &guarded, Language::Ru);
+        let inserts: Vec<&str> = guarded_items
+            .iter()
+            .map(|item| item.insert.as_str())
+            .collect();
+        assert!(
+            inserts.contains(&"$peak"),
+            "ASCII-имя — `$форма` без qualified"
+        );
+        assert!(
+            !guarded_items.iter().any(|item| item.label == "купон"),
+            "не вставляемое имя не подсказывается"
+        );
+        assert!(
+            inserts.contains(&"Налоги.inn"),
+            "`$inn` запрещён валютой — qualified-форма"
+        );
+        assert!(
+            inserts.contains(&"Спрос.users"),
+            "позиционное ребро — только qualified"
+        );
+        assert!(!inserts.contains(&"$users"));
     }
 
     /// Число и число+пробел → единицы; вставка замещает только число.
