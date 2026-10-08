@@ -403,7 +403,9 @@ pub const SETTINGS_TABS: [SettingsTab; 9] = [
         ],
     },
     SettingsTab {
-        // FR-079 (S3): ИИ-подсказки шаблонов (master-тумблер + движок)
+        // FR-079 (S3): ИИ-карточки шаблонов (master-тумблер + движок).
+        // CR-022: попап при вводе ИИ-строки не показывает (c1_in_popup
+        // default false) — тумблер управляет C3-карточками «что дальше»
         title_key: keys::TAB_SUGGEST,
         icon: "✦",
         theme_cards: false,
