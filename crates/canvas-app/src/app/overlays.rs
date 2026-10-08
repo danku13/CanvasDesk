@@ -1775,13 +1775,18 @@ impl App {
             &mut fs,
             &self.visible_scheme_categories(),
         );
-        // Подложка панели
+        // Подложка панели — CR-031/S5 (UR-002 п.3): канонический стиль
+        // модали кита (kit::modal_style: panel_fill/panel_border,
+        // RADIUS_PANEL) — раньше menu_fill/palette_border как у попапа
+        // палитры, из-за чего панель выглядела «не на ui-kit».
+        let kit_palette = palette.kit_palette();
+        let gallery_panel_style = canvas_ui::kit::modal_style(&kit_palette);
         instances.push(CardInstance {
             pos: [lay.panel_rect[0], lay.panel_rect[1]],
             size: [lay.panel_rect[2], lay.panel_rect[3]],
-            fill: palette.menu_fill,
-            border: palette.palette_border,
-            params: [10.0, 0.0, 0.0, 1.0],
+            fill: gallery_panel_style.fill,
+            border: gallery_panel_style.border,
+            params: [gallery_panel_style.radius, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         // Шапка + счётчик
@@ -1804,16 +1809,18 @@ impl App {
             color: palette.body,
             align: TextAlign::Center,
         });
-        // Кнопка закрытия «×»
-        // FR-055 (этап U4): стиль — через кит (kit::control_style_of: явные
-        // слоты palette_chip_fill + title, RADIUS_CHIP — совпадает с прежним
-        // литеральным quad'ом; I-1 ноль скачка)
-        let close_style = canvas_ui::kit::control_style_of(
-            palette.palette_chip_fill,
-            [0.0; 4],
-            [0.0; 4],
-            canvas_core::tokens::RADIUS_CHIP,
+        // Кнопка закрытия «×» — CR-031/S5: канонический kit-стиль
+        // иконочной кнопки (kit::icon_button_style = Ghost-слоты с hover),
+        // как в витрине/настройках; раньше — заливка чипа без состояний.
+        let mut close_widget = WidgetState::default();
+        close_widget.set_pointer(
+            self.cursor[0] >= lay.close_rect[0]
+                && self.cursor[0] <= lay.close_rect[0] + lay.close_rect[2]
+                && self.cursor[1] >= lay.close_rect[1]
+                && self.cursor[1] <= lay.close_rect[1] + lay.close_rect[3],
+            false,
         );
+        let close_style = canvas_ui::kit::icon_button_style(close_widget.kit_state(), &kit_palette);
         instances.push(CardInstance {
             pos: [lay.close_rect[0], lay.close_rect[1]],
             size: [lay.close_rect[2], lay.close_rect[3]],
@@ -1824,19 +1831,22 @@ impl App {
         });
         texts.push(OwnedScreenText {
             text: "×".to_owned(),
-            origin: [lay.close_rect[0], lay.close_rect[1] + 3.0],
+            origin: [lay.close_rect[0], lay.close_rect[1] + 4.0],
             width: lay.close_rect[2],
             font_size: 13.0,
+            // glyphon-Color не конвертируется из слота напрямую — текст «×»
+            // на ghost-кнопке при любом состоянии титульный (hover виден
+            // по заливке/рамке контрола)
             color: palette.title,
             align: TextAlign::Center,
         });
-        // Поле фильтра
+        // Поле фильтра — радиус токенизирован (RADIUS_CHIP = прежний 6)
         instances.push(CardInstance {
             pos: [lay.input_rect[0], lay.input_rect[1]],
             size: [lay.input_rect[2], lay.input_rect[3]],
             fill: palette.search_input_fill,
             border: [0.0; 4],
-            params: [6.0, 0.0, 0.0, 1.0],
+            params: [canvas_core::tokens::RADIUS_CHIP, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
@@ -1851,19 +1861,22 @@ impl App {
             color: palette.body,
             align: TextAlign::Left,
         });
-        // Чипы категорий («Все» + уникальные категории реестра)
+        // Чипы категорий («Все» + уникальные категории реестра) —
+        // CR-031/S5: язык чипов выровнен с палитрой шаблонов (заливка без
+        // рамки, активная — слот selected, радиус-токен RADIUS_PILL),
+        // раньше — контурные пилюли с menu_fill (выглядело «не на ui-kit»).
         for (rect, category) in &lay.chip_rects {
             let active = self.scheme_gallery.category == *category;
             instances.push(CardInstance {
                 pos: [rect[0], rect[1]],
                 size: [rect[2], rect[3]],
                 fill: if active {
-                    palette.palette_chip_fill
+                    palette.palette_selected_fill
                 } else {
-                    palette.menu_fill
+                    palette.palette_chip_fill
                 },
-                border: palette.palette_border,
-                params: [12.0, 0.0, 0.0, 1.0],
+                border: [0.0; 4],
+                params: [canvas_core::tokens::RADIUS_PILL, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
             let label = match category {
@@ -1914,7 +1927,10 @@ impl App {
                         palette.control_hover_fill
                     }
                 } else {
-                    palette.menu_fill
+                    // CR-031/S5: строка на подложке панели (panel_fill),
+                    // а не на попап-заливке menu_fill — иначе на панели
+                    // модали строки «плавали» своим фоном.
+                    gallery_panel_style.fill
                 },
                 border: palette.palette_border,
                 params: [8.0, 0.0, 0.0, 1.0],
