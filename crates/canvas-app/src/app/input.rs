@@ -832,6 +832,46 @@ impl App {
                 return;
             }
         }
+        // W2 п.1 (PRD-0010 F-4): открытая агент-панель — приёмник текста
+        // (символы → input, Backspace — удаление, Enter — отправка, Esc —
+        // закрыть). Паттерн — ветка settings_text_edit выше (транзиентный
+        // UI-приёмник приоритетен над канвас-роутером).
+        if self.agent_panel.open && event.state == ElementState::Pressed {
+            let handled = match &event.logical_key {
+                Key::Named(NamedKey::Escape) => {
+                    self.agent_panel.open = false;
+                    true
+                }
+                Key::Named(NamedKey::Enter) => {
+                    if !self.agent_panel.busy && !self.agent_panel.input.trim().is_empty() {
+                        let text = self.agent_panel.input.clone();
+                        self.agent_send(&text);
+                    }
+                    true
+                }
+                Key::Named(NamedKey::Backspace) => {
+                    if self.modifiers.control_key() {
+                        self.agent_panel.input.clear();
+                    } else {
+                        self.agent_panel.input.pop();
+                    }
+                    self.agent_panel.caret = self.agent_panel.input.len();
+                    true
+                }
+                Key::Character(text)
+                    if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
+                {
+                    self.agent_panel.input.push_str(text);
+                    self.agent_panel.caret = self.agent_panel.input.len();
+                    true
+                }
+                _ => false,
+            };
+            if handled {
+                self.request_redraw();
+                return;
+            }
+        }
         // FR-054 (Q4-a PRD-0009): весь on_key — доставка KeyboardRouter'ом
         // по скоуп-стеку из реестра (FR-051): верхний скоуп первым,
         // поглотивший гасит доставку; скоупы без обработчика
@@ -928,6 +968,21 @@ impl App {
                 categories = self.templates.categories().len(),
                 "шаблонная палитра: док открыт/сфокусирован"
             );
+            self.request_redraw();
+            return;
+        }
+        // W2 п.1 (PRD-0010 F-4): Ctrl+I — тогл Agent Panel (кириллица —
+        // «Ш»). Ветер после роутера: при открытой панели Enter/Esc/символы
+        // уже ушли в input выше; редактор ноды съедает Ctrl+I (курсив) в
+        // своей ветке раньше — конфликтов нет.
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && self.modifiers.control_key()
+            && !self.modifiers.shift_key()
+            && matches!(&event.logical_key, Key::Character(c)
+                if c.eq_ignore_ascii_case("i") || c.eq_ignore_ascii_case("ш"))
+        {
+            self.agent_panel.open = !self.agent_panel.open;
             self.request_redraw();
             return;
         }
@@ -2372,6 +2427,12 @@ impl App {
                         CanvasMenuItem::AutolinkFind => {
                             self.open_autolink_review();
                         }
+                        // W2 п.1 (PRD-0010 F-3): открыть диалог генерации
+                        // графа (вход Graph Builder)
+                        CanvasMenuItem::AiGraphBuilder => {
+                            self.graph_builder.open = true;
+                            self.request_redraw();
+                        }
                         // FR-038 п.16-17 (T-038.5): batch-операции
                         // выделения — ОДНА undo-операция на все ноды;
                         // хоткеи не назначаются (F1 HOTKEYS не трогаем,
@@ -2898,6 +2959,17 @@ impl App {
                 // suggest-карточки) — глотаем ввод в пределах rect, мимо —
                 // проходит в обычный canvas-pick ниже.
                 if self.ai_status_panel_click() {
+                    return;
+                }
+                // W2 п.1 (PRD-0010 F-3/F-4): Agent Panel и Graph Builder —
+                // транзиентные AI-поверхности (как ai-status-panel): клик
+                // внутри — диспетчер панели, мимо диалога graph builder —
+                // Backdrop-закрытие; дальше — обычный canvas-pick.
+                let cursor_pt = [self.cursor[0], self.cursor[1]];
+                if self.graph_builder.open && self.graph_builder_click(cursor_pt) {
+                    return;
+                }
+                if self.agent_panel.open && self.agent_panel_click(cursor_pt) {
                     return;
                 }
                 // FR-052 (U2 PRD-0009): единый диспетчер поверхностей —
