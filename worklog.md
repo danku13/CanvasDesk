@@ -1409,3 +1409,22 @@ Work Log:
 Stage Summary:
 - FR-102 реализован (код+тесты), ожидает приёмки владельца; формулировки user-docs обновлены по явному запросу владельца
 - CI: fmt/clippy/test/build (ubuntu/windows/macos) + wasm-check — запущены пушем
+
+---
+Task ID: CR-030 (сессия web-0a539c42-84fd-4916-9a97-970c8052c51d)
+Agent: Super Z (main, координатор)
+Task: Запрос владельца 2026-10-09 со скриншотом: «если edge идёт от значения, то он шёл от соответствующей точки… точка коннектора как обычная смысловая, а не data-связь» — CR-030: якорь истока value-связи в data-точке порта
+
+Work Log:
+- Зарегистрирован CR-030 (cr-030-edge-value-anchor.md; первично CR-027, перенумерация из-за коллизии с параллельной сессией, чей CR-027 = Ctrl+Enter); локальный дубль отчёта Ctrl+Enter удалён
+- Root cause: edge_curve/bezier_between всегда якорят концы в port_point (центры сторон) — построчные data-порты FR-025 в геометрии рёбер основного канваса не участвуют (эталон построчных якорей есть только в stage-срезе — stage_edge_anchor_points)
+- Core (c338af6): EdgeAnchors{from,to} + anchored-варианты bezier/edge_curve/edge_polyline/edge_endpoint/edge_midpoint/distance_to_edge/edge_at; нормаль якоренного конца — по грани (anchor_side, не nearest_side); NONE = бит-в-бит прежнее; 5 тестов
+- Render (1993a6f): TextSystem::edge_source_anchor (чистое ядро edge_source_anchor_from_rows, 8 сценариев в тесте): from_line → порт строки, from_output → футер шаблона (валидация по снапшоту outputs)/последнее присваивание переменной, value без адресации → финальный порт; Renderer::edge_anchors_all — один резолв на кадр; прокидка в линии (cards), лейблы (midpoint/стаггер пучков), хэндлы CR-002, бокс правки лейбла (session_area/session_area_offset — якоря параметром)
+- App (0cd6120): edge_anchors_all/edge_anchors_for/editing_session_anchors; hit-test рёбер (клик/двойной клик/hover пучка/Shift+клик/unmapped-тултип) — edge_at_anchored; хэндлы, резинка перепривязки (draft_origin с якорем), пин, палитра, зоны лейбла — та же геометрия; headless — деградация NONE
+- Слияния origin/main (догон W3+W4 параллельной сессии: CR-026, click-to-edit, FR-100, FR-102): конфликт только в index-cr-fr.md (обе строки); стыковка кода — begin_edit_at с якорями, CachedRow.explainable в тесте; комментарии CR-027→CR-030
+- Гейты: fmt; check --workspace; test --workspace 95 наборов ok; clippy --workspace -D warnings; wasm_gate --check OK; push a90c275..677e4d5
+
+Stage Summary:
+- CR-030 выполнен: value-ребро стартует от data-точки значения (построчный порт/футер/финальный порт), контрольные рёбра и stage-срез — без изменений; визуал = hit-test = хэндлы = лейблы (один резолв кэша раскладки)
+- Открытые вопросы: (1) приёмка владельцем на скриншоте «Корзины»; (2) пучки веса ≥ 2 на канвасе рисуются одной линией по доминанте — строковые якоря схлопываются (веер — только в stage); (3) приёмник value-ребра остаётся на семантической точке (у текстовых нод нет входных data-точек) — отдельный CR при желании
+- Tokens (estimate, правило AGENTS.md): in≈420k, out≈38k, total≈458k, model=GLM (Super Z), scope=CR-030
