@@ -931,7 +931,8 @@ pub fn line_eval_env(
 /// FR-029 (семантика адресации рёбер, общая с [`inbound_values`]):
 /// `fromOutput` — именованный выход источника (снапшот `outputs` шаблона
 /// или переменная Numi-листа текстовой ноды), тихая деградация `None`;
-/// приоритет при обоих полях — `fromLine`. Рёбра с `toParam` в слоты
+/// приоритет при обоих полях — имя (ADR-0003, CR-025), сломанная
+/// адресация имени — фолбэк на строку. Рёбра с `toParam` в слоты
 /// НЕ входят (они «проливаются» в параметры — [`inbound_values`]); в
 /// канвасах без адресованных рёбер поведение идентично прежнему.
 /// `named` — карта именованных выходов потока (`FlowSolutions::named`):
@@ -959,25 +960,30 @@ pub fn inbound_slots_with_lines(
 }
 
 /// FR-029: значение, которое несёт value-ребро (источник по адресации):
-/// `fromLine` → строка листа; иначе `fromOutput` → именованный выход;
-/// иначе значение ноды целиком. Сломанная адресация — `None` (тихая
-/// деградация: проваленный исток не роняет пересчёт downstream).
+/// ADR-0003/CR-025 (приоритет имени): `fromOutput` → именованный выход;
+/// иначе `fromLine` → строка листа; иначе значение ноды целиком. При
+/// обоих полях имя старше индекса (ADR-0003:51-52); сломанная адресация
+/// имени — фолбэк на строку (тихая деградация: проваленный исток не
+/// роняет пересчёт downstream). Для data-нод адресация — в
+/// [`edge_source_value_with_data`] (колонка × запись — не приоритет).
 pub(crate) fn edge_source_value(
     edge: &Edge,
     outputs: &FlowOutputs,
     lines: &LineOutputs,
     named: &NamedOutputs,
 ) -> Option<Value> {
-    if let Some(line) = edge.from_line {
-        lines.get(&(edge.from_node.clone(), line)).cloned()
-    } else if let Some(name) = &edge.from_output {
-        named.get(&(edge.from_node.clone(), name.clone())).cloned()
-    } else {
-        outputs
-            .get(&edge.from_node)
-            .and_then(|result| result.as_ref().ok())
-            .cloned()
+    if let Some(name) = &edge.from_output {
+        if let Some(value) = named.get(&(edge.from_node.clone(), name.clone())).cloned() {
+            return Some(value);
+        }
     }
+    if let Some(line) = edge.from_line {
+        return lines.get(&(edge.from_node.clone(), line)).cloned();
+    }
+    outputs
+        .get(&edge.from_node)
+        .and_then(|result| result.as_ref().ok())
+        .cloned()
 }
 
 /// FR-045 R-2 (проливание колонок CSV, §Q3): [`edge_source_value`] со
@@ -1507,22 +1513,38 @@ pub fn spill_source_field(
     from_line: Option<usize>,
     fallback: &str,
 ) -> String {
-    if let Some(name) = from_output {
-        return name.to_owned();
+    if let Some(name) = source_line_name(canvas, from_node, from_output, from_line) {
+        return name;
     }
     if let Some(line) = from_line {
-        let raw = canvas
-            .node(from_node)
-            .and_then(|node| node.text.as_deref())
-            .and_then(|text| text.lines().nth(line));
-        if let Some(raw) = raw {
-            if let crate::expr::NumiLineKind::Assignment { name } = crate::expr::line_kind(raw) {
-                return name;
-            }
-        }
         return format!("строка {}", line + 1);
     }
     fallback.to_owned()
+}
+
+/// CR-025 (UR-001-10, ADR-0003: имя > индекс): имя строки-истока для
+/// display-путей — ЕДИНАЯ точка резолва: `fromOutput` → имя; строка-
+/// присваивание источника → её имя (тот же вердикт, что в проливании);
+/// безымянная строка/нет адресации — None (вызывающий локализует
+/// фолбэк «строка N»/показывает fallback). Публична для dataref
+/// ([`display_ref_for_edge`]) и подписей портов приложения.
+pub fn source_line_name(
+    canvas: &Canvas,
+    from_node: &str,
+    from_output: Option<&str>,
+    from_line: Option<usize>,
+) -> Option<String> {
+    if let Some(name) = from_output {
+        return Some(name.to_owned());
+    }
+    let raw = canvas
+        .node(from_node)
+        .and_then(|node| node.text.as_deref())
+        .and_then(|text| text.lines().nth(from_line?));
+    match raw.map(crate::expr::line_kind) {
+        Some(crate::expr::NumiLineKind::Assignment { name }) => Some(name),
+        _ => None,
+    }
 }
 
 /// Заголовок ноды-источника для подписи проливания: снимок имени шаблона

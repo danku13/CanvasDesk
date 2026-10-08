@@ -1,6 +1,6 @@
 # CR-025: Тултип value-коннектора — «Нода.параметр = значение» (резолв имени строки)
 
-- **Статус:** выявлено
+- **Статус:** реализовано (код+тесты), ожидает приёмки владельца
 - **Тип:** CR
 - **Приоритет:** важно
 - **Владелец:** danku13 (симптом, решение), агент (анализ)
@@ -68,6 +68,7 @@
 ## История изменений (Changelog)
 
 - `2026-10-08` — агент: документ создан по UR-001-10; решение владельца Q8 «имя + значение» зафиксировано; статус `выявлено`.
+- `2026-10-08` — агент (волна W2): реализовано. Единая точка резолва — `flow::source_line_name` (pub; fromOutput → имя строки-присваивания через line_kind → None), `spill_source_field` переведён на неё. `dataref::display_ref_for_edge` — резолв поля через `spill_source_field` (поле «строка N» — только безымянные строки; fallback edge.id сохранён; tooltip-поле упразднено — значение недоступно в core, тултип собирается в app). Приоритет полей — ИМЯ > индекс (п.3, ADR-0003) во всех путях: исполнение `flow::edge_source_value` (сломанное имя → фолбэк fromLine), `lineage::edge_target` (то же, дерево ведёт к определяющей строке имени), дока model.rs/from_output и inbound_slots обновлены. App: `port_label_for` Line(Some) — «Объект.имя = значение» (значение из expr_line_results: Ok → значение, Err → текст ошибки, нет исхода → только адрес; i18n-фолбэк «строка N»/«line N» только безымянным); `inbound_label_lines` — тот же резолв. Опциональный п.4 (заполнение from_output при drag) — НЕ реализован (вне v1, показ исправлен единым резолвом). Тесты: dataref `display_ref_from_line_resolves_assignment_name` («Цена.price»), `display_ref_both_fields_name_wins`; lineage `from_output_priority_over_line` (переведён со старого `from_line_priority_over_output`: 10/line 0/«5»); app `port_tooltip_control_port_silent_value_side_keeps_labels` («Корзина.qty = 10»); обновлены port_label_*/port_in_label_lines_* (имена вместо «строка N», EN-фолбэк «line N» на безымянных); core 492, app 594, пиннеры integration_explain_x6 4/4, clippy -D warnings, fmt. MCP-контракты не тронуты (round-trip: формат .canvas не менялся).
 
 ## Источники истины (References)
 

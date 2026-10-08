@@ -4071,11 +4071,35 @@ impl App {
             &canvas_core::dataref::display_name_counts(canvas),
         );
         Some(match target {
-            // «Объект.строка N» — 1-based для отображения, как в dataref
-            // (поле собирается i18n-ключом: RU «строка N», EN «line N»)
+            // CR-025 (UR-001-10, Q8 «имя + значение»): имя строки-присваивания
+            // (ADR-0003: имя > индекс; единая точка — flow::source_line_name),
+            // i18n-фолбэк «строка N» — только безымянным; хвост — текущее
+            // значение строки из потока («Цена.price = 100 rub»), без исхода —
+            // только адрес
             PortTarget::Line(Some(line)) => {
-                let n = (line + 1).to_string();
-                format!("{obj}.{}", self.trf(keys::STAGE_LINE_LABEL, &[("{n}", &n)]))
+                let line = *line;
+                let field =
+                    match canvas_core::flow::source_line_name(canvas, &node_id, None, Some(line)) {
+                        Some(name) => name,
+                        None => {
+                            let n = (line + 1).to_string();
+                            self.trf(keys::STAGE_LINE_LABEL, &[("{n}", &n)])
+                        }
+                    };
+                let value = self
+                    .scene
+                    .expr_line_results
+                    .get(&node_id)
+                    .and_then(|lines| lines.get(line))
+                    .and_then(|outcome| outcome.as_ref())
+                    .map(|outcome| match outcome {
+                        ExprOutcome::Ok(value) => value.to_string(),
+                        ExprOutcome::Err(msg) => msg.clone(),
+                    });
+                match value {
+                    Some(v) => format!("{obj}.{field} = {v}"),
+                    None => format!("{obj}.{field}"),
+                }
             }
             // Футер шаблонной ноды — значение ноды целиком (F-5 «out:»)
             PortTarget::Line(None) => self.trf(keys::STAGE_OUT_LABEL, &[("{name}", &obj)]),
@@ -4120,12 +4144,24 @@ impl App {
             if eff_to != side {
                 continue;
             }
-            // Поле: from_line → i18n «строка N»/«line N» (1-based);
-            // from_output/fallback edge.id — поле из единой точки dataref.
+            // Поле: CR-025 — имя строки резолвится (ADR-0003: имя > индекс,
+            // единая точка flow::source_line_name: fromOutput → имя
+            // присваивания); i18n «строка N»/«line N» — только безымянным;
+            // from_output/фолбэк edge.id — поле из единой точки dataref.
             let field = match edge.from_line {
                 Some(line) => {
-                    let n = (line + 1).to_string();
-                    self.trf(keys::STAGE_LINE_LABEL, &[("{n}", &n)])
+                    match canvas_core::flow::source_line_name(
+                        canvas,
+                        &edge.from_node,
+                        edge.from_output.as_deref(),
+                        Some(line),
+                    ) {
+                        Some(name) => name,
+                        None => {
+                            let n = (line + 1).to_string();
+                            self.trf(keys::STAGE_LINE_LABEL, &[("{n}", &n)])
+                        }
+                    }
                 }
                 None => r.r.field.clone(),
             };
@@ -11766,12 +11802,12 @@ mod tests {
         let app = stub_app_with_canvas(canvas);
         assert_eq!(
             app.port_label_for(0, &PortTarget::Line(Some(0))),
-            Some("Заявки.строка 1".to_owned()),
-            "построчный порт — полный путь (R-5: полный путь в тултипе)"
+            Some("Заявки.users = 10".to_owned()),
+            "CR-025: имя присваивания + текущее значение строки"
         );
         assert_eq!(
             app.port_label_for(0, &PortTarget::Line(Some(1))),
-            Some("Заявки.строка 2".to_owned())
+            Some("Заявки.conv = 0.2".to_owned())
         );
         assert_eq!(
             app.port_label_for(0, &PortTarget::Line(None)),
@@ -11816,8 +11852,13 @@ mod tests {
         app_en.settings.language = Language::En;
         assert_eq!(
             app_en.port_label_for(0, &PortTarget::Line(Some(0))),
-            Some("Заявки.line 1".to_owned()),
-            "EN — «line N» (STAGE_LINE_LABEL)"
+            Some("Заявки.users = 10".to_owned()),
+            "EN: имя присваивания не локализуется (CR-025)"
+        );
+        assert_eq!(
+            app_en.port_label_for(0, &PortTarget::Line(Some(5))),
+            Some("Заявки.line 6".to_owned()),
+            "EN: безымянная/несуществующая строка — фолбэк «line N»"
         );
         assert_eq!(
             app_en.port_label_for(0, &PortTarget::Line(None)),
@@ -11841,8 +11882,8 @@ mod tests {
         let app = stub_app_with_canvas(canvas);
         assert_eq!(
             app.port_label_for(0, &PortTarget::Line(Some(0))),
-            Some("Заявки (a).строка 1".to_owned()),
-            "коллизия имён — дискриминатор node_id (§Q2)"
+            Some("Заявки (a).x = 1".to_owned()),
+            "коллизия имён — дискриминатор node_id (§Q2); CR-025: имя+значение"
         );
         assert_eq!(
             app.port_label_for(1, &PortTarget::Line(None)),
@@ -11883,8 +11924,8 @@ mod tests {
             .expect("левый вход dst — 3 истока");
         assert_eq!(lines.len(), 3, "каждое входящее value-ребро — строка");
         assert_eq!(
-            lines[0].text, "from: Заявки.строка 1",
-            "fromLine — i18n «строка N», 1-based (R-5, как в v1)"
+            lines[0].text, "from: Заявки.users",
+            "CR-025: fromLine на строку-присваивание — имя (имя > индекс)"
         );
         assert!(!lines[0].unmapped);
         assert_eq!(
@@ -12004,8 +12045,8 @@ mod tests {
             .inbound_label_lines(1, Side::Left)
             .expect("левый вход dst — 4 истока");
         assert_eq!(
-            lines[0].text, "from: Заявки.line 1 · not mapped",
-            "EN: поле строки и маркер unmapped (Р-5 + Р-3)"
+            lines[0].text, "from: Заявки.f0 · not mapped",
+            "EN: имя fromOutput сильнее fromLine (CR-025/ADR-0003) + unmapped"
         );
         assert!(lines[0].unmapped);
         assert_eq!(lines[3].text, "+1 more", "EN: свёртка");
@@ -13224,7 +13265,7 @@ mod suggest_flow_tests {
     #[test]
     fn port_tooltip_control_port_silent_value_side_keeps_labels() {
         let mut canvas = Canvas::default();
-        let mut src = Node::text("src", "qty = 10", 0.0, 0.0);
+        let mut src = Node::text("src", "Корзина\nqty = 10", 0.0, 0.0);
         src.width = 200.0;
         src.height = 100.0;
         let mut dst = Node::text("dst", "итог", 400.0, 0.0);
@@ -13255,7 +13296,10 @@ mod suggest_flow_tests {
         let label = app
             .port_label_for(0, &PortTarget::Line(Some(0)))
             .expect("лейбл построчного порта");
-        assert!(label.contains("строка"), "«Объект.строка N»: {label}");
+        assert_eq!(
+            label, "Корзина.qty = 10",
+            "CR-025 Q8: «Нода.параметр = значение» (имя + значение из потока)"
+        );
     }
 
     /// Домен-гейт C4: прозаический фреймворк-канвас — не предлагаем.
