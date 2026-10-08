@@ -156,6 +156,14 @@ ITEM="1035,117" BODY="1078,708" LABEL=about scripts/wasm_ui_test.sh --no-build
   закрылась). Из прогона выловлены две грабли и вписаны выше: xvfb-run без
   xauth (Xvfb вручную) и http.server-ребёнок, держащий event loop node
   (явный `kill` в finally + watchdog).
+- 2026-10-08 (FR-100, UR-001-02): клавиатурный смоук web расширен chord'ами
+  редактора — секция 2b `scripts/web_smoke.py`. Тракт: dblclick → заметка →
+  `Control+Backspace` (word-delete, winit-web доставляет chord редактору —
+  шим FR-095 гасит default браузера `preventDefault`) → `Control+a`
+  (select-all, браузерный select-all подавлен) → замена текста → Enter →
+  оракул — поиск замены в модели (лог `поиск завершён rows≥1`) + отсутствие
+  `pageerror`. Сценарий добавлен, прогон в этой среде не выполнялся —
+  ручная web-приёмка владельцем (macOS-браузер: те же chord'ы через Cmd).
 
 ## 6. Шпаргалка
 

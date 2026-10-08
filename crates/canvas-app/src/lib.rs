@@ -615,6 +615,27 @@ pub mod ui {
             crate::i18n::keys::HKEY_SPACE,
             crate::i18n::keys::HK_EXPLAIN_STEP,
         ),
+        // FR-100: полный набор команд редактора ноды (UR-001-02)
+        (
+            crate::i18n::keys::HKEY_CTRL_BACKSPACE,
+            crate::i18n::keys::HK_WORD_DELETE,
+        ),
+        (
+            crate::i18n::keys::HKEY_PAGE_UP_DOWN,
+            crate::i18n::keys::HK_EDITOR_PAGE,
+        ),
+        (
+            crate::i18n::keys::HKEY_TAB_INDENT,
+            crate::i18n::keys::HK_EDITOR_TAB,
+        ),
+        (
+            crate::i18n::keys::HKEY_HOME_SMART,
+            crate::i18n::keys::HK_EDITOR_HOME,
+        ),
+        (
+            crate::i18n::keys::HKEY_CMD_EDITOR,
+            crate::i18n::keys::HK_CMD_PARITY,
+        ),
     ];
 
     /// Полная высота панели хоткеев (FR-004): паддинги + заголовок +

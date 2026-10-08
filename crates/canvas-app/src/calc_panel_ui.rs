@@ -149,6 +149,10 @@ pub fn build_model(
             value,
         });
     }
+    // CR-021 (UR-001-04): группа «Расчёт · формулы» — через единую точку
+    // классификации `expr::line_role` (внутри `formula_displays` — как в
+    // теле ноды): литеральные константы (`qty = 10`) — параметры, сюда не
+    // входят; присваивания с RHS-входами (`sum = $1 * $2`) — расчёт.
     let formulas = formula_displays(canvas, receiver_id)
         .into_iter()
         .map(|row| FormulaRow {
@@ -604,6 +608,32 @@ mod tests {
         assert_eq!(model.formulas[0].name, "x");
         assert_eq!(model.formulas[0].operand_edges, vec![0]);
         assert_eq!(model.formulas[1].operand_edges, vec![1, 2]);
+    }
+
+    /// CR-021: панель stage и тело ноды классифицируют ОДИНАКОВО (единая
+    /// точка `expr::line_role` внутри `formula_displays`): репродуктор
+    /// UR-001-04 — литеральные константы (`qty = 10`) в «Расчёт · формулы»
+    /// не входят; присваивание с RHS-входами (`sum = $1 * $2`) — расчёт.
+    #[test]
+    fn model_formulas_exclude_literal_params_include_calc_assignments() {
+        let mut canvas = Canvas::default();
+        canvas
+            .nodes
+            .push(text_node("dst", "qty = 10\nsum = $1 * $2\nзаметка", 0.0));
+        let model = build_model(
+            &canvas,
+            "dst",
+            &[],
+            &values(LineOutputs::new(), NamedOutputs::new()),
+        );
+        assert_eq!(
+            model.formulas.len(),
+            1,
+            "только расчёт: {:#?}",
+            model.formulas
+        );
+        assert_eq!(model.formulas[0].name, "sum");
+        assert_eq!(model.formulas[0].line, 1);
     }
 
     /// Unmapped-вход (источник без значения адресованного выхода) —

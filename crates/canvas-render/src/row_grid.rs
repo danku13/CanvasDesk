@@ -17,7 +17,7 @@
 //! таблицы не меняет Y-ряд (I-1); детерминизм прохода A (повторный кадр —
 //! идентичный результат, D-11).
 
-use canvas_core::expr::{line_kind, NumiLineKind};
+use canvas_core::expr::{line_kind, line_role, LineRole, NumiLineKind};
 use canvas_core::Language;
 use canvas_ui::measure::TextMeasurer;
 use canvas_ui::row_guides::{measure_row_cells, RowGuides};
@@ -536,10 +536,19 @@ pub(crate) fn build_rows(
     let lines: Vec<&str> = body_text.split('\n').collect();
     for (i, outcome) in outcomes.iter().enumerate() {
         let Some(outcome) = outcome else { continue };
-        // Род строки — детектор движка (грамматика не дублируется).
+        // Род строки — единая точка классификации (CR-021, expr::line_role):
+        // присваивание с формульным RHS — расчёт (зона «РАСЧЁТ», маркер ƒ —
+        // как в панели stage), литеральное присваивание-константа —
+        // параметр. Имя — детектор движка (грамматика не дублируется).
         let Some(raw) = lines.get(i) else { continue };
         let (kind, name) = match line_kind(raw) {
-            NumiLineKind::Assignment { name } => (RowKind::Param, Some(name)),
+            NumiLineKind::Assignment { name } => {
+                let kind = match line_role(raw) {
+                    LineRole::Param => RowKind::Param,
+                    LineRole::Calc => RowKind::Calc,
+                };
+                (kind, Some(name))
+            }
             // Строка с исходом без присваивания — расчётная. line_kind
             // смотрит с ПУСТЫМ окружением: переменные листа он называет
             // прозой («a * 2» при `a` выше), но движок ноды с окружением
@@ -547,10 +556,12 @@ pub(crate) fn build_rows(
             // нет: имя здесь не нужно, результат уже вычислен движком).
             _ => (RowKind::Calc, None),
         };
-        // Формульная часть: присваивание — RHS, выражение — вся строка.
-        let formula = match kind {
-            RowKind::Param => assignment_rhs(raw),
-            _ => raw.trim().to_owned(),
+        // Формульная часть: присваивание — RHS (CR-021: и у расчётного —
+        // имя с «=» живёт в левой части строки), выражение — вся строка.
+        let formula = if name.is_some() {
+            assignment_rhs(raw)
+        } else {
+            raw.trim().to_owned()
         };
         let mut row = match outcome {
             canvas_core::expr::ExprOutcome::Ok(value) => {
@@ -781,14 +792,13 @@ pub(crate) fn pass_a(
 /// FR-061 коммит 3: план усечения ОДНОЙ строки (последняя ступень §3.4).
 /// Расчётные строки (Calc) — усечение формулы целиком: имя параметра/путь
 /// авто-строки не деградируют («имя+числа+юниты всегда читаемы»).
-/// Приёмка T9 FR-061: присваивания с ВЫРАЖЕНИЕМ в RHS (`load = a / b`) —
-/// тоже формульные строки (прототип: calcRow = [имя][=][формула]); их RHS
-/// деградирует с ЗАЩИЩЁННЫМ префиксом «имя =» (само имя не трогается),
-/// иначе левый текст наезжает на ячейки (нечем спасать — Param ранее не
-/// планировался вовсе). Литеральные RHS — числа: не деградируют никогда
-/// ([`is_literal_rhs`]). Порядок: алиасы идентификаторов (Q8) → хвостовой
-/// ellipsis ([`TextMeasurer::ellipsis_weighted`], детерминированный
-/// бинарный поиск).
+/// CR-021: расчётным может быть и ПРИСВАИВАНИЕ («sum = $1 * $2» — роль
+/// `line_role::Calc`): его RHS деградирует с ЗАЩИЩЁННЫМ префиксом
+/// «имя =» (само имя не трогается — как у Param-выражений T9, иначе левый
+/// текст наезжает на ячейки); голое выражение — без префикса. Параметры
+/// с литеральным RHS (числа) — не деградируют никогда ([`is_literal_rhs`]).
+/// Порядок: алиасы идентификаторов (Q8) → хвостовой ellipsis
+/// ([`TextMeasurer::ellipsis_weighted`], детерминированный бинарный поиск).
 fn plan_row_ellipsis(
     measurer: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
@@ -801,15 +811,16 @@ fn plan_row_ellipsis(
         return None;
     }
     match row.kind {
-        RowKind::Calc => plan_text_ellipsis(
-            measurer,
-            fs,
-            &row.formula,
-            String::new(),
-            available,
-            family,
-            size,
-        ),
+        // CR-021: у расчётного присваивания формула — RHS, имя живёт в
+        // левой части строки — защищаем префикс «имя =» (как у Param-выражений).
+        RowKind::Calc => {
+            let prefix = if row.name.is_empty() {
+                String::new()
+            } else {
+                format!("{} = ", row.name)
+            };
+            plan_text_ellipsis(measurer, fs, &row.formula, prefix, available, family, size)
+        }
         RowKind::Param if !is_literal_rhs(row) => {
             // Префикс «имя =» защищён; деградирует только RHS-формула.
             let prefix = format!("{} = ", row.name);
@@ -971,6 +982,34 @@ mod tests {
         assert_eq!(rows[1].formula, "800 rps / 12 ms");
         assert!(rows[1].name.is_empty(), "у выражения имени нет");
         assert!(!rows[1].value.is_empty());
+    }
+
+    /// CR-021 (UR-001-04, решение владельца Q3): тело ноды классифицирует
+    /// строки единой точкой `expr::line_role` — присваивание с RHS,
+    /// читающим значения (`sum = $1 * $2`), — РАСЧЁТ (маркер ƒ, зона
+    /// «РАСЧЁТ», как в панели stage); литеральная константа (`qty = 10`)
+    /// остаётся ПАРАМЕТРОМ. Формульная часть расчётного присваивания —
+    /// RHS (имя с «=» живёт в левой части строки).
+    #[test]
+    fn build_rows_classification_line_role_sum_is_calc_qty_is_param() {
+        let text = "qty = 10\nprice = 100 руб\nsum = $1 * $2";
+        // Репродуктор UR-001-04: входы $1=10, $2=100 (как от value-рёбер)
+        let inbound = canvas_core::expr::Env::with_inbound(vec![
+            Some(canvas_core::Value::scalar(10.0)),
+            Some(canvas_core::Value::scalar(100.0)),
+        ]);
+        let outcomes = canvas_core::expr::eval_lines_in(text, &inbound);
+        let rows = build_rows(text, Some(&outcomes), &[], &[], &[]);
+        assert_eq!(rows.len(), 3, "все строки с исходами: {rows:?}");
+        // Литеральные константы — параметры (не в счёт расчёта)
+        assert_eq!(rows[0].kind, RowKind::Param, "qty = 10 — параметр");
+        assert_eq!(rows[0].name, "qty");
+        assert_eq!(rows[1].kind, RowKind::Param, "price = 100 руб — параметр");
+        // Присваивание с RHS-входами — расчёт (ƒ), с именем и RHS-формулой
+        assert_eq!(rows[2].kind, RowKind::Calc, "sum = $1 * $2 — расчёт");
+        assert_eq!(rows[2].name, "sum");
+        assert_eq!(rows[2].formula, "$1 * $2", "формула — RHS присваивания");
+        assert!(!rows[2].value.is_empty(), "значение расчёта в ячейке");
     }
 
     /// D-2: авто-строки — префикс с частями D-1; unmapped — «—» приглушено.
@@ -1557,13 +1596,18 @@ mod tests {
         assert!(is_literal_rhs(&rows[1]), "«50000» — литерал");
     }
 
-    /// Приёмка T9 FR-061: Param с выражением в RHS усекается с ЗАЩИЩЁННЫМ
-    /// префиксом «имя =» (лестница §3.4 дошла до последней ступени);
-    /// литеральный Param (числа) не усекается никогда.
+    /// Приёмка T9 FR-061 + CR-021: присваивание с выражением в RHS
+    /// (`load = a / b`) — по единой классификации `line_role` это РАСЧЁТ
+    /// (маркер ƒ, RHS читает переменные), и его усечение идёт с ЗАЩИЩЁННЫМ
+    /// префиксом «имя =» (как у Param-выражений; левая часть не деградирует).
+    /// Литеральный Param (числа) не усекается никогда.
     #[test]
-    fn pass_a_truncates_param_expression_rhs_with_protected_prefix() {
+    fn pass_a_truncates_calc_assignment_rhs_with_protected_prefix() {
         let text = "load = connection_per_second_value / server_rate_value";
         let rows = build_rows(text, Some(&outcomes(text)), &[], &[], &[]);
+        // CR-021: RHS-выражение с переменными — расчёт, не параметр
+        assert_eq!(rows[0].kind, RowKind::Calc, "RHS читает значения — Calc");
+        assert_eq!(rows[0].name, "load", "имя расчётного присваивания живёт");
         assert!(!is_literal_rhs(&rows[0]));
         let mut fs = font_system();
         let mut m = TextMeasurer::new();
@@ -1590,10 +1634,10 @@ mod tests {
         );
         let plan = pass.ellipsis[0]
             .as_ref()
-            .expect("узкое тело: план усечения для Param-выражения");
+            .expect("узкое тело: план усечения для расчётного присваивания");
         assert!(
             plan.display.starts_with("load = "),
-            "префикс «имя =» защищён"
+            "префикс «имя =» защищён (CR-021: и у Calc-присваивания)"
         );
         assert!(plan.display.ends_with('…'), "хвост — многоточие");
         assert_eq!(

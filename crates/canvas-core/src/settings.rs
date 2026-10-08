@@ -222,7 +222,9 @@ impl SuggestEngineKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SuggestSettings {
-    /// Мастер-тумблер: попап FR-021 догружает ИИ-строки, карточки C3.
+    /// Мастер-тумблер: карточки C3 «что дальше» (и будущие поверхности —
+    /// поиск/агент). Попап FR-021 ИИ-строки НЕ догружает: с CR-022
+    /// C1-мердж снят решением владельца — см. [`Self::c1_in_popup`].
     pub enabled: bool,
     /// Движок: off | lex | lex+laya (см. [`SuggestEngineKind`]).
     pub engine: SuggestEngineKind,
@@ -242,6 +244,14 @@ pub struct SuggestSettings {
     pub confidence_threshold: f64,
     /// Подсекция l1-laya (читается только в сборке с feature).
     pub laya: LayaSettings,
+    /// CR-022 (решение владельца Q5 по UR-001-06, «вообще не надо
+    /// триггерить»): ИИ-предложения шаблонов (C1) в попапе редактора
+    /// сняты — дефолт `false`: C1-триггер не взводится из `update_hints`,
+    /// `suggest_remerge` не мерджит ИИ-строки. Код сохранён ЗА ФЛАГОМ для
+    /// тестов и будущих поверхностей: явное `true` в config.toml
+    /// восстанавливает прежний контракт (попап L0 + ИИ-строки, показ
+    /// по SuggestReady при закрытом L0).
+    pub c1_in_popup: bool,
 }
 
 impl Default for SuggestSettings {
@@ -255,6 +265,9 @@ impl Default for SuggestSettings {
             log_suggest: true,
             confidence_threshold: 0.0,
             laya: LayaSettings::default(),
+            // CR-022: снятое состояние — старые конфиги (serde default
+            // контейнера) и дефолт получают выключенный C1-мердж
+            c1_in_popup: false,
         }
     }
 }
@@ -561,9 +574,11 @@ pub struct Settings {
     /// вовсе (opt-out), счётчик продолжает работать отдельно. Дефолт
     /// вкл (предвыбранный чекбокс первого запуска).
     pub telemetry_analytics: bool,
-    /// FR-079 (S3): секция `[suggest]` — ИИ-подсказки шаблонов (гибрид
+    /// FR-079 (S3): секция `[suggest]` — ИИ-карточки шаблонов (гибрид
     /// lex+Laya за feature-флагом). Дефолт OFF до гейта S5; старые конфиги
-    /// без секции грузятся дефолтом (serde default).
+    /// без секции грузятся дефолтом (serde default). CR-022: ИИ-строки
+    /// в попапе редактора сняты (`c1_in_popup = false`) — тумблер
+    /// управляет C3-карточками «после создания ноды».
     #[serde(default)]
     pub suggest: SuggestSettings,
     /// FR-LLM-B / PRD-0010 F-7 (Q1+Q2+Q5+Q7): настройки LLM-слоя —
@@ -1094,6 +1109,9 @@ mod tests {
                     platt_a: -0.02,
                     platt_b: -0.9,
                 },
+                // CR-022: не-дефолт — проверяет сохранение явного выбора
+                // пользователя (поверхность C1 за флагом)
+                c1_in_popup: true,
             },
             // Stream C (F-2.1): LLM-настройки проходят round-trip (значения
             // не дефолтные — проверяют сохранение выбора пользователя в
@@ -1259,6 +1277,36 @@ platt_b = -0.814
         settings.normalize();
         assert_eq!(settings.suggest.alpha, 1.0);
         assert_eq!(settings.suggest.max_options, 50);
+    }
+
+    /// CR-022: `c1_in_popup` — ИИ-предложения шаблонов в попапе редактора
+    /// сняты решением владельца (Q5 по UR-001-06, «вообще не надо
+    /// триггерить»): старый конфиг без поля грузится как false (снятое
+    /// состояние — serde default), явное `true` сохраняет выбор и проходит
+    /// round-trip (код C1 жив за флагом для тестов/будущих поверхностей).
+    #[test]
+    fn suggest_c1_in_popup_defaults_false_and_roundtrip() {
+        // Старый конфиг без поля — выключено (решение владельца CR-022)
+        let (settings, warn) = Settings::load_toml_str("");
+        assert!(warn.is_none());
+        assert!(
+            !settings.suggest.c1_in_popup,
+            "дефолт старого конфига — C1 в попапе выключен (CR-022)"
+        );
+        // Явное true читается (поверхность сохранена за флагом)
+        let (settings, warn) = Settings::load_toml_str("[suggest]\nc1_in_popup = true\n");
+        assert!(warn.is_none(), "{warn:?}");
+        assert!(settings.suggest.c1_in_popup, "явное true сохраняется");
+        // Round-trip через файл — значение не теряется
+        let mut settings = Settings::default();
+        settings.suggest.c1_in_popup = true;
+        let dir = crate::test_scratch_root().join("canvasdesk-suggest-c1-test"); // FR-036
+        let path = dir.join("config.toml");
+        settings.save(&path).expect("сохранение");
+        let (loaded, warn) = Settings::load(&path);
+        assert!(warn.is_none());
+        assert!(loaded.suggest.c1_in_popup, "round-trip сохраняет флаг");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// CR-003: зона портов — пресеты, цикл замкнут, кламп ручных значений.
