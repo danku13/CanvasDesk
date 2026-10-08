@@ -109,11 +109,13 @@ pub use drag_push::{DragPushParams, DragPushState};
 /// те же события из DOM-листенеров (W6), приложение — единый потребитель.
 pub use dragdrop::{DragData, DragEvent};
 pub use edgegeom::{
-    best_sides, bezier_between, curve_point, curve_tangent, distance_point_to_polyline,
-    distance_to_edge, draft_curve, edge_at, edge_curve, edge_endpoint, edge_midpoint,
-    edge_polyline, effective_sides, line_port_at, nearest_side, param_port_at, port_at, port_point,
-    retarget_edge, route_polyline, side_normal, tessellate, CubicBezier, EdgeEnd, LinePort,
-    ParamPort, AVOID_MARGIN, EDGE_HIT_TOLERANCE, MAX_DETOURS, PORT_HIT_PX, TESSELLATION_SEGMENTS,
+    best_sides, bezier_between, bezier_between_anchors, curve_point, curve_tangent,
+    distance_point_to_polyline, distance_to_edge, distance_to_edge_anchored, draft_curve, edge_at,
+    edge_at_anchored, edge_curve, edge_curve_anchored, edge_endpoint, edge_endpoint_anchored,
+    edge_midpoint, edge_midpoint_anchored, edge_polyline, edge_polyline_anchored, effective_sides,
+    line_port_at, nearest_side, param_port_at, port_at, port_point, retarget_edge, route_polyline,
+    side_normal, tessellate, CubicBezier, EdgeAnchors, EdgeEnd, LinePort, ParamPort, AVOID_MARGIN,
+    EDGE_HIT_TOLERANCE, MAX_DETOURS, PORT_HIT_PX, TESSELLATION_SEGMENTS,
 };
 pub use error::CoreError;
 pub use expr::{
