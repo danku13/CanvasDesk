@@ -157,7 +157,9 @@ fn token_response_parse_fixture() {
     assert_eq!(tokens.refresh_token, "rt_permanent_1");
     assert!(!tokens.id_token.is_empty());
     assert_eq!(tokens.expires_at, now + 3600);
-    assert!(tokens.account_email.is_none()); // email добирается из id_token
+    // Email добирается из id_token сразу при exchange (fbb7536: симметрично
+    // refresh-пути) — бейдж Settings «вход выполнен · email» полон сразу.
+    assert_eq!(tokens.account_email.as_deref(), Some("user@example.com"));
 }
 
 #[test]

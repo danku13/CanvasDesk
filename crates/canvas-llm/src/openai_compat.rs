@@ -13,26 +13,29 @@
 //! (hardcoded, см. `openai()` / `openrouter()` / `zai()` / `moonshot()` /
 //! `ollama()`). Auth — `Authorization: Bearer {api_key}` (Ollama без auth).
 //!
-//! **Transport (ADR-0010 сохранён):** ureq (no-TLS по умолчанию для wasm-gate;
-//! HTTPS-эндпоинты требуют feature `l1-llm-tls`). desktop: прямые запросы
+//! **Transport (W1, `docs/plans/llm-waves-w1-w2-w3.md`):** все HTTP-вызовы
+//! идут через [`crate::transport::HttpTransport`] (натив — UreqTransport;
+//! wasm — WasmFetchTransport за `wasm-fetch`, волна W3). HTTPS-эндпоинты
+//! на нативе требуют feature `l1-llm-tls`. desktop: прямые запросы
 //! к провайдеру, ключ в OS keychain (НЕ в config.toml). Web: cloud-proxy
-//! (Stream D `crates/canvas-web/src/llm_proxy.rs`).
+//! (PRD-0010 F-5.10, деплой `cloud/llm-proxy`).
 
 use crate::error::LlmError;
-use crate::health::check_endpoint;
+use crate::transport::{HttpRequest, HttpTransport, UreqTransport};
 use crate::types::{
     ChatOpts, ChoiceAnswer, JsonVal, Message, ModelInfo, OptionDesc, Pricing, ProviderCaps, Role,
     ToolCall, ToolCallingOpts, ToolDef,
 };
 use crate::LlmProvider;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 /// OpenAI-compatible адаптер для 5 провайдеров.
 ///
-/// Потокобезопасен (`ureq::Agent` внутренне Arc'd). Один инстанс на
-/// приложение (или на feature — suggest/graph/agent могут иметь разные
-/// `model`/`endpoint`).
+/// Потокобезопасен (`HttpTransport: Send + Sync`, состояние без мутаций).
+/// Один инстанс на приложение (или на feature — suggest/graph/agent могут
+/// иметь разные `model`/`endpoint`).
 pub struct OpenAiCompatibleProvider {
     /// Идентификатор провайдера (для Settings): `"openai"`, `"openrouter"`,
     /// `"zai"`, `"moonshot"`, `"ollama"`.
@@ -51,6 +54,9 @@ pub struct OpenAiCompatibleProvider {
     timeout: Duration,
     /// Является ли OpenRouter (для choice через `/api/alpha/decisions`).
     is_openrouter: bool,
+    /// W1: HTTP-транспорт (натив — UreqTransport; тесты — MockTransport;
+    /// wasm — WasmFetchTransport, волна W3).
+    transport: Arc<dyn HttpTransport>,
 }
 
 impl OpenAiCompatibleProvider {
@@ -74,12 +80,24 @@ impl OpenAiCompatibleProvider {
             models,
             timeout: Duration::from_secs(30),
             is_openrouter: false,
+            transport: Arc::new(UreqTransport::new()),
         }
     }
 
     /// Timeout запроса (для suggest — 10с, для graph/agent — больше).
     pub fn with_timeout(mut self, secs: u64) -> Self {
         self.timeout = Duration::from_secs(secs);
+        self
+    }
+
+    /// W1: подменить HTTP-транспорт (builder-стиль).
+    ///
+    /// Тесты — [`crate::transport::MockTransport`] (без сети); web-сборка
+    /// (волна W3) — [`crate::transport::WasmFetchTransport`] (браузерный
+    /// fetch к cloud-proxy). Конструкторы по умолчанию ставят UreqTransport,
+    /// поэтому существующие вызовы (canvas-app/llm_factory) не меняются.
+    pub fn with_transport(mut self, transport: Arc<dyn HttpTransport>) -> Self {
+        self.transport = transport;
         self
     }
 
@@ -319,49 +337,32 @@ impl OpenAiCompatibleProvider {
         )
     }
 
-    /// Собрать ureq-агента с текущим timeout.
-    fn agent(&self) -> ureq::Agent {
-        ureq::AgentBuilder::new().timeout(self.timeout).build()
-    }
-
-    /// Добавить auth-заголовок (если есть api_key).
-    fn authed(&self, req: ureq::Request) -> ureq::Request {
-        if self.api_key.is_empty() {
-            req
-        } else {
-            req.set("Authorization", &format!("Bearer {}", self.api_key))
+    /// POST JSON по полному URL с auth + маппинг статусов (async — W1).
+    async fn post_json_url(
+        &self,
+        url: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, LlmError> {
+        let mut req = HttpRequest::post_json(url, body, self.timeout);
+        if !self.api_key.is_empty() {
+            req = req.with_header("Authorization", format!("Bearer {}", self.api_key));
         }
+        let resp = self.transport.execute(req).await?;
+        if let Some(err) = resp.map_status("openai-compat") {
+            return Err(err);
+        }
+        serde_json::from_str(&resp.body_str())
+            .map_err(|e| LlmError::Protocol(format!("битый JSON ответа: {e}")))
     }
 
-    /// POST JSON с auth + обработка ошибок.
-    fn post_json(
+    /// POST JSON к `{base_url}/{path}` (async — W1).
+    async fn post_json(
         &self,
         path: &str,
-        body: serde_json::Value,
+        body: &serde_json::Value,
     ) -> Result<serde_json::Value, LlmError> {
         let url = format!("{}/{}", self.base_url, path.trim_start_matches('/'));
-        let agent = self.agent();
-        let req = self.authed(agent.post(&url));
-        match req.send_json(body) {
-            Ok(resp) => {
-                let text = resp
-                    .into_string()
-                    .map_err(|e| LlmError::Transport(e.to_string()))?;
-                serde_json::from_str(&text)
-                    .map_err(|e| LlmError::Protocol(format!("битый JSON ответа: {e}")))
-            }
-            Err(ureq::Error::Status(code, resp)) => {
-                let body_text = resp.into_string().unwrap_or_default();
-                match code {
-                    401 | 403 => Err(LlmError::Auth(format!("HTTP {code}: {body_text}"))),
-                    429 => Err(LlmError::RateLimit {
-                        retry_after_secs: None,
-                    }),
-                    _ => Err(LlmError::Transport(format!("HTTP {code}: {body_text}"))),
-                }
-            }
-            Err(ureq::Error::Transport(t)) => Err(LlmError::Transport(t.to_string())),
-        }
+        self.post_json_url(&url, body).await
     }
 
     /// Преобразовать `Message` в OpenAI-совместимый JSON.
@@ -452,7 +453,9 @@ impl LlmProvider for OpenAiCompatibleProvider {
         }
         body.insert("stream".into(), serde_json::Value::Bool(false));
 
-        let resp = self.post_json("chat/completions", serde_json::Value::Object(body))?;
+        let resp = self
+            .post_json("chat/completions", &serde_json::Value::Object(body))
+            .await?;
         // resp.choices[0].message.content
         let content = resp
             .pointer("/choices/0/message/content")
@@ -469,10 +472,10 @@ impl LlmProvider for OpenAiCompatibleProvider {
         if self.is_openrouter {
             // OpenRouter System One: POST /api/alpha/decisions (нативные probs).
             // Тело как у Laya `/v1/systemone` (см. canvas-suggest/src/laya/client.rs).
-            self.choice_openrouter_systemone(document, options)
+            self.choice_openrouter_systemone(document, options).await
         } else {
             // Chat-fallback: prompt template + response_format=json_object.
-            self.choice_chat_fallback(document, options)
+            self.choice_chat_fallback(document, options).await
         }
     }
 
@@ -529,7 +532,9 @@ impl LlmProvider for OpenAiCompatibleProvider {
         body.insert("tool_choice".into(), tool_choice);
         body.insert("stream".into(), serde_json::Value::Bool(false));
 
-        let resp = self.post_json("chat/completions", serde_json::Value::Object(body))?;
+        let resp = self
+            .post_json("chat/completions", &serde_json::Value::Object(body))
+            .await?;
         let tool_calls = resp
             .pointer("/choices/0/message/tool_calls")
             .and_then(|v| v.as_array())
@@ -566,7 +571,9 @@ impl LlmProvider for OpenAiCompatibleProvider {
         );
         body.insert("input".into(), serde_json::Value::Array(inputs));
 
-        let resp = self.post_json("embeddings", serde_json::Value::Object(body))?;
+        let resp = self
+            .post_json("embeddings", &serde_json::Value::Object(body))
+            .await?;
         let data = resp
             .get("data")
             .and_then(|v| v.as_array())
@@ -585,11 +592,19 @@ impl LlmProvider for OpenAiCompatibleProvider {
     }
 
     async fn health(&self) -> Result<(), LlmError> {
+        // W1: GET /models через ИНЖЕКТИРОВАННЫЙ транспорт (не глобальный
+        // UreqTransport) — mock в тестах, WasmFetchTransport в web (W3)
+        // работают одинаково. Семантика прежняя: 2xx → Ok, 401/403 → Auth,
+        // 429 → RateLimit (Retry-After), прочее → Transport.
         let url = format!("{}/models", self.base_url);
-        if self.api_key.is_empty() {
-            check_endpoint(&url, "", "")
-        } else {
-            check_endpoint(&url, "Authorization", &format!("Bearer {}", self.api_key))
+        let mut req = HttpRequest::get(url, self.timeout);
+        if !self.api_key.is_empty() {
+            req = req.with_header("Authorization", format!("Bearer {}", self.api_key));
+        }
+        let resp = self.transport.execute(req).await?;
+        match resp.map_status("health-check") {
+            None => Ok(()),
+            Some(err) => Err(err),
         }
     }
 }
@@ -597,7 +612,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
 impl OpenAiCompatibleProvider {
     /// OpenRouter System One choice (нативные probs через `/api/alpha/decisions`).
     /// Протокол тот же что Laya `/v1/systemone` (см. `canvas-suggest/src/laya/client.rs:70`).
-    fn choice_openrouter_systemone(
+    async fn choice_openrouter_systemone(
         &self,
         document: &str,
         options: &[OptionDesc],
@@ -623,32 +638,8 @@ impl OpenAiCompatibleProvider {
             "model": self.model,
         });
         let url = format!("{}/api/alpha/decisions", self.base_url);
-        let agent = self.agent();
-        let req = self.authed(agent.post(&url));
-        let resp_value: serde_json::Value = match req.send_json(body) {
-            Ok(resp) => {
-                let text = resp
-                    .into_string()
-                    .map_err(|e| LlmError::Transport(e.to_string()))?;
-                serde_json::from_str(&text)
-                    .map_err(|e| LlmError::Protocol(format!("битый JSON ответа: {e}")))?
-            }
-            Err(ureq::Error::Status(401 | 403, resp)) => {
-                let _ = resp.into_string();
-                return Err(LlmError::Auth("HTTP 401/403".into()));
-            }
-            Err(ureq::Error::Status(429, resp)) => {
-                let _ = resp.into_string();
-                return Err(LlmError::RateLimit {
-                    retry_after_secs: None,
-                });
-            }
-            Err(ureq::Error::Status(code, resp)) => {
-                let body_text = resp.into_string().unwrap_or_default();
-                return Err(LlmError::Transport(format!("HTTP {code}: {body_text}")));
-            }
-            Err(ureq::Error::Transport(t)) => return Err(LlmError::Transport(t.to_string())),
-        };
+        // W1: тот же transport-путь (URL целиком — путь выходит за `{base}/v1`).
+        let resp_value: serde_json::Value = self.post_json_url(&url, &body).await?;
 
         // answers.main.probabilities + answer_confidence (как Laya).
         let main = resp_value
@@ -677,7 +668,7 @@ impl OpenAiCompatibleProvider {
 
     /// Chat-fallback для choice: prompt template + response_format=json_object.
     /// Используется всеми OpenAI-compat провайдерами кроме OpenRouter.
-    fn choice_chat_fallback(
+    async fn choice_chat_fallback(
         &self,
         document: &str,
         options: &[OptionDesc],
@@ -713,7 +704,7 @@ impl OpenAiCompatibleProvider {
             "stream": false,
         });
 
-        let resp = self.post_json("chat/completions", body)?;
+        let resp = self.post_json("chat/completions", &body).await?;
         let content = resp
             .pointer("/choices/0/message/content")
             .and_then(|v| v.as_str())

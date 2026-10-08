@@ -33,6 +33,8 @@
 //! источник — дизайн-док §4.2 (cookbook Sign-in-with-ChatGPT, preview).
 
 use crate::error::LlmError;
+use crate::transport::{HttpRequest, HttpResponse, HttpTransport, UreqTransport};
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::jwt::JwksKey;
@@ -305,15 +307,21 @@ pub fn states_equal(expected: &str, received: &str) -> bool {
 }
 
 // ============================================================================
-// OAuthClient — сетевой клиент token endpoint (ureq, feature l1-llm)
+// OAuthClient — сетевой клиент token endpoint (HttpTransport, feature l1-llm)
 // ============================================================================
 
 /// OAuth-клиент Sign-in-with-ChatGPT (PRD-0010 F-5.1).
 ///
-/// Один инстанс на приложение; потокобезопасен (только `&self`-методы,
-/// ureq::Agent создаётся на вызов). `ext_agent_host_id` — **persistent
-/// device id** (один на установку; генерирует и хранит canvas-app) —
-/// OpenAI связывает с ним повторные входы (дизайн-док §4.3).
+/// Один инстанс на приложение; потокобезопасен (только `&self`-методы).
+/// `ext_agent_host_id` — **persistent device id** (один на установку;
+/// генерирует и хранит canvas-app) — OpenAI связывает с ним повторные входы
+/// (дизайн-док §4.3).
+///
+/// **Транспорт (W1):** HTTP-вызовы идут через [`HttpTransport`] (по умолчанию
+/// UreqTransport; тесты — MockTransport через `with_transport`; web —
+/// WasmFetchTransport, волна W3). Синхронные методы (`exchange_code` и др.)
+/// — desktop-путь из worker-потока canvas-app (API-контракт сохранён);
+/// async-двойники (`*_async`) — для web-пути W3.
 pub struct OAuthClient {
     /// Хост auth (можно подменить для тестов/проксирования).
     auth_host: String,
@@ -325,6 +333,8 @@ pub struct OAuthClient {
     ext_agent_host_id: String,
     /// Timeout HTTP-запросов.
     timeout: Duration,
+    /// W1: HTTP-транспорт (натив — UreqTransport; тесты — MockTransport).
+    transport: Arc<dyn HttpTransport>,
 }
 
 impl OAuthClient {
@@ -335,7 +345,14 @@ impl OAuthClient {
             proxy_url: None,
             ext_agent_host_id: ext_agent_host_id.into(),
             timeout: Duration::from_secs(30),
+            transport: Arc::new(UreqTransport::new()),
         }
+    }
+
+    /// W1: подменить HTTP-транспорт (builder-стиль).
+    pub fn with_transport(mut self, transport: Arc<dyn HttpTransport>) -> Self {
+        self.transport = transport;
+        self
     }
 
     /// Задать cloud-proxy URL (web/wasm путь, F-5.10). `Some(url)` —
@@ -404,6 +421,9 @@ impl OAuthClient {
     /// POST `{token_url}` (`application/x-www-form-urlencoded`), ответ —
     /// JSON `{access_token, refresh_token, id_token, expires_in}` →
     /// [`OAuthTokens`] (`expires_at = now + expires_in`).
+    ///
+    /// Синхронный вариант (desktop: worker-поток canvas-app). Для web (W3) —
+    /// [`Self::exchange_code_async`].
     pub fn exchange_code(
         &self,
         session: &LoginSession,
@@ -415,12 +435,26 @@ impl OAuthClient {
         tokens_from_json(&body, now)
     }
 
+    /// Async-двойник [`Self::exchange_code`] (web/wasm путь, волна W3).
+    pub async fn exchange_code_async(
+        &self,
+        session: &LoginSession,
+        code: &str,
+    ) -> Result<OAuthTokens, LlmError> {
+        let form = build_exchange_form(code, &session.verifier, &session.redirect_uri);
+        let now = now_unix()?;
+        let body = self.post_token_endpoint_async(&form).await?;
+        tokens_from_json(&body, now)
+    }
+
     /// Refresh flow (PRD-0010 F-5.7): `grant_type=refresh_token` → новая
     /// пара access/refresh (+id_token). Ответ сервера без нового
     /// `refresh_token` (нет ротации) → старый сохраняется вызывающим кодом.
     ///
     /// Истёкший/отозванный refresh_token (HTTP 400/401 `invalid_grant`) →
     /// `LlmError::Auth` — UI показывает «войти снова» (F-5.9).
+    ///
+    /// Синхронный вариант (desktop); для web (W3) — [`Self::refresh_tokens_async`].
     pub fn refresh_tokens(&self, refresh_token: &str) -> Result<OAuthTokens, LlmError> {
         let form = build_refresh_form(refresh_token);
         let now = now_unix()?;
@@ -428,66 +462,55 @@ impl OAuthClient {
         tokens_from_json(&body, now)
     }
 
+    /// Async-двойник [`Self::refresh_tokens`] (web/wasm путь, волна W3).
+    pub async fn refresh_tokens_async(&self, refresh_token: &str) -> Result<OAuthTokens, LlmError> {
+        let form = build_refresh_form(refresh_token);
+        let now = now_unix()?;
+        let body = self.post_token_endpoint_async(&form).await?;
+        tokens_from_json(&body, now)
+    }
+
     /// Загрузить JWKS-набор (`GET {auth_host}/.well-known/jwks.json`) для
     /// [`super::jwt::verify_id_token`]. Вызывается один раз на сессию —
     /// кэширование на стороне приложения (дизайн-док §4.4 п.1).
+    /// Синхронный вариант (desktop); для web (W3) — [`Self::fetch_jwks_async`].
     pub fn fetch_jwks(&self) -> Result<Vec<JwksKey>, LlmError> {
-        let url = format!("{}{JWKS_PATH}", self.auth_host.trim_end_matches('/'));
-        let agent = ureq::AgentBuilder::new().timeout(self.timeout).build();
-        let resp = agent.get(&url).call().map_err(map_ureq_err("JWKS GET"))?;
-        let text = resp
-            .into_string()
-            .map_err(|e| LlmError::Transport(format!("JWKS: тело не прочитано: {e}")))?;
-        let value: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| LlmError::Protocol(format!("JWKS: битый JSON: {e}")))?;
-        super::jwt::parse_jwks(&value)
+        let resp = self.transport.execute_blocking(&self.jwks_request())?;
+        jwks_from_response(resp)
+    }
+
+    /// Async-двойник [`Self::fetch_jwks`] (web/wasm путь, волна W3).
+    pub async fn fetch_jwks_async(&self) -> Result<Vec<JwksKey>, LlmError> {
+        let resp = self.transport.execute(self.jwks_request()).await?;
+        jwks_from_response(resp)
+    }
+
+    /// Построить GET-запрос JWKS (общее для sync/async вариантов).
+    fn jwks_request(&self) -> HttpRequest {
+        HttpRequest::get(
+            format!("{}{JWKS_PATH}", self.auth_host.trim_end_matches('/')),
+            self.timeout,
+        )
     }
 
     /// POST form в token endpoint с маппингом ошибок OAuth:
-    /// 400/401 → `LlmError::Auth` (с `error_description` из тела),
+    /// 400/401/403 → `LlmError::Auth` (с `error_description` из тела),
     /// 429 → `LlmError::RateLimit`, остальное → `Transport`.
+    /// Синхронный вариант (desktop: worker-поток canvas-app).
     fn post_token_endpoint(&self, form: &str) -> Result<serde_json::Value, LlmError> {
-        let url = self.token_url();
-        let agent = ureq::AgentBuilder::new().timeout(self.timeout).build();
-        let req = agent
-            .post(&url)
-            .set("content-type", "application/x-www-form-urlencoded")
-            .set("origin", ORIGIN);
-        match req.send_string(form) {
-            Ok(resp) => {
-                let text = resp
-                    .into_string()
-                    .map_err(|e| LlmError::Transport(format!("token endpoint: {e}")))?;
-                serde_json::from_str(&text)
-                    .map_err(|e| LlmError::Protocol(format!("token endpoint: битый JSON: {e}")))
-            }
-            Err(ureq::Error::Status(code, resp)) => {
-                // Заголовки читаются ДО слива тела (into_string забирает
-                // Response целиком).
-                let retry_after_secs = resp
-                    .header("retry-after")
-                    .and_then(|v| v.trim().parse::<u32>().ok());
-                let body = resp.into_string().unwrap_or_default();
-                match code {
-                    400 | 401 | 403 => {
-                        // OAuth-ошибка: {"error": "invalid_grant", ...} (RFC 6749 §5.2).
-                        let desc = serde_json::from_str::<serde_json::Value>(&body)
-                            .ok()
-                            .and_then(|v| {
-                                v.get("error_description")
-                                    .or_else(|| v.get("error"))
-                                    .and_then(|x| x.as_str())
-                                    .map(str::to_string)
-                            })
-                            .unwrap_or(body);
-                        Err(LlmError::Auth(format!("HTTP {code}: {desc}")))
-                    }
-                    429 => Err(LlmError::RateLimit { retry_after_secs }),
-                    _ => Err(LlmError::Transport(format!("HTTP {code}: {body}"))),
-                }
-            }
-            Err(ureq::Error::Transport(t)) => Err(LlmError::Transport(t.to_string())),
-        }
+        let resp = self.transport.execute_blocking(&self.token_request(form))?;
+        token_endpoint_result(resp)
+    }
+
+    /// Async-двойник [`Self::post_token_endpoint`] (web/wasm, волна W3).
+    async fn post_token_endpoint_async(&self, form: &str) -> Result<serde_json::Value, LlmError> {
+        let resp = self.transport.execute(self.token_request(form)).await?;
+        token_endpoint_result(resp)
+    }
+
+    /// Построить POST-запрос token endpoint (общее для sync/async).
+    fn token_request(&self, form: &str) -> HttpRequest {
+        HttpRequest::post_form(self.token_url(), form, self.timeout).with_header("origin", ORIGIN)
     }
 }
 
@@ -545,28 +568,52 @@ pub fn tokens_from_json(body: &serde_json::Value, now: u64) -> Result<OAuthToken
     })
 }
 
-/// Маппинг ошибок ureq → `LlmError` для GET-запросов (JWKS).
-pub(crate) fn map_ureq_err(context: &str) -> impl Fn(ureq::Error) -> LlmError + '_ {
-    move |e| match e {
-        ureq::Error::Status(401 | 403, resp) => {
-            let _ = resp.into_string();
-            LlmError::Auth(format!("{context}: HTTP 401/403"))
-        }
-        ureq::Error::Status(429, resp) => {
-            let retry = resp
-                .header("retry-after")
-                .and_then(|v| v.trim().parse::<u32>().ok());
-            let _ = resp.into_string();
-            LlmError::RateLimit {
-                retry_after_secs: retry,
-            }
-        }
-        ureq::Error::Status(code, resp) => {
-            let body = resp.into_string().unwrap_or_default();
-            LlmError::Transport(format!("{context}: HTTP {code}: {body}"))
-        }
-        ureq::Error::Transport(t) => LlmError::Transport(format!("{context}: {t}")),
+/// Обработать HTTP-ответ JWKS endpoint (общее для sync/async вариантов):
+/// 2xx → парсинг JSON; 401/403 → `Auth`, 429 → `RateLimit` (с `Retry-After`),
+/// остальное → `Transport`.
+fn jwks_from_response(resp: HttpResponse) -> Result<Vec<JwksKey>, LlmError> {
+    if let Some(err) = resp.map_status("JWKS GET") {
+        return Err(err);
     }
+    let value: serde_json::Value = serde_json::from_str(&resp.body_str())
+        .map_err(|e| LlmError::Protocol(format!("JWKS: битый JSON: {e}")))?;
+    super::jwt::parse_jwks(&value)
+}
+
+/// Обработать HTTP-ответ token endpoint (общее для sync/async вариантов):
+/// 2xx → JSON; 400/401/403 → `Auth` с `error_description` из тела
+/// (OAuth-ошибка: `{"error": "invalid_grant", …}` — RFC 6749 §5.2);
+/// 429 → `RateLimit` (с `Retry-After`); остальное → `Transport`.
+fn token_endpoint_result(resp: HttpResponse) -> Result<serde_json::Value, LlmError> {
+    match resp.status {
+        200..=299 => {}
+        400 | 401 | 403 => {
+            let body = resp.body_str();
+            let desc = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| {
+                    v.get("error_description")
+                        .or_else(|| v.get("error"))
+                        .and_then(|x| x.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or(body);
+            return Err(LlmError::Auth(format!("HTTP {}: {desc}", resp.status)));
+        }
+        429 => {
+            return Err(LlmError::RateLimit {
+                retry_after_secs: resp.retry_after_secs(),
+            })
+        }
+        code => {
+            return Err(LlmError::Transport(format!(
+                "HTTP {code}: {}",
+                resp.body_str()
+            )))
+        }
+    }
+    serde_json::from_str(&resp.body_str())
+        .map_err(|e| LlmError::Protocol(format!("token endpoint: битый JSON: {e}")))
 }
 
 // ============================================================================
