@@ -1353,3 +1353,24 @@ Stage Summary:
 - Telegram НЕ отправлялся (по инструкции)
 
 Tokens (estimate, правило AGENTS.md): in≈95k, out≈16k, total≈111k, model=glm-4.6, scope=FR-100 (estimate)
+---
+Task ID: UR-001-W3+W4 (сессия 2026-10-08, продолжение)
+Agent: Super Z (координатор) + субагенты W3-C1/W3-C1-fix, W3-C2, W3-C3-finish, W4-D1/W4-D1-cont/W4-D1-final
+Task: Реализация волн W3+W4 плана UR-001 (CR-021, CR-022, FR-101, FR-100, D2-приёмка)
+
+Work Log:
+- W3 запущена параллельно: C1 (worktree ur-001-w3-c1) ∥ C2 (ur-001-w3-c2) — крейты не пересекаются; C3 — после слияния C2 (общие файлы overlays.rs/hints_ui.rs). Три субагент-запуска прервались таймаутом шлюза — работа продолжена инкрементально (continuation-агенты с фиксацией состояния); потери нет
+- C1 (CR-021, 716a8c6): авто-строки для всех value-входов независимо от читаемости слота (пересмотр fr-050 Р-4; валидация W-UNUSED-SLOT не тронута); классификация Calc по RHS-входам (маркер ƒ); единая точка expr::{line_role, param_line_count} — потребители row_grid/text/calc_panel_ui/measure/scene; пиннеры flow/validate/scene обновлены. Попутный системный фикс (по красному CJM-тесту geometry_clean_after_autogrow: overlap note-8×note-9 investment-case): presize_text_heights в scheme_apply — консервативное предразмеривание высот text-нод ПЕРЕД раскладкой FR-071 (диагноз координатора debug-тестом: irr 200→368 после переклассификации/авто-строк)
+- C2 (CR-022, d1e353f): ИИ-предложения шаблонов сняты из попапа полностью — гейт-флаг suggest.c1_in_popup (serde default false), триггер update_hints + suggest_remerge за флагом; merge_ai_items сохранена (недостижима из пользовательского пути); тумблер «ИИ-карточки шаблонов (после создания ноды)» i18n RU/EN; план FR-079 §4.2 помечен «снят решением владельца»
+- C3 (FR-101, 88e2873): HintContext.inbounds — имена to_param-спиллов + qualified-ключи (единая точка flow::source_line_name + dataref::qualified_obj_name); счётчик inbound без to_param (фикс ложного $N); $-ветка и идентификаторный токен матчат по имени; вставка по языку токена (кириллица → Нода.параметр, ASCII → $имя); деталь «проливание из ноды X» i18n; 8 тестов FR-101
+- D1 (FR-100, f044440 + e503842 + 70ac302 + 286fd86): KeyCommand DeleteWordBackward/Forward, Undo/Redo (стек снимков с группировкой), PageUp/Down, Tab/Shift+Tab, SmartHome (edit.rs); Super-паритет + незнакомые Ctrl/Super-комбинации не глотаются (route_editor_key, тест); web-слой: preventDefault chord'ов шима FR-095, возврат фокуса канваса (toolbar), компенсация winit-web — capture-listener шлёт AppEvent::KeyboardModifiers из DOM без сброса на blur; доки hotkeys.md/HOTKEYS(28)/node.md/WASM-TESTING.md, web_smoke.py секция 2b
+- D2 (a2e7479): ACCEPTANCE.md — сквозной чек-лист UR-001.1–8 (план §3) с автоматическими доказательствами и пунктами ручной приёмки; синхрон index-cr-fr (CR-021/FR-100/FR-101 → «реализовано (ожидает приёмки)»)
+- Слияния: ur-001-w3-c2/c1 → ur-001-w3 → main (466e04b); ur-001-w4 → main (56f3566); origin/main параллельной сессии (ревизии CR-020/025, CR-027/028) влит бесконфликтно (c4c8d17)
+- Гейты на main (после всех слияний): fmt; clippy -D warnings (core/render/scene/app/ui/suggest/web); canvas-core 503, canvas-app 605, canvas-render 22 бинарника ok, canvas-scene 3 ok, canvas-suggest 56 (golden целы), integration_explain_x6 4/4; wasm_gate --check — зелёные; запушено (c4c8d17)
+
+Stage Summary:
+- 5/5 задач волн W3+W4 реализованы; CR-021/CR-022/FR-101/FR-100 — «реализовано (код+тесты), ожидает приёмки владельца»; план UR-001 закрыт целиком (11/11 дефектов: W1+W2 — прошлая сессия, W3+W4 — эта)
+- Открытые вопросы владельцу: (1) user-docs/ai-features.md описывает старый концепт Suggest — нужна ли ревизия страницы; (2) UI-тумблер для suggest.c1_in_popup или config-only; (3) $Объект.Поле — кандидат в отдельный FR (конфликт с валютой $); (4) порядок параметров манифеста в $-ветке (сейчас после $in/$N — как во FR-021 v1); (5) визуал схем после предразмеривания высот — на приёмку; (6) чип-свертка входов при 4+ строках — деталь приёмки, не блокер v1; (7) зебра/подсветки после CR-026 — калибровка на скриншотах (из W1+W2)
+- Онбординг: шаги тура не затронуты изменениями W3+W4 (попап-подсказки в онбординге не упоминаются; вопрос владельцу — по правилу AGENTS.md, задан в итоговом отчёте)
+- WASM L2 (браузерный стенд) не выполнялся (среда без Chromium/Xvfb) — web-часть FR-100 приёмке по §5 WASM-TESTING.md + web_smoke.py 2b вручную
+- Tokens (estimate, правило AGENTS.md): C1 ≈137k (+повторные запуски ~60k), C2 ≈113k, C3 ≈88k (+повтор ~30k), D1 ≈111k (+повторы ~100k), D2 ≈50k, координатор (слияния/гейты/пуши/отчёты) ≈90k; итого ≈0.68M
