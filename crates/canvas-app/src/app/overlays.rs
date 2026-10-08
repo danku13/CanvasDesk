@@ -3809,8 +3809,10 @@ impl App {
         // Тело шага: видимое окно строк — kit::list_rows над скролл-состоянием
         // тела (строки — тот же измеренный источник, что высота карточки:
         // lay.lines). При клампе высоты видны только строки окна — контент
-        // ужимается прокруткой, футер с CTA не перекрывается.
-        let body = onboarding_ui::body_area(card);
+        // ужимается прокруткой, футер с CTA не перекрывается. CR-031: на
+        // финальном шаге зона тела уже — снизу резервируются CTA-опции.
+        let is_last = state.is_last();
+        let body = onboarding_ui::body_area(card, is_last);
         for (idx, row) in kit::list_rows(
             canvas_ui::geometry::UiRect::new(body[0], body[1], body[2], body[3]),
             &scroll,
@@ -3834,37 +3836,75 @@ impl App {
                 PaintAlign::Left,
             );
         }
-        // Кнопки: Назад (слева, не на первом шаге), Далее/Готово (справа,
-        // primary), Пропустить (правый верх — ghost, выход виден всегда —
-        // NN/g). Состояния — WidgetState (FR-057: переходы указателя ведёт
-        // потребитель, стиль — матрица кита); стиль — слоты button_style
-        // (бывшие литералы CTA/вторичной заливки/рамки и hover_fill).
-        // Контракт кита: зажатие не ведётся (pressed_now = false) — клик
-        // обрабатывает `click_onboarding` по button_at.
-        let buttons = [
-            (
+        // Кнопки: Назад (слева, не на первом шаге), Далее (справа, primary,
+        // кроме финала — CR-031), Пропустить (правый верх — ghost, выход
+        // виден всегда — NN/g). Состояния — WidgetState (FR-057: переходы
+        // указателя ведёт потребитель, стиль — матрица кита); стиль — слоты
+        // button_style (бывшие литералы CTA/вторичной заливки/рамки и
+        // hover_fill). Контракт кита: зажатие не ведётся (pressed_now =
+        // false) — клик обрабатывает `click_onboarding` по button_at.
+        let mut buttons: Vec<(OnboardingButton, kit::ButtonVariant, String, f32)> = Vec::new();
+        if let Some(label) = state.prev_label_key() {
+            buttons.push((
                 OnboardingButton::Prev,
                 kit::ButtonVariant::Secondary,
-                state.prev_label_key().map(|key| self.tr(key).to_owned()),
+                self.tr(label).to_owned(),
                 13.0,
-            ),
-            (
+            ));
+        }
+        if !is_last {
+            buttons.push((
                 OnboardingButton::Next,
                 kit::ButtonVariant::Primary,
-                Some(self.tr(state.next_label_key()).to_owned()),
+                self.tr(state.next_label_key()).to_owned(),
                 13.0,
-            ),
-            (
-                OnboardingButton::Skip,
-                kit::ButtonVariant::Ghost,
-                Some(self.tr(keys::ONBOARDING_SKIP).to_owned()),
-                11.0,
-            ),
-        ];
+            ));
+        } else {
+            // CR-031: финальный шаг — две полноширинные CTA-опции вместо
+            // «Далее»: «Открыть шаблонную схему» (primary) и «Начать
+            // самому» (secondary). Обе завершают тур; галерею открывает
+            // только первая (выбор пользователя, не перегружаем новичка).
+            let [gallery_rect, empty_rect] = onboarding_ui::option_rects(card);
+            for (rect, variant, label_key) in [
+                (
+                    gallery_rect,
+                    kit::ButtonVariant::Primary,
+                    keys::ONBOARDING_FINAL_OPEN,
+                ),
+                (
+                    empty_rect,
+                    kit::ButtonVariant::Secondary,
+                    keys::ONBOARDING_FINAL_EMPTY,
+                ),
+            ] {
+                let mut widget = WidgetState::default();
+                widget.set_pointer(point_in_rect(rect, self.cursor), false);
+                let style = kit::button_style(variant, widget.kit_state(), &kit_palette);
+                d.control(
+                    canvas_ui::geometry::UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                    &style,
+                );
+                d.label(
+                    canvas_ui::geometry::UiRect::new(
+                        rect[0],
+                        rect[1] + (rect[3] - 13.0 * 1.3) / 2.0,
+                        rect[2],
+                        13.0 * 1.3,
+                    ),
+                    self.tr(label_key),
+                    style.text,
+                    13.0,
+                    PaintAlign::Center,
+                );
+            }
+        }
+        buttons.push((
+            OnboardingButton::Skip,
+            kit::ButtonVariant::Ghost,
+            self.tr(keys::ONBOARDING_SKIP).to_owned(),
+            11.0,
+        ));
         for (button, variant, label, font) in &buttons {
-            let Some(label) = label else {
-                continue;
-            };
             let rect = onboarding_ui::button_rect(card, *button);
             let mut widget = WidgetState::default();
             widget.set_pointer(point_in_rect(rect, self.cursor), false);

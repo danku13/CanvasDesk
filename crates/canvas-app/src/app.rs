@@ -14409,14 +14409,20 @@ mod we_onboarding_draw_tests {
             let (quads, texts) = app.onboarding_overlay();
             assert!(!quads.is_empty() && !texts.is_empty(), "кадр не пустой");
             let card = full.card;
-            let body = crate::onboarding_ui::body_area(card);
+            let body = crate::onboarding_ui::body_area(
+                card,
+                step + 1 == crate::onboarding_ui::ONBOARDING_STEPS.len(),
+            );
             let footer_top = card[1] + card[3] - crate::onboarding_ui::ONBOARDING_FOOTER_H;
             // Строки тела: только видимое окно (kit::list_rows) — меньше
-            // полного контента при клампе, каждая в зоне тела
+            // полного контента при клампе, каждая в зоне тела. CR-031:
+            // подписи CTA-опций финала — тоже 13px, но Center — фильтр по
+            // Left-выравниванию отсекает их (тело — всегда Left).
             let body_texts: Vec<_> = texts
                 .iter()
                 .filter(|t| {
                     t.font_size == crate::onboarding_ui::ONBOARDING_BODY_FONT
+                        && t.align == TextAlign::Left
                         && t.origin[1] < footer_top
                 })
                 .collect();
@@ -14434,12 +14440,17 @@ mod we_onboarding_draw_tests {
                 );
                 assert!(t.origin[1] >= body[1] - 0.01, "строка выше зоны тела");
             }
-            // CTA виден: подпись кнопки «Далее/Готово» — внутри rect кнопки
-            // в футере (hit-тест и отрисовка — одна геометрия)
-            let next_rect = crate::onboarding_ui::button_rect(
-                card,
-                crate::onboarding_ui::OnboardingButton::Next,
-            );
+            // CTA виден: подпись кнопки «Далее» (футер) — внутри rect кнопки
+            // (hit-тест и отрисовка — одна геометрия). CR-031: на финальном
+            // шаге CTA — полноширинная опция «Открыть шаблонную схему».
+            let next_rect = if step + 1 == crate::onboarding_ui::ONBOARDING_STEPS.len() {
+                crate::onboarding_ui::option_rects(card)[0]
+            } else {
+                crate::onboarding_ui::button_rect(
+                    card,
+                    crate::onboarding_ui::OnboardingButton::Next,
+                )
+            };
             assert!(
                 texts.iter().any(|t| {
                     t.origin[0] == next_rect[0]

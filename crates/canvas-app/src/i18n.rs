@@ -500,7 +500,6 @@ pub mod keys {
     pub const GALLERY_ALL: &str = "gallery.all";
     pub const GALLERY_META: &str = "gallery.meta";
     pub const GALLERY_FOOTER: &str = "gallery.footer";
-    pub const GALLERY_TRY: &str = "gallery.try";
     pub const GALLERY_EMPTY_TITLE: &str = "gallery.empty.title";
     pub const GALLERY_EMPTY_BODY: &str = "gallery.empty.body";
     pub const GALLERY_EMPTY_OPEN: &str = "gallery.empty.open";
@@ -655,9 +654,6 @@ pub mod keys {
     pub const ADMIN_NODE_TABLE: &str = "admin.node.table";
     /// Страница user-docs «UI-консоль» (FR-070, FR-031).
     pub const DOCS_PAGE_ADMIN: &str = "docs.page.admin";
-    /// Этап 4: шаг 9 онбординга — UI-консоль.
-    pub const ONBOARDING_STEP9_TITLE: &str = "onboarding.step9.title";
-    pub const ONBOARDING_STEP9_BODY: &str = "onboarding.step9.body";
     pub const ONBOARDING_NEXT: &str = "onboarding.next";
     pub const ONBOARDING_DONE: &str = "onboarding.done";
     pub const ONBOARDING_SKIP: &str = "onboarding.skip";
@@ -677,6 +673,10 @@ pub mod keys {
     pub const ONBOARDING_STEP7_BODY: &str = "onboarding.step7.body";
     pub const ONBOARDING_STEP8_TITLE: &str = "onboarding.step8.title";
     pub const ONBOARDING_STEP8_BODY: &str = "onboarding.step8.body";
+    /// CR-031: финальные CTA-опции последнего шага тура (вместо
+    /// «Попробовать» на шаге «Шаблоны нод» — тот ведёт «Далее» до финала).
+    pub const ONBOARDING_FINAL_OPEN: &str = "onboarding.final.open";
+    pub const ONBOARDING_FINAL_EMPTY: &str = "onboarding.final.empty";
 
     // --- Меню «?» и просмотрщик документации (FR-027/031) ---
     pub const HELP_DOCS: &str = "help.docs";
@@ -1359,7 +1359,6 @@ const RU: &[(&str, &str)] = &[
     (keys::GALLERY_ALL, "Все"),
     (keys::GALLERY_META, "ноды: {nodes}, связи: {edges}"),
     (keys::GALLERY_FOOTER, "Enter — открыть · Esc — закрыть"),
-    (keys::GALLERY_TRY, "Попробовать"),
     (keys::GALLERY_EMPTY_TITLE, "Начните с шаблона"),
     (
         keys::GALLERY_EMPTY_BODY,
@@ -1559,14 +1558,6 @@ const RU: &[(&str, &str)] = &[
     ),
     (keys::ADMIN_NODE_TABLE, "Таблица в теле (FR-061)"),
     (keys::DOCS_PAGE_ADMIN, "UI-консоль"),
-    (
-        keys::ONBOARDING_STEP9_TITLE,
-        "UI-консоль для владельца",
-    ),
-    (
-        keys::ONBOARDING_STEP9_BODY,
-        "Меню «?» → «UI-консоль» — весь интерфейс в одном месте: контролы во всех состояниях, контейнеры с разным наполнением, состояния объектов канваса и каталог дизайн-токенов с живой правкой цветов. Удобно для приёмки изменений и баг-репортов.",
-    ),
     (keys::ONBOARDING_BACK, "Назад"),
     (keys::ONBOARDING_NEXT, "Далее"),
     (keys::ONBOARDING_DONE, "Готово"),
@@ -1612,8 +1603,11 @@ const RU: &[(&str, &str)] = &[
     (keys::ONBOARDING_STEP8_TITLE, "Что дальше"),
     (
         keys::ONBOARDING_STEP8_BODY,
-        "Кнопка «?» рядом с настройками — документация и повтор этого тура в любой момент. F1 — список горячих клавиш прямо в приложении.",
+        "Готово! Дальше — на выбор: открыть готовую схему из галереи шаблонов и посмотреть, как всё устроено, или начать собирать свою с чистого холста. Документация и повтор тура — в меню «?», список горячих клавиш — F1.",
     ),
+    // CR-031: финальные CTA-опции последнего шага тура
+    (keys::ONBOARDING_FINAL_OPEN, "Открыть шаблонную схему"),
+    (keys::ONBOARDING_FINAL_EMPTY, "Начать самому"),
     // --- Меню «?» и документация ---
     (keys::HELP_DOCS, "Документация ▸"),
     (keys::HELP_ONBOARDING, "Пройти онбординг"),
@@ -2607,7 +2601,6 @@ const EN: &[(&str, &str)] = &[
     (keys::GALLERY_ALL, "All"),
     (keys::GALLERY_META, "nodes: {nodes}, edges: {edges}"),
     (keys::GALLERY_FOOTER, "Enter — open · Esc — close"),
-    (keys::GALLERY_TRY, "Try it"),
     (keys::GALLERY_EMPTY_TITLE, "Start from a template"),
     (
         keys::GALLERY_EMPTY_BODY,
@@ -2807,11 +2800,6 @@ const EN: &[(&str, &str)] = &[
     ),
     (keys::ADMIN_NODE_TABLE, "Table body (FR-061)"),
     (keys::DOCS_PAGE_ADMIN, "UI console"),
-    (keys::ONBOARDING_STEP9_TITLE, "UI console for the owner"),
-    (
-        keys::ONBOARDING_STEP9_BODY,
-        "The ? menu → UI console shows the whole interface in one place: controls in every state, containers at different fill levels, canvas object states and a design token catalog with live color editing. Handy for acceptance and bug reports.",
-    ),
     (keys::ONBOARDING_BACK, "Back"),
     (keys::ONBOARDING_NEXT, "Next"),
     (keys::ONBOARDING_DONE, "Done"),
@@ -2854,8 +2842,11 @@ const EN: &[(&str, &str)] = &[
     (keys::ONBOARDING_STEP8_TITLE, "What's next"),
     (
         keys::ONBOARDING_STEP8_BODY,
-        "The “?” button next to settings — documentation and this tour again anytime. F1 — the hotkey list right in the app.",
+        "Done! Now choose: open a template scheme from the gallery to see how it all works, or start building your own on a blank canvas. Docs and the tour replay live in the “?” menu, the hotkey list — F1.",
     ),
+    // CR-031: финальные CTA-опции последнего шага тура
+    (keys::ONBOARDING_FINAL_OPEN, "Open a template scheme"),
+    (keys::ONBOARDING_FINAL_EMPTY, "Start from scratch"),
     // --- Help menu and docs viewer ---
     (keys::HELP_DOCS, "Documentation ▸"),
     (keys::HELP_ONBOARDING, "Run onboarding"),
