@@ -2998,7 +2998,7 @@ impl App {
                                     && world[1] <= origin[1] + height
                             }),
                         EditTarget::Edge(index) => {
-                            // CR-027: зона лейбла — на якоренной линии
+                            // CR-030: зона лейбла — на якоренной линии
                             edge_edit_area(
                                 &self.scene.canvas,
                                 index,
@@ -3015,7 +3015,7 @@ impl App {
                     };
                     if inside {
                         let zoom_px = self.zoom_px();
-                        // CR-027: якоря лейбла связи — ДО мутабельного
+                        // CR-030: якоря лейбла связи — ДО мутабельного
                         // заимствования self.editing
                         let session_anchors = self.editing_session_anchors();
                         if let (Some(session), Some(renderer)) =
@@ -3285,7 +3285,7 @@ impl App {
                                 if row_hit.node == index && row_hit.line.is_some() {
                                     self.begin_editing(index);
                                     let zoom_px = self.zoom_px();
-                                    // CR-027: якоря лейбла связи — ДО
+                                    // CR-030: якоря лейбла связи — ДО
                                     // мутабельного заимствования
                                     let session_anchors = self.editing_session_anchors();
                                     if let (Some(session), Some(renderer)) =
@@ -3878,7 +3878,7 @@ impl App {
         if self.editor_dragging && !self.space_pressed {
             let world = self.cursor_world();
             let zoom_px = self.zoom_px();
-            // CR-027: якоря лейбла связи — ДО мутабельного заимствования
+            // CR-030: якоря лейбла связи — ДО мутабельного заимствования
             let session_anchors = self.editing_session_anchors();
             if let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut())
             {

@@ -2263,7 +2263,7 @@ impl App {
             None
         };
         if let (Some(session), Some(rect)) = (self.editing.as_ref(), caret_rect) {
-            // CR-027: якоря лейбла связи — та же линия, что нарисована
+            // CR-030: якоря лейбла связи — та же линия, что нарисована
             let session_anchors = match session.target() {
                 EditTarget::Edge(index) => self.edge_anchors_for(index),
                 _ => canvas_core::EdgeAnchors::NONE,

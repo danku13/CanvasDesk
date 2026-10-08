@@ -448,7 +448,7 @@ pub mod ui {
                         canvas_core::EdgeEnd::From => canvas_core::EdgeEnd::To,
                         canvas_core::EdgeEnd::To => canvas_core::EdgeEnd::From,
                     };
-                    // CR-027: неподвижный конец — на якоре data-порта (для
+                    // CR-030: неподвижный конец — на якоре data-порта (для
                     // From-истока value-ребра), сторона — грань порта
                     let (side, point) = canvas_core::edge_endpoint_anchored(
                         canvas,
