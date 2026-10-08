@@ -2839,10 +2839,18 @@ impl App {
                     None => self.dismiss_transients_on_miss(),
                 }
                 let world = self.cursor_world();
-                // PRD-0007 (F-1/AC-1.1): клик по цифре результата (полоса D)
-                // — фолбэк-триггер окна проверки цепочки; у константы —
-                // панель одного узла (AC-1.4)
                 if self.explain.is_none() {
+                    // CR-020 (Q2 «лупа на строку»): мини-лупа строки-результата
+                    // — приоритет над полосой ИТОГ (адресация по строке)
+                    if let Some((root, _)) = self.row_explain_hit_at(world) {
+                        self.open_explain(root);
+                        self.request_redraw();
+                        return;
+                    }
+                    // PRD-0007 (F-1/AC-1.1): клик по цифре результата (полоса
+                    // D) — фолбэк-триггер окна проверки цепочки; у константы —
+                    // панель одного узла (AC-1.4). CR-020: зона только при
+                    // видимом футере (у констант-присваиваний её нет)
                     if let Some(root) = self.result_band_root_at(world) {
                         self.open_explain(root);
                         self.request_redraw();

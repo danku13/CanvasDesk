@@ -8288,6 +8288,14 @@ impl App {
             Some(ExprOutcome::Ok(_)) => {}
             _ => return None,
         }
+        // CR-020 (UR-001-03, Q1): полоса «ИТОГ» — зона только там, где футер
+        // реально виден (правило рендера text.rs has_result / scene.rs
+        // node_shows_result_footer). У констант-присваиваний («qty = 10»)
+        // футер подавлен построчными результатами — невидимой зоны нет:
+        // клик по строке — выделение/драг ноды.
+        if !self.scene.node_shows_result_footer(index) {
+            return None;
+        }
         let band = [
             node.x,
             node.y + node.height - BODY_PADDING - RESULT_LINE_HEIGHT,
@@ -8295,6 +8303,23 @@ impl App {
             RESULT_LINE_HEIGHT,
         ];
         point_in_rect(band, world).then(|| LineageNodeId::total(node.id.clone()))
+    }
+
+    /// CR-020 (UR-001-03, Q2 «лупа на строку»): мини-лупа строки-результата
+    /// под world-точкой — корень explain-дерева этой строки. Единая точка
+    /// классификации строк (Calc/Param-формула vs константа-присваивание)
+    /// и геометрии — кэш строк рендера
+    /// ([`canvas_render::Renderer::row_explain_hits`]); шаблонные ноды —
+    /// футер FR-088 (луп строк нет). Возвращает (корень, rect иконки).
+    fn row_explain_hit_at(&self, world: Vec2) -> Option<(LineageNodeId, [f32; 4])> {
+        let index = self.hovered?;
+        let node = self.scene.canvas.nodes.get(index)?;
+        let renderer = self.renderer.as_ref()?;
+        let hit = renderer
+            .row_explain_hits(index, node)
+            .into_iter()
+            .find(|hit| point_in_rect(hit.rect, world))?;
+        Some((LineageNodeId::line(node.id.clone(), hit.line), hit.rect))
     }
 
     /// Системное контекстное меню десктопа (T17, план §3): нативное
@@ -13146,6 +13171,49 @@ mod suggest_flow_tests {
         app.settings.suggest.enabled = false;
         app.update_hints();
         assert!(app.suggest.pending.is_none(), "disabled — триггер молчит");
+    }
+
+    /// CR-020 (UR-001-03, Q1): зона полосы «ИТОГ» — только при видимом
+    /// футере. У константы-присваивания («qty = 10») футер подавлен
+    /// построчным результатом присваивания — клик по строке НЕ открывает
+    /// explain (раньше там лежала невидимая hit-зона 16px). Без построчных
+    /// результатов зона итога возвращается. Мини-лупа строки без рендера
+    /// (headless-стаб) — None.
+    #[test]
+    fn result_band_zone_only_when_footer_visible() {
+        let mut canvas = Canvas::default();
+        let mut node = Node::text("qty", "qty = 10", 0.0, 0.0);
+        node.width = 240.0;
+        node.height = 120.0;
+        canvas.nodes.push(node);
+        let mut app = suggest_stub_app(canvas);
+        app.hovered = Some(0);
+        // Точка внутри зоны полосы D (нижние RESULT_LINE_HEIGHT px тела)
+        let world: Vec2 = [5.0, 120.0 - BODY_PADDING - RESULT_LINE_HEIGHT / 2.0];
+        // «qty = 10»: итог потока Ok(10) + построчный исход присваивания
+        let outcome = canvas_core::expr::eval_lines("10")[0].clone();
+        assert!(matches!(outcome, Some(ExprOutcome::Ok(_))));
+        app.scene
+            .expr_results
+            .insert("qty".to_owned(), outcome.clone().expect("Ok(10)"));
+        app.scene
+            .expr_line_results
+            .insert("qty".to_owned(), vec![outcome]);
+        assert!(
+            app.result_band_root_at(world).is_none(),
+            "константа-присваивание — невидимой зоны нет (CR-020 Q1)"
+        );
+        assert!(
+            app.row_explain_hit_at(world).is_none(),
+            "мини-лупа требует рендер-кэша строк (headless — None)"
+        );
+        // Без построчных результатов футер виден — зона итога возвращается
+        app.scene.expr_line_results.clear();
+        let root = app
+            .result_band_root_at(world)
+            .expect("футер виден — зона итога жива");
+        assert_eq!(root.node_id, "qty");
+        assert!(root.line.is_none(), "адрес итога ноды");
     }
 
     /// Домен-гейт C4: прозаический фреймворк-канвас — не предлагаем.
