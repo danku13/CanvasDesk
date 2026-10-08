@@ -963,8 +963,13 @@ pub fn inbound_slots_with_lines(
 /// ADR-0003/CR-025 (приоритет имени): `fromOutput` → именованный выход;
 /// иначе `fromLine` → строка листа; иначе значение ноды целиком. При
 /// обоих полях имя старше индекса (ADR-0003:51-52); сломанная адресация
-/// имени — фолбэк на строку (тихая деградация: проваленный исток не
-/// роняет пересчёт downstream). Для data-нод адресация — в
+/// имени — фолбэк на строку, а на значение ноды ЦЕЛИКОМ отката нет
+/// (тихая деградация, прежнее поведение FR-029: проваленный исток не
+/// роняет пересчёт downstream и НЕ подменяется итогом ноды — ревизия
+/// 2026-10-08: откат к итогу ноды после CR-025 давал фантомный E-UNIT
+/// в validate::port_contract_issues поверх уже пробитого
+/// E-PORT-UNKNOWN и проливал итог ноды в параметр при проваленной
+/// адресации). Для data-нод адресация — в
 /// [`edge_source_value_with_data`] (колонка × запись — не приоритет).
 pub(crate) fn edge_source_value(
     edge: &Edge,
@@ -976,6 +981,12 @@ pub(crate) fn edge_source_value(
         if let Some(value) = named.get(&(edge.from_node.clone(), name.clone())).cloned() {
             return Some(value);
         }
+        // Имя задано, но не резолвится: фолбэк на строку (если задана);
+        // значение ноды целиком НЕ используется — адресация ребра явная,
+        // но проваленная.
+        return edge
+            .from_line
+            .and_then(|line| lines.get(&(edge.from_node.clone(), line)).cloned());
     }
     if let Some(line) = edge.from_line {
         return lines.get(&(edge.from_node.clone(), line)).cloned();
@@ -2941,6 +2952,66 @@ mod tests {
                 .map(|value| value.num),
             Some(500.0),
             "ребро без значения не сбрасывает локальный параметр"
+        );
+    }
+
+    /// Ревизия 2026-10-08 (регресс CR-025, отчёт гейтов scene
+    /// mcp_fr029_instagram_mvp_reference): сломанное `fromOutput` при
+    /// ВАЛИДНОМ toParam не подменяется итогом ноды-истока — значение ребра
+    /// None (параметр приёмника остаётся локальным), иначе validate ловит
+    /// фантомный E-UNIT поверх E-PORT-UNKNOWN. Фолбэк на from_line при
+    /// сломанном имени сохранён (контракт CR-025).
+    #[test]
+    fn broken_output_name_does_not_fall_back_to_node_total() {
+        let mut canvas = Canvas::default();
+        // Исток — текстовая нода с итогом (значение ноды целиком = 700).
+        node_with_expr(&mut canvas, "A", "700", 0.0);
+        template_node_with_outputs(
+            &mut canvas,
+            "gw",
+            &[("token_verify", 5.0, None)],
+            "$token_verify",
+            &[],
+        );
+        ported_value_edge(
+            &mut canvas,
+            "e1",
+            "A",
+            "gw",
+            Some("no_such"),
+            Some("token_verify"),
+        );
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("gw")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num),
+            Some(5.0),
+            "итог ноды-истока не проливается в параметр при провале адресации"
+        );
+        // Сломанное имя + валидная строка — фолбэк на строку (контракт CR-025).
+        // from_line адресует СТРОКИ ТЕКСТА — лист с присваиваниями.
+        let mut b = Node::text("B", "x = 40\ny = 50", 1.0, 0.0);
+        b.set_expr(None);
+        canvas.nodes.push(b);
+        template_node_with_outputs(&mut canvas, "gw2", &[("load", 1.0, None)], "$load", &[]);
+        let mut e2 = Edge::new("e2", "B", None, "gw2", None);
+        e2.set_flow_kind(FlowKind::Value);
+        e2.from_output = Some("no_such".to_owned());
+        e2.from_line = Some(1);
+        e2.to_param = Some("load".to_owned());
+        canvas.add_edge(e2);
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        assert_eq!(
+            solutions
+                .outputs
+                .get("gw2")
+                .and_then(|result| result.as_ref().ok())
+                .map(|value| value.num),
+            Some(50.0),
+            "сломанное имя — значение строки 2 (фолбэк from_line)"
         );
     }
 
