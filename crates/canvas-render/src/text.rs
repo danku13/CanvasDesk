@@ -3051,9 +3051,12 @@ impl TextSystem {
     /// край полосы строки (колонка луп — одна вертикаль с кнопкой футера
     /// FR-088 [`crate::cards::explain_button_rect`]), вертикаль — центр
     /// полосы строки (инвариант 2026-10-05, [`result_row_center_y`]).
-    /// Правый отступ — [`BODY_PADDING`]: ячейка юнита заканчивается на
-    /// `body_width − badge_w − GUIDE_GAP` ([`row_guides::RowGuides::
-    /// with_right_edge`]) — наезд исключён.
+    /// Правый отступ — [`BODY_PADDING`]. Ревизия 2026-10-08 (отчёт
+    /// владельца: лупа наезжала на значение/юнит «10 rub»): ячейки строк
+    /// НЕ тянутся до края тела — у не-шаблонной ноды правый край
+    /// направляющих зарезервирован под колонку луп
+    /// ([`row_grid::guides_right_edge`]), поэтому иконка стоит в своей
+    /// колонке, а не поверх ячеек.
     fn row_explain_lupa_rect(node: &Node, row_top: f32, row_line_h: f32) -> [f32; 4] {
         let cy = result_row_center_y(node, row_top, row_line_h);
         let size = crate::cards::EXPLAIN_BTN_SIZE;
@@ -3883,13 +3886,16 @@ impl TextSystem {
                         }
                         // Проход A: направляющие + режим бейджей (детерминизм
                         // — входы уже в ключе кэша: текст/ширина/зум/исходы).
+                        // Правый край направляющих — с резервом колонки луп
+                        // (не-шаблонная нода — CR-020 ревизия, см.
+                        // row_grid::guides_right_edge).
                         let left_max = geo.iter().map(|g| g.2).fold(0.0f32, f32::max);
                         let mut pass = row_grid::pass_a(
                             &mut self.measurer,
                             &mut self.font_system,
                             &rows_data,
                             left_max,
-                            body_width,
+                            row_grid::guides_right_edge(body_width, node.template().is_some()),
                             MONO_FAMILY,
                             RESULT_FONT_SIZE,
                             BODY_FONT_SIZE,
@@ -3965,7 +3971,7 @@ impl TextSystem {
                                 &mut self.font_system,
                                 &rows_data,
                                 left_max,
-                                body_width,
+                                row_grid::guides_right_edge(body_width, node.template().is_some()),
                                 MONO_FAMILY,
                                 RESULT_FONT_SIZE,
                                 BODY_FONT_SIZE,
@@ -5089,10 +5095,20 @@ impl TextSystem {
                         // FR-088: значение не заезжает в зону кнопки «Проверка
                         // цепочки» (иконка в правом конце полосы — рисуется
                         // при том же условии: итог без ошибки).
+                        // CR-020 ревизия: у НЕ-шаблонной ноды колонка луп уже
+                        // зарезервирована в направляющих (guides_right_edge) —
+                        // вычет здесь дважды смещал значение; остаётся
+                        // отсечка «не правее начала колонки луп» на случай
+                        // узкой таблицы. У шаблонной — вычет как раньше
+                        // (направляющие без резерва).
                         let right_world = if entry.result_error {
                             right_world
-                        } else {
+                        } else if node.template().is_some() {
                             right_world - crate::cards::EXPLAIN_BTN_ZONE
+                        } else {
+                            right_world.min(
+                                node.x + node.width - BODY_PADDING - crate::cards::EXPLAIN_BTN_ZONE,
+                            )
                         };
                         let right_phys = to_physical([right_world, top_world])[0];
                         let pos = to_physical([left_world, top_world]);
@@ -6666,6 +6682,60 @@ load = connections_per_sec / (servers * server_rate)\n";
         assert!(
             (rect[1] + rect[3] / 2.0 - cy).abs() < 0.01,
             "вертикаль — центр полосы строки"
+        );
+    }
+
+    /// CR-020 ревизия (отчёт владельца 2026-10-08: лупа строки наезжала на
+    /// значение/юнит — «10 rub»): у не-шаблонной ноды правый край
+    /// направляющих зарезервирован под колонку луп — правый край ячейки
+    /// юнита не заходит за левый край иконки. Прежде юнит тянулся до
+    /// `body_width − badge_w − GUIDE_GAP` (при пустой бейдж-колонке — до
+    /// края тела) и попадал под иконку.
+    #[test]
+    fn row_lupa_column_reserved_in_guides() {
+        let body_width = 240.0;
+        // Не-шаблонная нода: колонка луп = EXPLAIN_BTN_ZONE (иконка + отступы).
+        assert_eq!(
+            row_grid::guides_right_edge(body_width, false),
+            body_width - crate::cards::EXPLAIN_BTN_ZONE
+        );
+        // Шаблонная (луп строк нет, решение владельца Q2): раскладка прежняя.
+        assert_eq!(row_grid::guides_right_edge(body_width, true), body_width);
+
+        // Инвариант «юнит левее лупы» на геометрии узкой ноды без бейджей.
+        let guides = canvas_ui::row_guides::RowGuides {
+            value_w: 40.0,
+            unit_w: 24.0, // «rub»
+            badge_w: 0.0,
+            value_x: 0.0,
+            unit_x: 0.0,
+        }
+        .with_right_edge(
+            row_grid::guides_right_edge(body_width, false),
+            row_grid::GUIDE_GAP,
+        );
+        let mut node = Node::text("n", "a = 10 rub", 0.0, 0.0);
+        node.width = body_width + BODY_PADDING * 2.0;
+        node.height = 120.0;
+        let lupa = TextSystem::row_explain_lupa_rect(&node, 0.0, BODY_LINE_HEIGHT);
+        let unit_right_world = node.x + BODY_PADDING + guides.unit_right();
+        assert!(
+            unit_right_world <= lupa[0] + 0.5,
+            "юнит ({unit_right_world}) левее иконки лупы ({})",
+            lupa[0]
+        );
+        // Контроль регресса: без резерва юнит заходил бы под иконку.
+        let old = canvas_ui::row_guides::RowGuides {
+            value_w: 40.0,
+            unit_w: 24.0,
+            badge_w: 0.0,
+            value_x: 0.0,
+            unit_x: 0.0,
+        }
+        .with_right_edge(body_width, row_grid::GUIDE_GAP);
+        assert!(
+            node.x + BODY_PADDING + old.unit_right() > lupa[0],
+            "пре-фиксная раскладка должна была наезжать (инвариант теста)"
         );
     }
 
