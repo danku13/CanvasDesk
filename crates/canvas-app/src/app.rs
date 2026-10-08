@@ -14096,12 +14096,14 @@ mod suggest_flow_tests {
         app.hints.arm_suppress();
         app.update_hints();
         assert!(!app.hints.open, "после принятия попап закрыт (CR-023)");
-        // Вставка того же входа следом (токен после вставки — «купон») —
-        // путь Paste-команды: снятие подавления ПЕРЕД пересчётом
+        // Вставка значения с разделителем следом (токен после вставки —
+        // «купон», как и подавленный) — путь Paste-команды: снятие
+        // подавления ПЕРЕД пересчётом. FR-102: токен после точки — хвост
+        // пути — матчит поле объекта «Купон» → попап полей открыт
         app.editing
             .as_mut()
             .expect("правка")
-            .insert_text(&mut fs, "Купон.купон");
+            .insert_text(&mut fs, " - Купон.купон");
         app.hints.lift_suppression();
         app.update_hints();
         assert!(
@@ -14112,7 +14114,10 @@ mod suggest_flow_tests {
     }
 
     /// CR-029 (регресс чистого пути): вставка qualified-имени «Купон.купон»
-    /// открывает попап с подсказкой входа — как при наборе «купон».
+    /// открывает попап с подсказкой — как при наборе «купон».
+    /// FR-102: токен-хвост после точки («купон») теперь матчит ПОЛЕ объекта
+    /// — вставка подсказки — имя поля (детали — источник), не полный
+    /// qualified (тот заменил бы только хвост — путь задвоился бы).
     #[test]
     fn cr029_paste_qualified_name_opens_popup() {
         let mut app = suggest_stub_app(cr029_canvas());
@@ -14129,11 +14134,8 @@ mod suggest_flow_tests {
             app.hints.items
         );
         assert!(
-            app.hints
-                .items
-                .iter()
-                .any(|item| item.insert == "Купон.купон"),
-            "подсказка Купон.купон в попапе; items={:?}",
+            app.hints.items.iter().any(|item| item.insert == "купон"),
+            "подсказка поля «купон» объекта «Купон»; items={:?}",
             app.hints.items
         );
     }
@@ -14195,7 +14197,8 @@ mod suggest_flow_tests {
             .replace_token_before_caret(&mut fs, "купо", "Купон.купон");
         app.hints.arm_suppress();
         app.update_hints();
-        // « - Корзина.sum» одной вставкой
+        // « - Корзина.sum» одной вставкой; FR-102: токен-хвост «sum» после
+        // точки матчит поле объекта «Корзина» — вставка — имя поля
         app.editing
             .as_mut()
             .expect("правка")
@@ -14208,12 +14211,78 @@ mod suggest_flow_tests {
             app.hints.token, app.hints.items
         );
         assert!(
-            app.hints
-                .items
-                .iter()
-                .any(|item| item.insert == "Корзина.sum"),
-            "подсказка Корзина.sum; items={:?}",
+            app.hints.items.iter().any(|item| item.insert == "sum"),
+            "подсказка поля «sum» объекта «Корзина»; items={:?}",
             app.hints.items
+        );
+    }
+
+    // --- FR-102: подсказка полей после точки -------------------------------
+    // Запрос владельца (сессия 2026-10-09): «нужна подсказка полей после
+    // точки» — ввод «Корзина.» предлагает поля объекта из входящих
+    // qualified-ключей, принятие дописывает набираемый путь.
+
+    /// FR-102: точка после имени объекта открывает попап с ПОЛЯМИ этого
+    /// объекта (репродуктор: «итог = Корзина.» → поле «sum»); вставка —
+    /// только имя поля, деталь — нода-источник.
+    #[test]
+    fn fr102_dot_suggests_object_fields() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        suggest_start_editing(&mut app, 2, "итог = Корзина.");
+        app.update_hints();
+        assert!(
+            app.hints.open,
+            "точка после имени объекта открывает попап; items={:?}",
+            app.hints.items
+        );
+        let hint = app
+            .hints
+            .items
+            .iter()
+            .find(|item| item.insert == "sum")
+            .expect("поле sum после «Корзина.»");
+        assert_eq!(hint.label, "sum");
+        assert!(
+            hint.detail.contains("Корзина"),
+            "деталь — источник: {}",
+            hint.detail
+        );
+        // Чужой объект — полей нет (попап не открывается)
+        let mut app = suggest_stub_app(cr029_canvas());
+        suggest_start_editing(&mut app, 2, "итог = Купон.x");
+        app.update_hints();
+        assert!(
+            !app.hints.items.iter().any(|item| item.insert == "sum"),
+            "поле «sum» не подсказывается после чужого объекта"
+        );
+    }
+
+    /// FR-102: принятие поля дописывает набираемый путь — токен замены
+    /// это хвост ПОСЛЕ точки («итог = Корзина.s» + «sum» → «Корзина.sum»,
+    /// а не «Корзина.Корзина.sum»).
+    #[test]
+    fn fr102_dot_field_accept_replaces_tail_only() {
+        let mut app = suggest_stub_app(cr029_canvas());
+        let mut fs = cosmic_text::FontSystem::new();
+        suggest_start_editing(&mut app, 2, "итог = Корзина.s");
+        app.update_hints();
+        assert!(app.hints.open, "хвост после точки фильтрует поля");
+        assert_eq!(app.hints.token, "s", "токен замены — хвост после точки");
+        app.editing
+            .as_mut()
+            .expect("правка")
+            .replace_token_before_caret(&mut fs, &app.hints.token.clone(), "sum");
+        // Путь принятия (accept_hint): вставка + взведение подавления
+        app.hints.arm_suppress();
+        app.update_hints();
+        let (_, line_text, _) = app.editing.as_ref().expect("правка").caret_line();
+        assert_eq!(
+            line_text, "итог = Корзина.sum",
+            "принятие дописало путь без дублирования объекта"
+        );
+        assert!(
+            !app.hints.open,
+            "после принятия CR-023-подавление держит попап закрытым"
         );
     }
 }

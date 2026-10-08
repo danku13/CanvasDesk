@@ -158,6 +158,43 @@ pub fn token_before_caret(line: &str, caret: usize) -> (String, usize) {
     (prefix[start..].to_owned(), start)
 }
 
+/// FR-102: контекст точки — «Объект.» или «Объект.поля» непосредственно
+/// перед кареткой. Возвращает `(имя объекта, набранный префикс поля)`.
+/// НЕ контекст (попап полей не открывается): число перед точкой («2.» —
+/// семантика дробного числа/единиц, expr.rs FR-050 Р-6), `$`-токен перед
+/// точкой («$имя.» — валюта/параметр, полей не имеет), пробел между
+/// объектом и точкой (лексер соберёт qualified-путь только вплотную —
+/// `dot_field_starts`; «Объект .» — не начало qualified), пустой объект
+/// (точка без идентификатора). Объект — идентификатор до точки (буквы
+/// Unicode/цифры/`_`, начинается с буквы/`_`), префикс поля — токен
+/// после точки (может быть пуст — только точка набрана).
+pub fn dot_field_context(line_prefix: &str) -> Option<(String, String)> {
+    let (token, start) = token_before_caret(line_prefix, line_prefix.len());
+    let before = &line_prefix[..start];
+    if before.chars().next_back()? != '.' {
+        return None;
+    }
+    let obj_end = before.len() - '.'.len_utf8();
+    let obj_start = before[..obj_end]
+        .char_indices()
+        .rev()
+        .take_while(|&(_, ch)| ch.is_alphanumeric() || ch == '_')
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(obj_end);
+    let obj = &before[obj_start..obj_end];
+    // Объект начинается с буквы/`_` (число перед точкой — не объект)
+    let first = obj.chars().next()?;
+    if !(first.is_alphabetic() || first == '_') {
+        return None;
+    }
+    // `$`-токен перед точкой — валюта/параметр (FR-013), полей не имеет
+    if before[..obj_start].ends_with('$') {
+        return None;
+    }
+    Some((obj.to_owned(), token))
+}
+
 /// FR-101: рабочая форма вставки именованного входа — `Some(текст)` или
 /// `None` (ни одной грамматически валидной формы — подсказка не
 /// показывается: битая вставка хуже тишины).
@@ -337,6 +374,39 @@ pub fn hint_items(line_prefix: &str, ctx: &HintContext, language: Language) -> V
                     i18n::tr(language, keys::HINT_UNIT).to_owned(),
                 ));
             }
+        }
+        return items;
+    }
+    // FR-102: после точки — ПОЛЯ объекта (qualified-ключи входящих
+    // value-рёбер). Ветка раньше переменных/идентификатора и завершает
+    // разбор: после точки переменные/функции/единицы неуместны, а
+    // вставка — только имя поля (дописывает набираемый путь «Объект. →
+    // Объект.поле»; замена токена `replace_token_before_caret` — хвост
+    // после точки, полный qualified дал бы «Объект.Нода.поле»).
+    if let Some((obj, field_prefix)) = dot_field_context(line_prefix) {
+        let lower_obj = obj.to_lowercase();
+        let lower_field = field_prefix.to_lowercase();
+        for inbound in &ctx.inbounds {
+            let Some((inbound_obj, field)) = inbound.qualified.split_once('.') else {
+                continue;
+            };
+            if inbound_obj.is_empty()
+                || field.is_empty()
+                || inbound_obj.to_lowercase() != lower_obj
+                || !field.to_lowercase().starts_with(&lower_field)
+            {
+                continue;
+            }
+            push(HintItem::text(
+                HintKind::DollarRef,
+                field.to_owned(),
+                field.to_owned(),
+                i18n::trf(
+                    language,
+                    keys::HINT_FIELD,
+                    &[("{node}", inbound.source.as_str())],
+                ),
+            ));
         }
         return items;
     }
@@ -844,6 +914,119 @@ mod tests {
             "позиционное ребро — только qualified"
         );
         assert!(!inserts.contains(&"$users"));
+    }
+
+    /// FR-102: контекст точки — (объект, префикс поля); стражи контекста:
+    /// число перед точкой, `$`-объект, пробел перед точкой, пустой объект.
+    #[test]
+    fn dot_field_context_parses() {
+        assert_eq!(
+            dot_field_context("итог = Корзина."),
+            Some(("Корзина".to_owned(), String::new()))
+        );
+        assert_eq!(
+            dot_field_context("итог = Корзина.су"),
+            Some(("Корзина".to_owned(), "су".to_owned()))
+        );
+        // кириллица/цифры/подчёркивание в объекте; qualified-поле с дефисом
+        // матчится как токен после точки (класс символов token_before_caret:
+        // дефис обрывает — хвост подсказок набирается без дефисов)
+        assert_eq!(
+            dot_field_context("Заявки.Кол"),
+            Some(("Заявки".to_owned(), "Кол".to_owned()))
+        );
+        assert_eq!(
+            dot_field_context("Корзина"),
+            None,
+            "без точки — не контекст"
+        );
+        assert_eq!(
+            dot_field_context("Корзина ."),
+            None,
+            "пробел перед точкой — лексер qualified не соберёт"
+        );
+        assert_eq!(dot_field_context("2."), None, "число — не объект");
+        assert_eq!(dot_field_context("$Корз."), None, "$-токен — не объект");
+        assert_eq!(dot_field_context("."), None, "пустой объект");
+        assert_eq!(dot_field_context("итог = "), None);
+    }
+
+    /// FR-102: после точки подсказываются поля объекта — qualified-ключи
+    /// входящих value-рёбер. Вставка — только ИМЯ ПОЛЯ (дописывает путь:
+    /// «Корзина.s» + принятие → «Корзина.sum», полный qualified дал бы
+    /// «Объект.Нода.поле»); деталь — нода-источник; регистр не важен.
+    #[test]
+    fn hints_fields_after_dot() {
+        let mut multi = ctx();
+        multi.inbounds.push(InboundHint {
+            name: "sum".to_owned(),
+            qualified: "Корзина.sum".to_owned(),
+            source: "Корзина за вычетом скидок".to_owned(),
+            spill: false,
+        });
+        multi.inbounds.push(InboundHint {
+            name: "скидка".to_owned(),
+            qualified: "Корзина.скидка".to_owned(),
+            source: "Корзина за вычетом скидок".to_owned(),
+            spill: false,
+        });
+        // Точка без хвоста — все поля объекта (репродуктор: «итог = Корзина.»)
+        let items = hint_items("итог = Корзина.", &multi, Language::Ru);
+        let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
+        assert_eq!(labels, vec!["sum", "скидка"]);
+        assert!(items.iter().all(|item| item.kind == HintKind::DollarRef));
+        assert!(
+            items[0].detail.contains("Корзина"),
+            "деталь — источник: {}",
+            items[0].detail
+        );
+        // Дописываемый хвост фильтрует поля; вставка — только поле
+        let items = hint_items("итог = Корзина.с", &multi, Language::Ru);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].insert, "скидка");
+        // Регистр объекта и поля не важен
+        let items = hint_items("итог = корзина.S", &multi, Language::Ru);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].insert, "sum");
+        // Чужой объект/несуществующее поле — пусто (попап закрыт)
+        assert!(hint_items("итог = Корзина.x", &multi, Language::Ru).is_empty());
+        // Объект без qualified-ключа (пустая qualified) — не подсказывается
+        multi.inbounds.push(InboundHint {
+            name: "аноним".to_owned(),
+            qualified: String::new(),
+            source: "Аноним".to_owned(),
+            spill: true,
+        });
+        assert!(hint_items("итог = Аноним.", &multi, Language::Ru).is_empty());
+    }
+
+    /// FR-102: стражи ветки в `hint_items` — «2.» остаётся единицами;
+    /// «$Профиль.»/«Купон .»/«w = .» — НЕ контекст полей (разбор падает
+    /// в прежнюю семантику пустого токена — только переменные, без
+    /// DollarRef-полей); поле после точки НЕ подмешивает именованные
+    /// входы (ветка завершает разбор — иначе матч по имени поля «с»
+    /// предлагал бы «Скидка.скидка» внутрь набираемого пути).
+    #[test]
+    fn hints_fields_after_dot_guards() {
+        // «2.» — число перед точкой, НЕ объект: ветка полей не срабатывает
+        // (прежняя семантика пустого токена — без DollarRef-полей)
+        let items = hint_items("w = 2.", &ctx(), Language::Ru);
+        assert!(
+            !items.iter().any(|item| item.kind == HintKind::DollarRef),
+            "«2.» — не контекст полей"
+        );
+        // Не контекст полей → прежняя семантика пустого токена (переменные)
+        for prefix in ["w = $Профиль.", "w = Купон .", "w = ."] {
+            let items = hint_items(prefix, &ctx(), Language::Ru);
+            assert!(
+                !items.iter().any(|item| item.kind == HintKind::DollarRef),
+                "без полей на {prefix:?}"
+            );
+            assert!(items.iter().all(|item| item.kind == HintKind::Var));
+        }
+        // «Купон.с» — префикс «с» не матчит поле «купон» — тишина
+        // (именованный вход «Скидка.скидка» по имени НЕ подмешивается)
+        assert!(hint_items("w = Купон.с", &ctx(), Language::Ru).is_empty());
     }
 
     /// Число и число+пробел → единицы; вставка замещает только число.
