@@ -268,6 +268,16 @@ pub struct HintPopup {
     pub token: String,
     /// Якорь popup в логических px окна — низ каретки.
     pub anchor: [f32; 2],
+    /// CR-023 (UR-001-08): токен, на котором попап подавлен — принятая
+    /// подсказка или Esc закрыли свою тему; [`HintPopup::sync`] держит
+    /// попап закрытым, пока токен перед кареткой совпадает. Смена токена
+    /// (ввод/удаление символа) снимает подавление.
+    suppressed: Option<String>,
+    /// CR-023: подавление взведено принятием ([`HintPopup::arm_suppress`]),
+    /// но фактический токен после вставки ещё не известен — фиксируется
+    /// на первом [`HintPopup::sync`] (вставка «mm1(» даёт токен «mm1» —
+    /// считает `token_before_caret`, а не догадка места вызова).
+    pending_suppress: bool,
 }
 
 impl HintPopup {
@@ -277,17 +287,54 @@ impl HintPopup {
         self.items.clear();
         self.selected = 0;
         self.token.clear();
+        // CR-023: новая тема редактирования — подавление не переживает reset
+        self.suppressed = None;
+        self.pending_suppress = false;
+    }
+
+    /// CR-023: взвести подавление после принятия подсказки. Фактический
+    /// токен после вставки неизвестен здесь — его зафиксирует ближайший
+    /// [`HintPopup::sync`] (замена токена — backspace-семантика + вставка,
+    /// итоговый токен считает `update_hints`).
+    pub fn arm_suppress(&mut self) {
+        self.pending_suppress = true;
+        self.open = false;
+    }
+
+    /// CR-023: Esc — закрыть попап и подавить его на текущем токене до
+    /// смены текста перед кареткой (единая семантика с подавлением после
+    /// принятия; контракт FR-021). Список сохраняется.
+    pub fn dismiss(&mut self) {
+        self.pending_suppress = false;
+        self.suppressed = Some(self.token.clone());
+        self.open = false;
     }
 
     /// Обновить список после правки текста: выделение сохраняется, если
     /// влезает; пустой список закрывает popup.
+    /// CR-023: подавленный токен держит попап закрытым — принятое
+    /// автодополнение не навязывается повторно, пока токен перед кареткой
+    /// не изменится (движение каретки без правки — тишина).
     pub fn sync(&mut self, token: String, items: Vec<HintItem>) {
+        // Первая синхронизация после принятия: фиксируем фактический токен
+        // после вставки и подавляем его
+        if self.pending_suppress {
+            self.pending_suppress = false;
+            self.suppressed = Some(token.clone());
+        }
+        // Подавление живёт ровно до смены токена
+        let suppressed = self.suppressed.as_deref() == Some(token.as_str());
+        if !suppressed {
+            self.suppressed = None;
+        }
         self.token = token;
         if self.selected >= items.len() {
             self.selected = 0;
         }
         self.items = items;
-        self.open = !self.items.is_empty();
+        // Список сохраняется и под подавлением — ручное открытие (если
+        // появится по решению владельца) покажет его без пересчёта
+        self.open = !self.items.is_empty() && !suppressed;
     }
 
     /// Сдвиг выделения с закольцовыванием; true — было изменение.
@@ -546,5 +593,79 @@ mod tests {
         assert!(!popup.open);
         popup.sync("".to_owned(), Vec::new());
         assert!(!popup.open, "пустой список закрывает popup");
+    }
+
+    /// CR-023 (UR-001-08): разовое автодополнение — принятое не всплывает
+    /// повторно: подавление взводится принятием (`arm_suppress`), первый
+    /// sync после вставки фиксирует фактический токен, движение каретки
+    /// без правки — тишина, смена токена снимает подавление.
+    #[test]
+    fn hints_popup_accept_suppresses_until_token_change() {
+        let mut popup = HintPopup::default();
+        // Репродуктор владельца: `100 rub` → принять единицу → попап
+        // возвращался с той же подсказкой
+        popup.sync("50".to_owned(), hint_items("w = 50 ", &ctx(), Language::Ru));
+        assert!(popup.open);
+        // Принятие: arm_suppress + первый sync после вставки «сек»
+        popup.arm_suppress();
+        let units = hint_items("w = 50 сек", &ctx(), Language::Ru);
+        assert!(
+            !units.is_empty(),
+            "префикс принятой единицы снова даёт строки"
+        );
+        popup.sync("сек".to_owned(), units);
+        assert!(!popup.open, "после принятия попап закрыт");
+        assert!(
+            !popup.items.is_empty(),
+            "список сохраняется под подавлением"
+        );
+        // Движение каретки без правки — sync на том же токене — тишина
+        popup.sync(
+            "сек".to_owned(),
+            hint_items("w = 50 сек", &ctx(), Language::Ru),
+        );
+        assert!(!popup.open, "подавление держится на принятом токене");
+        // Смена токена (допечатать/стереть символ) — попап оценивает заново
+        popup.sync(
+            "се".to_owned(),
+            hint_items("w = 50 се", &ctx(), Language::Ru),
+        );
+        assert!(popup.open, "смена токена снимает подавление");
+    }
+
+    /// CR-023: Esc — dismiss до смены токена (единая семантика с
+    /// подавлением после принятия): правка токена возвращает попап,
+    /// движение каретки — нет. Прежний `reset` возвращал попап на том же
+    /// токене при первой же правке.
+    #[test]
+    fn hints_popup_esc_dismiss_holds_until_token_change() {
+        let mut popup = HintPopup::default();
+        popup.sync("mm".to_owned(), hint_items("w = mm", &ctx(), Language::Ru));
+        assert!(popup.open);
+        popup.dismiss();
+        assert!(!popup.open);
+        // Тот же токен — попап не возвращается
+        popup.sync("mm".to_owned(), hint_items("w = mm", &ctx(), Language::Ru));
+        assert!(!popup.open);
+        // Смена токена — оценивается заново (префикс `m` — mm1/mmc)
+        popup.sync("m".to_owned(), hint_items("w = m", &ctx(), Language::Ru));
+        assert!(popup.open);
+    }
+
+    /// CR-023: `reset` (новая тема редактирования) снимает и зафиксированное,
+    /// и взведённое подавление.
+    #[test]
+    fn hints_popup_reset_clears_suppression() {
+        let mut popup = HintPopup::default();
+        popup.sync("mm".to_owned(), hint_items("w = mm", &ctx(), Language::Ru));
+        popup.dismiss();
+        assert!(!popup.open);
+        popup.reset();
+        popup.sync("mm".to_owned(), hint_items("w = mm", &ctx(), Language::Ru));
+        assert!(popup.open, "reset снимает зафиксированное подавление");
+        popup.arm_suppress();
+        popup.reset();
+        popup.sync("mm".to_owned(), hint_items("w = mm", &ctx(), Language::Ru));
+        assert!(popup.open, "reset снимает взведённое подавление");
     }
 }

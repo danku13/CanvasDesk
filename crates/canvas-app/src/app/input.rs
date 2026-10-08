@@ -483,7 +483,10 @@ impl App {
                                 return true;
                             }
                             Key::Named(NamedKey::Escape) if !event.repeat => {
-                                self.hints.reset();
+                                // CR-023 (UR-001-08): dismiss с подавлением до
+                                // смены токена — прежний reset возвращал попап
+                                // на том же токене при следующей правке
+                                self.hints.dismiss();
                                 self.request_redraw();
                                 return true;
                             }
