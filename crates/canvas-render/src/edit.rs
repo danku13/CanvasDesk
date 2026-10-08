@@ -391,7 +391,11 @@ pub fn map_key(key: &Key, ctrl: bool, shift: bool, super_key: bool) -> Option<Ke
             shift,
         )),
         Key::Named(NamedKey::ArrowRight) => Some(KeyCommand::Motion(
-            if cmd { Motion::RightWord } else { Motion::Right },
+            if cmd {
+                Motion::RightWord
+            } else {
+                Motion::Right
+            },
             shift,
         )),
         Key::Named(NamedKey::ArrowUp) => Some(KeyCommand::Motion(Motion::Up, shift)),
@@ -1823,7 +1827,10 @@ mod tests {
     #[test]
     fn key_mapping() {
         let enter = Key::Named(NamedKey::Enter);
-        assert_eq!(map_key(&enter, false, false, false), Some(KeyCommand::Commit));
+        assert_eq!(
+            map_key(&enter, false, false, false),
+            Some(KeyCommand::Commit)
+        );
         assert_eq!(
             map_key(&enter, false, true, false),
             Some(KeyCommand::Action(Action::Enter))
@@ -1882,7 +1889,10 @@ mod tests {
             Some(KeyCommand::Insert("я".into()))
         );
         // Control-символы без Ctrl не вставляются
-        assert_eq!(map_key(&Key::Character("\t".into()), false, false, false), None);
+        assert_eq!(
+            map_key(&Key::Character("\t".into()), false, false, false),
+            None
+        );
         // Ctrl+Left — word jump, Shift+Left — расширение выделения
         assert_eq!(
             map_key(&Key::Named(NamedKey::ArrowLeft), true, false, false),
@@ -1893,7 +1903,10 @@ mod tests {
             Some(KeyCommand::Motion(Motion::Left, true))
         );
         // Прочие клавиши редактору не нужны
-        assert_eq!(map_key(&Key::Named(NamedKey::F5), false, false, false), None);
+        assert_eq!(
+            map_key(&Key::Named(NamedKey::F5), false, false, false),
+            None
+        );
     }
 
     // --- FR-100: полный набор шорткатов редактора ---
@@ -1971,9 +1984,18 @@ mod tests {
     #[test]
     fn super_parity_in_map_key() {
         let cases = [
-            (Key::Named(NamedKey::Backspace), Some(KeyCommand::DeleteWordBackward)),
-            (Key::Named(NamedKey::Delete), Some(KeyCommand::DeleteWordForward)),
-            (Key::Named(NamedKey::Enter), Some(KeyCommand::Action(Action::Enter))),
+            (
+                Key::Named(NamedKey::Backspace),
+                Some(KeyCommand::DeleteWordBackward),
+            ),
+            (
+                Key::Named(NamedKey::Delete),
+                Some(KeyCommand::DeleteWordForward),
+            ),
+            (
+                Key::Named(NamedKey::Enter),
+                Some(KeyCommand::Action(Action::Enter)),
+            ),
             (Key::Character("a".into()), Some(KeyCommand::SelectAll)),
             (Key::Character("z".into()), Some(KeyCommand::Undo)),
             (Key::Character("y".into()), Some(KeyCommand::Redo)),
@@ -1986,7 +2008,11 @@ mod tests {
                 expected,
                 "super=true ≡ ctrl=true для {key:?}"
             );
-            assert_eq!(map_key(&key, true, false, false), expected, "ctrl для {key:?}");
+            assert_eq!(
+                map_key(&key, true, false, false),
+                expected,
+                "ctrl для {key:?}"
+            );
         }
     }
 
@@ -1996,8 +2022,7 @@ mod tests {
     #[test]
     fn word_delete_backward_forward() {
         let (mut fs, mut s) = session("привет мир");
-        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false)
-            .expect("команда");
+        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false).expect("команда");
         s.apply(&mut fs, cmd);
         assert_eq!(s.text(), "привет ", "удалено «мир», пробел остался");
         let cmd = map_key(&Key::Named(NamedKey::Delete), true, false, false).expect("команда");
@@ -2011,8 +2036,7 @@ mod tests {
         s.apply(&mut fs, cmd);
         assert_eq!(s.text(), " мир", "удалено «привет», пробел остался");
         // Ctrl+Backspace в начале строки — no-op
-        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false)
-            .expect("команда");
+        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false).expect("команда");
         s.apply(&mut fs, cmd);
         assert_eq!(s.text(), " мир", "слева от каретки слова нет");
     }
@@ -2023,8 +2047,7 @@ mod tests {
     fn word_delete_with_selection_removes_selection() {
         let (mut fs, mut s) = session("привет мир");
         s.apply(&mut fs, KeyCommand::SelectAll);
-        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false)
-            .expect("команда");
+        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false).expect("команда");
         s.apply(&mut fs, cmd);
         assert_eq!(s.text(), "", "удалено выделение целиком");
     }
@@ -2036,8 +2059,7 @@ mod tests {
         let (mut fs, mut s) = session("раз\nдва");
         s.apply(&mut fs, KeyCommand::Motion(Motion::Down, false));
         s.apply(&mut fs, KeyCommand::Motion(Motion::Home, false));
-        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false)
-            .expect("команда");
+        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false).expect("команда");
         s.apply(&mut fs, cmd);
         assert_eq!(s.text(), "раздва", "перенос удалён вместе с переходом");
     }
@@ -2097,8 +2119,7 @@ mod tests {
     #[test]
     fn undo_covers_word_delete_and_paste() {
         let (mut fs, mut s) = session("абв годы");
-        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false)
-            .expect("команда");
+        let cmd = map_key(&Key::Named(NamedKey::Backspace), true, false, false).expect("команда");
         s.apply(&mut fs, cmd);
         assert_eq!(s.text(), "абв ");
         assert!(s.undo(&mut fs));
@@ -2147,7 +2168,11 @@ mod tests {
         let (mut fs, mut s) = session("абв");
         s.apply(&mut fs, KeyCommand::Tab);
         assert_eq!(s.text(), "    абв");
-        assert_eq!(s.caret_line().2, 10, "каретка сдвинулась на индент (4 байта пробела + «абв» = 10)");
+        assert_eq!(
+            s.caret_line().2,
+            10,
+            "каретка сдвинулась на индент (4 байта пробела + «абв» = 10)"
+        );
         // Частичный индент добивается до таб-стопа (4)
         let (mut fs, mut s) = session("  абв");
         s.apply(&mut fs, KeyCommand::Tab);
@@ -2188,8 +2213,7 @@ mod tests {
         let s = EditingSession::new_title(&mut fs, 0, "Имя", 300.0, 22.0, 1.0);
         let tab = map_key(&Key::Named(NamedKey::Tab), false, false, false).expect("команда");
         assert_eq!(s.adapt_command(tab), None, "Tab в заголовке не индентит");
-        let page = map_key(&Key::Named(NamedKey::PageUp), false, false, false)
-            .expect("команда");
+        let page = map_key(&Key::Named(NamedKey::PageUp), false, false, false).expect("команда");
         assert!(s.adapt_command(page).is_some(), "навигация не глушится");
     }
 }
@@ -2266,7 +2290,8 @@ fn title_adapt_command() {
     assert!(s.adapt_command(left).is_some(), "навигация не глушится");
     // Тело — поведение прежнее (Shift+Enter — новая строка)
     let body = EditingSession::new(&mut fs, EditTarget::Node(0), "", 300.0, 100.0, 1.0);
-    let shift_enter_body = map_key(&Key::Named(NamedKey::Enter), false, true, false).expect("команда");
+    let shift_enter_body =
+        map_key(&Key::Named(NamedKey::Enter), false, true, false).expect("команда");
     let expected = shift_enter_body.clone();
     assert_eq!(
         body.adapt_command(shift_enter_body),
