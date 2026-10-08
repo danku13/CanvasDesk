@@ -12,9 +12,18 @@
 //! канвас, `recompute_flow` даёт контрольные значения формул. Тесты
 //! исполняются нативно и под wasm32-wasip1 (гейт FR-037) — без ФС и сети.
 
+use crate::measure::{estimated_result_reserve_height, formula_line_indices};
 use canvas_core::flow::FlowKind;
 use canvas_core::schemes::SchemeManifest;
 use canvas_core::{Edge, Node, Side};
+
+/// Консервативная заглушка значения авто-строки при предразмеривании
+/// (решений при инстанциации нет). Форма разбора — как у реального
+/// отображения [`canvas_core::expr::Value`] (`format_num`: число с
+/// NBSP-группой + юнит): «150 000 руб» built-in схем не длиннее, короткие
+/// значения только безопаснее (оценка считается по символам, завышение
+/// длины строки — запас высоты, не дефект).
+const AUTO_ROW_VALUE_STUB: &str = "000\u{a0}000 руб";
 
 /// Инстанцированная схема: ноды/рёбра для вставки + bounding box (до
 /// сдвига, в координатах схемы) для zoom-to-fit.
@@ -174,14 +183,18 @@ pub fn instantiate_scheme_with_language(
         edges.push(built);
     }
 
-    // FR-071: умная раскладка — план позиций от семантики графа (кластеры
-    // по смыслу, слои DAG, barycenter, минимизация пересечений рёбер с
-    // нодами); рамки групп пересчитываются по bbox детей.
     let mut laid = canvas_core::Canvas {
         nodes,
         edges,
         ..canvas_core::Canvas::default()
     };
+    // CR-021 (W3-C1): предразмеривание text-нод — ДО раскладки (сетка
+    // FR-071 обязана шагать по финальным высотам, иначе авто-рост после
+    // recompute_flow выталкивает ноду из ряда в соседа).
+    presize_text_heights(&mut laid);
+    // FR-071: умная раскладка — план позиций от семантики графа (кластеры
+    // по смыслу, слои DAG, barycenter, минимизация пересечений рёбер с
+    // нодами); рамки групп пересчитываются по bbox детей.
     let plan = canvas_core::scheme_layout::plan_scheme_layout(&laid);
     for (index, [x, y]) in plan.positions {
         if let Some(node) = laid.nodes.get_mut(index) {
@@ -219,6 +232,106 @@ pub fn instantiate_scheme_with_language(
         edges: laid.edges,
         bbox: [min_x + dx, min_y + dy, max_x + dx, max_y + dy],
     })
+}
+
+/// CR-021 (W3-C1, фикс CJM-регрессии `geometry_clean_after_autogrow`):
+/// предразмерить text-ноды под консервативную оценку финальной высоты
+/// ПЕРЕД умной раскладкой FR-071.
+///
+/// Раскладка строит сетку по высотам, известным в момент инстанциации
+/// (манифестным), а реальный рост происходит позже — в `recompute_flow`
+/// (ленивый refit CR-012/FR-069 с точным шейпингом + авто-строки
+/// приёмников FR-050 Р-4, которые после CR-021 создаются для ВСЕХ
+/// позиционных value-входов независимо от читаемости слота). Нода
+/// «уезжала» за нижнюю границу своего ряда и налезала на соседа ряда
+/// ниже (investment-case: irr 200 → 368 при шаге ряда по манифестным
+/// высотам).
+///
+/// Фикс системный (в духе CR-021 — единая точка классификации, слой
+/// canvas-scene + canvas-core, БЕЗ canvas-render): height =
+/// max(манифест, оценка уровня 1 [`estimated_result_reserve_height`]).
+/// Завышение безопасно: рост высот grow-only, а зазор ряда ROW_GAP
+/// поглощает остаточную дельту точного шейпинга (уровень 2) над оценкой.
+///
+/// Входы оценки зеркалят recompute-путь сцены (I-2: мера = рендер):
+/// • авто-строки приёмника — позиционные value-рёбра в ноду
+///   (`to_node`, `FlowKind::Value`, `to_param.is_none()`; зеркало
+///   `flow::auto_rows_with_data` после CR-021, решения не нужны).
+///   Строки-проекции «путь = значение» препендятся display-тексту, их
+///   индексы входят в formula_lines (зеркало `SceneState::refit_inputs`);
+///   путь — общие функции ядра (`qualified_obj_name` +
+///   `spill_source_field`), значение — заглушка AUTO_ROW_VALUE_STUB;
+/// • formula_lines тела — построчные исходы `expr::eval_lines` текста
+///   (тот же текстовый хелпер, что в `measure::fit_template_node_height`),
+///   со сдвигом на длину авто-префикса;
+/// • desc — `canvasdesk.desc` ноды (инстансы схем его не несут — пусто;
+///   читается из ноды, чтобы оценка оставалась верной по построению);
+/// • footer_reserve/sigma_name — текстовое зеркало
+///   `node_shows_result_footer`: у заметки без шаблона и `canvasdesk.expr`
+///   футер показывается только при отсутствии построчных результатов И
+///   наличии итога; итог заметки — последняя формульная строка (ядро,
+///   FR-013), при пустых построчных исходах итога нет → футера нет,
+///   Σ-строка (ряд тела при футере) тоже отсутствует → имя пустое.
+fn presize_text_heights(canvas: &mut canvas_core::Canvas) {
+    // Иммутабельный проход: пути авто-строк приёмников (порядок —
+    // `canvas.edges`, как в `auto_rows_with_data` — детерминизм).
+    let counts = canvas_core::dataref::display_name_counts(canvas);
+    let mut auto_paths: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for edge in &canvas.edges {
+        if edge.flow_kind() != FlowKind::Value || edge.to_param.is_some() {
+            continue;
+        }
+        let obj = canvas_core::dataref::qualified_obj_name(canvas, &edge.from_node, &counts);
+        let field = canvas_core::flow::spill_source_field(
+            canvas,
+            &edge.from_node,
+            edge.from_output.as_deref(),
+            edge.from_line,
+            &edge.id,
+        );
+        auto_paths
+            .entry(edge.to_node.clone())
+            .or_default()
+            .push(format!("{obj}.{field} = {AUTO_ROW_VALUE_STUB}"));
+    }
+    // Мутация: рост высоты до консервативной оценки (grow-only от max).
+    for node in &mut canvas.nodes {
+        if node.kind() != canvas_core::NodeKind::Text {
+            continue;
+        }
+        let body = node.text.clone().unwrap_or_default();
+        let prefix = auto_paths.get(&node.id).cloned().unwrap_or_default();
+        let shift = prefix.len();
+        let display = if shift == 0 {
+            body.clone()
+        } else {
+            format!("{}\n{}", prefix.join("\n"), body)
+        };
+        let mut formula_lines: Vec<usize> =
+            formula_line_indices(&canvas_core::expr::eval_lines(&body))
+                .into_iter()
+                .map(|i| i + shift)
+                .chain(0..shift)
+                .collect();
+        formula_lines.sort_unstable();
+        let desc = node
+            .canvasdesk
+            .as_ref()
+            .and_then(|ext| ext.desc.as_deref())
+            .unwrap_or_default();
+        let estimate = estimated_result_reserve_height(
+            &display,
+            node.width,
+            &formula_lines,
+            desc,
+            false,
+            false,
+            "",
+            shift,
+        );
+        node.height = node.height.max(estimate);
+    }
 }
 
 #[cfg(test)]

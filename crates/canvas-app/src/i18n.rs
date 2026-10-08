@@ -29,7 +29,8 @@ pub mod keys {
     pub const TAB_CANVAS: &str = "settings.tab.canvas";
     pub const TAB_EDGES: &str = "settings.tab.edges";
     pub const TAB_APPEARANCE: &str = "settings.tab.appearance";
-    /// FR-079 (S3): таб «Подсказки» — ИИ-подсказки шаблонов.
+    /// FR-079 (S3): таб «Подсказки» — ИИ-карточки шаблонов (CR-022:
+    /// попап при вводе — только L0, карточки C3 — после создания ноды).
     pub const TAB_SUGGEST: &str = "settings.tab.suggest";
     /// FR-087: таб «Профиль» — роль и фильтры подсказок.
     pub const TAB_PROFILE: &str = "settings.tab.profile";
@@ -468,6 +469,9 @@ pub mod keys {
     pub const HINT_AI_DETAIL: &str = "hints.ai_detail";
     pub const HINT_AI_DETAIL_FUSION: &str = "hints.ai_detail_fusion";
     pub const HINT_DOLLAR_N: &str = "hints.dollar_n";
+    /// FR-101: деталь именованного входа — источник значения
+    /// («проливание из ноды X»).
+    pub const HINT_SPILL: &str = "hints.spill";
     /// FR-079 follow-up: empty-state карточек C3 — предложений нет,
     /// тултип рядом с якорем.
     pub const SUGGEST_EMPTY: &str = "suggest.empty";
@@ -1307,6 +1311,7 @@ const RU: &[(&str, &str)] = &[
     (keys::HINT_AI_DETAIL, "ИИ · заменит ноду шаблоном"),
     (keys::HINT_AI_DETAIL_FUSION, "ИИ+ · заменит ноду шаблоном"),
     (keys::HINT_DOLLAR_N, "вход №{i}"),
+    (keys::HINT_SPILL, "проливание из ноды «{node}»"),
     (keys::SUGGEST_EMPTY, "✦ AI-дополнений нет"),
     // --- Онбординг ---
     // --- Галерея схем (FR-049) ---
@@ -1863,8 +1868,13 @@ const RU: &[(&str, &str)] = &[
     ),
     (keys::ROW_AUTOLINK, "Автосвязь по именам (фон)"),
     // FR-079 (S3): таб «Подсказки»
-    (keys::ROW_SUGGEST_ENABLED, "ИИ-подсказки шаблонов"),
-    (keys::DESC_SUGGEST_ENABLED, "Предложения по мере ввода и карточки «что дальше»"),
+    // CR-022: формулировка тумблера уточнена — ИИ-строки в попапе сняты
+    // (c1_in_popup=false), тумблер управляет C3-карточками после создания ноды
+    (keys::ROW_SUGGEST_ENABLED, "ИИ-карточки шаблонов (после создания ноды)"),
+    (
+        keys::DESC_SUGGEST_ENABLED,
+        "Карточки «что дальше» у новой шаблонной ноды; попап при вводе — только L0-подсказки",
+    ),
     (keys::ROW_SUGGEST_ENGINE, "Движок"),
     (keys::DESC_SUGGEST_ENGINE, "Локальная лексика или гибрид с Laya (sidecar)"),
     (keys::SUGGEST_ENGINE_LEX, "Лексика (локально)"),
@@ -2526,6 +2536,7 @@ const EN: &[(&str, &str)] = &[
     (keys::HINT_AI_DETAIL, "AI · replaces node with template"),
     (keys::HINT_AI_DETAIL_FUSION, "AI+ · replaces node with template"),
     (keys::HINT_DOLLAR_N, "input #{i}"),
+    (keys::HINT_SPILL, "spill from node \"{node}\""),
     (keys::SUGGEST_EMPTY, "✦ No AI suggestions"),
     // --- Onboarding ---
     // --- Scheme gallery (FR-049) ---
@@ -3059,8 +3070,13 @@ const EN: &[(&str, &str)] = &[
     ),
     (keys::ROW_AUTOLINK, "Background autolink by names"),
     // FR-079 (S3): suggestions tab
-    (keys::ROW_SUGGEST_ENABLED, "AI template suggestions"),
-    (keys::DESC_SUGGEST_ENABLED, "As-you-type proposals and \u{201c}what goes next\u{201d} cards"),
+    // CR-022: reworded — AI lines removed from the typing popup
+    // (c1_in_popup=false); the toggle drives C3 cards after node creation
+    (keys::ROW_SUGGEST_ENABLED, "AI template cards (after node creation)"),
+    (
+        keys::DESC_SUGGEST_ENABLED,
+        "\u{201c}What comes next\u{201d} cards on a new template node; the typing popup shows L0 hints only",
+    ),
     (keys::ROW_SUGGEST_ENGINE, "Engine"),
     (keys::DESC_SUGGEST_ENGINE, "Local lexics or Laya hybrid (sidecar)"),
     (keys::SUGGEST_ENGINE_LEX, "Lexics (local)"),
@@ -3480,6 +3496,15 @@ mod tests {
         assert_eq!(
             trf(Language::Ru, keys::HINT_DOLLAR_N, &[("{i}", "2")]),
             "вход №2"
+        );
+        // FR-101: деталь именованного входа — источник значения
+        assert_eq!(
+            trf(Language::Ru, keys::HINT_SPILL, &[("{node}", "Купон")]),
+            "проливание из ноды «Купон»"
+        );
+        assert_eq!(
+            trf(Language::En, keys::HINT_SPILL, &[("{node}", "Купон")]),
+            "spill from node \"Купон\""
         );
         // Неизвестный плейсхолдер — текст без изменений
         assert_eq!(trf(Language::Ru, keys::DIALOG_YES, &[("{x}", "y")]), "Да");

@@ -1337,10 +1337,12 @@ pub fn unmapped_inputs_with_data(
 }
 
 /// FR-050 Р-4 (Н10-а — строка-проекция, решено раундом 4): авто-строка
-/// приёмника — производная строка тела ноды для value-ребра БЕЗ `toParam`,
-/// подключённого к ноде без ожидающего порта (позиционный слот не читается
-/// формулами ноды — условие W-UNUSED-SLOT FR-032; шаблонная нода читает
-/// `$параметры`, не `$N`). Display-level: НЕ сериализуется в `.canvas`
+/// приёмника — производная строка тела ноды для value-ребра БЕЗ `toParam`.
+/// CR-021 (решение владельца Q3): строка создаётся для КАЖДОГО позиционного
+/// value-входа независимо от читаемости слота — входящие значения видимы
+/// всегда (компактно); читаемость слота осталась только сигналом
+/// W-UNUSED-SLOT FR-032 (шаблонная нода читает `$параметры`, не `$N`).
+/// Display-level: НЕ сериализуется в `.canvas`
 /// (round-trip байт-в-байт), в undo не участвует — единственный источник
 /// истины ребро; повторный пересчёт даёт идентичную строку; удаление ребра
 /// удаляет строку (конвертации в ручную нет — Р-5); ручная правка
@@ -1423,15 +1425,19 @@ pub fn auto_rows(canvas: &Canvas, node_id: &str, solutions: &FlowSolutions) -> V
 /// FR-050 Р-4: [`auto_rows`] со снапшотами CSV-источников — значения
 /// data-нод резолвятся той же адресацией, что в пересчёте (FR-045 R-2:
 /// `fromOutput` — колонка, `fromLine` — запись; снапшота нет — unmapped).
+///
+/// CR-021 (UR-001-04, решение владельца Q3 — пересмотр fr-050 Р-4):
+/// авто-строки создаются для ВСЕХ позиционных value-входов независимо от
+/// читаемости слота. Читаемость (формула читает `$N`/`$in`/qualified —
+/// сборщик `validate::slot_references`) остаётся ТОЛЬКО сигналом
+/// W-UNUSED-SLOT (FR-032) — валидацию не трогает; входящие значения видимы
+/// всегда (компактно), строка расчёта помечается как расчёт (маркер ƒ).
 pub fn auto_rows_with_data(
     canvas: &Canvas,
     node_id: &str,
     solutions: &FlowSolutions,
     data: &DataSnapshots,
 ) -> Vec<AutoRow> {
-    let Some(node) = canvas.node(node_id) else {
-        return Vec::new();
-    };
     // Позиционные value-рёбра приёмника — слоты $1..$N по порядку
     // `canvas.edges` (как `inbound_values`).
     let positional: Vec<&Edge> = canvas
@@ -1446,27 +1452,9 @@ pub fn auto_rows_with_data(
     if positional.is_empty() {
         return Vec::new();
     }
-    // «Ожидающий порт»: слот читается формулами ноды — `$N` (целые ≥ 1)
-    // или `$in` (валиден при ровно одном входе) — зеркало логики
-    // W-UNUSED-SLOT FR-032. Читается → значение уходит в формулу
-    // (обычный поток FR-014), авто-строки нет.
-    // FR-050 Р-6: именованный путь «Объект.Поле» тоже читает слот своего
-    // ребра (ключи резолва — все адресные формы истока × поле).
-    let refs = crate::validate::slot_references(node);
-    let names = QualifiedNames::build(canvas);
     let counts = crate::dataref::display_name_counts(canvas);
     let mut result = Vec::new();
     for (slot, edge) in positional.iter().enumerate() {
-        let read = (refs.in_ref && positional.len() == 1)
-            || refs.slots.contains(&(slot + 1))
-            || (!refs.qualified.is_empty()
-                && names
-                    .edge_keys(canvas, edge)
-                    .iter()
-                    .any(|k| refs.qualified.contains(k)));
-        if read {
-            continue;
-        }
         let value = edge_source_value_with_data(
             edge,
             &solutions.outputs,
@@ -3689,22 +3677,25 @@ mod tests {
         assert_eq!(row(None).display_text(), "Трафик.peak_rps = —");
     }
 
-    /// FR-050 Р-4: «ожидающий порт» — слот читается формулой (`$in` при
-    /// единственном входе, `$N`) → авто-строки нет; шаблонная нода читает
-    /// `$параметры` → позиционное ребро даёт авто-строку.
+    /// CR-021 (UR-001-04, решение владельца Q3 — пересмотр fr-050 Р-4):
+    /// авто-строки создаются для ВСЕХ позиционных value-входов, включая
+    /// читаемые формулой (`$in` при единственном входе, `$N`). Читаемость
+    /// слота осталась сигналом W-UNUSED-SLOT (FR-032, validate.rs) — на
+    /// авто-строки не влияет. Шаблонная нода читает `$параметры` —
+    /// позиционное ребро по-прежнему даёт авто-строку.
     #[test]
-    fn auto_row_absent_when_slot_read() {
-        // $in при единственном входе — слот занят
+    fn auto_rows_present_even_when_slot_read() {
+        // $in при единственном входе — слот читается, строка входа видна
         let mut canvas = Canvas::default();
         node_with_expr(&mut canvas, "A", "7", 0.0);
         node_with_expr(&mut canvas, "B", "$in × 2", 1.0);
         value_edge(&mut canvas, "e1", "A", "B");
         let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
-        assert!(
-            auto_rows(&canvas, "B", &solutions).is_empty(),
-            "$in читает единственный вход"
-        );
-        // $2 читается, $1 нет — авто-строка только для первого слота
+        let rows = auto_rows(&canvas, "B", &solutions);
+        assert_eq!(rows.len(), 1, "вход виден и при читаемом $in: {rows:?}");
+        assert_eq!(rows[0].slot, 0);
+        assert_eq!(rows[0].edge_id, "e1");
+        // $2 читается, $1 нет — строки у ОБОИХ слотов (входы видимы всегда)
         let mut canvas2 = Canvas::default();
         node_with_expr(&mut canvas2, "A", "7", 0.0);
         node_with_expr(&mut canvas2, "C", "5", 1.0);
@@ -3713,11 +3704,13 @@ mod tests {
         value_edge(&mut canvas2, "e2", "C", "D");
         let solutions2 = propagate_with_lines(&canvas2, &WhatIfOverrides::default()).expect("DAG");
         let rows = auto_rows(&canvas2, "D", &solutions2);
-        assert_eq!(rows.len(), 1, "только неиспользуемый слот: {rows:?}");
-        assert_eq!(rows[0].slot, 0, "слот 0 ($1) не читается");
+        assert_eq!(rows.len(), 2, "оба входа видимы: {rows:?}");
+        assert_eq!(rows[0].slot, 0);
         assert_eq!(rows[0].edge_id, "e1");
+        assert_eq!(rows[1].slot, 1);
+        assert_eq!(rows[1].edge_id, "e2");
         // Шаблонная нода: формула читает $параметры — позиционное ребро
-        // даёт авто-строку (W-UNUSED-SLOT условие)
+        // даёт авто-строку (как раньше; W-UNUSED-SLOT условие не тронуто)
         let mut canvas3 = Canvas::default();
         node_with_expr(&mut canvas3, "A", "7", 0.0);
         template_node_with_outputs(
@@ -3733,6 +3726,110 @@ mod tests {
         assert_eq!(rows3.len(), 1, "шаблон не читает $N: {rows3:?}");
         assert_eq!(rows3[0].field, "e1", "ребро без адресации — edge.id");
         assert_eq!(rows3[0].path, "A.e1");
+    }
+
+    /// CR-021, верификация UR-001-04: репродуктор handtest «Общая сумма
+    /// корзины» — 2 value-ребра (qty = 10, price = 100 руб) и формула
+    /// `sum = $1 * $2`: обе входящие строки видимы со значениями, хотя
+    /// оба слота читаются формулой; поля — имена присваиваний-источников.
+    #[test]
+    fn handtest_cart_total_shows_inbound_rows_with_calc_formula() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text(
+            "cart",
+            "Корзина\nqty = 10\nprice = 100 руб",
+            0.0,
+            0.0,
+        ));
+        node_with_expr(&mut canvas, "total", "sum = $1 * $2", 1.0);
+        // fromLine-адресация: e1 — строка «qty», e2 — строка «price»
+        let mut e1 = Edge::new("e1", "cart", None, "total", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_line = Some(1);
+        canvas.add_edge(e1);
+        let mut e2 = Edge::new("e2", "cart", None, "total", None);
+        e2.set_flow_kind(FlowKind::Value);
+        e2.from_line = Some(2);
+        canvas.add_edge(e2);
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        let rows = auto_rows(&canvas, "total", &solutions);
+        assert_eq!(rows.len(), 2, "оба входа видимы (CR-021): {rows:?}");
+        assert_eq!(rows[0].path, "Корзина.qty");
+        assert_eq!(rows[0].value.as_ref().map(|v| v.num), Some(10.0));
+        assert_eq!(rows[1].path, "Корзина.price");
+        let price = rows[1].value.as_ref().expect("значение пролито");
+        assert!(price.to_string().contains("100"), "значение: {price}");
+        // Валидация FR-032 не тронута: оба слота читаются формулой —
+        // ложных W-UNUSED-SLOT на видимые строки нет
+        assert_eq!(
+            crate::validate::validate(&canvas),
+            Vec::new(),
+            "читаемые слоты не предупреждение (пересмотр Р-4 не ломает FR-032)"
+        );
+    }
+
+    /// CR-021 + FR-032: авто-строки (проекция, все входы видимы) и
+    /// W-UNUSED-SLOT (валидация) — НЕЗАВИСИМЫЕ сигналы: слот $2 читается,
+    /// слот $1 нет → W-UNUSED-SLOT ровно о ребре первого слота, при этом
+    /// авто-строки у ОБОИХ входов (пересмотр fr-050 Р-4).
+    #[test]
+    fn unused_slot_validation_independent_of_visible_rows() {
+        let mut canvas = Canvas::default();
+        node_with_expr(&mut canvas, "a", "10", 0.0);
+        node_with_expr(&mut canvas, "b", "20", 1.0);
+        node_with_expr(&mut canvas, "c", "$2 + 100", 2.0);
+        value_edge(&mut canvas, "e1", "a", "c");
+        value_edge(&mut canvas, "e2", "b", "c");
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        // Валидация: W-UNUSED-SLOT о e1 (слот $1 не читается), e2 чист
+        let issues = crate::validate::validate(&canvas);
+        assert_eq!(issues.len(), 1, "только слот $1: {issues:?}");
+        assert_eq!(issues[0].edge_id.as_deref(), Some("e1"));
+        // Проекция: обе строки входов видимы (CR-021)
+        let rows = auto_rows(&canvas, "c", &solutions);
+        assert_eq!(rows.len(), 2, "оба входа видимы: {rows:?}");
+        assert_eq!(rows[0].edge_id, "e1");
+        assert_eq!(rows[1].edge_id, "e2");
+    }
+
+    /// CR-021: авто-строки — проекция пересчёта, сериализацию `.canvas`
+    /// не трогают: round-trip канваса с 2 value-рёбрами и формулой
+    /// `sum = $1 * $2` байт-в-байт, авто-строки после загрузки — те же.
+    #[test]
+    fn auto_rows_roundtrip_canvas_unchanged() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text(
+            "cart",
+            "Корзина\nqty = 10\nprice = 100 руб",
+            0.0,
+            0.0,
+        ));
+        node_with_expr(&mut canvas, "total", "sum = $1 * $2", 1.0);
+        let mut e1 = Edge::new("e1", "cart", None, "total", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_output = Some("qty".to_owned());
+        canvas.add_edge(e1);
+        let mut e2 = Edge::new("e2", "cart", None, "total", None);
+        e2.set_flow_kind(FlowKind::Value);
+        e2.from_output = Some("price".to_owned());
+        canvas.add_edge(e2);
+        let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
+        let before = auto_rows(&canvas, "total", &solutions);
+        assert_eq!(before.len(), 2);
+        // Round-trip: сериализация → парсинг → байт-в-байт
+        let serialized = canvas.to_json().expect("сериализация");
+        let restored = Canvas::from_str(&serialized).expect("канвас читается");
+        assert_eq!(
+            serialized,
+            restored.to_json().expect("сериализация"),
+            "авто-строки в сериализацию не попадают (проекция)"
+        );
+        let solutions2 = propagate_with_lines(&restored, &WhatIfOverrides::default()).expect("DAG");
+        assert_eq!(
+            auto_rows(&restored, "total", &solutions2),
+            before,
+            "проекция воспроизводится после загрузки"
+        );
     }
 
     /// FR-050 Р-4 (Н7/Р-6): поле авто-строки — fromLine → имя присваивания
@@ -3949,11 +4046,12 @@ mod tests {
         );
     }
 
-    /// Р-6: именованный путь читает слот своего ребра — W-UNUSED-SLOT не
-    /// срабатывает, авто-строка не появляется (значение не «теряется»).
-    /// Тебро без адресации в путь имени — поле edge.id.
+    /// Р-6 + CR-021: именованный путь читает слот своего ребра —
+    /// W-UNUSED-SLOT не срабатывает (валидация FR-032 не тронута), но
+    /// авто-строка входа теперь ВИДНА (пересмотр fr-050 Р-4 — решение
+    /// владельца Q3). Ребро без адресации в путь имени — поле edge.id.
     #[test]
-    fn qualified_consumes_slot_no_warning_no_auto_row() {
+    fn qualified_consumes_slot_no_warning_auto_row_visible() {
         let mut canvas = Canvas::default();
         canvas
             .nodes
@@ -3963,10 +4061,14 @@ mod tests {
             .push(Node::text("r", "итог = Заявки.Кол + 1", 1.0, 0.0));
         ported_value_edge(&mut canvas, "e1", "s", "r", Some("Кол"), None);
         let solutions = propagate_with_lines(&canvas, &WhatIfOverrides::default()).expect("DAG");
-        assert!(
-            auto_rows(&canvas, "r", &solutions).is_empty(),
-            "слот читается именованным путём — авто-строки нет"
+        let rows = auto_rows(&canvas, "r", &solutions);
+        assert_eq!(
+            rows.len(),
+            1,
+            "CR-021: вход виден и при чтении путём: {rows:?}"
         );
+        assert_eq!(rows[0].path, "Заявки.Кол");
+        assert_eq!(rows[0].value.as_ref().map(|v| v.num), Some(40.0));
         assert_eq!(
             crate::validate::validate(&canvas),
             Vec::new(),
