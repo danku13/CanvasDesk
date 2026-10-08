@@ -72,13 +72,8 @@ pub struct RadioCardStyle {
     pub indicator_fill: [f32; 4],
 }
 
-/// Alpha-tint (rgb сохраняется, alpha заменяется) — именованный паттерн
-/// `agent_panel.rs:443-444`/`graph_builder_ui.rs:197-202`: tinted-фон под
-/// selected/error/success семантику. Не вычисляет новых цветов —
-/// модулирует прозрачность существующего слота.
-fn tint(slot: [f32; 4], alpha: f32) -> [f32; 4] {
-    [slot[0], slot[1], slot[2], alpha]
-}
+// tint() извлечена в `crate::paint::tint` (аудит 2026-10-06: была дублирована 3×).
+use crate::paint::tint;
 
 /// Раскладка radio-card в слоте `slot` с измеренными ширинами подписей.
 ///
