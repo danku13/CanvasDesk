@@ -6,7 +6,9 @@
 //! (ADR-0012), в headless/wasm-режиме работает консервативная оценка
 //! (growth-only, безопасность сохраняется).
 
-use canvas_core::expr::{self, line_kind, ExprOutcome, NumiLineKind};
+use canvas_core::expr::{
+    self, line_kind, line_role, param_line_count, ExprOutcome, LineRole, NumiLineKind,
+};
 use canvas_core::Node;
 
 // --- метрики раскладки (значения синхронны с canvas-render: cards.rs
@@ -175,17 +177,11 @@ pub fn estimated_result_reserve_height(
     // «параметры» — есть присваивания с исходами; «расчёт» — есть
     // расчётные строки и режим ЛИСТА (в блоке его роль играет ряд
     // заголовка, уже учтённый в header_rows). Логика — зеркально
-    // body_items (canvas-render), I-2.
+    // body_items (canvas-render), I-2. CR-021: параметр — присваивание
+    // с RHS-литералом (единая точка `param_line_count`); расчётные
+    // присваивания в «параметры» не попадают.
     let lines: Vec<&str> = text.lines().collect();
-    let params = formula_lines
-        .iter()
-        .copied()
-        .filter(|&i| {
-            lines
-                .get(i)
-                .is_some_and(|line| matches!(line_kind(line), NumiLineKind::Assignment { .. }))
-        })
-        .count();
+    let params = param_line_count(&lines, formula_lines);
     let calcs = formula_lines.len().saturating_sub(params);
     let mut label_rows = 0.0;
     if params > 0 {
@@ -517,10 +513,12 @@ pub fn fit_template_node_height(node: &mut Node) {
     // FR-069: desc — None (реестр манифестов недоступен здесь, оценка без
     // супрессии консервативна); desc_expanded — дефолт (кламп);
     // footer_reserve — шаблонная нода показывает футер итога.
+    // CR-021: расчётная строка — по единой классификации `line_role`
+    // (и присваивание с RHS-входами открывает Σ-строку, I-2 с рендером).
     let sigma_name = if formula_lines.iter().any(|&i| {
         text.lines()
             .nth(i)
-            .is_some_and(|line| !matches!(line_kind(line), NumiLineKind::Assignment { .. }))
+            .is_some_and(|line| line_role(line) == LineRole::Calc)
     }) {
         format!("Σ {}", node.sigma_row_name())
     } else {

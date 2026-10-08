@@ -2247,6 +2247,82 @@ pub fn line_kind(line: &str) -> NumiLineKind {
     }
 }
 
+/// CR-021 (UR-001-04): роль формульной строки тела — «параметр» или
+/// «расчёт». ЕДИНАЯ точка классификации для тела ноды (canvas-render:
+/// [`crate::expr::line_role`] → род строки/метки зон) и панели stage
+/// «Как считается» (canvas-app: группа «Расчёт · формулы») — вердикт не
+/// дублируется (UR-001-04 B: двойная классификация одной строки на двух
+/// поверхностях).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineRole {
+    /// Присваивание-константа: RHS — литерал (число/юнит/дробная валюта),
+    /// ссылок на значения нет (`qty = 10`, `rate = 0.2`).
+    Param,
+    /// Расчёт (маркер ƒ): выражение или присваивание, чей RHS читает
+    /// значения — входы `$N`/`$in`, параметры шаблона `$имя`, локальные
+    /// переменные, qualified-пути «Объект.Поле» (`sum = $1 × $2`).
+    Calc,
+}
+
+/// CR-021: единая точка классификации «параметр vs расчёт» (см.
+/// [`LineRole`]). Правило: присваивание — параметр ТОЛЬКО когда RHS —
+/// литерал без ссылок; всё, что читает значения (или не разбирается
+/// как литерал), — расчёт. Определение «ссылки на вход» — зеркало
+/// `validate::collect_slot_refs` (целое `$N` ≥ 1 — слот; дробное/`$0` —
+/// валюта, литерал). Проза роли не имеет — потребители передают только
+/// строки с результатами; для прозы возвращается `Calc` (документировано,
+/// фильтрация прозы — за [`line_kind`]).
+pub fn line_role(line: &str) -> LineRole {
+    if !matches!(line_kind(line), NumiLineKind::Assignment { .. }) {
+        return LineRole::Calc;
+    }
+    // Канонический текст экранирует литеральные маркеры (CR-019) —
+    // снимаем, как line_kind/eval_lines
+    let unescaped = unescape_canonical(line);
+    let trimmed = unescaped.trim();
+    let statement = trimmed.strip_prefix('=').map(str::trim).unwrap_or(trimmed);
+    match parse(statement) {
+        Ok(Expr::Assign { rhs, .. }) if is_literal_expr(&rhs) => LineRole::Param,
+        _ => LineRole::Calc,
+    }
+}
+
+/// CR-021: выражение — литерал (ссылок на значения нет): числа/юниты,
+/// дробная валюта; операции над литералами — литерал. Ссылки — `Var`
+/// (локальная переменная), `Param` (параметр шаблона), `Inbound`/целый
+/// `$N` ≥ 1 (слоты — зеркало `validate::collect_slot_refs`), `Qualified`.
+fn is_literal_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::Num(..) => true,
+        Expr::DollarAmount(n) => !(*n >= 1.0 && n.fract() == 0.0),
+        Expr::Neg(inner) => is_literal_expr(inner),
+        Expr::Assign { rhs, .. } => is_literal_expr(rhs),
+        Expr::Bin { lhs, rhs, .. } => is_literal_expr(lhs) && is_literal_expr(rhs),
+        Expr::Call { args, .. } => args.iter().all(is_literal_expr),
+        Expr::Block(statements) => statements.iter().all(is_literal_expr),
+        Expr::Var(_) | Expr::Param(_) | Expr::Inbound | Expr::Qualified { .. } => false,
+    }
+}
+
+/// CR-021: число строк-ПАРАМЕТРОВ среди формульных строк — единая точка
+/// счёта зон для всех поверхностей: тело ноды («ПАРАМЕТРЫ · N»,
+/// canvas-render::text), консервативная оценка высоты и Σ-гейт сцены
+/// (canvas-scene::measure/scene — I-2: оценка не занижает высоту).
+/// Классификация — [`line_role`] (присваивание с RHS-литералом —
+/// параметр; расчётные присваивания `sum = $1 * $2` в счёт не идут).
+/// Строки вне диапазона (теоретически — formula_lines всегда в границах)
+/// параметрами не считаются — как в прежнем поведении потребителей.
+pub fn param_line_count(lines: &[&str], formula_lines: &[usize]) -> usize {
+    formula_lines
+        .iter()
+        .filter(|&i| {
+            lines
+                .get(*i)
+                .is_some_and(|line| line_role(line) == LineRole::Param)
+        })
+        .count()
+}
+
 /// FR-061 D-7 / FR-069 (этап F, перенос из canvas-render::text в ядро):
 /// план заголовка блока-ведомости — `Some((первая расчётная строка, число
 /// расчётных))`, когда строк данных (параметры + расчёт — все строки с
@@ -2255,6 +2331,8 @@ pub fn line_kind(line: &str) -> NumiLineKind {
 /// есть расчётные. Чистая функция — рендер и измерение (canvas-render) и
 /// консервативная оценка высоты (canvas-scene, уровень 1 refit) считают
 /// ОДИН план: оценка не занижает высоту на ряд заголовка (I-2).
+/// CR-021: расчётные строки — по единой классификации [`line_role`]
+/// (присваивание с RHS-входами — тоже расчёт).
 pub fn block_header_plan(lines: &[&str], formula_lines: &[usize]) -> Option<(usize, usize)> {
     let calc: Vec<usize> = formula_lines
         .iter()
@@ -2262,7 +2340,7 @@ pub fn block_header_plan(lines: &[&str], formula_lines: &[usize]) -> Option<(usi
         .filter(|&i| {
             lines
                 .get(i)
-                .is_some_and(|line| !matches!(line_kind(line), NumiLineKind::Assignment { .. }))
+                .is_some_and(|line| line_role(line) == LineRole::Calc)
         })
         .collect();
     if formula_lines.len() > crate::settings::NODE_BODY_BLOCK_THRESHOLD && !calc.is_empty() {
@@ -3761,5 +3839,101 @@ mod tests {
         // Живая каноника (звёздочка без бэкслеша) — как прежде
         let lines = eval_lines("sum = 10 * 2");
         assert_eq!(ok_text(&lines[0]), "20", "живой * по-прежнему считается");
+    }
+
+    // --- CR-021 (UR-001-04): единая точка классификации «параметр vs расчёт» ---
+
+    /// CR-021: литеральные присваивания-константы — параметры («ПАРАМЕТРЫ»):
+    /// RHS — число/юнит/дробная валюта/константное выражение, ссылок на
+    /// значения нет. Экранированная каноника (CR-019) снимается перед
+    /// разбором.
+    #[test]
+    fn line_role_literal_assignments_are_params() {
+        assert_eq!(line_role("qty = 10"), LineRole::Param);
+        assert_eq!(line_role("price = 100 руб"), LineRole::Param);
+        assert_eq!(line_role("rate = 0.2"), LineRole::Param);
+        assert_eq!(line_role("минус = -3"), LineRole::Param);
+        assert_eq!(
+            line_role("цена = $5.99"),
+            LineRole::Param,
+            "дробная валюта — литерал, не слот"
+        );
+        assert_eq!(
+            line_role("выражение = 2 + 3"),
+            LineRole::Param,
+            "константное выражение без ссылок — параметр"
+        );
+        assert_eq!(
+            line_role("sum = 10 \\* 2"),
+            LineRole::Param,
+            "экранированная каноника снимается (CR-019)"
+        );
+    }
+
+    /// CR-021: присваивания со ссылками на значения — расчёт (маркер ƒ):
+    /// слоты `$N` (целое ≥ 1 — зеркало `validate::collect_slot_refs`),
+    /// `$in`, параметры шаблона `$имя`, локальные переменные, qualified-пути
+    /// «Объект.Поле», смешанные с литералами.
+    #[test]
+    fn line_role_value_refs_are_calc() {
+        assert_eq!(
+            line_role("sum = $1 * $2"),
+            LineRole::Calc,
+            "репродуктор UR-001-04: слоты — входы"
+        );
+        assert_eq!(line_role("x = $in × 2"), LineRole::Calc);
+        assert_eq!(
+            line_role("уровень = mm1($rps, 1 req / 10 ms)"),
+            LineRole::Calc,
+            "параметр шаблона — ссылка на значение"
+        );
+        assert_eq!(
+            line_role("total = qty * 2"),
+            LineRole::Calc,
+            "локальная переменная — ссылка"
+        );
+        assert_eq!(
+            line_role("итог = Заявки.Кол * Заявки.чек"),
+            LineRole::Calc,
+            "qualified-путь (FR-050 Р-6) — вход"
+        );
+        assert_eq!(line_role("sum = $1 + 100"), LineRole::Calc, "смешанная");
+        assert_eq!(
+            line_role("цена = $2"),
+            LineRole::Calc,
+            "целый $N ≥ 1 — слот"
+        );
+    }
+
+    /// CR-021: голые выражения — расчёт (как раньше); проза роли не имеет
+    /// (потребители передают только строки с результатами) — документированный
+    /// вердикт Calc, фильтрация прозы остаётся за `line_kind`.
+    #[test]
+    fn line_role_expression_is_calc_prose_documented() {
+        assert_eq!(line_role("800 rps / 12 ms"), LineRole::Calc);
+        assert_eq!(line_role("просто заметка"), LineRole::Calc);
+    }
+
+    /// CR-021: единая точка счёта зон `param_line_count` — только реальные
+    /// параметры (RHS-литералы); расчётное присваивание `sum = $1 * $2` и
+    /// голое выражение в «ПАРАМЕТРЫ · N» не попадают (потребители — метки
+    /// зон canvas-render и оценка высоты canvas-scene, I-2).
+    #[test]
+    fn param_line_count_counts_only_literal_params() {
+        let text = "qty = 10\nprice = 100 руб\nsum = $1 * $2\n800 rps / 12 ms";
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(param_line_count(&lines, &[0, 1, 2, 3]), 2, "qty и price");
+        assert_eq!(
+            param_line_count(&lines, &[2]),
+            0,
+            "расчётное присваивание — не параметр"
+        );
+        assert_eq!(param_line_count(&lines, &[3]), 0, "голое выражение");
+        assert_eq!(param_line_count(&lines, &[]), 0, "нет формульных строк");
+        assert_eq!(
+            param_line_count(&lines, &[99]),
+            0,
+            "индекс вне диапазона — не параметр"
+        );
     }
 }
