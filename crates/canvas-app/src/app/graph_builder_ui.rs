@@ -1,6 +1,4 @@
-#![allow(dead_code)] // FR-LLM-D: hit-test + state used by future Stream D integration (worker wiring)
-//! FR-LLM-D / PRD-0010 F-3 — Graph builder dialog: модальный диалог генерации
-//! графа из текста через LLM (.byok → .canvas JSON).
+//! FR-LLM-D / PRD-0010 F-3 — модальный диалог генерации графа из текста через LLM.
 //!
 //! Диалог: textarea (текст пользователя) + mode selector (3 radio-cards:
 //! Mindmap / Outline / Summary) + cost estimate + Generate/Cancel buttons
@@ -22,6 +20,10 @@
 // FR-LLM-D-TODO: маркер для мест, где нужна интеграция с LLM-воркером.
 
 use super::*;
+// FR-LLM-D-W2: трейт провайдера в скоупе для методов models/active_model
+// (реальный путь генерации, feature l1-llm).
+#[cfg(feature = "l1-llm")]
+use canvas_llm::LlmProvider;
 // FR-LLM-D: UiRect — геометрия kit-компонентов.
 use canvas_ui::geometry::UiRect;
 
@@ -65,11 +67,136 @@ pub struct GraphBuilderState {
     pub cost_estimate: Option<f32>,
     /// Идёт LLM-запрос (блокирует кнопки).
     pub busy: bool,
+    /// FR-LLM-D-W2: фокус клавиатуры в textarea (клик по полю).
+    pub text_focused: bool,
     /// Каретка в textarea.
     pub caret: usize,
 }
 
 impl App {
+    /// FR-LLM-D-W2 (llm-waves §3.1, F-3 PRD): открыть диалог генератора
+    /// графа (Ctrl+G). Повторный вызов при открытом диалоге — idempotent
+    /// (фокус в textarea).
+    pub(crate) fn graph_builder_open(&mut self) {
+        self.graph_builder.open = true;
+        self.graph_builder.text_focused = true;
+        self.request_redraw();
+    }
+
+    /// FR-LLM-D-W2: клавиатура диалога (модальный): Esc — закрыть, Enter —
+    /// Generate (не в busy), символы/Backspace — textarea, ↑/↓ — режим.
+    pub(crate) fn on_graph_builder_key(&mut self, event: &winit::event::KeyEvent) {
+        use winit::keyboard::{Key, NamedKey};
+        // Ctrl-комбинации не глотаем (Ctrl+G повторно — idempotent).
+        if self.modifiers.control_key() && event.logical_key != Key::Named(NamedKey::Escape) {
+            return;
+        }
+        match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.graph_builder.open = false;
+                self.graph_builder.text_focused = false;
+                self.request_redraw();
+            }
+            Key::Named(NamedKey::Enter) => {
+                self.graph_builder_generate();
+            }
+            Key::Named(NamedKey::Backspace) => {
+                if self.graph_builder.caret > 0 {
+                    self.graph_builder.caret -= 1;
+                    self.graph_builder.text.remove(self.graph_builder.caret);
+                    self.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::Delete) => {
+                if self.graph_builder.caret < self.graph_builder.text.len() {
+                    self.graph_builder.text.remove(self.graph_builder.caret);
+                    self.request_redraw();
+                }
+            }
+            // ↑/↓ — выбор режима (mindmap → outline → summary, по кругу).
+            Key::Named(NamedKey::ArrowUp) => {
+                self.graph_builder_cycle_mode(-1);
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                self.graph_builder_cycle_mode(1);
+            }
+            Key::Named(NamedKey::Home) => {
+                self.graph_builder.caret = 0;
+                self.request_redraw();
+            }
+            Key::Named(NamedKey::End) => {
+                self.graph_builder.caret = self.graph_builder.text.len();
+                self.request_redraw();
+            }
+            Key::Character(text) => {
+                if !self.graph_builder.busy {
+                    self.graph_builder
+                        .text
+                        .insert_str(self.graph_builder.caret, text);
+                    self.graph_builder.caret += text.len();
+                    self.request_redraw();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// FR-LLM-D-W2: циклическая смена режима (клик по mode-card / ↑↓).
+    fn graph_builder_cycle_mode(&mut self, direction: i8) {
+        let modes = [
+            GraphBuilderMode::Mindmap,
+            GraphBuilderMode::Outline,
+            GraphBuilderMode::Summary,
+        ];
+        let current = modes
+            .iter()
+            .position(|&m| m == self.graph_builder.mode)
+            .unwrap_or(0);
+        let next = (current as i8 + direction).rem_euclid(modes.len() as i8) as usize;
+        self.graph_builder.mode = modes[next];
+        self.request_redraw();
+    }
+
+    /// FR-LLM-D-W2 (llm-waves §3.1): клик-диспетчер диалога (из
+    /// `on_left_button`, до FR-052 pick — модаль транзиентна, как
+    /// ai_onboarding). Возвращает `true` — клик поглощён (включая backdrop:
+    /// клик мимо диалога закрывает его).
+    pub(crate) fn graph_builder_click(&mut self) -> bool {
+        let Some(hit) = self.graph_builder_hit(self.cursor) else {
+            return false;
+        };
+        match hit {
+            GraphBuilderHit::Backdrop | GraphBuilderHit::Cancel => {
+                self.graph_builder.open = false;
+                self.graph_builder.text_focused = false;
+                self.request_redraw();
+            }
+            GraphBuilderHit::Generate => self.graph_builder_generate(),
+            GraphBuilderHit::Textarea => {
+                self.graph_builder.text_focused = true;
+                self.request_redraw();
+            }
+            GraphBuilderHit::Mode(i) => {
+                self.graph_builder_cycle_mode(i as i8 - self.graph_builder_mode_index() as i8)
+            }
+            GraphBuilderHit::Accept => self.graph_builder_accept(),
+            GraphBuilderHit::Reject => self.graph_builder_reject(),
+            GraphBuilderHit::NoOp => {
+                // Тело диалога — глотаем (модаль).
+            }
+        }
+        true
+    }
+
+    /// FR-LLM-D-W2: индекс текущего режима (для клика по mode-card).
+    fn graph_builder_mode_index(&self) -> usize {
+        match self.graph_builder.mode {
+            GraphBuilderMode::Mindmap => 0,
+            GraphBuilderMode::Outline => 1,
+            GraphBuilderMode::Summary => 2,
+        }
+    }
+
     /// FR-LLM-D / PRD-0010 F-3: render graph builder dialog overlay.
     /// Возвращает (quads, texts) для screen_bands. Диалог скрыт если
     /// `!state.open`.
@@ -486,17 +613,13 @@ impl App {
         Some(GraphBuilderHit::NoOp)
     }
 
-    /// FR-LLM-D / PRD-0010 F-3.4: генерация графа (mock).
+    /// FR-LLM-D / PRD-0010 F-3.4: генерация графа.
     ///
-    /// Шаги:
-    /// 1. Проверка AI paused / off / cost limit.
-    /// 2. Cost estimate (для отображения).
-    /// 3. Mock: построить preview из текста (без LLM-вызова).
-    ///
-    /// FR-LLM-D-TODO: реальный LLM-вызов через `GraphBuilder::build()`:
-    ///   let input = GraphBuilderInput::new(&state.text, state.mode);
-    ///   let output = builder.build(&input).await?;
-    ///   state.preview = Some(to_agent_preview(&output));
+    /// FR-LLM-D-W2 (llm-waves §3.2): реальный путь — `GraphBuilder::build()`
+    /// через фабрику + executor-сим (worker-поток), ответ доезжает в
+    /// [`App::graph_builder_llm_finished`] (AppEvent::LlmTask). Executor
+    /// недоступен (дефолтная сборка / wasm до W3) — mock-эвристика
+    /// (graceful degradation F-5.9, тесты).
     pub(super) fn graph_builder_generate(&mut self) {
         if self.graph_builder.busy {
             return;
@@ -517,6 +640,11 @@ impl App {
             ));
             return;
         }
+        let text = self.graph_builder.text.trim().to_owned();
+        if text.is_empty() {
+            self.show_toast("Введите текст для генерации");
+            return;
+        }
         // FR-LLM-OAUTH-APP / PRD-0010 F-5.9: построение реального провайдера
         // через фабрику (`llm_factory`) до генерации — валидация конфига
         // (пустой BYOK-ключ / невыполненный OAuth-вход ChatGPT). При
@@ -535,24 +663,20 @@ impl App {
             return;
         }
         // 2. Cost estimate.
-        self.graph_builder.cost_estimate = Some(0.04);
         self.graph_builder.busy = true;
 
-        // 3. Mock preview (без LLM).
-        let preview = self.graph_builder_build_preview(&self.graph_builder.text);
-        self.graph_builder.preview = Some(preview);
+        // FR-LLM-D-W2: реальный путь — executor-сим (натив, l1-llm).
+        #[cfg(feature = "l1-llm")]
+        if self.graph_builder_submit_llm(&text) {
+            self.show_toast(self.tr(keys::AI_GRAPH_GENERATING));
+            self.request_redraw();
+            return;
+        }
 
-        // FR-LLM-D-TODO: реальный LLM-вызов:
-        //   let provider = ...;  // из settings.llm.provider_graph
-        //   let privacy = self.settings.llm.data_residency.privacy_mode();
-        //   let builder = canvas_graph_builder::GraphBuilder::new(provider, privacy);
-        //   let input = canvas_graph_builder::GraphBuilderInput::new(
-        //       &self.graph_builder.text,
-        //       self.graph_builder.mode,
-        //   );
-        //   let output = pollster::block_on(builder.build(&input))?;
-        //   let canvas = canvas_graph_builder::GraphBuilder::<P>::to_canvas(&output);
-        //   // применить canvas через graph_apply, обновить cost.
+        // 3. Mock preview (без LLM): cost-оценка как в прототипе.
+        self.graph_builder.cost_estimate = Some(0.04);
+        let preview = self.graph_builder_build_preview(&text);
+        self.graph_builder.preview = Some(preview);
 
         self.graph_builder.busy = false;
         // ChatGPT rate counter.
@@ -560,6 +684,161 @@ impl App {
             self.ai_chatgpt_rate_used = self.ai_chatgpt_rate_used.saturating_add(1);
         }
         self.request_redraw();
+    }
+
+    /// FR-LLM-D-W2 (llm-waves §3.2): реальная генерация через
+    /// `canvas_graph_builder::GraphBuilder::build()` в executor-симе.
+    /// `true` — задание принято (busy до `graph_builder_llm_finished`).
+    #[cfg(feature = "l1-llm")]
+    fn graph_builder_submit_llm(&mut self, text: &str) -> bool {
+        let llm = self.settings.llm.clone();
+        let Some(provider) = crate::llm_factory::build_feature_provider(
+            llm.provider_graph,
+            &llm.model_graph,
+            &llm,
+            &self.oauth_assets(),
+        ) else {
+            // Недоступность уже отчитана provider_unavailable_message выше.
+            return false;
+        };
+        let mode = self.graph_builder.mode;
+        let privacy = llm.data_residency.privacy_mode();
+        // Cost estimate до запроса (Q4): GraphBuilder::estimate по модели.
+        let boxed = llm_executor::BoxedProvider(provider);
+        let input = canvas_graph_builder::GraphBuilderInput::new(text, mode);
+        let builder = canvas_graph_builder::GraphBuilder::new(boxed, privacy);
+        // Модель не найдена в списке (custom-модель BYOK) — free-заглушка
+        // (оценка 0.0; фактический расход тоже посчитается как 0 — честно
+        // для unknown-тарифа, лучше чем блокировать запрос).
+        let model = builder
+            .provider()
+            .models()
+            .iter()
+            .find(|m| m.id == builder.provider().active_model())
+            .cloned()
+            .unwrap_or_else(|| {
+                canvas_llm::ModelInfo::free_local("custom", "Custom", 0, true, false)
+            });
+        let estimate = builder.estimate(&input, &model);
+        self.graph_builder.cost_estimate = Some(estimate.estimated_cost_usd as f32);
+
+        let job: llm_executor::LlmJob = Box::new(move || {
+            // Async-вызов в worker-потоке: pollster-блокировка (натив).
+            let outcome = pollster::block_on(async { builder.build(&input).await });
+            let result = match outcome {
+                Ok(output) => {
+                    // Q4: фактический расход (usage — оценка по JSON-ответу).
+                    let output_tokens = graph_output_tokens(&output);
+                    let input_tokens = estimate.estimated_input_tokens.max(1);
+                    let cost_usd = model
+                        .pricing
+                        .map(|p| canvas_llm::actual_cost(&p, input_tokens, output_tokens.max(1)))
+                        .unwrap_or(0.0);
+                    Ok(llm_executor::GraphBuildResult {
+                        output,
+                        input_tokens,
+                        output_tokens: output_tokens.max(1),
+                        cost_usd,
+                    })
+                }
+                // GraphBuilderError → строка (человекочитаемо, redact уже
+                // применён внутри build по privacy).
+                Err(err) => Err(err.to_string()),
+            };
+            AppEvent::LlmTask(Arc::new(llm_executor::LlmTaskOutcome::Graph(result)))
+        });
+        self.llm_executor.submit(job)
+    }
+
+    /// FR-LLM-D-W2: результат реальной генерации (из `AppEvent::LlmTask`):
+    /// GraphBuilderOutput → preview (FR-010 v2 layout через `to_canvas`) →
+    /// Accept/Reject; cost — в счётчики.
+    #[cfg(feature = "l1-llm")]
+    pub(super) fn graph_builder_llm_finished(
+        &mut self,
+        result: Result<llm_executor::GraphBuildResult, String>,
+    ) {
+        // Дубль/устаревшее (диалог уже не ждёт) — тихий discard.
+        if !self.graph_builder.busy {
+            return;
+        }
+        self.graph_builder.busy = false;
+        let provider_is_chatgpt =
+            self.settings.llm.provider_graph == canvas_llm::LlmProviderId::ChatGptOAuth;
+        match result {
+            Ok(build) => {
+                // Q4: фактический расход — инкремент счётчиков.
+                self.ai_cost_session += build.cost_usd;
+                self.ai_cost_day += build.cost_usd;
+                if provider_is_chatgpt {
+                    self.ai_chatgpt_rate_used = self.ai_chatgpt_rate_used.saturating_add(1);
+                }
+                if build.output.nodes.is_empty() {
+                    // Пустой результат (GraphBuilderError::Empty приходит как
+                    // Err, но страховка).
+                    self.show_toast(self.tr(keys::AI_GRAPH_EMPTY));
+                } else {
+                    // FR-010 v2 layout: to_canvas строит Canvas с раскладкой,
+                    // конвертируем в preview (ghost-ноды).
+                    let preview = self.graph_preview_from_output(&build.output);
+                    self.graph_builder.preview = Some(preview);
+                }
+            }
+            Err(err) => {
+                self.show_toast(self.trf(keys::AI_GRAPH_REQUEST_FAIL, &[("err", &err)]));
+            }
+        }
+        self.graph_builder.cost_estimate = None;
+        self.request_redraw();
+    }
+
+    /// FR-LLM-D-W2: GraphBuilderOutput → AgentPreview (ghost-ноды).
+    /// Раскладка — `GraphBuilder::to_canvas` (FR-010 v2 TreeHorizontal),
+    /// затем Canvas → preview-геометрия (title = label/первая строка, text).
+    #[cfg(feature = "l1-llm")]
+    fn graph_preview_from_output(
+        &self,
+        output: &canvas_graph_builder::GraphBuilderOutput,
+    ) -> AgentPreview {
+        // to_canvas — associated fn generic-импа: вызываем через наш
+        // BoxedProvider-параметризацию (сама fn P не использует).
+        let canvas =
+            canvas_graph_builder::GraphBuilder::<llm_executor::BoxedProvider>::to_canvas(output);
+        let id_to_index: std::collections::HashMap<String, usize> = canvas
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id.clone(), i))
+            .collect();
+        let nodes: Vec<AgentPreviewNode> = canvas
+            .nodes
+            .iter()
+            .map(|n| {
+                let title = n
+                    .label
+                    .clone()
+                    .or_else(|| n.title().map(|s| s.to_owned()))
+                    .unwrap_or_else(|| n.id.clone());
+                AgentPreviewNode {
+                    title,
+                    text: n.text.clone().unwrap_or_default(),
+                    x: n.x,
+                    y: n.y,
+                    width: n.width,
+                    height: n.height,
+                }
+            })
+            .collect();
+        let edges: Vec<(usize, usize, String)> = canvas
+            .edges
+            .iter()
+            .filter_map(|e| {
+                let from = id_to_index.get(&e.from_node).copied()?;
+                let to = id_to_index.get(&e.to_node).copied()?;
+                Some((from, to, e.label.clone().unwrap_or_default()))
+            })
+            .collect();
+        AgentPreview { nodes, edges }
     }
 
     /// FR-LLM-D / PRD-0010 F-3: построить preview из текста (mock — для UI).
@@ -590,6 +869,7 @@ impl App {
             .enumerate()
             .map(|(i, title)| AgentPreviewNode {
                 title: title.to_string(),
+                text: String::new(),
                 x: base_x + i as f32 * 320.0,
                 y: base_y,
                 width: 240.0,
@@ -603,20 +883,31 @@ impl App {
         AgentPreview { nodes, edges }
     }
 
-    /// FR-LLM-D / PRD-0010 F-3: принять preview графа.
+    /// FR-LLM-D / PRD-0010 F-3: принять preview графа — применить через
+    /// `graph_apply` батчем (FR-033, один undo-шаг; общий механизм с
+    /// агент-панелью — [`App::agent_apply_preview`]).
     pub(super) fn graph_builder_accept(&mut self) {
         let Some(preview) = self.graph_builder.preview.take() else {
             return;
         };
-        // FR-LLM-D-TODO: реальный graph_apply с undo-шагом.
         let n = preview.nodes.len();
         let m = preview.edges.len();
-        self.show_toast(format!(
-            "Граф сгенерирован: {}×{} · применён одним undo-шагом",
-            n, m
-        ));
-        self.graph_builder.cost_estimate = None;
-        self.graph_builder.open = false;
+        match self.agent_apply_preview(&preview) {
+            Ok(()) => {
+                self.show_toast(self.trf(
+                    keys::AI_GRAPH_APPLIED,
+                    &[("nodes", &n.to_string()), ("edges", &m.to_string())],
+                ));
+                self.graph_builder.cost_estimate = None;
+                self.graph_builder.open = false;
+            }
+            Err(err) => {
+                // Канвас нетронут (атомарность) — диалог открыт, preview
+                // убран: пользователь видит ошибку и может повторить.
+                self.graph_builder.preview = None;
+                self.show_toast(self.trf(keys::AI_GRAPH_APPLY_FAIL, &[("err", &err)]));
+            }
+        }
         self.request_redraw();
     }
 
@@ -632,6 +923,21 @@ impl App {
 /// не дублировать формулу в hit-test и render).
 fn mc_mc_y(mc_y: f32) -> f32 {
     mc_y
+}
+
+/// FR-LLM-D-W2 (l1-llm): грубая оценка числа выходных токенов JSON-ответа
+/// (для фактического расхода, Q4 — usage провайдер не возвращает; ~4 байта
+/// на токен, как `canvas_llm::estimate_tokens`).
+#[cfg(feature = "l1-llm")]
+fn graph_output_tokens(output: &canvas_graph_builder::GraphBuilderOutput) -> usize {
+    let mut size = 0usize;
+    for node in &output.nodes {
+        size += node.id.len() + node.label.len() + node.text.as_deref().map_or(0, str::len) + 48;
+    }
+    for edge in &output.edges {
+        size += edge.from.len() + edge.to.len() + edge.label.as_deref().map_or(0, str::len) + 32;
+    }
+    (size / 4).max(1)
 }
 
 /// FR-LLM-D / PRD-0010 F-3: hit-test диалога генератора графа — элемент под
@@ -670,6 +976,8 @@ mod tests {
         assert!(s.preview.is_none());
         assert!(s.cost_estimate.is_none());
         assert!(!s.busy);
+        // FR-LLM-D-W2: фокус textarea по умолчанию снят.
+        assert!(!s.text_focused);
     }
 
     /// Размеры диалога.

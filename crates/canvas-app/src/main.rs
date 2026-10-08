@@ -294,6 +294,20 @@ fn main() -> anyhow::Result<()> {
                 }),
             ));
         }
+        // FR-LLM-D-W2 (llm-waves §3.7): executor-сим LLM-футур — async-вызовы
+        // LLM (agent tool-calling / graph builder / health-check) вне UI-треда;
+        // результаты будят цикл AppEvent::LlmTask (паттерн suggest-воркера).
+        // Провал спавна не роняет запуск: панели деградируют на mock + warn.
+        {
+            let proxy = proxy.clone();
+            app.attach_llm_executor(std::sync::Arc::new(
+                canvas_app::app::llm_executor::LlmExecutor::spawn(std::sync::Arc::new(
+                    move |event| {
+                        let _ = proxy.send_event(event);
+                    },
+                )),
+            ));
+        }
         // M5: тик-поток host'а (1 c) — будит цикл для refresh-снапшотов
         // (LOD-расписание считает менеджер по времени, тик — только побудка;
         // паттерн — сервисы T15/T16, sender через EventLoopProxy)

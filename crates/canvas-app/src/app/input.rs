@@ -855,6 +855,37 @@ impl App {
         {
             return;
         }
+        // FR-LLM-D-W2 (llm-waves §3.1): модальный graph builder — глушит весь
+        // ввод канваса (как T21-диалог): Esc — закрыть, Enter — Generate,
+        // символы/Backspace — textarea, ↑/↓ — режимы. Панель транзиентна
+        // (не в реестре FR-052 — паттерн suggest-карточек/статус-панели).
+        if self.graph_builder.open && event.state == ElementState::Pressed {
+            self.on_graph_builder_key(event);
+            return;
+        }
+        // FR-LLM-D-W2 (llm-waves §3.1): агент-панель с фокусом ввода —
+        // клавиатура уходит в input area (паттерн поиска): Esc — закрыть,
+        // Enter — отправить, символы/Backspace — поле. Без фокуса —
+        // лестница канваса работает как обычно.
+        if self.agent_panel.open
+            && self.agent_panel.input_focused
+            && event.state == ElementState::Pressed
+        {
+            self.on_agent_panel_key(event);
+            return;
+        }
+        // Esc при открытой панели без фокуса ввода — закрыть панель
+        // (до канвас-лестницы Esc: панель поверх канваса).
+        if event.logical_key == Key::Named(NamedKey::Escape)
+            && event.state == ElementState::Pressed
+            && !event.repeat
+            && self.agent_panel.open
+            && !self.agent_panel.input_focused
+        {
+            self.agent_panel.open = false;
+            self.request_redraw();
+            return;
+        }
         // Esc-лестница из реестра: порядок esc_stack воспроизводит прежнюю
         // ручную лестницу 8143–8232 дословно (первый поглотитель останавливает)
         if event.logical_key == Key::Named(NamedKey::Escape)
@@ -929,6 +960,38 @@ impl App {
                 "шаблонная палитра: док открыт/сфокусирован"
             );
             self.request_redraw();
+            return;
+        }
+        // FR-LLM-D-W2 (llm-waves §3.1, F-4 PRD): Ctrl+I — toggle агент-панели
+        // (кириллица — «ш»). Конфликта с курсивом нет: лестница ниже роутера
+        // FR-052 — активный редактор забирает свою комбинацию раньше (Q3
+        // what-if поэтому на Ctrl+Shift+I); вне редактора — панель.
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && self.modifiers.control_key()
+            && !self.modifiers.shift_key()
+            && matches!(&event.logical_key, Key::Character(c)
+                if c.eq_ignore_ascii_case("i") || c.eq_ignore_ascii_case("ш"))
+        {
+            if self.editing.is_some() {
+                self.finish_editing(true);
+            }
+            self.agent_panel_toggle();
+            return;
+        }
+        // FR-LLM-D-W2 (llm-waves §3.1, F-3 PRD): Ctrl+G — открыть диалог
+        // генератора графа (кириллица — «п»; G = graph, не занято).
+        if event.state == ElementState::Pressed
+            && !event.repeat
+            && self.modifiers.control_key()
+            && !self.modifiers.shift_key()
+            && matches!(&event.logical_key, Key::Character(c)
+                if c.eq_ignore_ascii_case("g") || c.eq_ignore_ascii_case("п"))
+        {
+            if self.editing.is_some() {
+                self.finish_editing(true);
+            }
+            self.graph_builder_open();
             return;
         }
         // FR-017 (CP6): Ctrl+Shift+I — вход/выход из what-if режима
@@ -2894,6 +2957,18 @@ impl App {
                 // suggest-карточки) — глотаем ввод в пределах rect, мимо —
                 // проходит в обычный canvas-pick ниже.
                 if self.ai_status_panel_click() {
+                    return;
+                }
+                // FR-LLM-D-W2 (llm-waves §3.1): модальный graph builder —
+                // hit-test раньше реестра (Block-модаль: клик мимо диалога
+                // закрывает, по элементам — диспетч). Транзиентен (паттерн
+                // статус-панели), реестр FR-052 не участвует.
+                if self.graph_builder.open && self.graph_builder_click() {
+                    return;
+                }
+                // FR-LLM-D-W2: агент-панель — hit-test (боковая панель:
+                // клики в её пределах глотаются, мимо — канвас).
+                if self.agent_panel.open && self.agent_panel_click() {
                     return;
                 }
                 // FR-052 (U2 PRD-0009): единый диспетчер поверхностей —

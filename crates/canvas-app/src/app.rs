@@ -174,6 +174,10 @@ mod agent_panel;
 // FR-LLM-D / PRD-0010 F-3: Graph builder dialog — модальная генерация графа
 // из текста. Владелец: Stream D. UI + state (LLM-вызов через worker, TODO).
 mod graph_builder_ui;
+// FR-LLM-D-W2 (llm-waves §3.7): executor-сим для LLM-футур — worker-поток
+// (натив) / стаб (wasm до W3) + доставка результатов через AppEvent::LlmTask.
+// pub для main.rs (спавн воркера с proxy-notifier) и W3 (canvas-web драйвер).
+pub mod llm_executor;
 
 // FR-LLM-OAUTH-APP / PRD-0010 F-5.2+F-5.3+F-5.8: OAuth-флоу «Вход ChatGPT» —
 // состояние (Idle/Waiting/Connected/Failed), FileTokenStore (oauth_tokens.json
@@ -373,6 +377,12 @@ pub enum AppEvent {
         generation: u64,
         answers: std::sync::Arc<Vec<crate::suggest::SuggestAnswer>>,
     },
+    /// FR-LLM-D-W2 (llm-waves §3.7): executor-сим отдал результат LLM-задачи
+    /// (agent tool-calling / graph builder / health-check / suggest mm).
+    /// Доставка — EventLoopProxy (натив: воркер-поток executor-сима; W3/wasm:
+    /// spawn_local-драйвер canvas-web). Полезная нагрузка — `Arc` (паттерн
+    /// SuggestReady). Обработка — `App::on_llm_task` (user_event).
+    LlmTask(Arc<llm_executor::LlmTaskOutcome>),
     /// События шины системных событий (T16): сессия (lock/unlock, R8),
     /// suspend/resume, ExplorerStarted (TaskbarCreated, R7/R11),
     /// shell-hook/clipboard (потребители T18/будущее), SHCNE-мост в
@@ -1273,6 +1283,16 @@ pub struct App {
     // health-check (/v1/models) — Stream C/D TODO (`// FR-LLM-FIX-TODO:`).
     ai_key_ok: bool,
     ai_selfhost_ok: bool,
+    // FR-LLM-D-W2 (llm-waves §3.4): состояние кнопок «Проверить» —
+    // idle → проверяется → ok / ошибка (замена mock-toggle). Флаги выше
+    // (ai_key_ok/ai_selfhost_ok) выставляются из исхода для совместимости
+    // рендера бейджей; тексты деталей — в этих состояниях.
+    ai_key_check: llm_executor::LlmCheckState,
+    ai_selfhost_check: llm_executor::LlmCheckState,
+    /// FR-LLM-D-W2 (llm-waves §3.7): executor-сим LLM-футур — worker-поток
+    /// (натив, инъекция в main.rs) / стаб (wasm до W3). Деградация при
+    /// недоступности — mock-флоу панелей / lex-режим suggest (как сейчас).
+    llm_executor: Arc<llm_executor::LlmExecutor>,
     /// FR-LLM-OAUTH-APP / PRD-0010 F-5.8: OAuth-флоу «Вход ChatGPT» —
     /// состояние (Idle/Waiting/Connected/Failed), token store
     /// (oauth_tokens.json 0600 рядом с config.toml) и воркер desktop-login.
@@ -1795,6 +1815,11 @@ impl App {
             // (mock health-check переключает по клику; реальный — Stream C/D).
             ai_key_ok: false,
             ai_selfhost_ok: false,
+            // FR-LLM-D-W2: health-чеки стартуют idle; executor — стаб до
+            // инъекции в main.rs (натив) / W3 (wasm).
+            ai_key_check: llm_executor::LlmCheckState::default(),
+            ai_selfhost_check: llm_executor::LlmCheckState::default(),
+            llm_executor: Arc::new(llm_executor::LlmExecutor::stub()),
             // FR-LLM-OAUTH-APP: OAuth-флоу — store читает oauth_tokens.json
             // из каталога конфига (None — memory-фолбэк); если токены на
             // месте, старт в Connected (флаги синхронизирует oauth_poll в

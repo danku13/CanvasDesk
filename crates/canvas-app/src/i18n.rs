@@ -930,6 +930,52 @@ pub mod keys {
     pub const AI_FOOT_HINT: &str = "ai.foot_hint";
     pub const AI_RATE_BADGE: &str = "ai.rate_badge";
 
+    // --- FR-LLM-D-W2 (llm-waves §3): живые LLM-вызовы, health-check, OAuth-сим ---
+    /// Агент-панель: запрос отправлен (реальный путь, ожидание ответа).
+    pub const AI_AGENT_REQUESTING: &str = "ai.agent.requesting";
+    /// Агент-панель: preview готов (число нод/рёбер + фактический расход).
+    pub const AI_AGENT_PREVIEW_OK: &str = "ai.agent.preview_ok";
+    /// Агент-панель: LLM ответил без операций для канваса.
+    pub const AI_AGENT_PREVIEW_EMPTY: &str = "ai.agent.preview_empty";
+    /// Агент-панель: preview применён через graph_apply (один undo-шаг).
+    pub const AI_AGENT_APPLIED: &str = "ai.agent.applied";
+    /// Агент-панель: graph_apply отклонил батч ({err}).
+    pub const AI_AGENT_APPLY_FAIL: &str = "ai.agent.apply_fail";
+    /// Агент-панель: валидация отклонила вызовы (Q3 whitelist).
+    pub const AI_AGENT_REJECTED: &str = "ai.agent.rejected";
+    /// Агент-панель: ошибка LLM-запроса ({err}).
+    pub const AI_AGENT_REQUEST_FAIL: &str = "ai.agent.request_fail";
+    /// Graph builder: генерация запущена (ожидание ответа).
+    pub const AI_GRAPH_GENERATING: &str = "ai.graph.generating";
+    /// Graph builder: LLM вернул пустой граф.
+    pub const AI_GRAPH_EMPTY: &str = "ai.graph.empty";
+    /// Graph builder: применён через graph_apply.
+    pub const AI_GRAPH_APPLIED: &str = "ai.graph.applied";
+    /// Graph builder: graph_apply отклонил батч.
+    pub const AI_GRAPH_APPLY_FAIL: &str = "ai.graph.apply_fail";
+    /// Graph builder: ошибка LLM-запроса.
+    pub const AI_GRAPH_REQUEST_FAIL: &str = "ai.graph.request_fail";
+    /// Health-check: проверка в полёте.
+    pub const AI_CHECK_RUNNING: &str = "ai.check.running";
+    /// Health-check: успех (+{n} моделей).
+    pub const AI_CHECK_OK: &str = "ai.check.ok";
+    /// Health-check: ошибка ({err}).
+    pub const AI_CHECK_FAIL: &str = "ai.check.fail";
+    /// Health-check: selfhost без endpoint.
+    pub const AI_CHECK_NO_ENDPOINT: &str = "ai.check.no_endpoint";
+    /// Провайдер недоступен: ChatGPT не вошёл, есть BYOK (fallback обещает).
+    pub const AI_PROV_CHATGPT_FALLBACK: &str = "ai.prov.chatgpt_fallback";
+    /// Провайдер недоступен: ChatGPT не вошёл, BYOK не задан.
+    pub const AI_PROV_CHATGPT_NOBYOK: &str = "ai.prov.chatgpt_nobyok";
+    /// Провайдер недоступен: BYOK без ключа.
+    pub const AI_PROV_BYOK_NOKEY: &str = "ai.prov.byok_nokey";
+    /// Провайдер недоступен: Ollama/прочее.
+    pub const AI_PROV_UNAVAILABLE: &str = "ai.prov.unavailable";
+    /// OAuth web-сим: флоу запущен через бридж.
+    pub const AI_OAUTH_WEB_STARTED: &str = "ai.oauth.web_started";
+    /// OAuth web-сим: бридж вернул ошибку.
+    pub const AI_OAUTH_BRIDGE_ERR: &str = "ai.oauth.bridge_err";
+
     // --- FR-LLM-B / PRD-0010 F-7.9: AI status panel ---
     pub const AI_STATUS_PAUSED: &str = "ai.status.paused";
     pub const AI_STATUS_SESSION: &str = "ai.status.session";
@@ -2142,6 +2188,62 @@ const RU: &[(&str, &str)] = &[
         "OAuth-вход доступен только в нативной сборке с feature l1-llm-tls",
     ),
     (keys::AI_OAUTH_TOAST_LOGOUT, "Выход выполнен — токены удалены"),
+    // --- FR-LLM-D-W2 (llm-waves §3): живые LLM-вызовы, health-check, OAuth-сим (RU) ---
+    (keys::AI_AGENT_REQUESTING, "Запрос отправлен — жду ответ модели…"),
+    (
+        keys::AI_AGENT_PREVIEW_OK,
+        "Предлагаю связку: {nodes} {n_word} · {edges} {e_word}. Ghost-превью — на канвасе, применю одним undo-шагом (F-4.5). Фактический расход: ${cost}.",
+    ),
+    (
+        keys::AI_AGENT_PREVIEW_EMPTY,
+        "Модель ответила без операций для канваса (нет создания нод/рёбер). Переформулируйте запрос.",
+    ),
+    (
+        keys::AI_AGENT_APPLIED,
+        "✓ Применено: {nodes} {n_word} · {edges} {e_word} — graph_apply, один undo-шаг. Деструктивные ops по-прежнему требуют confirm.",
+    ),
+    (keys::AI_AGENT_APPLY_FAIL, "graph_apply отклонил батч: {err}"),
+    (
+        keys::AI_AGENT_REJECTED,
+        "Валидация отклоняла непросленные мутации ({calls} вызов(ов)) — Q3 whitelist: агент может создавать новые ноды и менять только выделенные. Уточните выделение или запрос.",
+    ),
+    (keys::AI_AGENT_REQUEST_FAIL, "Ошибка LLM-запроса: {err}"),
+    (keys::AI_GRAPH_GENERATING, "Генерация запущена — жду ответ модели…"),
+    (
+        keys::AI_GRAPH_EMPTY,
+        "Модель вернула пустой граф (0 нод). Попробуйте другой режим или уточните текст.",
+    ),
+    (
+        keys::AI_GRAPH_APPLIED,
+        "Граф сгенерирован: {nodes}×{edges} — применён одним undo-шагом",
+    ),
+    (keys::AI_GRAPH_APPLY_FAIL, "graph_apply отклонил батч: {err}"),
+    (keys::AI_GRAPH_REQUEST_FAIL, "Ошибка генерации: {err}"),
+    (keys::AI_CHECK_RUNNING, "Проверяется…"),
+    (keys::AI_CHECK_OK, "Ключ валиден · {n} моделей"),
+    (keys::AI_CHECK_FAIL, "Ошибка: {err}"),
+    (
+        keys::AI_CHECK_NO_ENDPOINT,
+        "Self-hosted endpoint не задан — введите URL в строке выше",
+    ),
+    (
+        keys::AI_PROV_CHATGPT_FALLBACK,
+        "ChatGPT: вход не выполнен (нет токенов) — запрос уйдёт через BYOK-ключ. Выполните «Войти через ChatGPT» в Настройках AI (9-й таб).",
+    ),
+    (
+        keys::AI_PROV_CHATGPT_NOBYOK,
+        "ChatGPT: вход не выполнен (нет токенов), BYOK-ключ не задан. Выполните «Войти через ChatGPT» или введите BYOK-ключ в Настройках AI (9-й таб).",
+    ),
+    (
+        keys::AI_PROV_BYOK_NOKEY,
+        "BYOK: API-ключ не задан — введите ключ в Настройках AI (9-й таб).",
+    ),
+    (
+        keys::AI_PROV_UNAVAILABLE,
+        "Провайдер недоступен по текущему конфигу — проверьте настройки в Настройках AI (9-й таб).",
+    ),
+    (keys::AI_OAUTH_WEB_STARTED, "OAuth-вход запущен в браузере — завершите во всплывающем окне"),
+    (keys::AI_OAUTH_BRIDGE_ERR, "OAuth web-флоу вернул ошибку: {err}"),
     // --- FR-LLM-B / PRD-0010 F-7.9: AI status panel (RU) ---
     (keys::AI_STATUS_PAUSED, "AI на паузе — нажмите ▶, чтобы возобновить"),
     (keys::AI_STATUS_SESSION, "Session: {v}"),
@@ -3330,6 +3432,65 @@ const EN: &[(&str, &str)] = &[
         "OAuth sign-in requires the native build with the l1-llm-tls feature",
     ),
     (keys::AI_OAUTH_TOAST_LOGOUT, "Signed out — tokens removed"),
+    // --- FR-LLM-D-W2 (llm-waves §3): живые LLM-вызовы, health-check, OAuth-сим (EN) ---
+    (keys::AI_AGENT_REQUESTING, "Request sent — waiting for the model…"),
+    (
+        keys::AI_AGENT_PREVIEW_OK,
+        "Proposed graph: {nodes} {n_word} · {edges} {e_word}. Ghost preview is on the canvas; I will apply it as a single undo step (F-4.5). Actual spend: ${cost}.",
+    ),
+    (
+        keys::AI_AGENT_PREVIEW_EMPTY,
+        "The model replied without canvas operations (no node/edge creation). Try rephrasing the request.",
+    ),
+    (
+        keys::AI_AGENT_APPLIED,
+        "✓ Applied: {nodes} {n_word} · {edges} {e_word} — graph_apply, a single undo step. Destructive ops still require confirmation.",
+    ),
+    (keys::AI_AGENT_APPLY_FAIL, "graph_apply rejected the batch: {err}"),
+    (
+        keys::AI_AGENT_REJECTED,
+        "Validation rejected unsolicited mutations ({calls} call(s)) — Q3 whitelist: the agent may create new nodes and modify only the selected ones. Adjust the selection or the request.",
+    ),
+    (keys::AI_AGENT_REQUEST_FAIL, "LLM request failed: {err}"),
+    (keys::AI_GRAPH_GENERATING, "Generation started — waiting for the model…"),
+    (
+        keys::AI_GRAPH_EMPTY,
+        "The model returned an empty graph (0 nodes). Try another mode or clarify the text.",
+    ),
+    (
+        keys::AI_GRAPH_APPLIED,
+        "Graph generated: {nodes}×{edges} — applied as a single undo step",
+    ),
+    (keys::AI_GRAPH_APPLY_FAIL, "graph_apply rejected the batch: {err}"),
+    (keys::AI_GRAPH_REQUEST_FAIL, "Generation failed: {err}"),
+    (keys::AI_CHECK_RUNNING, "Checking…"),
+    (keys::AI_CHECK_OK, "Key is valid · {n} models"),
+    (keys::AI_CHECK_FAIL, "Error: {err}"),
+    (
+        keys::AI_CHECK_NO_ENDPOINT,
+        "Self-hosted endpoint is not set — enter the URL in the row above",
+    ),
+    (
+        keys::AI_PROV_CHATGPT_FALLBACK,
+        "ChatGPT: not signed in (no tokens) — the request will go via the BYOK key. Use “Sign in with ChatGPT” in AI Settings (9th tab).",
+    ),
+    (
+        keys::AI_PROV_CHATGPT_NOBYOK,
+        "ChatGPT: not signed in (no tokens) and no BYOK key set. Use “Sign in with ChatGPT” or enter a BYOK key in AI Settings (9th tab).",
+    ),
+    (
+        keys::AI_PROV_BYOK_NOKEY,
+        "BYOK: API key is not set — enter the key in AI Settings (9th tab).",
+    ),
+    (
+        keys::AI_PROV_UNAVAILABLE,
+        "Provider is unavailable for the current config — check AI Settings (9th tab).",
+    ),
+    (
+        keys::AI_OAUTH_WEB_STARTED,
+        "OAuth sign-in started in the browser — finish it in the popup window",
+    ),
+    (keys::AI_OAUTH_BRIDGE_ERR, "OAuth web flow returned an error: {err}"),
     // --- FR-LLM-B / PRD-0010 F-7.9: AI status panel (EN) ---
     (keys::AI_STATUS_PAUSED, "AI is paused — press ▶ to resume"),
     (keys::AI_STATUS_SESSION, "Session: {v}"),

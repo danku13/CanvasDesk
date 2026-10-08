@@ -44,6 +44,18 @@ canvas-llm = { workspace = true, features = ["serde"] }
 # `GraphBuilderMode` enum (доступен без фичи).
 canvas-graph-builder = { workspace = true }
 anyhow.workspace = true
+# FR-LLM-D-W2 (llm-waves §3.7): block_on async-футур LLM-задач в воркере
+# executor-сима. pollster — уже НЕПРЕРЫВНО в дереве (workspace-версия из
+# canvas-render, безусловная зависимость app) — прямое подключение не
+# добавляет ни одного нового крейта в lock (llm-waves §0.3: новых внешних
+# зависимостей нет). Optional: реального исполнителя тянет только l1-llm.
+pollster = { workspace = true, optional = true }
+# FR-LLM-D-W2 (llm-waves §3.2/§3.8): обёртка Box<dyn LlmProvider> под
+# generic-движки canvas-llm/canvas-suggest (GraphBuilder<P>/LlmMmSource<P> —
+# impl трейта для обёртки). async-trait 0.1 — уже в дереве за l1-llm
+# (canvas-llm/dep:async-trait) и в dev-зависимостях canvas-graph-builder —
+# прямое подключение за l1-llm не добавляет новых крейтов (§0.3).
+async-trait = { version = "0.1", optional = true }
 # FR-053 (U3 PRD-0009 F-6): тип FontSystem в сигнатурах раскладки пилотов
 # (TextMeasurer canvas-ui принимает &mut FontSystem — владелец инстанса
 # canvas-render::text). Уже в workspace (рендер) — не новая зависимость (G7).
@@ -74,7 +86,15 @@ l1-laya = ["canvas-suggest/l1-laya"]
 # canvas-graph-builder/l1-llm → canvas-llm/l1-llm). OFF по умолчанию —
 # сетевых зависимостей в дефолтном дереве нет (wasm-гейт ADR-0011);
 # подключается в нативной (desktop) сборке.
-l1-llm = ["canvas-graph-builder/l1-llm", "canvas-llm/l1-llm"]
+l1-llm = [
+    "canvas-graph-builder/l1-llm",
+    "canvas-llm/l1-llm",
+    # FR-LLM-D-W2 (§3.8): LlmMmSource suggest-mm (wasm-ветка) — L1-слой
+    # canvas-suggest (redact+cache+choice; ureq НЕ тянет — это l1-laya).
+    "canvas-suggest/l1-llm",
+    "dep:pollster",
+    "dep:async-trait",
+]
 # FR-LLM-OAUTH-APP / PRD-0010 F-5.1–F-5.8: OAuth-эндпоинты Sign-in-with-
 # ChatGPT HTTPS (auth.openai.com / api.openai.com) — TLS нужен только в
 # нативной сборке (ureq/rustls); wasm не трогаем (ADR-0011: web-путь —

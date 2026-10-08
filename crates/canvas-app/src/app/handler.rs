@@ -1419,6 +1419,11 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                 }
             }
+            // FR-LLM-D-W2 (llm-waves §3.7): результат LLM-задачи executor-сима
+            // (agent tool-calling / graph builder / health-check / suggest mm).
+            // Доставка — EventLoopProxy из воркера executor-сима (натив) или
+            // spawn_local-драйвера canvas-web (W3); обработка — App::on_llm_task.
+            AppEvent::LlmTask(outcome) => self.on_llm_task(outcome),
             // Web-мост ввода кириллицы/IME (canvas-web beforeinput): тот же
             // маршрут приёмника, что у Ime::Commit (wasm-аудит 2026-09-25)
             AppEvent::ImeCommit(text) => self.insert_committed_text(&text),
