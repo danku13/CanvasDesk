@@ -7,6 +7,9 @@
   2. Клавиатура: двойной клик — новая заметка + инлайн-редактор; кириллица
      печатается (Key::Character), Ctrl+A/Ctrl+B/Ctrl+Z не роняют модуль,
      Enter коммитит.
+  2b. FR-100 (UR-001-02): chord'ы редактора на web — Control+Backspace
+     (word-delete) и Control+a (select-all; шим FR-095 гасит default
+     браузера) доходят до редактора, правки коммитятся и находятся поиском.
   3. ?stress=5000: стресс-сцена сеется, рендер живёт, rAF-fps меряется.
   4. ?stress=abc: битый параметр — warn, обычный запуск (деградация).
 
@@ -230,6 +233,57 @@ async def main() -> int:
         )
         if page_errors:
             failures.append(f"pageerror: {page_errors[:3]}")
+
+        # --- 2b. FR-100: chord'ы редактора на web (word-delete, select-all) ---
+        # UR-001-02: на web Ctrl-комбинации редактора глохли (winit-web
+        # стирал модификаторы до KeyboardInput, шим FR-095 не звал
+        # preventDefault — браузер делал свой select-all). Здесь:
+        # Control+Backspace удаляет слово слева (FR-100 DeleteWordBackward),
+        # Control+a выделяет всё (шим глушит default, winit доносит chord),
+        # замена текстом перезаписывает выделение. Оракул — сквозной, как в
+        # секции 2: после коммита Ctrl+F находит замену в модели (rows>=1)
+        # и pageerror нет.
+        await page.mouse.dblclick(640, 520)
+        await asyncio.sleep(0.8)
+        cur_fr100 = await page.evaluate("document.querySelector('canvas')?.style.cursor")
+        print(
+            ("PASS" if cur_fr100 == "text" else "FAIL"),
+            f"2b: двойной клик → инлайн-редактор (cursor={cur_fr100!r})",
+        )
+        if cur_fr100 != "text":
+            failures.append(f"2b: редактор не открылся (cursor={cur_fr100!r})")
+        await dispatch_text(page, "раз два три")
+        await page.keyboard.press("Control+Backspace")  # FR-100: слово «три» под кареткой
+        await page.keyboard.press("Control+a")  # FR-100: select-all (шим не глотает)
+        await dispatch_text(page, "итог")  # замена выделения
+        await page.keyboard.press("Enter")  # коммит
+        await asyncio.sleep(0.6)
+        console_msgs.clear()
+        await page.keyboard.press("Control+f")
+        await asyncio.sleep(0.4)
+        await dispatch_text(page, "итог")
+        ok = await wait_console(console_msgs, "поиск завершён", 10)
+        rows_fr100 = 0
+        for m in reversed(console_msgs):
+            if "поиск завершён" in m and "rows=" in m:
+                rows_fr100 = int(m.split("rows=")[1].split()[0])
+                break
+        print(
+            ("PASS" if ok and rows_fr100 >= 1 else "FAIL"),
+            f"2b: замена после word-delete+select-all в модели (rows={rows_fr100})",
+        )
+        if not (ok and rows_fr100 >= 1):
+            failures.append(f"2b: поиск не нашёл замену: rows={rows_fr100}")
+        await page.keyboard.press("Enter")  # прыжок к найденной ноде
+        await asyncio.sleep(1.0)
+        await page.keyboard.press("Escape")  # закрыть панель
+        await asyncio.sleep(0.3)
+        print(
+            ("PASS" if not page_errors else "FAIL"),
+            f"2b: chord'ы FR-100 без pageerror ({len(page_errors)})",
+        )
+        if page_errors:
+            failures.append(f"2b: pageerror: {page_errors[:3]}")
 
         # --- 3. ?stress=5000 + ?log=debug — стресс-сцена, fps, поиск ---
         console_msgs.clear()
