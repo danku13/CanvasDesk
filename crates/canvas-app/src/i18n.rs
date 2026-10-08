@@ -327,6 +327,7 @@ pub mod keys {
     pub const HKEY_LMB_PORT: &str = "hotkeys.key.lmb_port";
     pub const HKEY_LMB_HANDLE: &str = "hotkeys.key.lmb_handle";
     pub const HKEY_DOUBLE_CLICK: &str = "hotkeys.key.double_click";
+    pub const HKEY_F2: &str = "hotkeys.key.f2";
     pub const HKEY_RMB: &str = "hotkeys.key.rmb";
     pub const HKEY_SPACE_DRAG: &str = "hotkeys.key.space_drag";
     pub const HKEY_CTRL_WHEEL: &str = "hotkeys.key.ctrl_wheel";
@@ -356,6 +357,7 @@ pub mod keys {
     pub const HK_DRAG_EDGE: &str = "hotkeys.desc.drag_edge";
     pub const HK_REBIND_EDGE: &str = "hotkeys.desc.rebind_edge";
     pub const HK_DOUBLE_CLICK: &str = "hotkeys.desc.double_click";
+    pub const HK_F2: &str = "hotkeys.desc.f2";
     pub const HK_CONTEXT_MENU: &str = "hotkeys.desc.context_menu";
     pub const HK_PAN: &str = "hotkeys.desc.pan";
     pub const HK_ZOOM: &str = "hotkeys.desc.zoom";
@@ -1160,6 +1162,7 @@ const RU: &[(&str, &str)] = &[
     (keys::HKEY_LMB_PORT, "ЛКМ от порта"),
     (keys::HKEY_LMB_HANDLE, "ЛКМ за хэндл"),
     (keys::HKEY_DOUBLE_CLICK, "2× клик"),
+    (keys::HKEY_F2, "F2"),
     (keys::HKEY_RMB, "ПКМ"),
     (keys::HKEY_SPACE_DRAG, "Space+drag"),
     (keys::HKEY_CTRL_WHEEL, "Ctrl+колесо"),
@@ -1188,6 +1191,7 @@ const RU: &[(&str, &str)] = &[
     (keys::HK_DRAG_EDGE, "протянуть связь"),
     (keys::HK_REBIND_EDGE, "перепривязать связь"),
     (keys::HK_DOUBLE_CLICK, "заметка / открыть файл"),
+    (keys::HK_F2, "правка выделенной ноды"),
     (keys::HK_CONTEXT_MENU, "меню объекта"),
     (keys::HK_PAN, "панорамирование"),
     (keys::HK_ZOOM, "масштаб"),
@@ -2379,6 +2383,7 @@ const EN: &[(&str, &str)] = &[
     (keys::HKEY_LMB_PORT, "LMB from port"),
     (keys::HKEY_LMB_HANDLE, "LMB on handle"),
     (keys::HKEY_DOUBLE_CLICK, "Double-click"),
+    (keys::HKEY_F2, "F2"),
     (keys::HKEY_RMB, "RMB"),
     (keys::HKEY_SPACE_DRAG, "Space+drag"),
     (keys::HKEY_CTRL_WHEEL, "Ctrl+wheel"),
@@ -2407,6 +2412,7 @@ const EN: &[(&str, &str)] = &[
     (keys::HK_DRAG_EDGE, "drag an edge"),
     (keys::HK_REBIND_EDGE, "rebind an edge"),
     (keys::HK_DOUBLE_CLICK, "note / open file"),
+    (keys::HK_F2, "edit selected node"),
     (keys::HK_CONTEXT_MENU, "object menu"),
     (keys::HK_PAN, "panning"),
     (keys::HK_ZOOM, "zoom"),

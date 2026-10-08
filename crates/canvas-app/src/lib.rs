@@ -585,6 +585,7 @@ pub mod ui {
             crate::i18n::keys::HKEY_DOUBLE_CLICK,
             crate::i18n::keys::HK_DOUBLE_CLICK,
         ),
+        (crate::i18n::keys::HKEY_F2, crate::i18n::keys::HK_F2),
         (
             crate::i18n::keys::HKEY_RMB,
             crate::i18n::keys::HK_CONTEXT_MENU,

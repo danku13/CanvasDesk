@@ -725,6 +725,75 @@ struct SettleAnim {
 /// Длительность settle-анимации вставки в группу (FR-012), мс.
 const SETTLE_ANIM_MS: f32 = 250.0;
 
+/// Зона нажатия по text-ноде, которая на «клик без движения» откроет правку
+/// (click-to-edit, docs/dev-researches/inline-edit-single-click-analysis.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ClickEditZone {
+    /// Тело заметки — правка текста (T7).
+    Body,
+    /// Шапка — правка заголовка (FR-072).
+    Title,
+}
+
+/// Отложенный кандидат click-to-edit: ставится на нажатии по text-ноде,
+/// потребляется на отпускании без движения за порог клик/драг (модель
+/// tldraw/Sheets — analysis §1.3: drag по телу остаётся переносом, клик
+/// открывает правку с кареткой в точке нажатия).
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ClickEditCandidate {
+    /// Индекс text-ноды в `canvas.nodes`.
+    index: usize,
+    /// Зона нажатия — тело или шапка.
+    zone: ClickEditZone,
+    /// World-точка нажатия — в неё ставится каретка (конверсия как CR-018 v2).
+    world: [f32; 2],
+    /// Экранный курсор на нажатии — по нему считается порог клик/драг.
+    press_cursor: [f32; 2],
+}
+
+/// Решает, открывает ли нажатие по ноде кандидат click-to-edit (клик без
+/// движения → правка с кареткой в точке). `None` — нажатие ведёт себя как
+/// раньше (drag-перенос, клик — только выделение).
+///
+/// Гейты (analysis §1.3):
+/// - правка — только text-ноды: файловые карточки открываются ассоциацией
+///   (T17), виджеты держат ввод в WebView, группы правят label двойным
+///   кликом (v1 — вне скоупа);
+/// - what-if — клик по строке расчёта тостит, override на даблклике (FR-017 Q8);
+/// - тач — правка по двойному тапу (FR-092/093): виртуальная клавиатура
+///   не должна всплывать по случайному тапу;
+/// - Ctrl/Shift+нажатие — выделение (CR-001), приоритет над правкой.
+pub(super) fn click_edit_target(
+    node: &Node,
+    world: Vec2,
+    whatif_active: bool,
+    press_from_touch: bool,
+    modifier_selection: bool,
+) -> Option<ClickEditZone> {
+    if node.kind() != NodeKind::Text
+        || node.file.is_some()
+        || whatif_active
+        || press_from_touch
+        || modifier_selection
+    {
+        return None;
+    }
+    // FR-072: шапка (верхние HEADER_HEIGHT world-px) — заголовок, ниже — тело
+    Some(if world[1] < node.y + HEADER_HEIGHT {
+        ClickEditZone::Title
+    } else {
+        ClickEditZone::Body
+    })
+}
+
+/// Отпускание кандидата — «клик» (движение в пороге клик/драг, тот же
+/// `SELECT_DRAG_THRESHOLD`, что у рамки выделения): открывает правку.
+/// Движение сильнее порога — это был drag-перенос, кандидат сбрасывается.
+fn click_edit_is_click(candidate: &ClickEditCandidate, cursor: [f32; 2]) -> bool {
+    (cursor[0] - candidate.press_cursor[0]).abs() <= SELECT_DRAG_THRESHOLD
+        && (cursor[1] - candidate.press_cursor[1]).abs() <= SELECT_DRAG_THRESHOLD
+}
+
 /// FR-027: меню помощи кнопки «?» — колонка screen-space у кнопки (кламп
 /// к окну) + флаг раскрытого подменю разделов документации (двухэтапный
 /// Esc: подменю → меню → закрыто — семантика FR-026).
@@ -973,6 +1042,11 @@ pub struct App {
     editor_dragging: bool,
     /// Детектор двойного клика ЛКМ (T7).
     double_click: DoubleClick,
+    /// Click-to-edit (см. docs/dev-researches/inline-edit-single-click-analysis.md):
+    /// кандидат «клик без движения по text-ноде откроет правку» — ставится на
+    /// нажатии, потребляется на отпускании за порогом клик/драг (модель
+    /// tldraw/Sheets: drag по телу остаётся переносом, клик — каретка).
+    click_edit: Option<ClickEditCandidate>,
     /// FR-093: нажатие пришло от тача (on_touch, wasm32) — двойной тап
     /// сверяется с расширенным допуском сдвига (палец гуляет сильнее
     /// курсора). Ставится в on_touch перед Pressed, гасится в on_left_button.
@@ -1611,6 +1685,7 @@ impl App {
             title_then_body: None,
             editor_dragging: false,
             double_click: DoubleClick::new(),
+            click_edit: None,
             press_from_touch: false,
             clipboard,
             menu: None,
@@ -2277,6 +2352,50 @@ impl App {
     /// zoom * scale_factor — перевод world-px в физические (для буфера редактора).
     fn zoom_px(&self) -> f32 {
         self.camera.zoom() * self.scale_factor()
+    }
+
+    /// Click-to-edit: открыть правку зоны ноды и поставить каретку в
+    /// world-точку клика. Конверсия координат — единая с CR-018 v2 (клик по
+    /// строке таблицы): `session_area_offset` + `session.click`. Без рендера
+    /// (stub-тесты) сессия не открывается — no-op без паники.
+    fn begin_edit_at(&mut self, index: usize, zone: ClickEditZone, world: Vec2) {
+        match zone {
+            ClickEditZone::Title => self.begin_editing_title(index),
+            ClickEditZone::Body => self.begin_editing(index),
+        }
+        let zoom_px = self.zoom_px();
+        if let (Some(session), Some(renderer)) = (self.editing.as_mut(), self.renderer.as_mut()) {
+            if let Some((origin, _, _)) =
+                session_area_offset(&self.scene.canvas, session, self.settings.edges_avoid_nodes)
+            {
+                let x = ((world[0] - origin[0]) * zoom_px) as i32;
+                let y = ((world[1] - origin[1]) * zoom_px) as i32;
+                // CR-018 v1.1: клик по стационарной зоне (выше буфера —
+                // desc/метки) каретку не двигает — редактор просто живёт
+                if y >= 0 {
+                    session.click(renderer.font_system_mut(), x, y);
+                }
+            }
+        }
+    }
+
+    /// Курсор-«луч» над редактируемым текстом text-ноды (тело или шапка) на
+    /// hover — видовая подсказка, что клик откроет правку (click-to-edit).
+    fn click_edit_hover_text(&self) -> bool {
+        let Some(index) = self.hovered else {
+            return false;
+        };
+        let Some(node) = self.scene.canvas.nodes.get(index) else {
+            return false;
+        };
+        click_edit_target(
+            node,
+            self.cursor_world(),
+            self.scene.whatif_active,
+            false,
+            false,
+        )
+        .is_some()
     }
 
     /// Начать редактирование текстовой ноды (T7) или подписи группы:
@@ -4663,6 +4782,8 @@ impl App {
                 CursorIcon::NwseResize
             } else if body_pointer {
                 CursorIcon::Pointer
+            } else if self.click_edit_hover_text() {
+                CursorIcon::Text
             } else {
                 CursorIcon::Default
             }
@@ -12731,6 +12852,122 @@ mod tests {
         // Повторный коммит — ещё append
         app.insert_committed_text("-paste");
         assert_eq!(app.settings.llm.api_key, "sk-test-123xyz-paste");
+    }
+
+    // --- Click-to-edit: правка ноды одиночным кликом (analysis §4) --------
+
+    /// Зоны по Y: шапка (верхние HEADER_HEIGHT world-px) — заголовок,
+    /// ниже — тело (та же развилка, что у двойного клика FR-072).
+    #[test]
+    fn click_edit_target_zones_by_y() {
+        let mut node = Node::text("n", "текст", 100.0, 50.0);
+        node.width = 300.0;
+        node.height = 200.0;
+        let title = click_edit_target(
+            &node,
+            [150.0, 50.0 + HEADER_HEIGHT - 1.0],
+            false,
+            false,
+            false,
+        );
+        assert_eq!(
+            title,
+            Some(ClickEditZone::Title),
+            "клик в шапке — заголовок"
+        );
+        let body = click_edit_target(
+            &node,
+            [150.0, 50.0 + HEADER_HEIGHT + 10.0],
+            false,
+            false,
+            false,
+        );
+        assert_eq!(body, Some(ClickEditZone::Body), "клик в теле — правка тела");
+    }
+
+    /// Гейты объекта: только text-ноды без файла — файловые карточки
+    /// открываются ассоциацией (T17), группы правят label даблкликом (v1).
+    #[test]
+    fn click_edit_target_object_gates() {
+        let mut file_node = Node::text("f", "", 0.0, 0.0);
+        file_node.file = Some("report.txt".to_owned());
+        assert_eq!(
+            click_edit_target(&file_node, [10.0, 60.0], false, false, false),
+            None,
+            "файловая карточка не правится по клику"
+        );
+        let group = Node::group("g", 0.0, 0.0, 200.0, 200.0);
+        assert_eq!(
+            click_edit_target(&group, [50.0, 60.0], false, false, false),
+            None,
+            "группа — вне скоупа click-to-edit v1"
+        );
+    }
+
+    /// Гейты контекста: what-if (override на даблклике, FR-017 Q8), тач
+    /// (двойной тап, FR-092/093) и модификаторы выделения (CR-001)
+    /// запрещают click-to-edit.
+    #[test]
+    fn click_edit_target_context_gates() {
+        let node = Node::text("n", "текст", 0.0, 0.0);
+        let point = [10.0, 60.0];
+        assert_eq!(
+            click_edit_target(&node, point, true, false, false),
+            None,
+            "what-if — правка строки только через override даблклика"
+        );
+        assert_eq!(
+            click_edit_target(&node, point, false, true, false),
+            None,
+            "тач — правка только двойным тапом"
+        );
+        assert_eq!(
+            click_edit_target(&node, point, false, false, true),
+            None,
+            "Ctrl/Shift+клик — выделение (CR-001)"
+        );
+    }
+
+    /// Порог клик/драг: движение в пределах SELECT_DRAG_THRESHOLD — клик
+    /// (правка), сильнее — drag-перенос (кандидат сбрасывается без правки).
+    #[test]
+    fn click_edit_is_click_threshold() {
+        let candidate = ClickEditCandidate {
+            index: 0,
+            zone: ClickEditZone::Body,
+            world: [0.0, 0.0],
+            press_cursor: [500.0, 300.0],
+        };
+        assert!(
+            click_edit_is_click(&candidate, [502.0, 301.0]),
+            "в пороге — клик"
+        );
+        assert!(
+            !click_edit_is_click(&candidate, [506.0, 300.0]),
+            "за порогом — drag, правка не открывается"
+        );
+    }
+
+    /// Потребление кандидата на отпускании: без рендера (stub) правка не
+    /// открывается (graceful no-op — сессию создаёт только живой рендер),
+    /// но кандидат всегда снимается — жест не протекает в следующий клик.
+    #[test]
+    fn click_edit_candidate_consumed_on_release() {
+        let mut canvas = Canvas::default();
+        canvas.nodes.push(Node::text("n", "текст", 0.0, 0.0));
+        let mut app = stub_app_with_canvas(canvas);
+        app.click_edit = Some(ClickEditCandidate {
+            index: 0,
+            zone: ClickEditZone::Body,
+            world: [10.0, 60.0],
+            press_cursor: app.cursor,
+        });
+        app.on_left_button(ElementState::Released);
+        assert!(app.click_edit.is_none(), "кандидат потреблён/снят");
+        assert!(
+            app.editing.is_none(),
+            "без рендера сессия не открывается (no-op без паники)"
+        );
     }
 }
 

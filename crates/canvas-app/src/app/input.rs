@@ -1165,6 +1165,12 @@ impl App {
                     match &event.logical_key {
                         Key::Named(NamedKey::Tab) => self.mindmap_add_child(index),
                         Key::Named(NamedKey::Enter) if !ctrl => self.mindmap_add_sibling(index),
+                        // Click-to-edit: клавиатурный вход в правку выделенной
+                        // text-ноды — та же цель по точке, что у даблклика
+                        // (курсор в шапке — заголовок, ниже — тело)
+                        Key::Named(NamedKey::F2) => {
+                            self.begin_edit_node(index, self.cursor_world())
+                        }
                         Key::Named(NamedKey::ArrowLeft) if ctrl => {
                             self.mindmap_set_collapsed(index, true);
                         }
@@ -2849,6 +2855,10 @@ impl App {
         }
         match state {
             ElementState::Pressed => {
+                // Click-to-edit: новое нажатие — новый жест; кандидат с
+                // предыдущего (не потреблённый, например поверхностью UI)
+                // не переживает следующее нажатие
+                self.click_edit = None;
                 // FR-079 (S3): C3-карточки — клик до диспетчера поверхностей:
                 // стопка транзиентна (паттерн тултипа, не реестр FR-052);
                 // клик по карточке глотается, мимо — закрывает и проходит
@@ -3274,6 +3284,23 @@ impl App {
                         // текущие позиции (внешние сдвиги между драгами
                         // поглощаются)
                         self.drag_push_begin();
+                        // Click-to-edit: нажатие по text-ноде — кандидат на
+                        // правку; откроется на отпускании без движения за
+                        // порог (drag по телу остаётся переносом, analysis §1.3)
+                        if let Some(zone) = click_edit_target(
+                            &self.scene.canvas.nodes[index],
+                            world,
+                            self.scene.whatif_active,
+                            press_from_touch,
+                            self.modifiers.control_key() || self.modifiers.shift_key(),
+                        ) {
+                            self.click_edit = Some(ClickEditCandidate {
+                                index,
+                                zone,
+                                world,
+                                press_cursor: self.cursor,
+                            });
+                        }
                         self.dragging = Some(DragState {
                             primary: index,
                             grab_world: world,
@@ -3497,6 +3524,21 @@ impl App {
                     // FR-006: закрытие отложенного drag/resize — undo-шаг при
                     // фактическом изменении (клик без движения не шаг)
                     self.finish_interaction_undo();
+                }
+                // Click-to-edit: отпускание без движения за порог по
+                // text-ноде — правка с кареткой в точке клика. ПОСЛЕ
+                // finish_interaction_undo: пустой drag не создаёт undo-шаг,
+                // а сессия ставит свой отложенный снапшот (begin_pending_undo
+                // в begin_editing) — двойного шага не образуется. Повторный
+                // what-if-гейт: candidate мог простоять через смену режима.
+                if let Some(candidate) = self.click_edit.take() {
+                    if !self.scene.whatif_active && click_edit_is_click(&candidate, self.cursor) {
+                        self.begin_edit_at(
+                            candidate.index,
+                            candidate.zone,
+                            Vec2::from(candidate.world),
+                        );
+                    }
                 }
                 // FR-038 (п.9): направляющие не переживают отпускание
                 if let Some(renderer) = self.renderer.as_mut() {
