@@ -297,6 +297,7 @@ name = "canvas-app"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "canvas-core",
  "canvas-graph-builder",
  "canvas-llm",
@@ -309,6 +310,7 @@ dependencies = [
  "canvas-widgets",
  "cosmic-text",
  "js-sys",
+ "pollster",
  "serde",
  "serde_json",
  "toml",

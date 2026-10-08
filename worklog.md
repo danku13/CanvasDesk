@@ -1463,3 +1463,27 @@ Work Log:
 Stage Summary:
 - UR-002 7/7 закрыт кодом и тестами (canvas-app 684 ok на этапе S5; финальный гейт — в этой записи); ожидает приёмки владельца на живом стенде
 - Tokens (estimate, правило AGENTS.md): in≈180k, out≈25k, total≈205k, model=GLM (Super Z), scope=CR-031
+
+---
+Task ID: W2 (сессия web-94c8d67d-efca-4624-9b94-34d7f5f7cc85, волна 2)
+Agent: Super Z (main, координатор) — сессия LLM-волн
+Task: Волна 2 «Вживление в canvas-app: панели, входы, cost, health-UI, OAuth-сим» (план §3)
+
+Work Log:
+- База: origin/main eb0b97a (W1 параллельной сессии; моя дублирующая реализация отозвана, ветка удалена)
+- llm_executor.rs (новый, п.7): общий механизм async LLM-вызовов — натив worker-поток + pollster; wasm шов LlmSpawnFn (spawn_local, инъекция W3) с честным фейлом до инъекции; инбокс результатов + дренаж llm_poll в about_to_wait (паттерн oauth_poll); дедупликация джоб по kind; джобы Health/Models/Agent/Graph/SuggestChoice; BoxedProvider — локальная делегация Box<dyn LlmProvider> для GraphBuilder<P> (в canvas-llm нет blanket-impl, чужой крейт не трогаем); тесты с poll-wait
+- П.1 входы панелей: agent_panel_click/graph_builder_click (диспетчеры AgentPanelHit/GraphBuilderHit) → обработчик ввода перед canvas-pick (транзиентные поверхности, паттерн ai-status-panel); Ctrl+I тогл Agent Panel (кириллица «Ш»; редактор ноды съедает курсив раньше); ввод в input панели (символы/Backspace/Enter/Esc — паттерн settings_text_edit); пункт меню «Генератор графа (AI)…» (CanvasMenuItem::AiGraphBuilder, i18n ru+en)
+- П.2 реальные вызовы: agent_send — build_feature_provider → spawn_agent (tool_calling по MCP tools_list → ToolDef-конверт, системный промпт graph_apply-батча); on_agent_result — agent_validate_tool_calls (Q3 whitelist) → preview из calls (n_note/edge_create по ref-адресам); agent_accept_preview — реальный mcp_dispatch("n") c FR-033 семантикой (всё-или-ничего, один undo-шаг), ошибки — человекочитаемые, канвас не меняется; graph_builder_generate → spawn_graph (GraphBuilder::build) → preview из GeneratedNode/Edge; graph_builder_accept — тот же mcp_dispatch путь; mock-флоу сохранён как fallback (F-5.9) и для тестов
+- П.3 cost: после каждой успешной джобы actual_cost(estimate_tokens(промпт), estimate_tokens(ответ)) → ai_cost_session/ai_cost_day; ChatGPT rate counter
+- П.4 health-UI: кнопки «Проверить» (AiApiKey/AiSelfhostUrl/AiSelfhostKey) → ai_health_check → build_health_provider (BYOK = openrouter-пресет/selfhost; Selfhost = endpoint+selfhost_key) → executor → HealthReport → ai_key_ok/ai_selfhost_ok + тосты i18n (без l1-llm — прежний mock-toggle)
+- П.5 discovery: после Ok health → spawn_models (GET /v1/models через транспорт executor) → ai_discovered_models (dropdown_options точка готова) + автозаполнение пустых модель-полей + тост; fallback свободного ввода сохранён
+- П.6 OAuth web-сим: трейт WebOAuthBridge (oauth_assets/start_login/sign_out) + App::set_web_oauth_bridge (инъекция W3); oauth_button_click — runtime-проверка моста вместо компайл-тайм запрета (wasm+l1-llm): мост есть → делегирование флоу, нет → прежний тост; oauth_assets wasm-ветка — token_store из моста (было — жёсткий None)
+- П.8 suggest mm-source в wasm: обе wasm-ветки (Popup/Cards) — sync-lex мгновенно + SuggestChoiceJob через executor (redact по data_residency); on_suggest_llm_choice — fusion с lex по поколению (suggest_llm_rerank-контекст); ошибка/нет провайдера/пауза → вырождение в lex
+- i18n: AI_HEALTH_OK/FAIL/NO_KEY/NO_ENDPOINT, AI_DISCOVERY_OK, AI_GRAPH_DONE, AI_MENU_GRAPH_BUILDER (ru+en); интеграционный тест меню обновлён (10→11 пунктов)
+- Гейты: fmt; clippy --workspace --all-targets -D warnings; test --workspace (648 canvas-app lib, 0 FAILED); check -p canvas-web --target wasm32 (ADR-0011)
+
+Stage Summary:
+- W2 готова: панели доступны пользователю (Ctrl+I/меню), реальные LLM-вызовы на нативе, cost фактический, health/discovery работают, симы для W3 инъекционны (WebOAuthBridge + LlmSpawnFn + set_llm_transport)
+- Для W3: canvas-web инъецирует set_llm_spawner (spawn_local) + set_llm_transport (WasmFetchTransport) + set_web_oauth_bridge (OPFS-стор + web-флоу) → feature-флип активирует панели/suggest-LLM/OAuth в браузере
+- Ограничение: полный dropdown-автодополнение в TextInput-строках моделей — точка dropdown_options заполнена discovered-моделями, рендер-автокомплит отложен (render-path изменение, вне бюджета волны); noted в отчёте
+- Tokens (estimate, правило AGENTS.md): in≈700k, out≈110k, total≈810k, model=GLM (Super Z), scope=W2

@@ -4904,21 +4904,26 @@ impl App {
                 self.oauth_button_click();
                 return;
             }
-            // FR-LLM-FIX: mock health-check BYOK-ключа — toggle ai_key_ok.
-            // FR-LLM-FIX-TODO: реальный health-check — GET /v1/models с
-            // api_key, при 200 заполнить список моделей (модель-строки
-            // получат dropdown_options не пустой), при 4xx — бейдж «ключ
-            // невалиден». Stream C/D.
+            // FR-LLM-FIX: W2 п.4 — реальный health-check через LLM-executor
+            // (canvas_llm::health::check_provider, API W1). Без l1-llm —
+            // прежний mock-toggle (панель остаётся UI-демо).
             SettingsRow::AiApiKey => {
-                self.ai_key_ok = !self.ai_key_ok;
+                #[cfg(feature = "l1-llm")]
+                self.ai_health_check(crate::llm_executor::HealthTarget::Byok);
+                #[cfg(not(feature = "l1-llm"))]
+                {
+                    self.ai_key_ok = !self.ai_key_ok;
+                }
             }
-            // FR-LLM-FIX: mock health-check self-hosted endpoint — toggle
-            // ai_selfhost_ok. FR-LLM-FIX-TODO: реальный health-check —
-            // GET {endpoint}/v1/models с api_key, при 200 — бейдж «endpoint
-            // отвечает», при ошибке — «неверный URL»/«endpoint не отвечает».
-            // Stream C/D.
+            // W2 п.4: selfhost «Проверить» — реальный health-check
+            // {endpoint}/v1/models (без l1-llm — mock-toggle).
             SettingsRow::AiSelfhostUrl | SettingsRow::AiSelfhostKey => {
-                self.ai_selfhost_ok = !self.ai_selfhost_ok;
+                #[cfg(feature = "l1-llm")]
+                self.ai_health_check(crate::llm_executor::HealthTarget::Selfhost);
+                #[cfg(not(feature = "l1-llm"))]
+                {
+                    self.ai_selfhost_ok = !self.ai_selfhost_ok;
+                }
             }
             _ => {
                 debug_assert!(false, "не Button-строка: {row:?}");
