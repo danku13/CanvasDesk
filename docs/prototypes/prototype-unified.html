@@ -496,10 +496,11 @@ body.light #aistatus .ais-feat.on { border-color:rgba(124,77,224,.42); backgroun
   color:var(--txt); background:var(--panel2); white-space:nowrap; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
 .ag-chip.ai { border-color:rgba(177,140,255,.42); color:var(--ai); background:rgba(177,140,255,.08); }
 body.light .ag-chip.ai { border-color:rgba(124,77,224,.42); color:var(--ai); background:rgba(124,77,224,.06); }
-.ag-log { flex:1; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:9px; }
+.ag-log { flex:1; overflow-y:auto; overflow-x:hidden; padding:12px 14px; display:flex; flex-direction:column; gap:9px; }
 .ag-empty { color:var(--dim); font-size:11.5px; line-height:1.55; border:1px dashed var(--line);
   border-radius:10px; padding:12px 13px; }
-.ag-msg { font-size:12.5px; line-height:1.5; border-radius:10px; padding:8px 11px; max-width:94%; }
+.ag-msg { font-size:12.5px; line-height:1.5; border-radius:10px; padding:8px 11px; max-width:94%;
+  overflow-wrap:anywhere; word-break:break-word; }
 .ag-msg .t { font-size:9px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin-bottom:3px; }
 .ag-msg.user { align-self:flex-end; background:rgba(77,163,255,.12); border:1px solid rgba(77,163,255,.3); }
 body.light .ag-msg.user { background:rgba(47,127,232,.09); }
@@ -507,24 +508,27 @@ body.light .ag-msg.user { background:rgba(47,127,232,.09); }
 .ag-msg.err { align-self:flex-start; background:rgba(229,105,122,.08); border:1px solid rgba(229,105,122,.38); color:var(--rej); }
 .ag-msg.preview { border-color:rgba(177,140,255,.5); }
 .ag-tools { margin-top:6px; border-top:1px dashed var(--line); padding-top:6px; display:flex; flex-direction:column; gap:3px; }
-.ag-tool { font-family:var(--mono); font-size:10.5px; color:var(--dim); line-height:1.45; }
+.ag-tool { font-family:var(--mono); font-size:10.5px; color:var(--dim); line-height:1.45; overflow-wrap:anywhere; word-break:break-word; }
 .ag-tool .fn { color:var(--ai); }
 .ag-tool b { color:var(--ok); font-weight:600; }
 .ag-tool.wrn { color:var(--warn); }
 .ag-tool.sk { height:10px; border-radius:5px; width:72%;
   background:linear-gradient(90deg, rgba(177,140,255,.07), rgba(177,140,255,.18), rgba(177,140,255,.07));
   background-size:220% 100%; animation:sgShimmer 1.15s linear infinite; }
-.ag-acts { display:flex; gap:8px; margin-top:8px; }
+.ag-acts { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
 .ag-acts button { flex:1; font-size:11.5px; padding:5px 10px; border-radius:7px; cursor:pointer;
   border:1px solid var(--line); background:none; color:var(--txt); }
 .ag-acts button.acc { border-color:rgba(63,191,127,.5); color:var(--ok); font-weight:600; }
 .ag-acts button.acc:hover { background:rgba(63,191,127,.1); }
 .ag-acts button.rej:hover { border-color:var(--rej); color:var(--rej); }
 .ag-acts button:disabled { opacity:.4; cursor:default; }
-.ag-est { padding:6px 14px; font-size:10.5px; color:var(--dim); border-top:1px solid var(--line); font-family:var(--mono); }
+.ag-acts .st { flex-basis:100%; font-size:9.5px; color:var(--dim); }
+.ag-est { padding:6px 14px; font-size:10.5px; color:var(--dim); border-top:1px solid var(--line); font-family:var(--mono);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .ag-inrow { display:flex; gap:8px; padding:9px 14px 6px; border-top:1px solid var(--line); }
-.ag-inrow textarea { flex:1; resize:none; background:var(--panel2); color:var(--txt); border:1px solid var(--line);
-  border-radius:8px; font:12.5px/1.45 inherit; padding:7px 10px; min-height:34px; max-height:110px; }
+.ag-inrow textarea { flex:1; min-width:0; resize:none; background:var(--panel2); color:var(--txt); border:1px solid var(--line);
+  border-radius:8px; font-family:inherit; font-size:12.5px; line-height:1.45; padding:7px 10px; min-height:34px; max-height:110px;
+  white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
 .ag-inrow textarea:focus { outline:none; border-color:var(--accent); }
 .ag-inrow button { align-self:flex-end; }
 .ag-quick { display:flex; gap:6px; padding:3px 14px 12px; flex-wrap:wrap; }
@@ -4866,7 +4870,11 @@ function aiAgentBuildPreview(txt){
 }
 function aiAcceptPreview(){
   const pv = AI.agent.preview;
-  if (!pv) return;
+  if (!pv){ // клик по устаревшей кнопке — гасим ряд и объясняем (F-4.11)
+    agLogEl().querySelectorAll('.ag-acts:not(.done)').forEach(a=>agActsResolve(a, '— Preview уже обработан'));
+    showToast('Preview уже обработан — отправьте новый запрос агенту');
+    return;
+  }
   const idmap = [];
   pv.nodes.forEach(nd=>{
     const node = {
@@ -4894,18 +4902,31 @@ function aiAcceptPreview(){
   const n = pv.nodes.length, m = pv.edges.length;
   const last = agLogEl().lastElementChild;
   const acts = last && last.querySelector('.ag-acts');
-  if (acts){ acts.querySelectorAll('button').forEach(b=>{ b.disabled = true; }); }
+  if (acts) agActsResolve(acts, '✓ Принято — применено к канвасу');
   agBot('✓ Применено: '+n+' '+pluralRu(n,'нода','ноды','нод')+', '+m+' '+pluralRu(m,'связь','связи','связей')+' · graph_apply — один undo-шаг (F-4.5). Деструктивные ops по-прежнему требуют confirm.', 'bot');
   showToast('Agent: применено '+n+'×'+m+' · undo одним шагом · graph_validate пройден');
   emit('agApplied');
 }
 function aiRejectPreview(why){
-  if (!AI.agent.preview) return;
+  if (!AI.agent.preview){
+    if (!why){ // клик по устаревшей кнопке — гасим ряд и объясняем (F-4.11); вызовы с причиной (тумблер/пауза) остаются тихими
+      agLogEl().querySelectorAll('.ag-acts:not(.done)').forEach(a=>agActsResolve(a, '— Preview уже обработан'));
+      showToast('Preview уже обработан — отправьте новый запрос агенту');
+    }
+    return;
+  }
   AI.agent.preview = null;
   const last = agLogEl().lastElementChild;
   const acts = last && last.querySelector('.ag-acts');
-  if (acts){ acts.querySelectorAll('button').forEach(b=>{ b.disabled = true; }); }
+  if (acts) agActsResolve(acts, '✕ Отклонено — канвас не изменён');
   agBot((why? why+'. ': '')+'Превью отклонено — ghost-ноды убраны, канвас не изменён. Переформулируйте запрос или уточните контекст.', 'bot');
+}
+/* Решение по preview (Accept/Reject/Esc/новый запрос) гасит acts-ряд: disabled + явный статус (F-4.11) */
+function agActsResolve(acts, status){
+  if (!acts || acts.classList.contains('done')) return;
+  acts.classList.add('done');
+  acts.querySelectorAll('button').forEach(b=>{ b.disabled = true; });
+  if (status){ const s = document.createElement('span'); s.className = 'st'; s.textContent = status; acts.appendChild(s); }
 }
 function agSend(txtRaw){
   const txt = String(txtRaw||'').trim();
@@ -4922,6 +4943,9 @@ function agSend(txtRaw){
     agBot('⚠ 429 rate limit: подписка ChatGPT исчерпана ('+AI.rate.total+'/'+AI.rate.total+'). Fallback: BYOK — Настройки → AI and Models (F-5.9).', 'err');
     return;
   }
+  // новый запрос отменяет предыдущий preview: гасим старые acts-ряды и ghost (stale-клики, F-4.11)
+  agLogEl().querySelectorAll('.ag-acts:not(.done)').forEach(a=>agActsResolve(a, '— Неактуально: отправлен новый запрос'));
+  AI.agent.preview = null;
   agUser(txt);
   inp.value = ''; inp.style.height = 'auto';
   AI.agent.busy = true;
