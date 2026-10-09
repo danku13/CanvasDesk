@@ -66,6 +66,30 @@ const MINIMAP_W: f32 = 220.0;
 const MINIMAP_H: f32 = 140.0;
 const MINIMAP_MARGIN: f32 = 16.0;
 
+/// UR-005 rev2 (регресс UR-003: мини-карта пропала в wasm): единая
+/// математика позиции панели (левый верхний угол, логические px) — рендер
+/// (`ai_status_panel`) и rect/hit-test (`ai_status_panel_rect`) обязаны
+/// считать ОДНУ геометрию (раньше формулы дублировались и могли
+/// разъехаться). `has_minimap` — наличие ЗОНЫ миникарты
+/// (`minimap_zone_rect`, БЕЗ гейта видимости): панель встаёт над
+/// миникартой с зазором [`AI_STATUS_GAP_ABOVE_MINIMAP`], иначе — в правый
+/// нижний угол. Зона вместо гейтованного rect: флаг видимости выставляется
+/// ПОЗЖЕ подготовки панелей в кадре — гейтованный rect давал флаг прошлой
+/// кадра, и квад миникарты налезал на панель (исходный симптом UR-005).
+pub(super) fn ai_status_panel_origin(
+    viewport: [f32; 2],
+    panel_h: f32,
+    has_minimap: bool,
+) -> [f32; 2] {
+    let panel_x = viewport[0] - AI_STATUS_W - AI_STATUS_MARGIN;
+    let panel_y = if has_minimap {
+        viewport[1] - MINIMAP_MARGIN - MINIMAP_H - AI_STATUS_GAP_ABOVE_MINIMAP - panel_h
+    } else {
+        viewport[1] - AI_STATUS_MARGIN - panel_h
+    };
+    [panel_x, panel_y]
+}
+
 // FR-LLM-FIX: внутренняя геометрия — 1:1 по CSS прототипа.
 /// Паддинг панели: 9px top/bottom, 11px left/right (`padding:9px 11px`).
 const PAD_TOP: f32 = 9.0;
@@ -296,17 +320,12 @@ impl App {
             AI_STATUS_H
         };
 
-        // Позиция панели: правый край, над миникартой (если миникарта есть)
-        // или просто в правом нижнем углу.
-        let has_minimap = self.minimap_rect().is_some();
-        let panel_x = viewport[0] - AI_STATUS_W - AI_STATUS_MARGIN;
-        let panel_y = if has_minimap {
-            // Над миникартой (8px зазор).
-            viewport[1] - MINIMAP_MARGIN - MINIMAP_H - AI_STATUS_GAP_ABOVE_MINIMAP - panel_h
-        } else {
-            // Миникарты нет — панель в правом нижнем углу с отступом.
-            viewport[1] - AI_STATUS_MARGIN - panel_h
-        };
+        // UR-005 rev2: позиция панели — ОДНА математика с
+        // ai_status_panel_rect (ai_status_panel_origin); привязка к ЗОНЕ
+        // миникарты (без гейта видимости) — панель встаёт над миникартой
+        // даже в кадре смены видимости.
+        let has_minimap = self.minimap_zone_rect().is_some();
+        let [panel_x, panel_y] = ai_status_panel_origin(viewport, panel_h, has_minimap);
         let panel = [panel_x, panel_y, AI_STATUS_W, panel_h];
 
         // === Фон панели — kit::panel_style (FR-055: слоты panel_*) ======
@@ -597,13 +616,8 @@ impl App {
         } else {
             AI_STATUS_H
         };
-        let has_minimap = self.minimap_rect().is_some();
-        let panel_x = viewport[0] - AI_STATUS_W - AI_STATUS_MARGIN;
-        let panel_y = if has_minimap {
-            viewport[1] - MINIMAP_MARGIN - MINIMAP_H - AI_STATUS_GAP_ABOVE_MINIMAP - panel_h
-        } else {
-            viewport[1] - AI_STATUS_MARGIN - panel_h
-        };
+        let has_minimap = self.minimap_zone_rect().is_some();
+        let [panel_x, panel_y] = ai_status_panel_origin(viewport, panel_h, has_minimap);
         Some([panel_x, panel_y, AI_STATUS_W, panel_h])
     }
 
@@ -725,6 +739,50 @@ mod tests {
     #[test]
     fn gap_above_minimap_is_8() {
         assert_eq!(AI_STATUS_GAP_ABOVE_MINIMAP, 8.0);
+    }
+
+    /// UR-005 rev2 (регресс UR-003: «мини-карта пропала в wasm»): панель
+    /// встаёт НАД зоной миникарты с зазором 8px — прямоугольники не
+    /// пересекаются по вертикали, значит минимапа (pass ПОСЛЕ панелей) и
+    /// панель видны ОДНОВРЕМЕННО. Прежнее правило «панель видима →
+    /// миникарта скрыта» в web прятало миникарту навсегда.
+    #[test]
+    fn panel_origin_sits_above_minimap_zone() {
+        let viewport = [1440.0, 900.0];
+        let [px, py] = ai_status_panel_origin(viewport, AI_STATUS_H, true);
+        // Зона миникарты — та же математика, что minimap_pass::quad_rect_logical
+        // (зеркала констант: MINIMAP_W/H/MARGIN в этом файле).
+        let zone_x1 = viewport[0] - MINIMAP_MARGIN;
+        let zone_top = viewport[1] - MINIMAP_MARGIN - MINIMAP_H;
+        let panel_bottom = py + AI_STATUS_H;
+        // Зазор панель→зона ровно 8px; панель строго выше зоны.
+        assert!((zone_top - panel_bottom - AI_STATUS_GAP_ABOVE_MINIMAP).abs() < 1e-3);
+        assert!(panel_bottom <= zone_top);
+        // Горизонтально полосы пересекаются (панель шире зоны) — разводка по вертикали.
+        assert!(px + AI_STATUS_W > zone_x1 - MINIMAP_W);
+        // Панель у правого края с отступом.
+        assert!((px - (viewport[0] - AI_STATUS_W - AI_STATUS_MARGIN)).abs() < 1e-3);
+    }
+
+    /// UR-005 rev2: без зоны миникарты панель — в правом нижнем углу
+    /// (привязка низа панели к низу вьюпорта с отступом 12px).
+    #[test]
+    fn panel_origin_bottom_corner_without_minimap() {
+        let viewport = [1440.0, 900.0];
+        let [px, py] = ai_status_panel_origin(viewport, AI_STATUS_H, false);
+        assert!((py - (viewport[1] - AI_STATUS_MARGIN - AI_STATUS_H)).abs() < 1e-3);
+        assert!((px - (viewport[0] - AI_STATUS_W - AI_STATUS_MARGIN)).abs() < 1e-3);
+    }
+
+    /// UR-005 rev2: paused-панель (выше на 18px) всё ещё не задевает зону —
+    /// зазор считается от фактической высоты panel_h.
+    #[test]
+    fn panel_origin_with_paused_extra_still_above_zone() {
+        let viewport = [1440.0, 900.0];
+        let panel_h = AI_STATUS_H + AI_STATUS_PAUSED_EXTRA;
+        let [_, py] = ai_status_panel_origin(viewport, panel_h, true);
+        let zone_top = viewport[1] - MINIMAP_MARGIN - MINIMAP_H;
+        assert!((zone_top - (py + panel_h) - AI_STATUS_GAP_ABOVE_MINIMAP).abs() < 1e-3);
     }
 
     /// FR-LLM-FIX: padding панели — 9px top/bottom, 11px left/right
