@@ -111,3 +111,34 @@ pub(crate) fn set_recent_label(name: &str) {
         }
     }
 }
+
+/// UR-003: сдвинуть DOM-хром из-под углов GPU-панелей во всю высоту.
+/// `left` — открыт левый док палитры (Ctrl+P): `#author-bar` уезжает
+/// вправо от дока; `right` — открыта агент-панель (Ctrl+I): `#w6-toolbar`
+/// уезжает влево от панели. Канвас — GPU-UI без z-index, DOM-бары
+/// (z-index: 10) всегда выше: прежде они перекрывали шапки панелей
+/// (у агент-панели — вместе с кнопкой ✕). Синхронизация — классы на
+/// `body` (`cd-panel-left`/`cd-panel-right`); CSS в index.html — сдвиги
+/// и transition. Идемпотентно: сет-методы classList не дублируют классы.
+/// Вызывается после каждого события цикла (TourAwareApp, паттерн FR-095).
+pub(crate) fn set_panel_overlap(left: bool, right: bool) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Some(document) = window.document() else {
+        return;
+    };
+    let Some(body) = document.body() else {
+        return;
+    };
+    let class_list = body.class_list();
+    let sync = |class: &str, on: bool| {
+        if on {
+            class_list.add_1(class).ok();
+        } else {
+            class_list.remove_1(class).ok();
+        }
+    };
+    sync("cd-panel-left", left);
+    sync("cd-panel-right", right);
+}

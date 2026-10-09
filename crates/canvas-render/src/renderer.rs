@@ -563,6 +563,9 @@ pub struct Renderer {
     /// Пайплайн миникарты (T13-B) + текущий кадр (None — не задан).
     minimap_pipeline: MinimapPipeline,
     minimap: Option<MinimapTexture>,
+    /// UR-003: миникарта видима (false — квад и hit-rect скрыты, текстура
+    /// остаётся в кэше; агент-панель во всю высоту перекрывает её угол).
+    minimap_visible: bool,
     /// Проход снапшотов виджетов (M5 T20-D): текстуры по node_id, LRU-кэп.
     widget_pass: crate::widget_pass::WidgetPass,
     scale_factor: f32,
@@ -858,6 +861,7 @@ impl Renderer {
             text,
             minimap_pipeline,
             minimap: None,
+            minimap_visible: true,
             widget_pass,
             scale_factor: scale_factor as f32,
             grid_visible: true,
@@ -1004,14 +1008,29 @@ impl Renderer {
 
     /// Прямоугольник миникарты в ЛОГИЧЕСКИХ px — hit-test приложения
     /// (T13-C): координаты курсора winit — логические. None — миникарта не
-    /// задана или окно меньше 252×172 логических px (миникарта скрыта).
+    /// задана, скрыта ([`Self::set_minimap_visible`]) или окно меньше
+    /// 252×172 логических px (миникарта скрыта).
     pub fn minimap_rect_logical(&self) -> Option<[f32; 4]> {
+        if !self.minimap_visible {
+            return None;
+        }
         self.minimap.as_ref().and_then(|_| {
             quad_rect_logical(
                 self.size.width as f32 / self.scale_factor,
                 self.size.height as f32 / self.scale_factor,
             )
         })
+    }
+
+    /// UR-003: показать/скрыть миникарту без сброса текстуры. Агент-панель
+    /// (Ctrl+I) во всю высоту закрывает правый нижний угол — миникарта
+    /// рисовалась ПОВЕРХ неё (отдельный pass после screen-оверлеев) и
+    /// налезала на cost-строку и поле ввода. Приложение выставляет флаг
+    /// покадрово (idемпотентно, паттерн set_table_guides_visible); текстура
+    /// остаётся в кэше — при закрытии панели кадр возвращается без
+    /// перерастеризации.
+    pub fn set_minimap_visible(&mut self, visible: bool) {
+        self.minimap_visible = visible;
     }
 
     /// Полная инвалидация кэшей по индексам нод (T8): после удаления ноды
@@ -2284,12 +2303,15 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         // Миникарта (T13-B): прямоугольник квада в физических px (None —
-        // миникарта не задана или окно меньше 252×172 логических). Вычисляется
-        // один раз — он же гейтит и загрузку uniform, и draw
-        let minimap_quad = self
-            .minimap
-            .as_ref()
-            .and_then(|_| quad_rect(self.size.width, self.size.height, self.scale_factor));
+        // миникарта не задана, скрыта (UR-003) или окно меньше 252×172
+        // логических). Вычисляется один раз — он же гейтит и загрузку
+        // uniform, и draw
+        let minimap_quad = self.minimap.as_ref().and_then(|_| {
+            if !self.minimap_visible {
+                return None;
+            }
+            quad_rect(self.size.width, self.size.height, self.scale_factor)
+        });
         // Uniform квада пишется до submit: write_buffer упорядочен раньше
         // команд кодировщика, создаваемого ниже
         if let Some(rect) = minimap_quad {

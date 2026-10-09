@@ -1044,6 +1044,7 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 &mut measurer,
                 &mut fs,
                 &app.template_category_names(),
+                &app.template_category_display_names(),
             );
             surface
                 .hit_rects

@@ -5397,6 +5397,23 @@ impl App {
             || self.settings_text_edit.is_some()
     }
 
+    /// UR-003: перекрытие GPU-панелей DOM-хромом web-сборки. Возвращает
+    /// флаги «(левая панель открыта, правая панель открыта)» — web-слой
+    /// (TourAwareApp → toolbar::set_panel_overlap) вешает на body классы
+    /// `cd-panel-left`/`cd-panel-right`, сдвигая `#author-bar`/`#w6-toolbar`
+    /// из-под углов панелей. Канвас — GPU-UI без z-index, DOM-бары
+    /// (z-index: 10) всегда выше него: обе поверхности во всю высоту
+    /// (Ctrl+P — левый док, Ctrl+I — правая панель) перекрывались шапками,
+    /// включая кнопку ✕ агент-панели — её было нельзя закрыть мышью.
+    ///
+    /// Platform-нейтрально (как `text_input_active` — FR-095): нативная
+    /// сборка метод не вызывает, DOM-хром существует только на web.
+    pub fn html_panel_overlap(&self) -> (bool, bool) {
+        let left = self.template_panel.open;
+        let right = self.agent_panel_rect().is_some();
+        (left, right)
+    }
+
     // FR-LLM-FIX (task FIX-TEXT-INPUT): helpers для доступа к редактируемой
     // строке настроек. По `settings_text_edit` выбирают поле `LlmSettings` —
     // модель-строки пишут в `model_*`, API-ключ — в `api_key`, URL endpoint'а

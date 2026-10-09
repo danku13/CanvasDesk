@@ -1096,6 +1096,33 @@
         transition: fill 150ms ease;
       }
       #author-bar a:hover svg { fill: var(--cd-text); }
+      /* UR-003: GPU-панели во всю высоту поднимаются над канвасом, но
+       * НЕ над DOM-хромом (канвас без z-index, бары z-index: 10 — всегда
+       * выше). Раньше #author-bar перекрывал шапку дока палитры (Ctrl+P),
+       * #w6-toolbar — шапку агент-панели (Ctrl+I, включая кнопку ✕).
+       * Синхронизация — body-классы из Rust (TourAwareApp →
+       * toolbar::set_panel_overlap, паттерн FR-095): бар уезжает из-под
+       * угла панели с тем же transition, что у hover-состояний. */
+      #author-bar, #w6-toolbar, #tour-menu {
+        transition: transform 150ms ease, right 150ms ease;
+      }
+      /* Левый док палитры: x 12..352 (PANEL_MARGIN 12 + PANEL_WIDTH 340);
+       * бар уходит за правый край дока (зазор 8px). Кламп min() держит бар
+       * на экране у узкого окна (ширина бара ~156px + поля). */
+      body.cd-panel-left #author-bar {
+        transform: translateX(min(352px, calc(100vw - 172px)));
+      }
+      /* Агент-панель: правые 388px (AGENT_PANEL_W); тулбар уходит влево
+       * от панели (зазор 8px). Только ≥1200px: ниже тулбар живёт в
+       * левом нижнем углу (media-ревизия FR-099) и панель не перекрывает. */
+      @media (min-width: 1200px) {
+        body.cd-panel-right #w6-toolbar {
+          transform: translateX(-396px);
+        }
+        body.cd-panel-right #tour-menu {
+          right: 396px;
+        }
+      }
       /* "Об авторе" overlay — модальный экран с подробными ссылками.
        * Открывается кликом по ℹ-иконке в #author-bar или через
        * CanvasMenuItem::About (window.__canvasdesk_openAbout()). */
