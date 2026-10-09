@@ -34,6 +34,9 @@ pub const NODE_MIN_PX: u32 = 2;
 /// Фон миникарты: тёмный, полупрозрачный — из design-токенов (FR-046;
 /// дифференциация по темам — v2).
 pub use canvas_core::tokens::MINIMAP_BG as BG_COLOR;
+/// Контур панели миникарты (UR-003: полупрозрачный фон на тёмной сетке
+/// читался как «пустой угол» — панель без контура сливалась с канвасом).
+pub use canvas_core::tokens::MINIMAP_BORDER as BORDER_COLOR;
 /// Цвет линий edges — из design-токенов (FR-046).
 pub use canvas_core::tokens::MINIMAP_EDGE as EDGE_COLOR;
 /// Цвет ноды с битой ссылкой (file, brokenLink) — из design-токенов (FR-046).
@@ -46,6 +49,8 @@ pub use canvas_core::tokens::MINIMAP_NODE_GROUP as NODE_COLOR_GROUP;
 pub use canvas_core::tokens::MINIMAP_NODE_TEXT as NODE_COLOR_TEXT;
 /// Цвет рамки viewport (белый, непрозрачный) — из design-токенов (FR-046).
 pub use canvas_core::tokens::MINIMAP_VIEWPORT as VIEWPORT_COLOR;
+/// Толщина контура панели, px (1 px буфера — волосяная линия).
+const BORDER_PX: i32 = 1;
 
 /// Максимальная сторона буфера миникарты, px: реальный физический размер
 /// (логические 220×140 × scale_factor) не превышает размеры экрана с большим
@@ -58,14 +63,6 @@ const EDGE_CLAMP_MARGIN_PX: i32 = 64;
 /// Минимальная половина контента по оси (world): защита от деления на ноль
 /// при вычислении масштаба (точечный/линейный контент).
 const MIN_CONTENT_HALF: f32 = 1e-3;
-/// Нижний порог охвата миникарты в единицах viewport (приёмка T13): карта
-/// показывает не меньше ~MIN_VIEWPORT_COVERAGE вьюпортов по каждой оси —
-/// базовый масштаб ~1/10 от видимого. Меньше масштаб становится только
-/// когда union(ноды ∪ viewport) превышает этот охват (отлёт камеры дальше).
-/// Без порога отлёт растягивал union пустотой между нодами и камерой:
-/// ноды мельчали пропорционально расстоянию, а драг «убегал» (set_viewport
-/// пересчитывал fit на каждый кадр, курсор мапился в другую world-точку).
-const MIN_VIEWPORT_COVERAGE: f32 = 10.0;
 /// Минимальный равномерный масштаб (px/world): обратное преобразование
 /// не делит на ноль даже при испорченных вручную полях.
 const MIN_SCALE: f32 = 1e-6;
@@ -256,24 +253,18 @@ impl MinimapMapping {
                 padding_px: CONTENT_PADDING_PX,
             };
         };
-        // Полуразмеры viewport — основа нижнего порога охвата (T13): порог
-        // не применяется к вырожденному viewport (свёрнутое окно).
-        let vp_half = sanitize_rect(viewport_world)
-            .filter(|r| r[2] > r[0] && r[3] > r[1])
-            .map_or([0.0, 0.0], |r| [(r[2] - r[0]) * 0.5, (r[3] - r[1]) * 0.5]);
         Self {
             content_center: [(min_x + max_x) * 0.5, (min_y + max_y) * 0.5],
             // Вырожденная ось (точка/линия контента) — минимум MIN_CONTENT_HALF,
-            // чтобы масштаб в `scale` оставался конечным; далее — нижний порог
-            // охвата MIN_VIEWPORT_COVERAGE вьюпортов (приёмка T13): пока сцена
-            // влезает в него, масштаб стабилен и двигается только рамка.
+            // чтобы масштаб в `scale` оставался конечным. Порог охвата ×10
+            // вьюпортов (abb2ced) удалён (UR-003): при zoom-to-fit он сжимал
+            // весь контент в ~1/10 карты — мини-карта выглядела пустой
+            // («пропала»). Стабильность драга теперь даёт ЗАМОРОЗКА маппинга
+            // в `set_viewport` (пересчёт fit — только capture/рост рамки),
+            // а не нижний порог масштаба.
             content_half: [
-                ((max_x - min_x) * 0.5)
-                    .max(MIN_CONTENT_HALF)
-                    .max(vp_half[0] * MIN_VIEWPORT_COVERAGE),
-                ((max_y - min_y) * 0.5)
-                    .max(MIN_CONTENT_HALF)
-                    .max(vp_half[1] * MIN_VIEWPORT_COVERAGE),
+                ((max_x - min_x) * 0.5).max(MIN_CONTENT_HALF),
+                ((max_y - min_y) * 0.5).max(MIN_CONTENT_HALF),
             ],
             size_px,
             padding_px: CONTENT_PADDING_PX,
@@ -349,15 +340,44 @@ impl Minimap {
         Self { input, mapping }
     }
 
-    /// Обновить только рамку viewport (камера двигается, сцена — нет):
-    /// дешевле, чем полная пересборка `capture`.
+    /// Обновить только рамку viewport (камера двигается, сцена — нет).
+    /// МАППИНГ НЕ ПЕРЕСОБИРАЕТСЯ (заморожен с последнего `capture`/
+    /// [`Minimap::ensure_viewport_visible`]): масштаб и центр карты неизменны,
+    /// по карте едет только белая рамка. Инвариант драга (приёмка T13): один
+    /// и тот же пиксель карты мапится в одну и ту же world-точку на весь
+    /// жест — прежний пересбор fit на каждый кадр давал feedback loop
+    /// («драг убегал», abb2ced). Рост карты при выходе рамки за границы —
+    /// [`Minimap::ensure_viewport_visible`] (вне драга).
     pub fn set_viewport(&mut self, viewport_world: [f32; 4]) {
-        // Content bounds зависит от viewport: пересобираем fit по сохранённым
-        // нодам с прежним размером буфера (size_px текущего mapping).
+        self.input.viewport_world = viewport_world;
+    }
+
+    /// Гарантировать, что рамка viewport видна на карте: если она вышла за
+    /// world-границы замороженного маппинга (пан/зум-отлёт), пересобрать fit
+    /// по нодам ∪ viewport (масштаб уменьшается, контент остаётся читаемым).
+    /// Возвращает true — маппинг изменился (кадр нужно перерендерить).
+    /// Вызывается приложением ВНЕ драга по миникарте (в драге маппинг
+    /// заморожен — инвариант стабильности курсора).
+    pub fn ensure_viewport_visible(&mut self, viewport_world: [f32; 4]) -> bool {
+        let Some(vp) = sanitize_rect(viewport_world).filter(|r| r[2] > r[0] && r[3] > r[1]) else {
+            return false;
+        };
+        // World-границы текущего маппинга (content_center ± content_half).
+        let m = &self.mapping;
+        let [min_x, min_y, max_x, max_y] = [
+            m.content_center[0] - m.content_half[0],
+            m.content_center[1] - m.content_half[1],
+            m.content_center[0] + m.content_half[0],
+            m.content_center[1] + m.content_half[1],
+        ];
+        let inside = vp[0] >= min_x && vp[1] >= min_y && vp[2] <= max_x && vp[3] <= max_y;
+        if inside {
+            return false;
+        }
         let width = self.mapping.size_px[0].max(0.0) as u32;
         let height = self.mapping.size_px[1].max(0.0) as u32;
-        self.input.viewport_world = viewport_world;
         self.mapping = MinimapMapping::fit(&self.input.nodes, viewport_world, width, height);
+        true
     }
 
     /// Растеризация в RGBA-буфер (фон+скругление, ноды, edges, рамка viewport).
@@ -407,7 +427,25 @@ impl Minimap {
                 let frame = self.viewport_frame_px();
                 raster.fill_frame(frame, VIEWPORT_COLOR);
             }
-            // 5. Скругление углов: за пределами радиуса alpha 0 — маска
+            // 5. Контур панели (UR-003): 1px волосяная линия по периметру —
+            //    отделяет панель от канваса при пустом/тёмном контенте.
+            raster.fill_rect(0, 0, width as i32, BORDER_PX, BORDER_COLOR);
+            raster.fill_rect(
+                0,
+                height as i32 - BORDER_PX,
+                width as i32,
+                height as i32,
+                BORDER_COLOR,
+            );
+            raster.fill_rect(0, 0, BORDER_PX, height as i32, BORDER_COLOR);
+            raster.fill_rect(
+                width as i32 - BORDER_PX,
+                0,
+                width as i32,
+                height as i32,
+                BORDER_COLOR,
+            );
+            // 6. Скругление углов: за пределами радиуса alpha 0 — маска
             //    поверх всего контента (углы миникарты всегда прозрачны).
             raster.round_corners(CORNER_RADIUS as i32);
         }
@@ -710,12 +748,13 @@ mod tests {
         image.rgba.chunks_exact(4).any(|px| px == color.as_slice())
     }
 
-    /// Нижний порог охвата (приёмка T13): контент, влезающий в
-    /// MIN_VIEWPORT_COVERAGE вьюпортов, не растягивает карту — масштаб ~1/10
-    /// от видимого, стабилен; центр viewport — в центре буфера. Viewport
-    /// 100×100 в буфере 220×140: half = 500 (10 вьюпортов), scale = 124/1000.
+    /// Контент заполняет карту (UR-003, замена порога охвата ×10):
+    /// fit по нодам ∪ viewport без нижнего порога масштаба. Viewport
+    /// 100×100 в буфере 220×140: avail = 204×124, scale = min(2.04, 1.24)
+    /// = 1.24 — рамка viewport 124×124 px в центре буфера (читаемая карта,
+    /// а не пятно 1/10 буфера).
     #[test]
-    fn fit_viewport_coverage_floor() {
+    fn fit_viewport_only_fills_map() {
         let mapping = MinimapMapping::fit(&[], [0.0, 0.0, 100.0, 100.0], 220, 140);
         assert_close(
             mapping.world_to_map([50.0, 50.0]),
@@ -725,21 +764,21 @@ mod tests {
         );
         assert_close(
             mapping.world_to_map([0.0, 0.0]),
-            [103.8, 63.8],
+            [48.0, 8.0],
             EPS,
-            "min-угол: 1/10 буфера от центра",
+            "min-угол viewport: рамка в padding (масштаб заполнил карту)",
         );
         assert_close(
             mapping.world_to_map([100.0, 100.0]),
-            [116.2, 76.2],
+            [172.0, 132.0],
             EPS,
-            "max-угол: рамка viewport — 12.4 px карты",
+            "max-угол viewport: рамка 124×124 px карты",
         );
     }
 
-    /// Сцена шире порога охвата: масштаб меньше базового (1/10) — карта
-    /// уменьшается, только когда union нод превышает MIN_VIEWPORT_COVERAGE
-    /// вьюпортов (отлёт дальше).
+    /// Сцена шире viewport: масштаб уменьшается под union(ноды ∪ viewport)
+    /// — карта показывает весь контент (UR-003: без порога охвата масштаб
+    /// всегда заполняет карту реальным контентом).
     #[test]
     fn fit_scene_beyond_coverage_shrinks() {
         let nodes = [MinimapNode {
@@ -1026,19 +1065,19 @@ mod tests {
         assert_eq!(image.height, 140);
         assert_eq!(image.rgba.len(), 220 * 140 * 4);
         assert_eq!(pixel(&image, 110, 70), BG_COLOR, "центр — фон");
-        // Рамка viewport: порог охвата ×10 — viewport (100 мир.) это 1/10
-        // буфера, прямоугольник map ≈ [103.8, 63.8, 116.2, 76.2] (± округление)
+        // Рамка viewport: контент заполняет карту (UR-003) — viewport
+        // (100 мир.) при scale 1.24 — прямоугольник map ≈ [48, 8, 172, 132]
         assert_eq!(
-            pixel(&image, 110, 64),
+            pixel(&image, 110, 8),
             VIEWPORT_COLOR,
             "верхняя полоса рамки"
         );
         assert_eq!(
-            pixel(&image, 110, 76),
+            pixel(&image, 110, 131),
             VIEWPORT_COLOR,
             "нижняя полоса рамки"
         );
-        assert_eq!(pixel(&image, 104, 70), VIEWPORT_COLOR, "левая полоса рамки");
+        assert_eq!(pixel(&image, 48, 70), VIEWPORT_COLOR, "левая полоса рамки");
         for (x, y) in [(0, 0), (219, 0), (0, 139), (219, 139)] {
             assert_eq!(
                 pixel(&image, x, y)[3],
@@ -1219,44 +1258,44 @@ mod tests {
             EPS,
             "клик в центр миникарты",
         );
-        // Порог охвата ×10: контент — 10 вьюпортов (half=500, scale=0.124),
-        // min-угол viewport [0,0] — в map-точке [103.8, 63.8]
+        // Контент заполняет карту (UR-003): scale = 1.24, min-угол viewport
+        // [0,0] — в map-точке [48, 8]
         assert_close(
-            minimap.map_to_world([103.8, 63.8]),
+            minimap.map_to_world([48.0, 8.0]),
             [0.0, 0.0],
             0.5,
             "клик в min-угол viewport",
         );
     }
 
-    /// set_viewport: input обновляется, mapping пересобирается по нодам ∪
-    /// новый viewport; hit-test и round-trip согласованы с новой геометрией.
+    /// set_viewport: input обновляется, МАППИНГ ЗАМОРОЖЕН (UR-003): масштаб
+    /// и центр карты неизменны, по карте едет только рамка viewport.
+    /// Инвариант драга: один и тот же пиксель карты мапится в одну и ту же
+    /// world-точку до и после движения камеры (без feedback loop abb2ced).
     #[test]
-    fn set_viewport_rebuilds_mapping() {
+    fn set_viewport_keeps_mapping_frozen() {
         let scene = canvas(
             vec![node_of_type("file", "f", 0.0, 0.0, 100.0, 100.0)],
             vec![],
         );
         let mut minimap = Minimap::capture(&scene, [0.0, 0.0, 100.0, 100.0], 220, 140);
-        // Расширяем viewport: контент = [-100,-100, 200,200], центр (50,50)
-        minimap.set_viewport([-100.0, -100.0, 200.0, 200.0]);
-        assert_eq!(
-            minimap.input().viewport_world,
-            [-100.0, -100.0, 200.0, 200.0]
+        let world_before = minimap.map_to_world([57.0, 91.0]);
+        let scale_before = minimap.world_to_map([0.0, 0.0]);
+        // Камера уехала далеко вправо-вниз: рамка должна выйти за границы
+        // карты, а НЕ пересобрать масштаб (драг стабилен)
+        minimap.set_viewport([500.0, 500.0, 600.0, 600.0]);
+        assert_eq!(minimap.input().viewport_world, [500.0, 500.0, 600.0, 600.0]);
+        assert_close(
+            minimap.map_to_world([57.0, 91.0]),
+            world_before,
+            EPS,
+            "тот же пиксель карты — та же world-точка (инвариант драга)",
         );
         assert_close(
-            minimap.map_to_world([110.0, 70.0]),
-            [50.0, 50.0],
+            minimap.world_to_map([0.0, 0.0]),
+            scale_before,
             EPS,
-            "центр карты → новый центр контента",
-        );
-        // half: union = 150, но порог охвата ×10 → 1500; scale = 124/3000;
-        // min-угол viewport в map [103.8, 63.8] (рамка — 1/10 буфера)
-        assert_close(
-            minimap.world_to_map([-100.0, -100.0]),
-            [103.8, 63.8],
-            EPS,
-            "новый min-угол контента",
+            "масштаб карты не изменился",
         );
         let map = minimap.world_to_map([37.5, -12.25]);
         assert_close(
@@ -1265,6 +1304,52 @@ mod tests {
             1.0,
             "round-trip после set_viewport",
         );
+    }
+
+    /// ensure_viewport_visible: рамка внутри границ карты — no-op (false),
+    /// маппинг не трогается.
+    #[test]
+    fn ensure_viewport_visible_noop_when_inside() {
+        let scene = canvas(
+            vec![node_of_type("file", "f", 0.0, 0.0, 100.0, 100.0)],
+            vec![],
+        );
+        let mut minimap = Minimap::capture(&scene, [10.0, 10.0, 90.0, 90.0], 220, 140);
+        assert!(!minimap.ensure_viewport_visible([20.0, 20.0, 80.0, 80.0]));
+        assert_close(
+            minimap.world_to_map([0.0, 0.0]),
+            [48.0, 8.0],
+            EPS,
+            "маппинг не изменился",
+        );
+    }
+
+    /// ensure_viewport_visible: рамка вышла за границы (пан-отлёт) — fit
+    /// пересобирается по нодам ∪ viewport, рамка снова видна на карте.
+    #[test]
+    fn ensure_viewport_visible_grows_when_frame_leaves() {
+        let scene = canvas(
+            vec![node_of_type("file", "f", 0.0, 0.0, 100.0, 100.0)],
+            vec![],
+        );
+        let mut minimap = Minimap::capture(&scene, [0.0, 0.0, 100.0, 100.0], 220, 140);
+        // Пан далеко: рамка [900..1000] вне границ fit ([0..100] ∪ padding)
+        assert!(minimap.ensure_viewport_visible([900.0, 900.0, 1000.0, 1000.0]));
+        // Новые границы = ноды ∪ viewport = [0..1000]: центр (500,500),
+        // scale = 124/1000; рамка viewport — 124 px карты (видна)
+        assert_close(
+            minimap.world_to_map([500.0, 500.0]),
+            [110.0, 70.0],
+            EPS,
+            "новый центр контента — в центре карты",
+        );
+        let frame = minimap.viewport_frame_px();
+        assert!(
+            frame[0] >= 0.0 && frame[1] >= 0.0 && frame[2] <= 220.0 && frame[3] <= 140.0,
+            "рамка внутри карты после роста: {frame:?}"
+        );
+        // Повторный вызов с тем же viewport — no-op (без пинга масштаба)
+        assert!(!minimap.ensure_viewport_visible([900.0, 900.0, 1000.0, 1000.0]));
     }
 
     /// Критерий производительности (SPEC/TASKS T13: 5000 нод — единицы мс):
