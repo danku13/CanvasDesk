@@ -5398,7 +5398,7 @@ impl App {
         if self.template_panel.open && self.template_panel.focused {
             self.template_panel.insert_str(text);
             self.template_panel.selected = 0;
-            self.template_panel.scroll_top = 0;
+            self.template_panel.scroll.reset();
             self.request_redraw();
             return;
         }
@@ -7632,7 +7632,7 @@ impl App {
         {
             self.template_panel.category = None;
             self.template_panel.selected = 0;
-            self.template_panel.scroll_top = 0;
+            self.template_panel.scroll.reset();
         }
     }
 
@@ -7693,7 +7693,7 @@ impl App {
             count,
             viewport[0],
             viewport[1],
-            hover.scroll_top,
+            hover.scroll.first,
         ))
     }
 
@@ -8066,7 +8066,7 @@ impl App {
             ));
             self.template_panel.category = None;
             self.template_panel.selected = 0;
-            self.template_panel.scroll_top = 0;
+            self.template_panel.scroll.reset();
             self.scheme_gallery.category = None;
             self.scheme_gallery.selected = 0;
             self.scheme_gallery.scroll_top = 0;

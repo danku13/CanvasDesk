@@ -1865,7 +1865,7 @@ impl App {
                             Some(name.clone())
                         };
                     self.template_panel.selected = 0;
-                    self.template_panel.scroll_top = 0;
+                    self.template_panel.scroll.reset();
                     handled = true;
                     break;
                 }

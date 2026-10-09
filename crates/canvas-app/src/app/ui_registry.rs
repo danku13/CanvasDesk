@@ -704,7 +704,7 @@ pub struct UiFrameSig {
     pub flow_map_scroll_offset: f32,
     /// Раскрытая категория template-strip (-1 = None, иначе индекс).
     pub template_hover_open: i32,
-    /// Скролл flyout'а template-strip (`template_hover.scroll_top`).
+    /// Скролл flyout'а template-strip (`template_hover.scroll.first`).
     pub template_hover_scroll: u32,
     /// Раскрытая hover'ом группа палитры (-1 = None, иначе индекс).
     pub palette_hover_open: i32,
@@ -896,7 +896,7 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
     // Hover-раскрытия и скроллы отдельных панелей — влияют на hit-rect'ы
     // внутри поверхности (не на состав кадра).
     let (template_hover_open, template_hover_scroll) = match &app.template_hover {
-        Some(h) => (h.open.map_or(-1, |i| i as i32), h.scroll_top as u32),
+        Some(h) => (h.open.map_or(-1, |i| i as i32), h.scroll.first as u32),
         None => (-1, 0),
     };
     let palette_hover_open = app.palette_hover.open.map_or(-1, |i| i as i32);

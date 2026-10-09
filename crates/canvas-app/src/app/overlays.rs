@@ -2808,7 +2808,7 @@ impl App {
             if changed {
                 if self.template_panel.filter.text != before {
                     self.template_panel.selected = 0;
-                    self.template_panel.scroll_top = 0;
+                    self.template_panel.scroll.reset();
                 }
                 self.request_redraw();
                 return true;
