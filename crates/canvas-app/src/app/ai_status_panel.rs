@@ -133,8 +133,9 @@ const FEAT_GAP: f32 = 5.0;
 const FEAT_RADIUS: f32 = canvas_core::tokens::RADIUS_PILL;
 
 // FR-LLM-FIX-2: геометрия головной строки — flex-параметры CSS прототипа.
-/// Зазор flex-строки шапки (`gap:6px` в `.ais-head`).
-const HEAD_GAP: f32 = 6.0;
+/// Зазор flex-строки шапки (`gap:6px` в `.ais-head`) — токен
+/// `canvas_core::tokens::SPACING_S` (значение прежнего литерала 6).
+use canvas_core::tokens::SPACING_S as HEAD_GAP;
 /// Горизонтальный паддинг чипа провайдера (`padding:1px 7px` → 7px слева/справа).
 const PROV_CHIP_PAD_X: f32 = 7.0;
 /// Высота чипа провайдера (`padding:1px` + font 9.5 ≈ 14px).

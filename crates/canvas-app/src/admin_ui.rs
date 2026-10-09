@@ -26,14 +26,17 @@ use canvas_ui::measure::TextMeasurer;
 pub const FONT_FAMILY: &str = crate::kit_ui::FONT_FAMILY;
 /// Кегль подписей админпанели.
 pub const LABEL_SIZE: f32 = crate::kit_ui::LABEL_SIZE;
-/// Отступ панели админпанели от краёв вьюпорта (spacing-scale XL).
-const VIEWPORT_MARGIN: f32 = 24.0;
-/// Зазор между зонами панели.
-pub const ZONE_GAP: f32 = 12.0;
+/// Зазор между зонами панели — токен `canvas_core::tokens::SPACING_LG`
+/// (значение прежнего литерала 12).
+pub use canvas_core::tokens::SPACING_LG as ZONE_GAP;
+/// Отступ панели админпанели от краёв вьюпорта (spacing-scale XL) — токен
+/// `canvas_core::tokens::SPACING_XL` (значение прежнего литерала 24).
+use canvas_core::tokens::SPACING_XL as VIEWPORT_MARGIN;
 /// Высота строки сайдбара (kit Button).
 pub const SIDEBAR_ITEM_H: f32 = kit::BUTTON_HEIGHT;
-/// Зазор между пунктами сайдбара.
-pub const SIDEBAR_ITEM_GAP: f32 = 6.0;
+/// Зазор между пунктами сайдбара — токен `canvas_core::tokens::SPACING_S`
+/// (значение прежнего литерала 6).
+pub use canvas_core::tokens::SPACING_S as SIDEBAR_ITEM_GAP;
 /// Ширина колонки сайдбара.
 pub const SIDEBAR_W: f32 = 190.0;
 /// Ширина слота кнопки «Сброс».
@@ -1218,8 +1221,9 @@ impl FillLevel {
 
 /// Высота демо-ячейки контейнера.
 pub const FILL_CELL_H: f32 = 96.0;
-/// Зазор между демо-ячейками.
-pub const FILL_CELL_GAP: f32 = 8.0;
+/// Зазор между демо-ячейками — токен `canvas_core::tokens::SPACING_SM`
+/// (значение прежнего литерала 8).
+pub use canvas_core::tokens::SPACING_SM as FILL_CELL_GAP;
 
 /// Ячейка уровня наполнения (контент-координаты).
 #[derive(Debug, Clone, Copy, PartialEq)]

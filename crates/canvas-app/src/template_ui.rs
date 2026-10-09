@@ -91,17 +91,19 @@ pub fn category_display_name(language: canvas_core::Language, category: &str) ->
 /// Ширина панели, логические px (клампится к окну).
 pub const PANEL_WIDTH: f32 = 340.0;
 /// Боковой отступ панели от ЛЕВОГО края окна (FR-024: док слева —
-/// паттерн Miro Template picker).
-pub const PANEL_MARGIN: f32 = 12.0;
+/// паттерн Miro Template picker) — токен `canvas_core::tokens::SPACING_LG`
+/// (значение прежнего литерала 12).
+pub use canvas_core::tokens::SPACING_LG as PANEL_MARGIN;
 /// Отступ от верхнего и нижнего края окна (панель — во всю высоту).
 pub const PANEL_TOP_MARGIN: f32 = 12.0;
-/// Внутренний отступ содержимого.
-pub const PANEL_PADDING: f32 = 10.0;
 /// Высота шапки панели («Шаблоны» + счётчик).
 // FR-046 W-d аудит §4: токен-источник `PANEL_HEADER_H_S` (30 — small
 // вариант шкалы высот шапок панелей). Прежний локальный литерал 30.0
 // заменён реэкспортом токена — ноль визуального скачка (I-1).
 pub use canvas_core::tokens::PANEL_HEADER_H_S as PANEL_HEADER_H;
+/// Внутренний отступ содержимого — токен `canvas_core::tokens::SPACING_MD`
+/// (значение прежнего литерала 10).
+pub use canvas_core::tokens::SPACING_MD as PANEL_PADDING;
 /// Высота поля поиска.
 pub const INPUT_HEIGHT: f32 = 32.0;
 /// Высота строки категории (чипы-фильтры).
@@ -528,20 +530,26 @@ pub struct PanelLayout {
 /// логические px. Ширина полосы — максимум ширин чипов категорий, но не
 /// уже этой границы (впритык под короткие имена не сжимаем).
 pub const STRIP_MIN_W: f32 = 64.0;
-/// Вертикальный внутренний паддинг полосы (над первой строкой и под шевроном).
-pub const STRIP_PAD_V: f32 = 6.0;
+/// Вертикальный внутренний паддинг полосы (над первой строкой и под
+/// шевроном) — токен `canvas_core::tokens::SPACING_S` (значение прежнего
+/// литерала 6).
+pub use canvas_core::tokens::SPACING_S as STRIP_PAD_V;
 /// Горизонтальный внутренний паддинг полосы.
 pub const STRIP_PAD_H: f32 = 4.0;
 /// Запас ширины полосы под счётчик шаблонов («backend · 10») рядом с именем.
 pub const STRIP_COUNT_SLACK: f32 = 28.0;
-/// Зазор между полосой категорий и flyout, логические px.
-pub const FLYOUT_GAP: f32 = 6.0;
+/// Зазор между полосой категорий и flyout, логические px — токен
+/// `canvas_core::tokens::SPACING_S` (значение прежнего литерала 6).
+pub use canvas_core::tokens::SPACING_S as FLYOUT_GAP;
 /// Минимальная ширина flyout, логические px.
 pub const FLYOUT_MIN_W: f32 = 260.0;
-/// Вертикальный внутренний паддинг flyout (над первой/под последней строкой).
-pub const FLYOUT_PAD_V: f32 = 6.0;
-/// Горизонтальный внутренний паддинг flyout.
-pub const FLYOUT_PAD_H: f32 = 8.0;
+/// Вертикальный внутренний паддинг flyout (над первой/под последней
+/// строкой) — токен `canvas_core::tokens::SPACING_S` (значение прежнего
+/// литерала 6).
+pub use canvas_core::tokens::SPACING_S as FLYOUT_PAD_V;
+/// Горизонтальный внутренний паддинг flyout — токен
+/// `canvas_core::tokens::SPACING_SM` (значение прежнего литерала 8).
+pub use canvas_core::tokens::SPACING_SM as FLYOUT_PAD_H;
 
 /// Ширина flyout: уже дока на 40 px, но не уже [`FLYOUT_MIN_W`].
 pub fn flyout_width() -> f32 {

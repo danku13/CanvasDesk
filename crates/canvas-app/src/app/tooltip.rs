@@ -63,17 +63,21 @@ pub(crate) const TOOLTIP_FONT: f32 = 13.0;
 /// текст молча клипается» устранён).
 pub(crate) const TOOLTIP_MAX_TEXT_W: f32 = 380.0;
 
-/// Внутренние паддинги подложки (use-case §2: слот 6–8).
-pub(crate) const TOOLTIP_PAD_X: f32 = 8.0;
-pub(crate) const TOOLTIP_PAD_Y: f32 = 6.0;
+/// Внутренний вертикальный паддинг подложки — токен
+/// `canvas_core::tokens::SPACING_S` (значение прежнего литерала 6).
+pub(crate) use canvas_core::tokens::SPACING_S as TOOLTIP_PAD_Y;
+/// Внутренний горизонтальный паддинг подложки (use-case §2: слот 6–8) —
+/// токен `canvas_core::tokens::SPACING_SM` (значение прежнего литерала 8).
+pub(crate) use canvas_core::tokens::SPACING_SM as TOOLTIP_PAD_X;
 
 /// Радиус подложки (use-case §2: RADIUS_CHIP 6).
 pub(crate) const TOOLTIP_RADIUS: f32 = 6.0;
 
 /// Зазор между подложками, когда активны два тултипа разом (например,
 /// битая ссылка на hovered-ноде + усечённая формула под курсором) —
-/// прежний вариант рисовал оба текста в одной точке (наложение).
-pub(crate) const TOOLTIP_STACK_GAP: f32 = 8.0;
+/// прежний вариант рисовал оба текста в одной точке (наложение) — токен
+/// `canvas_core::tokens::SPACING_SM` (значение прежнего литерала 8).
+pub(crate) use canvas_core::tokens::SPACING_SM as TOOLTIP_STACK_GAP;
 
 /// Шаг строк (лог. px) — паритет конвейеру рендера
 /// (`line_height = font_size · 1.3`, `canvas-render/src/text.rs`).
