@@ -1262,7 +1262,13 @@ pub struct App {
     /// как у inline-поля подмены `explain`); Enter/Esc/клик мимо — конец ввода.
     /// Не переживает закрытие модалки (сбрасывается в on_left_button, когда
     /// модалка закрывается, и в on_key при Enter/Esc).
-    settings_text_edit: Option<SettingsRow>,
+    /// Активная правка текстовой строки настроек: строка + kit-модель поля
+    /// (design/rules/09-input.md IN1/IN2/IN7: каретка/селекция в символах,
+    /// полный клавиатурный контракт, маска пароля на рендере). Текст
+    /// синхронизируется в `LlmSettings` write-through (см.
+    /// [`App::sync_settings_text_edit`]) — mock health-check и рендер
+    /// читают настройки напрямую, как прежде.
+    settings_text_edit: Option<(SettingsRow, canvas_ui::kit::TextFieldModel)>,
     /// W-a: прокрутка контента правой панели настроек — сдвиг вверх (px),
     /// 0 — верх списка. Кламп в `[0, modal_scroll_max]` — на потребителе
     /// (settings_ui::modal_layout_scrolled); сброс — при смене таба и
@@ -5329,8 +5335,14 @@ impl App {
     }
 
     /// Общий маршрут текста коммита (Ime::Commit + web-мост AppEvent::ImeCommit):
-    /// 1) редактор заметки (EditingSession) — та же вставка, что Paste;
-    /// 2) панель поиска; 3) inline-поле подмены окна проверки (FR-048 X3).
+    /// 0) текстовое поле строки настроек; 1) редактор заметки; 2) панель
+    /// поиска; 3) поиск палитры (док в фокусе); 4) фильтр галереи схем;
+    /// 5) инлайн-поле подмены окна проверки; 6) агент-панель (поле в фокусе).
+    ///
+    /// Волна «input-адекватность» (design/rules/09-input.md IN8): ВСЕ активные
+    /// текстовые приёмники обязаны присутствовать здесь и в
+    /// [`Self::text_input_active`] — иначе на web/mobile ввод молча теряется
+    /// (найденный аудитом дефект: агент-панель не получала IME-коммиты).
     ///
     /// FR-LLM-FIX (task FIX-TEXT-INPUT): 0) — текстовое поле строки настроек
     /// (модалка настроек поверх канваса, фокус поля — приоритет над нижними
@@ -5340,10 +5352,14 @@ impl App {
         if text.is_empty() {
             return;
         }
-        // FR-LLM-FIX (task FIX-TEXT-INPUT): 0) текстовое поле строки настроек
-        // (модалка сверху — приоритет; IME-коммит append'ит к полю).
+        // 0) текстовое поле строки настроек (модалка сверху — приоритет;
+        // вставка через kit-модель в позицию каретки, замещает селекцию;
+        // write-through в LlmSettings — как в клавиатурной ветке on_key).
         if self.settings_text_edit.is_some() {
-            self.settings_text_edit_value_mut().push_str(text);
+            if let Some((_, field)) = self.settings_text_edit.as_mut() {
+                field.insert(text);
+            }
+            self.sync_settings_text_edit();
             self.request_redraw();
             return;
         }
@@ -5364,37 +5380,56 @@ impl App {
             });
             return;
         }
-        // 3) Inline-поле подмены окна проверки цепочки (FR-048 X3)
+        // 3) Поиск палитры (док в фокусе — владеет клавиатурой)
+        if self.template_panel.open && self.template_panel.focused {
+            self.template_panel.insert_str(text);
+            self.template_panel.selected = 0;
+            self.template_panel.scroll_top = 0;
+            self.request_redraw();
+            return;
+        }
+        // 4) Фильтр галереи схем (модаль владеет клавиатурой)
+        if self.scheme_gallery.open {
+            self.scheme_gallery.filter.insert(text);
+            self.scheme_gallery.selected = 0;
+            self.scheme_gallery.scroll_top = 0;
+            self.request_redraw();
+            return;
+        }
+        // 5) Inline-поле подмены окна проверки цепочки (FR-048 X3)
         if let Some(state) = self.explain.as_mut() {
             if let Some(edit) = state.edit.as_mut() {
                 edit.type_str(text);
                 self.request_redraw();
+                return;
             }
+        }
+        // 6) Агент-панель: поле в фокусе — вставка в kit-модель (IN8: прежде
+        // приёмник отсутствовал — web/mobile не могли печатать в Ctrl+I чат)
+        if self.agent_panel.open && self.agent_panel.input_focused && !self.agent_panel.busy {
+            self.agent_panel.field.insert(text);
+            self.request_redraw();
         }
     }
 
     /// FR-095 (мобильный web): активен ли текстовый ввод — то есть должен
     /// ли web-слой держать фокус скрытого input-шима (виртуальная
     /// клавиатура). Приёмники — те же, что у [`Self::insert_committed_text`]:
-    /// редактор заметки, панель поиска, поиск палитры (клавиатурный фокус
-    /// дока), поле подмены окна проверки. Web-слой (canvas-web) опрашивает
-    /// это состояние после каждого события цикла (TourAwareApp) — канал
-    /// app→web без новых мостов: App остаётся платформенно-нейтральным.
-    ///
-    /// FR-LLM-FIX (task FIX-TEXT-INPUT): добавлен приёмник — редактируемое
-    /// текстовое поле строки настроек (имя модели / API-ключ / URL / self-
-    /// hosted ключ). Когда `settings_text_edit.is_some()` — web-слой держит
-    /// фокус input-шима, чтобы символы через `Ime::Commit` дошли до строки.
+    /// поле настроек, редактор заметки, панель поиска, поиск палитры,
+    /// фильтр галереи, поле подмены окна проверки, агент-панель (IN8;
+    /// прежде агент-панель отсутствовала — виртуальная клавиатура не
+    /// поднималась и ввод в Ctrl+I чат на web/mobile терялся).
     pub fn text_input_active(&self) -> bool {
-        self.editing.is_some()
+        self.settings_text_edit.is_some()
+            || self.editing.is_some()
             || self.search.is_open()
             || (self.template_panel.open && self.template_panel.focused)
+            || self.scheme_gallery.open
             || self
                 .explain
                 .as_ref()
                 .is_some_and(|state| state.edit.is_some())
-            // FR-LLM-FIX (task FIX-TEXT-INPUT): поле строки настроек.
-            || self.settings_text_edit.is_some()
+            || (self.agent_panel.open && self.agent_panel.input_focused)
     }
 
     /// UR-003: перекрытие GPU-панелей DOM-хромом web-сборки. Возвращает
@@ -5427,17 +5462,40 @@ impl App {
     // не нужен. Для рендера поля используйте `settings_text_value_for_row`
     // (работает для любой строки, не только при активной правке).
 
-    /// Mutable-ссылка на редактируемую строку настроек. Вызывается только
-    /// когда `settings_text_edit.is_some()` (проверка в on_key/insert_text).
-    fn settings_text_edit_value_mut(&mut self) -> &mut String {
-        match self.settings_text_edit {
-            Some(SettingsRow::AiModelSuggest) => &mut self.settings.llm.model_suggest,
-            Some(SettingsRow::AiModelGraph) => &mut self.settings.llm.model_graph,
-            Some(SettingsRow::AiModelAgent) => &mut self.settings.llm.model_agent,
-            Some(SettingsRow::AiApiKey) => &mut self.settings.llm.api_key,
-            Some(SettingsRow::AiSelfhostUrl) => &mut self.settings.llm.endpoint,
-            Some(SettingsRow::AiSelfhostKey) => &mut self.settings.llm.selfhost_key,
-            _ => unreachable!("settings_text_edit_value_mut без активной строки"),
+    /// Write-through синхронизация текста активного kit-поля настроек в
+    /// `LlmSettings` (волна «input-адекватность» IN1/IN2): правка живёт в
+    /// kit-модели (каретка/селекция), настройки читают напрямую — mock
+    /// health-check («Проверить») видит незакоммиченный ввод, как прежде.
+    /// Коммит (Enter/Esc/клик мимо) — сброс `settings_text_edit` +
+    /// `save_settings()`.
+    fn sync_settings_text_edit(&mut self) {
+        if let Some((row, field)) = &self.settings_text_edit {
+            let value = field.text.clone();
+            match row {
+                SettingsRow::AiModelSuggest => self.settings.llm.model_suggest = value,
+                SettingsRow::AiModelGraph => self.settings.llm.model_graph = value,
+                SettingsRow::AiModelAgent => self.settings.llm.model_agent = value,
+                SettingsRow::AiApiKey => self.settings.llm.api_key = value,
+                SettingsRow::AiSelfhostUrl => self.settings.llm.endpoint = value,
+                SettingsRow::AiSelfhostKey => self.settings.llm.selfhost_key = value,
+                _ => {}
+            }
+        }
+    }
+
+    /// Начать правку текстовой строки настроек: kit-модель из текущего
+    /// значения (каретка в конец); клик по УЖЕ активной строке сохраняет
+    /// модель (каретку ставит вызывающий — IN5).
+    fn start_settings_text_edit(&mut self, row: SettingsRow) {
+        let same_active = self
+            .settings_text_edit
+            .as_ref()
+            .is_some_and(|(r, _)| *r == row);
+        if !same_active {
+            let value = self.settings_text_value_for_row(row).to_owned();
+            let mut field = canvas_ui::kit::TextFieldModel::default();
+            field.set_text(value);
+            self.settings_text_edit = Some((row, field));
         }
     }
 
@@ -5517,45 +5575,23 @@ impl App {
                 self.search.ensure_selection_visible();
                 self.request_redraw();
             }
-            Key::Named(NamedKey::Backspace) => {
-                self.edit_search_input(|input| input.backspace(ctrl));
+            // Волна «input-адекватность» (design/rules/09-input.md IN2/IN9):
+            // клавиатурный контракт поля — единый kit-маппер для всех полей
+            // (Backspace/Delete, стрелки ±Shift ±Ctrl-слова, Home/End,
+            // Ctrl+A/C/V/X, печать, Space). Debounce запроса — тот же.
+            _ => {
+                let changed = crate::app::input::apply_text_field_key(
+                    &event.logical_key,
+                    &self.modifiers,
+                    &mut self.search.input.field,
+                    self.clipboard.as_mut(),
+                );
+                if changed {
+                    self.search_pending =
+                        Some((self.search.input.query().to_owned(), Instant::now()));
+                    self.request_redraw();
+                }
             }
-            Key::Named(NamedKey::Delete) => {
-                self.edit_search_input(SearchInput::delete);
-            }
-            // UR-005 (та же регрессия, что в агент-панели): Space — Named-
-            // клавиша winit, ветка Character его не ловила — пробелы не
-            // вводились в поле поиска.
-            Key::Named(NamedKey::Space) => {
-                self.edit_search_input(|input| {
-                    input.insert_str(" ");
-                    true
-                });
-                self.request_redraw();
-            }
-            Key::Named(NamedKey::ArrowLeft) if !ctrl => {
-                self.search.input.move_left();
-                self.request_redraw();
-            }
-            Key::Named(NamedKey::ArrowRight) if !ctrl => {
-                self.search.input.move_right();
-                self.request_redraw();
-            }
-            Key::Named(NamedKey::Home) => {
-                self.search.input.move_to_start();
-                self.request_redraw();
-            }
-            Key::Named(NamedKey::End) => {
-                self.search.input.move_to_end();
-                self.request_redraw();
-            }
-            Key::Character(text) => {
-                self.edit_search_input(|input| {
-                    input.insert_str(text);
-                    true
-                });
-            }
-            _ => {}
         }
     }
 
@@ -5906,20 +5942,28 @@ impl App {
                 scheme_gallery_ui::clamp_scroll(&mut self.scheme_gallery, visible);
                 true
             }
-            Key::Named(NamedKey::Backspace) if !event.repeat => {
-                self.scheme_gallery.filter.pop();
-                self.scheme_gallery.selected = 0;
-                self.scheme_gallery.scroll_top = 0;
-                true
+            // Волна «input-адекватность» (design/rules/09-input.md IN2/IN9):
+            // поле фильтра галереи — полный клавиатурный контракт через единый
+            // kit-маппер (Backspace-слово, стрелки/селекция, Ctrl+A/C/V/X);
+            // правка сбрасывает выбор/скролл (прежнее поведение).
+            _ => {
+                let before = self.scheme_gallery.filter.text.clone();
+                let changed = crate::app::input::apply_text_field_key(
+                    &event.logical_key,
+                    &self.modifiers,
+                    &mut self.scheme_gallery.filter,
+                    self.clipboard.as_mut(),
+                );
+                if changed {
+                    if self.scheme_gallery.filter.text != before {
+                        self.scheme_gallery.selected = 0;
+                        self.scheme_gallery.scroll_top = 0;
+                    }
+                    self.request_redraw();
+                }
+                // прочие клавиши глотаются молча — канвасу не достаются
+                false
             }
-            Key::Character(text) if !event.repeat && !self.modifiers.control_key() => {
-                self.scheme_gallery.filter.push_str(text.as_str());
-                self.scheme_gallery.selected = 0;
-                self.scheme_gallery.scroll_top = 0;
-                true
-            }
-            // Прочие нажатия глотаются молча — канвасу не достаются
-            _ => false,
         }
     }
 
@@ -13465,20 +13509,23 @@ mod tests {
         assert!(with_btn[2] < model[2], "поле с кнопкой у́же модель-строки");
     }
 
-    /// `insert_committed_text` (IME-коммит) append'ит текст к активному полю
-    /// строки настроек — паритет с EditingSession::Paste. Это та же ветка,
-    /// что и Ctrl+V в on_key (Fix 2), но через IME-мост web-слоя.
+    /// `insert_committed_text` (IME-коммит) вставляет текст в активное поле
+    /// строки настроек (kit-модель, в позицию каретки — write-through в
+    /// LlmSettings). Это та же ветка, что и Ctrl+V в on_key, но через
+    /// IME-мост web-слоя.
     #[test]
     fn insert_committed_text_appends_to_settings_text_field() {
         let mut app = app_with_llm_settings();
         app.settings_open = true;
-        app.settings_text_edit = Some(SettingsRow::AiApiKey);
+        let mut field = canvas_ui::kit::TextFieldModel::default();
+        field.set_text("sk-test-123".to_owned());
+        app.settings_text_edit = Some((SettingsRow::AiApiKey, field));
         // Исходное значение — "sk-test-123"
         assert_eq!(app.settings.llm.api_key, "sk-test-123");
-        // IME-коммит append'ит к полю
+        // IME-коммит вставляет в каретку (конец) — write-through в настройки
         app.insert_committed_text("xyz");
         assert_eq!(app.settings.llm.api_key, "sk-test-123xyz");
-        // Повторный коммит — ещё append
+        // Повторный коммит — ещё вставка
         app.insert_committed_text("-paste");
         assert_eq!(app.settings.llm.api_key, "sk-test-123xyz-paste");
     }

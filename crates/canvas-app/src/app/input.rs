@@ -8,6 +8,123 @@
 
 use super::*;
 
+/// Маппинг клавиши winit в kit-действие ввода для однострочных полей
+/// (design/rules/09-input.md IN2): эталонный маппер для ВСЕХ текстовых
+/// приёмников приложения (поиск, палитра, галерея, настройки, агент-панель,
+/// explain-инлайн). Кит не знает winit (zero-dep G7) — платформенный маппинг
+/// живёт здесь. `None` — клавиша не для поля (потребитель решает: Enter/Esc/
+/// стрелки-списки/глобальные хоткеи).
+///
+/// Раскладко-независимость Ctrl-комбо (паттерн FIX-TEXTINPUT-KIT): латиница,
+/// кириллица (йцукен-греи) и control-коды. Cmd/Super — паритет Ctrl (FR-100).
+/// AltGr (Ctrl+Alt+символ) НЕ считается командным — символы печатаются.
+pub(crate) fn text_field_action(
+    key: &Key,
+    modifiers: &ModifiersState,
+) -> Option<canvas_ui::kit::TextFieldAction> {
+    use canvas_ui::kit::TextFieldAction as A;
+    let ctrl = modifiers.control_key();
+    let cmd = (ctrl || modifiers.super_key()) && !modifiers.alt_key();
+    let shift = modifiers.shift_key();
+    let plain_char = |_s: &str| !ctrl && !modifiers.super_key() && !modifiers.alt_key();
+    match key {
+        Key::Character(text) => {
+            if cmd {
+                // Ctrl-комбо — раскладко-независимо
+                if matches!(text.as_str(), "a" | "A" | "ф" | "Ф" | "\u{01}") {
+                    Some(A::SelectAll)
+                } else if matches!(text.as_str(), "c" | "C" | "с" | "С" | "\u{03}") {
+                    Some(A::Copy)
+                } else if matches!(text.as_str(), "x" | "X" | "ч" | "Ч" | "\u{18}") {
+                    Some(A::Cut)
+                } else if matches!(text.as_str(), "v" | "V" | "м" | "М" | "\u{16}") {
+                    Some(A::Paste)
+                } else {
+                    None
+                }
+            } else if plain_char(text) {
+                Some(A::Insert(text.to_string()))
+            } else {
+                None
+            }
+        }
+        Key::Named(named) => match named {
+            NamedKey::Backspace => {
+                if cmd {
+                    Some(A::BackspaceWord)
+                } else {
+                    Some(A::Backspace)
+                }
+            }
+            NamedKey::Delete => {
+                if cmd {
+                    Some(A::DeleteWord)
+                } else {
+                    Some(A::Delete)
+                }
+            }
+            NamedKey::ArrowLeft => Some(if cmd {
+                A::CaretWordLeft(shift)
+            } else {
+                A::CaretLeft(shift)
+            }),
+            NamedKey::ArrowRight => Some(if cmd {
+                A::CaretWordRight(shift)
+            } else {
+                A::CaretRight(shift)
+            }),
+            NamedKey::Home => Some(A::Home(shift)),
+            NamedKey::End => Some(A::End(shift)),
+            // Space — Named-клавиша winit: ветка Character его не видит
+            // (регрессия UR-005), поэтому пробел мапится явно.
+            NamedKey::Space if plain_char(" ") => Some(A::Insert(" ".to_owned())),
+            _ => None,
+        },
+        // Unidentified/Dead — не для поля
+        _ => None,
+    }
+}
+
+/// Единое применение клавиши к полю (IN2): маппинг → `apply` → доведение
+/// буферных эффектов (Copy/Cut — запись, Paste — чтение и вставка).
+/// `true` — модель изменилась (потребителю перерисоваться/пересчитать фильтр).
+pub(crate) fn apply_text_field_key(
+    key: &Key,
+    modifiers: &ModifiersState,
+    field: &mut canvas_ui::kit::TextFieldModel,
+    clipboard: &mut dyn canvas_core::ClipboardBackend,
+) -> bool {
+    use canvas_ui::kit::TextFieldEffect as E;
+    let Some(action) = text_field_action(key, modifiers) else {
+        return false;
+    };
+    let mut cut_text: Option<String> = None;
+    let mut want_paste = false;
+    let changed = match field.apply(action) {
+        E::Cut(text) => {
+            cut_text = Some(text);
+            true
+        }
+        E::Paste => {
+            want_paste = true;
+            false
+        }
+        E::Copy(_) => false,
+        E::Changed => true,
+        E::None => false,
+    };
+    if let Some(text) = cut_text {
+        clipboard.set_text(text);
+    }
+    if want_paste {
+        if let Some(text) = clipboard.get_text() {
+            field.insert(&text);
+            return true;
+        }
+    }
+    changed
+}
+
 impl App {
     /// События drag-drop (T9): превью зоны на Enter/Over, вставка нод на
     /// Drop. Данные приходят сырыми из shell, план строит crate::ui.
@@ -653,27 +770,32 @@ impl App {
                                 self.request_redraw();
                                 return true;
                             }
-                            Key::Named(NamedKey::Backspace) => {
-                                if let Some(state) = self.explain.as_mut() {
+                            // Волна «input-адекватность» (design/rules/
+                            // 09-input.md IN2/IN9): поле подмены — полный
+                            // клавиатурный контракт через единый kit-маппер
+                            // (прежде — только Backspace/печать: без стрелок,
+                            // Home/End, селекции и буфера обмена).
+                            _ => {
+                                let changed = if let Some(state) = self.explain.as_mut() {
                                     if let Some(edit) = state.edit.as_mut() {
-                                        edit.backspace();
+                                        crate::app::input::apply_text_field_key(
+                                            &event.logical_key,
+                                            &self.modifiers,
+                                            &mut edit.field,
+                                            self.clipboard.as_mut(),
+                                        )
+                                    } else {
+                                        false
                                     }
+                                } else {
+                                    false
+                                };
+                                if changed {
+                                    self.request_redraw();
                                 }
-                                self.request_redraw();
-                                return true;
+                                return true; // прочие клавиши глотаются, пока поле открыто
                             }
-                            Key::Character(text) => {
-                                if let Some(state) = self.explain.as_mut() {
-                                    if let Some(edit) = state.edit.as_mut() {
-                                        edit.type_str(text.as_str());
-                                    }
-                                }
-                                self.request_redraw();
-                                return true;
-                            }
-                            _ => {}
                         }
-                        return true; // прочие клавиши глотаются, пока поле открыто
                     }
                     // X5 (AC-6.3): Space в защите — следующий уровень
                     // (вне защиты клавиша идёт по лестнице, как раньше)
@@ -769,82 +891,52 @@ impl App {
     }
 
     pub(super) fn on_key(&mut self, event: &KeyEvent) {
-        // FR-LLM-FIX (task FIX-TEXT-INPUT): редактируемое текстовое поле строки
-        // настроек (имя модели / API-ключ / URL / self-hosted ключ) — приоритет
-        // над роутером (как explain edit_open в `route_owner_key`). Символы
-        // идут в поле, Backspace — удаление последнего символа, Enter/Esc —
-        // конец ввода (с сохранением в config.toml/localStorage). Прочие
-        // клавиши (Ctrl+F/Ctrl+P/…) — пропускаются к роутеру (например, Ctrl+F
-        // откроет поиск, закрывая правку общим хвостом `finish_editing`).
+        // Волна «input-адекватность» (design/rules/09-input.md IN2/IN9):
+        // редактируемое текстовое поле строки настроек — полный клавиатурный
+        // контракт через единый kit-маппер (прежде — только append/pop и
+        // Ctrl+V: без стрелок, селекции, Ctrl+A/C/X). Enter/Esc — коммит
+        // (сохранение в config.toml/localStorage); незнакомые клавиши
+        // (Ctrl+F/Ctrl+P/…) — пропускаются к роутеру, как прежде.
         if self.settings_open
             && self.settings_text_edit.is_some()
             && event.state == ElementState::Pressed
         {
-            let handled = match &event.logical_key {
-                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Escape) => {
-                    // FR-LLM-FIX (task FIX-TEXT-INPUT): коммит поля — сохраняем
-                    // настройки (как `apply_dropdown_choice`), сбрасываем фокус.
-                    self.settings_text_edit = None;
-                    self.save_settings();
-                    true
-                }
-                Key::Named(NamedKey::Backspace) => {
-                    // FR-LLM-FIX (task FIX-TEXT-INPUT): Ctrl+Backspace — очистить
-                    // поле (как `edit_search_input(|i| i.clear())`); обычный
-                    // Backspace — удалить последний символ.
-                    if self.modifiers.control_key() {
-                        self.settings_text_edit_value_mut().clear();
-                    } else {
-                        self.settings_text_edit_value_mut().pop();
-                    }
-                    true
-                }
-                // FR-LLM-FIX (task FIX-TEXTINPUT-KIT): Ctrl+V — вставка из
-                // буфера обмена в активное поле строки настроек (паритет с
-                // EditingSession::Paste: те же клавиши, что `map_key` →
-                // `KeyCommand::Paste` — латиница, кириллическая раскладка,
-                // control-код \u{16}). Без этой ветки Ctrl+V уходил в
-                // `KeyOwner::Editor`, где `editing.is_none()` при активном
-                // поле настроек → вставка терялась (Regression FIX-TEXTINPUT-KIT).
-                Key::Character(text)
-                    if self.modifiers.control_key()
-                        && !self.modifiers.alt_key()
-                        && matches!(text.as_str(), "v" | "V" | "м" | "М" | "\u{16}") =>
-                {
-                    if let Some(clip) = self.clipboard.get_text() {
-                        self.settings_text_edit_value_mut().push_str(&clip);
-                    }
-                    true
-                }
-                // FR-LLM-FIX (task FIX-TEXT-INPUT): символы без модификаторов
-                // — append к строке. С Ctrl/Alt — пропускаем к роутеру (Ctrl+F
-                // и т.п. должны работать, не вставляя «f» в поле).
-                Key::Character(text)
-                    if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
-                {
-                    self.settings_text_edit_value_mut().push_str(text);
-                    true
-                }
-                _ => false,
+            if matches!(
+                &event.logical_key,
+                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Escape)
+            ) {
+                // Коммит поля: write-through уже синхронизировал LlmSettings;
+                // сброс фокуса + сохранение (как `apply_dropdown_choice`).
+                self.settings_text_edit = None;
+                self.save_settings();
+                self.request_redraw();
+                return;
+            }
+            let handled = if let Some((_, field)) = self.settings_text_edit.as_mut() {
+                crate::app::input::apply_text_field_key(
+                    &event.logical_key,
+                    &self.modifiers,
+                    field,
+                    self.clipboard.as_mut(),
+                )
+            } else {
+                false
             };
             if handled {
+                self.sync_settings_text_edit();
                 self.request_redraw();
                 return;
             }
         }
         // W2 п.1 (PRD-0010 F-4) / UR-005: открытая агент-панель — приёмник
-        // текста при фокусе в поле (`input_focused`): символы/Space → insert,
-        // стрелки — каретка/селекция (Shift), Home/End, Backspace/Delete
-        // (kit TextFieldModel FR-058 — позиции в СИМВОЛАХ), Ctrl+A/C/V/X,
-        // Enter — отправка, Esc — закрыть. Регрессии, закрытые здесь:
-        // (1) Space — winit отдаёт его как Named(Space), ветка Character
-        //     его не ловила — пробелы не вводились;
-        // (2) выделение/каретка — прежний caret был в байтах (ломался на
-        //     кириллице), sel/стрелки/буфер отсутствовали;
+        // текста при фокусе в поле. Волна «input-адекватность» (design/rules/
+        // 09-input.md IN2/IN9): клавиатурный контракт поля — единый kit-маппер
+        // (прежде — рукописный match ~110 строк с дублированием char-срезов
+        // буфера; теперь те же клавиши, что во всех полях приложения, плюс
+        // словесные Ctrl+←/→/Backspace/Delete, отсутствовавшие здесь).
+        // Enter — отправка (семантика потребителя), Esc — закрыть панель.
         // (3) без фокуса панель клавиши НЕ глотает — канвас-хоткеи работают
         //     при открытой панели (возврат фокуса — клик по полю).
-        // Паттерн — ветка settings_text_edit выше (транзиентный UI-приёмник
-        // приоритетен над канвас-роутером).
         if self.agent_panel.open && event.state == ElementState::Pressed {
             // Esc закрывает панель при любом фокусе (аффорданс поверхности).
             if event.logical_key == Key::Named(NamedKey::Escape) {
@@ -854,119 +946,22 @@ impl App {
                 return;
             }
             if self.agent_panel.input_focused {
-                // Ctrl+<char> (латиница/кириллица/control-код) — буфер и
-                // select-all (раскладко-независимо, паттерн FIX-TEXTINPUT-KIT).
-                let ctrl_char = |codes: &[&str]| -> bool {
-                    self.modifiers.control_key()
-                        && !self.modifiers.alt_key()
-                        && matches!(&event.logical_key, Key::Character(t) if codes.contains(&t.as_str()))
-                };
-                let handled = if ctrl_char(&["a", "A", "ф", "Ф", "\u{01}"]) {
-                    self.agent_panel.field.select_all();
-                    true
-                } else if ctrl_char(&["c", "C", "с", "С", "\u{03}"]) {
-                    let text = match self.agent_panel.field.sel {
-                        Some((a, b)) => {
-                            let (s, e) = (a.min(b), a.max(b));
-                            let chars: Vec<char> = self.agent_panel.field.text.chars().collect();
-                            chars[s..e].iter().collect()
-                        }
-                        None => self.agent_panel.field.text.clone(),
-                    };
-                    self.clipboard.set_text(text);
-                    true
-                } else if ctrl_char(&["x", "X", "ч", "Ч", "\u{18}"]) {
-                    let text = match self.agent_panel.field.sel {
-                        Some((a, b)) => {
-                            let (s, e) = (a.min(b), a.max(b));
-                            let chars: Vec<char> = self.agent_panel.field.text.chars().collect();
-                            let cut: String = chars[s..e].iter().collect();
-                            self.agent_panel.field.backspace(); // удаляет селекцию
-                            cut
-                        }
-                        None => {
-                            let cut = self.agent_panel.field.text.clone();
-                            self.agent_panel.clear_input();
-                            cut
-                        }
-                    };
-                    self.clipboard.set_text(text);
-                    true
-                } else if ctrl_char(&["v", "V", "м", "М", "\u{16}"]) {
-                    if let Some(clip) = self.clipboard.get_text() {
-                        self.agent_panel.field.insert(&clip);
+                // Enter — отправка запроса (семантика потребителя, IN2).
+                if event.logical_key == Key::Named(NamedKey::Enter) {
+                    if !self.agent_panel.busy && !self.agent_panel.input_text().trim().is_empty() {
+                        let text = self.agent_panel.input_text().to_owned();
+                        self.agent_send(&text);
                     }
-                    true
-                } else {
-                    match &event.logical_key {
-                        Key::Named(NamedKey::Enter) => {
-                            if !self.agent_panel.busy
-                                && !self.agent_panel.input_text().trim().is_empty()
-                            {
-                                let text = self.agent_panel.input_text().to_owned();
-                                self.agent_send(&text);
-                            }
-                            true
-                        }
-                        Key::Named(NamedKey::Backspace) => {
-                            if self.modifiers.control_key() {
-                                // Ctrl+Backspace — очистить поле (как в поиске).
-                                self.agent_panel.clear_input();
-                            } else {
-                                self.agent_panel.field.backspace();
-                            }
-                            true
-                        }
-                        Key::Named(NamedKey::Delete) => {
-                            self.agent_panel.field.delete();
-                            true
-                        }
-                        // Регрессия UR-005: Space — Named-клавиша (не
-                        // Character!) — пробел теперь вставляется.
-                        Key::Named(NamedKey::Space) => {
-                            self.agent_panel.field.insert(" ");
-                            true
-                        }
-                        Key::Named(NamedKey::ArrowLeft) => {
-                            self.agent_panel
-                                .field
-                                .move_caret(-1, self.modifiers.shift_key());
-                            true
-                        }
-                        Key::Named(NamedKey::ArrowRight) => {
-                            self.agent_panel
-                                .field
-                                .move_caret(1, self.modifiers.shift_key());
-                            true
-                        }
-                        Key::Named(NamedKey::Home) => {
-                            let back = self.agent_panel.field.caret as isize;
-                            self.agent_panel
-                                .field
-                                .move_caret(-back, self.modifiers.shift_key());
-                            true
-                        }
-                        Key::Named(NamedKey::End) => {
-                            let total = self.agent_panel.field.text.chars().count();
-                            let fwd = total as isize - self.agent_panel.field.caret as isize;
-                            self.agent_panel
-                                .field
-                                .move_caret(fwd, self.modifiers.shift_key());
-                            true
-                        }
-                        // Символы без модификаторов — insert в позицию каретки
-                        // (с замещением селекции). С Ctrl/Alt — пропуск к
-                        // роутеру (Ctrl+P/Ctrl+F и т.п. не вставляют «f»).
-                        Key::Character(text)
-                            if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
-                        {
-                            self.agent_panel.field.insert(text);
-                            true
-                        }
-                        _ => false,
-                    }
-                };
-                if handled {
+                    self.request_redraw();
+                    return;
+                }
+                let changed = crate::app::input::apply_text_field_key(
+                    &event.logical_key,
+                    &self.modifiers,
+                    &mut self.agent_panel.field,
+                    self.clipboard.as_mut(),
+                );
+                if changed {
                     self.request_redraw();
                     return;
                 }
@@ -2251,7 +2246,7 @@ impl App {
             // обычная обработка для Toggle/Dropdown; клик по ДРУГОЙ строке
             // гасит фокус активного поля (правка закончена — сохраняем).
             if let Some(row) = modal_row_at(&layout, self.cursor) {
-                let prev_text_edit = self.settings_text_edit;
+                let prev_text_edit = self.settings_text_edit.clone();
                 match row_kind(row) {
                     RowKind::Toggle => self.apply_toggle_row(row),
                     // FR-LLM-FIX: Button-строки (API-ключ / self-hosted URL /
@@ -2288,12 +2283,66 @@ impl App {
                             // всё равно читает `settings.llm.api_key`).
                             self.apply_button_row(row);
                         } else {
-                            // FR-LLM-FIX (task FIX-TEXT-INPUT): клик по
-                            // текстовому полю/лейблу — фокус и ввод (Enter/Esc/
-                            // клик мимо — конец; символы — append; Backspace —
-                            // pop). Для модель-строк кликабельна вся строка
-                            // (кнопки нет); для строк с кнопкой — лейбл и поле.
-                            self.settings_text_edit = Some(row);
+                            // Волна «input-адекватность» (design/rules/
+                            // 09-input.md IN1/IN5): клик по текстовому полю —
+                            // фокус + каретка по месту клика (kit-модель;
+                            // для модель-строк кликабельна вся строка, для
+                            // строк с кнопкой — лейбл и поле). Enter/Esc/клик
+                            // мимо — коммит; ввод — через kit-маппер.
+                            self.start_settings_text_edit(row);
+                            // Каретка по клику: раскладка поля тем же кеглем,
+                            // что рендер (11.0), затем caret_index_at_x (IN5).
+                            if let Some(row_rect) = layout.row_rect(row) {
+                                let [fx, fy, fw, _] = text_input_field_rect(row, row_rect);
+                                let value = self.settings_text_value_for_row(row).to_owned();
+                                let mut model = canvas_ui::kit::TextFieldModel::default();
+                                model.set_text(value);
+                                let slot = canvas_ui::geometry::UiRect::new(
+                                    fx,
+                                    fy,
+                                    fw,
+                                    canvas_ui::kit::TEXT_FIELD_HEIGHT,
+                                );
+                                let min = canvas_ui::geometry::UiVec2::new(
+                                    canvas_ui::kit::TEXT_FIELD_MIN_W,
+                                    canvas_ui::kit::TEXT_FIELD_HEIGHT,
+                                );
+                                let max = canvas_ui::geometry::UiVec2::new(
+                                    fw,
+                                    canvas_ui::kit::TEXT_FIELD_HEIGHT,
+                                );
+                                let kit_palette = self.effective_palette().kit_palette();
+                                let mut m = canvas_ui::measure::TextMeasurer::new();
+                                let mut fs = canvas_render::text::measure_font_system();
+                                let lay = canvas_ui::kit::text_field(
+                                    slot,
+                                    min,
+                                    max,
+                                    &model,
+                                    "",
+                                    true,
+                                    canvas_ui::kit::KitState::Normal,
+                                    &kit_palette,
+                                    &mut m,
+                                    &mut fs,
+                                    canvas_render::text::SANS_FAMILY,
+                                    11.0,
+                                );
+                                let idx = canvas_ui::kit::caret_index_at_x(
+                                    &model,
+                                    lay.text_area,
+                                    lay.scroll_x,
+                                    self.cursor[0],
+                                    &mut m,
+                                    &mut fs,
+                                    canvas_render::text::SANS_FAMILY,
+                                    11.0,
+                                );
+                                if let Some((_, field)) = self.settings_text_edit.as_mut() {
+                                    field.caret = idx;
+                                    field.sel = None;
+                                }
+                            }
                         }
                     }
                 }

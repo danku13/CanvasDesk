@@ -1045,12 +1045,15 @@ pub fn edit_at(
 
 /// Inline-поле подмены листа (AC-4.1): одна строка текста, открывается
 /// по кнопке «Изменить», коммит — Enter/клик мимо, отмена — Esc.
+/// Волна «input-адекватность» (design/rules/09-input.md IN1/IN2/IN9):
+/// текст/каретка/селекция — kit `TextFieldModel` (каретка в символах,
+/// полный клавиатурный контракт — больше не «append/pop без каретки»).
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditField {
     /// Индекс редактируемого узла дерева.
     pub idx: usize,
-    /// Текст поля (preset — текущая подмена или исходник строки).
-    pub text: String,
+    /// Модель поля кита (preset — текущая подмена или исходник строки).
+    pub field: canvas_ui::kit::TextFieldModel,
 }
 
 // --- режим защиты (PRD-0007 X5, F-8/AC-6.1–6.4) ----------------------------
@@ -1144,14 +1147,23 @@ pub fn has_hidden(vis: &Visibility) -> bool {
 }
 
 impl EditField {
-    /// Ввод строки (клавиши-символы события, включая кириллицу).
+    /// Ввод строки (клавиши-символы события, включая кириллицу/IME) —
+    /// вставка в каретку kit-модели (замещает селекцию).
     pub fn type_str(&mut self, s: &str) {
-        self.text.push_str(s);
+        if s.is_empty() {
+            return;
+        }
+        self.field.insert(s);
     }
 
-    /// Backspace: убрать последний графемный кластер (не байт — кириллица).
+    /// Backspace: удалить символ перед кареткой или селекцию.
     pub fn backspace(&mut self) {
-        self.text.pop();
+        self.field.backspace();
+    }
+
+    /// Текст поля (для коммита/рендера).
+    pub fn text(&self) -> &str {
+        &self.field.text
     }
 }
 
@@ -1598,7 +1610,9 @@ impl ExplainState {
             return false;
         }
         let text = preset.or_else(|| node.formula.clone()).unwrap_or_default();
-        self.edit = Some(EditField { idx, text });
+        let mut field = canvas_ui::kit::TextFieldModel::default();
+        field.set_text(text);
+        self.edit = Some(EditField { idx, field });
         true
     }
 
@@ -1612,7 +1626,7 @@ impl ExplainState {
         let node = tree.nodes.get(edit.idx)?;
         let line = node.line?;
         let source = node.formula.clone().unwrap_or_default();
-        let text = edit.text.trim().to_owned();
+        let text = edit.field.text.trim().to_owned();
         if text.is_empty() || text == source.trim() {
             return None; // пустое/неизменённое поле — отмена без подмены
         }
@@ -2270,15 +2284,15 @@ mod tests {
         assert!(st.edit.is_none());
         // Лист: preset нет → исходник строки.
         assert!(st.start_edit(2, &tree_for_check, None));
-        assert_eq!(st.edit.as_ref().expect("поле").text, "620");
+        assert_eq!(st.edit.as_ref().expect("поле").field.text, "620");
         // Ввод кириллицы/символов + Backspace (pop последнего char —
         // «₽» и кириллица не режутся по байтам).
         let edit = st.edit.as_mut().expect("поле");
-        edit.text.clear();
+        edit.field.set_text(String::new());
         edit.type_str("₽ 620");
         edit.backspace();
-        assert_eq!(edit.text, "₽ 62");
-        edit.text.clear();
+        assert_eq!(edit.field.text, "₽ 62");
+        edit.field.set_text(String::new());
         edit.type_str("700");
         // finish: узел/строка/текст.
         let outcome = st.finish_edit();
@@ -2615,7 +2629,11 @@ mod tests {
             st.start_edit(2, &tree_ref, None),
             "лист редактируем в защите"
         );
-        st.edit.as_mut().expect("поле").text = "700".into();
+        st.edit
+            .as_mut()
+            .expect("поле")
+            .field
+            .set_text("700".to_owned());
         assert_eq!(
             st.finish_edit(),
             Some(("c".to_owned(), 0, "700".to_owned())),

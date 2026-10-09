@@ -1527,16 +1527,37 @@ impl App {
             palette.accent,
             6.0,
         ));
-        // Каретка (мигающая полоса) — ширина текста поля ИЗМЕРЕНА реальным
-        // шейпингом (CR-015: прежняя эвристика `chars × 12 × 0.62` давала
-        // caret не по глифам; замер — тем же кеглем, каким рисуется текст
-        // поля ниже, 12.0); квад каретки — до текста (под ним, перекрытие
-        // с последним глифом — 1.5 px, не мешает чтению).
+        // Каретка/текст поля — kit::text_field (волна «input-адекватность»,
+        // design/rules/09-input.md IN2/IN3): caret_x по замеру префикса ДО
+        // КАРЕТКИ kit-модели (прежде — всегда конец строки: стрелки не
+        // двигали каретку), скролл-вслед при переполнении, placeholder —
+        // подсказка i18n. Квад каретки — до текста (перекрытие с последним
+        // глифом 1.5 px не мешает чтению).
         let mut m = canvas_ui::measure::TextMeasurer::new();
         let mut fs = canvas_render::text::measure_font_system();
-        let text_w = m.width_of(&mut fs, &edit.text, canvas_render::text::SANS_FAMILY, 12.0);
+        let slot = canvas_ui::geometry::UiRect::new(field[0], field[1], field[2], field[3]);
+        let min = canvas_ui::geometry::UiVec2::new(
+            canvas_ui::kit::TEXT_FIELD_MIN_W,
+            canvas_ui::kit::TEXT_FIELD_HEIGHT,
+        );
+        let max = canvas_ui::geometry::UiVec2::new(field[2], field[3]);
+        let kit_palette = palette.kit_palette();
+        let lay = canvas_ui::kit::text_field(
+            slot,
+            min,
+            max,
+            &edit.field,
+            self.tr(keys::EXPLAIN_EDIT_HINT),
+            true,
+            canvas_ui::kit::KitState::Normal,
+            &kit_palette,
+            &mut m,
+            &mut fs,
+            canvas_render::text::SANS_FAMILY,
+            12.0,
+        );
         drop(fs);
-        let caret_x = field[0] + 8.0 + text_w;
+        let caret_x = lay.caret_x.max(field[0] + 8.0);
         if (state.opened_at.elapsed().as_millis() / 530) % 2 == 0 {
             let caret = [
                 caret_x.min(field[0] + field[2] - 8.0),
@@ -1553,13 +1574,9 @@ impl App {
                 0.0,
             ));
         }
-        let empty = edit.text.is_empty();
+        let empty = edit.field.text.is_empty();
         texts.push(OwnedScreenText {
-            text: if empty {
-                self.tr(keys::EXPLAIN_EDIT_HINT).to_owned()
-            } else {
-                edit.text.clone()
-            },
+            text: lay.text_shown.clone(),
             origin: [field[0] + 8.0, field[1] + 5.5],
             width: field[2] - 16.0,
             font_size: 12.0,

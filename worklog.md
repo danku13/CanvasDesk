@@ -1583,6 +1583,8 @@ Stage Summary:
 - Открытые: i18n строк агент-панели (hardcoded RU), точная геометрия Accept/Reject (FR-LLM-D-TODO)
 Tokens: in≈210k, out≈60k, total≈270k (estimate), model=GLM (Super Z main), scope=UR-005/CR-034
 - CI 4b318cc: gates ubuntu/macos/windows ✅, wasm-check ✅, web+docs ✅, licenses ✅, build/deploy ✅ (только artifacts-джобы докатывались — не гейты). Telegram-финал 923.
+
+---
 Task ID: UR-003-миникарта
 Agent: Super Z (main)
 Task: «Проверь куда пропала мини-карта» — диагностика пропажи мини-карты, корневая причина, фикс, гейты
@@ -1600,3 +1602,24 @@ Stage Summary:
 - Мини-карта восстановлена как продукт: контент заполняет карту, рамка viewport едет по замороженному маппингу, карта растёт при отлёте камеры, панель имеет контур
 - Порог abb2ced удалён осознанно: его мотивация (стабильность драга) теперь гарантируется заморозкой маппинга — контракт задокументирован в minimap.md §2.1
 - Токены: in≈120k, out≈14k, total≈134k, model=GLM, scope=UR-003
+
+---
+Task ID: INPUT-ADEQUACY (сессия web-94c8d67d-efca-4624-9b94-34d7f5f7cc85)
+Agent: Super Z (main)
+Task: Сообщение владельца: «детальный аудит работы input компоненты в ui-kit… сформулируй концепции адекватности поведения input модулей, определи всего ли достаточно, проведи аудит input полей и их типов в UI и доработай, используй везде ui-kit, а не кастомные решения».
+
+Work Log:
+- Этап 1 (аудит): инвентаризация кита (TextFieldModel/text_field/TextField/WidgetState/FocusRing) и ВСЕХ текстовых приёмников app: найдено 7 пробелов кита (нет скролл-вслед, словесных операций, клика→каретка, селекция-утилит, маппера клавиш, маски, max_chars) и 5 кастомных дублей (SearchInput — байтовая каретка без селекции/буфера; gallery filter:String; template filter:String+cursor; settings_text_edit:String; explain EditField:String) + 3 литерала-каретки «{}|»; бонус-дефект IN8: агент-панель отсутствовала в text_input_active/insert_committed_text → web/mobile не поднималась виртуальная клавиатура (Ctrl+I чат не вводился)
+- Этап 2 (концепция): design/rules/09-input.md — 10 принципов IN1–IN10 (единая модель, клавиатурный контракт, каретка всегда видна, выделение, мышь, состояния, типы text/password/search/chat-input, IME/web-паритет, kit-everywhere, достаточность); индекс design/README.md (+п.10)
+- Этап 3 (кит): TextFieldModel + max_chars/словесные операции (move_caret_word/delete_word_backward/forward — паритет SearchInput, Chrome-семантика движения)/selected_text/apply(TextFieldAction)→TextFieldEffect; text_field_ex c опцией маски → text_field_masked (каретка по ширине маски); TextFieldLayout.scroll_x (скролл-вслед за кареткой, окно текста бинарным поиском по префикс-ширинам, unfocused — прежнее ellipsis-поведение); caret_index_at_x (половинное разбиение); TextFieldProps.mask; фасад kit.rs +Eq
+- Этап 4 (миграция, kit-everywhere): app-маппер text_field_action (раскладко-независимые Ctrl+A/C/X/V: латиница/кириллица/control-коды; Space=Named) + apply_text_field_key (доведение буфера); SearchInput → обёртка kit-модели (тесты на СИМВОЛЫ); gallery/template filter → TextFieldModel (рендер kit_field_view — caret 1.5px accent, «|» удалены); settings_text_edit → (строка, kit-модель) + write-through sync + маска «•» через text_field_masked (прежде каретка мерялась по сырому тексту — уезжала) + клик→каретка (IN5); explain EditField → kit-модель (каретка/стрелки/буфер появились) + рендер caret_x из кита; агент-панель: рукописный match ~110 строк → маппер (+Ctrl+←/→, словесные), клик→каретка; insert_committed_text/text_input_active — полный список приёмников IN8 (gallery/template/agent добавлены)
+- Гейты: cargo fmt --all --check ✅; cargo check --workspace ✅; cargo test --workspace 2766 passed / 0 failed ✅; cargo clippy --workspace --all-targets — 0 warnings ✅
+- Доки: design/rules/09-input.md (новый), design/README.md (индекс), design/use-cases/text-field.md (§7 — актуальные кодо-пути)
+
+Stage Summary:
+- Текстовые поля приложения — ЕДИНЫЙ контракт кита: одна модель (символы), один маппер клавиш, один рендер каретки; 5 кастомных дублей и 3 «|»-литерала устранены
+- Новые возможности у всех полей: скролл-вслед (печать за краем видима), Ctrl+←/→ по словам, Shift-селекция, Ctrl+A/C/X/V, клик→каретка, маска API-ключей (секреты больше не светятся), max_chars-политика
+- Web/mobile: агент-панель/галерея/палитра получили IME-коммиты и виртуальную клавиатуру (IN8)
+- Открытые (v2): двойной клик — выделение слова, drag-селекция, KitState::Error-слот в компоненте TextField
+Tokens: in≈150k, out≈45k, total≈195k (estimate), model=GLM (Super Z main), scope=INPUT-ADEQUACY
+

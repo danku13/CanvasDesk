@@ -1567,6 +1567,58 @@ impl App {
                 // UR-005: клик по полю — фокус (рамка accent + каретка;
                 // клавиатура маршрутизируется веткой agent_panel в on_key).
                 self.agent_panel.input_focused = true;
+                // Волна «input-адекватность» (design/rules/09-input.md IN5):
+                // клик по полю — каретка по месту клика (замер kit::text_field
+                // тем же кеглем, что рендер — INPUT_FONT 12.0).
+                if let Some(rect) = self.agent_panel_rect() {
+                    let lay = AgentPanelLayout::build(canvas_ui::geometry::UiRect::new(
+                        rect[0], rect[1], rect[2], rect[3],
+                    ));
+                    let input_rect = lay.input;
+                    let slot = canvas_ui::geometry::UiRect::new(
+                        input_rect.x,
+                        input_rect.y,
+                        input_rect.w,
+                        input_rect.h,
+                    );
+                    let min = canvas_ui::geometry::UiVec2::new(
+                        canvas_ui::kit::TEXT_FIELD_MIN_W,
+                        canvas_ui::kit::TEXT_FIELD_HEIGHT,
+                    );
+                    let max = canvas_ui::geometry::UiVec2::new(
+                        input_rect.w,
+                        canvas_ui::kit::TEXT_FIELD_HEIGHT,
+                    );
+                    let kit_palette = self.effective_palette().kit_palette();
+                    let mut m = canvas_ui::measure::TextMeasurer::new();
+                    let mut fs = canvas_render::text::measure_font_system();
+                    let lay = canvas_ui::kit::text_field(
+                        slot,
+                        min,
+                        max,
+                        &self.agent_panel.field,
+                        "",
+                        true,
+                        canvas_ui::kit::KitState::Normal,
+                        &kit_palette,
+                        &mut m,
+                        &mut fs,
+                        canvas_render::text::SANS_FAMILY,
+                        INPUT_FONT,
+                    );
+                    let idx = canvas_ui::kit::caret_index_at_x(
+                        &self.agent_panel.field,
+                        lay.text_area,
+                        lay.scroll_x,
+                        point[0],
+                        &mut m,
+                        &mut fs,
+                        canvas_render::text::SANS_FAMILY,
+                        INPUT_FONT,
+                    );
+                    self.agent_panel.field.caret = idx;
+                    self.agent_panel.field.sel = None;
+                }
                 self.request_redraw();
             }
             AgentPanelHit::Send => {
