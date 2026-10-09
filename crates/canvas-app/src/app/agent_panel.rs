@@ -35,8 +35,11 @@ use canvas_ui::geometry::{UiRect, UiVec2};
 
 /// Ширина панели (прототип строки 484: 388px, max 94vw — клампим в рендере).
 pub const AGENT_PANEL_W: f32 = 388.0;
-/// Минимальная ширина вьюпорта для показа панели (на узких окнах панель
-/// прячется — как `AI_STATUS_MIN_VIEWPORT_W`).
+/// Минимальная ширина вьюпорта для показа панели. LAY-W1 (LAY8.2):
+/// решение о показе — HideBelow в декларации реестра
+/// (`ui_registry::AGENT_PANEL_DEGRADATION`, 600×240); константа —
+/// именованный параметр политики, тела draw/hit консультируются с
+/// реестром (`ui_registry::agent_panel_visible`), не сравнивают сами.
 pub const AGENT_PANEL_MIN_VIEWPORT_W: f32 = 600.0;
 /// Высота шапки (bolt + title + close). LAY-W7 (аудит layouts-2026-10 §5):
 /// псевдоним `tokens::PANEL_HEADER_H_L` (44) — значение уже совпадало;
@@ -285,7 +288,9 @@ fn to_xywh(r: UiRect) -> [f32; 4] {
 impl App {
     /// FR-LLM-D / PRD-0010 F-4: render agent panel overlay.
     /// Возвращает (quads, texts, icons) для screen_bands/icon_instances.
-    /// Панель скрыта если `!state.open` или вьюпорт слишком узкий.
+    /// LAY-W1 (LAY8.2): панель скрыта если `!state.open` ИЛИ срабатывает
+    /// HideBelow реестра (`ui_registry::agent_panel_visible`) — ниже
+    /// минимума 600×240 панель не рисуется ЦЕЛИКОМ (LAY8 п.4).
     pub(super) fn agent_panel_overlay(
         &self,
     ) -> (
@@ -300,7 +305,10 @@ impl App {
             return (quads, texts, icons_out);
         }
         let viewport = self.viewport_logical();
-        if viewport[0] < AGENT_PANEL_MIN_VIEWPORT_W || viewport[1] <= 0.0 {
+        // LAY-W1 (LAY8.2): показ решает политика HideBelow реестра
+        // (AGENT_PANEL_DEGRADATION, 600×240) — ниже минимума панель не
+        // рисуется ЦЕЛИКОМ (LAY8 п.4: промежуточных ступеней нет).
+        if !ui_registry::agent_panel_visible(viewport) {
             return (quads, texts, icons_out);
         }
         let palette = self.effective_palette();
@@ -953,13 +961,15 @@ impl App {
     }
 
     /// FR-LLM-D / PRD-0010 F-4: rect панели агента (для hit-тестов и
-    /// клавиатурного фокуса). `None` — панель скрыта.
+    /// клавиатурного фокуса). `None` — панель скрыта: закрыта (`!open`) или
+    /// HideBelow реестра (`ui_registry::agent_panel_visible`, LAY-W1) —
+    /// панель не участвует в хитах (LAY8 п.3–4).
     pub(super) fn agent_panel_rect(&self) -> Option<[f32; 4]> {
         if !self.agent_panel.open {
             return None;
         }
         let viewport = self.viewport_logical();
-        if viewport[0] < AGENT_PANEL_MIN_VIEWPORT_W || viewport[1] <= 0.0 {
+        if !ui_registry::agent_panel_visible(viewport) {
             return None;
         }
         let panel_w = AGENT_PANEL_W.min(viewport[0] * 0.94);
