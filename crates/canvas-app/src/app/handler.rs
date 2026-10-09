@@ -1241,6 +1241,14 @@ impl ApplicationHandler<AppEvent> for App {
                 } else {
                     None
                 };
+                // UR-003: миникарта скрыта, пока открыта агент-панель
+                // (Ctrl+I) — панель во всю высоту перекрывает её угол,
+                // а миникарта рисуется отдельным pass'ом ПОСЛЕ
+                // screen-оверлеев и прежде налезала на cost-строку и
+                // поле ввода. Считаем ДО mutable-займа рендерера
+                // (agent_panel_rect нужен immutable self); в рендерере —
+                // идемпотентно, покадрово.
+                let minimap_visible = self.agent_panel_rect().is_none();
                 if let Some(renderer) = self.renderer.as_mut() {
                     // FR-042 (E2): контекст агрегации кадра — индекс сцены +
                     // hover пучка; None при выключенной агрегации (F-13)
@@ -1316,6 +1324,7 @@ impl ApplicationHandler<AppEvent> for App {
                     // FR-061 этап D (D-14/Q9): направляющие таблицы — только
                     // в DebugOverlay (F9 / ?ui=debug), в проде невидимы.
                     renderer.set_table_guides_visible(self.debug_overlay);
+                    renderer.set_minimap_visible(minimap_visible);
                     match renderer.render(
                         &self.camera,
                         &scene,

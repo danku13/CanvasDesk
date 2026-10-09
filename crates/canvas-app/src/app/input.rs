@@ -1729,14 +1729,16 @@ impl App {
             &mut measurer,
             &mut fs,
             &self.template_category_names(),
+            &self.template_category_display_names(),
         );
         let mut handled = false;
-        // FR-097: контейнер для клампа тач-хитов — прямоугольник дока
-        // (расширенные зоны не выходят за панель, канвас не перекрывается)
-        let panel_hit = rect_xywh(lay.panel_rect);
+        // UR-003: rect'ы PanelLayout — xywh, берём КАК ЕСТЬ (прежде
+        // rect_xywh(...) трактовал их как xyxy: хит-тесты строк/чипов/
+        // поиска/кнопки «‹» вырождались и молча не срабатывали).
+        let panel_hit = lay.panel_rect;
         // Кнопка сворачивания дока («‹» в шапке)
         if point_in_rect(
-            crate::touch_targets::touch_hit_xywh(rect_xywh(lay.collapse_rect), panel_hit),
+            crate::touch_targets::touch_hit_xywh(lay.collapse_rect, panel_hit),
             self.cursor,
         ) {
             self.template_panel.close();
@@ -1746,7 +1748,7 @@ impl App {
         // Клик по полю поиска — клавиатурный фокус в панель
         if !handled
             && point_in_rect(
-                crate::touch_targets::touch_hit_xywh(rect_xywh(lay.input_rect), panel_hit),
+                crate::touch_targets::touch_hit_xywh(lay.input_rect, panel_hit),
                 self.cursor,
             )
         {
@@ -1756,7 +1758,7 @@ impl App {
         if !handled {
             for (rect, name, _active) in &lay.category_rects {
                 if point_in_rect(
-                    crate::touch_targets::touch_hit_xywh(rect_xywh(*rect), panel_hit),
+                    crate::touch_targets::touch_hit_xywh(*rect, panel_hit),
                     self.cursor,
                 ) {
                     self.template_panel.category =
@@ -1780,7 +1782,7 @@ impl App {
             for (rect, row) in lay.row_rects.iter().zip(lay.rows.iter()) {
                 // FR-097: тач-цель строки ≥ 44 лог. px (кламп в док)
                 if point_in_rect(
-                    crate::touch_targets::touch_hit_xywh(rect_xywh(*rect), panel_hit),
+                    crate::touch_targets::touch_hit_xywh(*rect, panel_hit),
                     self.cursor,
                 ) {
                     if let PanelRow::Template(index) = row {
@@ -1795,7 +1797,7 @@ impl App {
                 }
             }
         }
-        if !handled && point_in_rect(rect_xywh(lay.panel_rect), self.cursor) {
+        if !handled && point_in_rect(lay.panel_rect, self.cursor) {
             // Внутри дока, мимо элементов — глотаем; FR-098: кандидат в
             // drag-скролл списка (вертикальный драг пальцем — колесо на
             // таче недоступно; сброс — Release/Cancel/Released кнопки)
@@ -4399,8 +4401,9 @@ impl App {
                 &mut measurer,
                 &mut fs,
                 &self.template_category_names(),
+                &self.template_category_display_names(),
             );
-            if point_in_rect(rect_xywh(lay.panel_rect), self.cursor) {
+            if point_in_rect(lay.panel_rect, self.cursor) {
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y.round() as i32,
                     MouseScrollDelta::PixelDelta(pos) => (pos.y / 40.0).round() as i32,
@@ -4655,6 +4658,7 @@ impl App {
                             &mut measurer,
                             &mut fs,
                             &self.template_category_names(),
+                            &self.template_category_display_names(),
                         );
                         self.template_panel
                             .scroll_by(-lines * template_ui::PANEL_WHEEL_LINES, lay.max_scroll);

@@ -2594,6 +2594,7 @@ impl App {
             &mut measurer,
             &mut fs,
             &self.template_category_names(),
+            &self.template_category_display_names(),
         )
         .rows_area[3]
     }
@@ -2640,8 +2641,16 @@ impl App {
                 &mut measurer,
                 &mut fs,
                 &self.template_category_names(),
+                &self.template_category_display_names(),
             );
-            let panel = rect_xywh(lay.panel_rect);
+            // UR-003: rect'ы PanelLayout — xywh (контракт point_in_rect),
+            // потребители обязаны брать их КАК ЕСТЬ. Прежние rect_xywh(...)
+            // трактовали xywh как xyxy: квады строк/поля/кнопки «‹»
+            // вырождались (h/w → 0 — подложек не видно, иконка всплывала
+            // над строкой), а hit-тесты кликов по строкам/чипам/поиску
+            // молча не срабатывали (проверено живым прогоном: клик по
+            // строке — 0 изменённых пикселей).
+            let panel = lay.panel_rect;
             // Подложка дока: плотная, с рамкой (отделяет панель от канваса).
             // CR-011: рамка палитурная (была захардкожена тёмной — ломала
             // светлую тему).
@@ -2675,13 +2684,13 @@ impl App {
                 align: TextAlign::Center,
             });
             // FR-025: кнопка сворачивания дока («‹» у правого края шапки)
-            let collapse = rect_xywh(lay.collapse_rect);
+            let collapse = lay.collapse_rect;
             instances.push(CardInstance {
                 pos: [collapse[0], collapse[1]],
                 size: [collapse[2], collapse[3]],
                 fill: palette.palette_chip_fill,
                 border: [0.0; 4],
-                params: [6.0, 0.0, 0.0, 1.0],
+                params: [canvas_core::tokens::RADIUS_CHIP, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
             texts.push(OwnedScreenText {
@@ -2693,13 +2702,13 @@ impl App {
                 align: TextAlign::Center,
             });
             // Поле фильтра: placeholder при пустом вводе, иначе текст с кареткой
-            let input = rect_xywh(lay.input_rect);
+            let input = lay.input_rect;
             instances.push(CardInstance {
                 pos: [input[0], input[1]],
                 size: [input[2], input[3]],
                 fill: palette.search_input_fill,
                 border: [0.0; 4],
-                params: [6.0, 0.0, 0.0, 1.0],
+                params: [canvas_core::tokens::RADIUS_CHIP, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
             texts.push(OwnedScreenText {
@@ -2718,7 +2727,10 @@ impl App {
                 },
                 align: TextAlign::Left,
             });
-            // Чипы категорий (CR-011: заливки палитурные, не хардкод)
+            // Чипы категорий (CR-011: заливки палитурные, не хардкод;
+            // UR-003: радиус — токен RADIUS_CHIP, как у чипов полосы и кита
+            // (chip_style), не локальный литерал 11; текст — с падом кита
+            // CHIP_PAD_H: ширина чипа = текст + 2·8, замер по display-имени)
             for (rect, name, active) in &lay.category_rects {
                 instances.push(CardInstance {
                     pos: [rect[0], rect[1]],
@@ -2729,15 +2741,15 @@ impl App {
                         palette.palette_chip_fill
                     },
                     border: [0.0; 4],
-                    params: [11.0, 0.0, 0.0, 1.0],
+                    params: [canvas_core::tokens::RADIUS_CHIP, 0.0, 0.0, 1.0],
                     corners: [0.0; 4],
                 });
                 texts.push(OwnedScreenText {
                     // FR-040 v2: чипы категорий — по языку приложения
                     // (raw-токен — только для поиска по реестру)
                     text: template_ui::category_display_name(self.settings.language, name),
-                    origin: [rect[0] + 10.0, rect[1] + 6.0],
-                    width: rect[2] - 12.0,
+                    origin: [rect[0] + canvas_ui::kit::CHIP_PAD_H, rect[1] + 6.0],
+                    width: rect[2] - canvas_ui::kit::CHIP_PAD_H * 2.0,
                     font_size: 12.0,
                     color: palette.title,
                     align: TextAlign::Left,
@@ -2767,7 +2779,7 @@ impl App {
                             .filter(|other| matches!(other, PanelRow::Template(_)))
                             .count();
                         let selected = self.template_panel.selected == ordinal;
-                        let row_rect = rect_xywh(*rect);
+                        let row_rect = *rect;
                         let row_hover = point_in_rect(row_rect, self.cursor);
                         // Подложка-карточка строки (Miro: карточка с фоном;
                         // CR-011: заливки палитурные, не хардкод)
@@ -2800,8 +2812,9 @@ impl App {
                 }
             }
             // Футер-подсказка (CR-011: позиция из footer_rect чистой геометрии —
-            // строки списка в него не заходят; FR-025: Esc сворачивает док)
-            let footer = rect_xywh(lay.footer_rect);
+            // строки списка в него не заходят; FR-025: Esc сворачивает док;
+            // UR-003: rect — xywh как есть, без ложной xyxy-конвертации)
+            let footer = lay.footer_rect;
             texts.push(OwnedScreenText {
                 text: self.tr(keys::TEMPLATES_FOOTER).to_owned(),
                 origin: [footer[0], footer[1] + 7.0],

@@ -904,6 +904,7 @@ pub fn panel_layout(
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
     visible: &[String],
+    chip_labels: &[String],
 ) -> PanelLayout {
     use canvas_ui::geometry::{UiRect, UiVec2};
     use canvas_ui::layout::{pad, stack, Column, HAlign, MeasuredItem, Row, VAlign};
@@ -979,17 +980,36 @@ pub fn panel_layout(
         .into_iter()
         .filter(|category| visible.iter().any(|v| v == category))
         .collect();
+    // UR-003 (фикс обрезки чипов): замер чипа — по ЛОКАЛИЗОВАННОЙ подписи
+    // (chip_labels параллелен `categories`), а не по raw-токену реестра:
+    // «product-analytics» уже «Продуктовая аналитика» — кириллический
+    // рендер не влезал в чип, замерянный по латинице (текст резался
+    // TextBounds без эллипсиса). Паритет полосы: dock_strip_layout мерит
+    // по тем же display-именам (FR-040 v2). Значение фильтра
+    // (panel.category) остаётся raw-токеном — category_rects несут raw.
     let chip_slot = UiRect::new(
         inner.x,
         chips_y,
         inner_w,
         (CATEGORY_ROW_H * 2.0 + gap).max(CATEGORY_ROW_H),
     );
-    let chip_pairs = canvas_ui::kit::chip_strip_wrap(chip_slot, &categories, 2, m, fs);
+    let chip_labels_visible: Vec<&str> = categories
+        .iter()
+        .map(|raw| {
+            chip_labels
+                .iter()
+                .zip(visible.iter())
+                .find(|(_, v)| *v == raw)
+                .map(|(label, _)| label.as_str())
+                .unwrap_or(raw)
+        })
+        .collect();
+    let chip_pairs = canvas_ui::kit::chip_strip_wrap(chip_slot, &chip_labels_visible, 2, m, fs);
     let chip_rects: Vec<UiRect> = chip_pairs.iter().map(|(r, _)| *r).collect();
     let category_rects: Vec<([f32; 4], String, bool)> = chip_pairs
         .iter()
-        .map(|(r, category)| {
+        .zip(categories.iter())
+        .map(|((r, _), category)| {
             let active = panel.category.as_deref() == Some(*category);
             ([r.x, r.y, r.w, r.h], (*category).to_owned(), active)
         })
@@ -1546,6 +1566,53 @@ mod tests {
 
     // --- Панель (FR-024: секции, левый док) ---
 
+    /// UR-003: чипы категорий дока меряются по ЛОКАЛИЗОВАННЫМ подписям
+    /// (`chip_labels`), а не по raw-токенам реестра. Прежде замер шёл по
+    /// «product-analytics», а рисовалась кириллица «Продуктовая аналитика»
+    /// (шире латиницы) — текст резался TextBounds без эллипсиса
+    /// («Продуктовая ана»). Паритет с полосой (dock_strip_layout — тоже
+    /// display-имена, FR-040 v2). Значение фильтра остаётся raw-токеном.
+    #[test]
+    fn panel_chips_measured_by_display_labels() {
+        let registry = registry();
+        let mut panel = TemplatePanel::new();
+        panel.open = true;
+        let visible = all_visible(&registry);
+        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru, &visible);
+        let mut fs = font_system();
+        let mut m = TextMeasurer::new();
+        // Локализованные RU-подписи шире raw-токенов (реальный кейс)
+        let labels: Vec<String> = visible
+            .iter()
+            .map(|raw| category_display_name(canvas_core::Language::Ru, raw).to_owned())
+            .collect();
+        let lay = panel_layout(
+            1280.0, 800.0, &registry, &panel, &rows, &mut m, &mut fs, &visible, &labels,
+        );
+        assert_eq!(
+            lay.category_rects.len(),
+            visible.len(),
+            "все видимые категории получили чипы"
+        );
+        for ((rect, raw, _), label) in lay.category_rects.iter().zip(labels.iter()) {
+            // State-биндинг не сломан: category_rects несёт RAW-токен
+            assert!(
+                visible.iter().any(|v| v == raw),
+                "category_rects несёт raw-токен, получено: {raw}"
+            );
+            // Ширина чипа = замер display-подписи + 2·CHIP_PAD_H (кит):
+            // текст влезает в нарисованный чип целиком
+            let expected =
+                m.width_of(&mut fs, label, FAMILY, CHIP_FONT) + canvas_ui::kit::CHIP_PAD_H * 2.0;
+            assert!(
+                (rect[2] - expected).abs() < 1.0,
+                "чип «{raw}»: ширина {:.1}, ожидалась по display-имени {:.1}",
+                rect[2],
+                expected
+            );
+        }
+    }
+
     fn template_indexes(rows: &[PanelRow]) -> Vec<usize> {
         rows.iter()
             .filter_map(|row| match row {
@@ -1804,6 +1871,7 @@ mod tests {
             &mut m,
             &mut fs,
             &all_visible(&registry),
+            &all_visible(&registry), // UR-003: display-имена чипов
         );
         // Кнопка сворачивания — в правой части шапки, внутри панели
         let c = lay.collapse_rect;
@@ -2103,6 +2171,7 @@ mod tests {
             &mut m,
             &mut fs,
             &all_visible(&registry),
+            &all_visible(&registry), // UR-003: display-имена чипов
         )
         .rows_area[3];
         assert!(rows_area_h > 0.0);
@@ -2201,6 +2270,7 @@ mod tests {
             &mut m,
             &mut fs,
             &all_visible(&registry),
+            &all_visible(&registry), // UR-003: display-имена чипов
         );
         // FR-024: док у ЛЕВОГО края, во всю высоту окна
         assert!((lay.panel_rect[0] - PANEL_MARGIN).abs() < 0.01);
@@ -2239,6 +2309,7 @@ mod tests {
             &mut m,
             &mut fs,
             &all_visible(&registry),
+            &all_visible(&registry), // UR-003: display-имена чипов
         );
         for rect in &small.row_rects {
             assert!(rect[1] + rect[3] <= small.panel_rect[1] + small.panel_rect[3] + 0.01);
@@ -2649,6 +2720,7 @@ mod tests {
             &mut m,
             &mut fs,
             &all_visible(&registry),
+            &all_visible(&registry), // UR-003: display-имена чипов
         );
         if !lay.scroll.needs_scroll() {
             // Всё влезает (мелкий реестр) — прокрутка не нужна
@@ -2674,6 +2746,7 @@ mod tests {
             &mut m,
             &mut fs,
             &all_visible(&registry),
+            &all_visible(&registry), // UR-003: display-имена чипов
         );
         assert_eq!(lay2.rows.last(), rows.last(), "последняя строка видна");
         assert!(!lay2.rows.is_empty(), "хвост не пуст");
@@ -2709,6 +2782,7 @@ mod tests {
             &mut m,
             &mut fs,
             &all_visible(&registry),
+            &all_visible(&registry), // UR-003: display-имена чипов
         );
         assert_eq!(lay.max_scroll, 0, "микроокно — прокрутки нет");
     }
@@ -2735,6 +2809,7 @@ mod tests {
             m,
             fs,
             &all_visible(registry),
+            &all_visible(registry), // UR-003: display-имена чипов
         )
     }
 

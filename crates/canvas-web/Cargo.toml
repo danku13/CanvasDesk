@@ -54,6 +54,8 @@ web-sys = { workspace = true, features = [
     "Document",
     "Window",
     "Element",
+    # UR-003: classList body (cd-panel-left/right — сдвиг DOM-хрома)
+    "DomTokenList",
     "Node",
     "Clipboard",
     "Navigator",

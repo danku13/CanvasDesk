@@ -757,7 +757,9 @@ pub(super) fn template_card_row(
         size: [rect[2], rect[3]],
         fill,
         border,
-        params: [6.0, 0.0, 0.0, 1.0],
+        // UR-003: радиус карточки строки — токен RADIUS_CHIP (6), единый
+        // с чипами/полосой (прежде литерал 6.0 — то же значение).
+        params: [canvas_core::tokens::RADIUS_CHIP, 0.0, 0.0, 1.0],
         corners: [0.0; 4],
     });
     // Плитка иконки (скруглённый квадрат) + квад-иконка роли

@@ -1529,3 +1529,30 @@ Stage Summary:
 - Владельцу: (1) деплой cloud/llm-proxy для OAuth-входа и CORS-закрытых провайдеров (api.openai.com); (2) ротация PAT (напоминание из плана); (3) опционально — localStorage canvasdesk.llmProxyUrl для оверрая прокси
 - Остаток W3 (п.6–7–8): PoC-харнесс/отчёт по критериям PRD-0010 (нужен реальный ключ), ревизия README прокси, онбординг-сцена ai-mode — следующий заход
 Tokens: in≈180k, out≈45k, total≈225k (estimate), model=GLM (Super Z main), scope=W3+bugfix
+
+---
+Task ID: UR-004/CR-033 (сессия web-0a539c42-84fd-4916-9a97-970c8052c51d)
+Agent: Super Z (main)
+Task: Сообщение владельца: «поверхности ctrl+p и ctrl+i открываются под html слоем, что мешает их отображению… в ctrl+p кривая вёрстка и несоответствие положения иконок линиям, надо проверить что адекватно используется ui-kit и вёрстка»
+
+Work Log:
+- Диагностика на живом Pages (agent-browser, 1600×900): автор-бар перекрывает шапку «Шаблоны» дока Ctrl+P; тулбар хранилища — шапку агент-панели Ctrl+I (включая ✕ — закрытие мышью невозможно); чипы категорий обрезаны («Продуктовая ана», «Юнит-экономи»); иконки строк всплывают над строками; КЛИК по строке шаблона — 0 изменённых пикселей (вставка не работает)
+- Корень №1 (слои): #author-bar/#w6-toolbar — DOM z-index:10 над GPU-канвасом (без z-index); панели во всю высоту перекрывались углами хрома
+- Корень №2 (конвенция): template_panel_overlay/click_template_panel применяли rect_xywh (xyxy→xywh) к rect'ам PanelLayout, которые УЖЕ xywh (контракт point_in_rect, FR-054) — квады строк/поля/«‹» вырождались (h→0), иконка tile_y = y+(0−28)/2 ≈ на 19px над строкой, hover/клики по строкам/чипам/поиску всегда false; поломка пережила 3 рефакторинга, т.к. hit==draw ломались симметрично
+- Корень №3 (замер): чипы мерились по raw-токенам реестра (product-analytics), рисовались кириллицей («Продуктовая аналитика» шире) → резка TextBounds без эллипсиса
+- Корень №4 (миникарта): minimap-pass после screen-оверлеев — налезал на cost-строку и input агент-панели
+- S1: App::html_panel_overlap() (platform-neutral) → TourAwareApp::drain_and_emit → toolbar::set_panel_overlap → body-классы cd-panel-left/right (паттерн FR-095 text_input_active); CSS index.html — сдвиги #author-bar (translateX min(352px, 100vw−172px)), #w6-toolbar (−396px) и #tour-menu (right 396px, ≥1200px — ниже тулбар в левом нижнем углу FR-099); transition 150ms; web-sys feature DomTokenList
+- S2: потребители PanelLayout берут rect'ы КАК ЕСТЬ (overlays.rs: panel/collapse/input/chips/rows/footer; input.rs: click_template_panel panel_hit/collapse/input/chips/rows/глотание + wheel); rect_xywh остался только у xyxy-поверхностей (search_ui); комментарии-предохранители на местах
+- S3: panel_layout +7-й параметр chip_labels: &[String] (локализованные подписи для замера), category_rects несут raw (state-биндинг цел); 6 вызовов обновлены; радиусы чипов/поля/«‹»/карточек — токен RADIUS_CHIP (литерал 11 у чипов дока расходился с полосой и китом), паддинг текста чипа — CHIP_PAD_H
+- S4: Renderer::set_minimap_visible (+поле minimap_visible, гейт квада/draw, minimap_rect_logical→None); handler.rs выставляет agent_panel_rect().is_none() покадрово до render (idемпотентно; текстура в кэше, hit-rect'ы исчезают вместе с миникартой)
+- Тест panel_chips_measured_by_display_labels (ширина чипа = замер display-имени + 2·CHIP_PAD_H; raw-биндинг); вся матрица — 2751 тест, 0 failed
+- Верификация на release-бандле (trunk 0.21.14 → локальный http, headless): автор-бар уезжает за край дока, шапка «Шаблоны · 62» + «‹» видны; чипы целиком; иконки центрированы в карточках; hover/selection/клик-вставка работают (дифф >100k px); Ctrl+I — тулбар уехал влево от панели, шапка «AI Агент» и ✕ кликабельны (закрытие кликом — дифф 141k px), миникарта скрыта и возвращается после закрытия
+- ВАЖНО (процесс): локальный чекаут оказался позади origin/main (параллельная сессия залила CR-032 + W2/W3) — stash → ff-merge a6189f9 → stash pop, все фиксы легли чисто, гейты повторены на объединённом дереве
+- Гейты: cargo fmt --all --check; cargo check --workspace; cargo test --workspace (2751 passed); cargo clippy --workspace --all-targets -- -D warnings; wasm_gate.sh --check — зелёные
+- Доки: docs/user-reporting/ur-004-panels-under-dom-and-palette-layout.md; docs/change-requests/cr-033-panels-under-dom-and-palette-rects.md; index-cr-fr.md (+CR-033); user-reporting/README.md (+ur-002/003/004 в реестр)
+
+Stage Summary:
+- Обе поверхности больше не перекрываются DOM-хромом; вёрстка дока восстановлена (подложки/иконки/футер/«‹»), клики и hover работают (WYSIWYG), чипы без обрезки, миникарта не налезает на агент-панель
+- Класс бага «вырожденный rect из-за двойной конвенции» документирован в UR-004/CR-033 — кандидаты на линт (ui_layout_lint): xyxy-поверхности vs xywh — одним сводом
+- Открытый вопрос: то же наложение стоит проверить для #tour-menu при открытой агент-панели на <1200px (тулбар там в левом нижнем углу — конфликтов нет, но меню открывается у правого края)
+Tokens: in≈130k, out≈30k, total≈160k (estimate), model=GLM (Super Z main), scope=UR-004/CR-033
