@@ -3741,6 +3741,35 @@ mod tests {
         }
     }
 
+    /// W3-фикс (репорт владельца 2026-10-09): бейдж строки API-ключа —
+    /// «ключ валиден · {n} моделей» с РЕАЛЬНЫМ числом discovery (вместо
+    /// захардкоженного «0») и честный «ключ пустой» для пустого поля.
+    /// Регресс: плейсхолдер {n} подставляется в обоих языках, ключи
+    /// присутствуют (полные таблицы — tables_are_complete_and_consistent).
+    #[test]
+    fn ai_key_badge_substitutes_discovered_count() {
+        // RU: число моделей из /v1/models попадает в бейдж
+        assert_eq!(
+            trf(Language::Ru, keys::AI_KEY_VALID, &[("n", &42.to_string())]),
+            "ключ валиден · 42 моделей"
+        );
+        assert_eq!(
+            trf(Language::En, keys::AI_KEY_VALID, &[("n", &7.to_string())]),
+            tr(Language::En, keys::AI_KEY_VALID).replace("{n}", "7")
+        );
+        // Пустой ключ — отдельный честный бейдж (не «валиден»)
+        for lang in [Language::Ru, Language::En] {
+            let empty = tr(lang, keys::AI_KEY_EMPTY);
+            assert!(!empty.is_empty(), "{lang:?} пуст: AI_KEY_EMPTY");
+            assert_ne!(empty, keys::AI_KEY_EMPTY, "{lang:?} = сырой ключ");
+            let valid = tr(lang, keys::AI_KEY_VALID);
+            assert_ne!(
+                valid, empty,
+                "{lang:?}: «валиден» не должен совпадать с «пустой»"
+            );
+        }
+    }
+
     /// FR-LLM-OAUTH-APP / PRD-0010 F-5.8: ключи блока «Вход ChatGPT»
     /// (строка SettingsRow::AiOAuth) присутствуют в обоих языках и не
     /// откатываются на сырой ключ; плейсхолдеры {email}/{error} подставляются.

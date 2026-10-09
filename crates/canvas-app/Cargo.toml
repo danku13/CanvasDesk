@@ -95,6 +95,12 @@ l1-llm = [
 # fetch + cloud-proxy, F-5.10). Включает l1-llm и тянет canvas-llm/
 # l1-llm-tls (там же автентификация OAuth-клиента).
 l1-llm-tls = ["l1-llm", "canvas-llm/l1-llm-tls"]
+# W3 (F-5.10): браузерный fetch-транспорт провайдеров. ВАЖНО: фича легальна
+# ТОЛЬКО под wasm32-целью (canvas-llm/wasm-fetch даёт compile_error! на
+# нативе), поэтому включается исключительно target-блоком canvas-web
+# ([target.'cfg(target_arch = "wasm32")'.dependencies]) — см.
+# llm_factory::platform_transport. На нативе фичу не включать.
+wasm-fetch-bridge = ["l1-llm", "canvas-llm/wasm-fetch"]
 
 # FR-040 v2 (web persist): на wasm32 настройки сохраняются в localStorage
 # браузера (натив — config.toml через `Settings::save(path)`). Трейты

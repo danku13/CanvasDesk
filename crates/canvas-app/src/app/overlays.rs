@@ -4917,7 +4917,12 @@ impl App {
                 self.ai_health_check(crate::llm_executor::HealthTarget::Byok);
                 #[cfg(not(feature = "l1-llm"))]
                 {
-                    self.ai_key_ok = !self.ai_key_ok;
+                    // W3-фикс (репорт владельца): mock-тоггл не должен
+                    // показывать «ключ валиден» для пустого ключа —
+                    // честный no-op (бейдж AI_KEY_EMPTY рисует состояние).
+                    if !self.settings.llm.api_key.trim().is_empty() {
+                        self.ai_key_ok = !self.ai_key_ok;
+                    }
                 }
             }
             // W2 п.4: selfhost «Проверить» — реальный health-check
@@ -5844,14 +5849,31 @@ impl App {
                             } else {
                                 "•".repeat(key.chars().count().min(20))
                             };
-                            let badge = if self.ai_key_ok {
-                                // FR-LLM-FIX-TODO: реальный health-check заменит
-                                // «0» на число моделей из /v1/models (Stream C/D).
-                                self.tr(keys::AI_KEY_VALID).replace("{n}", "0")
+                            // W3-фикс (репорт владельца 2026-10-09): бейдж
+                            // отражает фактическое состояние — пустой ключ
+                            // («ключ пустой — введите ключ»), число моделей
+                            // из discovery (/v1/models, executor W2) вместо
+                            // захардкоженного «0».
+                            let badge = if key.trim().is_empty() {
+                                self.tr(keys::AI_KEY_EMPTY).to_owned()
+                            } else if self.ai_key_ok {
+                                // W2 п.5: discovery живёт за l1-llm (без фичи
+                                // список всегда пуст — «0 моделей» честно).
+                                #[cfg(feature = "l1-llm")]
+                                let n = self.ai_discovered_models.len().to_string();
+                                #[cfg(not(feature = "l1-llm"))]
+                                let n = String::from("0");
+                                crate::i18n::trf(
+                                    self.settings.language,
+                                    keys::AI_KEY_VALID,
+                                    &[("n", n.as_str())],
+                                )
                             } else {
                                 self.tr(keys::AI_KEY_NOT_CHECKED).to_owned()
                             };
-                            let color: canvas_render::Color = if self.ai_key_ok {
+                            let color: canvas_render::Color = if key.trim().is_empty() {
+                                palette.icon
+                            } else if self.ai_key_ok {
                                 crate::kit_ui::color4(palette.control_success)
                             } else {
                                 palette.icon
@@ -6118,12 +6140,28 @@ impl App {
                     if text_input_has_button(*row) {
                         let (badge_text, badge_color) = match row {
                             SettingsRow::AiApiKey => {
-                                let badge = if self.ai_key_ok {
-                                    self.tr(keys::AI_KEY_VALID).replace("{n}", "0")
+                                // W3-фикс (репорт владельца): как в первом
+                                // бейдже строки — пустой ключ / реальное
+                                // число discovery вместо «0».
+                                let key_empty = self.settings.llm.api_key.trim().is_empty();
+                                let badge = if key_empty {
+                                    self.tr(keys::AI_KEY_EMPTY).to_owned()
+                                } else if self.ai_key_ok {
+                                    #[cfg(feature = "l1-llm")]
+                                    let n = self.ai_discovered_models.len().to_string();
+                                    #[cfg(not(feature = "l1-llm"))]
+                                    let n = String::from("0");
+                                    crate::i18n::trf(
+                                        self.settings.language,
+                                        keys::AI_KEY_VALID,
+                                        &[("n", n.as_str())],
+                                    )
                                 } else {
                                     self.tr(keys::AI_KEY_NOT_CHECKED).to_owned()
                                 };
-                                let color: canvas_render::Color = if self.ai_key_ok {
+                                let color: canvas_render::Color = if key_empty {
+                                    palette.icon
+                                } else if self.ai_key_ok {
                                     crate::kit_ui::color4(palette.control_success)
                                 } else {
                                     palette.icon
