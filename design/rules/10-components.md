@@ -97,3 +97,41 @@ UI-консоль («?» → «UI-консоль») обязана показы�
 tooltip, text_field, switch, card, list, icons, table, panel_header —
 **не хватает** banner, chat_bubble, crumbs, footer, radio_card, two_column
 (бэклог W2 аудита). Новый компонент без секции витрины — незакрытая волна.
+
+**Витрина раскладок** (норматив `design/rules/11-layouts.md`, чек-лист
+LAY11 п.10): секция витрины обновляется в той же волне, что и новая
+раскладка/механизм LAY. Состав layout-секций на 2026-10-10 (код —
+`canvas-app/src/kit_ui.rs`, константы `SECTION_*`/`SECTION_LAYOUT_*`):
+
+| Секция | Механизм 11-layouts.md |
+|---|---|
+| measured | LAY6 — измеренный текст (`Row::lay_out_measured`, F-13) |
+| grow | LAY4 — flex-факторы (`Child::flexible`, grow 2:1) |
+| wrap | LAY3 — политика `RowPolicy::Wrap` |
+| grid | LAY2/LAY5 — `grid_cells` (равные явные колонки) |
+| focus | LAY11 — Tab-кольцо витрины (FocusRing) |
+| squeeze | LAY3 — политика `RowPolicy::SqueezeTail` |
+| align | LAY2 — `MainAlign::SpaceBetween` / `Column` + распорка (LAY7.3) |
+| component_row / component_panel | компонентный слой K1 (Row/Table/Panel) |
+| layout_constrain | LAY2 — `constrain(min, max, desired)` (clamp) |
+| layout_pad | LAY2 — `pad(slot, EdgeInsets)` из шкалы S1 |
+| layout_stack | LAY2 — `stack(slot, size, HAlign, VAlign)` (центр/угол) |
+| layout_gaps | LAY7 — шкала зазоров S1 (S/SM/MD/LG/XL с подписями) |
+| layout_percent | LAY5 — сцена `SceneDim::Percent` + `Fill` (доли ширины) |
+| layout_aspect | LAY5 — сцена aspect-ratio (плитки 16:9) |
+| layout_sticky | LAY5 — сцена Sticky в прокручиваемом окне (Hidden+offset) |
+| layout_hide_below | LAY8 п.3 — `DegradationPolicy::HideBelow` (порог 900×600) |
+
+Правила витрины раскладок:
+
+- **K4.1** Секции-демо строятся ТОЛЬКО примитивами `canvas_ui::layout` и
+  сценой `SceneNode` (`lay_out_scene`); зазоры/паддинги — только шкалы S1
+  (LAY7), текст — через `TextMeasurer`/`MeasuredItem` (LAY6), никаких
+  молчаливых клампов (G5), `Custom` — только с обоснованием (G8).
+- **K4.2** Геометрия демо и подписи секций — из единственной раскладки
+  (`gallery_layout`): hit-слоты (при появлении интерактива) и отрисовка
+  строятся из одних rect'ов (LAY1.2); скролл-сдвиг/фильтр полной
+  видимости — общий механизм витрины.
+- **K4.3** Сцена-секции проверяют маску `LayoutFeatures` движка перед
+  расширенными политиками (LAY5.2); механизм LAY, не показанный секцией
+  витрины, — незакрытая волна (аналог K1.1 для компонентов).

@@ -589,6 +589,24 @@ pub mod keys {
     pub const KIT_ALIGN_A: &str = "kit.align.a";
     pub const KIT_ALIGN_B: &str = "kit.align.b";
     pub const KIT_ALIGN_C: &str = "kit.align.c";
+    /// LAY-SHOWCASE (витрина раскладок, design/rules/11-layouts.md LAY11
+    /// п.10): секции механизмов, которых не было в layout-секциях витрины —
+    /// constrain/pad/stack (LAY2), шкала зазоров S1 (LAY7), сцена
+    /// percent+Fill / aspect-ratio / sticky (LAY5), деградация HideBelow
+    /// (LAY8). Заголовки + подписи демо.
+    pub const KIT_SECTION_LAYOUT_CONSTRAIN: &str = "kit.section.layout_constrain";
+    pub const KIT_SECTION_LAYOUT_PAD: &str = "kit.section.layout_pad";
+    pub const KIT_SECTION_LAYOUT_STACK: &str = "kit.section.layout_stack";
+    pub const KIT_SECTION_LAYOUT_GAPS: &str = "kit.section.layout_gaps";
+    pub const KIT_SECTION_LAYOUT_PERCENT: &str = "kit.section.layout_percent";
+    pub const KIT_SECTION_LAYOUT_ASPECT: &str = "kit.section.layout_aspect";
+    pub const KIT_SECTION_LAYOUT_STICKY: &str = "kit.section.layout_sticky";
+    pub const KIT_SECTION_LAYOUT_HIDE_BELOW: &str = "kit.section.layout_hide_below";
+    pub const KIT_LAYOUT_STACK_CENTER: &str = "kit.layout.stack_center";
+    pub const KIT_LAYOUT_STACK_END: &str = "kit.layout.stack_end";
+    pub const KIT_LAYOUT_STICKY_HEADER: &str = "kit.layout.sticky_header";
+    pub const KIT_LAYOUT_HIDE_BELOW_PANEL: &str = "kit.layout.hide_below_panel";
+    pub const KIT_LAYOUT_HIDE_BELOW_HIDDEN: &str = "kit.layout.hide_below_hidden";
     /// DebugOverlay (F10): подсказка тогла.
     pub const KIT_DEBUG_HINT: &str = "kit.debug.hint";
 
@@ -1492,6 +1510,47 @@ const RU: &[(&str, &str)] = &[
     (keys::KIT_ALIGN_A, "Начало"),
     (keys::KIT_ALIGN_B, "Центр"),
     (keys::KIT_ALIGN_C, "Конец"),
+    // LAY-SHOWCASE: витрина раскладок (норматив 11-layouts.md, LAY11 п.10)
+    (
+        keys::KIT_SECTION_LAYOUT_CONSTRAIN,
+        "Зажим размера (constrain: желаемое → min/max)",
+    ),
+    (
+        keys::KIT_SECTION_LAYOUT_PAD,
+        "Внутренние поля (pad: EdgeInsets из шкалы S1)",
+    ),
+    (
+        keys::KIT_SECTION_LAYOUT_STACK,
+        "Наложение (stack: блок в слоте — центр / угол)",
+    ),
+    (
+        keys::KIT_SECTION_LAYOUT_GAPS,
+        "Шкала зазоров (S1: S / SM / MD / LG / XL)",
+    ),
+    (
+        keys::KIT_SECTION_LAYOUT_PERCENT,
+        "Сцена: проценты и Fill (доли ширины)",
+    ),
+    (keys::KIT_SECTION_LAYOUT_ASPECT, "Сцена: aspect-ratio (плитки 16:9)"),
+    (
+        keys::KIT_SECTION_LAYOUT_STICKY,
+        "Сцена: sticky-шапка в окне прокрутки",
+    ),
+    (
+        keys::KIT_SECTION_LAYOUT_HIDE_BELOW,
+        "Деградация HideBelow (порог 900×600)",
+    ),
+    (keys::KIT_LAYOUT_STACK_CENTER, "по центру"),
+    (keys::KIT_LAYOUT_STACK_END, "в угол"),
+    (keys::KIT_LAYOUT_STICKY_HEADER, "sticky-шапка"),
+    (
+        keys::KIT_LAYOUT_HIDE_BELOW_PANEL,
+        "Панель видна: окно ≥ {min_w}×{min_h}",
+    ),
+    (
+        keys::KIT_LAYOUT_HIDE_BELOW_HIDDEN,
+        "Окно < {min_w}×{min_h} — панель скрыта целиком",
+    ),
     (
         keys::KIT_DEBUG_HINT,
         "DebugOverlay (F9): рамки слоёв, имя под курсором, пересечения",
@@ -2781,6 +2840,50 @@ const EN: &[(&str, &str)] = &[
     (keys::KIT_ALIGN_A, "Start"),
     (keys::KIT_ALIGN_B, "Center"),
     (keys::KIT_ALIGN_C, "End"),
+    // LAY-SHOWCASE: layout showcase (11-layouts.md, LAY11 item 10)
+    (
+        keys::KIT_SECTION_LAYOUT_CONSTRAIN,
+        "Size clamp (constrain: desired → min/max)",
+    ),
+    (
+        keys::KIT_SECTION_LAYOUT_PAD,
+        "Inner padding (pad: EdgeInsets from the S1 scale)",
+    ),
+    (
+        keys::KIT_SECTION_LAYOUT_STACK,
+        "Stacking (stack: block in a slot — center / corner)",
+    ),
+    (
+        keys::KIT_SECTION_LAYOUT_GAPS,
+        "Gap scale (S1: S / SM / MD / LG / XL)",
+    ),
+    (
+        keys::KIT_SECTION_LAYOUT_PERCENT,
+        "Scene: percent and Fill (width shares)",
+    ),
+    (
+        keys::KIT_SECTION_LAYOUT_ASPECT,
+        "Scene: aspect-ratio (16:9 tiles)",
+    ),
+    (
+        keys::KIT_SECTION_LAYOUT_STICKY,
+        "Scene: sticky header in a scroll window",
+    ),
+    (
+        keys::KIT_SECTION_LAYOUT_HIDE_BELOW,
+        "HideBelow degradation (threshold 900×600)",
+    ),
+    (keys::KIT_LAYOUT_STACK_CENTER, "centered"),
+    (keys::KIT_LAYOUT_STACK_END, "pinned to corner"),
+    (keys::KIT_LAYOUT_STICKY_HEADER, "sticky header"),
+    (
+        keys::KIT_LAYOUT_HIDE_BELOW_PANEL,
+        "Panel visible: window ≥ {min_w}×{min_h}",
+    ),
+    (
+        keys::KIT_LAYOUT_HIDE_BELOW_HIDDEN,
+        "Window < {min_w}×{min_h} — panel hidden entirely",
+    ),
     (
         keys::KIT_DEBUG_HINT,
         "DebugOverlay (F9): layer rects, name under cursor, intersections",
