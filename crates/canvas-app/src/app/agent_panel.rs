@@ -31,7 +31,7 @@
 use super::*;
 // FR-LLM-D: UiRect — геометрия kit-компонентов (panel_style/chip_style
 // принимают UiRect, не сырой [f32; 4]).
-use canvas_ui::geometry::UiRect;
+use canvas_ui::geometry::{UiRect, UiVec2};
 
 /// Ширина панели (прототип строки 484: 388px, max 94vw — клампим в рендере).
 pub const AGENT_PANEL_W: f32 = 388.0;
@@ -48,18 +48,26 @@ const EST_H: f32 = 22.0;
 const INPUT_H: f32 = 44.0;
 /// Высота quick-actions (3 preset buttons).
 const QUICK_H: f32 = 36.0;
-/// Внутренний отступ панели.
-const PAD: f32 = 12.0;
-/// Зазор между элементами в стеке.
-const GAP: f32 = 8.0;
-/// Размер кнопки закрытия (✕).
-const CLOSE_BTN_SIZE: f32 = 22.0;
+/// Внутренний отступ панели — токен SPACING_LG (design/rules 03, S1:
+/// паддинг контейнеров — MD/LG).
+const PAD: f32 = canvas_core::tokens::SPACING_LG;
+/// Зазор между элементами в стеке — токен SPACING_SM.
+const GAP: f32 = canvas_core::tokens::SPACING_SM;
+/// Размер иконочных кнопок (✕/send) — константа кита (design/rules 03, S3:
+/// «высоты — константы кита, не параметры вызова»).
+const ICON_BTN: f32 = canvas_ui::kit::ICON_BUTTON_SIZE;
+/// Высота поля ввода — константа кита TEXT_FIELD_HEIGHT (S3).
+const INPUT_FIELD_H: f32 = canvas_ui::kit::TEXT_FIELD_HEIGHT;
+/// Высота чипов/пилюль — константа кита CHIP_HEIGHT (S3; была 18 — вне шкалы).
+const CHIP_H: f32 = canvas_ui::kit::CHIP_HEIGHT;
+/// Горизонтальный пад текста чипа — 2·SPACING_SM.
+const CHIP_PAD_H: f32 = canvas_core::tokens::SPACING_SM;
 /// Высота кнопок preview (Accept / Reject) — внутри лога сообщений.
 const PREVIEW_BTN_H: f32 = 26.0;
-/// Ширина чипов контекста (provider / rate / context).
-const CHIP_W: f32 = 100.0;
 /// Радиус чипов quick-actions (pills).
 const PILL_RADIUS: f32 = canvas_core::tokens::RADIUS_PILL;
+/// Кегль текста поля ввода (тот же, что у чипов/лога — 11/12 шкала).
+const INPUT_FONT: f32 = 12.0;
 
 /// FR-LLM-D / PRD-0010 F-4: состояние агент-панели.
 #[derive(Debug, Clone, Default)]
@@ -68,16 +76,33 @@ pub struct AgentState {
     pub open: bool,
     /// Журнал сообщений (user / bot / error / preview-with-actions).
     pub messages: Vec<AgentMessage>,
-    /// Текст в input area (draft).
-    pub input: String,
+    /// Поле ввода (draft) — kit `TextFieldModel` (FR-058): текст/каретка/
+    /// селекция — в СИМВОЛАХ (design/rules 00, П6: «каретка поля считается
+    /// в символах, не в байтах» — прежний `caret: usize` был в байтах и
+    /// ломался на кириллице).
+    pub field: canvas_ui::kit::TextFieldModel,
+    /// Поле в фокусе (UR-005): рамка accent + каретка (design/rules 04, A4:
+    /// «рамка фокуса — слот accent, паттерн TextField витрины»). Прежде стиль
+    /// поля был захардкожен Normal — поле всегда выглядело неактивным.
+    pub input_focused: bool,
     /// Идёт LLM-запрос (блокирует input + send).
     pub busy: bool,
     /// Preview ghost-нод (Q3: confirm перед apply). `None` — preview нет.
     pub preview: Option<AgentPreview>,
     /// Cost estimate для текущего запроса (Q4 — для отображения в панели).
     pub cost_estimate: Option<f32>,
-    /// Каретка в input (для будущей inline-правки).
-    pub caret: usize,
+}
+
+impl AgentState {
+    /// Текст поля (для отправки/рендера).
+    pub fn input_text(&self) -> &str {
+        &self.field.text
+    }
+
+    /// Очистить поле (после отправки); каретка/селекция сбрасываются.
+    pub fn clear_input(&mut self) {
+        self.field = canvas_ui::kit::TextFieldModel::default();
+    }
 }
 
 /// FR-LLM-D / PRD-0010 F-4: сообщение в журнале агент-панели.
@@ -174,19 +199,91 @@ impl Default for ValidationResult {
     }
 }
 
+/// UR-005: единая геометрия интерактивных rect'ов панели — один источник
+/// для draw (`agent_panel_overlay`) и hit (`agent_panel_hit`). Урок CR-033:
+/// расхождение конвенций draw/hit не переживает рефакторинги — дублирующая
+/// геометрия запрещена (design/rules 00, П5).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct AgentPanelLayout {
+    /// Фон панели.
+    pub panel: UiRect,
+    /// Кнопка закрытия ✕ (ICON_BUTTON_SIZE, центр шапки).
+    pub close: UiRect,
+    /// Поле ввода (TEXT_FIELD_HEIGHT, центр 44-пиксельной полосы).
+    pub input: UiRect,
+    /// Кнопка отправки (ICON_BUTTON_SIZE, центр полосы ввода).
+    pub send: UiRect,
+    /// Quick-action пилюли (CHIP_HEIGHT).
+    pub quick: [UiRect; 3],
+}
+
+impl AgentPanelLayout {
+    /// Раскладка по rect'у панели (правый край, full-height).
+    pub fn build(panel: UiRect) -> Self {
+        let [px, py, pw, ph] = [panel.x, panel.y, panel.w, panel.h];
+        // ✕ — ICON_BUTTON_SIZE, вертикально по центру шапки.
+        let close = UiRect::new(
+            px + pw - PAD - ICON_BTN,
+            py + (HEAD_H - ICON_BTN) * 0.5,
+            ICON_BTN,
+            ICON_BTN,
+        );
+        // Полоса ввода: 44px над quick-actions; поле — TEXT_FIELD_HEIGHT,
+        // вертикально по центру полосы (раньше 36px — вне шкалы кита).
+        let row_y = py + ph - QUICK_H - INPUT_H;
+        let input = UiRect::new(
+            px + PAD,
+            row_y + (INPUT_H - INPUT_FIELD_H) * 0.5,
+            pw - PAD * 2.0 - ICON_BTN - GAP,
+            INPUT_FIELD_H,
+        );
+        let send = UiRect::new(
+            input.x + input.w + GAP,
+            row_y + (INPUT_H - ICON_BTN) * 0.5,
+            ICON_BTN,
+            ICON_BTN,
+        );
+        // Quick-actions: пилюли CHIP_HEIGHT, центр 36-полосы.
+        let quick_y = py + ph - QUICK_H + (QUICK_H - CHIP_H) * 0.5;
+        let quick_w = (pw - PAD * 2.0 - GAP * 2.0) / 3.0;
+        let quick = std::array::from_fn(|i| {
+            UiRect::new(
+                px + PAD + i as f32 * (quick_w + GAP),
+                quick_y,
+                quick_w,
+                CHIP_H,
+            )
+        });
+        Self {
+            panel,
+            close,
+            input,
+            send,
+            quick,
+        }
+    }
+}
+
 impl App {
     /// FR-LLM-D / PRD-0010 F-4: render agent panel overlay.
-    /// Возвращает (quads, texts) для screen_bands. Панель скрыта если
-    /// `!state.open` или вьюпорт слишком узкий.
-    pub(super) fn agent_panel_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+    /// Возвращает (quads, texts, icons) для screen_bands/icon_instances.
+    /// Панель скрыта если `!state.open` или вьюпорт слишком узкий.
+    pub(super) fn agent_panel_overlay(
+        &self,
+    ) -> (
+        Vec<CardInstance>,
+        Vec<OwnedScreenText>,
+        Vec<canvas_render::IconInstance>,
+    ) {
         let mut quads = Vec::new();
         let mut texts = Vec::new();
+        let mut icons_out = Vec::new();
         if !self.agent_panel.open {
-            return (quads, texts);
+            return (quads, texts, icons_out);
         }
         let viewport = self.viewport_logical();
         if viewport[0] < AGENT_PANEL_MIN_VIEWPORT_W || viewport[1] <= 0.0 {
-            return (quads, texts);
+            return (quads, texts, icons_out);
         }
         let palette = self.effective_palette();
         let kit_palette = palette.kit_palette();
@@ -201,7 +298,16 @@ impl App {
         let panel_x = viewport[0] - panel_w;
         let panel_y = 0.0;
         let panel_h = viewport[1];
+        // UR-005: единая раскладка draw==hit (константы кита: ICON_BUTTON_SIZE /
+        // TEXT_FIELD_HEIGHT / CHIP_HEIGHT — design/rules 03, S3).
+        let lay = AgentPanelLayout::build(UiRect::new(panel_x, panel_y, panel_w, panel_h));
         let panel = [panel_x, panel_y, panel_w, panel_h];
+
+        // CR-015/UR-005: TextMeasurer+FontSystem — один на кадр, до всех
+        // текстовых секций (чипы, empty-state wrap, поле ввода, bubbles).
+        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        let sans_family = canvas_render::text::SANS_FAMILY; // «Noto Sans Display»
 
         // === Фон панели — kit::panel_style (FR-055: слот panel_*) ==========
         let panel_style = canvas_ui::kit::panel_style(&kit_palette);
@@ -221,16 +327,13 @@ impl App {
 
         // === Шапка: bolt ⚡ + title + sub + close ✕ =======================
         let head_y = panel_y + 8.0;
-        // FR-ICONS: ⚡ — glyph fallback (SVG-атлас может не иметь).
-        d.label_left(
-            UiRect::new(panel_x + PAD, head_y + 4.0, 16.0, 20.0),
-            "⚡",
-            kit_palette.accent,
-            14.0,
-        );
+        // FR-ICONS/UR-005: болт — SVG-иконка `zap` (глиф ⚡ отсутствовал в
+        // сабсете — тофу в wasm; теперь есть и в атласе, и в сабсете).
+        let bolt_rect = UiRect::new(panel_x + PAD, head_y + 2.0, 20.0, 20.0);
+        d.icon(bolt_rect, "zap", "⚡", kit_palette.accent, 14.0);
         // Заголовок «AI Агент».
         d.label_left(
-            UiRect::new(panel_x + PAD + 18.0, head_y + 1.0, 180.0, 14.0),
+            UiRect::new(panel_x + PAD + 22.0, head_y + 1.0, 180.0, 14.0),
             "AI Агент",
             kit_palette.text_title,
             13.0,
@@ -238,19 +341,19 @@ impl App {
         // Подзаголовок (одна строка, приглушённый).
         d.label_left(
             UiRect::new(
-                panel_x + PAD + 18.0,
+                panel_x + PAD + 22.0,
                 head_y + 16.0,
-                panel_w - PAD * 2.0 - 18.0,
+                panel_w - PAD * 2.0 - 22.0,
                 12.0,
             ),
             "tool-calling · 42 MCP-инструмента · PRD-0010 F-4",
             kit_palette.text_muted,
             9.0,
         );
-        // Кнопка закрытия ✕ (правый край шапки).
-        let close_x = panel_x + panel_w - PAD - CLOSE_BTN_SIZE;
+        // Кнопка закрытия ✕ (правый край шапки, ICON_BUTTON_SIZE).
+        let close_rect = lay.close;
         let close_hovered = point_in_rect(
-            [close_x, head_y + 2.0, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE],
+            [close_rect.x, close_rect.y, close_rect.w, close_rect.h],
             self.cursor,
         );
         let close_state = if close_hovered {
@@ -259,9 +362,9 @@ impl App {
             canvas_ui::kit::KitState::Normal
         };
         let close_style = canvas_ui::kit::icon_button_style(close_state, &kit_palette);
-        let close_rect = UiRect::new(close_x, head_y + 2.0, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE);
         d.control(close_rect, &close_style);
-        d.label_center(close_rect, "✕", close_style.text, 13.0);
+        // FR-ICONS/UR-005: ✕ — SVG-иконка `close` (глиф — фолбэк).
+        d.icon(close_rect, "close", "✕", close_style.text, 13.0);
 
         // === Контекстная строка: 3 chips (Context / Provider / Rate) =====
         let ctx_y = panel_y + HEAD_H;
@@ -292,49 +395,70 @@ impl App {
                 }
             }
         };
-        // Context chip (ширина — остаток от provider/rate chips).
-        let prov_label = crate::settings_ui::ai_provider_label(
-            self.settings.language,
-            self.settings.llm.provider_agent,
-        );
+        // UR-005 (П6): ширины чипов — по фактическому замеру шрифта, не
+        // фиксированные 100px (литерал давал клип «BYOK (свой ключ)»).
+        // Провайдер — короткая подпись (FR-LLM-FIX-2: полные подписи —
+        // только в настройках, в чипе они раздували панель).
+        let prov_label = self.ai_status_prov_label(self.settings.llm.provider_agent);
         let rate_label = format!(
             "ChatGPT: {}/80",
             self.ai_chatgpt_rate_used.saturating_sub(0)
         );
         let rate_visible =
             self.settings.llm.provider_agent == canvas_llm::LlmProviderId::ChatGptOAuth;
-        let chip_h = 18.0;
-        let chip_y = ctx_y + 6.0;
-        let chip_gap = 4.0;
-        // Layout: [Context ...] [Provider 100px] [Rate 100px?]
-        let rate_w = if rate_visible { CHIP_W } else { 0.0 };
-        let prov_x = panel_x + panel_w - PAD - rate_w - chip_gap - CHIP_W;
-        let rate_x = panel_x + panel_w - PAD - rate_w;
+        let chip_y = ctx_y + (CTX_H - CHIP_H) * 0.5;
+        let chip_gap = canvas_core::tokens::SPACING_S; // 6 — зазор чипов в баре (S1)
+        let chip_font = 10.0;
+        let mut chip_text_w =
+            |s: &str| measurer.width_of(&mut fs, s, sans_family, chip_font) + CHIP_PAD_H * 2.0;
+        // Rate chip (первый справа, если виден), затем provider; context —
+        // остаток ширины с ellipsis (молчаливая обрезка запрещена — П6).
+        let rate_w = if rate_visible {
+            chip_text_w(&rate_label)
+        } else {
+            0.0
+        };
+        let prov_w = chip_text_w(&prov_label).max(52.0);
+        let content_right = panel_x + panel_w - PAD;
+        let rate_x = content_right - rate_w;
+        let prov_x = rate_x - chip_gap - prov_w;
         let ctx_x = panel_x + PAD;
-        let ctx_w = prov_x - chip_gap - ctx_x;
-        // Context chip.
+        let ctx_w = (prov_x - chip_gap - ctx_x).max(60.0);
+        // Context chip (Selected → Selected-слот, иначе Normal).
         let ctx_state = if matches!(ctx, AgentContext::SelectedNodes(_)) {
             canvas_ui::kit::KitState::Selected
         } else {
             canvas_ui::kit::KitState::Normal
         };
         let ctx_chip_style = canvas_ui::kit::chip_style(ctx_state, &kit_palette);
-        let ctx_rect = UiRect::new(ctx_x, chip_y, ctx_w, chip_h);
+        let ctx_rect = UiRect::new(ctx_x, chip_y, ctx_w, CHIP_H);
         d.control(ctx_rect, &ctx_chip_style);
-        d.label_center(ctx_rect, &ctx_label, ctx_chip_style.text, 10.0);
-        // Provider chip.
+        let ctx_shown = measurer.ellipsis(
+            &mut fs,
+            &ctx_label,
+            sans_family,
+            chip_font,
+            ctx_w - CHIP_PAD_H * 2.0,
+        );
+        d.label_left(
+            UiRect::new(ctx_x + CHIP_PAD_H, chip_y, ctx_w - CHIP_PAD_H * 2.0, CHIP_H),
+            &ctx_shown,
+            ctx_chip_style.text,
+            chip_font,
+        );
+        // Provider chip (короткая подпись, замеренная ширина).
         let prov_chip_style =
             canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &kit_palette);
-        let prov_rect = UiRect::new(prov_x, chip_y, CHIP_W, chip_h);
+        let prov_rect = UiRect::new(prov_x, chip_y, prov_w, CHIP_H);
         d.control(prov_rect, &prov_chip_style);
-        d.label_center(prov_rect, &prov_label, prov_chip_style.text, 10.0);
+        d.label_center(prov_rect, &prov_label, prov_chip_style.text, chip_font);
         // Rate chip (только для ChatGPT OAuth).
         if rate_visible {
             let rate_chip_style =
                 canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &kit_palette);
-            let rate_rect = UiRect::new(rate_x, chip_y, CHIP_W, chip_h);
+            let rate_rect = UiRect::new(rate_x, chip_y, rate_w, CHIP_H);
             d.control(rate_rect, &rate_chip_style);
-            d.label_center(rate_rect, &rate_label, rate_chip_style.text, 10.0);
+            d.label_center(rate_rect, &rate_label, rate_chip_style.text, chip_font);
         }
 
         // === Журнал сообщений (скроллится; здесь — простая простыня) ======
@@ -358,31 +482,37 @@ impl App {
         // CR-015 fix (Task Q1+Q2): TextMeasurer для реального шейпинга текста
         // bubble (вместо эвристик `text.len() as f32 * 6.0` / `text.len() /
         // 32.0` / `text.len() / 48` — те ломаются на Cyrillic/emoji: byte_count
-        // ≠ glyph_count). Один measurer+FontSystem на цикл сообщений (не на
-        // сообщение — кэш переиспользуется). Семейство/кегль — те же, что у
-        // `d.label_left` рендера bubble (FR-053: метрики раскладки = метрики
-        // рендера). Контракт «вложенный лок FontSystem запрещён» (app.rs:209):
-        // `agent_panel_overlay` не вызывается внутри другого FontSystem-лока
-        // (handler.rs:314 —顶层 render path, без шейпинг-локов рядом).
-        let mut measurer = canvas_ui::measure::TextMeasurer::new();
-        let mut fs = canvas_render::text::measure_font_system();
-        let bubble_family = canvas_render::text::SANS_FAMILY; // «Noto Sans Display»
+        // ≠ glyph_count). Measurer+FontSystem создан ОДИН раз выше (UR-005:
+        // чипы/empty-state/полё ввода/bubbles — один пул на кадр). Семейство/
+        // кегль — те же, что у `d.label_left` рендера bubble (FR-053: метрики
+        // раскладки = метрики рендера). Контракт «вложенный лок FontSystem
+        // запрещён» (app.rs:209): `agent_panel_overlay` не вызывается внутри
+        // другого FontSystem-лока (handler.rs —顶层 render path, без
+        // шейпинг-локов рядом).
+        let bubble_family = sans_family; // «Noto Sans Display»
         let bubble_size = 11.0; // bubble text font_size (matches d.label_left)
         if self.agent_panel.messages.is_empty() {
-            d.label_left(
-                UiRect::new(
-                    log_rect.x + 8.0,
-                    msg_y,
-                    log_rect.w - 16.0,
-                    log_rect.h - 16.0,
-                ),
-                "Панель агента пуста. Опишите задачу текстом — агент вызовет \
-                 MCP-инструменты (node_create, graph_validate, graph_apply…), \
-                 покажет preview ghost-нодами на канвасе и спросит Accept/Reject. \
-                 Деструктивные операции — только с подтверждением.",
-                kit_palette.text_muted,
-                11.0,
-            );
+            // UR-005: подсказка переносится по реальной ширине (TextMeasurer).
+            // Прежде — одна строка `label_left` с молчаливой обрезкой справа
+            // (скриншот владельца: «…агент вызовет M» — хвост текста терялся).
+            let hint = "Панель агента пуста. Опишите задачу текстом — агент \
+                        вызовет MCP-инструменты (node_create, graph_validate, \
+                        graph_apply…), покажет preview ghost-нодами на канвасе \
+                        и спросит Accept/Reject. Деструктивные операции — только \
+                        с подтверждением.";
+            let hint_area_w = log_rect.w - 16.0;
+            let hint_lines = measurer.wrap(&mut fs, hint, bubble_family, bubble_size, hint_area_w);
+            let line_h = 15.0; // bubble_size 11 · 1.35 → 15 (ритм лога)
+            let mut line_y = msg_y;
+            for line in &hint_lines {
+                d.label_left(
+                    UiRect::new(log_rect.x + 8.0, line_y, hint_area_w, line_h),
+                    line,
+                    kit_palette.text_muted,
+                    bubble_size,
+                );
+                line_y += line_h;
+            }
         } else {
             // Каждое сообщение — user (справа) / bot (слева) / error.
             for msg in &self.agent_panel.messages {
@@ -641,52 +771,114 @@ impl App {
         );
 
         // === Input area (textarea + send button) =========================
-        let input_y = panel_y + panel_h - QUICK_H - INPUT_H + 4.0;
-        let send_w = 36.0;
-        let input_w = panel_w - PAD * 2.0 - send_w - GAP;
-        let input_rect = UiRect::new(panel_x + PAD, input_y, input_w, INPUT_H - 8.0);
-        let input_state = if self.agent_panel.busy {
-            canvas_ui::kit::KitState::Disabled
+        // UR-005: раскладка — из единого AgentPanelLayout (draw == hit);
+        // высоты — константы кита (TEXT_FIELD_HEIGHT 30 / ICON_BUTTON_SIZE 26).
+        let input_rect = lay.input;
+        let send_rect = lay.send;
+        // Фокус (design/rules 04, A4: рамка фокуса — слот accent, паттерн
+        // TextField витрины). busy → Disabled (текст приглушён, каретки нет).
+        let input_focused = self.agent_panel.input_focused && !self.agent_panel.busy;
+        // Контейнер поля — сырой CardInstance (как пилот TextField в
+        // overlays.rs): params.y = 1 — фокус-кольцо 3px accent; Normal —
+        // слоты control_fill/control_border (ST2), радиус RADIUS_CHIP.
+        let (input_fill, input_border) = if input_focused {
+            (kit_palette.control_fill, kit_palette.accent)
         } else {
-            canvas_ui::kit::KitState::Normal
+            (kit_palette.control_fill, kit_palette.control_border)
         };
-        let input_style = canvas_ui::kit::control_style_of(
-            kit_palette.panel_fill,
-            kit_palette.panel_border,
-            kit_palette.text,
-            canvas_core::tokens::RADIUS_PANEL,
-        );
-        let _ = input_state; // FR-LLM-D-TODO: визуальное отличие disabled (через kit Disabled слот — будущая волна kit)
-        d.control(input_rect, &input_style);
+        d.quads.push(crate::app::band_rect_quad_pub(
+            [input_rect.x, input_rect.y, input_rect.w, input_rect.h],
+            input_fill,
+            input_border,
+            canvas_core::tokens::RADIUS_CHIP,
+        ));
+        // Геометрия текста — kit::text_field (FR-055/058): ellipsis,
+        // text_area, caret_x по замеру префикса тем же кеглем (П6).
         let placeholder = "Опишите задачу: «создай CAC и свяжи с LTV»";
-        let input_text = if self.agent_panel.input.is_empty() {
-            placeholder.to_owned()
-        } else {
-            self.agent_panel.input.clone()
-        };
-        let input_color = if self.agent_panel.input.is_empty() {
+        let field_min = UiVec2::new(
+            canvas_ui::kit::TEXT_FIELD_MIN_W,
+            canvas_ui::kit::TEXT_FIELD_HEIGHT,
+        );
+        let field_max = UiVec2::new(input_rect.w, canvas_ui::kit::TEXT_FIELD_HEIGHT);
+        let field_layout = canvas_ui::kit::text_field(
+            input_rect,
+            field_min,
+            field_max,
+            &self.agent_panel.field,
+            placeholder,
+            input_focused,
+            if self.agent_panel.busy {
+                canvas_ui::kit::KitState::Disabled
+            } else {
+                canvas_ui::kit::KitState::Normal
+            },
+            &kit_palette,
+            &mut measurer,
+            &mut fs,
+            sans_family,
+            INPUT_FONT,
+        );
+        let text_area = field_layout.text_area;
+        // UR-005: выделение — подложка accent α0.25 под текстом (фон до текста;
+        // границы — замер префиксов тем же кеглем, что и рендер).
+        if input_focused {
+            if let Some((a, b)) = self.agent_panel.field.sel {
+                let chars: Vec<char> = self.agent_panel.field.text.chars().collect();
+                let (start, end) = (a.min(b), a.max(b));
+                if start != end {
+                    let sel_prefix: String = chars[..start].iter().collect();
+                    let sel_full: String = chars[..end].iter().collect();
+                    let x0 = text_area.x
+                        + measurer
+                            .width_of(&mut fs, &sel_prefix, sans_family, INPUT_FONT)
+                            .min(text_area.w);
+                    let x1 = text_area.x
+                        + measurer
+                            .width_of(&mut fs, &sel_full, sans_family, INPUT_FONT)
+                            .min(text_area.w);
+                    if x1 > x0 {
+                        d.rect(
+                            UiRect::new(x0, text_area.y + 2.0, x1 - x0, text_area.h - 4.0),
+                            [
+                                kit_palette.accent[0],
+                                kit_palette.accent[1],
+                                kit_palette.accent[2],
+                                0.25,
+                            ],
+                            [0.0; 4],
+                            0.0,
+                        );
+                    }
+                }
+            }
+        }
+        // Текст поля: пустое — placeholder приглушённым (kit text_field даёт
+        // ellipsis-версию в text_shown); цвет disabled при busy (ST2).
+        let is_placeholder = self.agent_panel.field.text.is_empty();
+        let input_color = if self.agent_panel.busy {
+            kit_palette.disabled_text
+        } else if is_placeholder {
             kit_palette.text_muted
         } else {
             kit_palette.text
         };
-        d.label_left(
-            UiRect::new(
-                input_rect.x + 8.0,
-                input_rect.y + 4.0,
-                input_rect.w - 16.0,
-                input_rect.h - 8.0,
-            ),
-            &input_text,
-            input_color,
-            12.0,
-        );
-        // Send button ➤.
-        let send_rect = UiRect::new(
-            panel_x + PAD + input_w + GAP,
-            input_y,
-            send_w,
-            INPUT_H - 8.0,
-        );
+        d.label_left(text_area, &field_layout.text_shown, input_color, INPUT_FONT);
+        // Каретка — 1.5px слот accent (паттерн пилота TextField; kit даёт
+        // caret_x = -1 когда не в фокусе).
+        if input_focused && field_layout.caret_x >= 0.0 {
+            d.quads.push(crate::app::band_rect_quad_pub(
+                [
+                    field_layout.caret_x,
+                    text_area.y + 2.0,
+                    1.5,
+                    text_area.h - 4.0,
+                ],
+                kit_palette.accent,
+                [0.0; 4],
+                0.0,
+            ));
+        }
+        // Send button ➤ (ICON_BUTTON_SIZE; иконка — SVG `send`, глиф — фолбэк).
         let send_hovered = point_in_rect(
             [send_rect.x, send_rect.y, send_rect.w, send_rect.h],
             self.cursor,
@@ -704,15 +896,13 @@ impl App {
             &kit_palette,
         );
         d.control(send_rect, &send_style);
-        d.label_center(send_rect, "➤", send_style.text, 14.0);
+        d.icon(send_rect, "send", "➤", send_style.text, 14.0);
 
         // === Quick actions (3 preset pill-кнопки) ========================
-        let quick_y = panel_y + panel_h - QUICK_H + 4.0;
         let quick_labels: [&str; 3] = ["CAC ↔ LTV", "Воронка из 3 нод", "Проверка графа"];
-        let quick_w = (panel_w - PAD * 2.0 - GAP * 2.0) / 3.0;
         for (i, label) in quick_labels.iter().enumerate() {
-            let qx = panel_x + PAD + i as f32 * (quick_w + GAP);
-            let qhovered = point_in_rect([qx, quick_y, quick_w, 24.0], self.cursor);
+            let qrect = lay.quick[i];
+            let qhovered = point_in_rect([qrect.x, qrect.y, qrect.w, qrect.h], self.cursor);
             let qstate = if qhovered {
                 canvas_ui::kit::KitState::Hovered
             } else {
@@ -720,12 +910,13 @@ impl App {
             };
             // Pill: chip_style с радиусом RADIUS_PILL (максимальный радиус).
             let qstyle = canvas_ui::kit::chip_style(qstate, &kit_palette);
-            let qrect = UiRect::new(qx, quick_y, quick_w, 24.0);
             d.rect(qrect, qstyle.fill, qstyle.border, PILL_RADIUS);
             d.label_center(qrect, label, qstyle.text, 10.0);
         }
 
         // FR-LLM-D: дрейн KitDraw → возвращаемые Vec'и (как ai_status_panel.rs).
+        // UR-005: +icons — прежде иконки KitDraw терялись (дрейнился только
+        // search_overlay) — SVG-иконки панели не доходили до рендера.
         quads = d.quads;
         texts = d
             .texts
@@ -739,7 +930,8 @@ impl App {
                 align: t.align,
             })
             .collect();
-        (quads, texts)
+        icons_out = d.icons;
+        (quads, texts, icons_out)
     }
 
     /// FR-LLM-D / PRD-0010 F-4: rect панели агента (для hit-тестов и
@@ -1209,8 +1401,7 @@ impl App {
         self.agent_panel
             .messages
             .push(AgentMessage::User(txt.to_owned()));
-        self.agent_panel.input.clear();
-        self.agent_panel.caret = 0;
+        self.agent_panel.clear_input();
         self.agent_panel.busy = true;
 
         // 3. Контекст (для отображения и будущего redact).
@@ -1354,59 +1545,42 @@ impl App {
 
     /// FR-LLM-D / PRD-0010 F-4: hit-test агент-панели — определить элемент
     /// под курсором (для обработчика ввода). `None` — клик мимо панели.
+    /// UR-005: геометрия — из единого [`AgentPanelLayout`] (draw == hit).
     pub(crate) fn agent_panel_hit(&self, point: [f32; 2]) -> Option<AgentPanelHit> {
         let panel = self.agent_panel_rect()?;
         if !point_in_rect(panel, point) {
             return None;
         }
-        let [panel_x, panel_y, panel_w, panel_h] = panel;
-        // Кнопка закрытия ✕ (правый край шапки).
-        let head_y = panel_y + 8.0;
-        let close_x = panel_x + panel_w - PAD - CLOSE_BTN_SIZE;
-        if point_in_rect(
-            [close_x, head_y + 2.0, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE],
-            point,
-        ) {
+        let lay = AgentPanelLayout::build(UiRect::new(panel[0], panel[1], panel[2], panel[3]));
+        // Кнопка закрытия ✕.
+        if point_in_rect([lay.close.x, lay.close.y, lay.close.w, lay.close.h], point) {
             return Some(AgentPanelHit::Close);
         }
         // Input area.
-        let input_y = panel_y + panel_h - QUICK_H - INPUT_H + 4.0;
-        let send_w = 36.0;
-        let input_w = panel_w - PAD * 2.0 - send_w - GAP;
-        let input_rect = [panel_x + PAD, input_y, input_w, INPUT_H - 8.0];
-        if point_in_rect(input_rect, point) {
+        if point_in_rect([lay.input.x, lay.input.y, lay.input.w, lay.input.h], point) {
             return Some(AgentPanelHit::Input);
         }
         // Send button.
-        let send_rect = [
-            panel_x + PAD + input_w + GAP,
-            input_y,
-            send_w,
-            INPUT_H - 8.0,
-        ];
-        if point_in_rect(send_rect, point) {
+        if point_in_rect([lay.send.x, lay.send.y, lay.send.w, lay.send.h], point) {
             return Some(AgentPanelHit::Send);
         }
         // Quick actions (3 preset).
-        let quick_y = panel_y + panel_h - QUICK_H + 4.0;
-        let quick_w = (panel_w - PAD * 2.0 - GAP * 2.0) / 3.0;
-        for i in 0..3 {
-            let qx = panel_x + PAD + i as f32 * (quick_w + GAP);
-            if point_in_rect([qx, quick_y, quick_w, 24.0], point) {
+        for (i, q) in lay.quick.iter().enumerate() {
+            if point_in_rect([q.x, q.y, q.w, q.h], point) {
                 return Some(AgentPanelHit::QuickAction(i));
             }
         }
         // Accept/Reject кнопки (если есть preview в последнем сообщении).
-        let log_y = panel_y + HEAD_H + CTX_H;
-        let log_h = panel_h - HEAD_H - CTX_H - EST_H - INPUT_H - QUICK_H - GAP;
+        let log_y = panel[1] + HEAD_H + CTX_H;
+        let log_h = panel[3] - HEAD_H - CTX_H - EST_H - INPUT_H - QUICK_H - GAP;
         if self.agent_panel.preview.is_some() {
             // Грубая проверка — кнопки где-то в нижней половине лога.
             // FR-LLM-D-TODO: точная геометрия — через макет сообщений.
             let btn_y = log_y + log_h - PREVIEW_BTN_H - 16.0;
-            let btn_w = (panel_w - PAD * 2.0 - 8.0) / 2.0;
-            let accept_rect = [panel_x + PAD + 16.0, btn_y, btn_w, PREVIEW_BTN_H];
+            let btn_w = (panel[2] - PAD * 2.0 - 8.0) / 2.0;
+            let accept_rect = [panel[0] + PAD + 16.0, btn_y, btn_w, PREVIEW_BTN_H];
             let reject_rect = [
-                panel_x + PAD + 16.0 + btn_w + 8.0,
+                panel[0] + PAD + 16.0 + btn_w + 8.0,
                 btn_y,
                 btn_w,
                 PREVIEW_BTN_H,
@@ -1427,21 +1601,29 @@ impl App {
     /// `true` — клик поглощён панелью.
     pub(super) fn agent_panel_click(&mut self, point: [f32; 2]) -> bool {
         let Some(hit) = self.agent_panel_hit(point) else {
+            // UR-005: клик мимо панели — поле теряет фокус (панель остаётся
+            // открытой, канвас получает свои хоткеи; возврат фокуса — клик
+            // по Input).
+            if self.agent_panel.input_focused {
+                self.agent_panel.input_focused = false;
+                self.request_redraw();
+            }
             return false;
         };
         match hit {
             AgentPanelHit::Close => {
                 self.agent_panel.open = false;
+                self.agent_panel.input_focused = false;
                 self.request_redraw();
             }
             AgentPanelHit::Input => {
-                // Фокус input: клавиатура и так маршрутизируется в UI-слой
-                // (esc_stack верхний owner); символьный ввод панели —
-                // через agent_input_push (см. route_owner_key).
+                // UR-005: клик по полю — фокус (рамка accent + каретка;
+                // клавиатура маршрутизируется веткой agent_panel в on_key).
+                self.agent_panel.input_focused = true;
                 self.request_redraw();
             }
             AgentPanelHit::Send => {
-                let text = self.agent_panel.input.clone();
+                let text = self.agent_panel.input_text().to_owned();
                 self.agent_send(&text);
             }
             AgentPanelHit::QuickAction(i) => {
@@ -1605,16 +1787,87 @@ mod tests {
     }
 
     /// FR-LLM-D: AgentState default — закрытая панель, без сообщений, не занят.
+    /// UR-005: поле — kit TextFieldModel (пусто, caret 0, без селекции),
+    /// фокуса нет (панель закрыта).
     #[test]
     fn agent_state_default() {
         let s = AgentState::default();
         assert!(!s.open);
         assert!(s.messages.is_empty());
-        assert!(s.input.is_empty());
+        assert!(s.input_text().is_empty());
+        assert_eq!(s.field.caret, 0);
+        assert!(s.field.sel.is_none());
+        assert!(!s.input_focused);
         assert!(!s.busy);
         assert!(s.preview.is_none());
         assert!(s.cost_estimate.is_none());
-        assert_eq!(s.caret, 0);
+    }
+
+    /// UR-005: clear_input сбрасывает текст/каретку/селекцию (после отправки).
+    #[test]
+    fn agent_state_clear_input_resets_field() {
+        let mut s = AgentState::default();
+        s.field.set_text("привет мир".to_owned());
+        s.field.move_caret(3, false);
+        s.field.move_caret(-2, true); // селекция
+        assert!(!s.input_text().is_empty());
+        assert!(s.field.sel.is_some());
+        s.clear_input();
+        assert!(s.input_text().is_empty());
+        assert_eq!(s.field.caret, 0);
+        assert!(s.field.sel.is_none());
+    }
+
+    /// UR-005: каретка/селекция поля — в СИМВОЛАХ, не в байтах
+    /// (design/rules 00 П6; прежний caret был в байтах и ломался на кириллице).
+    #[test]
+    fn agent_field_caret_counts_chars_not_bytes() {
+        let mut s = AgentState::default();
+        // «воронка» — 7 символов = 14 байт UTF-8.
+        s.field.set_text("воронка".to_owned());
+        assert_eq!(s.field.text.len(), 14);
+        assert_eq!(s.field.caret, 7);
+        s.field.move_caret(-3, false);
+        assert_eq!(s.field.caret, 4);
+        // Вставка в середину кириллицы.
+        s.field.insert("X");
+        assert_eq!(s.field.text, "вороXнка");
+        assert_eq!(s.field.caret, 5);
+    }
+
+    /// UR-005: выделение — shift-стрелки расширяют, вставка/удаление
+    /// замещают выделенный диапазон (kit TextFieldModel FR-058).
+    #[test]
+    fn agent_field_selection_extend_and_replace() {
+        let mut s = AgentState::default();
+        s.field.set_text("абвгд".to_owned());
+        s.field.move_caret(-2, true); // Shift+Left ×1
+                                      // sel = (anchor, head): anchor — исходная каретка (5), head — новая (3).
+        assert_eq!(s.field.sel, Some((5, 3)));
+        s.field.move_caret(-1, true); // ещё Shift+Left → head 2
+        assert_eq!(s.field.sel, Some((5, 2)));
+        // Вставка замещает выделенный диапазон [2..5) = «вгд».
+        s.field.insert("Z");
+        assert_eq!(s.field.text, "абZ");
+        assert!(s.field.sel.is_none());
+        // Backspace без выделения удаляет символ перед кареткой;
+        // с выделением — весь диапазон.
+        s.field.set_text("пробелы и выделение".to_owned());
+        s.field.select_all();
+        s.field.backspace();
+        assert!(s.field.text.is_empty());
+    }
+
+    /// UR-005: Space вставляет пробел (регрессия: winit отдаёт Space как
+    /// Named(NamedKey::Space) — ветка Character его не ловила, пробелы
+    /// не вводились). Вставка идёт через model.insert — в позицию каретки.
+    #[test]
+    fn agent_field_space_insert() {
+        let mut s = AgentState::default();
+        s.field.set_text("создай".to_owned());
+        s.field.insert(" ");
+        s.field.insert("CAC");
+        assert_eq!(s.input_text(), "создай CAC");
     }
 
     /// FR-LLM-D: AgentPreview default — пустой.

@@ -1,10 +1,12 @@
 //! FR-ICONS: screen-space wgpu-пайплайн SVG-иконок.
 //!
 //! Атлас собирается один раз при init из растеризованных байт (`icon_data.rs`):
-//! 5 наборов × 39 имён × 32×32 px (bootstrap 24×24 дополнен до 32×32;
+//! 5 наборов × 43 имена × 32×32 px (bootstrap 24×24 дополнен до 32×32;
 //! набор `roles` — sparse: только свои 20 имён, чужие ячейки прозрачны)
-//! = 39×5 ячеек = 1248×160 px атлас (37-е имя `custom` — FR-085; 38–39-е
-//! `tab_drag`/`tab_suggest` — ревизия 2026-10-02). Все
+//! = 43×5 ячеек = 1376×160 px атлас (37-е имя `custom` — FR-085; 38–39-е
+//! `tab_drag`/`tab_suggest` — ревизия 2026-10-02; 40–43-е `send`/`zap`/
+//! `pause`/`play` — ревизия ctrl+i 2026-10-09: иконки AI-поверхностей).
+//! Все
 //! наборы в одном атласе — переключение
 //! набора не требует ребинда bind-группы (выбор набора = выбор UV в атласе).
 //!
@@ -32,7 +34,7 @@ pub const ICON_CELL_PX: u32 = 32;
 /// Иконок в строке атласа (= число имён).
 pub const ICONS_PER_ROW: u32 = ICON_NAMES.len() as u32;
 /// Сторона атласа: ICONS_PER_ROW × ICON_SETS.len() ячеек ICON_CELL_PX².
-pub const ATLAS_W: u32 = ICONS_PER_ROW * ICON_CELL_PX; // 39 * 32 = 1248
+pub const ATLAS_W: u32 = ICONS_PER_ROW * ICON_CELL_PX; // 43 * 32 = 1376
 pub const ATLAS_H: u32 = ICON_SETS.len() as u32 * ICON_CELL_PX; // 5 * 32 = 160
 
 /// Инстанс иконки для GPU (layout — attributes в icons.wgsl).
@@ -711,6 +713,27 @@ mod tests {
         assert!(icon_uv("unknown", "unknown").is_none());
     }
 
+    /// Ревизия ctrl+i (2026-10-09, UR-005): иконки AI-поверхностей
+    /// (`send`/`zap`/`pause`/`play`) растеризованы во ВСЕХ UI-наборах —
+    /// агент-панель и статусная панель AI рисуют их `d.icon` при любом
+    /// `IconStyle` (SVG-режимы); при Glyph-стиле фолбэк-глифы покрыты
+    /// сабсетом CanvasDesk Symbols (тест `ui_symbol_glyphs_covered_by_embedded_fonts`).
+    #[test]
+    fn ai_surface_icons_rasterized_in_all_ui_sets() {
+        for set in ["lucide", "material", "feather", "bootstrap"] {
+            for name in ["send", "zap", "pause", "play"] {
+                assert!(
+                    icon_uv(set, name).is_some(),
+                    "{set}/{name} — нет UV в атласе (иконка AI-поверхности)"
+                );
+                assert!(
+                    icon_rgba(set, name).is_some(),
+                    "{set}/{name} — нет растра (прозрачная ячейка)"
+                );
+            }
+        }
+    }
+
     /// Ревизия владельца 2026-10-02 (дефект «иконки не видно»): sparse-пара
     /// (набор не объявляет имя — ячейка атласа прозрачна) тоже None —
     /// потребителю нужен глиф-фолбэк, а не пустой квад. Прежде
@@ -794,11 +817,12 @@ mod tests {
 
     /// Атлас вмещает все наборы × имена. Геометрия — производные константы
     /// (`ICONS_PER_ROW`/`ATLAS_W`/`ATLAS_H` считаются от реестров), тест
-    /// закрепляет согласованность и фактический размер: 5 наборов × 39 имён
-    /// (17 UI + `edit` + `tab_drag`/`tab_suggest` + 20 ролей) = 195 ячеек.
-    /// Прежний захардкоженный размер (36/180/1152, затем 37/185) отставал
-    /// от реестра — CI #412–#414 красные; теперь тест берёт факт из реестра
-    /// и ловит расхождение атласа с ним.
+    /// закрепляет согласованность и фактический размер: 5 наборов × 43 имён
+    /// (17 UI + `edit` + `tab_drag`/`tab_suggest` + 20 ролей + `send`/`zap`/
+    /// `pause`/`play` — ревизия ctrl+i 2026-10-09) = 215 ячеек.
+    /// Прежний захардкоженный размер (36/180/1152, затем 37/185, 39/195)
+    /// отставал от реестра — CI #412–#414 красные; теперь тест берёт факт
+    /// из реестра и ловит расхождение атласа с ним.
     #[test]
     fn atlas_size_matches_repositories() {
         let total_cells = ICONS_PER_ROW * ICON_SETS.len() as u32;
@@ -808,8 +832,8 @@ mod tests {
             "ICONS_PER_ROW производна от реестра имён"
         );
         assert_eq!(
-            total_cells, 195,
-            "5 наборов × 39 имён (FR-085 + табы Драг/Подсказки 2026-10-02)"
+            total_cells, 215,
+            "5 наборов × 43 имён (FR-085 + табы 2026-10-02 + send/zap/pause/play UR-005)"
         );
         assert_eq!(ATLAS_W, ICON_NAMES.len() as u32 * ICON_CELL_PX);
         assert_eq!(ATLAS_H, ICON_SETS.len() as u32 * ICON_CELL_PX);
