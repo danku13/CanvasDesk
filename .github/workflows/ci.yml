@@ -82,6 +82,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
 
+  # LAY-W12 (аудит layouts-2026-10 §5): регрессионный гейт LAY7 —
+  # быстрый bash-grep без сборки: ловит НОВЫЕ нарушения в canvas-app:
+  # 1. gap: <литерал float> в Row/Column — кроме 0.0 (нейтральный ритм)
+  #    и SPACING_*/именованных констант; collision_gap/row_gap — НЕ LAY7;
+  # 2. y += <литерал float> — ручной курсор (анти-паттерн LAY2/LAY10)
+  #    вне allowlist (kit_ui, admin_ui, overlays, stage — до волны W3,
+  #    которая мигрирует скелеты на Column-примитивы).
+  # Запуск параллельно с wasm-check/licenses/llm-proxy — гейт быстрый
+  # (awk+grep+rg, без компиляции Rust).
+  lay7-lint:
+    name: lay7-lint (regression gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: LAY7 regression lint (gap literals + y += cursors)
+        run: bash scripts/lay7_lint.sh
+
   # Релизные бинари трёх ОС — только с зелёных гейтов и только на пуш
   # (PR-ы не тратят минуты на загрузку артефактов). Это же — обходной
   # путь при локальной ошибке линковки LNK1104 (docs/ENVIRONMENT.md §8).

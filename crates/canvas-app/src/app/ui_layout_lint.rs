@@ -487,3 +487,234 @@ fn lint_ai_status_open() {
         .iter()
         .all(|s| s.surface.as_str() != ui_registry::id::AI_STATUS));
 }
+
+// --- LAY-W11: канонические состояния слепых зон линта ----------------------
+//
+// Аудит ui-kit (§5 LAY-W11) выявил 4 поверхности без канонических состояний
+// G4-линта: graph_builder, flow_map, calc-панель, hints. Ниже — lint-тесты
+// для каждой. Класс покрытия разный (см. комментарии у каждого теста):
+// * flow_map — полный lint: поверхность в реестре (id::FLOW_MAP),
+//   hit-rect'ы панели/«✕»/строк в кадре;
+// * calc_panel — best-effort lint: панель рисуется ВНУТРИ поверхности STAGE
+//   (строки панели НЕ в кадре реестра — клики через `click_main_stage` +
+//   `stage_frame_ctx`), но нетривиальный пучок+формула детерминируют
+//   инварианты ОКНА stage на реальном кадре;
+// * graph_builder, hints — слепые зоны: оверлеи рисуются через `screen_bands`
+//   в handler.rs (Modals/Popups), НЕ в реестре `build_registry` — hit-rect'ы
+//   в кадре ОТСУТСТВУЮТ. Lint-тесты — маркеры канонического состояния (нулевые
+//   пересечения других поверхностей при открытом оверлее); регрессия
+//   «поверхность добавлена в реестер, но рендер/hit расходятся» будет поймана
+//   `lint_frame` автоматически.
+
+/// LAY-W11: карта проливаний — полный G4-lint. Поверхность в реестре
+/// (`id::FLOW_MAP`, `build_registry` при `flow_map_open`), hit-rect'ы
+/// панели/«✕»/строк в кадре (`fill_hit_rects` → `flow_map_layout`).
+/// `test_viewport` — `flow_map_layout` читает `viewport_logical()` (не
+/// явный `vp` из `build_frame_at`); без оверрайда панель вырождается в 0×0
+/// (паттерн `lint_palette_selected`). Сцена без проливаний — панель с
+/// футер-подсказкой (rows_count = 0 → list_h = FOOTER_H).
+#[test]
+fn lint_flow_map_open() {
+    lint_state("flow_map", |app, vp| {
+        app.flow_map_open = true;
+        app.test_viewport = Some(vp);
+    });
+    // Верификация покрытия: frame содержит FLOW_MAP поверхность с hit-rect'ами
+    // (panel + close; rows_count = 0 — без строк). Слепая зона закрыта.
+    let mut app = lint_stub(Language::Ru);
+    let vp = [1280.0, 800.0];
+    app.flow_map_open = true;
+    app.test_viewport = Some(vp);
+    let frame = build_frame_at(&app, vp);
+    let flow_map = frame
+        .surfaces
+        .iter()
+        .find(|s| s.surface.as_str() == ui_registry::id::FLOW_MAP)
+        .expect("FLOW_MAP поверхность в реестре при flow_map_open");
+    assert!(
+        flow_map.hit_rects.len() >= 2,
+        "FLOW_MAP: panel + close hit-rect'ы (got {})",
+        flow_map.hit_rects.len()
+    );
+}
+
+/// LAY-W11: main stage с реальным пучком ≥ 2 рёбер и формулой в приёмнике —
+/// панель «Как считается» строится (`calc_panel_ui::layout` → `Some`).
+///
+/// Слепая зона: hit-rect'ы СТРОК панели (`var_rows`, `formula_rows`) НЕ в
+/// кадре реестра — клики по ним идут через `click_main_stage` →
+/// `stage_frame_ctx` (canvas-цепочка, не surface-реестр). В кадре
+/// `id::STAGE` лежит только rect ОКНА stage. Lint детерминирует инварианты
+/// ОКНА stage на нетривиальном срезе (2 ноды + 2 ребра + формула): регрессия
+/// `main_stage_rect`/`build_frame_at` будет поймана, геометрия строк панели
+/// — отдельная задача (покрыта модельными тестами `calc_panel_ui::layout`).
+///
+/// Фикстура: 2 ноды (Исток с выходами users/conv, Отчёт с формулой
+/// `x = Исток.users * Исток.conv`), 2 value-ребра src→dst (пучок веса 2 —
+/// `MainStageState::open` требует `bundle.weight ≥ 2`). `recompute_flow` —
+/// значения выходов истока в потоке (модель панели — `RowValue::Ok`, не
+/// `Unknown`).
+#[test]
+fn lint_calc_panel_open() {
+    lint_state("calc_panel", |app, _vp| {
+        let mut src = Node::text("src", "Исток\nusers = 10\nconv = 0.2", 0.0, 0.0);
+        src.width = 420.0;
+        src.height = 200.0;
+        let mut dst = Node::text("dst", "Отчёт\nx = Исток.users * Исток.conv", 700.0, 0.0);
+        dst.width = 420.0;
+        dst.height = 220.0;
+        app.scene.canvas.nodes.push(src);
+        app.scene.canvas.nodes.push(dst);
+        let mut e1 = Edge::new("e1", "src", None, "dst", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_output = Some("users".to_owned());
+        let mut e2 = Edge::new("e2", "src", None, "dst", None);
+        e2.set_flow_kind(FlowKind::Value);
+        e2.from_output = Some("conv".to_owned());
+        app.scene.canvas.edges.push(e1);
+        app.scene.canvas.edges.push(e2);
+        // Без пересчёта потока модель панели строится, но значения выходов
+        // — Unknown; `layout` всё равно вернёт Some (переменные/формулы есть).
+        // recompute_flow — каноничность состояния (значения как у FR-044).
+        app.scene.recompute_flow();
+        let index = canvas_core::EdgeBundleIndex::build(&app.scene.canvas);
+        app.main_stage = MainStageState::open(&app.scene.canvas, &index, 0);
+        // Каноничность: stage открыт (пучок веса 2 ≥ 2 — `open` не вырожден).
+        assert!(app.main_stage.is_some(), "stage открыт на пучке веса 2");
+    });
+    // Верификация покрытия: frame содержит STAGE поверхность с hit-rect'ом
+    // окна. Слепая зона — строки calc-панели НЕ в кадре (клики через
+    // `click_main_stage` → `stage_frame_ctx`, не через реестр); этот lint
+    // детерминирует только rect ОКНА stage на нетривиальном пучке.
+    let mut app = lint_stub(Language::Ru);
+    let vp = [1280.0, 800.0];
+    let mut src = Node::text("src", "Исток\nusers = 10\nconv = 0.2", 0.0, 0.0);
+    src.width = 420.0;
+    src.height = 200.0;
+    let mut dst = Node::text("dst", "Отчёт\nx = Исток.users * Исток.conv", 700.0, 0.0);
+    dst.width = 420.0;
+    dst.height = 220.0;
+    app.scene.canvas.nodes.push(src);
+    app.scene.canvas.nodes.push(dst);
+    let mut e1 = Edge::new("e1", "src", None, "dst", None);
+    e1.set_flow_kind(FlowKind::Value);
+    e1.from_output = Some("users".to_owned());
+    let mut e2 = Edge::new("e2", "src", None, "dst", None);
+    e2.set_flow_kind(FlowKind::Value);
+    e2.from_output = Some("conv".to_owned());
+    app.scene.canvas.edges.push(e1);
+    app.scene.canvas.edges.push(e2);
+    app.scene.recompute_flow();
+    let index = canvas_core::EdgeBundleIndex::build(&app.scene.canvas);
+    app.main_stage = MainStageState::open(&app.scene.canvas, &index, 0);
+    let frame = build_frame_at(&app, vp);
+    let stage = frame
+        .surfaces
+        .iter()
+        .find(|s| s.surface.as_str() == ui_registry::id::STAGE)
+        .expect("STAGE поверхность в реестре при main_stage.open");
+    assert!(
+        stage.hit_rects.iter().any(|h| h.element == "stage"),
+        "STAGE: hit-rect окна stage есть"
+    );
+}
+
+/// LAY-W11: graph_builder dialog — слепая зона. Оверлей рисуется через
+/// `screen_bands` (`handler.rs:347-350`, слой Modals — затемнение + карточка
+/// диалога `graph_builder_overlay`), НЕ в реестре `build_registry`.
+/// Hit-тест — отдельный путь `graph_builder_hit`/`graph_builder_click`
+/// (`input.rs:3152`, canvas-цепочка). В кадре `build_frame_at` НЕТ
+/// `graph_builder` поверхности → `lint_frame` тривиально зелёный.
+///
+/// Тест — маркер канонического состояния: фиксирует, что открытие диалога
+/// не ломает инварианты ДРУГИХ поверхностей (corner_buttons/empty в кадре
+/// остаются без пересечений и в вьюпорте). Регрессия «диалог зарегистрирован
+/// в реестре, но рендер/hit разошлись» будет поймана автоматически —
+/// `lint_frame` увидит новую поверхность и проверит её hit-rect'ы.
+#[test]
+fn lint_graph_builder_open() {
+    lint_state("graph_builder", |app, _vp| {
+        app.graph_builder.open = true;
+        // Каноничность состояния: текст + режим (по умолчанию Mindmap) —
+        // оверлей `graph_builder_overlay` строит ненулевые инстансы (хотя
+        // они и не в кадре реестра, рендер-путь детерминирован).
+        app.graph_builder.text = "Сводка по продукту: CAC, LTV, отток".into();
+        // Слепая зона: frame не содержит graph_builder surface —
+        // `lint_frame` проходит тривиально. Маркер документирует состояние.
+        assert!(app.graph_builder.open);
+    });
+    // Верификация слепой зоны: frame НЕ содержит graph_builder поверхности
+    // (оверлей рисуется через `screen_bands` в handler.rs:347-350, минуя
+    // реестр). Когда поверхность добавят в реестр — этот assert ЗАПАДАЁТ
+    // (напоминание переработать lint на полный кадр + backdrop-контракт).
+    let mut app = lint_stub(Language::Ru);
+    app.graph_builder.open = true;
+    let frame = build_frame_at(&app, [1280.0, 800.0]);
+    assert!(
+        frame
+            .surfaces
+            .iter()
+            .all(|s| s.surface.as_str() != "graph_builder"),
+        "graph_builder НЕ в реестре (слепая зона LAY-W11); добавлен — переработать lint"
+    );
+}
+
+/// LAY-W11: hints popup — слепая зона. Popup рисуется через `screen_bands`
+/// (`handler.rs:453-454`, слой Popups — `hints_overlay`), НЕ в реестре
+/// `build_registry`. Hit-тест — только клавиатурная навигация
+/// (`input.rs:524`: ArrowUp/Down/Enter/Tab/Escape); мышь через popup НЕ
+/// перехватывается (клики проваливаются в canvas-цепочку). В кадре
+/// `build_frame_at` НЕТ `hints` поверхности → `lint_frame` тривиально зелёный.
+///
+/// Тест — маркер канонического состояния: фиксирует, что открытие popup
+/// (с элементами + якорем у каретки) не ломает инварианты других поверхностей.
+/// Якорь — центр вьюпорта (в headless-заглушке нет EditingSession —
+/// `sync_hints_anchor` остаётся no-op; якорь выставлен явно для полноты
+/// состояния). Регрессия «popup зарегистрирован в реестре» поймает
+/// расхождения рендер/hit автоматически.
+#[test]
+fn lint_hints_open() {
+    lint_state("hints", |app, vp| {
+        app.hints.open = true;
+        app.hints.items = vec![
+            hints_ui::HintItem::text(
+                hints_ui::HintKind::Var,
+                "users".into(),
+                "users".into(),
+                "переменная".into(),
+            ),
+            hints_ui::HintItem::text(
+                hints_ui::HintKind::Var,
+                "conv".into(),
+                "conv".into(),
+                "переменная".into(),
+            ),
+        ];
+        // Якорь — центр вьюпорта (низ каретки в реальном UI; в headless нет
+        // EditingSession — центр каноничен и детерминирован).
+        app.hints.anchor = [vp[0] * 0.5, vp[1] * 0.5];
+        app.hints.selected = 0;
+        // Слепая зона: frame не содержит hints surface — `lint_frame`
+        // проходит тривиально. Маркер документирует каноническое состояние.
+        assert!(app.hints.open);
+        assert!(!app.hints.items.is_empty());
+    });
+    // Верификация слепой зоны: frame НЕ содержит hints поверхности (popup
+    // рисуется через `screen_bands` в handler.rs:453-454, минуя реестр).
+    // Когда поверхность добавят в реестр — этот assert ЗАПАДАЁТ (напоминание
+    // переработать lint на полный кадр + hit-rect'ы строк).
+    let mut app = lint_stub(Language::Ru);
+    app.hints.open = true;
+    app.hints.items = vec![hints_ui::HintItem::text(
+        hints_ui::HintKind::Var,
+        "users".into(),
+        "users".into(),
+        "переменная".into(),
+    )];
+    app.hints.anchor = [640.0, 400.0];
+    let frame = build_frame_at(&app, [1280.0, 800.0]);
+    assert!(
+        frame.surfaces.iter().all(|s| s.surface.as_str() != "hints"),
+        "hints НЕ в реестре (слепая зона LAY-W11); добавлен — переработать lint"
+    );
+}

@@ -1238,7 +1238,9 @@ pub fn gallery_layout(
     // занимает главную ось РЯДА). Зазор между 2-й и 3-й ячейкой =
     // column-gap + распорка + column-gap. rect распорки — не рисуется.
     let column_cells: Vec<UiRect> = canvas_ui::layout::Column {
-        gap: 6.0,
+        // LAY7: 6.0 = SPACING_S (шкала S1). Литерал убран — гейт
+        // scripts/lay7_lint.sh (LAY-W12) ловит inline-литералы gap.
+        gap: canvas_core::tokens::SPACING_S,
         ..canvas_ui::layout::Column::default()
     }
     .lay_out_measured_with(
