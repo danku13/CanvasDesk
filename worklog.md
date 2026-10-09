@@ -1623,3 +1623,22 @@ Stage Summary:
 - Открытые (v2): двойной клик — выделение слова, drag-селекция, KitState::Error-слот в компоненте TextField
 Tokens: in≈150k, out≈45k, total≈195k (estimate), model=GLM (Super Z main), scope=INPUT-ADEQUACY
 
+---
+Task ID: UR-005-rev2-миникарта-wasm (сессия web-0a539c42)
+Agent: Super Z (main)
+Task: «я всё ещё не вижу мини-карту в wasm версии» (скриншот) — повторная диагностика UR-003, корневая причина, фикс, гейты, пуш
+
+Work Log:
+- Скриншот владельца: правый нижний угол — только AI-статус-панель (BYOK), мини-карты нет; гейты/CI прошлого фикса 377292a зелёные → web-специфичный сценарий
+- Корневая причина: правило UR-005 (CR-034) «миникарта скрыта при видимой AI-статус-панели» — в web панель после AI-онбординга видима ПОСТОЯННО (llm≠all_off, окно ≥900px) → мини-карта скрыта всегда; натив с дефолтами (all_off) дефект не показывал
+- Второй дефект: цикл обратной связи — панель позиционировалась по гейтованному minimap_rect() (флаг прошлой кадра: флаг выставляется позже подготовки панелей) → после закрытия агент-панели квад на кадр налезал на панель (исходный симптом UR-005)
+- Фикс: minimap_visible_for_frame (гейт только агент-панелью), minimap_zone_rect/_logical (зона без гейта видимости — по ней встаёт AI-панель, F-7.9 «панель над миникартой» детерминирована в кадре), ai_status_panel_origin (единая математика позиции вместо дублей в рендере и rect)
+- Проба web: scripts/web_minimap_probe4.py (trunk release + Playwright/SwiftShader, конфиг BYOK через localStorage; найден и обойдён баг квотинга init-script — !r ломал TOML → дефолты)
+- Верификация: сценарий владельца — VERDICT PASS: контент AI-панели y 630..740 (41 строка), бордер мини-карты 744..883 (расчёт 744..884); дефолт-конфиг — мини-карта в углу, без регрессии; полный кадр — тур подавлен, тема/язык применились
+- TDD: minimap_visible_only_gated_by_agent_panel, panel_origin_sits_above_minimap_zone, panel_origin_bottom_corner_without_minimap, panel_origin_with_paused_extra_still_above_zone
+- Гейты: fmt ✓, check ✓, test workspace 96 наборов ✓, clippy -D warnings ✓, wasm-gate ✓; доки: ur-003-minimap-missing.md (дополнение UR-005 rev2)
+
+Stage Summary:
+- Мини-карта в wasm восстановлена для реального сценария владельца (AI-панель + мини-карта одновременно); конфликт z-order исключён геометрией, а не скрытием
+- Коммит «fix(ui,web): UR-005 rev2 — мини-карта в wasm…»; пуш в main
+- Токены: in≈170k, out≈18k, total≈188k, model=GLM, scope=UR-005-rev2
