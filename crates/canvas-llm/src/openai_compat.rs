@@ -535,10 +535,33 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let resp = self
             .post_json("chat/completions", &serde_json::Value::Object(body))
             .await?;
-        let tool_calls = resp
-            .pointer("/choices/0/message/tool_calls")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| LlmError::Protocol("нет choices[0].message.tool_calls".into()))?;
+        // W2-фикс (репродукция 2026-10-09): модель может ответить текстом без
+        // tool_calls (tool_choice=auto не гарантирует вызов). Прежняя ошибка
+        // «нет choices[0].message.tool_calls» теряла текст ответа — в панели
+        // оставалось непонятно, почему схему не построили. Сниппет текста
+        // модели попадает в Protocol-ошибку → в журнал панели.
+        let tool_calls = match resp.pointer("/choices/0/message/tool_calls") {
+            Some(v) if v.is_array() => v.as_array().cloned().unwrap_or_default(),
+            _ => {
+                let content = resp
+                    .pointer("/choices/0/message/content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let mut snippet: String = content.chars().take(280).collect();
+                if content.chars().count() > 280 {
+                    snippet.push('…');
+                }
+                return Err(if snippet.is_empty() {
+                    LlmError::Protocol("нет choices[0].message.tool_calls в ответе".into())
+                } else {
+                    LlmError::Protocol(format!(
+                        "модель ответила текстом без tool_calls: «{snippet}» — \
+                         переформулируйте запрос (нужны вызовы graph_apply) или \
+                         возьмите модель с tool-calling"
+                    ))
+                });
+            }
+        };
 
         let out: Vec<ToolCall> = tool_calls
             .iter()
