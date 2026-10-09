@@ -1582,3 +1582,4 @@ Stage Summary:
 - Класс «minimap-pass поверх панелей» закрыт для обеих AI-панелей; общий кандидат: гейт по пересечению rect'ов вместо перечисления
 - Открытые: i18n строк агент-панели (hardcoded RU), точная геометрия Accept/Reject (FR-LLM-D-TODO)
 Tokens: in≈210k, out≈60k, total≈270k (estimate), model=GLM (Super Z main), scope=UR-005/CR-034
+- CI 4b318cc: gates ubuntu/macos/windows ✅, wasm-check ✅, web+docs ✅, licenses ✅, build/deploy ✅ (только artifacts-джобы докатывались — не гейты). Telegram-финал 923.
