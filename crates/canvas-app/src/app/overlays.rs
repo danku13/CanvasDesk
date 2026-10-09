@@ -1776,6 +1776,173 @@ impl App {
             );
             d.label_center(*rect, &(i + 1).to_string(), palette.text, 11.0);
         }
+        // === LAY-SHOWCASE (design/rules/11-layouts.md, LAY11 п.10): витрина
+        // раскладок — отрисовка декоративная (hit-зон нет), геометрия — из
+        // раскладки (LAY1.2); тексты — measured/шрифтовые, как в секциях выше.
+        // Constrain (LAY2): блок = результат clamp; подпись «желаемое → итог»
+        // (числа демо — без i18n, как номера сетки).
+        for (rect, desired) in &lay.layout_constrain {
+            d.rect(
+                *rect,
+                palette.control_fill,
+                palette.control_border,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            d.label_center(
+                *rect,
+                &format!("{}→{}", *desired as i32, rect.w as i32),
+                palette.text_muted,
+                11.0,
+            );
+        }
+        // Pad (LAY2 + LAY7): рамка-ячейка + внутренний rect после pad
+        // (имя ступени S1 — класс шкалы, без перевода).
+        for (cell, inner, name) in &lay.layout_pad {
+            d.rect(
+                *cell,
+                [0.0; 4],
+                palette.control_border,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            d.rect(*inner, palette.control_fill, [0.0; 4], 2.0);
+            d.label_center(*inner, name, palette.text_muted, 11.0);
+        }
+        // Stack (LAY2): слот-рамка + фиксированный блок («модалка»):
+        // Center/Center и End/End — подписи i18n.
+        for (i, (slot, block)) in lay.layout_stack.iter().enumerate() {
+            d.rect(
+                *slot,
+                [0.0; 4],
+                palette.control_border,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            d.rect(
+                *block,
+                palette.control_fill,
+                palette.control_border,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            let key = if i == 0 {
+                crate::i18n::keys::KIT_LAYOUT_STACK_CENTER
+            } else {
+                crate::i18n::keys::KIT_LAYOUT_STACK_END
+            };
+            d.label_center(*block, &label(key), palette.text, 11.0);
+        }
+        // Шкала зазоров S1 (LAY7): пары блоков — зазор = значение ступени;
+        // подпись — тот же текст, что в замере раскладки (GapDemoRow.caption).
+        for row in &lay.layout_gaps {
+            for rect in &row.blocks {
+                d.rect(
+                    *rect,
+                    palette.control_fill,
+                    palette.control_border,
+                    canvas_core::tokens::RADIUS_CHIP,
+                );
+            }
+            d.label_left(row.label, &row.caption, palette.text_muted, 11.0);
+        }
+        // Сцена: percent + Fill (LAY5): доли ширины (подписи — запись долей
+        // и имя варианта SceneDim::Fill — классы, без перевода).
+        const PERCENT_LABELS: [&str; 3] = ["20%", "30%", "Fill"];
+        for (i, rect) in lay.layout_percent.iter().enumerate() {
+            d.rect(
+                *rect,
+                palette.control_fill,
+                palette.control_border,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            if let Some(text) = PERCENT_LABELS.get(i) {
+                d.label_center(*rect, text, palette.text, 11.0);
+            }
+        }
+        // Сцена: aspect-ratio (LAY5): плитки 16:9 — пропорция без перевода.
+        for rect in &lay.layout_aspect {
+            d.rect(
+                *rect,
+                palette.control_fill,
+                palette.control_border,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            d.label_center(*rect, "16:9", palette.text, 11.0);
+        }
+        // Сцена: sticky-шапка (LAY5): окно + строки с номерами + шапка
+        // поверх (рисуется последней — прилипла к верху окна).
+        if let Some(sticky) = &lay.layout_sticky {
+            d.rect(
+                sticky.window,
+                [0.0; 4],
+                palette.control_border,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            for (i, rect) in sticky.rows.iter().enumerate() {
+                d.rect(
+                    *rect,
+                    palette.control_fill,
+                    palette.control_border,
+                    canvas_core::tokens::RADIUS_CHIP,
+                );
+                d.label_center(*rect, &(i + 1).to_string(), palette.text, 11.0);
+            }
+            d.rect(
+                sticky.header,
+                palette.panel_fill,
+                palette.accent,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            d.label_center(
+                sticky.header,
+                &label(crate::i18n::keys::KIT_LAYOUT_STICKY_HEADER),
+                palette.text,
+                11.0,
+            );
+        }
+        // Деградация HideBelow (LAY8): панель по центру слота с подписью
+        // минимума; ниже порога — панель скрыта ЦЕЛИКОМ, в слоте подпись
+        // скрытия (значения порога — из константы демо, подстановка trf).
+        if lay.layout_hide_below.slot.w > 0.0 {
+            d.rect(
+                lay.layout_hide_below.slot,
+                [0.0; 4],
+                palette.control_border,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            let min_w = format!("{}", crate::kit_ui::GALLERY_HIDE_BELOW_MIN.x as i32);
+            let min_h = format!("{}", crate::kit_ui::GALLERY_HIDE_BELOW_MIN.y as i32);
+            let subs = &[("{min_w}", min_w.as_str()), ("{min_h}", min_h.as_str())];
+            match &lay.layout_hide_below.panel {
+                Some(panel) => {
+                    d.rect(
+                        *panel,
+                        panel_style.fill,
+                        panel_style.border,
+                        panel_style.radius,
+                    );
+                    d.label_center(
+                        *panel,
+                        &crate::i18n::trf(
+                            lang,
+                            crate::i18n::keys::KIT_LAYOUT_HIDE_BELOW_PANEL,
+                            subs,
+                        ),
+                        palette.text,
+                        11.0,
+                    );
+                }
+                None => {
+                    d.label_center(
+                        lay.layout_hide_below.slot,
+                        &crate::i18n::trf(
+                            lang,
+                            crate::i18n::keys::KIT_LAYOUT_HIDE_BELOW_HIDDEN,
+                            subs,
+                        ),
+                        palette.text_muted,
+                        11.0,
+                    );
+                }
+            }
+        }
         // FR-059: бегунок скролла контента витрины (контент выше панели)
         if let Some(knob) = canvas_ui::kit::scroll_bar(lay.sections_viewport, &scroll, &palette) {
             d.rect(knob, palette.control_border, [0.0; 4], 2.0);

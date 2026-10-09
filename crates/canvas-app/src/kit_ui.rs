@@ -36,7 +36,13 @@ use canvas_ui::kit::{self, ButtonVariant, ControlStyle, KitPalette, KitState};
 // FR-068 W1 (ADR-0014 §Решение п.5 P1): витрина — pilot-поверхность, раскладка
 // секций v2 идёт через [`pilot_backend`] (taffy за фичей — opt-in; на default
 // сборке backend тот же Native — геометрия байт-в-байт прежняя).
-use canvas_ui::layout::{grid_cells_with, pilot_backend, Child, MeasuredItem, Row, RowPolicy};
+// LAY-SHOWCASE (design/rules/11-layouts.md): примитивы LAY2 (constrain/pad/
+// stack) и маска движка LAY5.2 (LayoutFeatures) для сцен-секций.
+use canvas_ui::layout::{
+    constrain, grid_cells_with, pad, pilot_backend, stack, Child, FlexLayoutEngine, HAlign,
+    LayoutFeatures, MeasuredItem, Row, RowPolicy, SceneDim, SceneNode, ScenePosition, SceneSize,
+    VAlign,
+};
 use canvas_ui::measure::TextMeasurer;
 // FR-057 (волна 2 кита): draw-слой и машина состояний — в крейте canvas-ui;
 // этот модуль — тонкий адаптер «items Painter'а → инстансы рендера».
@@ -97,6 +103,17 @@ pub const SECTION_COMPONENT_ROW: &str = "kit.section.component_row";
 pub const SECTION_COMPONENT_PANEL: &str = "kit.section.component_panel";
 pub const SECTION_SQUEEZE: &str = "kit.section.squeeze";
 pub const SECTION_ALIGN: &str = "kit.section.align";
+/// LAY-SHOWCASE (design/rules/11-layouts.md LAY11 п.10): витрина раскладок —
+/// механизмы, которых ещё не было в секциях (инвентаризация LAY2/LAY5/LAY7/
+/// LAY8 против SECTION_MEASURED/GROW/WRAP/GRID/FOCUS/SQUEEZE/ALIGN).
+pub const SECTION_LAYOUT_CONSTRAIN: &str = "kit.section.layout_constrain";
+pub const SECTION_LAYOUT_PAD: &str = "kit.section.layout_pad";
+pub const SECTION_LAYOUT_STACK: &str = "kit.section.layout_stack";
+pub const SECTION_LAYOUT_GAPS: &str = "kit.section.layout_gaps";
+pub const SECTION_LAYOUT_PERCENT: &str = "kit.section.layout_percent";
+pub const SECTION_LAYOUT_ASPECT: &str = "kit.section.layout_aspect";
+pub const SECTION_LAYOUT_STICKY: &str = "kit.section.layout_sticky";
+pub const SECTION_LAYOUT_HIDE_BELOW: &str = "kit.section.layout_hide_below";
 
 /// FR-059: демо-модель текстового поля витрины (обычное — текст без фокуса).
 pub const GALLERY_FIELD_TEXT: &str = "50 rps";
@@ -136,6 +153,43 @@ pub const GALLERY_SQUEEZE_BOX_W: f32 = 72.0;
 pub const GALLERY_SQUEEZE_BOX_H: f32 = 20.0;
 /// Пересборка поверхностей (волна 2): высота демо-панели component::Panel.
 pub const GALLERY_COMPONENT_PANEL_H: f32 = 88.0;
+
+// === LAY-SHOWCASE (design/rules/11-layouts.md, LAY11 п.10): константы
+// демо витрины раскладок. Механизмы, которых ещё не было в секциях:
+// constrain/pad/stack (LAY2), шкала зазоров S1 (LAY7), сцена
+// percent+Fill / aspect-ratio / sticky (LAY5), деградация HideBelow (LAY8).
+
+/// LAY2: высота демо-блока constrain/percent.
+pub const GALLERY_LAYOUT_BLOCK_H: f32 = 24.0;
+/// LAY2 constrain: нижняя граница демо (min приоритетнее max — LAY2).
+pub const GALLERY_CONSTRAIN_MIN: f32 = 48.0;
+/// LAY2 constrain: верхняя граница демо.
+pub const GALLERY_CONSTRAIN_MAX: f32 = 120.0;
+/// LAY2 pad/stack: высота демо-ячеек.
+pub const GALLERY_LAYOUT_CELL_H: f32 = 56.0;
+/// LAY2 stack: размер фиксированного блока в слоте («модалка»);
+/// высота = 2×BUTTON_HEIGHT — вторична, ширина — демо-константа слота.
+pub const GALLERY_STACK_BLOCK: UiVec2 = UiVec2::new(120.0, 32.0);
+/// LAY7: ширина блока демо шкалы зазоров.
+pub const GALLERY_GAP_BLOCK_W: f32 = 64.0;
+/// LAY7: высота блока демо шкалы зазоров.
+pub const GALLERY_GAP_BLOCK_H: f32 = 20.0;
+/// LAY5 sticky: высота строки демо-окна прокрутки.
+pub const GALLERY_STICKY_ROW_H: f32 = 24.0;
+/// LAY5 sticky: строк контента в демо (в окне видны 3 — контент прокручен).
+pub const GALLERY_STICKY_ROWS: usize = 8;
+/// LAY5 sticky: демо-сдвиг окна (2 строки — шапка прилипает к top: 0).
+pub const GALLERY_STICKY_DEMO_OFFSET: f32 = 48.0;
+/// LAY5 sticky: строк в видимом окне (высота окна выводится из константы).
+pub const GALLERY_STICKY_VISIBLE_ROWS: usize = 3;
+/// LAY8: высота слота демо HideBelow.
+pub const GALLERY_HIDE_BELOW_H: f32 = 56.0;
+/// LAY8: размер демо-панели внутри слота (stack по центру).
+pub const GALLERY_HIDE_BELOW_PANEL: UiVec2 = UiVec2::new(220.0, 36.0);
+/// LAY8 п.3: порог демо HideBelow — канонический минимум what-if бара
+/// (registry.rs: surface "whatif" — HideBelow 900×600; ниже минимума
+/// панель скрывается ЦЕЛИКОМ, не сжимается — LAY8 п.3).
+pub const GALLERY_HIDE_BELOW_MIN: UiVec2 = UiVec2::new(900.0, 600.0);
 /// Пересборка поверхностей (волна 2): ширина/высота ячейки демо-колонки
 /// (Column::lay_out_measured, MeasuredItem::Fixed — именованный эквивалент).
 pub const GALLERY_COLUMN_CELL_W: f32 = 160.0;
@@ -257,6 +311,72 @@ pub struct GalleryLayout {
     /// Пересборка поверхностей (волна 2): Column + распорка — ячейки
     /// вертикального стека (зазор между 1-й и 2-й = gap + Spacer).
     pub column_cells: Vec<UiRect>,
+    /// LAY-SHOWCASE (LAY2 constrain): (блок, желаемая ширина); ширина блока =
+    /// результат `constrain(min, max, desired)` — подпись «желаемое → итог».
+    pub layout_constrain: Vec<(UiRect, f32)>,
+    /// LAY-SHOWCASE (LAY2 pad + LAY7): (ячейка, внутренний rect после
+    /// `pad(cell, EdgeInsets::uniform(g))`, имя ступени S1).
+    pub layout_pad: Vec<(UiRect, UiRect, &'static str)>,
+    /// LAY-SHOWCASE (LAY2 stack): (слот, блок) — Center/Center и End/End
+    /// («модалка по центру» / «прижата к углу»).
+    pub layout_stack: Vec<(UiRect, UiRect)>,
+    /// LAY-SHOWCASE (LAY7): строки шкалы зазоров S1 — пара блоков с зазором
+    /// ступени + подпись «ступень · значение» (значение — токен шкалы).
+    pub layout_gaps: Vec<GapDemoRow>,
+    /// LAY-SHOWCASE (LAY5, SceneNode): percent-треки + Fill — доли ширины
+    /// (20% / 30% / Fill); пусто, если маска движка без PERCENT/FLEX_GROW.
+    pub layout_percent: Vec<UiRect>,
+    /// LAY-SHOWCASE (LAY5, SceneNode): aspect-ratio — превью-плитки 16:9;
+    /// пусто, если маска движка без ASPECT_RATIO.
+    pub layout_aspect: Vec<UiRect>,
+    /// LAY-SHOWCASE (LAY5, SceneNode): sticky-шапка в прокручиваемом окне
+    /// (демо-сдвиг; строки — полностью видимые); None — секция за краем
+    /// окна или маска движка без STICKY.
+    pub layout_sticky: Option<StickyDemo>,
+    /// LAY-SHOWCASE (LAY8): HideBelow — слот + панель (None при скрытии
+    /// ниже порога [`GALLERY_HIDE_BELOW_MIN`] — скрывается ЦЕЛИКОМ).
+    pub layout_hide_below: HideBelowDemo,
+}
+
+/// LAY-SHOWCASE (LAY7): строка демо шкалы зазоров S1 — два блока с зазором
+/// ступени + подпись (текст = измеренная строка [`MeasuredItem::Text`]).
+#[derive(Debug, Clone)]
+pub struct GapDemoRow {
+    /// Пара блоков (зазор между ними = значение ступени шкалы S1).
+    pub blocks: Vec<UiRect>,
+    /// Подпись ступени (rect из раскладки; ширина = измеренная + pad).
+    pub label: UiRect,
+    /// Текст подписи («S · 6» — тот же, что в замере раскладки).
+    pub caption: String,
+}
+
+/// LAY-SHOWCASE (LAY5 sticky): демо «sticky-шапка в окне прокрутки» —
+/// окно (SceneOverflow::Hidden + offset), шапка (Sticky top 0, кламп
+/// post-processing'ом сцены) и полностью видимые строки контента.
+#[derive(Debug, Clone)]
+pub struct StickyDemo {
+    /// Окно прокрутки (контейнер сцены; == слот секции).
+    pub window: UiRect,
+    /// Sticky-шапка (прилипла к `window.y + top` при демо-сдвиге).
+    pub header: UiRect,
+    /// Строки контента, целиком видимые в окне (частичные — не рисуются:
+    /// тексты кита не клипятся — паттерн видимости витрины).
+    pub rows: Vec<UiRect>,
+}
+
+/// LAY-SHOWCASE (LAY8): демо деградации HideBelow — панель с подписью
+/// минимума; при окне ниже порога панель исчезает ЦЕЛИКОМ (п.3 LAY8:
+/// «промежуточных ступеней нет»).
+#[derive(Debug, Clone)]
+pub struct HideBelowDemo {
+    /// Слот секции (рамка видна всегда — демо-контейнер).
+    pub slot: UiRect,
+    /// Панель ([`stack`] по центру слота) — None, если скрыта порогом или
+    /// секция за краем окна секций.
+    pub panel: Option<UiRect>,
+    /// Порог сработал (`DegradationPolicy::HideBelow.hidden_at(viewport)`)
+    /// — флаг от вьюпорта приложения, не зависит от скролла витрины.
+    pub hidden: bool,
 }
 
 /// FR-068 (W3.3): демо-данные табличной секции витрины (Table) — 4 строки:
@@ -1149,6 +1269,323 @@ pub fn gallery_layout(
     );
     y += 3.0 * GALLERY_COLUMN_CELL_H + 3.0 * 6.0 + 12.0;
 
+    // === LAY-SHOWCASE (design/rules/11-layouts.md, LAY11 п.10): витрина
+    // раскладок — механизмы LAY2/LAY5/LAY7/LAY8, которых ещё не было в
+    // секциях. Демо строятся ТОЛЬКО примитивами canvas_ui::layout и сценой
+    // SceneNode (lay_out_scene — как html5_demos.rs); зазоры/паддинги —
+    // SPACING_* (LAY7); геометрия — из результатов раскладки (LAY1.2);
+    // hit-зон нет (декоративные демо — интерактив витрины только в шапке).
+
+    // --- Constrain (LAY2): желаемое → min/max (min приоритетнее max).
+    // Три блока: ниже минимума / внутри границ / выше максимума —
+    // ширины блоков = результат `constrain(min, max, desired)`.
+    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_CONSTRAIN));
+    y += 18.0;
+    let layout_constrain: Vec<(UiRect, f32)> = {
+        let desired = [24.0, 80.0, 160.0];
+        let blocks: Vec<Child> = desired
+            .iter()
+            .map(|&d| {
+                let clamped = constrain(
+                    UiVec2::new(GALLERY_CONSTRAIN_MIN, GALLERY_LAYOUT_BLOCK_H),
+                    UiVec2::new(GALLERY_CONSTRAIN_MAX, GALLERY_LAYOUT_BLOCK_H),
+                    UiVec2::new(d, GALLERY_LAYOUT_BLOCK_H),
+                );
+                Child::fixed(clamped.x, clamped.y)
+            })
+            .collect();
+        Row {
+            gap: kit::GAP_CONTROLS,
+            ..Row::default()
+        }
+        .lay_out_with(
+            pilot_backend(),
+            UiRect::new(control_x, y, control_w, GALLERY_LAYOUT_BLOCK_H),
+            &blocks,
+        )
+        .into_iter()
+        .zip(desired)
+        .collect()
+    };
+    y += GALLERY_LAYOUT_BLOCK_H + SECTION_GAP;
+
+    // --- Pad (LAY2 + LAY7): внутренние поля контейнера — EdgeInsets
+    // из шкалы S1 (S/SM/MD/LG): рамка-ячейка + внутренний rect после pad.
+    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_PAD));
+    y += 18.0;
+    let layout_pad: Vec<(UiRect, UiRect, &'static str)> = {
+        let scales: [(&'static str, f32); 4] = [
+            ("S", canvas_core::tokens::SPACING_S),
+            ("SM", canvas_core::tokens::SPACING_SM),
+            ("MD", canvas_core::tokens::SPACING_MD),
+            ("LG", canvas_core::tokens::SPACING_LG),
+        ];
+        Row {
+            gap: kit::GAP_CONTROLS,
+            ..Row::default()
+        }
+        .lay_out_with(
+            pilot_backend(),
+            UiRect::new(control_x, y, control_w, GALLERY_LAYOUT_CELL_H),
+            &[
+                Child::flexible(0.0, GALLERY_LAYOUT_CELL_H, 1.0),
+                Child::flexible(0.0, GALLERY_LAYOUT_CELL_H, 1.0),
+                Child::flexible(0.0, GALLERY_LAYOUT_CELL_H, 1.0),
+                Child::flexible(0.0, GALLERY_LAYOUT_CELL_H, 1.0),
+            ],
+        )
+        .into_iter()
+        .zip(scales)
+        .map(|(cell, (name, g))| (cell, pad(cell, EdgeInsets::uniform(g)), name))
+        .collect()
+    };
+    y += GALLERY_LAYOUT_CELL_H + SECTION_GAP;
+
+    // --- Stack (LAY2): фиксированный блок в слоте — «модалка по центру»
+    // (Center/Center) и «прижата к углу» (End/End); слоты — равные доли
+    // ширины (grow 1:1).
+    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_STACK));
+    y += 18.0;
+    let layout_stack: Vec<(UiRect, UiRect)> = {
+        let aligns = [(HAlign::Center, VAlign::Center), (HAlign::End, VAlign::End)];
+        Row {
+            gap: kit::GAP_CONTROLS,
+            ..Row::default()
+        }
+        .lay_out_with(
+            pilot_backend(),
+            UiRect::new(control_x, y, control_w, GALLERY_LAYOUT_CELL_H),
+            &[
+                Child::flexible(0.0, GALLERY_LAYOUT_CELL_H, 1.0),
+                Child::flexible(0.0, GALLERY_LAYOUT_CELL_H, 1.0),
+            ],
+        )
+        .into_iter()
+        .zip(aligns)
+        .map(|(cell, (h, v))| (cell, stack(cell, GALLERY_STACK_BLOCK, h, v)))
+        .collect()
+    };
+    y += GALLERY_LAYOUT_CELL_H + SECTION_GAP;
+
+    // --- Шкала зазоров S1 (LAY7): пары блоков с зазорами S/SM/MD/LG/XL —
+    // зазор пары == значение ступени; подпись — MeasuredItem::Text
+    // («ступень · значение», значение — токен шкалы, не литерал).
+    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_GAPS));
+    y += 18.0;
+    let layout_gaps: Vec<GapDemoRow> = {
+        let scales: [(&'static str, f32); 5] = [
+            ("S", canvas_core::tokens::SPACING_S),
+            ("SM", canvas_core::tokens::SPACING_SM),
+            ("MD", canvas_core::tokens::SPACING_MD),
+            ("LG", canvas_core::tokens::SPACING_LG),
+            ("XL", canvas_core::tokens::SPACING_XL),
+        ];
+        let mut rows = Vec::with_capacity(scales.len());
+        for (name, g) in scales {
+            // Подпись живёт до конца итерации — MeasuredItem заимствует из
+            // неё (паттерн wrap-секции). Pad подписи — SM слева+справа
+            // (2×SM — суммарный пад из ступеней шкалы, LAY7.1).
+            let caption = format!("{name} · {}", g as i32);
+            let cells = Row {
+                gap: g,
+                ..Row::default()
+            }
+            .lay_out_measured_with(
+                pilot_backend(),
+                UiRect::new(control_x, y, control_w, GALLERY_GAP_BLOCK_H),
+                &[
+                    MeasuredItem::Fixed {
+                        w: GALLERY_GAP_BLOCK_W,
+                        h: GALLERY_GAP_BLOCK_H,
+                    },
+                    MeasuredItem::Fixed {
+                        w: GALLERY_GAP_BLOCK_W,
+                        h: GALLERY_GAP_BLOCK_H,
+                    },
+                    MeasuredItem::Text {
+                        text: &caption,
+                        max_w: None,
+                        min_w: 0.0,
+                        pad_x: 2.0 * canvas_core::tokens::SPACING_SM,
+                        h: Some(GALLERY_GAP_BLOCK_H),
+                    },
+                ],
+                m,
+                fs,
+                FONT_FAMILY,
+                LABEL_SIZE,
+            );
+            let mut it = cells.into_iter();
+            rows.push(GapDemoRow {
+                blocks: vec![it.next().unwrap_or_default(), it.next().unwrap_or_default()],
+                label: it.next().unwrap_or_default(),
+                caption,
+            });
+            y += GALLERY_GAP_BLOCK_H + canvas_core::tokens::SPACING_SM;
+        }
+        rows
+    };
+    y += SECTION_GAP - canvas_core::tokens::SPACING_SM;
+
+    // --- Сцена: percent + Fill (LAY5): доли ширины — 20% / 30% / Fill
+    // (остаток). LAY5.2: перед расширенными политиками проверяется маска
+    // движка — код не молчит в возможностях, которых нет (демо пустое).
+    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_PERCENT));
+    y += 18.0;
+    let layout_percent: Vec<UiRect> = {
+        let feats = canvas_ui::layout::default_backend().features();
+        if feats.contains(LayoutFeatures::PERCENT) && feats.contains(LayoutFeatures::FLEX_GROW) {
+            let shares = [
+                SceneDim::Percent(0.20),
+                SceneDim::Percent(0.30),
+                SceneDim::Fill,
+            ];
+            let scene = SceneNode::row(
+                control_w,
+                GALLERY_LAYOUT_BLOCK_H,
+                kit::GAP_CONTROLS,
+                shares
+                    .iter()
+                    .map(|&w| {
+                        SceneNode::default().sized(SceneSize {
+                            w,
+                            h: SceneDim::Length(GALLERY_LAYOUT_BLOCK_H),
+                        })
+                    })
+                    .collect(),
+            );
+            // Контракт lay_out_scene: [0] — корень (== слот); доли — дети
+            // с индекса 1 (DFS pre-order).
+            FlexLayoutEngine
+                .lay_out_scene(
+                    UiRect::new(control_x, y, control_w, GALLERY_LAYOUT_BLOCK_H),
+                    &scene,
+                )
+                .into_iter()
+                .skip(1)
+                .collect()
+        } else {
+            Vec::new()
+        }
+    };
+    y += GALLERY_LAYOUT_BLOCK_H + SECTION_GAP;
+
+    // --- Сцена: aspect-ratio (LAY5): превью-плитки 16:9 — ширина задана
+    // (равные трети контрол-колонки), высота выводится движком из ratio.
+    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_ASPECT));
+    y += 18.0;
+    let (layout_aspect, aspect_h): (Vec<UiRect>, f32) = {
+        let feats = canvas_ui::layout::default_backend().features();
+        let tile_w = ((control_w - 2.0 * kit::GAP_CONTROLS) / 3.0).max(0.0);
+        let tile_h = tile_w * 9.0 / 16.0;
+        let rects = if feats.contains(LayoutFeatures::ASPECT_RATIO) && tile_w > 0.0 {
+            let scene = SceneNode::row(
+                control_w,
+                tile_h,
+                kit::GAP_CONTROLS,
+                (0..3)
+                    .map(|_| {
+                        SceneNode::default()
+                            .sized(SceneSize::fixed_w(tile_w))
+                            .ratio(16.0 / 9.0)
+                    })
+                    .collect(),
+            );
+            // Контракт lay_out_scene: [0] — корень (== слот); плитки —
+            // дети с индекса 1 (DFS pre-order).
+            FlexLayoutEngine
+                .lay_out_scene(UiRect::new(control_x, y, control_w, tile_h), &scene)
+                .into_iter()
+                .skip(1)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        (rects, tile_h)
+    };
+    y += aspect_h + SECTION_GAP;
+
+    // --- Сцена: sticky-шапка (LAY5): окно-колонка (Hidden + offset) —
+    // шапка Sticky{top: 0} прилипает к верху окна при демо-сдвиге
+    // (post-processing сцены — формула demo_01_sticky_header_column);
+    // строки контента за краем окна не рисуются (полная видимость).
+    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_STICKY));
+    y += 18.0;
+    // Высота окна: шапка + зазор + N строк с зазорами (S1).
+    let sticky_window_h = GALLERY_STICKY_ROW_H
+        + canvas_core::tokens::SPACING_S
+        + GALLERY_STICKY_VISIBLE_ROWS as f32 * GALLERY_STICKY_ROW_H
+        + (GALLERY_STICKY_VISIBLE_ROWS.saturating_sub(1)) as f32 * canvas_core::tokens::SPACING_S;
+    let layout_sticky: Option<StickyDemo> = {
+        let feats = canvas_ui::layout::default_backend().features();
+        let window = UiRect::new(control_x, y, control_w, sticky_window_h);
+        if feats.contains(LayoutFeatures::STICKY) && control_w > 0.0 {
+            let header =
+                SceneNode::leaf(control_w, GALLERY_STICKY_ROW_H).at(ScenePosition::Sticky {
+                    top: Some(0.0),
+                    left: None,
+                });
+            let mut children = Vec::with_capacity(1 + GALLERY_STICKY_ROWS);
+            children.push(header);
+            children.extend(
+                (0..GALLERY_STICKY_ROWS).map(|_| SceneNode::leaf(control_w, GALLERY_STICKY_ROW_H)),
+            );
+            let scene = SceneNode::column(
+                control_w,
+                sticky_window_h,
+                canvas_core::tokens::SPACING_S,
+                children,
+            )
+            .clipped()
+            .scrolled(GALLERY_STICKY_DEMO_OFFSET);
+            // Контракт lay_out_scene: [0] — корень-окно, [1] — шапка,
+            // далее строки по порядку (DFS pre-order == порядок rect'ов).
+            let rects = FlexLayoutEngine.lay_out_scene(window, &scene);
+            let mut it = rects.into_iter();
+            let root = it.next().unwrap_or_default();
+            let sticky_header = it.next().unwrap_or_default();
+            let rows: Vec<UiRect> = it
+                .filter(|r| r.y >= root.y - 0.01 && r.bottom() <= root.bottom() + 0.01)
+                .collect();
+            Some(StickyDemo {
+                window: root,
+                header: sticky_header,
+                rows,
+            })
+        } else {
+            None
+        }
+    };
+    y += sticky_window_h + SECTION_GAP;
+
+    // --- Деградация HideBelow (LAY8 п.3): панель с подписью минимума —
+    // при окне ниже порога скрывается ЦЕЛИКОМ (не сжимается); порог —
+    // канонический what-if (900×600), политика — kit API реестра.
+    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_HIDE_BELOW));
+    y += 18.0;
+    let hide_below_hidden = canvas_ui::registry::DegradationPolicy::HideBelow {
+        min_width: GALLERY_HIDE_BELOW_MIN.x,
+        min_height: GALLERY_HIDE_BELOW_MIN.y,
+    }
+    .hidden_at(viewport[0], viewport[1]);
+    let hide_below_slot = UiRect::new(control_x, y, control_w, GALLERY_HIDE_BELOW_H);
+    let hide_below_panel = if hide_below_hidden {
+        None
+    } else {
+        Some(stack(
+            hide_below_slot,
+            GALLERY_HIDE_BELOW_PANEL,
+            HAlign::Center,
+            VAlign::Center,
+        ))
+    };
+    let layout_hide_below = HideBelowDemo {
+        slot: hide_below_slot,
+        panel: hide_below_panel,
+        hidden: hide_below_hidden,
+    };
+    y += GALLERY_HIDE_BELOW_H + SECTION_GAP;
+
     // Полная высота колонки секций (для скролла)
     let content_h = (y - sections_top).max(0.0);
 
@@ -1376,6 +1813,98 @@ pub fn gallery_layout(
         .filter(|r| visible(r))
         .map(|r| UiRect::new(r.x, r.y - off, r.w, r.h))
         .collect();
+    // LAY-SHOWCASE: секции витрины раскладок — сдвиг + фильтр полной
+    // видимости (паттерн секций выше: геометрия одна — draw/hit не дублируется)
+    let layout_constrain: Vec<(UiRect, f32)> = layout_constrain
+        .into_iter()
+        .filter(|(r, _)| visible(r))
+        .map(|(r, d)| (UiRect::new(r.x, r.y - off, r.w, r.h), d))
+        .collect();
+    let layout_pad: Vec<(UiRect, UiRect, &'static str)> = layout_pad
+        .into_iter()
+        .filter(|(cell, _, _)| visible(cell))
+        .map(|(cell, inner, name)| {
+            (
+                UiRect::new(cell.x, cell.y - off, cell.w, cell.h),
+                UiRect::new(inner.x, inner.y - off, inner.w, inner.h),
+                name,
+            )
+        })
+        .collect();
+    let layout_stack: Vec<(UiRect, UiRect)> = layout_stack
+        .into_iter()
+        .filter(|(slot, _)| visible(slot))
+        .map(|(slot, block)| {
+            (
+                UiRect::new(slot.x, slot.y - off, slot.w, slot.h),
+                UiRect::new(block.x, block.y - off, block.w, block.h),
+            )
+        })
+        .collect();
+    let layout_gaps: Vec<GapDemoRow> = layout_gaps
+        .into_iter()
+        .filter(|row| row.blocks.first().is_some_and(visible))
+        .map(|row| GapDemoRow {
+            blocks: row
+                .blocks
+                .into_iter()
+                .map(|r| UiRect::new(r.x, r.y - off, r.w, r.h))
+                .collect(),
+            label: UiRect::new(row.label.x, row.label.y - off, row.label.w, row.label.h),
+            caption: row.caption,
+        })
+        .collect();
+    let layout_percent: Vec<UiRect> = layout_percent
+        .into_iter()
+        .filter(visible)
+        .map(|r| UiRect::new(r.x, r.y - off, r.w, r.h))
+        .collect();
+    let layout_aspect: Vec<UiRect> = layout_aspect
+        .into_iter()
+        .filter(visible)
+        .map(|r| UiRect::new(r.x, r.y - off, r.w, r.h))
+        .collect();
+    let layout_sticky = layout_sticky
+        .filter(|demo| visible(&demo.window))
+        .map(|demo| StickyDemo {
+            window: UiRect::new(
+                demo.window.x,
+                demo.window.y - off,
+                demo.window.w,
+                demo.window.h,
+            ),
+            header: UiRect::new(
+                demo.header.x,
+                demo.header.y - off,
+                demo.header.w,
+                demo.header.h,
+            ),
+            rows: demo
+                .rows
+                .into_iter()
+                .map(|r| UiRect::new(r.x, r.y - off, r.w, r.h))
+                .collect(),
+        });
+    let layout_hide_below = if visible(&layout_hide_below.slot) {
+        HideBelowDemo {
+            slot: UiRect::new(
+                layout_hide_below.slot.x,
+                layout_hide_below.slot.y - off,
+                layout_hide_below.slot.w,
+                layout_hide_below.slot.h,
+            ),
+            panel: layout_hide_below
+                .panel
+                .map(|p| UiRect::new(p.x, p.y - off, p.w, p.h)),
+            hidden: layout_hide_below.hidden,
+        }
+    } else {
+        HideBelowDemo {
+            slot: UiRect::new(0.0, 0.0, 0.0, 0.0),
+            panel: None,
+            hidden: layout_hide_below.hidden,
+        }
+    };
     // focus_targets НЕ сдвигаются/фильтруются — контент-координаты Tab-кольца
 
     GalleryLayout {
@@ -1418,6 +1947,14 @@ pub fn gallery_layout(
         squeeze_cells,
         align_between,
         column_cells,
+        layout_constrain,
+        layout_pad,
+        layout_stack,
+        layout_gaps,
+        layout_percent,
+        layout_aspect,
+        layout_sticky,
+        layout_hide_below,
     }
 }
 
@@ -1995,8 +2532,11 @@ mod tests {
             gallery_scroll_viewport([1280.0, 800.0]),
             lay0.sections_viewport
         );
-        // Нижнее положение скролла — хвост витрины (секции волны 2:
-        // компонентный слой + недостающие layout-примитивы) видим целиком
+        // Нижнее положение скролла — хвост витрины: LAY-SHOWCASE (витрина
+        // раскладок, 11-layouts.md LAY11 п.10) — новый хвост колонки;
+        // секции волны 2 (компонентный слой + layout-примитивы) — выше,
+        // видны детерминированным сканом (окно секций ≈ 550 px, обе семьи
+        // целиком не влезают вместе с новым хвостом).
         let bottom = kit::ScrollState {
             offset: lay0.content_h - lay0.sections_viewport.h,
             content_h: lay0.content_h,
@@ -2004,18 +2544,41 @@ mod tests {
         };
         let lay1 = gallery_layout([1280.0, 800.0], Language::Ru, &bottom, &p, &mut m, &mut fs);
         assert!(
-            lay1.component_row_slot.w > 0.0,
-            "component::Row — хвост колонки"
+            lay1.layout_hide_below.slot.w > 0.0,
+            "HideBelow (LAY-SHOWCASE) — хвост колонки"
         );
-        assert!(lay1.component_panel.is_some(), "component::Panel — хвост");
-        assert_eq!(
-            lay1.squeeze_cells.len(),
-            GALLERY_SQUEEZE_BOXES,
-            "SqueezeTail — хвост"
-        );
-        assert_eq!(lay1.align_between.len(), 3, "SpaceBetween — хвост");
-        assert_eq!(lay1.column_cells.len(), 4, "Column — хвост");
         assert!(lay1.button_rows.is_empty(), "секции v1 ушли вверх");
+        // Секции волны 2 — выше нового хвоста: скан до их полной видимости.
+        let lay_w2 = scan_offset(
+            &|lay| {
+                lay.component_row_slot.w > 0.0
+                    && lay.component_panel.is_some()
+                    && lay.squeeze_cells.len() == GALLERY_SQUEEZE_BOXES
+                    && lay.align_between.len() == 3
+                    && lay.column_cells.len() == 4
+            },
+            &p,
+            &mut m,
+            &mut fs,
+            lay0.content_h,
+            lay0.sections_viewport.h,
+            lay0.content_h - lay0.sections_viewport.h,
+        );
+        assert!(
+            lay_w2.component_row_slot.w > 0.0,
+            "component::Row — над хвостом LAY-SHOWCASE"
+        );
+        assert!(
+            lay_w2.component_panel.is_some(),
+            "component::Panel — хвост v2"
+        );
+        assert_eq!(
+            lay_w2.squeeze_cells.len(),
+            GALLERY_SQUEEZE_BOXES,
+            "SqueezeTail — хвост v2"
+        );
+        assert_eq!(lay_w2.align_between.len(), 3, "SpaceBetween — хвост v2");
+        assert_eq!(lay_w2.column_cells.len(), 4, "Column — хвост v2");
         // Секции layout v2 (F-13…F-17) — середина колонки: один скан на
         // семейство (в одном окне секций видны вместе)
         let max_offset = lay0.content_h - lay0.sections_viewport.h;
@@ -2491,6 +3054,20 @@ mod tests {
             crate::i18n::keys::KIT_ALIGN_A,
             crate::i18n::keys::KIT_ALIGN_B,
             crate::i18n::keys::KIT_ALIGN_C,
+            // LAY-SHOWCASE: витрина раскладок (11-layouts.md, LAY11 п.10)
+            crate::i18n::keys::KIT_SECTION_LAYOUT_CONSTRAIN,
+            crate::i18n::keys::KIT_SECTION_LAYOUT_PAD,
+            crate::i18n::keys::KIT_SECTION_LAYOUT_STACK,
+            crate::i18n::keys::KIT_SECTION_LAYOUT_GAPS,
+            crate::i18n::keys::KIT_SECTION_LAYOUT_PERCENT,
+            crate::i18n::keys::KIT_SECTION_LAYOUT_ASPECT,
+            crate::i18n::keys::KIT_SECTION_LAYOUT_STICKY,
+            crate::i18n::keys::KIT_SECTION_LAYOUT_HIDE_BELOW,
+            crate::i18n::keys::KIT_LAYOUT_STACK_CENTER,
+            crate::i18n::keys::KIT_LAYOUT_STACK_END,
+            crate::i18n::keys::KIT_LAYOUT_STICKY_HEADER,
+            crate::i18n::keys::KIT_LAYOUT_HIDE_BELOW_PANEL,
+            crate::i18n::keys::KIT_LAYOUT_HIDE_BELOW_HIDDEN,
         ];
         for lang in [Language::Ru, Language::En] {
             for key in keys {
@@ -2501,5 +3078,215 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Значение ступени шкалы S1 по имени (тестовая карта имён демо —
+    /// значения берутся из токенов, не литералов).
+    fn scale_value(name: &str) -> f32 {
+        match name {
+            "S" => canvas_core::tokens::SPACING_S,
+            "SM" => canvas_core::tokens::SPACING_SM,
+            "MD" => canvas_core::tokens::SPACING_MD,
+            "LG" => canvas_core::tokens::SPACING_LG,
+            "XL" => canvas_core::tokens::SPACING_XL,
+            _ => panic!("неизвестная ступень шкалы S1: {name}"),
+        }
+    }
+
+    /// LAY-SHOWCASE (design/rules/11-layouts.md, LAY11 п.10): витрина
+    /// раскладок — секции механизмов LAY2/LAY7 (constrain/pad/stack/gaps),
+    /// LAY5 (сцена percent/Fill, aspect, sticky) и LAY8 (HideBelow).
+    /// Геометрия — из результатов раскладки; сцены — с проверкой маски
+    /// движка (LAY5.2); hit-зон у секций нет (декоративные демо).
+    #[test]
+    fn gallery_layout_showcase_sections() {
+        let mut m = new_measurer();
+        let mut fs = measure_font_system();
+        let p = gallery_palette();
+        let lay0 = gallery_layout(
+            [1280.0, 800.0],
+            Language::Ru,
+            &kit::ScrollState::default(),
+            &p,
+            &mut m,
+            &mut fs,
+        );
+
+        // === Примитивы: constrain / pad / stack (LAY2) + gaps (LAY7) ===
+        let lay_prim = scan_to(
+            &|lay| {
+                lay.layout_constrain.len() == 3
+                    && lay.layout_pad.len() == 4
+                    && lay.layout_stack.len() == 2
+                    && lay.layout_gaps.len() == 5
+            },
+            &p,
+            &mut m,
+            &mut fs,
+            lay0.content_h,
+            lay0.sections_viewport.h,
+        );
+        // Constrain: desired [24, 80, 160] → ширины [min, 80, max]
+        // (min приоритетнее max — контракт constrain).
+        let desired: Vec<f32> = lay_prim.layout_constrain.iter().map(|(_, d)| *d).collect();
+        assert_eq!(desired, vec![24.0, 80.0, 160.0], "желаемые ширины демо");
+        let widths: Vec<f32> = lay_prim.layout_constrain.iter().map(|(r, _)| r.w).collect();
+        assert!(
+            (widths[0] - GALLERY_CONSTRAIN_MIN).abs() < 0.01
+                && (widths[1] - 80.0).abs() < 0.01
+                && (widths[2] - GALLERY_CONSTRAIN_MAX).abs() < 0.01,
+            "кламп в min/max: {widths:?}"
+        );
+        // Блоки — в одном ряду без наложений (шаг = ширина + зазор).
+        for pair in lay_prim.layout_constrain.windows(2) {
+            let gap = pair[1].0.x - pair[0].0.right();
+            assert!((gap - kit::GAP_CONTROLS).abs() < 0.01, "зазор ряда: {gap}");
+        }
+        // Pad: внутренний rect = ячейка минус EdgeInsets ступени (обе оси).
+        for (cell, inner, name) in &lay_prim.layout_pad {
+            let g = scale_value(name);
+            assert!((inner.w - (cell.w - 2.0 * g)).abs() < 0.01);
+            assert!((inner.h - (cell.h - 2.0 * g)).abs() < 0.01);
+            assert!(inner.w > 0.0 && inner.h > 0.0, "пад не съел ячейку");
+        }
+        // Stack: [0] — блок по центру слота, [1] — прижат к правому нижнему
+        // углу (End/End).
+        let (slot0, block0) = &lay_prim.layout_stack[0];
+        assert!(
+            (block0.x - (slot0.x + (slot0.w - block0.w) / 2.0)).abs() < 0.01
+                && (block0.y - (slot0.y + (slot0.h - block0.h) / 2.0)).abs() < 0.01,
+            "stack Center/Center"
+        );
+        let (slot1, block1) = &lay_prim.layout_stack[1];
+        assert!(
+            (slot1.right() - block1.right()).abs() < 0.01
+                && (slot1.bottom() - block1.bottom()).abs() < 0.01,
+            "stack End/End"
+        );
+        // Gaps: зазор пары == значение ступени И зазор перед подписью тот же
+        // (Row gap един для всех детей); подписи — измеренные (LAY6).
+        for (i, row) in lay_prim.layout_gaps.iter().enumerate() {
+            assert_eq!(row.blocks.len(), 2);
+            let g = scale_value(&row.caption[..row.caption.find(' ').unwrap_or(0)]);
+            let pair_gap = row.blocks[1].x - row.blocks[0].right();
+            assert!(
+                (pair_gap - g).abs() < 0.01,
+                "ступень {i}: зазор {pair_gap} != {g}"
+            );
+            let label_gap = row.label.x - row.blocks[1].right();
+            assert!(
+                (label_gap - g).abs() < 0.01,
+                "зазор до подписи: {label_gap}"
+            );
+            assert!(!row.caption.is_empty(), "подпись ступени");
+        }
+
+        // === Сцена: percent/Fill, aspect, sticky (LAY5) ===
+        // LAY5.2: маска движка заявляет сцена-возможности демо.
+        let feats = canvas_ui::layout::default_backend().features();
+        assert!(
+            feats.contains(LayoutFeatures::PERCENT)
+                && feats.contains(LayoutFeatures::ASPECT_RATIO)
+                && feats.contains(LayoutFeatures::STICKY),
+            "FlexLayoutEngine заявляет percent/aspect/sticky"
+        );
+        let lay_scene = scan_to(
+            &|lay| {
+                lay.layout_percent.len() == 3
+                    && lay.layout_aspect.len() == 3
+                    && lay.layout_sticky.is_some()
+            },
+            &p,
+            &mut m,
+            &mut fs,
+            lay0.content_h,
+            lay0.sections_viewport.h,
+        );
+        // Percent: 20% / 30% / Fill(остаток); сумма + зазоры == ширина слота.
+        let slot_w = lay_scene
+            .layout_sticky
+            .as_ref()
+            .map(|s| s.window.w)
+            .unwrap_or(0.0);
+        let pw: Vec<f32> = lay_scene.layout_percent.iter().map(|r| r.w).collect();
+        assert!((pw[0] - 0.20 * slot_w).abs() < 0.6, "20%: {}", pw[0]);
+        assert!((pw[1] - 0.30 * slot_w).abs() < 0.6, "30%: {}", pw[1]);
+        let fill_w = pw[2];
+        assert!(
+            (pw.iter().sum::<f32>() + 2.0 * kit::GAP_CONTROLS - slot_w).abs() < 1.0,
+            "Fill — остаток ширины: {pw:?} против {slot_w}"
+        );
+        assert!(fill_w > pw[1], "Fill шире 30%-трека: {fill_w}");
+        // Aspect: высота выводится из ratio 16:9 (rounding ≤ 0.5 px — LAY9.3).
+        for tile in &lay_scene.layout_aspect {
+            assert!(
+                (tile.h - tile.w * 9.0 / 16.0).abs() < 0.6,
+                "16:9: {}×{}",
+                tile.w,
+                tile.h
+            );
+        }
+        // Sticky: шапка прилипла к верху окна; 3 строки целиком видны,
+        // шаг строк = row_h + зазор S; контент прокручен (offset демо).
+        let sticky = lay_scene.layout_sticky.as_ref().expect("sticky-демо");
+        assert!(
+            (sticky.header.y - sticky.window.y).abs() < 0.01,
+            "шапка у top"
+        );
+        assert_eq!(sticky.rows.len(), GALLERY_STICKY_VISIBLE_ROWS);
+        for r in &sticky.rows {
+            assert!(r.y >= sticky.window.y - 0.01 && r.bottom() <= sticky.window.bottom() + 0.01);
+        }
+        let step = sticky.rows[1].y - sticky.rows[0].y;
+        assert!(
+            (step - (GALLERY_STICKY_ROW_H + canvas_core::tokens::SPACING_S)).abs() < 0.01,
+            "шаг строк: {step}"
+        );
+        let first_rel = sticky.rows[0].y - sticky.window.y;
+        let expected_rel = GALLERY_STICKY_ROW_H
+            + canvas_core::tokens::SPACING_S
+            + (GALLERY_STICKY_ROW_H + canvas_core::tokens::SPACING_S)
+            - GALLERY_STICKY_DEMO_OFFSET;
+        assert!(
+            (first_rel - expected_rel).abs() < 0.01,
+            "первая видимая строка после сдвига: {first_rel} != {expected_rel}"
+        );
+
+        // === Деградация: HideBelow (LAY8 п.3) ===
+        let lay_hide = scan_to(
+            &|lay| lay.layout_hide_below.slot.w > 0.0,
+            &p,
+            &mut m,
+            &mut fs,
+            lay0.content_h,
+            lay0.sections_viewport.h,
+        );
+        assert!(!lay_hide.layout_hide_below.hidden, "1280×800 ≥ 900×600");
+        let panel = lay_hide.layout_hide_below.panel.expect("панель видна");
+        assert!((panel.w - GALLERY_HIDE_BELOW_PANEL.x).abs() < 0.01);
+        // Панель — stack по центру слота.
+        let slot = &lay_hide.layout_hide_below.slot;
+        assert!(
+            (panel.x - (slot.x + (slot.w - panel.w) / 2.0)).abs() < 0.01,
+            "панель по центру слота"
+        );
+        // Окно ниже порога — панель скрыта ЦЕЛИКОМ (флаг от вьюпорта,
+        // не от скролла витрины: lay0 — offset 0).
+        let lay_small = gallery_layout(
+            [800.0, 560.0],
+            Language::Ru,
+            &kit::ScrollState::default(),
+            &p,
+            &mut m,
+            &mut fs,
+        );
+        assert!(
+            lay_small.layout_hide_below.hidden,
+            "800×560 < 900×600 — порог сработал"
+        );
+        assert!(
+            lay_small.layout_hide_below.panel.is_none(),
+            "панель скрыта целиком (нет промежуточных ступеней)"
+        );
     }
 }
