@@ -1010,6 +1010,76 @@ pub mod keys {
     pub const AI_ONB_TOAST_LOCAL: &str = "ai.onb.toast_local";
     pub const AI_ONB_TOAST_CLOUD: &str = "ai.onb.toast_cloud";
     pub const AI_ONB_TOAST_SELFHOST: &str = "ai.onb.toast_selfhost";
+
+    // --- Мультиканвас (FR-103, волна C0 — каркас; потребители — C3/C4) ---
+    /// Заголовок менеджера канвасов.
+    pub const CANVAS_MANAGER_TITLE: &str = "canvas.manager.title";
+    /// Плейсхолдер поиска по имени (№9/№3).
+    pub const CANVAS_MANAGER_SEARCH: &str = "canvas.manager.search";
+    /// CTA создания (пустое состояние и кнопка, №23a/№6).
+    pub const CANVAS_MANAGER_CREATE: &str = "canvas.manager.create";
+    /// Пункт «пустой» в меню создания (№7).
+    pub const CANVAS_MANAGER_CREATE_EMPTY: &str = "canvas.manager.create_empty";
+    /// Пункт «из шаблона» в меню создания (№38a — галерея-пикер).
+    pub const CANVAS_MANAGER_CREATE_TEMPLATE: &str = "canvas.manager.create_template";
+    /// Действие «дублировать» (№27a — «Имя (копия)»).
+    pub const CANVAS_MANAGER_DUPLICATE: &str = "canvas.manager.duplicate";
+    /// «Импорт файла…» (№25b).
+    pub const CANVAS_MANAGER_IMPORT: &str = "canvas.manager.import";
+    /// Действие «переименовать» (№9 — Enter/F2/двойной клик).
+    pub const CANVAS_MANAGER_RENAME: &str = "canvas.manager.rename";
+    /// Действие «удалить» (№15a — мягкое, с .bak).
+    pub const CANVAS_MANAGER_DELETE: &str = "canvas.manager.delete";
+    /// Кнопка undo в тосте удаления (№15a).
+    pub const CANVAS_MANAGER_UNDO: &str = "canvas.manager.undo";
+    /// Заголовок пустого состояния менеджера (№23a).
+    pub const CANVAS_MANAGER_EMPTY_TITLE: &str = "canvas.manager.empty_title";
+    /// Пояснение пустого состояния (одна работа — один канвас).
+    pub const CANVAS_MANAGER_EMPTY_HINT: &str = "canvas.manager.empty_hint";
+    /// Вторичное действие пустого состояния (№23a/№37b).
+    pub const CANVAS_MANAGER_OPEN_DISK: &str = "canvas.manager.open_disk";
+    /// Сортировка «по имени».
+    pub const CANVAS_MANAGER_SORT_NAME: &str = "canvas.manager.sort_name";
+    /// Сортировка «по дате изменения».
+    pub const CANVAS_MANAGER_SORT_MODIFIED: &str = "canvas.manager.sort_modified";
+    /// Заголовок группы зеркал репозиториев (№43a, PRD-0011).
+    pub const CANVAS_MANAGER_GROUP_REPOS: &str = "canvas.manager.group_repos";
+    /// Тултип зоны имени чипа — ренейм активного (№21c/№9).
+    pub const CANVAS_CHIP_RENAME_HINT: &str = "canvas.chip.rename_hint";
+    /// Строка хранилища: браузерное (№51a).
+    pub const CANVAS_STORAGE_BROWSER: &str = "canvas.storage.browser";
+    /// Строка хранилища: папка на диске (№51a).
+    pub const CANVAS_STORAGE_FOLDER: &str = "canvas.storage.folder";
+    /// «Переехать на диск…» (№51a).
+    pub const CANVAS_STORAGE_MOVE_TO_DISK: &str = "canvas.storage.move_to_disk";
+    /// Баннер потери доступа к папке (№44b).
+    pub const CANVAS_STORAGE_LOST_BANNER: &str = "canvas.storage.lost_banner";
+    /// Действие баннера: переподключить папку (№44b).
+    pub const CANVAS_STORAGE_RECONNECT: &str = "canvas.storage.reconnect";
+    /// Действие баннера: вернуться в браузерное хранилище (№44b).
+    pub const CANVAS_STORAGE_SWITCH_BROWSER: &str = "canvas.storage.switch_browser";
+    /// Заголовок модала миграции OPFS → папка (№42a).
+    pub const CANVAS_MIGRATE_TITLE: &str = "canvas.migrate.title";
+    /// Пояснение модала миграции: выбор канвасов чекбокс-списком (№42a).
+    pub const CANVAS_MIGRATE_HINT: &str = "canvas.migrate.hint";
+    /// Тост завершения миграции (оригиналы удалены, №52a).
+    pub const CANVAS_MIGRATE_DONE_TOAST: &str = "canvas.migrate.done_toast";
+    /// Модал Web Locks: канал уже открыт в другой вкладке (№14b/№35a).
+    pub const CANVAS_TAB_ALREADY_OPEN: &str = "canvas.tab.already_open";
+    /// Модал Web Locks: «Всё равно открыть» (№35a).
+    pub const CANVAS_TAB_OPEN_ANYWAY: &str = "canvas.tab.open_anyway";
+    /// Модал Web Locks: «Выбрать другой» (№35a).
+    pub const CANVAS_TAB_CHOOSE_OTHER: &str = "canvas.tab.choose_other";
+    /// Тост восстановления активного сценария (№36b — TODO-пометка FR-103).
+    pub const CANVAS_SWITCH_SCENARIO_TOAST: &str = "canvas.switch.scenario_toast";
+    /// Тост битого ?canvas= — открыт последний недавний (№31c).
+    pub const CANVAS_LINK_BROKEN_TOAST: &str = "canvas.link.broken_toast";
+    /// Тост внешних изменений файла — всегда спрашивать (№45b/№53b).
+    pub const CANVAS_EXT_CHANGED_TOAST: &str = "canvas.ext.changed_toast";
+    /// Тост drop-коллизии: сохранено под авто-суффиксом (№26b).
+    pub const CANVAS_DROP_RENAMED_TOAST: &str = "canvas.drop.renamed_toast";
+    /// Суффикс имени дубликата (№27a; подстановка в copy_name).
+    pub const CANVAS_COPY_SUFFIX: &str = "canvas.copy_suffix";
 }
 
 /// Русская таблица (эталон — порядок и полнота проверяются тестом).
@@ -2343,6 +2413,65 @@ const RU: &[(&str, &str)] = &[
         keys::AI_ONB_TOAST_SELFHOST,
         "AI-режим: Self-hosted — cloud-качество в вашем контуре",
     ),
+    // --- Мультиканвас (FR-103 C0) ---
+    (keys::CANVAS_MANAGER_TITLE, "Канвасы"),
+    (keys::CANVAS_MANAGER_SEARCH, "Поиск по имени…"),
+    (keys::CANVAS_MANAGER_CREATE, "Создать канвас"),
+    (keys::CANVAS_MANAGER_CREATE_EMPTY, "Пустой"),
+    (keys::CANVAS_MANAGER_CREATE_TEMPLATE, "Из шаблона…"),
+    (keys::CANVAS_MANAGER_DUPLICATE, "Дублировать"),
+    (keys::CANVAS_MANAGER_IMPORT, "Импорт файла…"),
+    (keys::CANVAS_MANAGER_RENAME, "Переименовать"),
+    (keys::CANVAS_MANAGER_DELETE, "Удалить"),
+    (keys::CANVAS_MANAGER_UNDO, "Отменить"),
+    (keys::CANVAS_MANAGER_EMPTY_TITLE, "Пока нет канвасов"),
+    (
+        keys::CANVAS_MANAGER_EMPTY_HINT,
+        "Одна работа — один канвас: создайте отдельный лист для новой задачи",
+    ),
+    (keys::CANVAS_MANAGER_OPEN_DISK, "Открыть файл с диска…"),
+    (keys::CANVAS_MANAGER_SORT_NAME, "По имени"),
+    (keys::CANVAS_MANAGER_SORT_MODIFIED, "По дате изменения"),
+    (keys::CANVAS_MANAGER_GROUP_REPOS, "Из репозиториев"),
+    (keys::CANVAS_CHIP_RENAME_HINT, "Переименовать (Enter)"),
+    (keys::CANVAS_STORAGE_BROWSER, "Хранилище: браузерное"),
+    (keys::CANVAS_STORAGE_FOLDER, "Хранилище: папка на диске"),
+    (keys::CANVAS_STORAGE_MOVE_TO_DISK, "Переехать на диск…"),
+    (keys::CANVAS_STORAGE_LOST_BANNER, "Доступ к папке потерян"),
+    (keys::CANVAS_STORAGE_RECONNECT, "Переподключить папку…"),
+    (
+        keys::CANVAS_STORAGE_SWITCH_BROWSER,
+        "Переключиться в браузерное",
+    ),
+    (keys::CANVAS_MIGRATE_TITLE, "Переезд на диск"),
+    (
+        keys::CANVAS_MIGRATE_HINT,
+        "Выберите канвасы, которые переедут на диск (оригиналы из браузерного хранилища удалятся)",
+    ),
+    (keys::CANVAS_MIGRATE_DONE_TOAST, "Канвасы переехали на диск"),
+    (
+        keys::CANVAS_TAB_ALREADY_OPEN,
+        "Этот канвас уже открыт в другой вкладке",
+    ),
+    (keys::CANVAS_TAB_OPEN_ANYWAY, "Всё равно открыть"),
+    (keys::CANVAS_TAB_CHOOSE_OTHER, "Выбрать другой"),
+    (
+        keys::CANVAS_SWITCH_SCENARIO_TOAST,
+        "Активен сценарий «{name}»",
+    ),
+    (
+        keys::CANVAS_LINK_BROKEN_TOAST,
+        "Канвас «{name}» не найден — открыт последний из недавних",
+    ),
+    (
+        keys::CANVAS_EXT_CHANGED_TOAST,
+        "Файл изменился снаружи — перезагрузить?",
+    ),
+    (
+        keys::CANVAS_DROP_RENAMED_TOAST,
+        "Имя занято — сохранено как «{name}»",
+    ),
+    (keys::CANVAS_COPY_SUFFIX, "(копия)"),
 ];
 
 /// Английская таблица — полный перевод каждого ключа (инвариант полноты).
@@ -3588,6 +3717,53 @@ const EN: &[(&str, &str)] = &[
     (keys::AI_ONB_TOAST_LOCAL, "AI mode: Local only — offline, data stays"),
     (keys::AI_ONB_TOAST_CLOUD, "AI mode: Cloud — better quality, data goes to provider (redact)"),
     (keys::AI_ONB_TOAST_SELFHOST, "AI mode: Self-hosted — cloud-quality in your contour"),
+    // --- Мультиканвас (FR-103 C0) ---
+    (keys::CANVAS_MANAGER_TITLE, "Canvases"),
+    (keys::CANVAS_MANAGER_SEARCH, "Search by name…"),
+    (keys::CANVAS_MANAGER_CREATE, "Create canvas"),
+    (keys::CANVAS_MANAGER_CREATE_EMPTY, "Blank"),
+    (keys::CANVAS_MANAGER_CREATE_TEMPLATE, "From template…"),
+    (keys::CANVAS_MANAGER_DUPLICATE, "Duplicate"),
+    (keys::CANVAS_MANAGER_IMPORT, "Import file…"),
+    (keys::CANVAS_MANAGER_RENAME, "Rename"),
+    (keys::CANVAS_MANAGER_DELETE, "Delete"),
+    (keys::CANVAS_MANAGER_UNDO, "Undo"),
+    (keys::CANVAS_MANAGER_EMPTY_TITLE, "No canvases yet"),
+    (
+        keys::CANVAS_MANAGER_EMPTY_HINT,
+        "One job — one canvas: create a separate sheet for the new task",
+    ),
+    (keys::CANVAS_MANAGER_OPEN_DISK, "Open file from disk…"),
+    (keys::CANVAS_MANAGER_SORT_NAME, "By name"),
+    (keys::CANVAS_MANAGER_SORT_MODIFIED, "By last modified"),
+    (keys::CANVAS_MANAGER_GROUP_REPOS, "From repositories"),
+    (keys::CANVAS_CHIP_RENAME_HINT, "Rename (Enter)"),
+    (keys::CANVAS_STORAGE_BROWSER, "Storage: browser"),
+    (keys::CANVAS_STORAGE_FOLDER, "Storage: disk folder"),
+    (keys::CANVAS_STORAGE_MOVE_TO_DISK, "Move to disk…"),
+    (keys::CANVAS_STORAGE_LOST_BANNER, "Folder access lost"),
+    (keys::CANVAS_STORAGE_RECONNECT, "Reconnect folder…"),
+    (keys::CANVAS_STORAGE_SWITCH_BROWSER, "Switch to browser storage"),
+    (keys::CANVAS_MIGRATE_TITLE, "Moving to disk"),
+    (
+        keys::CANVAS_MIGRATE_HINT,
+        "Choose canvases to move to disk (originals will be removed from browser storage)",
+    ),
+    (keys::CANVAS_MIGRATE_DONE_TOAST, "Canvases moved to disk"),
+    (keys::CANVAS_TAB_ALREADY_OPEN, "This canvas is already open in another tab"),
+    (keys::CANVAS_TAB_OPEN_ANYWAY, "Open anyway"),
+    (keys::CANVAS_TAB_CHOOSE_OTHER, "Choose another"),
+    (keys::CANVAS_SWITCH_SCENARIO_TOAST, "Scenario \"{name}\" is active"),
+    (
+        keys::CANVAS_LINK_BROKEN_TOAST,
+        "Canvas \"{name}\" not found — opened the most recent one",
+    ),
+    (keys::CANVAS_EXT_CHANGED_TOAST, "The file changed on disk — reload?"),
+    (
+        keys::CANVAS_DROP_RENAMED_TOAST,
+        "Name taken — saved as \"{name}\"",
+    ),
+    (keys::CANVAS_COPY_SUFFIX, "(copy)"),
 ];
 
 /// Поиск по таблице (линейный — таблицы статические, чтение раз в кадр).

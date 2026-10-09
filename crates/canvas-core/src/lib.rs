@@ -87,6 +87,10 @@ pub mod web_bridge;
 /// FR-017 (CP6): what-if сценарии — именованные построчные подмены,
 /// персистентность в `canvasdesk.whatif`.
 pub mod whatif;
+/// FR-103 (мультиканвас C0): модель записей рабочего стола канвасов и
+/// чистые функции имён/коллизий/сортировки/групп/миграции — контракты
+/// волн C1–C3 (план мультиканваса v2.1).
+pub mod workspace;
 
 pub use analyze::{
     analyze, badge_text, has_risk, AnalysisConfig, AnalysisFlags, AnalysisState,

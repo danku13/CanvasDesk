@@ -1,4 +1,24 @@
 ---
+Task ID: FR-103 (GitHub #4, волна C0 мультиканваса; high-level #14)
+Agent: Super Z (main)
+Task: Контракт-первый этап мультиканваса: заморозить контракты и чистые функции для параллельных воркстримов C1 (OpfsStore) / C2 (FsAccessStore+миграция) / C3 (менеджер UI). Директива планирования: сначала задачи (issues #14/#4), потом код; закрытие — по факту проверки.
+
+Work Log:
+- Доска: #14/#4 → In Progress; FR-103 по шаблону cr-template (следующий свободный номер; резервация FR-102 из PRD-0011 устарела — занят dot-field-hints)
+- canvas-core/src/workspace.rs (новый): CanvasEntry{name,ts,kind,repo}, EntryKind{Opfs,Folder,Disk}, MAX_CANVASES=10_000 (№16), display_name/to_file_name, validate_canvas_name (№9: запрет /\\:*?"<>|, контролей, ведущей точки, ≤120), name_taken регистронезависимо (семантика Windows-папок), auto_name «Canvas N» латиницей (№39c), collision_suffix « (N)» перед расширением (№13a), copy_name с i18n-суффиксом «(копия)»/(copy) (№27a), sorted_entries (Name/ModifiedDesc), group_entries корень+repos-группы (№43a), camera_key_for «canvasdesk.camera.{name}» (№12/№30b), migration_plan с авто-суффиксами в цели (№42a/№26b) — 12 тестов
+- whatif.rs: active_from_canvas/active_to_canvas/resolve_active — ключ canvasdesk.whatif.active, ИМЯ (не индекс) сценария, соседи scenarios/frozen не затрагиваются, протухший/мусор → None=«База» (№32c); TODO-пометка №36b (решение без финального понимания мультиканвас×мультивкладка) — 3 теста
+- canvas-web/src/workspace.rs (новый): трейт WorkspaceStore {list/create/rename/delete/exists} — синхронные сигнатуры по плану v2.1 §3.1, семантика в док-комментариях (белый список .canvas, .bak-близнец при rename, мягкий delete → .bak №15a); WorkspaceError{NotFound,NameTaken,NameInvalid,LimitReached,AccessLost,Io} std-only Display/Error; тест-двойник MemWorkspaceStore (Mutex, как OpfsStorage; CanvasStorage-мост для автосейва) — 6 контрактных тестов = эталон для C1/C2
+- i18n.rs: 37 ключей canvas.* (менеджер/поиск/создание/ренейм/удаление/undo/пустое состояние/сортировки/группа репо; хранилище браузерное-папка-переезд-баннер №51a/№44b; миграция №42a; вкладки №35a; тосты: сценарий №36b, битый ?canvas= №31c, внешние изменения №45b, drop-коллизия №26b; суффикс копии №27a; тултип чипа №9) RU/EN; инвариант полноты tables_are_complete_and_consistent зелёный
+- Гейты: cargo test --workspace OK; clippy -D warnings OK (2 замечания исправлены: map-комбинатор, sort_by_key); fmt --check OK; wasm_gate.sh --check OK (wasm32-таргет установлен в сессию)
+- Доки: fr-103-multicanvas-c0-contracts.md + строка в index-cr-fr.md
+
+Stage Summary:
+- Контракты заморожены: C1/C2 могут стартовать параллельно против WorkspaceStore + чистых функций canvas-core; C3 — против CanvasEntry/сортировок/групп и i18n-ключей
+- Поведение пользователя не менялось (контракты/данные, ключи без потребителей) — WASM L2 не требовался, L0 покрыт wasm_gate --check
+- Открытые точки для владельца: TODO №36b (семантика активного сценария при мультивкладках — отдельное уточнение); user-docs/онбординг — волны C4/C5 (правило AGENTS.md: вопрос задан в отчёте сессии)
+Tokens: in≈140k, out≈38k, total≈178k (estimate), model=GLM-4.7 (Super Z main), scope=FR-103
+
+---
 Task ID: CR-029 (сессия web-c1430de8-9dcf-4130-9380-b5107677d30c)
 Agent: Super Z (main)
 Task: Репорт владельца «иногда не отрабатывает автодополнение при вставке входящих значений» (скриншот: нода «Корзина за вычетом…», входы «Скидка . скидка / Корзина . sum / Купон . купон») — диагностика, фикс, гейты, доки

@@ -124,6 +124,54 @@ pub fn frozen_to_canvas(canvas: &mut Canvas, names: &[String]) {
     set_whatif_key(canvas, "frozen", value);
 }
 
+// ============================================================================
+// FR-103 (мультиканвас №32c/№36b): активный сценарий канваса в extra
+// ============================================================================
+
+/// FR-103: имя активного what-if сценария из
+/// `canvas.extra["canvasdesk"]["whatif"]["active"]` (строка — ИМЯ сценария:
+/// переживает переупорядочивание и ренеймы соседей, в отличие от индекса).
+/// Толерантно: мусор/отсутствие — `None` (канвас без сценария = «База»).
+///
+/// **TODO (решение №36b, план v2.1): решение хранить активный сценарий в
+/// `.canvas` принято без финального понимания семантики
+/// «мультиканвас × мультивкладка» — требует отдельного уточнения у владельца
+/// (включая тост «Активен сценарий "X"» при восстановлении).**
+pub fn active_from_canvas(canvas: &Canvas) -> Option<String> {
+    canvas
+        .extra
+        .get("canvasdesk")
+        .and_then(|ext| ext.get("whatif"))
+        .and_then(|whatif| whatif.get("active"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+/// FR-103: запись имени активного сценария (ключ `active`; соседи
+/// `scenarios`/`frozen` сохраняются). `None`/`Some("")` — удалить ключ:
+/// файл без активного сценария байт-в-байт как раньше (round-trip чистый).
+/// Запись выполняется тем же одним undo-шагом, что и правки сценария
+/// (инвариант follows-канваса, план §3.2).
+pub fn active_to_canvas(canvas: &mut Canvas, name: Option<&str>) {
+    let value = name
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(|name| Value::String(name.to_owned()));
+    set_whatif_key(canvas, "active", value);
+}
+
+/// FR-103: резолв активного сценария при загрузке канваса — валидация
+/// сохранённого имени по списку сценариев. Протухший (сценарий удалён/
+/// переименован) или отсутствующий → `None` = «База» (тихая деградация,
+/// №32c). Модель C: сценарии глобальны для канваса — один активный на файл.
+pub fn resolve_active(scenarios: &[Scenario], stored: Option<&str>) -> Option<String> {
+    let name = stored.map(str::trim).filter(|n| !n.is_empty())?;
+    scenarios
+        .iter()
+        .find(|scenario| scenario.name == name)
+        .map(|scenario| scenario.name.clone())
+}
+
 /// FR-064 P2: аккуратно обновить один ключ объекта
 /// `canvasdesk.whatif` (scenarios/frozen — соседи не затираются;
 /// чужие поля `canvasdesk` сохраняются). `value: None` — удалить ключ;
@@ -440,6 +488,84 @@ mod tests {
                 line_exprs: HashMap::new(),
             },
         ]
+    }
+
+    /// FR-103 (№32c): активный сценарий — round-trip имя/чтение; удаление
+    /// ключа возвращает файл к исходному виду (round-trip чистый).
+    #[test]
+    fn active_round_trip_and_removal() {
+        let mut canvas = scene();
+        scenarios_to_canvas(&mut canvas, &sample());
+        assert_eq!(
+            active_from_canvas(&canvas),
+            None,
+            "нет ключа — нет сценария"
+        );
+
+        active_to_canvas(&mut canvas, Some("Рост ×2"));
+        assert_eq!(active_from_canvas(&canvas).as_deref(), Some("Рост ×2"));
+
+        active_to_canvas(&mut canvas, None);
+        assert_eq!(active_from_canvas(&canvas), None);
+        let mut reference = scene();
+        scenarios_to_canvas(&mut reference, &sample());
+        assert_eq!(
+            serde_json::to_string(&canvas.extra).unwrap(),
+            serde_json::to_string(&reference.extra).unwrap(),
+            "extra вернулась к канвасу с одними сценариями (active удалён чисто)"
+        );
+        // сценарии не пострадали от записи/удаления active
+        assert_eq!(scenarios_from_canvas(&canvas).len(), 2);
+    }
+
+    /// FR-103: соседи сохраняются — active не затирает scenarios/frozen;
+    /// пустая строка эквивалентна отсутствию.
+    #[test]
+    fn active_preserves_neighbours_and_empty_string() {
+        let mut canvas = scene();
+        scenarios_to_canvas(&mut canvas, &sample());
+        frozen_to_canvas(&mut canvas, &["Рост ×2".to_owned()]);
+        active_to_canvas(&mut canvas, Some("Пустой"));
+        active_to_canvas(&mut canvas, Some("  "));
+        assert_eq!(active_from_canvas(&canvas), None, "пробел — как отсутствие");
+        assert_eq!(scenarios_from_canvas(&canvas).len(), 2, "scenarios живы");
+        assert_eq!(
+            frozen_from_canvas(&canvas),
+            vec!["Рост ×2".to_owned()],
+            "frozen жив"
+        );
+    }
+
+    /// FR-103 (№32c): резолв при загрузке — валидное имя живо, протухший
+    /// и мусор тихо деградируют в «Базу» (None).
+    #[test]
+    fn resolve_active_validates_against_scenarios() {
+        let scenarios = sample();
+        assert_eq!(
+            resolve_active(&scenarios, Some("Рост ×2")).as_deref(),
+            Some("Рост ×2")
+        );
+        assert_eq!(
+            resolve_active(&scenarios, Some("удалённый")),
+            None,
+            "протухший"
+        );
+        assert_eq!(resolve_active(&scenarios, None), None);
+        assert_eq!(resolve_active(&scenarios, Some("")), None);
+        assert_eq!(
+            resolve_active(&[], Some("Рост ×2")),
+            None,
+            "нет сценариев — База"
+        );
+        // полный цикл: записали, прочитали, отрезолвили — тем же значением
+        let mut canvas = scene();
+        scenarios_to_canvas(&mut canvas, &scenarios);
+        active_to_canvas(&mut canvas, Some("Пустой"));
+        let stored = active_from_canvas(&canvas);
+        assert_eq!(
+            resolve_active(&scenarios, stored.as_deref()).as_deref(),
+            Some("Пустой")
+        );
     }
 
     /// Инвариант 5: без сценариев — поле не появляется (round-trip чистый).
