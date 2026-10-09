@@ -39,7 +39,7 @@ use canvas_ui::kit::{self, ButtonVariant, ControlStyle, KitPalette, KitState};
 // LAY-SHOWCASE (design/rules/11-layouts.md): примитивы LAY2 (constrain/pad/
 // stack) и маска движка LAY5.2 (LayoutFeatures) для сцен-секций.
 use canvas_ui::layout::{
-    constrain, grid_cells_with, pad, pilot_backend, stack, Child, FlexLayoutEngine, HAlign,
+    constrain, grid_cells_with, pad, pilot_backend, stack, Child, Column, FlexLayoutEngine, HAlign,
     LayoutFeatures, MeasuredItem, Row, RowPolicy, SceneDim, SceneNode, ScenePosition, SceneSize,
     VAlign,
 };
@@ -58,6 +58,16 @@ pub const PANEL_MAX: UiVec2 = UiVec2::new(900.0, 640.0);
 /// Отступ секций по вертикали (spacing-scale) — токен
 /// `canvas_core::tokens::SPACING_LG` (значение прежнего литерала 12).
 pub use canvas_core::tokens::SPACING_LG as SECTION_GAP;
+/// Высота строки подписи секции в линейке (шаг прежнего курсора; кегль
+/// подписи 11, окно отрисовки 16 — overlays.rs). Вне S3 — пин геометрии,
+/// кандидат в `kit::CONST` (LAY-W7).
+const SECTION_TITLE_H: f32 = 18.0;
+/// Историческая надбавка зазора после секции Buttons (+4 px к SECTION_GAP;
+/// вне шкалы S1 — LAY7-P3). Геометрия пинена golden-тестом линейки.
+const BUTTONS_SECTION_GAP_EXTRA: f32 = 4.0;
+/// Исторический зазор между якорем и меню демо-dropdown (вне шкалы S1 —
+/// LAY7-P3). Геометрия пинена golden-тестом линейки.
+const DROPDOWN_ANCHOR_GAP: f32 = 4.0;
 /// Ширина колонки подписи состояния.
 pub const STATE_LABEL_W: f32 = 84.0;
 /// Кегль подписей контролов.
@@ -511,7 +521,7 @@ pub fn gallery_layout(
     let panel = gallery_panel(vp);
     let content = panel.inset(&EdgeInsets::uniform(canvas_core::tokens::SPACING_LG));
 
-    let mut y = content.y;
+    let y = content.y;
     let full_w = content.w;
 
     // Шапка: заголовок слева, кнопка темы + «✕» справа — раскладываются
@@ -554,10 +564,16 @@ pub fn gallery_layout(
             _ => {}
         }
     }
-    y += 30.0 + SECTION_GAP;
+    // Шаг шапки (30 + SECTION_GAP) фиксирован — скролл-контракт FR-059:
+    // тот же шаг повторяет `gallery_scroll_viewport` (окно секций).
+    let sections_top = y + 30.0 + SECTION_GAP;
     // Окно скролла секций (шапка выше — фиксирована)
-    let sections_viewport = UiRect::new(content.x, y, content.w, (content.bottom() - y).max(0.0));
-    let sections_top = y;
+    let sections_viewport = UiRect::new(
+        content.x,
+        sections_top,
+        content.w,
+        (content.bottom() - sections_top).max(0.0),
+    );
 
     let mut section_titles: Vec<(UiPoint, &'static str)> = Vec::new();
     let mut button_rows: Vec<ButtonRow> = Vec::new();
@@ -569,23 +585,316 @@ pub fn gallery_layout(
     let control_x = content.x + STATE_LABEL_W + canvas_core::tokens::SPACING_SM;
     let control_w = (content.right() - control_x).max(0.0);
 
-    // --- Buttons: 4 варианта × 4 состояния ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_BUTTONS));
-    y += 18.0;
+    // === LAY-W3b: вертикальная линейка секций — Column-скелет примитивов
+    // (аудит layouts-2026-10 §3.2/§3.10 → §5 LAY-W3). Одна раскладка
+    // `Column { gap: 0 }` через [`pilot_backend`] (NativeBackend — семантика
+    // прежнего курсора байт-в-байт, LAY9.1) из фиксированных блоков
+    // «подпись + контент» и именованных распорок-разделителей — вместо
+    // ручного курсора `y +=`. Зазоры — шкала S1: SECTION_GAP (алиас
+    // SPACING_LG), шаги демо-рядов Buttons/Gaps — SPACING_SM; исторические
+    // отклонения (+4 px после Buttons, нулевые после Focus/Align) сохранены
+    // и пинены golden-тестом gallery_layout_ruler_golden_column_skeleton.
+    // Сами демо-ряды внутри секций (Row/lay_out_measured/pilot_backend)
+    // не затронуты. ===
+
+    // Высоты контента секций — до раскладки линейки (те же выражения, что
+    // у демо-блоков ниже).
+    let toast_h = 20.0;
+    let card_h = 64.0;
+    let dropdown_item_h = 26.0;
+    let dropdown_menu_h = 3.0 * dropdown_item_h + 2.0 * 4.0;
+    let wrap_slot_h = 2.0 * kit::CHIP_HEIGHT + kit::GAP_CONTROLS;
+    let grid_cell_h = 32.0;
+    let grid_slot_h = 2.0 * grid_cell_h + kit::GAP_CONTROLS;
+    let align_column_block_h = 3.0 * GALLERY_COLUMN_CELL_H + 3.0 * 6.0 + 12.0;
+    let aspect_tile_w = ((control_w - 2.0 * kit::GAP_CONTROLS) / 3.0).max(0.0);
+    let aspect_h = aspect_tile_w * 9.0 / 16.0;
+    let sticky_window_h = GALLERY_STICKY_ROW_H
+        + canvas_core::tokens::SPACING_S
+        + GALLERY_STICKY_VISIBLE_ROWS as f32 * GALLERY_STICKY_ROW_H
+        + (GALLERY_STICKY_VISIBLE_ROWS.saturating_sub(1)) as f32 * canvas_core::tokens::SPACING_S;
+
+    // Блок линейки = (ширина колонки, высота); распорка = зазор линейки.
+    // ВАЖНО: зазор — Fixed{h}, а НЕ `Spacer`: в Column спейсер занимает
+    // нулевую высоту (он про ширину ряда — см. тест canvas-ui
+    // «Spacer в колонке — нулевая высота»), линейка бы схлопнулась.
+    // Отдельный rect-зазор перед раскладкой СЛИВАЕТСЯ в предыдущий блок
+    // (см. merge-проход ниже): потребители читают из итератора ровно
+    // 2 rect'а на секцию (подпись, контент).
+    fn block(w: f32, h: f32) -> MeasuredItem<'static> {
+        MeasuredItem::Fixed { w, h }
+    }
+    fn ruler_gap(len: f32) -> MeasuredItem<'static> {
+        MeasuredItem::Fixed { w: 0.0, h: len }
+    }
+    let mut ruler_items: Vec<MeasuredItem> = Vec::with_capacity(64);
+    // --- Buttons: подпись + 4 ряда (шаг SPACING_SM; хвост +4 px — пин) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(
+            full_w,
+            4.0 * kit::BUTTON_HEIGHT + 3.0 * canvas_core::tokens::SPACING_SM,
+        ),
+        ruler_gap(SECTION_GAP + BUTTONS_SECTION_GAP_EXTRA),
+    ]);
+    // --- IconButtons ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, kit::ICON_BUTTON_SIZE),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Chips ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, kit::CHIP_HEIGHT),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Dropdown: якорь + зазор + меню (зазор — DROPDOWN_ANCHOR_GAP, пин) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(
+            full_w,
+            kit::BUTTON_HEIGHT + DROPDOWN_ANCHOR_GAP + dropdown_menu_h,
+        ),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Toast ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, toast_h),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Tooltip (хвост 18 + 26 — шаг прежнего курсора, пин) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, 18.0 + 26.0),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- TextField ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, kit::TEXT_FIELD_HEIGHT),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Switch ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, kit::SWITCH_H),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Card ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, card_h),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Список + скролл ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, GALLERY_LIST_VIEWPORT_H),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Icon-глифы v2 ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, kit::ICON_BUTTON_SIZE),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Table: 4 строки без межстрочных зазоров (row_gap: 0) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, 4.0 * GALLERY_ROW_H),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Measured-ряд (F-13) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, kit::CHIP_HEIGHT),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Flex-факторы (F-14) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, kit::BUTTON_HEIGHT),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Wrap (F-15) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, wrap_slot_h),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Сетка (F-16) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, grid_slot_h),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Фокус (F-17): нулевой хвост до ComponentRow — исторический, пин ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, kit::BUTTON_HEIGHT),
+    ]);
+    // --- Компонент Row ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, GALLERY_ROW_H),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Компонент Panel ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, GALLERY_COMPONENT_PANEL_H),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- SqueezeTail ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, GALLERY_SQUEEZE_BOX_H),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Align: SpaceBetween-ряд + Column-демо с зазором SPACING_S;
+    // нулевой хвост до Constrain — исторический, пин ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(
+            full_w,
+            kit::CHIP_HEIGHT + canvas_core::tokens::SPACING_S + align_column_block_h,
+        ),
+    ]);
+    // --- Constrain (LAY2) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, GALLERY_LAYOUT_BLOCK_H),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Pad (LAY2 + LAY7) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, GALLERY_LAYOUT_CELL_H),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Stack (LAY2) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, GALLERY_LAYOUT_CELL_H),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Шкала зазоров S1 (LAY7): 5 рядов с шагом SPACING_SM ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(
+            full_w,
+            5.0 * GALLERY_GAP_BLOCK_H + 4.0 * canvas_core::tokens::SPACING_SM,
+        ),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Сцена: percent + Fill (LAY5) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, GALLERY_LAYOUT_BLOCK_H),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Сцена: aspect-ratio (LAY5) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, aspect_h),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Сцена: sticky-шапка (LAY5) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, sticky_window_h),
+        ruler_gap(SECTION_GAP),
+    ]);
+    // --- Деградация HideBelow (LAY8 п.3) + хвостовая распорка линейки
+    // (входит в content_h — скролл-контракт FR-059) ---
+    ruler_items.extend([
+        block(full_w, SECTION_TITLE_H),
+        block(full_w, GALLERY_HIDE_BELOW_H),
+        ruler_gap(SECTION_GAP),
+    ]);
+
+    // Merge-проход: rect-зазоры (Fixed{w:0}) сливаются в высоту ПРЕДЫДУЩЕГО
+    // блока. Потребители линейки читают из итератора ровно 2 rect'а на
+    // секцию (подпись, контент) — отдельный зазор съедался бы как подпись
+    // следующей секции (сдвиг линейки на величину зазора). Слияние
+    // сохраняет сумму высот и все позиции бит-в-бит; зазоры остаются
+    // токенами S1 (SECTION_GAP / BUTTONS_SECTION_GAP_EXTRA).
+    let mut merged_items: Vec<MeasuredItem> = Vec::with_capacity(ruler_items.len());
+    for item in ruler_items {
+        let is_gap = matches!(item, MeasuredItem::Fixed { w: 0.0, .. });
+        if is_gap {
+            let gap_h = match item {
+                MeasuredItem::Fixed { h, .. } => h,
+                _ => 0.0,
+            };
+            if let Some(MeasuredItem::Fixed { h, .. }) = merged_items.last_mut() {
+                *h += gap_h;
+            } else {
+                merged_items.push(item);
+            }
+        } else {
+            merged_items.push(item);
+        }
+    }
+    let ruler_items = merged_items;
+
+    // Раскладка линейки: Column (NativeBackend — прежняя арифметика курсора
+    // байт-в-байт; MainAlign::Start — блоки от верха окна секций).
+    let mut ruler = Column {
+        gap: 0.0,
+        ..Column::default()
+    }
+    .lay_out_measured_with(
+        pilot_backend(),
+        sections_viewport,
+        &ruler_items,
+        m,
+        fs,
+        FONT_FAMILY,
+        LABEL_SIZE,
+    )
+    .into_iter();
+
+    // --- Buttons: 4 варианта × 4 состояния (ряды — вложенный Column
+    // линейки с шагом SPACING_SM) ---
+    let buttons_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(buttons_title.x, buttons_title.y),
+        SECTION_BUTTONS,
+    ));
+    let button_row_rects = Column {
+        gap: canvas_core::tokens::SPACING_SM,
+        ..Column::default()
+    }
+    .lay_out_measured_with(
+        pilot_backend(),
+        ruler.next().unwrap_or_default(),
+        &[
+            block(full_w, kit::BUTTON_HEIGHT),
+            block(full_w, kit::BUTTON_HEIGHT),
+            block(full_w, kit::BUTTON_HEIGHT),
+            block(full_w, kit::BUTTON_HEIGHT),
+        ],
+        m,
+        fs,
+        FONT_FAMILY,
+        LABEL_SIZE,
+    );
     let variants = [
         ButtonVariant::Primary,
         ButtonVariant::Secondary,
         ButtonVariant::Ghost,
         ButtonVariant::Danger,
     ];
-    for variant in variants {
-        let slot = UiRect::new(content.x, y, full_w, kit::BUTTON_HEIGHT);
+    for (variant, slot) in variants.into_iter().zip(button_row_rects) {
         let per = ((control_w - 3.0 * kit::GAP_CONTROLS) / 4.0).max(0.0);
         let mut buttons = Vec::with_capacity(4);
         for (i, state_label) in STATE_LABELS.iter().enumerate() {
             let cell = UiRect::new(
                 control_x + i as f32 * (per + kit::GAP_CONTROLS),
-                y,
+                slot.y,
                 per,
                 kit::BUTTON_HEIGHT,
             );
@@ -609,17 +918,16 @@ pub fn gallery_layout(
             slot,
             buttons,
         });
-        y += kit::BUTTON_HEIGHT + 8.0;
     }
-    y += SECTION_GAP - 4.0;
 
     // --- IconButtons: 4 состояния ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_ICON));
-    y += 18.0;
+    let icon_title = ruler.next().unwrap_or_default();
+    section_titles.push((UiPoint::new(icon_title.x, icon_title.y), SECTION_ICON));
+    let icon_y = ruler.next().unwrap_or_default().y;
     for i in 0..4 {
         let cell = UiRect::new(
             control_x + i as f32 * (kit::ICON_BUTTON_SIZE + kit::GAP_CONTROLS),
-            y,
+            icon_y,
             kit::ICON_BUTTON_SIZE,
             kit::ICON_BUTTON_SIZE,
         );
@@ -631,18 +939,18 @@ pub fn gallery_layout(
             ),
         ));
     }
-    y += kit::ICON_BUTTON_SIZE + SECTION_GAP;
 
     // --- Chips: 4 состояния (измеренные ширины) ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_CHIPS));
-    y += 18.0;
+    let chips_title = ruler.next().unwrap_or_default();
+    section_titles.push((UiPoint::new(chips_title.x, chips_title.y), SECTION_CHIPS));
+    let chips_y = ruler.next().unwrap_or_default().y;
     {
         let mut x = control_x;
         let max_w = ((control_w - 3.0 * kit::GAP_CONTROLS) / 4.0).max(0.0);
         for state_label in STATE_LABELS.iter() {
             let label = tr(lang, state_label);
             let cl = kit::chip_layout(
-                UiPoint::new(x, y),
+                UiPoint::new(x, chips_y),
                 &label,
                 max_w,
                 m,
@@ -654,14 +962,17 @@ pub fn gallery_layout(
             x += cl.rect.w + kit::GAP_CONTROLS;
         }
     }
-    y += kit::CHIP_HEIGHT + SECTION_GAP;
 
     // --- Dropdown: якорь-кнопка + открытое меню (3 строки) ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_DROPDOWN));
-    y += 18.0;
+    let dropdown_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(dropdown_title.x, dropdown_title.y),
+        SECTION_DROPDOWN,
+    ));
+    let dropdown_y = ruler.next().unwrap_or_default().y;
     let anchor_label = tr(lang, "kit.dropdown.anchor");
     let anchor_btn = kit::button_layout(
-        UiRect::new(control_x, y, 190.0, kit::BUTTON_HEIGHT),
+        UiRect::new(control_x, dropdown_y, 190.0, kit::BUTTON_HEIGHT),
         &anchor_label,
         (
             canvas_ui::layout::HAlign::Start,
@@ -673,33 +984,37 @@ pub fn gallery_layout(
         LABEL_SIZE,
     );
     let dropdown_anchor = anchor_btn.rect;
-    y += kit::BUTTON_HEIGHT + 4.0;
-    let item_h = 26.0;
-    let menu_h = 3.0 * item_h + 2.0 * 4.0;
-    let dd = kit::dropdown_menu(dropdown_anchor, vp, UiVec2::new(190.0, menu_h));
+    let dd = kit::dropdown_menu(dropdown_anchor, vp, UiVec2::new(190.0, dropdown_menu_h));
     for i in 0..3 {
         dropdown_items.push(UiRect::new(
             dd.menu.x + 4.0,
-            dd.menu.y + 4.0 + i as f32 * (item_h + 4.0),
+            dd.menu.y + 4.0 + i as f32 * (dropdown_item_h + 4.0),
             dd.menu.w - 8.0,
-            item_h,
+            dropdown_item_h,
         ));
     }
     let dropdown_menu = dd.menu;
-    y += menu_h + SECTION_GAP;
 
     // --- Toast: строка внизу контента (kit Toast) ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_TOAST));
-    y += 18.0;
-    let toast = UiRect::new(content.x, y, content.w, 20.0);
-    y += 20.0 + SECTION_GAP;
+    let toast_title = ruler.next().unwrap_or_default();
+    section_titles.push((UiPoint::new(toast_title.x, toast_title.y), SECTION_TOAST));
+    let toast = UiRect::new(
+        content.x,
+        ruler.next().unwrap_or_default().y,
+        content.w,
+        toast_h,
+    );
 
     // --- Tooltip: якорь-чип + пузырь (delay пройден) ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_TOOLTIP));
-    y += 18.0;
+    let tooltip_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(tooltip_title.x, tooltip_title.y),
+        SECTION_TOOLTIP,
+    ));
+    let tooltip_y = ruler.next().unwrap_or_default().y;
     let anchor_label = tr(lang, "kit.tooltip.anchor");
     let cl = kit::chip_layout(
-        UiPoint::new(control_x, y),
+        UiPoint::new(control_x, tooltip_y),
         &anchor_label,
         140.0,
         m,
@@ -720,13 +1035,16 @@ pub fn gallery_layout(
     let tooltip = tip
         .map(|t| t.rect)
         .unwrap_or(UiRect::new(0.0, 0.0, 0.0, 0.0));
-    y += 18.0 + 26.0 + SECTION_GAP;
 
     // === FR-059: секции компонентов v2 (FR-058) — после секций v1 ===
 
     // --- TextField: Normal / Focused / Disabled (3 поля в ряд) ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_TEXT_FIELD));
-    y += 18.0;
+    let text_field_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(text_field_title.x, text_field_title.y),
+        SECTION_TEXT_FIELD,
+    ));
+    let text_field_y = ruler.next().unwrap_or_default().y;
     let mut text_fields: Vec<(KitState, bool, kit::TextFieldLayout)> = Vec::new();
     {
         let per = ((control_w - 2.0 * kit::GAP_CONTROLS) / 3.0).max(kit::TEXT_FIELD_MIN_W);
@@ -760,7 +1078,7 @@ pub fn gallery_layout(
         for (i, (state, model, placeholder_key)) in models.into_iter().enumerate() {
             let slot = UiRect::new(
                 control_x + i as f32 * (per + kit::GAP_CONTROLS),
-                y,
+                text_field_y,
                 per,
                 kit::TEXT_FIELD_HEIGHT,
             );
@@ -787,12 +1105,12 @@ pub fn gallery_layout(
             text_fields.push((state, focused, lay));
         }
     }
-    y += kit::TEXT_FIELD_HEIGHT + SECTION_GAP;
 
     // --- Switch: Off/Normal, On/Normal, On/Hovered, Off/Disabled + Pressed,
     // On/в фокусе (рамка accent — рисует потребитель, контракт FR-057) ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_SWITCH));
-    y += 18.0;
+    let switch_title = ruler.next().unwrap_or_default();
+    section_titles.push((UiPoint::new(switch_title.x, switch_title.y), SECTION_SWITCH));
+    let switch_y = ruler.next().unwrap_or_default().y;
     let mut switches: Vec<(UiRect, bool, KitState, bool)> = Vec::new();
     {
         let demo: [(bool, KitState, bool); 6] = [
@@ -806,32 +1124,36 @@ pub fn gallery_layout(
         for (i, (on, state, focused)) in demo.into_iter().enumerate() {
             let slot = UiRect::new(
                 control_x + i as f32 * (kit::SWITCH_W + kit::GAP_CONTROLS),
-                y,
+                switch_y,
                 kit::SWITCH_W,
                 kit::SWITCH_H,
             );
             switches.push((slot, on, state, focused));
         }
     }
-    y += kit::SWITCH_H + SECTION_GAP;
 
     // --- Card: хедер + тело внутри пада панели (kit::card) ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_CARD));
-    y += 18.0;
-    let card_slot = UiRect::new(control_x, y, control_w, 64.0);
+    let card_title = ruler.next().unwrap_or_default();
+    section_titles.push((UiPoint::new(card_title.x, card_title.y), SECTION_CARD));
+    let card_y = ruler.next().unwrap_or_default().y;
+    let card_slot = UiRect::new(control_x, card_y, control_w, card_h);
     let card = kit::card(
         card_slot,
-        UiVec2::new(0.0, 64.0),
-        UiVec2::new(600.0, 64.0),
+        UiVec2::new(0.0, card_h),
+        UiVec2::new(600.0, card_h),
         20.0,
         p,
     );
-    y += 64.0 + SECTION_GAP;
 
     // --- Список + скролл: 8 строк в окне 3 (бегунок в треке) ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_LIST));
-    y += 18.0;
-    let list_area = UiRect::new(control_x, y, control_w, GALLERY_LIST_VIEWPORT_H);
+    let list_title = ruler.next().unwrap_or_default();
+    section_titles.push((UiPoint::new(list_title.x, list_title.y), SECTION_LIST));
+    let list_area = UiRect::new(
+        control_x,
+        ruler.next().unwrap_or_default().y,
+        control_w,
+        GALLERY_LIST_VIEWPORT_H,
+    );
     let mut list_scroll = kit::ScrollState {
         offset: GALLERY_LIST_DEMO_OFFSET,
         content_h: GALLERY_LIST_ROWS as f32 * kit::LIST_ROW_H
@@ -847,12 +1169,12 @@ pub fn gallery_layout(
         GALLERY_LIST_ROWS,
     );
     let list_selected = 2usize;
-    y += GALLERY_LIST_VIEWPORT_H + SECTION_GAP;
 
     // --- Icon-глифы v2: ПОЛНЫЙ инвентарь Icon (8 вариантов — витрина
     // покрывает все записи enum; SVG-наборы — те же имена) ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_ICONS));
-    y += 18.0;
+    let icons_title = ruler.next().unwrap_or_default();
+    section_titles.push((UiPoint::new(icons_title.x, icons_title.y), SECTION_ICONS));
+    let icons_y = ruler.next().unwrap_or_default().y;
     let mut icon_glyphs: Vec<(UiRect, kit::Icon)> = Vec::new();
     {
         let glyphs = [
@@ -868,7 +1190,7 @@ pub fn gallery_layout(
         for (i, icon) in glyphs.into_iter().enumerate() {
             let cell = UiRect::new(
                 control_x + i as f32 * (kit::ICON_BUTTON_SIZE + kit::GAP_CONTROLS),
-                y,
+                icons_y,
                 kit::ICON_BUTTON_SIZE,
                 kit::ICON_BUTTON_SIZE,
             );
@@ -882,7 +1204,6 @@ pub fn gallery_layout(
             icon_glyphs.push((rect, icon));
         }
     }
-    y += kit::ICON_BUTTON_SIZE + SECTION_GAP;
 
     // === FR-068 W3 (этап M3): секция Table — табличные строки через
     // компонент Table (retained-вход кадра: set_rows + row_layout_with по
@@ -899,8 +1220,9 @@ pub fn gallery_layout(
     // отрисовке; оракул бит-в-бит «Row ≡ Table на одних данных»
     // (kit::row_guides/row_layout против Table::row_layout_with) — в
     // тестах модуля.
-    section_titles.push((UiPoint::new(content.x, y), SECTION_TABLE));
-    y += 18.0;
+    let table_title = ruler.next().unwrap_or_default();
+    section_titles.push((UiPoint::new(table_title.x, table_title.y), SECTION_TABLE));
+    let table_y = ruler.next().unwrap_or_default().y;
     let mut row_rows: Vec<RowDemoRow> = Vec::new();
     {
         let viewport_right = control_x + control_w;
@@ -942,7 +1264,7 @@ pub fn gallery_layout(
             for (i, (row_parts, state, zebra)) in demo.into_iter().enumerate() {
                 let slot = UiRect::new(
                     control_x,
-                    y + i as f32 * GALLERY_ROW_H,
+                    table_y + i as f32 * GALLERY_ROW_H,
                     control_w,
                     GALLERY_ROW_H,
                 );
@@ -957,15 +1279,18 @@ pub fn gallery_layout(
             }
         }
     }
-    y += 4.0 * GALLERY_ROW_H + SECTION_GAP;
 
     // === FR-062: секции layout v2 (F-13…F-17) — после секций компонентов v2 ===
 
     // --- Measured-ряд (F-13): ширины чипов — TextMeasurer внутри
     // раскладки ([`Row::lay_out_measured`]); пад чипа — измеренные
     // пробелы вокруг подписи (рисуется исходная подпись по центру).
-    section_titles.push((UiPoint::new(content.x, y), SECTION_MEASURED));
-    y += 18.0;
+    let measured_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(measured_title.x, measured_title.y),
+        SECTION_MEASURED,
+    ));
+    let measured_y = ruler.next().unwrap_or_default().y;
     let measured_chips: Vec<UiRect> = {
         let l_a = tr(lang, crate::i18n::keys::KIT_MEASURED_A);
         let l_b = tr(lang, crate::i18n::keys::KIT_MEASURED_B);
@@ -979,7 +1304,7 @@ pub fn gallery_layout(
         }
         .lay_out_measured_with(
             pilot_backend(),
-            UiRect::new(control_x, y, control_w, kit::CHIP_HEIGHT),
+            UiRect::new(control_x, measured_y, control_w, kit::CHIP_HEIGHT),
             &[
                 MeasuredItem::Text {
                     text: &t_a,
@@ -1009,19 +1334,19 @@ pub fn gallery_layout(
             LABEL_SIZE,
         )
     };
-    y += kit::CHIP_HEIGHT + SECTION_GAP;
 
     // --- Flex-факторы (F-14): fixed + grow ×2 + grow ×1 — свободное
     // место слота распределяется пропорционально grow.
-    section_titles.push((UiPoint::new(content.x, y), SECTION_GROW));
-    y += 18.0;
+    let grow_title = ruler.next().unwrap_or_default();
+    section_titles.push((UiPoint::new(grow_title.x, grow_title.y), SECTION_GROW));
+    let grow_y = ruler.next().unwrap_or_default().y;
     let grow_cells: Vec<(UiRect, &'static str)> = Row {
         gap: kit::GAP_CONTROLS,
         ..Row::default()
     }
     .lay_out_with(
         pilot_backend(),
-        UiRect::new(control_x, y, control_w, kit::BUTTON_HEIGHT),
+        UiRect::new(control_x, grow_y, control_w, kit::BUTTON_HEIGHT),
         &[
             Child::fixed(64.0, kit::BUTTON_HEIGHT),
             Child::flexible(40.0, kit::BUTTON_HEIGHT, 2.0),
@@ -1035,13 +1360,12 @@ pub fn gallery_layout(
         crate::i18n::keys::KIT_GROW_ONE,
     ])
     .collect();
-    y += kit::BUTTON_HEIGHT + SECTION_GAP;
 
     // --- Wrap (F-15): жадная упаковка measured-чипов в строки слота
     // (2 строки видимы; переполнение — за нижний край, видно линту).
-    section_titles.push((UiPoint::new(content.x, y), SECTION_WRAP));
-    y += 18.0;
-    let wrap_slot_h = 2.0 * kit::CHIP_HEIGHT + kit::GAP_CONTROLS;
+    let wrap_title = ruler.next().unwrap_or_default();
+    section_titles.push((UiPoint::new(wrap_title.x, wrap_title.y), SECTION_WRAP));
+    let wrap_y = ruler.next().unwrap_or_default().y;
     let wrap_chips: Vec<(UiRect, usize)> = {
         // подписи живут в блоке — MeasuredItem заимствует из них (без leak)
         let padded_labels: Vec<String> = (0..GALLERY_WRAP_CHIPS)
@@ -1071,7 +1395,7 @@ pub fn gallery_layout(
         }
         .lay_out_measured_with(
             pilot_backend(),
-            UiRect::new(control_x, y, control_w, wrap_slot_h),
+            UiRect::new(control_x, wrap_y, control_w, wrap_slot_h),
             &items,
             m,
             fs,
@@ -1083,47 +1407,40 @@ pub fn gallery_layout(
         .map(|(i, r)| (r, i))
         .collect()
     };
-    y += wrap_slot_h + SECTION_GAP;
 
     // --- Сетка (F-16): 4 равные колонки × 2 строки ([`grid_cells_with`],
     // FR-068 W1 — через [`pilot_backend`]; T2-триггер ADR-0013 — Grid
     // с явными треками в TaffyBackend).
-    section_titles.push((UiPoint::new(content.x, y), SECTION_GRID));
-    y += 18.0;
-    let grid_cell_h = 32.0;
+    let grid_title = ruler.next().unwrap_or_default();
+    section_titles.push((UiPoint::new(grid_title.x, grid_title.y), SECTION_GRID));
+    let grid_y = ruler.next().unwrap_or_default().y;
     let grid_col_w = ((control_w - 3.0 * kit::GAP_CONTROLS) / 4.0).max(0.0);
     let grid_cells: Vec<UiRect> = grid_cells_with(
         pilot_backend(),
-        UiRect::new(
-            control_x,
-            y,
-            control_w,
-            2.0 * grid_cell_h + kit::GAP_CONTROLS,
-        ),
+        UiRect::new(control_x, grid_y, control_w, grid_slot_h),
         &[grid_col_w; 4],
         2,
         grid_cell_h,
         UiVec2::new(kit::GAP_CONTROLS, kit::GAP_CONTROLS),
     );
-    y += 2.0 * grid_cell_h + kit::GAP_CONTROLS + SECTION_GAP;
 
     // --- Фокус (F-17): 4 слота фиксированной ширины; Tab-кольцо App
     // живёт в КОНТЕНТ-координатах ([`Self::focus_targets`]), рамка —
     // при отрисовке по совпадению с кольцом (слот accent).
-    section_titles.push((UiPoint::new(content.x, y), SECTION_FOCUS));
-    y += 18.0;
+    let focus_title = ruler.next().unwrap_or_default();
+    section_titles.push((UiPoint::new(focus_title.x, focus_title.y), SECTION_FOCUS));
+    let focus_y = ruler.next().unwrap_or_default().y;
     let focus_targets: Vec<UiRect> = (0..GALLERY_FOCUS_SLOTS)
         .map(|i| {
             UiRect::new(
                 control_x + i as f32 * (GALLERY_FOCUS_W + kit::GAP_CONTROLS),
-                y,
+                focus_y,
                 GALLERY_FOCUS_W,
                 kit::BUTTON_HEIGHT,
             )
         })
         .collect();
     let focus_buttons: Vec<UiRect> = focus_targets.clone();
-    y += kit::BUTTON_HEIGHT;
 
     // === Пересборка поверхностей (волна 2): демо компонентного слоя и
     // недостающих layout-примитивов — хвост колонки секций ===
@@ -1131,9 +1448,13 @@ pub fn gallery_layout(
     // --- Компонент Row (component::Row): Props + retained-компонент.
     // Отрисовка — Component::paint компонента в оверлее (Row::new поднимает
     // собственный FontSystem — как Table::new в fill_body FR-070). ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_COMPONENT_ROW));
-    y += 18.0;
-    let component_row_slot = UiRect::new(control_x, y, control_w, GALLERY_ROW_H);
+    let comp_row_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(comp_row_title.x, comp_row_title.y),
+        SECTION_COMPONENT_ROW,
+    ));
+    let comp_row_y = ruler.next().unwrap_or_default().y;
+    let component_row_slot = UiRect::new(control_x, comp_row_y, control_w, GALLERY_ROW_H);
     let component_row_props = canvas_ui::component::row::RowProps {
         marker: kit::RowMarker::Dot,
         label: tr(lang, crate::i18n::keys::KIT_COMPONENT_ROW_LABEL),
@@ -1142,13 +1463,16 @@ pub fn gallery_layout(
         opts: kit::RowOpts::default(),
         palette: *p,
     };
-    y += GALLERY_ROW_H + SECTION_GAP;
 
     // --- Компонент Panel (component::Panel): layout = [панель, контент]
     // (контракт порядка rects — panel.rs §Component); отрисовка хрома —
     // panel_style слотами в оверлее. ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_COMPONENT_PANEL));
-    y += 18.0;
+    let comp_panel_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(comp_panel_title.x, comp_panel_title.y),
+        SECTION_COMPONENT_PANEL,
+    ));
+    let comp_panel_y = ruler.next().unwrap_or_default().y;
     let panel_comp =
         canvas_ui::component::panel::Panel::new(canvas_ui::component::panel::PanelProps {
             min: UiVec2::new(0.0, GALLERY_COMPONENT_PANEL_H),
@@ -1158,19 +1482,31 @@ pub fn gallery_layout(
         });
     let panel_rects = panel_comp.layout(
         pilot_backend(),
-        UiRect::new(control_x, y, control_w, GALLERY_COMPONENT_PANEL_H),
+        UiRect::new(
+            control_x,
+            comp_panel_y,
+            control_w,
+            GALLERY_COMPONENT_PANEL_H,
+        ),
     );
     let component_panel = Some((panel_rects[0], panel_rects[1]));
-    y += GALLERY_COMPONENT_PANEL_H + SECTION_GAP;
 
     // --- SqueezeTail: именованная деградация узкого слота — хвост ряда
     // сжимается (до нуля), ничего не выходит за слот (переполнение видно
     // линту у Fit — здесь поглощается политикой). Боксы — MeasuredItem::Fixed
     // (именованное измеренное-эквивалентное spelling — правило W3 «0
     // Child::fixed у потребителей»). ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_SQUEEZE));
-    y += 18.0;
-    let squeeze_slot = UiRect::new(control_x, y, control_w, GALLERY_SQUEEZE_BOX_H);
+    let squeeze_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(squeeze_title.x, squeeze_title.y),
+        SECTION_SQUEEZE,
+    ));
+    let squeeze_slot = UiRect::new(
+        control_x,
+        ruler.next().unwrap_or_default().y,
+        control_w,
+        GALLERY_SQUEEZE_BOX_H,
+    );
     let squeeze_cells: Vec<UiRect> = Row {
         gap: kit::GAP_CONTROLS,
         policy: RowPolicy::SqueezeTail,
@@ -1190,13 +1526,39 @@ pub fn gallery_layout(
         FONT_FAMILY,
         LABEL_SIZE,
     );
-    y += GALLERY_SQUEEZE_BOX_H + SECTION_GAP;
 
     // --- MainAlign::SpaceBetween (Row): свободное место слота — в зазоры
     // между measured-чипами; и Column с распоркой (Spacer): зазор между
     // 1-й и 2-й ячейкой = gap + Spacer. ---
-    section_titles.push((UiPoint::new(content.x, y), SECTION_ALIGN));
-    y += 18.0;
+    let align_title = ruler.next().unwrap_or_default();
+    section_titles.push((UiPoint::new(align_title.x, align_title.y), SECTION_ALIGN));
+    // Два блока секции (SpaceBetween-ряд + Column-демо) — вертикальный
+    // Column линейки с зазором SPACING_S; нулевой хвост до Constrain —
+    // исторический, пинен golden-тестом линейки.
+    let mut align_blocks = Column {
+        gap: canvas_core::tokens::SPACING_S,
+        ..Column::default()
+    }
+    .lay_out_measured_with(
+        pilot_backend(),
+        UiRect::new(
+            control_x,
+            ruler.next().unwrap_or_default().y,
+            control_w,
+            kit::CHIP_HEIGHT + canvas_core::tokens::SPACING_S + align_column_block_h,
+        ),
+        &[
+            block(control_w, kit::CHIP_HEIGHT),
+            block(control_w, align_column_block_h),
+        ],
+        m,
+        fs,
+        FONT_FAMILY,
+        LABEL_SIZE,
+    )
+    .into_iter();
+    let align_between_y = align_blocks.next().unwrap_or_default().y;
+    let align_column_y = align_blocks.next().unwrap_or_default().y;
     let align_between: Vec<(UiRect, &'static str)> = {
         let keys = [
             crate::i18n::keys::KIT_ALIGN_A,
@@ -1221,7 +1583,7 @@ pub fn gallery_layout(
         }
         .lay_out_measured_with(
             pilot_backend(),
-            UiRect::new(control_x, y, control_w, kit::CHIP_HEIGHT),
+            UiRect::new(control_x, align_between_y, control_w, kit::CHIP_HEIGHT),
             &items,
             m,
             fs,
@@ -1232,7 +1594,6 @@ pub fn gallery_layout(
         .zip(keys)
         .collect()
     };
-    y += kit::CHIP_HEIGHT + 6.0;
     // Column (вертикальный стек, Fit): 3 ячейки + явная распорка 12 px
     // (Fixed 0×12 — Child::spacer в Column не участвует: «распорка» кита
     // занимает главную ось РЯДА). Зазор между 2-й и 3-й ячейкой =
@@ -1245,12 +1606,7 @@ pub fn gallery_layout(
     }
     .lay_out_measured_with(
         pilot_backend(),
-        UiRect::new(
-            control_x,
-            y,
-            control_w,
-            3.0 * GALLERY_COLUMN_CELL_H + 3.0 * 6.0 + 12.0,
-        ),
+        UiRect::new(control_x, align_column_y, control_w, align_column_block_h),
         &[
             MeasuredItem::Fixed {
                 w: GALLERY_COLUMN_CELL_W,
@@ -1271,7 +1627,6 @@ pub fn gallery_layout(
         FONT_FAMILY,
         LABEL_SIZE,
     );
-    y += 3.0 * GALLERY_COLUMN_CELL_H + 3.0 * 6.0 + 12.0;
 
     // === LAY-SHOWCASE (design/rules/11-layouts.md, LAY11 п.10): витрина
     // раскладок — механизмы LAY2/LAY5/LAY7/LAY8, которых ещё не было в
@@ -1283,8 +1638,12 @@ pub fn gallery_layout(
     // --- Constrain (LAY2): желаемое → min/max (min приоритетнее max).
     // Три блока: ниже минимума / внутри границ / выше максимума —
     // ширины блоков = результат `constrain(min, max, desired)`.
-    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_CONSTRAIN));
-    y += 18.0;
+    let constrain_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(constrain_title.x, constrain_title.y),
+        SECTION_LAYOUT_CONSTRAIN,
+    ));
+    let constrain_y = ruler.next().unwrap_or_default().y;
     let layout_constrain: Vec<(UiRect, f32)> = {
         let desired = [24.0, 80.0, 160.0];
         let blocks: Vec<Child> = desired
@@ -1304,19 +1663,19 @@ pub fn gallery_layout(
         }
         .lay_out_with(
             pilot_backend(),
-            UiRect::new(control_x, y, control_w, GALLERY_LAYOUT_BLOCK_H),
+            UiRect::new(control_x, constrain_y, control_w, GALLERY_LAYOUT_BLOCK_H),
             &blocks,
         )
         .into_iter()
         .zip(desired)
         .collect()
     };
-    y += GALLERY_LAYOUT_BLOCK_H + SECTION_GAP;
 
     // --- Pad (LAY2 + LAY7): внутренние поля контейнера — EdgeInsets
     // из шкалы S1 (S/SM/MD/LG): рамка-ячейка + внутренний rect после pad.
-    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_PAD));
-    y += 18.0;
+    let pad_title = ruler.next().unwrap_or_default();
+    section_titles.push((UiPoint::new(pad_title.x, pad_title.y), SECTION_LAYOUT_PAD));
+    let pad_y = ruler.next().unwrap_or_default().y;
     let layout_pad: Vec<(UiRect, UiRect, &'static str)> = {
         let scales: [(&'static str, f32); 4] = [
             ("S", canvas_core::tokens::SPACING_S),
@@ -1330,7 +1689,7 @@ pub fn gallery_layout(
         }
         .lay_out_with(
             pilot_backend(),
-            UiRect::new(control_x, y, control_w, GALLERY_LAYOUT_CELL_H),
+            UiRect::new(control_x, pad_y, control_w, GALLERY_LAYOUT_CELL_H),
             &[
                 Child::flexible(0.0, GALLERY_LAYOUT_CELL_H, 1.0),
                 Child::flexible(0.0, GALLERY_LAYOUT_CELL_H, 1.0),
@@ -1343,13 +1702,16 @@ pub fn gallery_layout(
         .map(|(cell, (name, g))| (cell, pad(cell, EdgeInsets::uniform(g)), name))
         .collect()
     };
-    y += GALLERY_LAYOUT_CELL_H + SECTION_GAP;
 
     // --- Stack (LAY2): фиксированный блок в слоте — «модалка по центру»
     // (Center/Center) и «прижата к углу» (End/End); слоты — равные доли
     // ширины (grow 1:1).
-    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_STACK));
-    y += 18.0;
+    let stack_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(stack_title.x, stack_title.y),
+        SECTION_LAYOUT_STACK,
+    ));
+    let stack_y = ruler.next().unwrap_or_default().y;
     let layout_stack: Vec<(UiRect, UiRect)> = {
         let aligns = [(HAlign::Center, VAlign::Center), (HAlign::End, VAlign::End)];
         Row {
@@ -1358,7 +1720,7 @@ pub fn gallery_layout(
         }
         .lay_out_with(
             pilot_backend(),
-            UiRect::new(control_x, y, control_w, GALLERY_LAYOUT_CELL_H),
+            UiRect::new(control_x, stack_y, control_w, GALLERY_LAYOUT_CELL_H),
             &[
                 Child::flexible(0.0, GALLERY_LAYOUT_CELL_H, 1.0),
                 Child::flexible(0.0, GALLERY_LAYOUT_CELL_H, 1.0),
@@ -1369,13 +1731,40 @@ pub fn gallery_layout(
         .map(|(cell, (h, v))| (cell, stack(cell, GALLERY_STACK_BLOCK, h, v)))
         .collect()
     };
-    y += GALLERY_LAYOUT_CELL_H + SECTION_GAP;
 
     // --- Шкала зазоров S1 (LAY7): пары блоков с зазорами S/SM/MD/LG/XL —
     // зазор пары == значение ступени; подпись — MeasuredItem::Text
     // («ступень · значение», значение — токен шкалы, не литерал).
-    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_GAPS));
-    y += 18.0;
+    let gaps_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(gaps_title.x, gaps_title.y),
+        SECTION_LAYOUT_GAPS,
+    ));
+    // Ряды шкалы — вложенный Column линейки с шагом SPACING_SM.
+    let gap_row_rects = Column {
+        gap: canvas_core::tokens::SPACING_SM,
+        ..Column::default()
+    }
+    .lay_out_measured_with(
+        pilot_backend(),
+        UiRect::new(
+            control_x,
+            ruler.next().unwrap_or_default().y,
+            control_w,
+            5.0 * GALLERY_GAP_BLOCK_H + 4.0 * canvas_core::tokens::SPACING_SM,
+        ),
+        &[
+            block(control_w, GALLERY_GAP_BLOCK_H),
+            block(control_w, GALLERY_GAP_BLOCK_H),
+            block(control_w, GALLERY_GAP_BLOCK_H),
+            block(control_w, GALLERY_GAP_BLOCK_H),
+            block(control_w, GALLERY_GAP_BLOCK_H),
+        ],
+        m,
+        fs,
+        FONT_FAMILY,
+        LABEL_SIZE,
+    );
     let layout_gaps: Vec<GapDemoRow> = {
         let scales: [(&'static str, f32); 5] = [
             ("S", canvas_core::tokens::SPACING_S),
@@ -1385,7 +1774,7 @@ pub fn gallery_layout(
             ("XL", canvas_core::tokens::SPACING_XL),
         ];
         let mut rows = Vec::with_capacity(scales.len());
-        for (name, g) in scales {
+        for (row, (name, g)) in gap_row_rects.into_iter().zip(scales) {
             // Подпись живёт до конца итерации — MeasuredItem заимствует из
             // неё (паттерн wrap-секции). Pad подписи — SM слева+справа
             // (2×SM — суммарный пад из ступеней шкалы, LAY7.1).
@@ -1396,7 +1785,7 @@ pub fn gallery_layout(
             }
             .lay_out_measured_with(
                 pilot_backend(),
-                UiRect::new(control_x, y, control_w, GALLERY_GAP_BLOCK_H),
+                UiRect::new(control_x, row.y, control_w, GALLERY_GAP_BLOCK_H),
                 &[
                     MeasuredItem::Fixed {
                         w: GALLERY_GAP_BLOCK_W,
@@ -1425,17 +1814,19 @@ pub fn gallery_layout(
                 label: it.next().unwrap_or_default(),
                 caption,
             });
-            y += GALLERY_GAP_BLOCK_H + canvas_core::tokens::SPACING_SM;
         }
         rows
     };
-    y += SECTION_GAP - canvas_core::tokens::SPACING_SM;
 
     // --- Сцена: percent + Fill (LAY5): доли ширины — 20% / 30% / Fill
     // (остаток). LAY5.2: перед расширенными политиками проверяется маска
     // движка — код не молчит в возможностях, которых нет (демо пустое).
-    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_PERCENT));
-    y += 18.0;
+    let percent_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(percent_title.x, percent_title.y),
+        SECTION_LAYOUT_PERCENT,
+    ));
+    let percent_y = ruler.next().unwrap_or_default().y;
     let layout_percent: Vec<UiRect> = {
         let feats = canvas_ui::layout::default_backend().features();
         if feats.contains(LayoutFeatures::PERCENT) && feats.contains(LayoutFeatures::FLEX_GROW) {
@@ -1462,7 +1853,7 @@ pub fn gallery_layout(
             // с индекса 1 (DFS pre-order).
             FlexLayoutEngine
                 .lay_out_scene(
-                    UiRect::new(control_x, y, control_w, GALLERY_LAYOUT_BLOCK_H),
+                    UiRect::new(control_x, percent_y, control_w, GALLERY_LAYOUT_BLOCK_H),
                     &scene,
                 )
                 .into_iter()
@@ -1472,25 +1863,26 @@ pub fn gallery_layout(
             Vec::new()
         }
     };
-    y += GALLERY_LAYOUT_BLOCK_H + SECTION_GAP;
 
     // --- Сцена: aspect-ratio (LAY5): превью-плитки 16:9 — ширина задана
     // (равные трети контрол-колонки), высота выводится движком из ratio.
-    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_ASPECT));
-    y += 18.0;
-    let (layout_aspect, aspect_h): (Vec<UiRect>, f32) = {
+    let aspect_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(aspect_title.x, aspect_title.y),
+        SECTION_LAYOUT_ASPECT,
+    ));
+    let aspect_y = ruler.next().unwrap_or_default().y;
+    let layout_aspect: Vec<UiRect> = {
         let feats = canvas_ui::layout::default_backend().features();
-        let tile_w = ((control_w - 2.0 * kit::GAP_CONTROLS) / 3.0).max(0.0);
-        let tile_h = tile_w * 9.0 / 16.0;
-        let rects = if feats.contains(LayoutFeatures::ASPECT_RATIO) && tile_w > 0.0 {
+        if feats.contains(LayoutFeatures::ASPECT_RATIO) && aspect_tile_w > 0.0 {
             let scene = SceneNode::row(
                 control_w,
-                tile_h,
+                aspect_h,
                 kit::GAP_CONTROLS,
                 (0..3)
                     .map(|_| {
                         SceneNode::default()
-                            .sized(SceneSize::fixed_w(tile_w))
+                            .sized(SceneSize::fixed_w(aspect_tile_w))
                             .ratio(16.0 / 9.0)
                     })
                     .collect(),
@@ -1498,31 +1890,31 @@ pub fn gallery_layout(
             // Контракт lay_out_scene: [0] — корень (== слот); плитки —
             // дети с индекса 1 (DFS pre-order).
             FlexLayoutEngine
-                .lay_out_scene(UiRect::new(control_x, y, control_w, tile_h), &scene)
+                .lay_out_scene(
+                    UiRect::new(control_x, aspect_y, control_w, aspect_h),
+                    &scene,
+                )
                 .into_iter()
                 .skip(1)
                 .collect()
         } else {
             Vec::new()
-        };
-        (rects, tile_h)
+        }
     };
-    y += aspect_h + SECTION_GAP;
 
     // --- Сцена: sticky-шапка (LAY5): окно-колонка (Hidden + offset) —
     // шапка Sticky{top: 0} прилипает к верху окна при демо-сдвиге
     // (post-processing сцены — формула demo_01_sticky_header_column);
     // строки контента за краем окна не рисуются (полная видимость).
-    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_STICKY));
-    y += 18.0;
-    // Высота окна: шапка + зазор + N строк с зазорами (S1).
-    let sticky_window_h = GALLERY_STICKY_ROW_H
-        + canvas_core::tokens::SPACING_S
-        + GALLERY_STICKY_VISIBLE_ROWS as f32 * GALLERY_STICKY_ROW_H
-        + (GALLERY_STICKY_VISIBLE_ROWS.saturating_sub(1)) as f32 * canvas_core::tokens::SPACING_S;
+    let sticky_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(sticky_title.x, sticky_title.y),
+        SECTION_LAYOUT_STICKY,
+    ));
+    let sticky_y = ruler.next().unwrap_or_default().y;
     let layout_sticky: Option<StickyDemo> = {
         let feats = canvas_ui::layout::default_backend().features();
-        let window = UiRect::new(control_x, y, control_w, sticky_window_h);
+        let window = UiRect::new(control_x, sticky_y, control_w, sticky_window_h);
         if feats.contains(LayoutFeatures::STICKY) && control_w > 0.0 {
             let header =
                 SceneNode::leaf(control_w, GALLERY_STICKY_ROW_H).at(ScenePosition::Sticky {
@@ -1560,19 +1952,21 @@ pub fn gallery_layout(
             None
         }
     };
-    y += sticky_window_h + SECTION_GAP;
-
     // --- Деградация HideBelow (LAY8 п.3): панель с подписью минимума —
     // при окне ниже порога скрывается ЦЕЛИКОМ (не сжимается); порог —
     // канонический what-if (900×600), политика — kit API реестра.
-    section_titles.push((UiPoint::new(content.x, y), SECTION_LAYOUT_HIDE_BELOW));
-    y += 18.0;
+    let hide_below_title = ruler.next().unwrap_or_default();
+    section_titles.push((
+        UiPoint::new(hide_below_title.x, hide_below_title.y),
+        SECTION_LAYOUT_HIDE_BELOW,
+    ));
+    let hide_below_y = ruler.next().unwrap_or_default().y;
     let hide_below_hidden = canvas_ui::registry::DegradationPolicy::HideBelow {
         min_width: GALLERY_HIDE_BELOW_MIN.x,
         min_height: GALLERY_HIDE_BELOW_MIN.y,
     }
     .hidden_at(viewport[0], viewport[1]);
-    let hide_below_slot = UiRect::new(control_x, y, control_w, GALLERY_HIDE_BELOW_H);
+    let hide_below_slot = UiRect::new(control_x, hide_below_y, control_w, GALLERY_HIDE_BELOW_H);
     let hide_below_panel = if hide_below_hidden {
         None
     } else {
@@ -1588,10 +1982,17 @@ pub fn gallery_layout(
         panel: hide_below_panel,
         hidden: hide_below_hidden,
     };
-    y += GALLERY_HIDE_BELOW_H + SECTION_GAP;
-
-    // Полная высота колонки секций (для скролла)
-    let content_h = (y - sections_top).max(0.0);
+    // Полная высота колонки секций (для скролла) — сумма блоков и распорок
+    // линейки (накопление Column тождественно прежнему курсору `y +=`;
+    // скролл-контракт FR-059 сохранён, включая хвостовую распорку).
+    let content_h = ruler_items
+        .iter()
+        .map(|item| match item {
+            MeasuredItem::Fixed { h, .. } => *h,
+            _ => 0.0,
+        })
+        .sum::<f32>()
+        .max(0.0);
 
     // === FR-059: сдвиг на scroll.offset + фильтр полной видимости ===
     // Тексты кита не клипятся по вертикали — секция за краем окна не
@@ -3292,5 +3693,244 @@ mod tests {
             lay_small.layout_hide_below.panel.is_none(),
             "панель скрыта целиком (нет промежуточных ступеней)"
         );
+    }
+
+    /// LAY-W3b: золотая геометрия вертикальной линейки секций витрины —
+    /// инвариант рефакторинга «ручной курсор `y +=` → Column-скелет»
+    /// (аудит layouts-2026-10 §3.2/§3.10, §5 LAY-W3). Y-координаты подписей
+    /// секций и якорей контента сняты с ПРЕЖНЕГО кода пробом (скан смещения
+    /// шагом 8 px, окно 1280×800, RU — как `scan_to`) и пинены с допуском
+    /// 0.005 px (< 0.01 px цели задачи). Исторические особенности линейки
+    /// зафиксированы как есть: хвост +4 px после Buttons, нулевые зазоры
+    /// после Focus (F-17) и Align (SpaceBetween+Column), шаг рядов Buttons
+    /// SPACING_SM, рядов шкалы Gaps — SPACING_SM.
+    #[test]
+    fn gallery_layout_ruler_golden_column_skeleton() {
+        const TOL: f32 = 0.005;
+        let expected: &[(&str, f32)] = &[
+            ("content_h", 2624.0),
+            ("TITLE kit.section.buttons", 134.0),
+            ("TITLE kit.section.icon_buttons", 312.0),
+            ("TITLE kit.section.chips", 368.0),
+            ("TITLE kit.section.dropdown", 422.0),
+            ("TITLE kit.section.toast", 572.0),
+            ("TITLE kit.section.tooltip", 622.0),
+            ("TITLE kit.section.text_field", 688.0),
+            ("TITLE kit.section.switch", 692.0),
+            ("TITLE kit.section.card", 686.0),
+            ("TITLE kit.section.list", 692.0),
+            ("TITLE kit.section.icons", 692.0),
+            ("TITLE kit.section.table", 692.0),
+            ("TITLE kit.section.measured", 690.0),
+            ("TITLE kit.section.grow", 688.0),
+            ("TITLE kit.section.wrap", 692.0),
+            ("TITLE kit.section.grid", 690.0),
+            ("TITLE kit.section.focus", 688.0),
+            ("TITLE kit.section.component_row", 688.0),
+            ("TITLE kit.section.component_panel", 686.0),
+            ("TITLE kit.section.squeeze", 692.0),
+            ("TITLE kit.section.align", 686.0),
+            ("TITLE kit.section.layout_constrain", 688.0),
+            ("TITLE kit.section.layout_pad", 686.0),
+            ("TITLE kit.section.layout_stack", 692.0),
+            ("TITLE kit.section.layout_gaps", 690.0),
+            ("TITLE kit.section.layout_percent", 692.0),
+            ("TITLE kit.section.layout_aspect", 690.0),
+            ("TITLE kit.section.layout_sticky", 688.0),
+            ("TITLE kit.section.layout_hide_below", 688.0),
+            ("ANCHOR buttons.first", 152.0),
+            ("ANCHOR buttons.last", 266.0),
+            ("ANCHOR icon", 330.0),
+            ("ANCHOR chips", 386.0),
+            ("ANCHOR dropdown.anchor", 440.0),
+            ("ANCHOR dropdown.menu", 474.0),
+            ("ANCHOR dropdown.item", 478.0),
+            ("ANCHOR toast", 590.0),
+            ("ANCHOR tooltip.anchor", 640.0),
+            ("ANCHOR tooltip.bubble", 662.0),
+            ("ANCHOR textfield", 674.0),
+            ("ANCHOR switch", 686.0),
+            ("ANCHOR card", 640.0),
+            ("ANCHOR list.area", 614.0),
+            ("ANCHOR icons.glyph", 678.0),
+            ("ANCHOR table.row", 678.0),
+            ("ANCHOR measured.chip", 684.0),
+            ("ANCHOR grow.cell", 674.0),
+            ("ANCHOR wrap.chip", 686.0),
+            ("ANCHOR grid.cell", 676.0),
+            ("ANCHOR focus.button", 674.0),
+            ("ANCHOR component.row", 682.0),
+            ("ANCHOR component.panel", 616.0),
+            ("ANCHOR squeeze.slot", 686.0),
+            ("ANCHOR align.between", 688.0),
+            ("ANCHOR align.column", 686.0),
+            ("ANCHOR constrain", 682.0),
+            ("ANCHOR pad", 648.0),
+            ("ANCHOR stack", 646.0),
+            ("ANCHOR gaps.first", 684.0),
+            ("ANCHOR gaps.last", 684.0),
+            ("ANCHOR percent", 678.0),
+            ("ANCHOR aspect", 564.0),
+            ("ANCHOR sticky.window", 594.0),
+            ("ANCHOR hidebelow.slot", 650.0),
+        ];
+        let mut m = new_measurer();
+        let mut fs = measure_font_system();
+        let p = gallery_palette();
+        let lay0 = gallery_layout(
+            [1280.0, 800.0],
+            Language::Ru,
+            &kit::ScrollState::default(),
+            &p,
+            &mut m,
+            &mut fs,
+        );
+        let content_h = lay0.content_h;
+        let viewport_h = lay0.sections_viewport.h;
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut check = |tag: &str, val: f32, off: f32| {
+            if seen.insert(tag.to_owned()) {
+                let (_, want) = expected
+                    .iter()
+                    .find(|(t, _)| t == &tag)
+                    .unwrap_or_else(|| panic!("золотой тег без ожидаемого значения: {tag}"));
+                assert!(
+                    (val - want).abs() < TOL,
+                    "дрейф линейки {tag} (off={off}): {val} != {want}"
+                );
+            }
+        };
+        // Полная высота колонки (скролл-контракт) — сверяется первым.
+        check("content_h", content_h, 0.0);
+        let mut off = 0.0f32;
+        while off <= content_h - viewport_h {
+            let s = kit::ScrollState {
+                offset: off,
+                content_h,
+                viewport_h,
+            };
+            let lay = gallery_layout([1280.0, 800.0], Language::Ru, &s, &p, &mut m, &mut fs);
+            for (origin, key) in &lay.section_titles {
+                check(&format!("TITLE {key}"), origin.y, off);
+            }
+            let mut pin = |tag: &str, val: f32, off: f32| check(tag, val, off);
+            if let Some(r) = lay.button_rows.first() {
+                pin("ANCHOR buttons.first", r.slot.y, off);
+            }
+            if let Some(r) = lay.button_rows.last() {
+                pin("ANCHOR buttons.last", r.slot.y, off);
+            }
+            if let Some(r) = lay.icon_buttons.first() {
+                pin("ANCHOR icon", r.y, off);
+            }
+            if let Some(r) = lay.chips.first() {
+                pin("ANCHOR chips", r.y, off);
+            }
+            if lay.dropdown_anchor.w > 0.0 {
+                pin("ANCHOR dropdown.anchor", lay.dropdown_anchor.y, off);
+            }
+            if lay.dropdown_menu.w > 0.0 {
+                pin("ANCHOR dropdown.menu", lay.dropdown_menu.y, off);
+            }
+            if let Some(r) = lay.dropdown_items.first() {
+                pin("ANCHOR dropdown.item", r.y, off);
+            }
+            if lay.toast.w > 0.0 {
+                pin("ANCHOR toast", lay.toast.y, off);
+            }
+            if lay.tooltip_anchor.w > 0.0 {
+                pin("ANCHOR tooltip.anchor", lay.tooltip_anchor.y, off);
+            }
+            if !lay.tooltip.is_empty() {
+                pin("ANCHOR tooltip.bubble", lay.tooltip.y, off);
+            }
+            if let Some((_, _, f)) = lay.text_fields.first() {
+                pin("ANCHOR textfield", f.rect.y, off);
+            }
+            if let Some((r, _, _, _)) = lay.switches.first() {
+                pin("ANCHOR switch", r.y, off);
+            }
+            if let Some(c) = &lay.card {
+                pin("ANCHOR card", c.rect.y, off);
+            }
+            if lay.list_area.w > 0.0 {
+                pin("ANCHOR list.area", lay.list_area.y, off);
+            }
+            if let Some((r, _)) = lay.icon_glyphs.first() {
+                pin("ANCHOR icons.glyph", r.y, off);
+            }
+            if let Some(r) = lay.row_rows.first() {
+                pin("ANCHOR table.row", r.lay.row.y, off);
+            }
+            if let Some(r) = lay.measured_chips.first() {
+                pin("ANCHOR measured.chip", r.y, off);
+            }
+            if let Some((r, _)) = lay.grow_cells.first() {
+                pin("ANCHOR grow.cell", r.y, off);
+            }
+            if let Some((r, _)) = lay.wrap_chips.first() {
+                pin("ANCHOR wrap.chip", r.y, off);
+            }
+            if let Some(r) = lay.grid_cells.first() {
+                pin("ANCHOR grid.cell", r.y, off);
+            }
+            if let Some(r) = lay.focus_buttons.first() {
+                pin("ANCHOR focus.button", r.y, off);
+            }
+            if lay.component_row_slot.w > 0.0 {
+                pin("ANCHOR component.row", lay.component_row_slot.y, off);
+            }
+            if let Some((panel, _)) = &lay.component_panel {
+                pin("ANCHOR component.panel", panel.y, off);
+            }
+            if lay.squeeze_slot.w > 0.0 {
+                pin("ANCHOR squeeze.slot", lay.squeeze_slot.y, off);
+            }
+            if let Some((r, _)) = lay.align_between.first() {
+                pin("ANCHOR align.between", r.y, off);
+            }
+            if let Some(r) = lay.column_cells.first() {
+                pin("ANCHOR align.column", r.y, off);
+            }
+            if let Some((r, _)) = lay.layout_constrain.first() {
+                pin("ANCHOR constrain", r.y, off);
+            }
+            if let Some((r, _, _)) = lay.layout_pad.first() {
+                pin("ANCHOR pad", r.y, off);
+            }
+            if let Some((r, _)) = lay.layout_stack.first() {
+                pin("ANCHOR stack", r.y, off);
+            }
+            if let Some(g) = lay.layout_gaps.first() {
+                if let Some(b) = g.blocks.first() {
+                    pin("ANCHOR gaps.first", b.y, off);
+                }
+            }
+            if lay.layout_gaps.len() >= 5 {
+                if let Some(b) = lay.layout_gaps[4].blocks.first() {
+                    pin("ANCHOR gaps.last", b.y, off);
+                }
+            }
+            if let Some(r) = lay.layout_percent.first() {
+                pin("ANCHOR percent", r.y, off);
+            }
+            if let Some(r) = lay.layout_aspect.first() {
+                pin("ANCHOR aspect", r.y, off);
+            }
+            if let Some(st) = &lay.layout_sticky {
+                pin("ANCHOR sticky.window", st.window.y, off);
+            }
+            if lay.layout_hide_below.slot.w > 0.0 {
+                pin("ANCHOR hidebelow.slot", lay.layout_hide_below.slot.y, off);
+            }
+            off += 8.0;
+        }
+        // Полнота: каждый золотой тег снят сканом (секция не исчезла).
+        for (tag, _) in expected {
+            assert!(
+                seen.iter().any(|t| t == tag),
+                "золотой тег не снят сканом: {tag}"
+            );
+        }
     }
 }
