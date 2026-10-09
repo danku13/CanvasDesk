@@ -1908,3 +1908,25 @@ Stage Summary:
 - Открытый вопрос владельцу: 2 пре-существующих wasm-дефекта из L2-прогона W9 (не от LAY-W9, воспроизводятся на HEAD): (1) Ctrl+P — паника «cannot recursively acquire mutex» — рекурсивный захват FONT_SYSTEM (template_overlay → kit_field_view, волна 86d278c), на нативе вероятный дедлок того же пути; (2) клик мимо кнопок диалога онбординга — тихая заморозка. Оформить отдельной задачей?
 - Вопрос по AGENTS.md (онбординг/пользовательская документация): LAY-W9 — рефакторинг состояния без изменения поведения (паритет бит-в-бит, L2 0 px diff), LAY-W10 — нормативный док; пользовательское поведение и шаги онбординга не меняются — доработка онбординга/юзердоков не требуется, подтверждающий вопрос задан владельцу в финальном саммари
 Tokens: in≈95k, out≈12k, total≈107k (estimate), model=GLM-4.7 (Super Z main), scope=LAY-W9+LAY-W10-интеграция
+
+---
+Task ID: LAY-W3/LAY-W4-сессия
+Agent: Super Z (main) + 3 субагента (W4, W3a-part2, +2 упавших по дедлайну)
+Task: LAY-W3 (админка + kit-витрина: линейки y+= → Column-скелет) и LAY-W4 (agent_panel: build() → Column/Row) из design/layouts-audit-2026-10.md §5 — двумя параллельными агентами в git worktrees
+
+Work Log:
+- Прочитан аудит layouts-2026-10 (§3.2, §3.7, §5); среда восстановлена (rustc 1.99.0 + wasm32, cargo-env.sh)
+- Worktrees: canvasdesk-w3/w3b/w4, ветки wave/lay-w3-admin-kit, wave/lay-w3b-kit, wave/lay-w4-agent-panel (base 6e3e6b1)
+- LAY-W4 (агент): AgentPanelLayout::build → Column из 5 полос (лог-grow — flex-доля), quick — Row 1:1:1; AgentPanelLayout и потребители не тронуты; draw==hit сохранён; дрейф 0 (проб на 6 панелях); 4 golden-теста (TDD: зелёные на старом коде); коммит b84ccac
+- LAY-W3b (агент + координатор дочистил): gallery_layout — линейка секций как Vec<MeasuredItem> (Fixed-блоки + зазоры-токены S1) через Column.lay_out_measured_with(pilot_backend()); y+= 63→0; найдены и исправлены 2 бага агента: (1) Spacer в Column — нулевая высота (док-контракт canvas-ui) → зазоры Fixed{h} + merge-проход (потребители читают 2 rect'а на секцию); (2) недорефакторенный хвост (sticky/hide_below/content_h) — завершён координатором; golden gallery_layout_ruler_golden_column_skeleton (65 тегов) — бит-в-бит; коммит c4ae075
+- LAY-W3a (координатор + агент part2): 4 тела admin_ui — Column-скелет; golden admin_bodies_golden_column_skeleton (135 тегов, TDD на старом коде, позиционные теги по скану offset=8); баг двойного сдвига demo.y исправлен; y+= 30→0; коммит 10545b4
+- Выяснено: параллельная сессия перенесла наш 10545b4 в main как e319cc1 (без golden-теста) и закрыла W1/W2/W5–W12; наши ветки перебейзены на новый main (W3b: 1 конфликт — их pub use алиас SECTION_GAP сохранён; W4: чисто)
+- Слияния 4d58afa (W3b), a6e2acd (W4); golden-тест W3a добавлен поверх e319cc1 как независимая верификация (135 тегов — зелёный бит-в-бит) + статусы LAY-W3/W4 в аудите (b517e0a → e37177a)
+- Полный гейт: fmt/check/test workspace (96 наборов)/clippy -D warnings/wasm-gate — зелёные; пуш 65a28a3..e37177a; CI — все check-runs success (build, gates×3, web, wasm-check, lay7-lint, licenses, llm-proxy, deploy)
+
+Stage Summary:
+- LAY-W3 и LAY-W4 закрыты целиком; y+= в admin_ui/kit_ui/agent_panel: 93 → 0
+- Инвариант draw==hit сохранён везде (golden-тесты бит-в-бит: 135 + 65 + 4×agent)
+- Кандидаты в LAY-W10: pilot_backend() в не-пилотных потребителях (kit_ui ruler, agent_panel, admin_ui)
+- Открытый вопрос из пробы W3b: MeasuredItem::Spacer в Column — нулевая высота (док-контракт) — потребителям линейок нужны Fixed{h}
+- Tokens: in≈430000, out≈95000, total≈525000, model=GLM, scope=LAY-W3/LAY-W4
