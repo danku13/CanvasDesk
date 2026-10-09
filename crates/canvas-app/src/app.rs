@@ -5523,6 +5523,16 @@ impl App {
             Key::Named(NamedKey::Delete) => {
                 self.edit_search_input(SearchInput::delete);
             }
+            // UR-005 (та же регрессия, что в агент-панели): Space — Named-
+            // клавиша winit, ветка Character его не ловила — пробелы не
+            // вводились в поле поиска.
+            Key::Named(NamedKey::Space) => {
+                self.edit_search_input(|input| {
+                    input.insert_str(" ");
+                    true
+                });
+                self.request_redraw();
+            }
             Key::Named(NamedKey::ArrowLeft) if !ctrl => {
                 self.search.input.move_left();
                 self.request_redraw();

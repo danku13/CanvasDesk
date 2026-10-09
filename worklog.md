@@ -1556,3 +1556,29 @@ Stage Summary:
 - Класс бага «вырожденный rect из-за двойной конвенции» документирован в UR-004/CR-033 — кандидаты на линт (ui_layout_lint): xyxy-поверхности vs xywh — одним сводом
 - Открытый вопрос: то же наложение стоит проверить для #tour-menu при открытой агент-панели на <1200px (тулбар там в левом нижнем углу — конфликтов нет, но меню открывается у правого края)
 Tokens: in≈130k, out≈30k, total≈160k (estimate), model=GLM (Super Z main), scope=UR-004/CR-033
+
+---
+Task ID: UR-005/CR-034 (сессия web-0a539c42-84fd-4916-9a97-970c8052c51d)
+Agent: Super Z (main)
+Task: Сообщение владельца: «проверь ui-kit На пример активного поля ввода, сейчас на ctrl+i оно всегда выглядит как неактивное, так же не отображается иконка отправки запроса, так же как и не отображаются иконки на панели статуса AI. на панели ctrl+i есть проблемы с вёрсткой (на скриншоте). сделай полную ревизию поверхности с учётом дизайн-концепции из design\rules и ui-kit. В поле ввода отсутствуют пробелы и выделение текста.»
+
+Work Log:
+- Диагноз по 6 пунктам владельца: (1) иконки ➤⚡⏸▶ — тофу: дефолт IconStyle::Glyph, сабсет CanvasDeskSymbols (21 глиф) их не содержал, в SVG-атласе имён send/zap/pause/play не было; KitDraw.icons из AI-панелей вообще не дрейнились в рендер (дрейнился только search_overlay); (2) поле ввода — стиль захардкожен Normal (let _ = input_state), фокуса/каретки нет; (3) Space — winit Named(Space), ветка Character не ловила (тот же дефект в поиске); (4) caret был в байтах (ломался бы на кириллице), sel/стрелки/буфер отсутствовали; (5) вёрстка: empty-state одной строкой с обрезкой (скриншот «…агент вызовет M»), провайдер-чип «BYOK (свой ключ)» клипался в фикс. 100px, высоты вне шкалы кита (36/36/22/18 vs 30/26/26/24), hit-тест дублировал геометрию draw
+- S1a (атлас): +16 SVG send/zap/pause/play × lucide/feather/material/bootstrap (официальные пути, пермиссивные лицензии); rasterize_icons.py — ROOT из __file__ (захардкоженный путь сломался при переносе чекаута), ICON_NAMES 39→43; icon_data.rs перегенерирован (атлас 1376×160, 215 ячеек)
+- S1b (шрифт): scripts/extend_symbol_font.py — 4 оригинальных полигональных силуэта (▶ ⏸ ⚡ ➤) в стиле соседних глифов сабсета (▲ 805×697 @ adv 907), fontTools, идемпотентен; лицензия OFL не менялась (заимствований контуров нет)
+- S1c (дрейн): agent_panel_overlay/ai_status_panel → (quads, texts, icons); handler.rs расширяет icon_instances
+- S2 (агент-панель): AgentState.field: kit TextFieldModel (FR-058 — caret/sel в СИМВОЛАХ) + input_focused (Ctrl+I фокусирует, клик-мимо — blur, клик по Input — фокус); клавиатура: Space/стрелки+Shift/Home/End/Backspace/Delete/Ctrl+A-C-X-V (латиница+кириллица+control-коды)/Enter/Esc; без фокуса панель клавиши не глотает (канвас-хоткеи работают); рендер: kit::text_field (ellipsis/text_area/caret_x), фокус-рамка accent + params.y=1 (паттерн пилота TextField, A4), выделение — подложка accent α0.25, каретка 1.5px; AgentPanelLayout::build — единая геометрия draw==hit; высоты — константы кита (TEXT_FIELD_HEIGHT/ICON_BUTTON_SIZE/CHIP_HEIGHT), паддинги SPACING_LG/SM/S; empty-state — TextMeasurer::wrap; чипы — замер ширин (П6) + короткий провайдер (ai_status_prov_label → pub(super)) + ellipsis context-чипа; иконки zap/close/send через d.icon
+- S3 (статус-панель AI): pause/play/gear через d.icon (SVG + глиф-фолбэк); дрейн иконок
+- S4 (поиск): Space в on_search_key (та же регрессия Named(Space))
+- Бонус (находка браузерной верификации): белый тофу-бокс поверх чипа «Ollama» — viewport-рамка МИНИКАПЫ рисовалась ПОВЕРХ AI-статус-панели (панель встаёт над минимапой, но minimap-pass позже screen-оверлеев; класс CR-033 №4, но для статус-панели; воспроизводится и на пре-изменениях). Гейт UR-003 расширен: minimap_visible = agent_panel_rect().is_none() && ai_status_panel_rect().is_none()
+- Верификация на release-бандле (trunk 0.21.14, headless Chromium 1600×900): онбординг пройден, Ctrl+I — панель с переносимой подсказкой (6 строк), ⚡/✕/➤ видны (SVG и глиф-режимы); ввод «cac ltv» — пробел вставляется; Shift+← ×3 — выделение подложкой; ввод «z» — замещение; Enter — отправка (ответ «Провайдер Off», черновик сохранён — legacy ранний выход); клик по канвасу — blur (рамка обычная, каретки нет); AI-статус-панель (Ollama): ⏸/⚙/чипы читаемы, тофу-бокс исчез после гейта минимапы
+- Тесты: canvas-render — ui_symbol_glyphs_covered_by_embedded_fonts +⚡➤⏸▶; ai_surface_icons_rasterized_in_all_ui_sets (новый); atlas_size 195→215. canvas-app — agent_state_default (обновлён), agent_state_clear_input_resets_field, agent_field_caret_counts_chars_not_bytes, agent_field_selection_extend_and_replace, agent_field_space_insert (новые)
+- Гейты: cargo fmt --all --check; cargo check --workspace; cargo test --workspace (2756 passed, 0 failed); cargo clippy --workspace --all-targets -- -D warnings; wasm_gate.sh --check — зелёные
+- Доки: docs/user-reporting/ur-005-agent-panel-revision.md; docs/change-requests/cr-034-agent-panel-revision.md; index-cr-fr.md (+CR-034); user-reporting/README.md (+ur-005)
+
+Stage Summary:
+- Все 6 пунктов владельца закрыты и верифицированы в браузере: фокус поля (рамка+каретка), иконка send, иконки статус-панели, вёрстка (перенос/чипы/kit-высоты/hit==draw), пробелы, выделение с буфером
+- Класс «Named(Space) не ловится Character-веткой» — два потребителя (агент+поиск); кандидаты на аудит: explain inline-edit (та же семантика, отдельная задача)
+- Класс «minimap-pass поверх панелей» закрыт для обеих AI-панелей; общий кандидат: гейт по пересечению rect'ов вместо перечисления
+- Открытые: i18n строк агент-панели (hardcoded RU), точная геометрия Accept/Reject (FR-LLM-D-TODO)
+Tokens: in≈210k, out≈60k, total≈270k (estimate), model=GLM (Super Z main), scope=UR-005/CR-034

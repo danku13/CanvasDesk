@@ -298,25 +298,31 @@ impl ApplicationHandler<AppEvent> for App {
                 // (не модальна — клик мимо кнопок проваливается под канвас,
                 // но `ai_status_panel_hit` глотает ввод в пределах rect).
                 {
-                    let (ai_instances, ai_texts) = self.ai_status_panel();
+                    // UR-005: +icons — дрейн иконок KitDraw (pause/play/gear)
+                    // в icon_instances (прежде SVG-иконки панели терялись).
+                    let (ai_instances, ai_texts, ai_icons) = self.ai_status_panel();
                     let ai_clip = match self.ai_status_panel_rect() {
                         Some(rect) => canvas_ui::UiRect::new(rect[0], rect[1], rect[2], rect[3]),
                         None => band_vp_clip,
                     };
                     screen_bands.push(UiLayer::Panels, ai_clip, ai_instances, ai_texts);
+                    self.icon_instances.extend(ai_icons);
                 }
                 // FR-LLM-D / PRD-0010 F-4: Agent panel — правая боковая
                 // панель чат-UI (tool-calling через LLM). Скрыта если закрыта
                 // (`Ctrl+I` toggle) или вьюпорт < 600px. Полоса Panels (как
                 // status panel — не модальна, клики мимо активных элементов
-                // глотаются `agent_panel_hit`).
+                // глотаются `agent_panel_hit`). UR-005: +icons — иконки
+                // KitDraw (zap/close/send) дрейнятся в icon_instances (прежде
+                // терялись — дрейнился только search_overlay).
                 {
-                    let (ag_instances, ag_texts) = self.agent_panel_overlay();
+                    let (ag_instances, ag_texts, ag_icons) = self.agent_panel_overlay();
                     let ag_clip = match self.agent_panel_rect() {
                         Some(rect) => canvas_ui::UiRect::new(rect[0], rect[1], rect[2], rect[3]),
                         None => band_vp_clip,
                     };
                     screen_bands.push(UiLayer::Panels, ag_clip, ag_instances, ag_texts);
+                    self.icon_instances.extend(ag_icons);
                 }
                 // FR-LLM-D / PRD-0010 F-3: Graph builder dialog — модальный
                 // оверлей генерации графа из текста. Полоса Modals (как
@@ -1248,7 +1254,13 @@ impl ApplicationHandler<AppEvent> for App {
                 // поле ввода. Считаем ДО mutable-займа рендерера
                 // (agent_panel_rect нужен immutable self); в рендерере —
                 // идемпотентно, покадрово.
-                let minimap_visible = self.agent_panel_rect().is_none();
+                // UR-005 (ревизия ctrl+i, верификация в браузере): тот же
+                // класс наложения — viewport-рамка минимапы рисовалась
+                // ПОВЕРХ AI-статус-панели (панель встаёт над минимапой,
+                // но её pass — раньше minimap-pass). Минимапа скрывается
+                // и когда статус-панель AI видима.
+                let minimap_visible =
+                    self.agent_panel_rect().is_none() && self.ai_status_panel_rect().is_none();
                 if let Some(renderer) = self.renderer.as_mut() {
                     // FR-042 (E2): контекст агрегации кадра — индекс сцены +
                     // hover пучка; None при выключенной агрегации (F-13)

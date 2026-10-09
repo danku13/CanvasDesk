@@ -31,7 +31,10 @@ import cairosvg
 from PIL import Image
 import io
 
-ROOT = Path("/home/z/my-project/CanvasDesk")
+# Ревизия ctrl+i (2026-10-09): ROOT выводится из расположения скрипта
+# (../) — прежний захардкоженный путь /home/z/my-project/CanvasDesk сломался
+# при переносе чекаута (регистр/директория), скрипт падал до генерации.
+ROOT = Path(__file__).resolve().parent.parent
 ICON_DIR = ROOT / "assets" / "icons"
 OUT_RS = ROOT / "crates" / "canvas-render" / "src" / "icon_data.rs"
 
@@ -45,6 +48,12 @@ ICON_NAMES = [
     # рисовал глифы ✥/✦, отсутствующие во встроенных шрифтах (тофу).
     "tab_drag", "tab_suggest",
     "more", "chevron_down", "chevron_right",
+    # Ревизия ctrl+i (2026-10-09, UR-005): иконки AI-поверхностей — send
+    # (кнопка отправки агент-панели), zap (болт шапки агент-панели),
+    # pause/play (кнопка паузы статусной панели AI). Прежние глифы
+    # (➤ ⚡ ⏸ ▶) отсутствовали во встроенном сабсете CanvasDeskSymbols —
+    # в wasm рисовался тофу (системного фолбэка нет).
+    "send", "zap", "pause", "play",
 ]
 # FR-075 W2: роли шаблонных нод — отдельный SPARSE-набор: имена существуют
 # только в наборе "roles", у остальных наборов эти ячейки атласа прозрачны.

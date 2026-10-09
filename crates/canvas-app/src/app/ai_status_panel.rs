@@ -243,11 +243,13 @@ fn feat_chips_measured(
 }
 
 impl App {
-    /// FR-LLM-FIX / PRD-0010 F-7.9 (Q4): статусная панель AI — квады + тексты.
+    /// FR-LLM-FIX / PRD-0010 F-7.9 (Q4): статусная панель AI — квады + тексты + иконки.
     ///
     /// FR-LLM-C: рендер через `KitDraw` + kit-компоненты. Возвращает
-    /// `(Vec<CardInstance>, Vec<OwnedScreenText>)`, дёргая `KitDraw::quads`
-    /// и конвертируя `OwnedText` → `OwnedScreenText` (как `overlays.rs`).
+    /// `(Vec<CardInstance>, Vec<OwnedScreenText>, Vec<IconInstance>)`, дёргая
+    /// `KitDraw::quads`/`icons` и конвертируя `OwnedText` → `OwnedScreenText`
+    /// (как `overlays.rs`). UR-005: иконки KitDraw дрейнятся в рендер —
+    /// прежде терялись (SVG-иконки панели не доходили до экрана).
     ///
     /// Возвращает пустые `Vec`, если:
     /// - вьюпорт слишком узкий (< 900px, F-7.9);
@@ -260,16 +262,23 @@ impl App {
     /// 3. **costs**: «Session: $X.XX · Day: $X.XX / $L.LL».
     /// 4. **progress**: горизонтальный прогресс-бар day/limit.
     /// 5. (если `ai_paused`) — янтарный лейбл «AI на паузе».
-    pub(super) fn ai_status_panel(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+    pub(super) fn ai_status_panel(
+        &self,
+    ) -> (
+        Vec<CardInstance>,
+        Vec<OwnedScreenText>,
+        Vec<canvas_render::IconInstance>,
+    ) {
         let mut quads = Vec::new();
         let mut texts = Vec::new();
+        let mut icons_out = Vec::new();
         let viewport = self.viewport_logical();
         if viewport[0] < AI_STATUS_MIN_VIEWPORT_W || viewport[1] <= 0.0 {
-            return (quads, texts);
+            return (quads, texts, icons_out);
         }
         let llm = &self.settings.llm;
         if llm.all_off() {
-            return (quads, texts);
+            return (quads, texts, icons_out);
         }
         let palette = self.effective_palette();
         let kit_palette = palette.kit_palette();
@@ -391,16 +400,22 @@ impl App {
         // Позиция — из раскладки (правый край контента, зазор 6px).
         let gear_x = head.gear_x;
         let pause_x = head.pause_x;
-        let pause_glyph = if self.ai_paused { "▶" } else { "⏸" };
+        // UR-005: иконки паузы — SVG-атлас (`pause`/`play` — ревизия 2026-10-09;
+        // глифы ⏸/▶ отсутствовали в сабсете — тофу в wasm).
+        let (pause_icon, pause_glyph) = if self.ai_paused {
+            ("play", "▶")
+        } else {
+            ("pause", "⏸")
+        };
         let pause_hovered =
             point_in_rect([pause_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE], self.cursor);
         let gear_hovered =
             point_in_rect([gear_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE], self.cursor);
-        // (btn_x, glyph, hovered, icon_name) — icon_name="" → глиф через
-        // label_center; иначе — d.icon (SVG-атлас + glyph fallback).
-        for (btn_x, glyph, hovered, icon_name) in [
-            (pause_x, pause_glyph, pause_hovered, ""),
-            (gear_x, "⚙", gear_hovered, "gear"),
+        // (btn_x, icon_name, glyph, hovered) — d.icon: SVG-атлас + glyph
+        // fallback (сабсет расширен ⏸/▶ — фолбэк тоже читаем).
+        for (btn_x, icon_name, glyph, hovered) in [
+            (pause_x, pause_icon, pause_glyph, pause_hovered),
+            (gear_x, "gear", "⚙", gear_hovered),
         ] {
             let btn_rect = UiRect::new(btn_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE);
             let btn_state = if hovered {
@@ -412,13 +427,7 @@ impl App {
             // FR-LLM-FIX: радиус 6px — kit::icon_button_style уже использует
             // RADIUS_CHIP (6.0), совпадает с прототипом.
             d.control(btn_rect, &btn_style);
-            if icon_name.is_empty() {
-                // FR-ICONS: иконки нет в атласе — глиф шрифтом через label_center.
-                d.label_center(btn_rect, glyph, btn_style.text, 12.0);
-            } else {
-                // FR-ICONS: иконка может быть в SVG-атласе; glyph — fallback.
-                d.icon(btn_rect, icon_name, glyph, btn_style.text, 12.0);
-            }
+            d.icon(btn_rect, icon_name, glyph, btn_style.text, 12.0);
         }
         let _ = active_label_key; // маркер — для будущей подписи активности.
 
@@ -548,7 +557,9 @@ impl App {
                 align: t.align,
             })
             .collect();
-        (quads, texts)
+        // UR-005: +icons — дрейн иконок KitDraw (pause/play/gear) в рендер.
+        icons_out = d.icons;
+        (quads, texts, icons_out)
     }
 
     /// FR-LLM-FIX-2: короткая подпись провайдера для чипа статусной панели —
@@ -556,7 +567,9 @@ impl App {
     /// OAuth', ollama:'Ollama', laya:'Laya (local)', off:'Off'}). Полные
     /// подписи настроек («BYOK (свой ключ)», «ChatGPT (вход)») — только в
     /// 9-м табе; в шапке панели они раздували чип и наезжали на кнопки.
-    fn ai_status_prov_label(&self, p: canvas_llm::LlmProviderId) -> String {
+    /// UR-005: pub(super) — переиспользуется чипом провайдера агент-панели
+    /// (прежний полный label клипался в фикс. 100px).
+    pub(super) fn ai_status_prov_label(&self, p: canvas_llm::LlmProviderId) -> String {
         let key = match p {
             canvas_llm::LlmProviderId::Off => keys::AI_PROV_SHORT_OFF,
             canvas_llm::LlmProviderId::Laya => keys::AI_PROV_SHORT_LAYA,

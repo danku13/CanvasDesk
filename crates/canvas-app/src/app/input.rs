@@ -832,44 +832,144 @@ impl App {
                 return;
             }
         }
-        // W2 п.1 (PRD-0010 F-4): открытая агент-панель — приёмник текста
-        // (символы → input, Backspace — удаление, Enter — отправка, Esc —
-        // закрыть). Паттерн — ветка settings_text_edit выше (транзиентный
-        // UI-приёмник приоритетен над канвас-роутером).
+        // W2 п.1 (PRD-0010 F-4) / UR-005: открытая агент-панель — приёмник
+        // текста при фокусе в поле (`input_focused`): символы/Space → insert,
+        // стрелки — каретка/селекция (Shift), Home/End, Backspace/Delete
+        // (kit TextFieldModel FR-058 — позиции в СИМВОЛАХ), Ctrl+A/C/V/X,
+        // Enter — отправка, Esc — закрыть. Регрессии, закрытые здесь:
+        // (1) Space — winit отдаёт его как Named(Space), ветка Character
+        //     его не ловила — пробелы не вводились;
+        // (2) выделение/каретка — прежний caret был в байтах (ломался на
+        //     кириллице), sel/стрелки/буфер отсутствовали;
+        // (3) без фокуса панель клавиши НЕ глотает — канвас-хоткеи работают
+        //     при открытой панели (возврат фокуса — клик по полю).
+        // Паттерн — ветка settings_text_edit выше (транзиентный UI-приёмник
+        // приоритетен над канвас-роутером).
         if self.agent_panel.open && event.state == ElementState::Pressed {
-            let handled = match &event.logical_key {
-                Key::Named(NamedKey::Escape) => {
-                    self.agent_panel.open = false;
-                    true
-                }
-                Key::Named(NamedKey::Enter) => {
-                    if !self.agent_panel.busy && !self.agent_panel.input.trim().is_empty() {
-                        let text = self.agent_panel.input.clone();
-                        self.agent_send(&text);
-                    }
-                    true
-                }
-                Key::Named(NamedKey::Backspace) => {
-                    if self.modifiers.control_key() {
-                        self.agent_panel.input.clear();
-                    } else {
-                        self.agent_panel.input.pop();
-                    }
-                    self.agent_panel.caret = self.agent_panel.input.len();
-                    true
-                }
-                Key::Character(text)
-                    if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
-                {
-                    self.agent_panel.input.push_str(text);
-                    self.agent_panel.caret = self.agent_panel.input.len();
-                    true
-                }
-                _ => false,
-            };
-            if handled {
+            // Esc закрывает панель при любом фокусе (аффорданс поверхности).
+            if event.logical_key == Key::Named(NamedKey::Escape) {
+                self.agent_panel.open = false;
+                self.agent_panel.input_focused = false;
                 self.request_redraw();
                 return;
+            }
+            if self.agent_panel.input_focused {
+                // Ctrl+<char> (латиница/кириллица/control-код) — буфер и
+                // select-all (раскладко-независимо, паттерн FIX-TEXTINPUT-KIT).
+                let ctrl_char = |codes: &[&str]| -> bool {
+                    self.modifiers.control_key()
+                        && !self.modifiers.alt_key()
+                        && matches!(&event.logical_key, Key::Character(t) if codes.contains(&t.as_str()))
+                };
+                let handled = if ctrl_char(&["a", "A", "ф", "Ф", "\u{01}"]) {
+                    self.agent_panel.field.select_all();
+                    true
+                } else if ctrl_char(&["c", "C", "с", "С", "\u{03}"]) {
+                    let text = match self.agent_panel.field.sel {
+                        Some((a, b)) => {
+                            let (s, e) = (a.min(b), a.max(b));
+                            let chars: Vec<char> = self.agent_panel.field.text.chars().collect();
+                            chars[s..e].iter().collect()
+                        }
+                        None => self.agent_panel.field.text.clone(),
+                    };
+                    self.clipboard.set_text(text);
+                    true
+                } else if ctrl_char(&["x", "X", "ч", "Ч", "\u{18}"]) {
+                    let text = match self.agent_panel.field.sel {
+                        Some((a, b)) => {
+                            let (s, e) = (a.min(b), a.max(b));
+                            let chars: Vec<char> = self.agent_panel.field.text.chars().collect();
+                            let cut: String = chars[s..e].iter().collect();
+                            self.agent_panel.field.backspace(); // удаляет селекцию
+                            cut
+                        }
+                        None => {
+                            let cut = self.agent_panel.field.text.clone();
+                            self.agent_panel.clear_input();
+                            cut
+                        }
+                    };
+                    self.clipboard.set_text(text);
+                    true
+                } else if ctrl_char(&["v", "V", "м", "М", "\u{16}"]) {
+                    if let Some(clip) = self.clipboard.get_text() {
+                        self.agent_panel.field.insert(&clip);
+                    }
+                    true
+                } else {
+                    match &event.logical_key {
+                        Key::Named(NamedKey::Enter) => {
+                            if !self.agent_panel.busy
+                                && !self.agent_panel.input_text().trim().is_empty()
+                            {
+                                let text = self.agent_panel.input_text().to_owned();
+                                self.agent_send(&text);
+                            }
+                            true
+                        }
+                        Key::Named(NamedKey::Backspace) => {
+                            if self.modifiers.control_key() {
+                                // Ctrl+Backspace — очистить поле (как в поиске).
+                                self.agent_panel.clear_input();
+                            } else {
+                                self.agent_panel.field.backspace();
+                            }
+                            true
+                        }
+                        Key::Named(NamedKey::Delete) => {
+                            self.agent_panel.field.delete();
+                            true
+                        }
+                        // Регрессия UR-005: Space — Named-клавиша (не
+                        // Character!) — пробел теперь вставляется.
+                        Key::Named(NamedKey::Space) => {
+                            self.agent_panel.field.insert(" ");
+                            true
+                        }
+                        Key::Named(NamedKey::ArrowLeft) => {
+                            self.agent_panel
+                                .field
+                                .move_caret(-1, self.modifiers.shift_key());
+                            true
+                        }
+                        Key::Named(NamedKey::ArrowRight) => {
+                            self.agent_panel
+                                .field
+                                .move_caret(1, self.modifiers.shift_key());
+                            true
+                        }
+                        Key::Named(NamedKey::Home) => {
+                            let back = self.agent_panel.field.caret as isize;
+                            self.agent_panel
+                                .field
+                                .move_caret(-back, self.modifiers.shift_key());
+                            true
+                        }
+                        Key::Named(NamedKey::End) => {
+                            let total = self.agent_panel.field.text.chars().count();
+                            let fwd = total as isize - self.agent_panel.field.caret as isize;
+                            self.agent_panel
+                                .field
+                                .move_caret(fwd, self.modifiers.shift_key());
+                            true
+                        }
+                        // Символы без модификаторов — insert в позицию каретки
+                        // (с замещением селекции). С Ctrl/Alt — пропуск к
+                        // роутеру (Ctrl+P/Ctrl+F и т.п. не вставляют «f»).
+                        Key::Character(text)
+                            if !self.modifiers.control_key() && !self.modifiers.alt_key() =>
+                        {
+                            self.agent_panel.field.insert(text);
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                if handled {
+                    self.request_redraw();
+                    return;
+                }
             }
         }
         // FR-054 (Q4-a PRD-0009): весь on_key — доставка KeyboardRouter'ом
@@ -974,7 +1074,8 @@ impl App {
         // W2 п.1 (PRD-0010 F-4): Ctrl+I — тогл Agent Panel (кириллица —
         // «Ш»). Ветер после роутера: при открытой панели Enter/Esc/символы
         // уже ушли в input выше; редактор ноды съедает Ctrl+I (курсив) в
-        // своей ветке раньше — конфликтов нет.
+        // своей ветке раньше — конфликтов нет. UR-005: открытие фокусирует
+        // поле (рамка accent + каретка; закрытие — снятие фокуса).
         if event.state == ElementState::Pressed
             && !event.repeat
             && self.modifiers.control_key()
@@ -983,6 +1084,7 @@ impl App {
                 if c.eq_ignore_ascii_case("i") || c.eq_ignore_ascii_case("ш"))
         {
             self.agent_panel.open = !self.agent_panel.open;
+            self.agent_panel.input_focused = self.agent_panel.open;
             self.request_redraw();
             return;
         }
