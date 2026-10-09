@@ -159,6 +159,23 @@ pub fn key_owner(registry: &SurfaceRegistry) -> KeyOwner {
         .unwrap_or(KeyOwner::Canvas)
 }
 
+/// Брейкпоинты ширины модалки настроек ([`id::SETTINGS`], LAY8.2 норматива
+/// `design/rules/11-layouts.md`): брейкпоинт регистрируется РЯДОМ С
+/// декларацией поверхности в реестре, а не в теле отрисовки. Единственное
+/// объявление — здесь; `settings_ui` потребляет их ре-экспортом под
+/// прежними именами (`MODAL_BP_*`) — [`crate::settings_ui::modal_mode`]
+/// ветвится Desktop/Compact/Mobile (W-e, вариант «A», решение владельца
+/// 03.10.2026): ≥ 1280 — двухколоночная раскладка, 768..1280 — одноколоночная
+/// с горизонтальным таб-баром, < 768 — полноэкранный лист. Порог «компакт»
+/// 1280 совпадает с каноническим вьюпортом гейта LAY8.1 (1280×800).
+pub const SETTINGS_BP_COMPACT: f32 = 1280.0;
+/// Брейкпоинт «мобильный» модалки настроек ([`id::SETTINGS`], ширина окна,
+/// лог. px): [`SETTINGS_BP_MOBILE`] ≤ viewport < [`SETTINGS_BP_COMPACT`] —
+/// компакт-режим ([`crate::settings_ui::modal_mode`]), ниже — полноэкранный
+/// лист вьюпорт минус внешние поля. См. [`SETTINGS_BP_COMPACT`] —
+/// единственное объявление брейкпоинтов настроек (LAY8.2).
+pub const SETTINGS_BP_MOBILE: f32 = 768.0;
+
 /// Сборка реестра активных поверхностей из состояния приложения.
 ///
 /// Порядок регистрации = обратный Esc-лестнице (см. заголовок модуля).
@@ -214,6 +231,9 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
     //    АДАПТИРУЮТСЯ брейкпоинтами ширины (settings_ui::modal_mode,
     //    вариант «A» от 03.10.2026) — HideBelow противоречил бы смыслу
     //    волны (модалка целиком в окне вплоть до 320×240).
+    //    Брейкпоинты адаптации — SETTINGS_BP_COMPACT/SETTINGS_BP_MOBILE
+    //    (выше, перед build_registry; LAY8.2: объявлены здесь же, рядом
+    //    с декларацией поверхности, а не в теле отрисовки settings_ui).
     if app.settings_open {
         reg.add(
             SurfaceDecl::new(id::SETTINGS, UiLayer::Modals, CapturePolicy::Block)
@@ -1635,6 +1655,27 @@ mod tests {
             .expect("whatif в реестре");
         assert!(decl.degradation.hidden_at(800.0, 560.0));
         assert!(!decl.degradation.hidden_at(1280.0, 800.0));
+    }
+
+    /// LAY8.2 (аудит LAY-W5): брейкпоинты модалки настроек объявлены В
+    /// РЕЕСТРЕ ([`SETTINGS_BP_COMPACT`]/[`SETTINGS_BP_MOBILE`], рядом с
+    /// декларацией SETTINGS), а не в теле отрисовки; значения канонические
+    /// (1280 = вьюпорт гейта LAY8.1; 768 — порог мобайл-листа, W-e «A»);
+    /// деградация SETTINGS — Always (настройки адаптируются, не прячутся).
+    #[test]
+    fn settings_breakpoints_registered_with_surface() {
+        assert_eq!(SETTINGS_BP_COMPACT, 1280.0);
+        assert_eq!(SETTINGS_BP_MOBILE, 768.0);
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.settings_open = true;
+        let reg = build_registry(&app);
+        let decl = reg
+            .declarations()
+            .iter()
+            .find(|d| d.id.as_str() == id::SETTINGS)
+            .expect("открытая модалка настроек в реестре");
+        assert_eq!(decl.degradation, DegradationPolicy::Always);
     }
 
     /// W-a (аудит §8 п.6): pick-rect реестра панели хоткеев == draw-rect —

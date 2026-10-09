@@ -1712,3 +1712,22 @@ Stage Summary:
 - Инвариант десктопа: `touch_hit_xywh` на точном указателе возвращает rect без изменений — поведение десктопа бит-в-бит прежнее (верифицировано тестом `lay_w8_touch_hit_noop_on_precise` + сохранением всех прежних 661 тестов)
 - Открытые вопросы владельцу: (1) autolink-диалог — расширять ли тач-зоны (мелкие кнопки в строках)? (2) explain `meta_rect` (крошки) — крошки сами по себе мелкие чипы, но их геометрия динамическая (через kit::crumbs); вопрос — выделять ли отдельную задачу. (3) Подтвердить контейнер «chip» для слота «✕» what-if (вместо bar) — расширенная зона ограничена чипом, не «крадёт» клики у соседа; это сознательное решение, но владелец может предпочесть bar (тогда «✕» будет ловче на таче, но может «съесть» клик по соседнему чипу)
 Tokens: in≈95k, out≈22k, total≈117k, model=GLM-4.7, scope=LAY-W8
+
+---
+Task ID: LAY-W5 (сессия web-3b7b2cbb)
+Agent: Super Z (main) + subagent general-purpose
+Task: Сообщение владельца: «Изучи design\layouts-audit-2026-10.md и стартуй LAY-W5 и LAY-W6 отдельными агентами». Этап 1 — LAY-W5 (P2, S): брейкпоинты настроек 1280/768 вынести в декларацию поверхности (LAY8.2 «брейкпоинт зарегистрирован там же, где рисуется поверхность»).
+
+Work Log:
+- Изучены: design/layouts-audit-2026-10.md (LAY-W5 §5, находка §3.8: MODAL_BP_COMPACT 1280 / MODAL_BP_MOBILE 768 в теле settings_ui.rs при декларации SETTINGS в ui_registry.rs), design/rules/11-layouts.md (LAY8.1 канонические вьюпорты, LAY8.2), crates/canvas-ui/src/registry.rs (SurfaceDecl: id/layer/capture/keyboard_scope/degradation — готового слота под брейкпоинты нет)
+- app/ui_registry.rs: SETTINGS_BP_COMPACT 1280.0 / SETTINGS_BP_MOBILE 768.0 объявлены рядом с build_registry (доки: LAY8.2, канон-вьюпорт LAY8.1 1280×800, W-e вариант «A» от 03.10.2026, семантика modal_mode); комментарий блока декларации SETTINGS ссылается на константы
+- settings_ui.rs: определения констант → ре-экспорт `pub use crate::app::ui_registry::{SETTINGS_BP_COMPACT as MODAL_BP_COMPACT, SETTINGS_BP_MOBILE as MODAL_BP_MOBILE}` — 12 вхождений (доки ModalMode, modal_mode, тесты) собрались бит-в-бит без правки тел
+- Тест settings_breakpoints_registered_with_surface: значения 1280/768 + декларация SETTINGS существует при settings_open=true с DegradationPolicy::Always
+- Гейты: fmt ✓, check -p canvas-app ✓, clippy -D warnings ✓, test -p canvas-app ✓; итоговый воркспейс-прогон main-агентом: fmt --all --check ✓, check --workspace ✓, test --workspace 96 наборов 0 failed ✓, clippy --workspace -D warnings ✓
+
+Stage Summary:
+- LAY8.2 для SETTINGS закрыт минимальной механической волной: единственное объявление брейкпоинтов — в реестре рядом с декларацией поверхности; settings_ui потребляет ре-экспортом под прежними именами; поведение/визуал бит-в-бит
+- Слот брейкпоинтов в SurfaceDecl не заводился (тяжёлый API не нужен); при волне LAY-W1 можно рассмотреть typed-слот
+- Файлы: crates/canvas-app/src/app/ui_registry.rs (+2 константы, +3 строки комментария декларации, +19 строк тест), crates/canvas-app/src/settings_ui.rs (const-определения → ре-экспорт)
+- Реализация subagent'ом (parallel), коммит и пуш — main-агент
+Tokens: in≈42k, out≈8k, total≈50k, model=GLM (subagent general-purpose), scope=LAY-W5
