@@ -49,10 +49,21 @@ Hover-заливки у поля нет (поле идентифицируетс
   значение откатывается.
 
 ## 7. Где в коде
-`canvas-ui/src/kit.rs` (TEXT_FIELD_*, focus_order), потребители:
-`canvas-render/src/search_ui.rs` (INPUT_HEIGHT 36, ROW_HEIGHT 28),
-`scheme_gallery_ui.rs` (INPUT_H 34), `template_ui.rs` (input 32);
-инлайн-редактор ноды — canvas-app (редактор с Ctrl+B/I/H, undo 50).
+Модель/действия/раскладка — `canvas-ui/src/component/text_field.rs`
+(`TextFieldModel` — текст/каретка/селекция в символах + `max_chars`;
+`TextFieldAction`/`TextFieldEffect` + `apply` — клавиатурный контракт;
+`text_field()`/`text_field_masked()` — placeholder/ellipsis/скролл-вслед/
+маска; `caret_index_at_x` — клик → каретка). Фасад — `canvas-ui/src/kit.rs`.
+Маппер клавиш (winit → TextFieldAction, буфер) —
+`canvas-app/src/app/input.rs` (`text_field_action`, `apply_text_field_key`).
+Потребители: `search_ui.rs` (`SearchInput` — обёртка kit-модели),
+`scheme_gallery_ui.rs` (filter), `template_ui.rs` (filter), настройки
+(`App::settings_text_edit` — (строка, kit-модель), маска API-ключей),
+`explain_ui.rs` (EditField), `agent_panel.rs` (поле Ctrl+I). Рендер полей
+панелей — `app/overlays.rs::kit_field_view` (каретка 1.5 px accent,
+литералы «|» запрещены). Норматив поведения — `design/rules/09-input.md`.
+Многострочный редактор заметки — отдельная сущность (canvas-render/edit.rs,
+cosmic-text: Ctrl+B/I/H, undo 50).
 
 ## 8. Что меняется при правке файла
 Высоты/паддинги → константы модулей + G4. Контракт клавиш → редактор

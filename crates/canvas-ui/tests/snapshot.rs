@@ -512,6 +512,7 @@ fn scene_text_field(
         text: t.search.to_owned(),
         caret: t.search.chars().count(),
         sel: None,
+        max_chars: None,
     };
     let lay = text_field(
         slot,

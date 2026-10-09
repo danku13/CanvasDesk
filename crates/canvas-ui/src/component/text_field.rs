@@ -33,7 +33,7 @@ use crate::widget::WidgetState;
 /// (`chars().count()`), не байтах: вставка/удаление/движение корректны на
 /// юникоде (emoji, multi-byte). IME/UTF-16-конвертация — на стороне ввода
 /// потребителя (контракт FR-058).
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TextFieldModel {
     /// Текст поля.
     pub text: String,
@@ -42,6 +42,10 @@ pub struct TextFieldModel {
     /// Селекция `(anchor, head)` в символах; `None` — нет селекции.
     /// `head` — текущая позиция каретки; `anchor` — начало выделения.
     pub sel: Option<(usize, usize)>,
+    /// Потолок длины текста в СИМВОЛАХ (политика IN7, design/rules/09):
+    /// `Insert` клампится до лимита (селекция замещается в рамках бюджета);
+    /// backspace/delete не ограничиваются. `None` — без потолка.
+    pub max_chars: Option<usize>,
 }
 
 impl TextFieldModel {
@@ -147,10 +151,286 @@ impl TextFieldModel {
         self.caret = start;
         self.sel = None;
     }
+
+    // --- Волна «input-адекватность» 2026-10-09 (design/rules/09-input.md) ----
+
+    /// Текст выделения (`None` — селекции нет или она пустая).
+    pub fn selected_text(&self) -> Option<String> {
+        let (start, end) = self.selection_range();
+        if start == end {
+            return None;
+        }
+        let chars: Vec<char> = self.text.chars().collect();
+        Some(chars[start..end].iter().collect())
+    }
+
+    /// Сдвинуть каретку на одно слово: `dir < 0` — к началу предыдущего слова
+    /// (skip разделителей влево, затем символов слова влево), `dir > 0` — к
+    /// началу следующего слова (skip символов слова вправо, затем разделителей).
+    /// `extend` — расширять селекцию (Ctrl+Shift+стрелки).
+    pub fn move_caret_word(&mut self, dir: isize, extend: bool) {
+        let chars: Vec<char> = self.text.chars().collect();
+        let new_pos = if dir < 0 {
+            let mut i = self.caret.min(chars.len());
+            while i > 0 && is_word_separator(chars[i - 1]) {
+                i -= 1;
+            }
+            while i > 0 && !is_word_separator(chars[i - 1]) {
+                i -= 1;
+            }
+            i
+        } else {
+            let mut i = self.caret.min(chars.len());
+            while i < chars.len() && !is_word_separator(chars[i]) {
+                i += 1;
+            }
+            while i < chars.len() && is_word_separator(chars[i]) {
+                i += 1;
+            }
+            i
+        };
+        let delta = new_pos as isize - self.caret as isize;
+        self.move_caret(delta, extend);
+    }
+
+    /// Ctrl+Backspace: удалить слово слева (эвристика SearchInput: символы
+    /// слова влево, затем разделители влево). Селекция (если есть) —
+    /// удаляется целиком. `true` — текст изменился.
+    pub fn delete_word_backward(&mut self) -> bool {
+        if self.sel.is_some() {
+            let (start, end) = self.selection_range();
+            let had = start != end;
+            self.delete_selection();
+            return had;
+        }
+        if self.caret == 0 {
+            return false;
+        }
+        let chars: Vec<char> = self.text.chars().collect();
+        let mut i = self.caret.min(chars.len());
+        while i > 0 && !is_word_separator(chars[i - 1]) {
+            i -= 1;
+        }
+        while i > 0 && is_word_separator(chars[i - 1]) {
+            i -= 1;
+        }
+        if i == self.caret {
+            return false;
+        }
+        // Удаление по ИНДЕКСАМ (не replacen — первое вхождение той же
+        // подстроки в начале текста не должно страдать).
+        let new_chars: Vec<char> = chars[..i]
+            .iter()
+            .chain(&chars[self.caret..])
+            .copied()
+            .collect();
+        self.text = new_chars.into_iter().collect();
+        self.caret = i;
+        true
+    }
+
+    /// Ctrl+Delete: удалить слово справа (зеркало [`Self::delete_word_backward`]:
+    /// символы слова вправо, затем разделители вправо). Селекция удаляется
+    /// целиком. `true` — текст изменился.
+    pub fn delete_word_forward(&mut self) -> bool {
+        if self.sel.is_some() {
+            let (start, end) = self.selection_range();
+            let had = start != end;
+            self.delete_selection();
+            return had;
+        }
+        let chars: Vec<char> = self.text.chars().collect();
+        let mut i = self.caret.min(chars.len());
+        while i < chars.len() && !is_word_separator(chars[i]) {
+            i += 1;
+        }
+        while i < chars.len() && is_word_separator(chars[i]) {
+            i += 1;
+        }
+        if i == self.caret {
+            return false;
+        }
+        // Удаление по ИНДЕКСАМ (не replacen — см. delete_word_backward).
+        let new_chars: Vec<char> = chars[..self.caret]
+            .iter()
+            .chain(&chars[i..])
+            .copied()
+            .collect();
+        self.text = new_chars.into_iter().collect();
+        true
+    }
+
+    /// Применить действие ввода (клавиатурный контракт IN2,
+    /// design/rules/09-input.md): одна семантика для ВСЕХ полей приложения.
+    /// Буфер обмена — на стороне потребителя (кит zero-dep, G7): [`TextFieldEffect::Copy`]/[`TextFieldEffect::Cut`]/
+    /// [`TextFieldEffect::Paste`] требуют доведения потребителем.
+    pub fn apply(&mut self, action: TextFieldAction) -> TextFieldEffect {
+        match action {
+            TextFieldAction::Insert(s) => {
+                let clamped = match self.max_chars {
+                    None => s,
+                    Some(max) => {
+                        let (start, end) = self.selection_range();
+                        let total = self.text.chars().count();
+                        let budget = max.saturating_sub(total - (end - start));
+                        let clamped: String = s.chars().take(budget).collect();
+                        if clamped.is_empty() {
+                            return TextFieldEffect::None;
+                        }
+                        clamped
+                    }
+                };
+                self.insert(&clamped);
+                TextFieldEffect::Changed
+            }
+            TextFieldAction::Backspace => {
+                if self.sel.is_none() && self.caret == 0 {
+                    TextFieldEffect::None
+                } else {
+                    self.backspace();
+                    TextFieldEffect::Changed
+                }
+            }
+            TextFieldAction::BackspaceWord => {
+                if self.delete_word_backward() {
+                    TextFieldEffect::Changed
+                } else {
+                    TextFieldEffect::None
+                }
+            }
+            TextFieldAction::Delete => {
+                if self.sel.is_none() && self.caret >= self.text.chars().count() {
+                    TextFieldEffect::None
+                } else {
+                    self.delete();
+                    TextFieldEffect::Changed
+                }
+            }
+            TextFieldAction::DeleteWord => {
+                if self.delete_word_forward() {
+                    TextFieldEffect::Changed
+                } else {
+                    TextFieldEffect::None
+                }
+            }
+            TextFieldAction::CaretLeft(extend) => {
+                self.move_caret(-1, extend);
+                TextFieldEffect::Changed
+            }
+            TextFieldAction::CaretRight(extend) => {
+                self.move_caret(1, extend);
+                TextFieldEffect::Changed
+            }
+            TextFieldAction::CaretWordLeft(extend) => {
+                self.move_caret_word(-1, extend);
+                TextFieldEffect::Changed
+            }
+            TextFieldAction::CaretWordRight(extend) => {
+                self.move_caret_word(1, extend);
+                TextFieldEffect::Changed
+            }
+            TextFieldAction::Home(extend) => {
+                let back = self.caret as isize;
+                self.move_caret(-back, extend);
+                TextFieldEffect::Changed
+            }
+            TextFieldAction::End(extend) => {
+                let total = self.text.chars().count();
+                let fwd = total as isize - self.caret as isize;
+                self.move_caret(fwd, extend);
+                TextFieldEffect::Changed
+            }
+            TextFieldAction::SelectAll => {
+                self.select_all();
+                TextFieldEffect::Changed
+            }
+            // Без селекции — весь текст (конвенция однострочных полей чата и
+            // фильтров, IN2): Ctrl+C/Ctrl+X на пустом поле дают пустую строку.
+            TextFieldAction::Copy => {
+                TextFieldEffect::Copy(self.selected_text().unwrap_or_else(|| self.text.clone()))
+            }
+            TextFieldAction::Cut => {
+                let text = self.selected_text().unwrap_or_else(|| self.text.clone());
+                if self.sel.is_some() {
+                    self.delete_selection();
+                } else {
+                    self.set_text(String::new());
+                }
+                if text.is_empty() {
+                    TextFieldEffect::None
+                } else {
+                    TextFieldEffect::Cut(text)
+                }
+            }
+            TextFieldAction::Paste => TextFieldEffect::Paste,
+        }
+    }
+}
+
+/// Разделитель слова для словесных операций (эвристика T14/SearchInput):
+/// whitespace или ASCII-пунктуация. Буквы (включая кириллицу), цифры и
+/// прочие многобайтные символы — символы слова.
+fn is_word_separator(c: char) -> bool {
+    c.is_whitespace() || c.is_ascii_punctuation()
+}
+
+/// Действие ввода над [`TextFieldModel`] (IN2). Маппинг клавиш платформы
+/// (winit Key → действие) — на стороне потребителя (кит не знает winit — G7);
+/// эталонный маппер приложения — `canvas_app::app::input::text_field_action`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TextFieldAction {
+    /// Вставить текст (печать/IME; замещает селекцию; кламп к max_chars).
+    Insert(String),
+    /// Backspace: селекция или символ слева.
+    Backspace,
+    /// Ctrl+Backspace: селекция или слово слева.
+    BackspaceWord,
+    /// Delete: селекция или символ справа.
+    Delete,
+    /// Ctrl+Delete: селекция или слово справа.
+    DeleteWord,
+    /// ← (аргумент — extend/Shift).
+    CaretLeft(bool),
+    /// → (аргумент — extend/Shift).
+    CaretRight(bool),
+    /// Ctrl+← (аргумент — extend/Shift).
+    CaretWordLeft(bool),
+    /// Ctrl+→ (аргумент — extend/Shift).
+    CaretWordRight(bool),
+    /// Home (аргумент — extend/Shift).
+    Home(bool),
+    /// End (аргумент — extend/Shift).
+    End(bool),
+    /// Ctrl+A.
+    SelectAll,
+    /// Ctrl+C: селекция или весь текст → [`TextFieldEffect::Copy`].
+    Copy,
+    /// Ctrl+X: селекция или весь текст → удаление + [`TextFieldEffect::Cut`].
+    Cut,
+    /// Ctrl+V: потребитель читает буфер и делает `Insert`.
+    Paste,
+}
+
+/// Результат [`TextFieldModel::apply`]: потребителю решить про перерисовку,
+/// буфер обмена и вставку.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TextFieldEffect {
+    /// Ничего не изменилось (noop на границе и т.п.).
+    None,
+    /// Модель изменилась — перерисовать поле.
+    Changed,
+    /// Скопировать строку в буфер (Ctrl+C; без селекции — весь текст).
+    Copy(String),
+    /// Вырезать: строка — в буфер (текст уже удалён из модели).
+    Cut(String),
+    /// Вставка: потребитель читает буфер и вызывает `Insert`.
+    Paste,
 }
 
 /// Раскладка текстового поля. `caret_x = -1.0` — каретка не рисуется (поле не
 /// в фокусе); иначе — x-координата каретки в `text_area` по замеру префикса.
+/// `scroll_x` — горизонтальный сдвиг окна текста (скролл-вслед за кареткой,
+/// IN3 design/rules/09): 0.0 — текст виден с начала.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextFieldLayout {
     /// Rect поля (constrain+stack в слоте).
@@ -160,8 +440,11 @@ pub struct TextFieldLayout {
     /// X каретки в `text_area` (по замеру текста до каретки); `-1.0` — нет каретки.
     pub caret_x: f32,
     /// Отображаемый текст: placeholder (если пусто) или сам текст — с `ellipsis`
-    /// по ширине `text_area`.
+    /// по ширине `text_area`; в фокусе — окно текста от `scroll_x`
+    /// (ellipsis не применяется к активному вводу, `use-cases/text-field.md` §6).
     pub text_shown: String,
+    /// Горизонтальный сдвиг окна текста в px (>= 0; 0 — с начала).
+    pub scroll_x: f32,
 }
 
 /// Текстовое поле в слоте. Стиль (фон/рамка/фокус-рамка) — отдельной функцией
@@ -183,6 +466,127 @@ pub fn text_field(
     family: &str,
     size: f32,
 ) -> TextFieldLayout {
+    text_field_ex(
+        slot,
+        min,
+        max,
+        model,
+        placeholder,
+        focused,
+        _state,
+        _p,
+        m,
+        fs,
+        family,
+        size,
+        None,
+    )
+}
+
+/// [`text_field`] с маской пароля (IN7 design/rules/09): глифы текста
+/// заменяются на `mask` (например `'\u{2022}'` — «•»); модель хранит
+/// исходник; каретка/селекция работают по маске (ширина маскированного
+/// префикса — тем же кеглем).
+#[allow(clippy::too_many_arguments)]
+pub fn text_field_masked(
+    slot: UiRect,
+    min: UiVec2,
+    max: UiVec2,
+    model: &TextFieldModel,
+    placeholder: &str,
+    focused: bool,
+    state: KitState,
+    p: &KitPalette,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    family: &str,
+    size: f32,
+    mask: char,
+) -> TextFieldLayout {
+    text_field_ex(
+        slot,
+        min,
+        max,
+        model,
+        placeholder,
+        focused,
+        state,
+        p,
+        m,
+        fs,
+        family,
+        size,
+        Some(mask),
+    )
+}
+
+/// Первый символьный индекс `i`, у которого ширина префикса `chars[..i]`
+/// ≥ `x` (замер тем же шейпером, П6; ширина префикса монотонна).
+fn prefix_index_at_x(
+    chars: &[char],
+    x: f32,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    family: &str,
+    size: f32,
+) -> usize {
+    if x <= 0.0 {
+        return 0;
+    }
+    let (mut lo, mut hi) = (0usize, chars.len());
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        let s: String = chars[..mid].iter().collect();
+        if m.width_of(fs, &s, family, size) >= x {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
+}
+
+/// Последний символьный индекс `j` (в диапазоне `start..=chars.len()`), при
+/// котором ширина `chars[start..j]` ≤ `avail` (хвост окна текста).
+fn window_end_index(
+    chars: &[char],
+    start: usize,
+    avail: f32,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    family: &str,
+    size: f32,
+) -> usize {
+    let (mut lo, mut hi) = (start, chars.len());
+    // Инвариант: ширина chars[start..lo] <= avail (при lo == start — 0).
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let s: String = chars[start..mid].iter().collect();
+        if m.width_of(fs, &s, family, size) <= avail {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+#[allow(clippy::too_many_arguments)]
+fn text_field_ex(
+    slot: UiRect,
+    min: UiVec2,
+    max: UiVec2,
+    model: &TextFieldModel,
+    placeholder: &str,
+    focused: bool,
+    _state: KitState,
+    _p: &KitPalette,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    family: &str,
+    size: f32,
+    mask: Option<char>,
+) -> TextFieldLayout {
     // Стиль — отдельной функцией потребителя (цвет отдельно от геометрии).
     let _ = (_state, _p);
     // Размер: constrain(min, max, desired=slot), позиция — stack по центру.
@@ -196,35 +600,102 @@ pub fn text_field(
         (rect.w - TEXT_FIELD_PAD_H * 2.0).max(0.0),
         rect.h,
     );
-    // Текст/плейсхолдер: пустое → placeholder с ellipsis; иначе текст с ellipsis.
-    // Каретка: по замеру префикса до caret в ИСХОДНОМ тексте, клампленный к
-    // text_area; -1.0 — не сфокусировано (потребитель не рисует каретку).
-    let (text_shown, caret_x) = if model.text.is_empty() {
+    // Отображаемые символы: с маской — повтор маски по числу символов
+    // (модель хранит исходник; каретка считается по маске — ширина
+    // маскированного префикса тем же кеглем, IN7).
+    let show_chars: Vec<char> = match mask {
+        Some(mask_char) => vec![mask_char; model.text.chars().count()],
+        None => model.text.chars().collect(),
+    };
+    // Текст/плейсхолдер: пустое → placeholder с ellipsis; иначе текст.
+    // Не в фокусе — текст с начала, ellipsis по text_area (прежнее поведение).
+    // В фокусе — окно текста, следующее за кареткой (скролл-вслед, IN3):
+    // ellipsis к активному вводу не применяется.
+    let (text_shown, caret_x, scroll_x) = if show_chars.is_empty() {
         let ph = if placeholder.is_empty() {
             String::new()
         } else {
             m.ellipsis(fs, placeholder, family, size, text_area.w)
         };
         let cx = if focused { text_area.x } else { -1.0 };
-        (ph, cx)
+        (ph, cx, 0.0)
     } else {
-        let shown = m.ellipsis(fs, &model.text, family, size, text_area.w);
-        let chars: Vec<char> = model.text.chars().collect();
-        let caret_idx = model.caret.min(chars.len());
-        let prefix: String = chars[..caret_idx].iter().collect();
+        let caret_idx = model.caret.min(show_chars.len());
+        let prefix: String = show_chars[..caret_idx].iter().collect();
         let prefix_w = m.width_of(fs, &prefix, family, size);
-        let cx = if focused {
-            text_area.x + prefix_w.min(text_area.w)
+        let shown = if focused {
+            // Скролл-вслед: каретка всегда видна.
+            let caret_w = prefix_w.min(text_area.w);
+            let scroll = if prefix_w > text_area.w {
+                prefix_w - text_area.w
+            } else {
+                0.0
+            };
+            let i0 = prefix_index_at_x(&show_chars, scroll, m, fs, family, size);
+            let j = window_end_index(&show_chars, i0, text_area.w, m, fs, family, size);
+            let start_x: String = show_chars[..i0].iter().collect();
+            let start_w = m.width_of(fs, &start_x, family, size);
+            let window: String = show_chars[i0..j].iter().collect();
+            // Каретка относительно начала окна; кламп к text_area.
+            let cx = text_area.x + (caret_w - start_w).clamp(0.0, text_area.w);
+            (window, cx, scroll)
         } else {
-            -1.0
+            let shown = m.ellipsis(
+                fs,
+                &show_chars.iter().collect::<String>(),
+                family,
+                size,
+                text_area.w,
+            );
+            (shown, -1.0, 0.0)
         };
-        (shown, cx)
+        shown
     };
     TextFieldLayout {
         rect,
         text_area,
         caret_x,
         text_shown,
+        scroll_x,
+    }
+}
+
+/// Символьная позиция каретки по клику (IN5 design/rules/09): `click_x` —
+/// абсолютный X клика; поле задано `text_area` + `scroll_x` из
+/// [`TextFieldLayout`]. Возвращает индекс в СИМВОЛАХ для [`TextFieldModel::caret`]
+/// (ближайшая граница символа слева от клика; за правым краем — конец текста).
+#[allow(clippy::too_many_arguments)]
+pub fn caret_index_at_x(
+    model: &TextFieldModel,
+    text_area: UiRect,
+    scroll_x: f32,
+    click_x: f32,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    family: &str,
+    size: f32,
+) -> usize {
+    // Целевая x-координата в СОБСТВЕННОМ тексте (без учёта окна).
+    let local = (click_x - text_area.x).max(0.0);
+    let target = scroll_x + local;
+    let chars: Vec<char> = model.text.chars().collect();
+    let idx = prefix_index_at_x(&chars, target, m, fs, family, size);
+    // Клик правее последнего символа — каретка в конец.
+    if idx == 0 {
+        return 0;
+    }
+    // Половинное разбиение: клик ближе к центру символа idx-1 — поставить
+    // каретку ПОСЛЕ него (idx), у левого края — перед (idx-1).
+    let prev: String = chars[..idx - 1].iter().collect();
+    let cur: String = chars[..idx].iter().collect();
+    let (x_prev, x_cur) = (
+        m.width_of(fs, &prev, family, size),
+        m.width_of(fs, &cur, family, size),
+    );
+    if target > (x_prev + x_cur) / 2.0 {
+        idx
+    } else {
+        idx - 1
     }
 }
 
@@ -272,6 +743,9 @@ pub struct TextFieldProps {
     pub width: f32,
     /// Срез слотов палитры (контракт F-8: цвета — только слоты).
     pub palette: KitPalette,
+    /// Маска пароля (IN7 design/rules/09): `Some(c)` — глифы заменяются
+    /// на `c` (модель хранит исходник); `None` — обычное поле.
+    pub mask: Option<char>,
 }
 
 /// Текстовое поле — retained-компонент (FR-068 W3): `Props` + стабильная
@@ -325,7 +799,7 @@ impl Component for TextField {
         let max = UiVec2::new(self.props.width, TEXT_FIELD_HEIGHT);
         let mut m = TextMeasurer::new();
         let lay = with_font_pool(|fs| {
-            text_field(
+            text_field_ex(
                 slot,
                 min,
                 max,
@@ -338,6 +812,7 @@ impl Component for TextField {
                 fs,
                 FONT_FAMILY,
                 FONT_SIZE,
+                self.props.mask,
             )
         });
         vec![lay.rect]
@@ -695,6 +1170,7 @@ mod tests {
             placeholder: "Поиск…".to_owned(),
             width: 200.0,
             palette: palette_a(),
+            mask: None,
         });
         let slot = UiRect::new(0.0, 0.0, 300.0, 60.0);
         let rects = tf.layout(default_backend(), slot);
@@ -710,6 +1186,7 @@ mod tests {
             placeholder: String::new(),
             width: 10.0,
             palette: palette_b(),
+            mask: None,
         });
         let rects = narrow.layout(default_backend(), slot);
         assert!((rects[0].w - TEXT_FIELD_MIN_W).abs() < 0.01, "кламп к min");
@@ -721,6 +1198,7 @@ mod tests {
             placeholder: "Поиск…".to_owned(),
             width: 200.0,
             palette,
+            mask: None,
         });
         focused.state.set_focused(true);
         let slot = UiRect::new(0.0, 0.0, 300.0, TEXT_FIELD_HEIGHT);
@@ -744,6 +1222,7 @@ mod tests {
             placeholder: String::new(),
             width: 200.0,
             palette,
+            mask: None,
         });
         let mut p = Painter::new();
         unfocused.paint(&mut p, &rects);
@@ -767,6 +1246,7 @@ mod tests {
             placeholder: String::new(),
             width: 120.0,
             palette: palette_b(),
+            mask: None,
         });
         let slot = UiRect::new(40.0, 50.0, 300.0, 60.0);
         let rects = tf.layout(default_backend(), slot);
@@ -782,4 +1262,390 @@ mod tests {
     }
 
     // --- ScrollState: scroll_by/clamp/needs_scroll/max_offset ----------------
+
+    // --- Волна «input-адекватность» 2026-10-09 (design/rules/09-input.md) ----
+
+    #[test]
+    fn model_word_backward_and_forward_boundaries() {
+        let mut m = TextFieldModel::default();
+        m.set_text("привет мир file.txt".to_owned());
+        // Каретка в конце: Ctrl+← → перед «.» (семантика Chrome: сначала
+        // разделители, затем символы слова — «txt» пропущен)
+        m.caret = m.text.chars().count();
+        m.move_caret_word(-1, false);
+        assert_eq!(m.caret, 16, "после 'file', перед '.'");
+        // ещё ← → перед «мир» (пробел пропущен, слово «мир» — нет)
+        m.move_caret_word(-1, false);
+        assert_eq!(m.caret, 11);
+        // ещё ← → перед «привет»
+        m.move_caret_word(-1, false);
+        assert_eq!(m.caret, 7);
+        m.move_caret_word(-1, false);
+        assert_eq!(m.caret, 0);
+        // Ctrl+→ по словам — обратно к концу
+        m.move_caret_word(1, false);
+        assert_eq!(m.caret, 7, "после 'привет' + разделитель");
+        m.move_caret_word(1, false);
+        assert_eq!(m.caret, 11);
+        m.move_caret_word(1, false);
+        assert_eq!(m.caret, 16, "после 'file.'");
+        m.move_caret_word(1, false);
+        assert_eq!(m.caret, m.text.chars().count());
+    }
+
+    #[test]
+    fn model_delete_word_backward_searchinput_parity() {
+        let mut m = TextFieldModel::default();
+        // «привет мир|» → Ctrl+Backspace → «привет|» (паритет SearchInput:
+        // слово + предшествующие разделители одним нажатием)
+        m.set_text("привет мир".to_owned());
+        m.caret = m.text.chars().count();
+        assert!(m.delete_word_backward());
+        assert_eq!(m.text, "привет");
+        assert_eq!(m.caret, 6);
+        // следующее нажатие — слово целиком
+        assert!(m.delete_word_backward());
+        assert_eq!(m.text, "");
+        // «hello   |» → первым нажатием удаляются только разделители
+        m.set_text("hello   ".to_owned());
+        m.caret = 8;
+        assert!(m.delete_word_backward());
+        assert_eq!(m.text, "hello");
+        // на границе — noop
+        m.set_text("".to_owned());
+        m.caret = 0;
+        assert!(!m.delete_word_backward());
+    }
+
+    #[test]
+    fn model_delete_word_forward_and_duplicates() {
+        let mut m = TextFieldModel::default();
+        m.set_text("ab abc abc".to_owned());
+        m.caret = 0;
+        // Ctrl+Delete у начала: слово + следующий за ним разделитель
+        assert!(m.delete_word_forward());
+        assert_eq!(m.text, "abc abc");
+        // дубликаты подстроки не страдают (удаление по индексам)
+        m.caret = 0;
+        assert!(m.delete_word_forward());
+        assert_eq!(m.text, "abc");
+    }
+
+    #[test]
+    fn model_apply_insert_clamps_to_max_chars() {
+        let mut m = TextFieldModel {
+            max_chars: Some(3),
+            ..Default::default()
+        };
+        assert_eq!(
+            m.apply(TextFieldAction::Insert("привет".to_owned())),
+            TextFieldEffect::Changed
+        );
+        assert_eq!(m.text.chars().count(), 3, "кламп к лимиту");
+        // при полном поле вставка — noop
+        assert_eq!(
+            m.apply(TextFieldAction::Insert("x".to_owned())),
+            TextFieldEffect::None
+        );
+        // с селекцией бюджет = лимит - (длина - выделение)
+        m.sel = Some((1, 3));
+        assert_eq!(
+            m.apply(TextFieldAction::Insert("XY".to_owned())),
+            TextFieldEffect::Changed
+        );
+        assert_eq!(m.text, "пXY");
+    }
+
+    #[test]
+    fn model_apply_backspace_delete_and_caret_noops() {
+        let mut m = TextFieldModel::default();
+        m.set_text("abc".to_owned());
+        m.caret = 0;
+        assert_eq!(
+            m.apply(TextFieldAction::Backspace),
+            TextFieldEffect::None,
+            "граница — noop"
+        );
+        assert_eq!(m.apply(TextFieldAction::Delete), TextFieldEffect::Changed);
+        assert_eq!(m.text, "bc");
+        m.caret = m.text.chars().count();
+        assert_eq!(
+            m.apply(TextFieldAction::Delete),
+            TextFieldEffect::None,
+            "граница — noop"
+        );
+        assert_eq!(
+            m.apply(TextFieldAction::Backspace),
+            TextFieldEffect::Changed
+        );
+        assert_eq!(m.text, "b");
+    }
+
+    #[test]
+    fn model_apply_home_end_selectall_copy_cut_paste() {
+        let mut m = TextFieldModel::default();
+        m.set_text("привет".to_owned());
+        assert_eq!(
+            m.apply(TextFieldAction::Home(false)),
+            TextFieldEffect::Changed
+        );
+        assert_eq!(m.caret, 0);
+        assert_eq!(
+            m.apply(TextFieldAction::End(false)),
+            TextFieldEffect::Changed
+        );
+        assert_eq!(m.caret, 6);
+        assert_eq!(
+            m.apply(TextFieldAction::SelectAll),
+            TextFieldEffect::Changed
+        );
+        assert_eq!(m.sel, Some((0, 6)));
+        // Copy с селекцией — выделение
+        assert_eq!(
+            m.apply(TextFieldAction::Copy),
+            TextFieldEffect::Copy("привет".to_owned())
+        );
+        // Copy без селекции — весь текст
+        m.sel = None;
+        assert_eq!(
+            m.apply(TextFieldAction::Copy),
+            TextFieldEffect::Copy("привет".to_owned())
+        );
+        // Cut с селекцией — удаляет выделение
+        m.sel = Some((0, 3));
+        assert_eq!(
+            m.apply(TextFieldAction::Cut),
+            TextFieldEffect::Cut("при".to_owned())
+        );
+        assert_eq!(m.text, "вет");
+        // Paste — сигнал потребителю (буфер на стороне app)
+        assert_eq!(m.apply(TextFieldAction::Paste), TextFieldEffect::Paste);
+        // Cut на пустом — None
+        m.set_text(String::new());
+        assert_eq!(m.apply(TextFieldAction::Cut), TextFieldEffect::None);
+    }
+
+    #[test]
+    fn model_apply_word_and_shift_extend() {
+        let mut m = TextFieldModel::default();
+        m.set_text("hello world".to_owned());
+        m.caret = m.text.chars().count();
+        m.apply(TextFieldAction::CaretWordLeft(false));
+        assert_eq!(
+            m.caret, 6,
+            "после 'hello', перед пробелом (Chrome-семантика)"
+        );
+        // extend — селекция от прежнего caret
+        m.apply(TextFieldAction::CaretWordLeft(true));
+        assert_eq!(m.caret, 0);
+        assert_eq!(m.sel, Some((6, 0)));
+        m.apply(TextFieldAction::End(true));
+        assert_eq!(m.sel, Some((6, 11)));
+        // BackspaceWord через apply: «hello world|» → «hello|»
+        m.sel = None;
+        m.caret = m.text.chars().count();
+        m.apply(TextFieldAction::BackspaceWord);
+        assert_eq!(m.text, "hello");
+    }
+
+    #[test]
+    fn layout_scroll_follows_caret_when_text_overflows() {
+        let mut m = TextMeasurer::new();
+        let mut fs = font_system();
+        let mut model = TextFieldModel::default();
+        model.set_text("очень длинная строка не помещается в узкое поле".to_owned());
+        model.caret = model.text.chars().count();
+        let slot = UiRect::new(0.0, 0.0, 60.0, TEXT_FIELD_HEIGHT);
+        let lay = text_field(
+            slot,
+            UiVec2::new(0.0, TEXT_FIELD_HEIGHT),
+            UiVec2::new(60.0, TEXT_FIELD_HEIGHT),
+            &model,
+            "",
+            true, // фокус
+            KitState::Normal,
+            &palette_a(),
+            &mut m,
+            &mut fs,
+            FAMILY,
+            13.0,
+        );
+        assert!(lay.scroll_x > 0.0, "скролл-вслед включился");
+        // Каретка видна внутри text_area
+        assert!(lay.caret_x >= lay.text_area.x);
+        assert!(lay.caret_x <= lay.text_area.x + lay.text_area.w + 0.01);
+        // Окно текста не шире text_area
+        let w = m.width_of(&mut fs, &lay.text_shown, FAMILY, 13.0);
+        assert!(
+            w <= lay.text_area.w + 0.5,
+            "окно текста помещается ({} <= {})",
+            w,
+            lay.text_area.w
+        );
+        // Хвост текста виден: окно заканчивается последними символами
+        let chars: Vec<char> = model.text.chars().collect();
+        let shown_len = lay.text_shown.chars().count();
+        let tail: String = chars[chars.len().saturating_sub(shown_len)..]
+            .iter()
+            .collect();
+        assert_eq!(lay.text_shown, tail, "показан хвост текста у каретки");
+        // Не в фокусе — прежнее поведение: текст с начала + ellipsis
+        let lay_unfocused = text_field(
+            slot,
+            UiVec2::new(0.0, TEXT_FIELD_HEIGHT),
+            UiVec2::new(60.0, TEXT_FIELD_HEIGHT),
+            &model,
+            "",
+            false,
+            KitState::Normal,
+            &palette_a(),
+            &mut m,
+            &mut fs,
+            FAMILY,
+            13.0,
+        );
+        assert_eq!(lay_unfocused.scroll_x, 0.0);
+        assert_eq!(lay_unfocused.caret_x, -1.0);
+    }
+
+    #[test]
+    fn layout_fits_no_scroll_and_mask_hides_text() {
+        let mut m = TextMeasurer::new();
+        let mut fs = font_system();
+        let mut model = TextFieldModel::default();
+        model.set_text("sk-secret-key-12345".to_owned());
+        model.caret = model.text.chars().count();
+        let slot = UiRect::new(0.0, 0.0, 400.0, TEXT_FIELD_HEIGHT);
+        // Обычное поле, текст помещается — scroll 0, текст виден
+        let lay = text_field(
+            slot,
+            UiVec2::new(0.0, TEXT_FIELD_HEIGHT),
+            UiVec2::new(400.0, TEXT_FIELD_HEIGHT),
+            &model,
+            "",
+            true,
+            KitState::Normal,
+            &palette_a(),
+            &mut m,
+            &mut fs,
+            FAMILY,
+            13.0,
+        );
+        assert_eq!(lay.scroll_x, 0.0);
+        assert_eq!(lay.text_shown, "sk-secret-key-12345");
+        // Маска: глифы заменены на «•», модель хранит исходник
+        let masked = text_field_masked(
+            slot,
+            UiVec2::new(0.0, TEXT_FIELD_HEIGHT),
+            UiVec2::new(400.0, TEXT_FIELD_HEIGHT),
+            &model,
+            "",
+            true,
+            KitState::Normal,
+            &palette_a(),
+            &mut m,
+            &mut fs,
+            FAMILY,
+            13.0,
+            '\u{2022}',
+        );
+        assert_ne!(masked.text_shown, "sk-secret-key-12345");
+        assert_eq!(
+            masked.text_shown.chars().count(),
+            model.text.chars().count()
+        );
+        assert!(
+            masked.text_shown.chars().all(|c| c == '\u{2022}'),
+            "все глифы — маска"
+        );
+        // Каретка по ширине маскированного префикса
+        let prefix_w = m.width_of(&mut fs, &"\u{2022}".repeat(19), FAMILY, 13.0);
+        assert!((masked.caret_x - (masked.text_area.x + prefix_w)).abs() < 0.1);
+    }
+
+    #[test]
+    fn caret_index_at_x_roundtrip_and_halves() {
+        let mut m = TextMeasurer::new();
+        let mut fs = font_system();
+        let mut model = TextFieldModel::default();
+        model.set_text("привет мир".to_owned());
+        let slot = UiRect::new(0.0, 0.0, 400.0, TEXT_FIELD_HEIGHT);
+        let lay = text_field(
+            slot,
+            UiVec2::new(0.0, TEXT_FIELD_HEIGHT),
+            UiVec2::new(400.0, TEXT_FIELD_HEIGHT),
+            &model,
+            "",
+            true,
+            KitState::Normal,
+            &palette_a(),
+            &mut m,
+            &mut fs,
+            FAMILY,
+            13.0,
+        );
+        // Клик у левого края — каретка 0
+        assert_eq!(
+            caret_index_at_x(
+                &model,
+                lay.text_area,
+                lay.scroll_x,
+                lay.text_area.x,
+                &mut m,
+                &mut fs,
+                FAMILY,
+                13.0
+            ),
+            0
+        );
+        // Клик правее всего текста — конец
+        assert_eq!(
+            caret_index_at_x(
+                &model,
+                lay.text_area,
+                lay.scroll_x,
+                lay.text_area.x + lay.text_area.w,
+                &mut m,
+                &mut fs,
+                FAMILY,
+                13.0
+            ),
+            10
+        );
+        // Раундтрип: x каретки после N символов → клик туда же → N
+        for n in 0..=10 {
+            let prefix: String = model.text.chars().take(n).collect();
+            let x = lay.text_area.x + m.width_of(&mut fs, &prefix, FAMILY, 13.0) + 1.0;
+            assert_eq!(
+                caret_index_at_x(
+                    &model,
+                    lay.text_area,
+                    lay.scroll_x,
+                    x,
+                    &mut m,
+                    &mut fs,
+                    FAMILY,
+                    13.0
+                ),
+                n,
+                "клик за символом {} возвращает caret {}",
+                n,
+                n
+            );
+        }
+        // Клик до поля (left of text_area) — каретка 0
+        assert_eq!(
+            caret_index_at_x(
+                &model,
+                lay.text_area,
+                lay.scroll_x,
+                lay.text_area.x - 10.0,
+                &mut m,
+                &mut fs,
+                FAMILY,
+                13.0
+            ),
+            0
+        );
+    }
 }

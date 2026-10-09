@@ -168,10 +168,10 @@ pub struct TemplatePanel {
     /// Клавиатурный фокус: true — клавиши уходят в панель (фильтр, стрелки,
     /// Enter, Esc), false — в канвас (панель видна, но не перехватывает).
     pub focused: bool,
-    /// Строка фильтра (подстрока без учёта регистра по имени/описанию/id).
-    pub filter: String,
-    /// Байтовая позиция каретки в `filter`.
-    pub cursor: usize,
+    /// Строка фильтра (подстрока без учёта регистра по имени/описанию/id) —
+    /// kit TextFieldModel (design/rules/09-input.md IN1: единая модель поля;
+    /// каретка/селекция в символах, полный клавиатурный контракт).
+    pub filter: canvas_ui::kit::TextFieldModel,
     /// Фильтр категории (клик по чипу); None — все категории.
     pub category: Option<String>,
     /// Выбранная строка-шаблон (ординал среди [`PanelRow::Template`]).
@@ -188,8 +188,7 @@ impl TemplatePanel {
         Self {
             open: false,
             focused: false,
-            filter: String::new(),
-            cursor: 0,
+            filter: canvas_ui::kit::TextFieldModel::default(),
             category: None,
             selected: 0,
             scroll_top: 0,
@@ -201,8 +200,7 @@ impl TemplatePanel {
     pub fn open(&mut self) {
         self.open = true;
         self.focused = true;
-        self.filter.clear();
-        self.cursor = 0;
+        self.filter.set_text(String::new());
         self.category = None;
         self.selected = 0;
         self.scroll_top = 0;
@@ -224,7 +222,10 @@ impl TemplatePanel {
     /// сохраняется, каретка — в конец строки).
     pub fn focus_search(&mut self) {
         self.focused = true;
-        self.cursor = self.filter.len();
+        // каретка — в конец строки (kit-модель: move_caret в символах)
+        let total = self.filter.text.chars().count();
+        self.filter
+            .move_caret(total as isize - self.filter.caret as isize, false);
     }
 
     /// Снять клавиатурный фокус (клик по канвасу): док остаётся развёрнут.
@@ -232,49 +233,39 @@ impl TemplatePanel {
         self.focused = false;
     }
 
-    /// Вставка строки в каретку (печать символа, IME).
+    /// Вставка строки в каретку (печать символа, IME) — kit-модель
+    /// (каретка/селекция в символах; вставка замещает селекцию).
     pub fn insert_str(&mut self, text: &str) {
-        let byte = self.cursor.min(self.filter.len());
-        self.filter.insert_str(byte, text);
-        self.cursor += text.len();
+        if text.is_empty() {
+            return;
+        }
+        self.filter.insert(text);
     }
 
-    /// Backspace: удалить символ перед кареткой (true — было изменение).
+    /// Backspace: удалить символ перед кареткой или селекцию
+    /// (true — было изменение).
     pub fn backspace(&mut self) -> bool {
-        if self.cursor == 0 {
-            return false;
-        }
-        let byte = self.cursor.min(self.filter.len());
-        let prev = self.filter[..byte]
-            .char_indices()
-            .next_back()
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        self.filter.replace_range(prev..byte, "");
-        self.cursor = prev;
-        true
+        matches!(
+            self.filter
+                .apply(canvas_ui::kit::TextFieldAction::Backspace),
+            canvas_ui::kit::TextFieldEffect::Changed
+        )
+    }
+
+    /// Delete: удалить символ справа от каретки или селекцию.
+    pub fn delete(&mut self) -> bool {
+        matches!(
+            self.filter.apply(canvas_ui::kit::TextFieldAction::Delete),
+            canvas_ui::kit::TextFieldEffect::Changed
+        )
     }
 
     pub fn move_left(&mut self) {
-        let byte = self.cursor.min(self.filter.len());
-        if let Some(i) = self.filter[..byte]
-            .char_indices()
-            .next_back()
-            .map(|(i, _)| i)
-        {
-            self.cursor = i;
-        }
+        self.filter.move_caret(-1, false);
     }
 
     pub fn move_right(&mut self) {
-        let byte = self.cursor.min(self.filter.len());
-        if let Some(i) = self.filter[byte..]
-            .char_indices()
-            .nth(1)
-            .map(|(i, _)| byte + i)
-        {
-            self.cursor = i;
-        }
+        self.filter.move_caret(1, false);
     }
 
     /// Сдвиг выделения (стрелки): нумеруются ТОЛЬКО строки-шаблоны
@@ -426,7 +417,7 @@ pub fn panel_rows(
     language: canvas_core::Language,
     visible: &[String],
 ) -> Vec<PanelRow> {
-    let query = panel.filter.to_lowercase();
+    let query = panel.filter.text.to_lowercase();
     let matches = |manifest: &TemplateManifest| -> bool {
         if !visible
             .iter()
@@ -455,7 +446,7 @@ pub fn panel_rows(
     // (аргумент language — индикатор намерения: фильтр билингвален и
     //  работает для любого языка; в будущем — упреждающее ранжирование)
     let _ = language;
-    let grouped = panel.filter.is_empty() && panel.category.is_none();
+    let grouped = panel.filter.text.is_empty() && panel.category.is_none();
     if !grouped {
         return registry
             .list()
@@ -1652,8 +1643,7 @@ mod tests {
         assert_eq!(template_indexes(&rows), vec![0]);
         assert!(rows.iter().all(|r| matches!(r, PanelRow::Template(_))));
         // По id
-        panel.filter.clear();
-        panel.cursor = 0;
+        panel.filter.set_text(String::new());
         panel.insert_str("mock.db");
         assert_eq!(
             template_indexes(&panel_rows(
@@ -1665,8 +1655,7 @@ mod tests {
             vec![1]
         );
         // По описанию
-        panel.filter.clear();
-        panel.cursor = 0;
+        panel.filter.set_text(String::new());
         panel.insert_str("партиции");
         assert_eq!(
             template_indexes(&panel_rows(
@@ -1678,7 +1667,7 @@ mod tests {
             vec![4]
         );
         // Мимо — пусто
-        panel.filter = "ghost".to_owned();
+        panel.filter.set_text("ghost".to_owned());
         assert!(panel_rows(
             &registry,
             &panel,
@@ -1824,15 +1813,15 @@ mod tests {
         panel.insert_str("lb");
         // Ctrl+P по развёрнутому: фокус в поиск, фильтр сохраняется
         panel.focus_search();
-        assert_eq!(panel.filter, "lb");
+        assert_eq!(panel.filter.text, "lb");
         assert!(panel.focused);
-        assert_eq!(panel.cursor, panel.filter.len());
+        assert_eq!(panel.filter.caret, panel.filter.text.chars().count());
         // Esc: свернуть док (фокус снят)
         panel.close();
         assert!(!panel.open && !panel.focused);
         // Клик по ручке: развернуть без фокуса и без сброса фильтра
         panel.expand();
-        assert!(panel.open && !panel.focused && panel.filter == "lb");
+        assert!(panel.open && !panel.focused && panel.filter.text == "lb");
         // FR-025 п.3: Esc по такому (развёрнутому, но БЕЗ фокуса) доку тоже
         // должен сворачивать — снятие open обязано не зависеть от focused
         // (ветка общей Esc-цепочки в main.rs, здесь — контракт close())
@@ -2132,18 +2121,18 @@ mod tests {
         let mut panel = TemplatePanel::new();
         panel.insert_str("lb");
         panel.insert_str(" x");
-        assert_eq!(panel.filter, "lb x");
-        assert_eq!(panel.cursor, 4);
+        assert_eq!(panel.filter.text, "lb x");
+        assert_eq!(panel.filter.caret, 4);
         // Backspace в середине
         panel.move_left();
         panel.move_left();
         panel.backspace(); // удаляет 'b' → "l x"
-        assert_eq!(panel.filter, "l x");
-        assert_eq!(panel.cursor, 1);
+        assert_eq!(panel.filter.text, "l x");
+        assert_eq!(panel.filter.caret, 1);
         // Backspace в начале — no-op
-        panel.cursor = 0;
+        panel.filter.caret = 0;
         assert!(!panel.backspace());
-        assert_eq!(panel.filter, "l x");
+        assert_eq!(panel.filter.text, "l x");
     }
 
     #[test]

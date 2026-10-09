@@ -90,8 +90,10 @@ pub struct SchemeGalleryState {
     pub selected: usize,
     /// Активная категория (`None` — «Все»).
     pub category: Option<String>,
-    /// Фильтр по названию/описанию (без регистрозависимости).
-    pub filter: String,
+    /// Фильтр по названию/описанию (без регистрозависимости) — kit
+    /// TextFieldModel (design/rules/09-input.md IN1: единая модель поля;
+    /// каретка/селекция в символах, полный клавиатурный контракт).
+    pub filter: canvas_ui::kit::TextFieldModel,
     /// Верх строки окна видимости (индекс в отфильтрованном списке).
     pub scroll_top: usize,
 }
@@ -105,7 +107,7 @@ impl SchemeGalleryState {
 
     pub fn close(&mut self) {
         self.open = false;
-        self.filter.clear();
+        self.filter.set_text(String::new());
         self.category = None;
         self.selected = 0;
         self.scroll_top = 0;
@@ -124,7 +126,7 @@ pub fn rows<'a>(
     state: &SchemeGalleryState,
     visible: &[String],
 ) -> Vec<&'a SchemeManifest> {
-    let filter = state.filter.to_lowercase();
+    let filter = state.filter.text.to_lowercase();
     registry
         .list()
         .iter()
@@ -615,7 +617,7 @@ mod tests {
             registry.list().len()
         );
         let mut filtered = st.clone();
-        filtered.filter = "смета".into();
+        filtered.filter.set_text("смета".to_owned());
         let r = rows(registry, &filtered, &all_visible(registry));
         assert!(!r.is_empty(), "фильтр по русскому названию находит");
         assert!(r.iter().all(|s| s.category == "planning"));
@@ -979,7 +981,7 @@ mod tests {
         );
         // Поиск по скрытой категории ничего не находит (шум роли убран).
         let mut filtered = st.clone();
-        filtered.filter = "смета".into(); // планирование (planning) — скрыто
+        filtered.filter.set_text("смета".to_owned()); // планирование (planning) — скрыто
         assert!(rows(registry, &filtered, &visible).is_empty());
         // Чипы — только видимые категории (business + framework +
         // onboarding, который App-хелпер добавляет поверх фильтра роли).

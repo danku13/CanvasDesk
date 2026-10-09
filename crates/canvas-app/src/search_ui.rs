@@ -77,18 +77,15 @@ pub fn row_height(subtitle_lines: usize) -> f32 {
 }
 
 /// Разделитель слова для Ctrl+Backspace — простая эвристика: пробельный символ
-/// или ASCII-знак препинания. Буквы (включая кириллицу), цифры и прочие
-/// многобайтные символы (эмодзи-подобные) считаются символами слова.
-fn is_word_separator(c: char) -> bool {
-    c.is_whitespace() || c.is_ascii_punctuation()
-}
-
-/// Однострочное поле ввода поиска: строка + каретка (байтовый индекс,
-/// всегда на границе UTF-8-символов).
+/// Однострочное поле ввода поиска — обёртка kit
+/// [`canvas_ui::kit::TextFieldModel`] (волна «input-адекватность» 2026-10-09,
+/// design/rules/09-input.md IN1/IN9: единая модель поля; каретка и селекция —
+/// в СИМВОЛАХ, не в байтах; словесные операции и клавиатурный контракт —
+/// kit `TextFieldAction`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SearchInput {
-    query: String,
-    cursor: usize,
+    /// Модель кита (текст/каретка/селекция).
+    pub field: canvas_ui::kit::TextFieldModel,
 }
 
 impl SearchInput {
@@ -99,118 +96,83 @@ impl SearchInput {
 
     /// Текущий запрос.
     pub fn query(&self) -> &str {
-        &self.query
+        &self.field.text
     }
 
-    /// Позиция каретки в байтах (на границе символов).
-    pub fn cursor(&self) -> usize {
-        self.cursor
+    /// Позиция каретки в СИМВОЛАХ (`chars().count()`).
+    pub fn caret(&self) -> usize {
+        self.field.caret
     }
 
-    /// Символ слева от байтового индекса `idx` (граница символов):
-    /// `(байтовый индекс символа, символ)`; `None`, если `idx == 0`.
-    fn char_before(&self, idx: usize) -> Option<(usize, char)> {
-        self.query[..idx].char_indices().next_back()
-    }
-
-    /// Заменить весь текст (Ctrl+F повторное открытие: прошлый запрос выделен —
-    /// ввод замещает), каретка в конец.
+    /// Заменить весь текст (повторное Ctrl+F: ввод замещает прошлый запрос),
+    /// каретка в конец.
     pub fn set_query(&mut self, text: &str) {
-        self.query.clear();
-        self.query.push_str(text);
-        self.cursor = self.query.len();
+        self.field.set_text(text.to_owned());
     }
 
-    /// Вставить текст в позицию каретки (символы печати). Каретка остаётся на
-    /// границе символов (вставляется строка целиком).
-    pub fn insert_str(&mut self, text: &str) {
+    /// Применить kit-действие ввода (маппер клавиш —
+    /// `crate::app::input::text_field_action`). Эффекты буфера (Copy/Cut/
+    /// Paste) — доводит потребитель.
+    pub fn apply_action(
+        &mut self,
+        action: canvas_ui::kit::TextFieldAction,
+    ) -> canvas_ui::kit::TextFieldEffect {
+        self.field.apply(action)
+    }
+
+    /// Вставить текст в позицию каретки (символы печати/IME).
+    /// Возвращает true, если текст изменился.
+    pub fn insert_str(&mut self, text: &str) -> bool {
         if text.is_empty() {
-            return;
+            return false;
         }
-        // Каретка всегда на границе символов — insert_str не паникует.
-        self.query.insert_str(self.cursor, text);
-        self.cursor += text.len();
+        let before = self.field.text.clone();
+        self.field.insert(text);
+        self.field.text != before
     }
 
     /// Backspace: удалить символ слева (многобайтный — целиком); с `word`
     /// (Ctrl+Backspace) — слово слева. Возвращает true, если текст изменился.
-    ///
-    /// Word-backspace (простая эвристика, план T14 §3): от каретки влево
-    /// удаляется цепочка символов слова, затем цепочка разделителей (пробелы +
-    /// знаки препинания) до начала предыдущего слова — «привет мир|» →
-    /// «привет|», «file.txt|» → «file|», «hello   |» → «hello|».
     pub fn backspace(&mut self, word: bool) -> bool {
-        if self.cursor == 0 {
-            return false;
-        }
-        let start = if word {
-            let mut idx = self.cursor;
-            // Фаза 1: символы слова (до разделителя).
-            while let Some((_, c)) = self.char_before(idx) {
-                if is_word_separator(c) {
-                    break;
-                }
-                idx -= c.len_utf8();
-            }
-            // Фаза 2: разделители до начала предыдущего слова.
-            while let Some((_, c)) = self.char_before(idx) {
-                if !is_word_separator(c) {
-                    break;
-                }
-                idx -= c.len_utf8();
-            }
-            idx
+        if word {
+            self.field.delete_word_backward()
         } else {
-            match self.char_before(self.cursor) {
-                Some((_, c)) => self.cursor - c.len_utf8(),
-                // Недостижимо: cursor > 0 и на границе символов.
-                None => return false,
-            }
-        };
-        if start >= self.cursor {
-            return false;
+            matches!(
+                self.field.apply(canvas_ui::kit::TextFieldAction::Backspace),
+                canvas_ui::kit::TextFieldEffect::Changed
+            )
         }
-        self.query.replace_range(start..self.cursor, "");
-        self.cursor = start;
-        true
     }
 
     /// Delete: удалить символ справа от каретки (многобайтный — целиком).
     /// Возвращает true, если текст изменился.
     pub fn delete(&mut self) -> bool {
-        let len = self.query[self.cursor..]
-            .chars()
-            .next()
-            .map_or(0, char::len_utf8);
-        if len == 0 {
-            return false;
-        }
-        self.query.replace_range(self.cursor..self.cursor + len, "");
-        true
+        matches!(
+            self.field.apply(canvas_ui::kit::TextFieldAction::Delete),
+            canvas_ui::kit::TextFieldEffect::Changed
+        )
     }
 
     /// Движение каретки: Home.
     pub fn move_to_start(&mut self) {
-        self.cursor = 0;
+        self.field.move_caret(-(self.field.caret as isize), false);
     }
 
     /// Движение каретки: End.
     pub fn move_to_end(&mut self) {
-        self.cursor = self.query.len();
+        let total = self.field.text.chars().count();
+        self.field
+            .move_caret(total as isize - self.field.caret as isize, false);
     }
 
-    /// Движение каретки: влево на один символ (по границам UTF-8).
+    /// Движение каретки: влево на один символ (в СИМВОЛАХ).
     pub fn move_left(&mut self) {
-        if let Some((_, c)) = self.char_before(self.cursor) {
-            self.cursor -= c.len_utf8();
-        }
+        self.field.move_caret(-1, false);
     }
 
-    /// Движение каретки: вправо на один символ (по границам UTF-8).
+    /// Движение каретки: вправо на один символ (в СИМВОЛАХ).
     pub fn move_right(&mut self) {
-        if let Some(c) = self.query[self.cursor..].chars().next() {
-            self.cursor += c.len_utf8();
-        }
+        self.field.move_caret(1, false);
     }
 }
 
@@ -675,10 +637,10 @@ mod tests {
         let mut input = SearchInput::new();
         input.insert_str("аб");
         assert_eq!(input.query(), "аб");
-        assert_eq!(input.cursor(), 4);
+        assert_eq!(input.caret(), 2, "каретка в СИМВОЛАХ (IN1)");
         input.insert_str("в");
         assert_eq!(input.query(), "абв");
-        assert_eq!(input.cursor(), 6);
+        assert_eq!(input.caret(), 3);
         // Пустая вставка — no-op
         input.insert_str("");
         assert_eq!(input.query(), "абв");
@@ -689,7 +651,7 @@ mod tests {
         input.move_left();
         input.insert_str("X");
         assert_eq!(input.query(), "abXc");
-        assert_eq!(input.cursor(), 3);
+        assert_eq!(input.caret(), 3);
     }
 
     /// Backspace удаляет символ слева (кириллица, 2 байта), на пустой строке
@@ -700,11 +662,11 @@ mod tests {
         input.set_query("абв");
         assert!(input.backspace(false));
         assert_eq!(input.query(), "аб");
-        assert_eq!(input.cursor(), 4);
+        assert_eq!(input.caret(), 2);
         assert!(input.backspace(false));
         assert!(input.backspace(false));
         assert_eq!(input.query(), "");
-        assert_eq!(input.cursor(), 0);
+        assert_eq!(input.caret(), 0);
         // Пустая строка — no-op без паники
         assert!(!input.backspace(false));
 
@@ -721,21 +683,21 @@ mod tests {
     fn input_backspace_multibyte_whole_char() {
         let mut input = SearchInput::new();
         input.set_query("𝕏");
-        assert_eq!(input.cursor(), 4);
+        assert_eq!(input.caret(), 1, "1 символ (не 4 байта)");
         assert!(input.backspace(false));
         assert_eq!(input.query(), "");
-        assert_eq!(input.cursor(), 0);
+        assert_eq!(input.caret(), 0);
 
         // Символы вокруг многобайтного: «a𝕏b» — удаляем b, затем 𝕏 целиком
         let mut input = SearchInput::new();
         input.set_query("a𝕏b");
-        assert_eq!(input.cursor(), 6);
+        assert_eq!(input.caret(), 3);
         input.backspace(false);
         assert_eq!(input.query(), "a𝕏");
-        assert_eq!(input.cursor(), 5);
+        assert_eq!(input.caret(), 2);
         input.backspace(false);
         assert_eq!(input.query(), "a");
-        assert_eq!(input.cursor(), 1);
+        assert_eq!(input.caret(), 1);
     }
 
     /// Ctrl+Backspace: слово + разделители до предыдущего слова (эвристика:
@@ -748,7 +710,7 @@ mod tests {
         input.set_query("hello world");
         assert!(input.backspace(true));
         assert_eq!(input.query(), "hello");
-        assert_eq!(input.cursor(), 5);
+        assert_eq!(input.caret(), 5);
 
         // кириллица
         let mut input = SearchInput::new();
@@ -792,7 +754,7 @@ mod tests {
         input.set_query("абвг");
         input.backspace(true);
         assert_eq!(input.query(), "");
-        assert_eq!(input.cursor(), 0);
+        assert_eq!(input.caret(), 0);
     }
 
     /// Delete удаляет символ справа (многобайтный — целиком); в конце строки
@@ -805,7 +767,7 @@ mod tests {
         input.move_to_start(); // каретка в начало
         assert!(input.delete());
         assert_eq!(input.query(), "bc");
-        assert_eq!(input.cursor(), 0); // каретка на месте
+        assert_eq!(input.caret(), 0); // каретка на месте
 
         input.move_to_end();
         assert!(!input.delete());
@@ -829,37 +791,37 @@ mod tests {
         assert!(!input.delete());
     }
 
-    /// Стрелки/Home/End ходят по границам символов: кириллица (2 байта) и
-    /// «𝕏» (4 байта); за края — no-op.
+    /// Стрелки/Home/End ходят по границам СИМВОЛОВ (IN1): кириллица и
+    /// «𝕏» — по одному символу за шаг; за края — no-op.
     #[test]
     fn input_arrows_home_end() {
         let mut input = SearchInput::new();
-        input.set_query("абвг"); // 4 символа, 8 байт
-        assert_eq!(input.cursor(), 8);
+        input.set_query("абвг"); // 4 символа
+        assert_eq!(input.caret(), 4);
         input.move_left();
-        assert_eq!(input.cursor(), 6);
+        assert_eq!(input.caret(), 3);
         input.move_left();
-        assert_eq!(input.cursor(), 4);
+        assert_eq!(input.caret(), 2);
         input.move_right();
-        assert_eq!(input.cursor(), 6);
+        assert_eq!(input.caret(), 3);
         input.move_to_start();
-        assert_eq!(input.cursor(), 0);
+        assert_eq!(input.caret(), 0);
         input.move_left(); // на начале — no-op
-        assert_eq!(input.cursor(), 0);
+        assert_eq!(input.caret(), 0);
         input.move_to_end();
-        assert_eq!(input.cursor(), 8);
+        assert_eq!(input.caret(), 4);
         input.move_right(); // в конце — no-op
-        assert_eq!(input.cursor(), 8);
+        assert_eq!(input.caret(), 4);
 
-        // 4-байтные символы: шаг каретки = 4
+        // многобайтные символы: шаг каретки = 1 символ
         let mut input = SearchInput::new();
         input.set_query("𝕏𝕏");
-        assert_eq!(input.cursor(), 8);
+        assert_eq!(input.caret(), 2);
         input.move_left();
-        assert_eq!(input.cursor(), 4);
+        assert_eq!(input.caret(), 1);
         input.move_left();
         input.move_left();
-        assert_eq!(input.cursor(), 0);
+        assert_eq!(input.caret(), 0);
     }
 
     /// set_query замещает текст, каретка — в конец (в т.ч. многобайтный).
@@ -868,16 +830,16 @@ mod tests {
         let mut input = SearchInput::new();
         input.set_query("смета");
         assert_eq!(input.query(), "смета");
-        assert_eq!(input.cursor(), 10);
+        assert_eq!(input.caret(), 5);
         input.set_query("𝕏");
-        assert_eq!(input.cursor(), 4);
+        assert_eq!(input.caret(), 1);
         // повторная установка замещает текст
         input.set_query("a");
         assert_eq!(input.query(), "a");
-        assert_eq!(input.cursor(), 1);
+        assert_eq!(input.caret(), 1);
         input.set_query("");
         assert_eq!(input.query(), "");
-        assert_eq!(input.cursor(), 0);
+        assert_eq!(input.caret(), 0);
     }
 
     /// Все операции на пустом поле — no-op без паники.
@@ -894,7 +856,7 @@ mod tests {
         input.move_to_end();
         input.set_query("");
         assert_eq!(input.query(), "");
-        assert_eq!(input.cursor(), 0);
+        assert_eq!(input.caret(), 0);
     }
 
     // ---------- SearchPanel ----------

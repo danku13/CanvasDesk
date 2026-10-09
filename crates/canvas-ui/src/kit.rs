@@ -76,7 +76,12 @@ pub use crate::row_guides::zebra_run_flags;
 pub use crate::component::table::{
     table_layout_immediate, Table, TableOpts, TableProps, TableRow, TableRowStyle,
 };
-pub use crate::component::text_field::{text_field, TextFieldLayout, TextFieldModel};
+// Волна «input-адекватность» 2026-10-09 (design/rules/09-input.md):
+// действия/эффекты ввода, маска пароля, клик→каретка — единый контракт полей.
+pub use crate::component::text_field::{
+    caret_index_at_x, text_field, text_field_masked, TextFieldAction, TextFieldEffect,
+    TextFieldLayout, TextFieldModel,
+};
 pub use crate::component::two_column::{two_column, two_column_right, TwoColumnLayout};
 pub use crate::component::{
     ButtonVariant, ControlStyle, KitPalette, KitState, PanelStyle, BUTTON_HEIGHT, BUTTON_PAD_H,

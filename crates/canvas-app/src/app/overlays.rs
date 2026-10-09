@@ -9,6 +9,52 @@
 
 use super::*;
 
+/// Рендер-данные однострочного kit-поля (design/rules/09-input.md IN3/IN9):
+/// текст — из `kit::text_field` (placeholder/ellipsis/скролл-вслед за
+/// кареткой), каретка — rect 1.5 px (`caret_x`; None — не сфокусировано).
+/// Литералы-каретки `format!("{}|")` в тексте полей ЗАПРЕЩЕНЫ (IN3).
+/// Потребитель: панель поиска, галерея схем, палитра шаблонов (поля владеют
+/// клавиатурой → `focused = true`).
+pub(super) fn kit_field_view(
+    field: &canvas_ui::kit::TextFieldModel,
+    input: [f32; 4],
+    placeholder: &str,
+    font_size: f32,
+    kit_palette: &canvas_ui::kit::KitPalette,
+) -> (String, Option<[f32; 4]>) {
+    let mut m = canvas_ui::measure::TextMeasurer::new();
+    let mut fs = canvas_render::text::measure_font_system();
+    let slot = canvas_ui::geometry::UiRect::new(input[0], input[1], input[2], input[3]);
+    let lay = canvas_ui::kit::text_field(
+        slot,
+        canvas_ui::geometry::UiVec2::new(
+            canvas_ui::kit::TEXT_FIELD_MIN_W,
+            canvas_ui::kit::TEXT_FIELD_HEIGHT,
+        ),
+        canvas_ui::geometry::UiVec2::new(input[2], input[3]),
+        field,
+        placeholder,
+        true,
+        canvas_ui::kit::KitState::Normal,
+        kit_palette,
+        &mut m,
+        &mut fs,
+        canvas_render::text::SANS_FAMILY,
+        font_size,
+    );
+    let caret = if lay.caret_x >= 0.0 {
+        Some([
+            lay.caret_x,
+            lay.text_area.y + 2.0,
+            1.5,
+            lay.text_area.h - 4.0,
+        ])
+    } else {
+        None
+    };
+    (lay.text_shown, caret)
+}
+
 /// Дефект №15 аудита адаптива (закрыт W-f, 04.10.2026): перенос текста с
 /// индикатором продолжения. Строки сверх `max_lines` НЕ теряются молча —
 /// на последней показанной строке добавляется индикатор «ещё N» (i18n-фраза
@@ -875,16 +921,33 @@ impl App {
             params: [6.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
-        // Каретка — литерал «|» в конце текста (MVP, без мерцания)
-        let query_with_caret = format!("{}|", self.search.input.query());
+        // Поле поиска: текст/каретка — через kit::text_field (IN3: каретка
+        // 1.5 px слот accent, скролл-вслед; литерал «|» в тексте запрещён)
+        let (query_shown, caret_rect) = kit_field_view(
+            &self.search.input.field,
+            input,
+            "",
+            14.0,
+            &palette.kit_palette(),
+        );
         texts.push(OwnedScreenText {
-            text: query_with_caret,
+            text: query_shown,
             origin: [input[0] + 10.0, input[1] + 9.0],
             width: (input[2] - 20.0).max(10.0),
             font_size: 14.0,
             color: palette.title,
             align: TextAlign::Left,
         });
+        if let Some(c) = caret_rect {
+            instances.push(CardInstance {
+                pos: [c[0], c[1]],
+                size: [c[2], c[3]],
+                fill: palette.accent,
+                border: [0.0; 4],
+                params: [0.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
+            });
+        }
         for (visible, rect) in lay.row_rects.iter().enumerate() {
             let row = self.search.scroll_top + visible;
             let Some(entry) = self.search.rows.get(row) else {
@@ -1849,18 +1912,34 @@ impl App {
             params: [canvas_core::tokens::RADIUS_CHIP, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
+        // Поле фильтра галереи: текст/каретка — через kit::text_field (IN3:
+        // каретка 1.5 px слот accent, скролл-вслед; литерал «|» запрещён)
+        let gallery_input = rect_xywh(lay.input_rect);
+        let (gallery_shown, gallery_caret) = kit_field_view(
+            &self.scheme_gallery.filter,
+            gallery_input,
+            self.tr(keys::GALLERY_SEARCH),
+            12.0,
+            &palette.kit_palette(),
+        );
         texts.push(OwnedScreenText {
-            text: if self.scheme_gallery.filter.is_empty() {
-                self.tr(keys::GALLERY_SEARCH).to_owned()
-            } else {
-                format!("{}|", self.scheme_gallery.filter)
-            },
-            origin: [lay.input_rect[0] + 8.0, lay.input_rect[1] + 8.0],
-            width: lay.input_rect[2] - 16.0,
+            text: gallery_shown,
+            origin: [gallery_input[0] + 8.0, gallery_input[1] + 8.0],
+            width: gallery_input[2] - 16.0,
             font_size: 12.0,
             color: palette.body,
             align: TextAlign::Left,
         });
+        if let Some(c) = gallery_caret {
+            instances.push(CardInstance {
+                pos: [c[0], c[1]],
+                size: [c[2], c[3]],
+                fill: palette.accent,
+                border: [0.0; 4],
+                params: [0.0, 0.0, 0.0, 1.0],
+                corners: [0.0; 4],
+            });
+        }
         // Чипы категорий («Все» + уникальные категории реестра) —
         // CR-031/S5: язык чипов выровнен с палитрой шаблонов (заливка без
         // рамки, активная — слот selected, радиус-токен RADIUS_PILL),
@@ -2546,29 +2625,24 @@ impl App {
             self.request_redraw();
             return true;
         }
-        if event.logical_key == Key::Named(NamedKey::Backspace) && !event.repeat {
-            self.template_panel.backspace();
-            self.template_panel.selected = 0;
-            self.template_panel.scroll_top = 0;
-            self.request_redraw();
-            return true;
-        }
-        if event.logical_key == Key::Named(NamedKey::ArrowLeft) && !event.repeat {
-            self.template_panel.move_left();
-            self.request_redraw();
-            return true;
-        }
-        if event.logical_key == Key::Named(NamedKey::ArrowRight) && !event.repeat {
-            self.template_panel.move_right();
-            self.request_redraw();
-            return true;
-        }
-        // Печатаемый символ (включая кириллицу — logical_key уже раскладка)
-        if let Key::Character(text) = &event.logical_key {
-            if !event.repeat && !self.modifiers.control_key() {
-                self.template_panel.insert_str(text.as_str());
-                self.template_panel.selected = 0;
-                self.template_panel.scroll_top = 0;
+        // Волна «input-адекватность» (design/rules/09-input.md IN2/IN9):
+        // поле фильтра палитры — полный клавиатурный контракт через единый
+        // kit-маппер (Backspace/Delete ± слово, стрелки ±Shift ±Ctrl-слова,
+        // Home/End, Ctrl+A/C/V/X, печать, Space). Правка фильтра сбрасывает
+        // выбор/скролл строк (прежнее поведение).
+        {
+            let before = self.template_panel.filter.text.clone();
+            let changed = crate::app::input::apply_text_field_key(
+                &event.logical_key,
+                &self.modifiers,
+                &mut self.template_panel.filter,
+                self.clipboard.as_mut(),
+            );
+            if changed {
+                if self.template_panel.filter.text != before {
+                    self.template_panel.selected = 0;
+                    self.template_panel.scroll_top = 0;
+                }
                 self.request_redraw();
                 return true;
             }
@@ -2711,22 +2785,38 @@ impl App {
                 params: [canvas_core::tokens::RADIUS_CHIP, 0.0, 0.0, 1.0],
                 corners: [0.0; 4],
             });
+            // Поле фильтра палитры: текст/каретка — через kit::text_field
+            // (IN3: каретка 1.5 px слот accent, скролл-вслед; «|» запрещён)
+            let tpl_input = lay.input_rect;
+            let (tpl_shown, tpl_caret) = kit_field_view(
+                &self.template_panel.filter,
+                tpl_input,
+                self.tr(keys::TEMPLATES_SEARCH),
+                13.0,
+                &palette.kit_palette(),
+            );
             texts.push(OwnedScreenText {
-                text: if self.template_panel.filter.is_empty() {
-                    self.tr(keys::TEMPLATES_SEARCH).to_owned()
-                } else {
-                    format!("{}|", self.template_panel.filter)
-                },
-                origin: [input[0] + 10.0, input[1] + 8.0],
-                width: (input[2] - 20.0).max(10.0),
+                text: tpl_shown,
+                origin: [tpl_input[0] + 10.0, tpl_input[1] + 8.0],
+                width: (tpl_input[2] - 20.0).max(10.0),
                 font_size: 13.0,
-                color: if self.template_panel.filter.is_empty() {
+                color: if self.template_panel.filter.text.is_empty() {
                     palette.body
                 } else {
                     palette.title
                 },
                 align: TextAlign::Left,
             });
+            if let Some(c) = tpl_caret {
+                instances.push(CardInstance {
+                    pos: [c[0], c[1]],
+                    size: [c[2], c[3]],
+                    fill: palette.accent,
+                    border: [0.0; 4],
+                    params: [0.0, 0.0, 0.0, 1.0],
+                    corners: [0.0; 4],
+                });
+            }
             // Чипы категорий (CR-011: заливки палитурные, не хардкод;
             // UR-003: радиус — токен RADIUS_CHIP, как у чипов полосы и кита
             // (chip_style), не локальный литерал 11; текст — с падом кита
@@ -5978,7 +6068,16 @@ impl App {
                 // контракт кита «цвет/текст — отдельно от геометрии» (§F-8).
                 RowKind::TextInput => {
                     let [field_x, field_y, field_w, _] = text_input_field_rect(*row, *rect);
-                    let editing_now = self.settings_text_edit == Some(*row);
+                    // Волна «input-адекватность» (IN1/IN7): активная правка —
+                    // persistent kit-модель (каретка/селекция переживают кадр);
+                    // неактивная — snapshot значения. Маска пароля — kit
+                    // text_field_masked (модель хранит исходник).
+                    let editing_field = self
+                        .settings_text_edit
+                        .as_ref()
+                        .filter(|(r, _)| r == row)
+                        .map(|(_, f)| f);
+                    let editing_now = editing_field.is_some();
                     // Кнопка «Проверить» — только для строк с кнопкой (URL/
                     // key/api_key). Модель-строки кнопки не имеют.
                     if text_input_has_button(*row) {
@@ -6019,10 +6118,18 @@ impl App {
                     // строки. min/max — kit-метрики (TEXT_FIELD_MIN_W/H).
                     let value = self.settings_text_value_for_row(*row);
                     let placeholder = self.settings_text_placeholder_for_row(*row);
-                    let model = canvas_ui::kit::TextFieldModel {
-                        text: value.to_owned(),
-                        caret: value.chars().count(),
-                        sel: None,
+                    let snapshot;
+                    let model: &canvas_ui::kit::TextFieldModel = match editing_field {
+                        Some(field) => field,
+                        None => {
+                            snapshot = canvas_ui::kit::TextFieldModel {
+                                text: value.to_owned(),
+                                caret: value.chars().count(),
+                                sel: None,
+                                max_chars: None,
+                            };
+                            &snapshot
+                        }
                     };
                     let slot = canvas_ui::UiRect::new(
                         field_x,
@@ -6038,20 +6145,42 @@ impl App {
                     let kit_palette = palette.kit_palette();
                     let mut m = canvas_ui::measure::TextMeasurer::new();
                     let mut fs = canvas_render::text::measure_font_system();
-                    let layout = canvas_ui::kit::text_field(
-                        slot,
-                        min,
-                        max,
-                        &model,
-                        placeholder,
-                        editing_now,
-                        canvas_ui::kit::KitState::Normal,
-                        &kit_palette,
-                        &mut m,
-                        &mut fs,
-                        canvas_render::text::SANS_FAMILY,
-                        11.0,
-                    );
+                    // Маска пароля (IN7): API-ключи рисуются «•» по МАСКЕ
+                    // (каретка по ширине маскированного префикса — прежде
+                    // каретка мерялась по сырому тексту и уезжала).
+                    let mask = matches!(row, SettingsRow::AiApiKey | SettingsRow::AiSelfhostKey)
+                        .then_some('\u{2022}');
+                    let layout = match mask {
+                        Some(mask_char) => canvas_ui::kit::text_field_masked(
+                            slot,
+                            min,
+                            max,
+                            model,
+                            placeholder,
+                            editing_now,
+                            canvas_ui::kit::KitState::Normal,
+                            &kit_palette,
+                            &mut m,
+                            &mut fs,
+                            canvas_render::text::SANS_FAMILY,
+                            11.0,
+                            mask_char,
+                        ),
+                        None => canvas_ui::kit::text_field(
+                            slot,
+                            min,
+                            max,
+                            model,
+                            placeholder,
+                            editing_now,
+                            canvas_ui::kit::KitState::Normal,
+                            &kit_palette,
+                            &mut m,
+                            &mut fs,
+                            canvas_render::text::SANS_FAMILY,
+                            11.0,
+                        ),
+                    };
                     drop(fs);
                     // FR-LLM-FIX (task FIX-TEXTINPUT-KIT): фон поля — row_fill;
                     // при фокусе — рамка акцентом (params.y = 1.0). Rect —
@@ -6073,51 +6202,11 @@ impl App {
                     // для модель-строк/URL показываем как есть. Пустое поле —
                     // плейсхолдер (приглушённым цветом). Текст рисуется по
                     // `layout.text_area` (min kit-пада TEXT_FIELD_PAD_H=8).
-                    let (field_text, is_placeholder) = match row {
-                        SettingsRow::AiApiKey => {
-                            let key = &self.settings.llm.api_key;
-                            if key.is_empty() {
-                                ("sk-…".to_owned(), true)
-                            } else {
-                                ("•".repeat(key.chars().count().min(20)), false)
-                            }
-                        }
-                        SettingsRow::AiSelfhostUrl => {
-                            let url = &self.settings.llm.endpoint;
-                            if url.is_empty() {
-                                ("https://llm.corp.local/v1".to_owned(), true)
-                            } else {
-                                (url.clone(), false)
-                            }
-                        }
-                        SettingsRow::AiSelfhostKey => {
-                            let key = &self.settings.llm.selfhost_key;
-                            if key.is_empty() {
-                                ("API key endpoint'а".to_owned(), true)
-                            } else {
-                                ("•".repeat(key.chars().count().min(20)), false)
-                            }
-                        }
-                        SettingsRow::AiModelSuggest
-                        | SettingsRow::AiModelGraph
-                        | SettingsRow::AiModelAgent => {
-                            let model = match row {
-                                SettingsRow::AiModelSuggest => &self.settings.llm.model_suggest,
-                                SettingsRow::AiModelGraph => &self.settings.llm.model_graph,
-                                SettingsRow::AiModelAgent => &self.settings.llm.model_agent,
-                                _ => unreachable!("модель-строка вне match"),
-                            };
-                            if model.is_empty() {
-                                ("glm-5.3-flash".to_owned(), true)
-                            } else {
-                                (model.clone(), false)
-                            }
-                        }
-                        // FR-LLM-FIX (task FIX-TEXT-INPUT): другие
-                        // TextInput-строки (если появятся) — пустое поле;
-                        // match exhaustive.
-                        _ => (String::new(), false),
-                    };
+                    // Отображаемый текст — из kit-layout (`text_shown`):
+                    // placeholder/маска/скролл-вслед считаются китом (IN3/IN7);
+                    // прежний ручной match с «•».repeat(min(20)) удалён.
+                    let field_text = layout.text_shown.clone();
+                    let is_placeholder = model.text.is_empty();
                     if !field_text.is_empty() {
                         texts.push(OwnedScreenText {
                             text: field_text,
