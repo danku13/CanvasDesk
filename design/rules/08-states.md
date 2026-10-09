@@ -30,8 +30,11 @@ Disabled > Pressed > Hovered > Selected > Normal
 | Normal | control_fill | control_primary |
 | Hovered | control_hover_fill | control_primary_hover_fill |
 | Selected | control_selected_fill | — |
-| Pressed | = Normal (визуально не дифференцируется в v1) | = Normal |
+| Pressed | = Hovered (hover-слоты; аудит 2026-10-09 приведён к факту `button_style` — прежний текст «= Normal» коду противоречил) | = primary_hover_fill |
 | Disabled | control_fill + text → control_disabled_text | ← |
+
+Отдельный слот `control_pressed_fill` (полная дифференциация pressed) —
+управляемое изменение v2: правка этой таблицы + KitPalette + токенов.
 
 Инвариант I-1: сегодня selected_fill = hover_fill (строка галереи не
 различает выбор/hover) — семантика уже разделена слотами, визуальная
@@ -64,6 +67,8 @@ release вне — не срабатывает. Это контракт всех
 Витрина: вся матрица ST1–ST4 показывается в UI-админпанели (FR-070,
 меню «?» → «UI-консоль», секции «Компоненты» и «Канвас») — живой образец
 слотов палитры, включая уровни наполнения контейнеров и live-правку слотов.
+Полный состав секций по компонентам — `10-components.md` §K4 (аудит
+2026-10-09: для 6 компонентов секции отсутствуют — бэклог W2).
 
 ## ST6. Что считается контролом
 
