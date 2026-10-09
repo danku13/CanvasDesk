@@ -43,6 +43,15 @@ CanvasDesk. Она отделена от кода специально: влад
 11. `rules/10-components.md` — реестр компонентов кита v2 (K1), реестр
    слотов KitPalette (K2), скролл-модель (K3), состав витрины UI-консоли
    (K4). Введён аудитом 2026-10-09 (`rules-audit-2026-10.md`).
+12. `rules/11-layouts.md` — раскладки и адаптивность: слот-модель
+   (LAY1), примитивы ↔ web-эквиваленты (LAY2), политики переполнения
+   Fit/SqueezeTail/Wrap (LAY3), flex-факторы (LAY4), grid + SceneNode-
+   сцена: percent/aspect/sticky/minmax (LAY5), измеренный текст (LAY6),
+   шкалы зазоров в gap (LAY7), адаптивность: вьюпорты G4 / HideBelow /
+   брейкпоинты / тач-цели 44 / safe-area (LAY8), движки и HTML5-паритет
+   (LAY9), типовые каркасы и анти-паттерны (LAY10), чек-лист (LAY11).
+   Введён 2026-10-09 — закрытие пробела «layout-правила отсутствуют»
+   (фрагменты прежде жили в П7/П10/S6).
 
 **Use cases** (`use-cases/`) — по файлу на компонент:
 
@@ -84,3 +93,4 @@ W1–W4).
 | Анимации | 150 мс микро / 300 мс полёт / 1200+ мс декоративные |
 | Слои | World → WorldOverlay → Widgets → Panels → Popups → Modals → Drag → Toasts → Debug |
 | Состояния | Disabled > Pressed > Hovered > Selected > Normal |
+| Раскладки | слот → Row/Column/grid_cells/stack → сцена (percent/sticky) → Custom; перелив — именованная политика; 3 вьюпорта G4 (11-layouts) |
