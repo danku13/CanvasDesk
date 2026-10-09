@@ -1846,3 +1846,23 @@ Stage Summary:
 - Реальные layout-баги НЕ обнаружены (lint_frame прошёл на всех 4 состояниях × 3 вьюпорта × 2 языка = 24 кадра)
 - Открытые вопросы владельцу: (1) graph_builder + hints — зарегистрировать в реестре поверхностей (отдельная задача — добавит Block-модальность/ backdrop-контракт, pick через HitStack вместо canvas-цепочки); (2) calc-панель — добавить hit-rect'ы строк в fill_hit_rects для id::STAGE (отдельная задача — изменит pick-поведение, требует регрессионного аудита click_main_stage)
 Tokens: in≈45k, out≈10k, total≈55k, model=GLM-4.7, scope=LAY-W11
+
+---
+Task ID: LAY-W10 (сессия web-f007af5d-5af9-4a7f-a6f5-4986136a1aa9)
+Agent: LAY-W10 implementation agent (subagent)
+Task: LAY-W10 — раздел «Исключения (documented девиации)» в design/rules/11-layouts.md (бэклог аудита раскладок §5, P3/S)
+
+Work Log:
+- Прочитан контекст: journal worklog.md (репо), design/layouts-audit-2026-10.md (целиком: §3.3/§3.7/§3.10, чек-лист §4, бэклог §5 LAY-W10), design/rules/11-layouts.md (273 строки), AGENTS.md
+- Верификация девиаций grep-ом по HEAD 6e3e6b1: tidy (explain_ui.rs:3,32; layout_tree:491, fit_scale:696), docs GFM (docs_ui.rs: layout_page:792, layout_table:903, gfm::parse_blocks_opts(body,true):803 + шапка-обоснование:15–20), wheel (template_ui.rs: wheel_geometry:1405, sector_point:1462, WheelGeometry::hit:1273, WHEEL_*; canvas-render/src/sectors.rs: angle_gap:75), gap: 0.0 (10 вхождений прод-кода: settings modal_layout_with ×4, template panel_layout, gallery/search layout_with, kit gallery_layout TableOpts, stage paint_calc_panel_rows TableOpts), row_gap: 2.0 (только admin_ui.rs:869/1524 — components_body/fill_body)
+- Расхождения аудита с кодом: kit_ui.rs:792/2261 (row_gap 2.0) не подтвердились git log -S (строка никогда не существовала в kit_ui.rs); stage.rs:255 — на самом деле row_gap: 0.0 (инвариант sync_scroll); kit_ui.rs:2824 row_gap: 0.0 — тестовый код (после #[cfg(test)]:2367), в исключения не внесён; в доке использованы устойчивые якоря (функции/константы) без номеров строк
+- Правки design/rules/11-layouts.md (+52/−2): раздел «Исключения (documented девиации)» после LAY11 (без номера LAY12, чек-лист не тронут): вводный абзац (перечень исчерпывающий, I-1 «правило видит код», контроль изменений через правку раздела), таблица 5 исключений (якоря | отступает от | обоснование | статус), 5 пунктов-пояснений с границей дозволенного; кросс-ссылки: LAY5.1 «wheel-меню — см. Исключения», LAY7.1 — предложение про нейтральный нулевой зазор вне S1
+- design/README.md не тронут (индекс README описывает правила LAY1–LAY11, посекционного индекса 11-layouts.md не содержит — синк не нужен)
+- Коммит c24b5c0 на ветке lay-w10 (только design/rules/11-layouts.md; worktree чист), без пуша/мерджа; репозиторный worklog.md не тронут
+
+Stage Summary:
+- c24b5c0 «docs(design): LAY-W10 — раздел «Исключения» в 11-layouts.md (девиации из аудита раскладок)»: 1 файл, +52/−2
+- Все 5 девиаций постановки канонизированы с grep-верифицированными якорями; ссылки аудита, не подтверждённые историей файла (kit_ui row_gap 2.0, stage.rs:255), в док не внесены
+- Маркдаун валиден, стиль согласован с документом (нормативный тон, «ёлочки», таблица)
+Tokens: in≈115k, out≈15k, total≈130k (estimate), model=GLM-4.7 (subagent), scope=LAY-W10
+ (docs(design): LAY-W10 — раздел «Исключения» в 11-layouts.md (девиации из аудита раскладок))
