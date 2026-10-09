@@ -204,10 +204,18 @@ pub const BODY_TOP_PAD: f32 = canvas_core::tokens::SPACING_SM;
 pub const FOOTER_H: f32 = 52.0;
 /// Высота баннера отклонённых (У8).
 pub const BANNER_H: f32 = 42.0;
-/// Высота заголовка группы.
-pub const GROUP_H: f32 = 34.0;
-/// Высота строки предложения.
-pub const ROW_H: f32 = 32.0;
+/// Высота заголовка группы. LAY-W7 (аудит layouts-2026-10 §5): канонизация
+/// на шкалу S3 — `tokens::CARD_HEADER_HEIGHT` (34); значение совпадает с
+/// прежним литералом, выражаем намерение через токен (header-ряд группы
+/// семантически = header карточки/блока). Альтернатива `kit::EMPTY_BTN_H`
+/// в S3-таблице правил 03 не реализована в ките — выбран существующий
+/// 34-пиксельный токен.
+pub const GROUP_H: f32 = canvas_core::tokens::CARD_HEADER_HEIGHT;
+/// Высота строки предложения. LAY-W7: канонизация на S3 —
+/// `kit::LIST_ROW_H` (26); ранее 32 (вне шкалы, −6px). Кнопки строки
+/// («Принять»/«Отклонить» `BTN_W` × `ROW_H − 8`) центрируются в 26-px
+/// строке: высота кнопок 18 — читаемость подписи сохраняется.
+pub const ROW_H: f32 = kit::LIST_ROW_H;
 /// Зазор между группами (spacing-scale токен `SPACING_SM`).
 pub const GROUP_GAP: f32 = canvas_core::tokens::SPACING_SM;
 /// Ширина чипа «100%»/единиц.
@@ -526,6 +534,15 @@ pub fn content_height(review: &Review) -> f32 {
 mod tests {
     use super::*;
     use canvas_core::Canvas;
+
+    /// LAY-W7 (аудит layouts-2026-10 §5): высоты autolink на шкале S3 —
+    /// `GROUP_H` = `tokens::CARD_HEADER_HEIGHT` (34, header-ряд группы),
+    /// `ROW_H` = `kit::LIST_ROW_H` (26, строка предложения).
+    #[test]
+    fn lay_w7_heights_are_canonical_s3() {
+        assert_eq!(GROUP_H, canvas_core::tokens::CARD_HEADER_HEIGHT);
+        assert_eq!(ROW_H, canvas_ui::kit::LIST_ROW_H);
+    }
 
     /// Канвас с парой нод A/B и предложением A→B rate.
     fn canvas_ab() -> Canvas {

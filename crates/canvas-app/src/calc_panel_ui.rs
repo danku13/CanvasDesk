@@ -202,12 +202,10 @@ fn edge_value(edge: &Edge, values: &PanelValues<'_>) -> RowValue {
 
 // --- Раскладка (screen px, координаты ОТНОСИТЕЛЬНЫЕ stage-rect) ----------
 
-/// Высота строки панели.
-// TODO: migrate to PANEL_HEADER_H_L=44 (FR-046 W-d аудит §4) — текущее
-// значение 22 не совпадает ни с одним вариантом шкалы (30/38/44) и не
-// является шапкой панели (это высота строки данных — оставлено как
-// отклонение до отдельной волны типового ряда строк; I-1: ноль скачка).
-pub const PANEL_ROW_H: f32 = 22.0;
+/// Высота строки панели. LAY-W7 (аудит layouts-2026-10 §5): канонизация
+/// на S3 — `kit::LIST_ROW_H` (26); ранее 22 (вне шкалы, +4px). Бывший
+/// TODO W-d закрыт этой волной.
+pub const PANEL_ROW_H: f32 = canvas_ui::kit::LIST_ROW_H;
 /// Высота заголовка группы (HEIGHT, не font-size — кегль шапки колонки
 /// задаёт рендер, не эта константа; FR-046 W-d аудит §4: `FONT_TITLE_LG`
 /// относится к кеглям текста, а не к высотам заголовков колонок).
@@ -466,9 +464,16 @@ impl StageCalcFocus {
 
 // --- Зона пилюль веера: переполнение (Q2, v2) -----------------------------
 
-/// Высота двухстрочной пилюли (адрес + значение) — базовый режим.
+/// Высота двухстрочной пилюли (адрес + значение) — базовый режим. LAY-W7:
+/// значение НЕ на шкале S3 как самостоятельная компонента — фиксируем как
+/// S3-производную: 2 строки × `TITLE_LINE_H`(17) + 2×пад ≈ 34 (равно
+/// `tokens::CARD_HEADER_HEIGHT`/`EMPTY_BTN_H` по числу, но семантически
+/// это пилюля веера, не кнопка/шапка — отдельная строка S3).
 pub const PILL_H_TWO_LINE: f32 = 34.0;
 /// Высота однострочной пилюли (адрес · значение) — компактный режим Q2.
+/// LAY-W7: значение НЕ на шкале S3 — фиксируем как S3-производную:
+/// 1 строка × `TITLE_LINE_H`(17) + 2×пад ≈ 20 (равно `kit::SWITCH_H` по
+/// числу, но семантически это пилюля, не свитч — отдельная строка S3).
 pub const PILL_H_ONE_LINE: f32 = 20.0;
 
 /// Режим зоны пилюль при переполнении стопки (Q2: «сокращение текста →
@@ -537,6 +542,19 @@ mod tests {
     use canvas_core::expr::Value;
     use canvas_core::flow::FlowKind;
     use canvas_core::{Edge, Node};
+
+    /// LAY-W7 (аудит layouts-2026-10 §5): `PANEL_ROW_H` — псевдоним
+    /// `kit::LIST_ROW_H` (26, каноническая строка списка S3). Пилюли
+    /// `PILL_H_TWO_LINE` (34) / `PILL_H_ONE_LINE` (20) — S3-производные
+    /// (контейнер 2-/1-строчной пилюли веера), оставлены как отдельные
+    /// строки S3 с задокументированной арифметикой.
+    #[test]
+    fn lay_w7_heights_are_canonical_s3() {
+        assert_eq!(PANEL_ROW_H, canvas_ui::kit::LIST_ROW_H);
+        // S3-производные пилюль — инвариант арифметики (2 строки/1 строка):
+        assert_eq!(PILL_H_TWO_LINE, 34.0);
+        assert_eq!(PILL_H_ONE_LINE, 20.0);
+    }
 
     fn text_node(id: &str, text: &str, x: f32) -> Node {
         Node::text(id, text, x, 0.0)
@@ -697,18 +715,19 @@ mod tests {
         .expect("панель есть");
         // Нижняя кромка над подсказкой
         assert!((lay.rect[1] + lay.rect[3] - (rect_h - PANEL_BOTTOM_GAP)).abs() < 0.01);
-        // Кап: max_h = 600*0.45 = 270 → окно 10 строк (геометрия прежняя)
-        assert_eq!(lay.var_rows.len(), 10);
-        assert_eq!(lay.vars_area[3], 10.0 * PANEL_ROW_H);
+        // Кап: max_h = 600*0.45 = 270 → окно 8 строк (LAY-W7: PANEL_ROW_H
+        // 22→26 — на 2 строки меньше вошло в тот же кап высоты).
+        assert_eq!(lay.var_rows.len(), 8);
+        assert_eq!(lay.vars_area[3], 8.0 * PANEL_ROW_H);
         // FR-059: перебор прокручивается — индексы модельные, скролл активен
         assert!(vars_scroll.needs_scroll());
-        assert_eq!(vars_scroll.max_offset(), 4.0 * PANEL_ROW_H);
+        assert_eq!(vars_scroll.max_offset(), 6.0 * PANEL_ROW_H);
         assert_eq!(lay.var_rows[0].0, 0);
-        assert_eq!(lay.var_rows[9].0, 9);
+        assert_eq!(lay.var_rows[7].0, 7);
         assert_eq!(lay.formula_rows.len(), 3);
-        assert!(!formulas_scroll.needs_scroll(), "3 строки в окне 10");
+        assert!(!formulas_scroll.needs_scroll(), "3 строки в окне 8");
         // Прокрутка переменных: последние строки становятся видимыми
-        vars_scroll.scroll_by(4.0 * PANEL_ROW_H);
+        vars_scroll.scroll_by(6.0 * PANEL_ROW_H);
         vars_scroll.clamp();
         let lay = layout(
             &model,
@@ -725,9 +744,9 @@ mod tests {
         let v = lay.var_rows[0].1;
         assert!(f[0] > v[0] + v[2], "колонки не пересекаются");
         // Хит-тест: внутри строки и мимо (индекс — модельный; после
-        // прокрутки первая видимая строка — № 4)
+        // прокрутки на 6 строк первая видимая строка — № 6)
         let mid = [v[0] + v[2] / 2.0, v[1] + PANEL_ROW_H / 2.0];
-        assert_eq!(lay.var_row_at(mid), Some(4));
+        assert_eq!(lay.var_row_at(mid), Some(6));
         assert_eq!(lay.formula_row_at(mid), None);
         let fmid = [f[0] + 10.0, f[1] + 5.0];
         assert_eq!(lay.formula_row_at(fmid), Some(0));

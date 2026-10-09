@@ -2788,9 +2788,11 @@ impl App {
     pub(super) fn on_explain_click(&mut self) {
         let viewport = self.viewport_logical();
         let win = explain_ui::window_rect(viewport);
-        // ✕ — закрыть (снапшот → сессионный кэш; работает и в защите —
-        // Defense → Closed, §6.4)
-        if point_in_rect(explain_ui::close_rect(win), self.cursor) {
+        // LAY-W8 (FR-097): тач-цель ✕ (CLOSE_SIZE=30) ≥ 44 (кламп в окно).
+        if point_in_rect(
+            crate::touch_targets::touch_hit_xywh(explain_ui::close_rect(win), win),
+            self.cursor,
+        ) {
             self.close_explain();
             return;
         }
@@ -2829,18 +2831,28 @@ impl App {
                 .explain
                 .as_ref()
                 .is_some_and(|s| s.revision != self.scene.revision);
-            // Чип «Данные изменены» — единственный путь Stale → Ready
-            // (AC-3.3): перестройка из нового снапшота, тот же корень
-            if stale_now && point_in_rect(explain_ui::chip_rect(win), self.cursor) {
+            // LAY-W8 (FR-097): тач-цель чипа «Данные изменены» (CHIP_H=24)
+            // ≥ 44 (кламп в окно).
+            if stale_now
+                && point_in_rect(
+                    crate::touch_targets::touch_hit_xywh(explain_ui::chip_rect(win), win),
+                    self.cursor,
+                )
+            {
                 let root = self.explain.as_ref().expect("готово").root.clone();
                 self.open_explain(root);
                 return;
             }
-            // FR-083: тумблер направления схемы — Ltr ↔ Rtl одним действием;
-            // пан сбрасывается внутри toggle_direction, выбор сохраняется
-            // в настройки тем же механизмом, что language
+            // LAY-W8 (FR-097): тач-цель тумблера направления (40×32) ≥ 44
+            // (кламп в окно).
             if explain_ui::direction_toggle_visible(win)
-                && point_in_rect(explain_ui::direction_toggle_rect(win), self.cursor)
+                && point_in_rect(
+                    crate::touch_targets::touch_hit_xywh(
+                        explain_ui::direction_toggle_rect(win),
+                        win,
+                    ),
+                    self.cursor,
+                )
             {
                 if let Some(state) = self.explain.as_mut() {
                     state.toggle_direction();
@@ -2850,8 +2862,12 @@ impl App {
                 self.request_redraw();
                 return;
             }
-            // X5 (AC-6.1): тумблер режима защиты — вход/выход одним действием
-            if point_in_rect(explain_ui::defense_toggle_rect(win), self.cursor) {
+            // LAY-W8 (FR-097): тач-цель тумблера защиты (152×32) ≥ 44
+            // (кламп в окно).
+            if point_in_rect(
+                crate::touch_targets::touch_hit_xywh(explain_ui::defense_toggle_rect(win), win),
+                self.cursor,
+            ) {
                 let depth = self.settings.explain_depth_limit;
                 if let Some(state) = self.explain.as_mut() {
                     if state.is_defense() {
@@ -2865,7 +2881,14 @@ impl App {
             }
             // X5 (AC-6.3): кнопки пошагового раскрытия в защите
             let defense_now = self.explain.as_ref().is_some_and(|s| s.is_defense());
-            if defense_now && point_in_rect(explain_ui::defense_step_rect(win), self.cursor) {
+            // LAY-W8 (FR-097): тач-цель «Раскрыть уровень» (170×32) ≥ 44
+            // (кламп в окно).
+            if defense_now
+                && point_in_rect(
+                    crate::touch_targets::touch_hit_xywh(explain_ui::defense_step_rect(win), win),
+                    self.cursor,
+                )
+            {
                 // Шаг имеет смысл, только если есть скрытые уровни
                 let body = explain_ui::body_rect(win);
                 let can_step = self
@@ -2884,7 +2907,14 @@ impl App {
                 self.request_redraw();
                 return;
             }
-            if defense_now && point_in_rect(explain_ui::defense_all_rect(win), self.cursor) {
+            // LAY-W8 (FR-097): тач-цель «Раскрыть всё» (126×32) ≥ 44
+            // (кламп в окно).
+            if defense_now
+                && point_in_rect(
+                    crate::touch_targets::touch_hit_xywh(explain_ui::defense_all_rect(win), win),
+                    self.cursor,
+                )
+            {
                 if let Some(state) = self.explain.as_mut() {
                     state.defense_reveal_all();
                 }

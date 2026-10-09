@@ -40,14 +40,13 @@ pub const PANEL_MARGIN: f32 = 16.0;
 /// ниже их низа, иначе заголовок «Проливания» уезжает под кнопки
 /// (wasm-аудит 2026-09-25).
 pub const PANEL_TOP: f32 = 64.0 + crate::ui::WEB_TOOLBAR_INSET;
-/// Высота заголовка (заголовок + кнопка «✕»).
-// TODO: migrate to PANEL_HEADER_H_M=38 (FR-046 W-d аудит §4) — текущее
-// значение 36 на 2px отличается от medium-варианта шкалы; оставлено как
-// отклонение до полного аудита геометрии (визуальный скачок при смене
-// 36→38 нежелателен в W-d-волне, I-1: ноль скачка).
-pub const HEADER_H: f32 = 36.0;
-/// Высота строки проливания.
-pub const ROW_H: f32 = 26.0;
+/// Высота заголовка (заголовок + кнопка «✕»). LAY-W7 (аудит layouts-2026-10
+/// §5): канонизация на S3 — `tokens::PANEL_HEADER_H_M` (38); ранее 36
+/// (вне шкалы, +2px). Бывший TODO W-d закрыт этой волной.
+pub const HEADER_H: f32 = canvas_core::tokens::PANEL_HEADER_H_M;
+/// Высота строки проливания. LAY-W7: псевдоним `kit::LIST_ROW_H` (значение
+/// уже совпадало — 26; выразим намерение через константу кита).
+pub const ROW_H: f32 = kit::LIST_ROW_H;
 /// Высота окна списка: до 12 строк ([`LIST_MAX_ROWS`]) — прежняя
 /// геометрия панели; строки сверх — доступны скроллом (FR-059: замена
 /// капа `VISIBLE_CAP` = 12 со строкой «… ещё N» кит-скроллом, G5).
@@ -234,6 +233,15 @@ pub fn flow_map_list_at(layout: &FlowMapLayout, cursor: [f32; 2]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// LAY-W7 (аудит layouts-2026-10 §5): высоты flowmap на шкале S3 —
+    /// `HEADER_H` = `tokens::PANEL_HEADER_H_M` (38, medium-вариант шапки
+    /// панели), `ROW_H` = `kit::LIST_ROW_H` (26, каноническая строка списка).
+    #[test]
+    fn lay_w7_heights_are_canonical_s3() {
+        assert_eq!(HEADER_H, canvas_core::tokens::PANEL_HEADER_H_M);
+        assert_eq!(ROW_H, kit::LIST_ROW_H);
+    }
 
     /// Н9-4: пустой канвас — панель минимальной высоты с одной строкой-
     /// подсказкой, ни строк.
