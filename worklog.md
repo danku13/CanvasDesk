@@ -1750,3 +1750,79 @@ Stage Summary:
 - Файлы: admin_ui.rs, kit_ui.rs, template_ui.rs, onboarding_ui.rs, lib.rs, suggest.rs, hints_ui.rs, flowmap_ui.rs, app/tooltip.rs, app/ai_status_panel.rs, app/graph_builder_ui.rs (все crates/canvas-app/src/)
 - Реализация subagent'ом (parallel), коммит и пуш — main-агент
 Tokens: in≈55k, out≈9k, total≈64k, model=GLM (subagent general-purpose), scope=LAY-W6
+
+---
+Task ID: LAY-W12
+Agent: subagent (general-purpose)
+Task: CI-гейт LAY7: регрессионный grep-линт gap/y+= в canvas-app
+
+Work Log:
+- Контекст: прочитан worklog.md (LAY-W7 + LAY-W8 завершены — 671 тест green), design/layouts-audit-2026-10.md §3.7 (перечень нарушений LAY7) и §5 (бэклог LAY-W12), scripts/token_lint.sh (шаблон: set -euo pipefail → cd repo-root → awk отрезает #[cfg(test)] → grep -vE комментарии → rg паттерн → сбор hits → exit 1/0), .github/workflows/ci.yml (структура: gates/wasm-check/licenses/artifacts/llm-proxy)
+- Аудит §3.7 сверен с текущим кодом: rg 'gap:\s*[0-9]+\.[0-9]+' в crates/canvas-app/src — единственный inline-литерал вне 0.0/collision_gap/row_gap: kit_ui.rs:1239 `gap: 6.0` (Column-литерал в gallery_layout). Остальные gap-литералы: `gap: 0.0` (7 мест: scheme_gallery/search/settings/template — нейтральный ритм, аудитом разрешены), `collision_gap:` (app.rs/snap.rs/support.rs — НЕ LAY7, collision/snap-параметры), `row_gap:` (admin_ui/stage/kit_ui — НЕ LAY7). Именованные константы (gap: TABLE_GUIDE_GAP, gap: GAP_CONTROLS, gap: BAR_GAP, gap: SPACING_*) — не литералы, lint не флагуются
+- Аудит §3.7 y += сверен: rg 'y\s*\+=\s*[0-9]+\.[0-9]+' → 56 вхождений: kit_ui.rs (36, строки 555-1565 — gallery-скелет), admin_ui.rs (17, строки 538-2642 — admin demo), app/overlays.rs (2, строки 4520/4530 — py += 14.0/30.0), app/stage.rs (1, строка 1878 — ext_y += 32.0). Все 4 файла идут в allowlist (до волны W3 — миграция скелетов на Column-примитивы)
+- Создан scripts/lay7_lint.sh (95 строк, +x): паттерн token_lint.sh (awk отрезает #[cfg(test)] → grep -vE комментарии → rg паттерн); две секции: (1) gap-литералы — rg 'gap:[[:space:]]*[0-9]+\.[0-9]+' + grep -vE collision_gap:/row_gap: + grep -vE 'gap:[[:space:]]*0\.' (исключение нейтрального 0.0-ритма); (2) y += — rg 'y[[:space:]]*\+=[[:space:]]*[0-9]+\.[0-9]+' вне allowlist `/(kit_ui|admin_ui|overlays|stage)\.rs$`. Паттерн y += ловит y, py, ext_y, *y (любая переменная, оканчивающаяся на y — соответствует перечню §3.7). Комментарии и doc-комментарии исключаются через grep -vE '^\S+:[0-9]+:[[:space:]]*(///|//!|//)'
+- bash -n scripts/lay7_lint.sh — синтаксис OK; первый прогон → FAIL на kit_ui.rs:1239 `gap: 6.0` (ожидаемо — единственный inline-литерал в коде)
+- Фикс kit_ui.rs:1239 — `gap: 6.0` → `gap: canvas_core::tokens::SPACING_S` (6.0 = SPACING_S, шкала S1; токен уже используется в том же файле — строки 1318/1377/1409/1516/1518/1536/3087/3242/3247/3248). Добавлен комментарий с ссылкой на гейт и обоснованием (LAY7: литерал убран, гейт lay7_lint.sh ловит inline-литералы). Фикс предпочтительнее allowlisting — паттерн LAY-W7 (алиас на токены) уже установился в коде
+- Повторный прогон scripts/lay7_lint.sh → OK (обе секции green, exit 0)
+- Самотест линта: в search_ui.rs (не-allowlisted) временно инжектированы `gap: 7.0` и `y += 99.0` → lint FAIL с точными координатами (file:line:content); revert → OK. Линт корректно ловит оба паттерна (gap-литерал и y+= вне allowlist)
+- CI: в .github/workflows/ci.yml добавлена джоба `lay7-lint` (между `licenses` и `artifacts`): ubuntu-latest, только checkout + bash scripts/lay7_lint.sh. Без rust-toolchain/swatinem/rust-cache — гейт быстрый (awk+grep+rg, без компиляции). Запускается параллельно с wasm-check/licenses/llm-proxy. Комментарий в YAML — на русском (конвенция проекта), со ссылкой на аудит §5 LAY-W12
+- YAML-синтаксис ci.yml проверен через python yaml.safe_load → 6 джобов: gates, wasm-check, licenses, lay7-lint, artifacts, llm-proxy. Все ключи валидны
+- Гейты после фикса kit_ui.rs: cargo build -p canvas-app ✓; cargo test -p canvas-app --lib — 671 passed / 0 failed (базовая линия LAY-W7/W8 сохранена); cargo clippy -p canvas-app -- -D warnings ✓ (0 warnings); cargo fmt --check -p canvas-app ✓
+
+Stage Summary:
+- Файлы изменены: scripts/lay7_lint.sh (+95, новый — регрессионный гейт LAY7), crates/canvas-app/src/kit_ui.rs (+2/-1 — gap: 6.0 → SPACING_S), .github/workflows/ci.yml (+17 — джоба lay7-lint)
+- Гейт ловит (правила):
+  1. gap: <inline литерал float> в Row/Column (паттерн `gap:[[:space:]]*[0-9]+\.[0-9]+`) — кроме gap: 0.0 (нейтральный ритм, фильтр `gap:[[:space:]]*0\.`), collision_gap/row_gap (НЕ LAY7 — collision/snap), именованных констант (gap: SECTION_GAP, gap: SPACING_S и т.п. — не литералы, не матчятся). Известная false-negative: `gap: 0.5` (любая дробь с целой частью 0 — фильтруется как «нейтральный ритм»); принято в задаче (0.5 px нигде в коде нет, sub-pixel gap невидим)
+  2. y += <inline литерал float> вне allowlist (паттерн `y[[:space:]]*\+=[[:space:]]*[0-9]+\.[0-9]+`) — ловит y, py, ext_y, *y (соответствует перечню §3.7: kit_ui 36 + admin_ui 17 + overlays 2 + stage 1 = 56). После волны W3 (миграция скелетов на Column-примитивы) allowlist удаляется
+- Allowlist y += (4 файла, до волны W3):
+  * crates/canvas-app/src/kit_ui.rs (36 вхождений — gallery-скелет)
+  * crates/canvas-app/src/admin_ui.rs (17 — admin demo-скелет)
+  * crates/canvas-app/src/app/overlays.rs (2 — py += в tooltip-стеке)
+  * crates/canvas-app/src/app/stage.rs (1 — ext_y += в extension-раскладке)
+- Allowlist gap: не нужен — единственный inline-литерал `gap: 6.0` (kit_ui.rs:1239) зафиксен → SPACING_S; остальные 7 `gap: 0.0` нейтральны (аудитом разрешены)
+- Тесты: cargo test -p canvas-app --lib 671/0 ✓ (базовая линия LAY-W7/W8 сохранена — фикс kit_ui.rs не сломал layout-тесты gallery); cargo clippy -p canvas-app -- -D warnings ✓; cargo fmt --check ✓; bash scripts/lay7_lint.sh exit 0; bash -n scripts/lay7_lint.sh синтаксис OK; самотест (инжекция gap: 7.0 + y += 99.0 в search_ui.rs → FAIL с точными координатами, revert → OK)
+- WASM-гейт: не запускался (изменения — bash-скрипт + 1 строка Rust + YAML; без GPU/платформо-специфичного кода); делегирован CI
+- Координация с LAY-W11 (параллельный агент в app/ui_layout_lint.rs): git status в начале сессии — clean; файлы LAY-W12 (scripts/lay7_lint.sh, .github/workflows/ci.yml, kit_ui.rs) не пересекаются с файлами LAY-W11 (app/ui_layout_lint.rs). Перед правкой kit_ui.rs файл перечитан — других активных правок не было
+- Открытые вопросы владельцу:
+  1. После волны W3 (миграция скелетов kit_ui/admin_ui/overlays/stage на Column-примитивы) — удалить allowlist `ALLOW_YPLUS_REGEX` из scripts/lay7_lint.sh (раскомментировать фильтр или удалить условие `if echo "$f" | grep -qE ...; then continue; fi`). Скрипт будет флаговать ВСЕ y += <literal>, что и есть цель LAY7/LAY10
+  2. P2-нарушения из аудита §3.7 (именованные константы вне шкалы — ai_status_panel PAD_*=9/11, GAP_*=5/7; palette PAL_*=3/5; settings MODAL_THEME_GAP=14; explain WIN_MARGIN=20/BODY_PAD=16/LAYOUT_PAD=14; calc_panel PANEL_BOTTOM_GAP=34; app DIALOG_*=16/20/40; onboarding AI_ONB_PAD_*=22/26/30 и т.п.) — НЕ ловятся этим линтом (они именованные константы, не inline-литералы). Это сознательное решение: гейт LAY7 ловит регрессии (новые inline-литералы), а не все P2-нарушения (для P2 нужна отдельная задача с миграцией констант на токены — LAY-W2 или подобная)
+  3. False-negative `gap: 0.5`: фильтр `gap:[[:space:]]*0\.'` исключает ВСЕ gap: 0.* (включая не-ноль). Принято в задаче; альтернатива — точный фильтр `gap:[[:space:]]*0\.0+\b` (только нули), но это пропустит `gap: 0.5` как нарушение (правильно), однако потребует уточнения, является ли `gap: 0.5` реальным нарушением (sub-pixel gap — артефакт). Решение владельца
+Tokens: in≈40k, out≈7k, total≈47k, model=GLM-4.7, scope=LAY-W12
+
+---
+Task ID: LAY-W11
+Agent: subagent (general-purpose)
+Task: G4-линт: канонические состояния для graph_builder, flow_map, calc-панели, hints — закрыть слепые зоны
+
+Work Log:
+- Контекст: прочитан worklog.md (LAY-W7/W8 — высоты S3 + тач-44; LAY-W12 — CI-гейт LAY7, параллельная сессия), оркестрационный worklog.md, аудит design/layouts-audit-2026-10.md §5 LAY-W11 (P3, S), ui_layout_lint.rs (416 строк, 19 lint-тестов), ui_registry.rs (2264 строки — build_registry + fill_hit_rects + ui_frame_flags)
+- Классификация 4 поверхностей по типу покрытия G4-линтом (после чтения registry/handler/overlays):
+  * flow_map — полный lint: id::FLOW_MAP в реестре (build_registry при flow_map_open, строки 295-299), hit-rect'ы панели/«✕»/строк в fill_hit_rects (1135-1148)
+  * calc_panel — best-effort lint: панель рисуется ВНУТРИ id::STAGE (stage_frame_ctx → calc_panel_layout), строки панели НЕ в кадре реестра (клики через click_main_stage → stage_frame_ctx, не surface-реестр); в кадре id::STAGE только rect ОКНА stage
+  * graph_builder — слепая зона: оверлей рисуется через screen_bands (handler.rs:347-350, слой Modals), НЕ в реестре build_registry; hit-тест отдельным путём graph_builder_hit/click (input.rs:3152, canvas-цепочка)
+  * hints — слепая зона: popup рисуется через screen_bands (handler.rs:453-454, слой Popups), НЕ в реестре; hit-тест только клавиатурная навигация (input.rs:524 — ArrowUp/Down/Enter/Tab/Escape), мышь через popup НЕ перехватывается
+- TDD: 4 новых lint-теста добавлены в crates/canvas-app/src/app/ui_layout_lint.rs (строки 443, 484, 561, 602). Каждый с верификационным блоком после lint_state (паттерн lint_gallery_open/assert_backdrop_is):
+  * lint_flow_map_open (443) — lint_state 3×2 + верификация: frame содержит FLOW_MAP поверхность с ≥2 hit-rect'ами (panel + close; rows_count=0 → футер-подсказка). test_viewport=Some(vp) — flow_map_layout читает viewport_logical() (не явный vp из build_frame_at), без оверрайда панель вырождается в 0×0 (паттерн lint_palette_selected)
+  * lint_calc_panel_open (484) — фикстура 2 ноды (Исток с users=10/conv=0.2, Отчёт с формулой x = Исток.users * Исток.conv) + 2 value-ребра src→dst (пучок веса 2, требуется MainStageState::open ≥2) + recompute_flow. lint_state 3×2 + верификация: frame содержит STAGE поверхность с hit-rect "stage" (окно). Документировано: строки calc-панели НЕ в кадре (слепая зона — клики через click_main_stage → stage_frame_ctx, не surface-реестр)
+  * lint_graph_builder_open (561) — lint_state 3×2 (graph_builder.open=true, text="Сводка по продукту: CAC, LTV, отток") + верификация слепой зоны: frame НЕ содержит "graph_builder" поверхности (assert all != "graph_builder"). Когда поверхность добавят в реестр — assert ЗАПАДАЁТ (напоминание переработать lint на полный кадр + backdrop-контракт)
+  * lint_hints_open (602) — lint_state 3×2 (hints.open=true, items=[Var "users", Var "conv"], anchor=центр vp, selected=0) + верификация слепой зоны: frame НЕ содержит "hints" поверхности (assert all != "hints"). Когда поверхность добавят в реестр — assert ЗАПАДАЁТ
+- Гейты:
+  * cargo fmt --check ✓ (после cargo fmt — 2 правки автоформата: свёртка Node::text в одну строку + inline chain frame.surfaces.iter().all)
+  * cargo test -p canvas-app --lib -- ui_layout_lint → 23 passed / 0 failed (19 прежних + 4 новых LAY-W11) ✓
+  * cargo test -p canvas-app --lib → 675 passed / 0 failed (671 прежних + 4 новых) ✓
+  * cargo clippy -p canvas-app -- -D warnings → exit 0 (0 warnings) ✓
+- WASM-гейт: target wasm32-unknown-unknown НЕ установлен в среде агента (rustup target list --installed → только x86_64-unknown-linux-gnu) — делегировано CI (прецедент FR-090/LAY-W7/LAY-W8). Изменения — чистый тест-код в #[cfg(test)] модуле, без платформо-специфичных зависимостей
+- Координация с LAY-W12: параллельный агент работал над scripts/lay7_lint.sh и .github/workflows/ci.yml — моих правок в этих файлах нет, конфликтов не было
+
+Stage Summary:
+- 4 lint-теста добавлены в crates/canvas-app/src/app/ui_layout_lint.rs (строки 443/484/561/602), файл 416→646 строк
+- Класс покрытия:
+  * flow_map — полный lint (поверхность в реестре, hit-rect'ы в кадре: panel + close, 0 строк = футер). Слепая зона закрыта
+  * calc_panel — best-effort lint (frame содержит STAGE с rect окна; строки панели НЕ в кадре — слепая зона документирована, геометрия строк покрывается модельными тестами calc_panel_ui::layout). Каноническое состояние с реальным пучком+формулой
+  * graph_builder — слепая зона (маркер): frame НЕ содержит поверхности, lint_frame тривиально зелёный; assert-верификация слепой зоны (напоминание переработать при добавлении в реестр)
+  * hints — слепая зона (маркер): frame НЕ содержит поверхности, lint_frame тривиально зелёный; assert-верификация слепой зоны
+- Тесты: 23 ui_layout_lint (19+4), 675 lib total — все green; fmt ✓; clippy -D warnings ✓
+- Не покрыто (причина): (1) graph_builder overlay — рисуется через screen_bands в handler.rs, минуя реестр; (2) hints popup — рисуется через screen_bands в handler.rs, минуя реестр; (3) строки calc-панели — клики через click_main_stage → stage_frame_ctx, не через surface-реестр. Все три документированы как слепые зоны с assert-маркерами; регрессия «поверхность добавлена в реестр» будет поймана автоматически (assert-верификация западаёт → переработать lint)
+- Реальные layout-баги НЕ обнаружены (lint_frame прошёл на всех 4 состояниях × 3 вьюпорта × 2 языка = 24 кадра)
+- Открытые вопросы владельцу: (1) graph_builder + hints — зарегистрировать в реестре поверхностей (отдельная задача — добавит Block-модальность/ backdrop-контракт, pick через HitStack вместо canvas-цепочки); (2) calc-панель — добавить hit-rect'ы строк в fill_hit_rects для id::STAGE (отдельная задача — изменит pick-поведение, требует регрессионного аудита click_main_stage)
+Tokens: in≈45k, out≈10k, total≈55k, model=GLM-4.7, scope=LAY-W11
