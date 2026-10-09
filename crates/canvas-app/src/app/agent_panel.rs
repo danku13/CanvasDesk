@@ -32,6 +32,10 @@ use super::*;
 // FR-LLM-D: UiRect — геометрия kit-компонентов (panel_style/chip_style
 // принимают UiRect, не сырой [f32; 4]).
 use canvas_ui::geometry::{UiRect, UiVec2};
+// LAY-W4: layout-примитивы кита — Column-скелет панели + Row-строки
+// (design/rules/11-layouts.md LAY2/LAY4/LAY10; аудит-2026-10 §3.2).
+use canvas_ui::geometry::EdgeInsets;
+use canvas_ui::layout::{pad, pilot_backend, Child, Column, CrossAlign, MainAlign, Row};
 
 /// Ширина панели (прототип строки 484: 388px, max 94vw — клампим в рендере).
 pub const AGENT_PANEL_W: f32 = 388.0;
@@ -234,41 +238,130 @@ pub(super) struct AgentPanelLayout {
 
 impl AgentPanelLayout {
     /// Раскладка по rect'у панели (правый край, full-height).
+    ///
+    /// LAY-W4 (design/layouts-audit-2026-10.md §3.2 → §5): каркас панели —
+    /// Column-скелет из пяти полос (шапка / контекст / лог-grow / input /
+    /// quick) по каркасу LAY10 «Панель» (шапка → тело → футер); строки
+    /// внутри полос — Row («тулбар»: ✕ прижат `MainAlign::End`,
+    /// quick-пилюли — равные доли). Структура [`AgentPanelLayout`] и
+    /// семантика полей НЕ изменились: геометрия по-прежнему одна на draw и
+    /// hit (урок CR-033, LAY1.2). Золотые тесты `agent_panel_layout_golden_*`
+    /// пинят прежнюю геометрию — нулевой сдвиг (допуск < 0.01 px).
+    ///
+    /// Соответствие нормативу:
+    /// - LAY2: скелет выражен примитивами `Column`/`Row`/`pad`/
+    ///   `Child::fixed`/`Child::flexible` — прежняя ручная арифметика
+    ///   (`py + ph - QUICK_H - INPUT_H`, `(pw - PAD*2 - GAP*2)/3`) убрана;
+    /// - LAY4 («лог-grow»): Column поддерживает flex-доли по высоте
+    ///   (`Child.grow`, FR-062 F-14), поэтому лог сообщений — единственный
+    ///   grow-заполнитель скелета (LAY4.1): `Child::flexible(.., 1.0)`
+    ///   получает остаток высоты слота после фиксированных полос и зазоров —
+    ///   дословный эквивалент прежнего расчёта нижних полос от нижнего края;
+    ///   в строке ввода grow-заполнитель — поле, кнопка фиксирована;
+    ///   quick-пилюли — три осмысленные равные доли 1:1:1;
+    /// - LAY7: зазоры строк — `GAP` (SPACING_SM), пад полос — `PAD`
+    ///   (SPACING_LG); `gap: 0.0` скелета — нейтральный «ритм без зазора»:
+    ///   полосы примыкают (прежний ритм панели), воздух даёт центрирование
+    ///   контента внутри полос.
     pub fn build(panel: UiRect) -> Self {
-        let [px, py, pw, ph] = [panel.x, panel.y, panel.w, panel.h];
-        // ✕ — ICON_BUTTON_SIZE, вертикально по центру шапки.
-        let close = UiRect::new(
-            px + pw - PAD - ICON_BTN,
-            py + (HEAD_H - ICON_BTN) * 0.5,
-            ICON_BTN,
-            ICON_BTN,
+        // Выбор backend'а — осознанный (LAY9.1, ADR-0014 «потребитель
+        // выбирает backend осознанно»): NativeBackend (`pilot_backend`)
+        // считает в чистой f32-арифметике — побитовый паритет с прежней
+        // ручной раскладкой. Дефолтный FlexLayoutEngine дополнительно
+        // приводит локации к целой px-сетке (зеркало taffy round_layout в
+        // `finish_line`) — сдвиг полос до 0.5 px, несовместимый с нулевым
+        // сдвигом LAY-W4 (golden-тесты). Семантики Fit/grow у обоих
+        // backend'ов совпадают (пинено юнит-тестами canvas-ui/layout.rs).
+        let backend = pilot_backend();
+
+        // Скелет: пять полос от слота панели. Ширина полос — вся панель;
+        // внутренние поля полос — горизонтальный `pad` ниже (вертикальных
+        // полей у панели нет — прежняя геометрия).
+        let bands = Column {
+            gap: 0.0,
+            ..Column::default()
+        }
+        .lay_out_with(
+            backend,
+            panel,
+            &[
+                Child::fixed(panel.w, HEAD_H),      // шапка (bolt/title/close)
+                Child::fixed(panel.w, CTX_H),       // контекстная строка (3 chips)
+                Child::flexible(panel.w, 0.0, 1.0), // лог сообщений — grow (LAY4.1)
+                Child::fixed(panel.w, INPUT_H),     // полоса ввода (поле + send)
+                Child::fixed(panel.w, QUICK_H),     // полоса quick-actions
+            ],
         );
-        // Полоса ввода: 44px над quick-actions; поле — TEXT_FIELD_HEIGHT,
-        // вертикально по центру полосы (раньше 36px — вне шкалы кита).
-        let row_y = py + ph - QUICK_H - INPUT_H;
-        let input = UiRect::new(
-            px + PAD,
-            row_y + (INPUT_H - INPUT_FIELD_H) * 0.5,
-            pw - PAD * 2.0 - ICON_BTN - GAP,
-            INPUT_FIELD_H,
-        );
-        let send = UiRect::new(
-            input.x + input.w + GAP,
-            row_y + (INPUT_H - ICON_BTN) * 0.5,
-            ICON_BTN,
-            ICON_BTN,
-        );
-        // Quick-actions: пилюли CHIP_HEIGHT, центр 36-полосы.
-        let quick_y = py + ph - QUICK_H + (QUICK_H - CHIP_H) * 0.5;
-        let quick_w = (pw - PAD * 2.0 - GAP * 2.0) / 3.0;
-        let quick = std::array::from_fn(|i| {
-            UiRect::new(
-                px + PAD + i as f32 * (quick_w + GAP),
-                quick_y,
-                quick_w,
-                CHIP_H,
+        // bands[1] (контекст) и bands[2] (лог) — каркас для отрисовки
+        // overlay; интерактивных rect'ов не дают и в структуру не входят.
+        let head_band = bands[0];
+        let input_band = bands[3];
+        let quick_band = bands[4];
+
+        // Пад полосы по горизонтали (LAY7: SPACING_LG — пад контейнера).
+        let pad_h = |band: UiRect| {
+            pad(
+                band,
+                EdgeInsets {
+                    left: PAD,
+                    right: PAD,
+                    ..EdgeInsets::default()
+                },
             )
-        });
+        };
+
+        // ✕ — ICON_BUTTON_SIZE: правый край шапки с падом PAD (Row{End} —
+        // LAY10 «тулбар», прижатие без «распорки»), вертикально по центру
+        // полосы (CrossAlign::Center).
+        let close = Row {
+            gap: 0.0,
+            main: MainAlign::End,
+            cross: CrossAlign::Center,
+            ..Row::default()
+        }
+        .lay_out_with(
+            backend,
+            pad_h(head_band),
+            &[Child::fixed(ICON_BTN, ICON_BTN)],
+        )[0];
+
+        // Полоса ввода: поле — TEXT_FIELD_HEIGHT, единственный grow-ребёнок
+        // строки (остаток ширины после кнопки и зазора — LAY4.1); send —
+        // ICON_BUTTON_SIZE; зазор GAP, оба по центру 44-пиксельной полосы.
+        let input_row = Row {
+            gap: GAP,
+            cross: CrossAlign::Center,
+            ..Row::default()
+        }
+        .lay_out_with(
+            backend,
+            pad_h(input_band),
+            &[
+                Child::flexible(0.0, INPUT_FIELD_H, 1.0), // поле ввода
+                Child::fixed(ICON_BTN, ICON_BTN),         // кнопка отправки
+            ],
+        );
+        let input = input_row[0];
+        let send = input_row[1];
+
+        // Quick-actions: три пилюли CHIP_HEIGHT равными долями (Row с
+        // grow 1:1:1 — осмысленные доли LAY4), центр 36-пиксельной полосы.
+        let quick_rects = Row {
+            gap: GAP,
+            cross: CrossAlign::Center,
+            ..Row::default()
+        }
+        .lay_out_with(
+            backend,
+            pad_h(quick_band),
+            &[
+                Child::flexible(0.0, CHIP_H, 1.0),
+                Child::flexible(0.0, CHIP_H, 1.0),
+                Child::flexible(0.0, CHIP_H, 1.0),
+            ],
+        );
+        let quick = [quick_rects[0], quick_rects[1], quick_rects[2]];
+
         Self {
             panel,
             close,
@@ -2454,5 +2547,91 @@ mod tests {
         assert!(auth_hint("llm transport: timeout").is_none());
         assert!(auth_hint("llm protocol: нет tool_calls").is_none());
         assert!(auth_hint("llm rate limit").is_none());
+    }
+
+    /// LAY-W4: допуск золотого теста геометрии (px). Задача требует
+    /// «нулевой сдвиг»: бит-в-бит либо плавающая погрешность < 0.01 px —
+    /// гейт вдвое строже (фактический дрейф рефакторинга — 0: все rect'ы
+    /// бит-в-бит равны прежним, замерено пробой на 6 панелях).
+    const GOLDEN_EPS: f32 = 0.005;
+
+    /// Помощник золотого теста: каждое поле rect'а — против значения,
+    /// снятого с прежней (ручной) арифметики `AgentPanelLayout::build`.
+    fn assert_rect_golden(what: &str, actual: UiRect, x: f32, y: f32, w: f32, h: f32) {
+        let d = [actual.x - x, actual.y - y, actual.w - w, actual.h - h];
+        assert!(
+            d[0].abs() <= GOLDEN_EPS
+                && d[1].abs() <= GOLDEN_EPS
+                && d[2].abs() <= GOLDEN_EPS
+                && d[3].abs() <= GOLDEN_EPS,
+            "{what}: ожидалось ({x}, {y}, {w}, {h}), получено {actual:?}, \
+             дрейф (Δx, Δy, Δw, Δh) = ({:?})",
+            d
+        );
+    }
+
+    /// LAY-W4, золотая геометрия (draw == hit, урок CR-033): каноническая
+    /// панель 388×800 (вьюпорт 1280×800). Значения сняты со СТАРОЙ
+    /// реализации build() до рефакторинга на Column/Row-скелет — рефакторинг
+    /// не имеет права сдвинуть ни один rect (LAY1.2: вторая геометрия для
+    /// хитов запрещена; golden пинит единственную).
+    #[test]
+    fn agent_panel_layout_golden_canonical_388x800() {
+        let lay = AgentPanelLayout::build(UiRect::new(0.0, 0.0, 388.0, 800.0));
+        // Слот проходит насквозь без изменений.
+        assert_eq!(lay.panel, UiRect::new(0.0, 0.0, 388.0, 800.0));
+        // ✕: правый край с падом (0+388−12−26), центр шапки 44 → y = 9.
+        assert_rect_golden("close", lay.close, 350.0, 9.0, 26.0, 26.0);
+        // Полоса ввода: y = 800−36−44+7 = 727; w = 388−2·12−26−8 = 330.
+        assert_rect_golden("input", lay.input, 12.0, 727.0, 330.0, 30.0);
+        assert_rect_golden("send", lay.send, 350.0, 729.0, 26.0, 26.0);
+        // quick: (388−2·12−2·8)/3 = 116; y = 800−36+6 = 770.
+        assert_rect_golden("quick[0]", lay.quick[0], 12.0, 770.0, 116.0, 24.0);
+        assert_rect_golden("quick[1]", lay.quick[1], 136.0, 770.0, 116.0, 24.0);
+        assert_rect_golden("quick[2]", lay.quick[2], 260.0, 770.0, 116.0, 24.0);
+    }
+
+    /// LAY-W4, золотая геометрия: узкое окно ниже брейкпоинта 600
+    /// (вьюпорт 400×560 → ширина панели клампится 0.94·vw = 376).
+    #[test]
+    fn agent_panel_layout_golden_narrow_376x560() {
+        let lay = AgentPanelLayout::build(UiRect::new(24.0, 0.0, 376.0, 560.0));
+        assert_eq!(lay.panel, UiRect::new(24.0, 0.0, 376.0, 560.0));
+        assert_rect_golden("close", lay.close, 362.0, 9.0, 26.0, 26.0);
+        assert_rect_golden("input", lay.input, 36.0, 487.0, 318.0, 30.0);
+        assert_rect_golden("send", lay.send, 362.0, 489.0, 26.0, 26.0);
+        assert_rect_golden("quick[0]", lay.quick[0], 36.0, 530.0, 112.0, 24.0);
+        assert_rect_golden("quick[1]", lay.quick[1], 156.0, 530.0, 112.0, 24.0);
+        assert_rect_golden("quick[2]", lay.quick[2], 276.0, 530.0, 112.0, 24.0);
+    }
+
+    /// LAY-W4, золотая геометрия: широкое окно 1920×1080 (панель у правого
+    /// края — координаты ~1900 пинят арифметику на больших величинах).
+    #[test]
+    fn agent_panel_layout_golden_wide_1920x1080() {
+        let lay = AgentPanelLayout::build(UiRect::new(1532.0, 0.0, 388.0, 1080.0));
+        assert_eq!(lay.panel, UiRect::new(1532.0, 0.0, 388.0, 1080.0));
+        assert_rect_golden("close", lay.close, 1882.0, 9.0, 26.0, 26.0);
+        assert_rect_golden("input", lay.input, 1544.0, 1007.0, 330.0, 30.0);
+        assert_rect_golden("send", lay.send, 1882.0, 1009.0, 26.0, 26.0);
+        assert_rect_golden("quick[0]", lay.quick[0], 1544.0, 1050.0, 116.0, 24.0);
+        assert_rect_golden("quick[1]", lay.quick[1], 1668.0, 1050.0, 116.0, 24.0);
+        assert_rect_golden("quick[2]", lay.quick[2], 1792.0, 1050.0, 116.0, 24.0);
+    }
+
+    /// LAY-W4, золотая геометрия: дробные координаты/высота (нестепенные
+    /// двойкой float'ы — пин погрешности f32: (319.6−40)/3 = 93.200005,
+    /// высота 737.5 → полосы 664.5/707.5). Погрешность рефакторинга здесь
+    /// максимальна и обязана остаться в пределах GOLDEN_EPS.
+    #[test]
+    fn agent_panel_layout_golden_fractional_319x737() {
+        let lay = AgentPanelLayout::build(UiRect::new(20.4, 0.0, 319.6, 737.5));
+        assert_eq!(lay.panel, UiRect::new(20.4, 0.0, 319.6, 737.5));
+        assert_rect_golden("close", lay.close, 302.0, 9.0, 26.0, 26.0);
+        assert_rect_golden("input", lay.input, 32.4, 664.5, 261.6, 30.0);
+        assert_rect_golden("send", lay.send, 302.0, 666.5, 26.0, 26.0);
+        assert_rect_golden("quick[0]", lay.quick[0], 32.4, 707.5, 93.200005, 24.0);
+        assert_rect_golden("quick[1]", lay.quick[1], 133.6, 707.5, 93.200005, 24.0);
+        assert_rect_golden("quick[2]", lay.quick[2], 234.80002, 707.5, 93.200005, 24.0);
     }
 }
