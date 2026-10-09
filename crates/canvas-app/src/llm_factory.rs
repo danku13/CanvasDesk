@@ -115,7 +115,9 @@ pub fn build_feature_provider(
                     Vec::new(),
                 )
             };
-            Some(Box::new(provider))
+            // W3 (F-5.10): wasm — браузерный fetch (паника ureq — см.
+            // доку `platform_transport`); натив — UreqTransport.
+            Some(Box::new(provider.with_transport(platform_transport())))
         }
         // FR-LLM-OAUTH-APP: Sign-in-with-ChatGPT — токены из store (дизайн-
         // док §4.4), proxy не используется на desktop (прямой api.openai.com;
@@ -129,13 +131,17 @@ pub fn build_feature_provider(
             };
             Some(Box::new(
                 canvas_llm::ChatGptOAuthProvider::new(store, oauth.ext_agent_host_id.clone(), None)
-                    .with_model(model),
+                    .with_model(model)
+                    // W3 (F-5.10): wasm — fetch-транспорт (см. platform_transport).
+                    .with_transport(platform_transport()),
             ))
         }
         // FR-LLM-OAUTH-APP: Ollama — localhost, без ключа.
-        LlmProviderId::Ollama => Some(Box::new(canvas_llm::OpenAiCompatibleProvider::ollama(
-            model,
-        ))),
+        LlmProviderId::Ollama => Some(Box::new(
+            canvas_llm::OpenAiCompatibleProvider::ollama(model)
+                // W3 (F-5.10): wasm — fetch-транспорт (см. platform_transport).
+                .with_transport(platform_transport()),
+        )),
         // Laya — sidecar внутри canvas-suggest (FR-079), не LlmProvider:
         // choice-ранжирование идёт мимо этого трейта. Off — AI выключен.
         LlmProviderId::Laya | LlmProviderId::Off => None,
@@ -152,6 +158,25 @@ pub fn build_feature_provider(
     _oauth: &OAuthAssets,
 ) -> Option<Box<dyn LlmProvider>> {
     None
+}
+
+/// W3 (F-5.10, репродукция 2026-10-09): платформенный транспорт провайдеров.
+/// Конструкторы canvas-llm по умолчанию ставят UreqTransport — на wasm32 он
+/// паникует в рантайме (`std::time`/`std::net` не реализованы: «time not
+/// implemented on this platform» — здоровье/чаты/дискавери умирали мгновенно
+/// после активации executor-шва). Web-путь (фича `wasm-fetch-bridge`,
+/// включается target-блоком canvas-web) — браузерный fetch
+/// (`WasmFetchTransport`); натив — UreqTransport (дефолт не меняем).
+#[cfg(feature = "l1-llm")]
+fn platform_transport() -> std::sync::Arc<dyn canvas_llm::HttpTransport> {
+    #[cfg(all(target_arch = "wasm32", feature = "wasm-fetch-bridge"))]
+    {
+        std::sync::Arc::new(canvas_llm::WasmFetchTransport)
+    }
+    #[cfg(any(not(target_arch = "wasm32"), not(feature = "wasm-fetch-bridge")))]
+    {
+        std::sync::Arc::new(canvas_llm::UreqTransport::new())
+    }
 }
 
 /// W2 п.4: провайдер для health-check «Проверить» (кнопки строк API-ключа
@@ -173,34 +198,43 @@ pub fn build_health_provider(
             }
             let endpoint = settings.endpoint.trim();
             if endpoint.is_empty() {
-                Some(Box::new(canvas_llm::OpenAiCompatibleProvider::openrouter(
-                    key,
-                    &settings.model_suggest,
-                )))
+                Some(Box::new(
+                    canvas_llm::OpenAiCompatibleProvider::openrouter(key, &settings.model_suggest)
+                        // W3 (F-5.10): wasm — fetch-транспорт (см. platform_transport).
+                        .with_transport(platform_transport()),
+                ))
             } else {
                 // Selfhost-конфиг проверяем selfhost-ключом (F-5.9/Q5).
-                Some(Box::new(canvas_llm::OpenAiCompatibleProvider::new(
-                    "selfhost",
-                    "Self-hosted",
-                    endpoint,
-                    settings.selfhost_key.trim(),
-                    &settings.model_suggest,
-                    Vec::new(),
-                )))
+                Some(Box::new(
+                    canvas_llm::OpenAiCompatibleProvider::new(
+                        "selfhost",
+                        "Self-hosted",
+                        endpoint,
+                        settings.selfhost_key.trim(),
+                        &settings.model_suggest,
+                        Vec::new(),
+                    )
+                    // W3 (F-5.10): wasm — fetch-транспорт (см. platform_transport).
+                    .with_transport(platform_transport()),
+                ))
             }
         }
         HT::Selfhost => {
             if settings.endpoint.trim().is_empty() {
                 return None;
             }
-            Some(Box::new(canvas_llm::OpenAiCompatibleProvider::new(
-                "selfhost",
-                "Self-hosted",
-                settings.endpoint.trim(),
-                settings.selfhost_key.trim(),
-                &settings.model_suggest,
-                Vec::new(),
-            )))
+            Some(Box::new(
+                canvas_llm::OpenAiCompatibleProvider::new(
+                    "selfhost",
+                    "Self-hosted",
+                    settings.endpoint.trim(),
+                    settings.selfhost_key.trim(),
+                    &settings.model_suggest,
+                    Vec::new(),
+                )
+                // W3 (F-5.10): wasm — fetch-транспорт (см. platform_transport).
+                .with_transport(platform_transport()),
+            ))
         }
     }
 }

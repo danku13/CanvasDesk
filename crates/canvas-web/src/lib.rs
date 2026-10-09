@@ -41,6 +41,11 @@ pub mod gpu_gate;
 pub mod ime;
 #[cfg(target_arch = "wasm32")]
 pub mod js_glue;
+// W3 (F-5.10): web-швы LLM — spawner/fetch-транспорт/OPFS-store/OAuth-мост.
+// Только wasm: швы canvas-app существуют за l1-llm, а l1-llm в canvas-web
+// включён только на wasm32-цели (feature-флип в Cargo.toml).
+#[cfg(target_arch = "wasm32")]
+pub mod llm_web;
 #[cfg(target_arch = "wasm32")]
 pub mod toolbar;
 #[cfg(target_arch = "wasm32")]

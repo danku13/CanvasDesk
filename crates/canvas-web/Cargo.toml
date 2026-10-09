@@ -27,6 +27,11 @@ canvas-core.workspace = true
 canvas-render.workspace = true
 canvas-scene.workspace = true
 canvas-widgets.workspace = true
+# W3 (волна LLM, F-5.10): прямой доступ к транспорту/токен-стору
+# (`canvas_llm::WasmFetchTransport`, `TokenStore`, `chatgpt_oauth`).
+# canvas-app уже тянет canvas-llm за l1-llm, но мост canvas-web строит
+# провайдер-независимые швы (transport/spawner/store) — ссылка явная.
+canvas-llm.workspace = true
 winit.workspace = true
 anyhow.workspace = true
 # Прошивка (§3.4): футура async-инициализации Renderer — spawn_local
@@ -37,6 +42,9 @@ js-sys.workspace = true
 toml.workspace = true
 # W11: widget_state — одна JSON-запись в localStorage (карта StateMap)
 serde_json.workspace = true
+# W3 (llm_web): StoredSession (PKCE-сессия логина) — derive Deserialize;
+# serde в workspace с derive (см. корневой Cargo.toml)
+serde.workspace = true
 # Прошивка: вставка winit-канваса в DOM (renderer_launch) + доступ
 # к document/window (web_sys::Window/Document/Node/HtmlCanvasElement)
 # W5: Clipboard/Navigator — navigator.clipboard за трейтом (web_clipboard);
@@ -93,6 +101,10 @@ web-sys = { workspace = true, features = [
     "ImageData",
     "OffscreenCanvas",
     "OffscreenCanvasRenderingContext2d",
+    # W3 (llm_web): history.replaceState (чистка oauth-параметров после
+    # callback) + UrlSearchParams (парс/удаление query)
+    "History",
+    "UrlSearchParams",
 ] }
 
 [dev-dependencies]
@@ -106,3 +118,21 @@ name = "canvas_web"
 crate-type = ["cdylib", "rlib"]
 
 [features]
+
+# W3 (волна LLM, план llm-waves-w1-w2-w3 §4 п.3 — «feature-флип»): активация
+# ИИ-функционала в web-сборке. Фичи включаются ТОЛЬКО на wasm32-цели:
+# - canvas-app/l1-llm — LLM-executor, панели, health/discovery UI, suggest
+#   mm-источник (W2-симы наполняются здесь, app_spawn.rs);
+# - canvas-llm/l1-llm — типы провайдеров (serde-деривы, OAuth-клиент);
+# - canvas-llm/wasm-fetch — браузерный fetch-транспорт (F-5.10). Легален
+#   только под wasm32 (compile_error! на нативе, ADR-0011) — поэтому в
+#   target-блоке, а не в общем [dependencies].
+# Нативная сборка canvas-web (rlib-тесты каркаса) остаётся без сети —
+# гейт ADR-0011 для нативных целей не нарушается. Правка ADR-0011
+# (amendment: сеть в wasm за явной feature, транспорт — fetch к
+# cloud/llm-proxy) — docs/adr/adr-0011-wasm-build-gate.md.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# wasm-fetch-bridge: canvas-app строит провайдеров на браузерном fetch
+# (llm_factory::platform_transport) — ureq на wasm32 паникует в рантайме.
+canvas-app = { workspace = true, features = ["wasm-fetch-bridge"] }
+canvas-llm = { workspace = true, features = ["l1-llm", "wasm-fetch"] }

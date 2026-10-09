@@ -18,8 +18,21 @@
 > - Волна 1 — ✅ реализована (2026-10-09: HttpTransport/Ureq/Mock, wasm-fetch
 >   за фичей, health::check + HealthReport, discovery + ModelCache TTL,
 >   getrandom wasm_js-гейт; тесты 2736 workspace + 232 canvas-llm/features)
-> - Волна 2 — ☐ не начата
-> - Волна 3 — ☐ не начата
+> - Волна 2 — ✅ реализована (2026-10-09: executor-сим LLM-футур, входы
+>   панелей Ctrl+I/Graph Builder, реальные вызовы на нативе, cost, health-UI,
+>   discovery-списки, OAuth web-сим, suggest mm-ранжирование в wasm)
+> - Волна 3 — ✅ ядро реализовано (2026-10-09, сессия багфиксов владельца):
+>   флип фич `l1-llm`+`wasm-fetch-bridge` в canvas-web (target-блок wasm32),
+>   wasm-executor (spawn_local-шов), fetch-транспорт executor'а, платформенный
+>   транспорт провайдеров (`llm_factory::platform_transport` — фикс паники
+>   ureq «time not implemented» на wasm), OPFS token store + OAuth web-мост
+>   (`llm_web.rs`: popup/callback/exchange, флаги конфига), бейдж ключа с
+>   фактическим числом discovery + честный «ключ пустой» (репорт владельца).
+>   Верифицировано на release-бандле: health OK + discovery 469 моделей,
+>   агент-запрос POST /v1/chat/completions с честной ошибкой 401 на фейковом
+>   ключе. Остаток: сквозной OAuth-прогон и PoC-отчёт (п.6–7) — после деплоя
+>   `cloud/llm-proxy` владельцем; онбординг-сцена ai-mode (п.8) — следующая
+>   правка.
 
 ---
 

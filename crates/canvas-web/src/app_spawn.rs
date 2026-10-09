@@ -116,6 +116,11 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
         return Ok(());
     }
     let init = crate::opfs::init_scene(&params).await;
+    // W3 (F-5.10): до load_settings/App — обработать oauth-callback
+    // (?oauth_callback= от 302 воркера): обмен code → токены в OPFS,
+    // флаги chatgpt_connected/email в localStorage-конфиге. Битый
+    // callback не мешает старту (warn + обычный запуск, F-5.9).
+    crate::llm_web::recover_oauth_callback().await;
     // Общее OPFS-хранилище для DOM-drop/reopen — только если оно
     // действительно OPFS (stress/fallback-MemStorage копии не сохраняют)
     if let Some(opfs) = init.opfs {
@@ -197,6 +202,10 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     // W11 (§5): реестр виджетов — как на нативе (в памяти: встроенные
     // пакеты из include_dir; выбор режима — в App::new по каталогу кэша)
     app.init_widgets();
+    // W3 (F-5.10): активация LLM в web — wasm-executor (spawn_local),
+    // fetch-транспорт, OPFS token store + OAuth-мост. До этого вызова
+    // джобы executor'а фейлятся честным «шов не инъектирован».
+    crate::llm_web::inject(&mut app).await;
     // FR-049 (US-5): ?template=<id> — отложенное применение на первом кадре
     if params.template.is_some() {
         app.set_pending_scheme(params.template.clone());

@@ -155,3 +155,31 @@ probe моста (ADR-0010), но end-to-end сценарии (окно, named p
   возвращает `temp_dir`, поведение тестов не менялось).
 - `scripts/wasm_gate.sh` — все три ступени OK; `--check` — ступень 1 OK.
 - CI: джоба `wasm-check` (ubuntu) зелёная на пуш (приёмка W0).
+
+## Amendment (W3, 2026-10-09): сеть в wasm за явной feature
+
+Волна 3 LLM-доработок (план `docs/plans/llm-waves-w1-w2-w3.md`, F-5.10) вводит
+первое санкционированное исключение из правила «в wasm-сборке сети нет»:
+
+- **Что разрешено:** HTTP-запросы LLM-провайдеров (health-check, discovery
+  `/v1/models`, chat/tool_calling/choice, OAuth token exchange) из web-сборки —
+  **только** через `canvas_llm::WasmFetchTransport` (браузерный `window.fetch`,
+  CORS-семантика браузера) за явной feature-цепочкой:
+  `canvas-web` → target-блок `[target.'cfg(target_arch = "wasm32")'.dependencies]`
+  → `canvas-app/wasm-fetch-bridge` → `canvas-llm/wasm-fetch`. Фича легальна
+  только под wasm32-целью (`compile_error!` на нативе в `transport.rs`).
+- **Дефолт не меняется:** сборки без явного включения (натив, дефолтный
+  workspace) остаются zero-dep/без сети; нативные rlib-тесты canvas-web
+  компилируются без сетевых фич.
+- **Транспорт провайдеров:** конструкторы canvas-llm по умолчанию ставят
+  `UreqTransport` (натив). Под wasm провайдеры обязаны строиться с
+  fetch-транспортом (`llm_factory::platform_transport`) — прямые вызовы
+  ureq на wasm32 паникуют в рантайме (`std::time`/`std::net` не реализованы:
+  «time not implemented on this platform»; статический аудит
+  `wasm_time_audit.py` сканирует web-крейты и этот класс в canvas-llm не ловил).
+- **OAuth-токены:** OPFS (`oauth-tokens.json`, origin-scoped) через
+  `canvas_web::llm_web::OpfsTokenStore`; в `localStorage` токены не пишутся
+  (XSS, дизайн-док §4.4).
+- **Проверка гейта:** прежняя команда ступени 1
+  (`cargo check -p canvas-web --target wasm32-unknown-unknown`) теперь
+  собирается С активными LLM-фичами — это и есть продуктовая web-конфигурация.
