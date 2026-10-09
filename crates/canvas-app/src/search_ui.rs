@@ -30,8 +30,10 @@ pub const PANEL_WIDTH: f32 = 460.0;
 pub use canvas_core::tokens::SPACING_LG as PANEL_SIDE_MARGIN;
 /// Отступ панели от верхнего края окна, логические px (токен `SPACING_LG`).
 pub use canvas_core::tokens::SPACING_LG as PANEL_TOP_MARGIN;
-/// Высота поля ввода, логические px.
-pub const INPUT_HEIGHT: f32 = 36.0;
+/// Высота поля ввода, логические px. LAY-W7 (аудит layouts-2026-10 §5):
+/// канонизация на шкалу S3 — `canvas_ui::kit::TEXT_FIELD_HEIGHT` (30);
+/// ранее 36 (вне шкалы, −6px).
+pub const INPUT_HEIGHT: f32 = canvas_ui::kit::TEXT_FIELD_HEIGHT;
 /// Максимум видимых строк результата (далее — прокрутка).
 pub const MAX_VISIBLE_ROWS: usize = 8;
 /// Внутренний отступ содержимого панели, логические px (токен `SPACING_SM`).
@@ -598,6 +600,13 @@ mod tests {
 
     const EPS: f32 = 1e-4;
 
+    /// LAY-W7 (аудит layouts-2026-10 §5): `INPUT_HEIGHT` — псевдоним
+    /// `kit::TEXT_FIELD_HEIGHT` (каноническая высота текстового поля S3).
+    #[test]
+    fn lay_w7_input_height_is_canonical_s3() {
+        assert_eq!(INPUT_HEIGHT, canvas_ui::kit::TEXT_FIELD_HEIGHT);
+    }
+
     /// `n` строк-заглушек.
     fn rows(n: usize) -> Vec<SearchRow> {
         (0..n)
@@ -992,11 +1001,13 @@ mod tests {
         assert!(((pr[0] + pr[2]) / 2.0 - 640.0).abs() < EPS);
         assert!((pr[1] - PANEL_TOP_MARGIN).abs() < EPS);
         // точные координаты (все значения представимы в f32 точно)
-        assert_eq!(pr, [410.0, 12.0, 870.0, 159.0]);
+        // LAY-W7: INPUT_HEIGHT мигрировал 36→30 (kit::TEXT_FIELD_HEIGHT) —
+        // высота панели и координаты строк ниже поля опустились на 6 px.
+        assert_eq!(pr, [410.0, 12.0, 870.0, 153.0]);
 
         // поле ввода внутри панели с отступом
         let ir = lay.input_rect;
-        assert_eq!(ir, [418.0, 20.0, 862.0, 56.0]);
+        assert_eq!(ir, [418.0, 20.0, 862.0, 50.0]);
         assert!((ir[1] - (pr[1] + PANEL_PADDING)).abs() < EPS);
         assert!((pr[2] - PANEL_PADDING - ir[2]).abs() < EPS);
         assert!((ir[3] - ir[1] - INPUT_HEIGHT).abs() < EPS);
@@ -1010,8 +1021,8 @@ mod tests {
         assert!((first[2] - ir[2]).abs() < EPS);
         // строки идут подряд
         assert!((lay.row_rects[1][1] - first[3]).abs() < EPS);
-        assert_eq!(lay.row_rects[0], [418.0, 64.0, 862.0, 93.0]);
-        assert_eq!(lay.row_rects[2], [418.0, 122.0, 862.0, 151.0]);
+        assert_eq!(lay.row_rects[0], [418.0, 58.0, 862.0, 87.0]);
+        assert_eq!(lay.row_rects[2], [418.0, 116.0, 862.0, 145.0]);
         // панель заканчивается отступом ниже последней строки
         let last = lay.row_rects[2];
         assert!((pr[3] - (last[3] + PANEL_PADDING)).abs() < EPS);
@@ -1103,9 +1114,11 @@ mod tests {
     #[test]
     fn panel_height_clamped_to_window() {
         let panel = panel_with_rows(20);
-        // 300 px: строки по 29 — влезает 7 (64 + 7·29 = 267 ≤ 292, 8-я — нет)
+        // 300 px: строки по 29 — влезает 8 (58 + 8·29 = 290 ≤ 292, 9-я — нет).
+        // LAY-W7: INPUT_HEIGHT 36→30 сдвинул верх строк с 64 до 58 — теперь
+        // в 300-пиксельное окно помещается на одну строку больше.
         let lay = layout(1280.0, 300.0, &panel);
-        assert_eq!(lay.row_rects.len(), 7);
+        assert_eq!(lay.row_rects.len(), 8);
         assert!(lay.panel_rect[3] <= 300.0 + EPS, "панель внутри окна");
 
         // совсем низкое окно — минимум одна строка
@@ -1187,7 +1200,7 @@ mod tests {
         let pr = lay.panel_rect;
         let expected_h = PANEL_TOP_MARGIN + PANEL_PADDING + INPUT_HEIGHT + PANEL_PADDING;
         assert!((pr[3] - expected_h).abs() < EPS);
-        assert!((pr[3] - 64.0).abs() < EPS); // 12 + 8 + 36 + 8
+        assert!((pr[3] - 58.0).abs() < EPS); // 12 + 8 + 30 + 8 (LAY-W7: INPUT_HEIGHT 36→30)
     }
 
     /// FR-054 (G4-линт миграции U5): вьюпорты 1280×800 / 1024×640 / 800×560 ×

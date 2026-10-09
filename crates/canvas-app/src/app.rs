@@ -3280,7 +3280,14 @@ impl App {
     fn whatif_bar_click(&mut self) -> bool {
         let viewport = self.viewport_logical();
         if !self.scene.whatif_active {
-            if point_in_rect(whatif_ui::enter_pill_rect(viewport), self.cursor) {
+            // LAY-W8 (FR-097): тач-цель пилюли входа (30 px) ≥ 44 (кламп в
+            // вьюпорт — расширенная зона не уходит за пределы окна).
+            let pill = whatif_ui::enter_pill_rect(viewport);
+            let viewport_rect = [0.0, 0.0, viewport[0], viewport[1]];
+            if point_in_rect(
+                crate::touch_targets::touch_hit_xywh(pill, viewport_rect),
+                self.cursor,
+            ) {
                 self.enter_whatif_mode();
                 return true;
             }
@@ -3292,7 +3299,14 @@ impl App {
             let rows = self.whatif_override_rows();
             let list = whatif_ui::overrides_list_layout(layout.rect, rows.len(), viewport);
             if let Some(row) = whatif_ui::override_row_at(list, rows.len(), self.cursor) {
-                if point_in_rect(whatif_ui::remove_button_rect(list, row), self.cursor) {
+                // LAY-W8 (FR-097): тач-цель «✕» (22×22) ≥ 44 (кламп в строку
+                // — расширенная зона не уходит за пределы строки подмены).
+                let remove = whatif_ui::remove_button_rect(list, row);
+                let row_rect = whatif_ui::override_row_rect(list, row);
+                if point_in_rect(
+                    crate::touch_targets::touch_hit_xywh(remove, row_rect),
+                    self.cursor,
+                ) {
                     self.whatif_remove_override(row);
                 }
                 self.request_redraw();

@@ -38,15 +38,27 @@ pub const AGENT_PANEL_W: f32 = 388.0;
 /// Минимальная ширина вьюпорта для показа панели (на узких окнах панель
 /// прячется — как `AI_STATUS_MIN_VIEWPORT_W`).
 pub const AGENT_PANEL_MIN_VIEWPORT_W: f32 = 600.0;
-/// Высота шапки (bolt + title + close).
-const HEAD_H: f32 = 44.0;
-/// Высота контекстной строки (3 chips).
+/// Высота шапки (bolt + title + close). LAY-W7 (аудит layouts-2026-10 §5):
+/// псевдоним `tokens::PANEL_HEADER_H_L` (44) — значение уже совпадало;
+/// выразим намерение через канонический токен шкалы S3.
+const HEAD_H: f32 = canvas_core::tokens::PANEL_HEADER_H_L;
+/// Высота контекстной строки (3 chips). LAY-W7: значение вне шкалы S3 как
+/// самостоятельная компонента — фиксируем как S3-производную: контейнер
+/// чипов `CHIP_HEIGHT`(24) с вертикальным падом ≈ 32 (полоса центрирует
+/// 24-px чипы в 32-px строке). Аналог `QUICK_H` для контекстной строки.
 const CTX_H: f32 = 32.0;
 /// Высота строки cost estimate.
 const EST_H: f32 = 22.0;
-/// Высота input row (textarea + send button).
+/// Высота input row (textarea + send button). LAY-W7: 44 = `MIN_TOUCH_TARGET`
+/// (LAY8.3 — тач-зона для input-области; поле внутри = `INPUT_FIELD_H`=30,
+/// `kit::TEXT_FIELD_HEIGHT`). Контейнер строки, не само поле — значение
+/// вне шкалы S3 как самостоятельная компонента, фиксируем как touch-target-
+/// derivative (44 = канонический минимум LAY8.3).
 const INPUT_H: f32 = 44.0;
-/// Высота quick-actions (3 preset buttons).
+/// Высота quick-actions (3 preset buttons). LAY-W7: контейнер чипов
+/// `CHIP_HEIGHT`(24) в 36-px полосе (центрирование 24-px пилюль в 36-px
+/// строке). Значение вне шкалы S3 как самостоятельная компонента —
+/// фиксируем как S3-производную (chip-row container).
 const QUICK_H: f32 = 36.0;
 /// Внутренний отступ панели — токен SPACING_LG (design/rules 03, S1:
 /// паддинг контейнеров — MD/LG).
@@ -262,6 +274,12 @@ impl AgentPanelLayout {
             quick,
         }
     }
+}
+
+/// LAY-W8: конвертация `UiRect` → `[x, y, w, h]` для передачи в
+/// `touch_targets::touch_hit_xywh` (контейнер — панель).
+fn to_xywh(r: UiRect) -> [f32; 4] {
+    [r.x, r.y, r.w, r.h]
 }
 
 impl App {
@@ -1493,27 +1511,34 @@ impl App {
     /// FR-LLM-D / PRD-0010 F-4: hit-test агент-панели — определить элемент
     /// под курсором (для обработчика ввода). `None` — клик мимо панели.
     /// UR-005: геометрия — из единого [`AgentPanelLayout`] (draw == hit).
+    ///
+    /// LAY-W8 (FR-097): на coarse-указателе hit-зоны ✕/send/quick-пилюль/
+    /// Accept-Reject дотягиваются до 44 лог. px центрированно, с клампом в
+    /// `panel` — расширенная зона не выходит за панель и не перекрывает
+    /// канвас. На точном указателе — rect без изменений (десктоп прежний).
     pub(crate) fn agent_panel_hit(&self, point: [f32; 2]) -> Option<AgentPanelHit> {
+        use crate::touch_targets::touch_hit_xywh;
         let panel = self.agent_panel_rect()?;
         if !point_in_rect(panel, point) {
             return None;
         }
         let lay = AgentPanelLayout::build(UiRect::new(panel[0], panel[1], panel[2], panel[3]));
+        // FR-097: тач-цель ≥ 44 лог. px (кламп в панель)
         // Кнопка закрытия ✕.
-        if point_in_rect([lay.close.x, lay.close.y, lay.close.w, lay.close.h], point) {
+        if point_in_rect(touch_hit_xywh(to_xywh(lay.close), panel), point) {
             return Some(AgentPanelHit::Close);
         }
-        // Input area.
-        if point_in_rect([lay.input.x, lay.input.y, lay.input.w, lay.input.h], point) {
+        // Input area — TEXT_FIELD_HEIGHT (30 px): на coarse дотягиваем до 44.
+        if point_in_rect(touch_hit_xywh(to_xywh(lay.input), panel), point) {
             return Some(AgentPanelHit::Input);
         }
         // Send button.
-        if point_in_rect([lay.send.x, lay.send.y, lay.send.w, lay.send.h], point) {
+        if point_in_rect(touch_hit_xywh(to_xywh(lay.send), panel), point) {
             return Some(AgentPanelHit::Send);
         }
         // Quick actions (3 preset).
         for (i, q) in lay.quick.iter().enumerate() {
-            if point_in_rect([q.x, q.y, q.w, q.h], point) {
+            if point_in_rect(touch_hit_xywh(to_xywh(*q), panel), point) {
                 return Some(AgentPanelHit::QuickAction(i));
             }
         }
@@ -1532,10 +1557,12 @@ impl App {
                 btn_w,
                 PREVIEW_BTN_H,
             ];
-            if point_in_rect(accept_rect, point) {
+            // FR-097: тач-цель Accept/Reject (PREVIEW_BTN_H=26) ≥ 44 (кламп
+            // в панель)
+            if point_in_rect(touch_hit_xywh(accept_rect, panel), point) {
                 return Some(AgentPanelHit::Accept);
             }
-            if point_in_rect(reject_rect, point) {
+            if point_in_rect(touch_hit_xywh(reject_rect, panel), point) {
                 return Some(AgentPanelHit::Reject);
             }
         }
@@ -1947,6 +1974,85 @@ pub(crate) fn auth_hint(reason: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// LAY-W7 (аудит layouts-2026-10 §5): `HEAD_H` — псевдоним
+    /// `tokens::PANEL_HEADER_H_L` (44, large-вариант шапки панели S3).
+    /// `INPUT_H`(44)/`CTX_H`(32)/`QUICK_H`(36) — S3-производные контейнеры
+    /// (тач-зона и chip-row полосы); инвариант арифметики зафиксирован.
+    #[test]
+    fn lay_w7_heights_are_canonical_s3() {
+        assert_eq!(HEAD_H, canvas_core::tokens::PANEL_HEADER_H_L);
+        // S3-производные контейнеры — инвариант значений:
+        assert_eq!(INPUT_H, 44.0); // = MIN_TOUCH_TARGET (LAY8.3)
+        assert_eq!(CTX_H, 32.0); // chip-row container
+        assert_eq!(QUICK_H, 36.0); // chip-row container
+    }
+
+    /// LAY-W8 (FR-097): на coarse hit-зоны ✕/send (ICON_BUTTON_SIZE 26) и
+    /// quick-пилюль (CHIP_HEIGHT 24) дотягиваются до 44 центрированно, с
+    /// клампом в панель. Тест верифицирует МАТЕМАТИКУ, используемую в
+    /// `agent_panel_hit` (без `App`/GPU): на coarse клик 5 px вне кнопки
+    /// попадает в расширенную зону, на precise — мимо.
+    #[test]
+    fn lay_w8_panel_layout_hit_zones_expand_on_coarse() {
+        let panel = [1100.0, 0.0, 388.0, 900.0];
+        let lay = AgentPanelLayout::build(UiRect::new(panel[0], panel[1], panel[2], panel[3]));
+        use crate::touch_targets::touch_hit_xywh;
+
+        // ✕ — правый верхний угол. Клик 5 px левее ✕, в шапке (панель).
+        let close_xywh = to_xywh(lay.close);
+        let left_of_close = [close_xywh[0] - 5.0, close_xywh[1] + close_xywh[3] / 2.0];
+        // Точка внутри панели.
+        assert!(point_in_rect(panel, left_of_close));
+
+        let was = canvas_core::web_bridge::pointer_coarse();
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        assert!(
+            point_in_rect(touch_hit_xywh(close_xywh, panel), left_of_close),
+            "coarse: клик 5 px левее ✕ попадает в расширенную зону"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(false);
+        assert_eq!(touch_hit_xywh(close_xywh, panel), close_xywh);
+        assert!(
+            !point_in_rect(touch_hit_xywh(close_xywh, panel), left_of_close),
+            "precise: клик 5 px левее ✕ проходит мимо (rect без изменений)"
+        );
+
+        // Quick-пилюля: клик 5 px ниже пилюли, в полосе QUICK_H=36.
+        // Пилюля CHIP_H=24 в 36-полосе → под пилюлей 6 px (центр 36/24=6).
+        // Расширение +10 px → точка 5 px ниже пилюли попадает в зону.
+        // Симметричный тест в середине панели (вне QUICK_H у нижнего края —
+        // кламп панели может ограничить расширение; используем макет с
+        // большой высотой, чтобы кламп не мешал).
+        let panel_tall = [1100.0, 0.0, 388.0, 2000.0];
+        let lay_tall = AgentPanelLayout::build(UiRect::new(
+            panel_tall[0],
+            panel_tall[1],
+            panel_tall[2],
+            panel_tall[3],
+        ));
+        let q = to_xywh(lay_tall.quick[0]);
+        let below_q = [q[0] + q[2] / 2.0, q[1] + q[3] + 5.0];
+        assert!(point_in_rect(panel_tall, below_q));
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        assert!(
+            point_in_rect(touch_hit_xywh(q, panel_tall), below_q),
+            "coarse: клик 5 px ниже quick-пилюли попадает в расширенную зону"
+        );
+        // Расширение по высоте произошло (height > исходной CHIP_H).
+        let expanded = touch_hit_xywh(q, panel_tall);
+        assert!(
+            expanded[3] > q[3],
+            "coarse: расширение по высоте (>{}), expanded={expanded:?}",
+            q[3]
+        );
+        canvas_core::web_bridge::set_pointer_coarse(false);
+        assert!(
+            !point_in_rect(touch_hit_xywh(q, panel_tall), below_q),
+            "precise: клик 5 px ниже quick-пилюли проходит мимо"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(was);
+    }
 
     /// Панель скрыта если `!state.open`.
     #[test]

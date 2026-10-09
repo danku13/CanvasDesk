@@ -24,6 +24,7 @@
 
 use crate::ui::point_in_rect;
 use canvas_ui::geometry::{EdgeInsets, UiRect, UiVec2};
+use canvas_ui::kit;
 use canvas_ui::layout::{
     constrain, pad, stack, CrossAlign, HAlign, MeasuredItem, Row, RowPolicy, VAlign,
 };
@@ -39,8 +40,9 @@ pub const BAR_HEIGHT: f32 = 44.0;
 pub const PILL_HEIGHT: f32 = 30.0;
 /// Ширина пилюли входа.
 pub const PILL_WIDTH: f32 = 104.0;
-/// Высота чипа сценария.
-pub const CHIP_HEIGHT: f32 = 26.0;
+/// Высота чипа сценария. LAY-W7 (аудит layouts-2026-10 §5): канонизация
+/// на шкалу S3 — `kit::CHIP_HEIGHT` (24); ранее 26 (вне шкалы, +2px).
+pub const CHIP_HEIGHT: f32 = kit::CHIP_HEIGHT;
 /// Горизонтальные поля чипа (spacing-scale).
 pub const CHIP_PAD_X: f32 = canvas_core::tokens::SPACING_LG;
 /// Зазор между элементами бара (spacing-scale).
@@ -58,8 +60,10 @@ pub const BTN_PAD_X: f32 = canvas_core::tokens::SPACING_LG;
 pub const CHIP_FONT: f32 = 13.0;
 /// Ширина кнопки «✕».
 pub const CLOSE_WIDTH: f32 = 28.0;
-/// Высота строки раскрытого списка подмен.
-pub const LIST_ROW_H: f32 = 24.0;
+/// Высота строки раскрытого списка подмен. LAY-W7: канонизация на S3 —
+/// `kit::LIST_ROW_H` (26); ранее 24 (на шкале только как CHIP_HEIGHT,
+/// семантически — высота строки, не чипа).
+pub const LIST_ROW_H: f32 = kit::LIST_ROW_H;
 /// Поля раскрытого списка (spacing-scale).
 pub const LIST_MARGIN: f32 = canvas_core::tokens::SPACING_S;
 /// Ширина раскрытого списка.
@@ -70,10 +74,12 @@ pub const REMOVE_WIDTH: f32 = 22.0;
 /// A3 design/rules/04; тот же размер, что у кнопки списка подмен —
 /// один размер снятия в what-if).
 pub const CHIP_CLOSE_W: f32 = 22.0;
-/// Высота строки таблицы сравнения.
-pub const TABLE_ROW_H: f32 = 24.0;
-/// Высота шапки таблицы сравнения.
-pub const TABLE_HEAD_H: f32 = 26.0;
+/// Высота строки таблицы сравнения. LAY-W7: канонизация на S3 —
+/// `kit::LIST_ROW_H` (26); ранее 24.
+pub const TABLE_ROW_H: f32 = kit::LIST_ROW_H;
+/// Высота шапки таблицы сравнения. LAY-W7: псевдоним `kit::LIST_ROW_H`
+/// (значение уже совпадало — 26; выразим намерение через константу кита).
+pub const TABLE_HEAD_H: f32 = kit::LIST_ROW_H;
 /// Ширина колонки таблицы сравнения.
 pub const TABLE_COL_W: f32 = 190.0;
 /// Поля таблицы сравнения (spacing-scale).
@@ -397,40 +403,55 @@ pub fn bar_layout(
 /// Hit-test бара: какое действие под точкой. Счётчик кликабелен всегда;
 /// Apply/Сброс — только при активном сценарии с подменами (гейт выше,
 /// по `override_count == 0` кнопки рисуются приглушёнными, но rect есть).
+///
+/// LAY-W8 (FR-097): на coarse-указателе hit-зоны чипов/кнопок/слотов «✕»
+/// дотягиваются до [`crate::touch_targets::MIN_TOUCH_TARGET`] (44 лог. px)
+/// центрированно, с клампом в бар ([`BarLayout::rect`]) — расширенная зона
+/// не выходит за полосу и не перекрывает соседние поверхности. Слот «✕»
+/// удаления сценария клампится в свой чип ([`BarLayout::scenarios`]) —
+/// расширенная зона не «крадёт» клики у соседнего чипа. На точном
+/// указателе — rect без изменений (десктоп бит-в-бит прежний).
 pub fn bar_action_at(layout: &BarLayout, point: [f32; 2]) -> Option<BarAction> {
-    if point_in_rect(layout.close, point) {
+    use crate::touch_targets::touch_hit_xywh;
+    let bar = layout.rect;
+    // FR-097: тач-цель ≥ 44 лог. px (кламп в бар)
+    if point_in_rect(touch_hit_xywh(layout.close, bar), point) {
         return Some(BarAction::Close);
     }
-    if point_in_rect(layout.apply, point) {
+    if point_in_rect(touch_hit_xywh(layout.apply, bar), point) {
         return Some(BarAction::Apply);
     }
-    if point_in_rect(layout.reset, point) {
+    if point_in_rect(touch_hit_xywh(layout.reset, bar), point) {
         return Some(BarAction::Reset);
     }
-    if point_in_rect(layout.compare, point) {
+    if point_in_rect(touch_hit_xywh(layout.compare, bar), point) {
         return Some(BarAction::Compare);
     }
-    if point_in_rect(layout.freeze, point) {
+    if point_in_rect(touch_hit_xywh(layout.freeze, bar), point) {
         return Some(BarAction::Freeze);
     }
-    if point_in_rect(layout.overrides, point) {
+    if point_in_rect(touch_hit_xywh(layout.overrides, bar), point) {
         return Some(BarAction::ToggleOverrides);
     }
-    if point_in_rect(layout.new_scenario, point) {
+    if point_in_rect(touch_hit_xywh(layout.new_scenario, bar), point) {
         return Some(BarAction::NewScenario);
     }
     // «✕» удаления сценария — ПЕРЕД телом чипа (слот — правый край чипа).
+    // FR-097: тач-цель ≥ 44 (кламп в чип — не крадёт клики у соседа)
     for (i, rect) in layout.scenario_closes.iter().enumerate() {
-        if point_in_rect(*rect, point) {
+        // Контейнер — чип сценария (не бар): расширенная зона «✕» не
+        // выходит за пределы своего чипа и не налезает на следующий.
+        let chip = layout.scenarios.get(i).copied().unwrap_or(bar);
+        if point_in_rect(touch_hit_xywh(*rect, chip), point) {
             return Some(BarAction::DeleteScenario(i));
         }
     }
     for (i, rect) in layout.scenarios.iter().enumerate() {
-        if point_in_rect(*rect, point) {
+        if point_in_rect(touch_hit_xywh(*rect, bar), point) {
             return Some(BarAction::Scenario(i));
         }
     }
-    if point_in_rect(layout.base, point) {
+    if point_in_rect(touch_hit_xywh(layout.base, bar), point) {
         return Some(BarAction::Base);
     }
     None
@@ -506,19 +527,29 @@ pub fn remove_button_rect(list: [f32; 4], row: usize) -> [f32; 4] {
 
 /// Hit-test строки подмены: индекс строки под точкой (`None` — поля,
 /// мимо списка). Кнопка «✕» — часть строки (снятие отдельным хит-тестом).
+///
+/// LAY-W8 (FR-097): на coarse-указателе hit-зона строки (24 px) дотягивается
+/// до 44 лог. px центрированно, с клампом в `list` — расширенная зона не
+/// выходит за список и не «крадёт» клики у соседних строк за пределами
+/// списка. На точном указателе — арифметика по строкам (24 px) без
+/// расширения (десктоп бит-в-бит прежний).
 pub fn override_row_at(list: [f32; 4], count: usize, point: [f32; 2]) -> Option<usize> {
     if !point_in_rect(list, point) {
         return None;
     }
-    let rel = point[1] - list[1] - LIST_MARGIN;
-    if rel < 0.0 {
-        return None;
-    }
-    let row = (rel / LIST_ROW_H) as usize;
-    // W-a: граница — вместимость клампнутого списка (не `count`): слот
-    // индикатора усечения и усечённый хвост не пикаются как ряды.
     let visible = list_visible_rows(count, list);
-    (row < visible).then_some(row)
+    // FR-097: тач-цель строки ≥ 44 лог. px (кламп в список). Раньше —
+    // арифметика rel/LIST_ROW_H (точный hit); теперь — итерация с
+    // расширением (центрированно, кламп в list). На точном указателе
+    // touch_hit_xywh — no-op, поведение прежнее.
+    use crate::touch_targets::touch_hit_xywh;
+    for row in 0..visible {
+        let row_rect = override_row_rect(list, row);
+        if point_in_rect(touch_hit_xywh(row_rect, list), point) {
+            return Some(row);
+        }
+    }
+    None
 }
 
 /// Геометрия таблицы сравнения: rect + rect'ы шапки и ячеек.
@@ -622,6 +653,19 @@ pub fn table_layout(
 mod tests {
     use super::*;
     use canvas_ui::geometry::UiRect;
+
+    /// LAY-W7 (аудит layouts-2026-10 §5): высоты what-if на шкале S3 —
+    /// `CHIP_HEIGHT`/`LIST_ROW_H`/`TABLE_ROW_H`/`TABLE_HEAD_H` суть
+    /// псевдонимы канонических констант кита. Численная проверка
+    /// фиксирует инвариант: смена значения в ките подхватывается here
+    /// автоматически (без локальных литералов).
+    #[test]
+    fn lay_w7_heights_are_canonical_s3() {
+        assert_eq!(CHIP_HEIGHT, kit::CHIP_HEIGHT);
+        assert_eq!(LIST_ROW_H, kit::LIST_ROW_H);
+        assert_eq!(TABLE_ROW_H, kit::LIST_ROW_H);
+        assert_eq!(TABLE_HEAD_H, kit::LIST_ROW_H);
+    }
 
     /// Детерминированный FontSystem тестов: вшитый рендером шрифт (тот же
     /// файл, что FONT_DATA canvas-render) — метрики одинаковы на всех CI.
@@ -753,6 +797,109 @@ mod tests {
         );
         // Мимо бара — None
         assert_eq!(bar_action_at(&layout, [5.0, 5.0]), None);
+    }
+
+    /// LAY-W8 (FR-097): на coarse-указателе hit-зона чипа/кнопки бара
+    /// дотягивается до 44 лог. px центрированно, с клампом в бар — клик
+    /// 5 px выше чипа «База» (но внутри 44-px расширенной зоны и внутри
+    /// бара) попадает в `BarAction::Base`. На точном указателе тот же
+    /// клик проходит мимо. Симметричный сценарий «coarse vs precise».
+    #[test]
+    fn lay_w8_bar_action_coarse_expands_chip_hit_zone() {
+        let layout = layout(&names(), "подмен: 3", [1600.0, 900.0]);
+        let chip = layout.base;
+        // 5 px ниже чипа, но внутри бара (BAR_HEIGHT=44, CHIP_HEIGHT=24 →
+        // под чипом есть место для расширения центрированно по Y).
+        let below = [chip[0] + chip[2] / 2.0, chip[1] + chip[3] + 5.0];
+        // Точка внутри бара (проходит внешний гейт point_in_rect(bar)).
+        assert!(
+            below[1] >= layout.rect[1] && below[1] <= layout.rect[1] + layout.rect[3],
+            "below={below:?} bar={:?}",
+            layout.rect
+        );
+
+        let was = canvas_core::web_bridge::pointer_coarse();
+        // Coarse: расширение — клик попадает в Base.
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        assert_eq!(
+            bar_action_at(&layout, below),
+            Some(BarAction::Base),
+            "coarse: клик 5 px ниже чипа «База» должен попасть в Base"
+        );
+        // Precise: без расширения — клик мимо (None или другой элемент).
+        canvas_core::web_bridge::set_pointer_coarse(false);
+        assert_ne!(
+            bar_action_at(&layout, below),
+            Some(BarAction::Base),
+            "precise: клик 5 px ниже чипа «База» не должен попасть в Base"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(was);
+    }
+
+    /// LAY-W8: на coarse hit-зона слота «✕» удаления сценария (22 px)
+    /// дотягивается до 44 центрированно, с клампом в чип сценария —
+    /// расширенная зона не крадёт клики у соседнего чипа. Клик 5 px левее
+    /// слота «✕» (но внутри чипа) попадает в `DeleteScenario(i)` на coarse,
+    /// в `Scenario(i)` на precise (тело чипа). На точном — прежнее поведение.
+    #[test]
+    fn lay_w8_bar_action_close_slot_clamps_to_chip() {
+        let layout = layout(&names(), "подмен: 3", [1600.0, 900.0]);
+        let i = 0;
+        let close = layout.scenario_closes[i];
+        let chip = layout.scenarios[i];
+        // 5 px левее слота «✕», в теле чипа (между подписью и «✕»).
+        let left_of_close = [close[0] - 5.0, close[1] + close[3] / 2.0];
+        // Точка внутри чипа — иначе выйдет за рамки теста.
+        assert!(left_of_close[0] >= chip[0]);
+
+        let was = canvas_core::web_bridge::pointer_coarse();
+        // Coarse: расширенный «✕» (кламп в чип) ловит клик левее слота.
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        assert_eq!(
+            bar_action_at(&layout, left_of_close),
+            Some(BarAction::DeleteScenario(i)),
+            "coarse: клик 5 px левее «✕» в пределах чипа — DeleteScenario"
+        );
+        // Precise: слот 22 px — клик левее слота, в теле чипа → Scenario(i).
+        canvas_core::web_bridge::set_pointer_coarse(false);
+        assert_eq!(
+            bar_action_at(&layout, left_of_close),
+            Some(BarAction::Scenario(i)),
+            "precise: клик 5 px левее «✕» — тело чипа, Scenario(i)"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(was);
+    }
+
+    /// LAY-W8: `override_row_at` на coarse расширяет hit-зону строки (24 px)
+    /// до 44 центрированно, с клампом в список. Клик в верхней марже списка
+    /// (выше строки 0 на 3 px, в пределах 44-px расширенной зоны) попадает
+    /// в строку 0 на coarse; на precise — None (поведение прежнее).
+    #[test]
+    fn lay_w8_override_row_at_coarse_expands_row() {
+        let bar = [500.0, 800.0, 600.0, BAR_HEIGHT];
+        let list = overrides_list_layout(bar, 3, [1600.0, 900.0]);
+        // LIST_MARGIN = SPACING_S = 6. Точка в верхней марже списка —
+        // 3 px от верха списка, выше строки 0 на 3 px (6-3=3).
+        let in_top_margin = [list[0] + list[2] / 2.0, list[1] + 3.0];
+        // Точка внутри list (проходит внешний гейт point_in_rect(list)).
+        assert!(in_top_margin[1] >= list[1] && in_top_margin[1] <= list[1] + list[3]);
+
+        let was = canvas_core::web_bridge::pointer_coarse();
+        // Precise: верхняя маржа — None (поведение прежнее, rel < 0).
+        canvas_core::web_bridge::set_pointer_coarse(false);
+        assert_eq!(
+            override_row_at(list, 3, in_top_margin),
+            None,
+            "precise: клик в верхней марже списка — None"
+        );
+        // Coarse: расширенная строка 0 ловит клик в марже.
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        assert_eq!(
+            override_row_at(list, 3, in_top_margin),
+            Some(0),
+            "coarse: клик в верхней марже — строка 0 (расширенная hit-зона)"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(was);
     }
 
     /// Узкое окно: полоса клампится внутрь (ширина <= окно - 2×margin).

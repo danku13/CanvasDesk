@@ -934,11 +934,22 @@ pub fn palette_layout(
 /// (баг-репорт владельца: «выпадающие меню активируются наведением на
 /// область, где должно появляться выпадающее меню»). Колонка раскрытой
 /// группы учитывается отдельно — в `PaletteHover::update`.
+///
+/// LAY-W8 (FR-097): на coarse-указателе hit-зона кнопки-триггера (30 px)
+/// дотягивается до 44 лог. px центрированно, с клампом в бар — расширенная
+/// зона не выходит за бар и не перекрывает канвас. На точном указателе —
+/// rect без изменений (десктоп прежний).
 pub fn palette_trigger_at(lay: &PaletteLayout, point: Vec2) -> Option<usize> {
     lay.groups
         .iter()
         .enumerate()
-        .find(|(_, g)| point_in_rect(g.button, point))
+        .find(|(_, g)| {
+            // FR-097: тач-цель кнопки-триггера ≥ 44 (кламп в бар)
+            point_in_rect(
+                crate::touch_targets::touch_hit_xywh(g.button, lay.bar),
+                point,
+            )
+        })
         .map(|(i, _)| i)
 }
 
@@ -1098,11 +1109,21 @@ impl PaletteHover {
 /// перекрываются по x — кликабельна лишь раскрытая), затем кнопки-триггеры
 /// (пин-переключение), затем бар. Колонка ЗАКРЫТОЙ группы не ловит — клик
 /// уходит в канвас (у колонок нет «призрачной» зоны).
+///
+/// LAY-W8 (FR-097): на coarse-указателе hit-зоны строк (26 px) и
+/// кнопок-триггеров (30 px) дотягиваются до 44 лог. px центрированно. Контейнер
+/// строки — колонка раскрытой группы (`group.dropdown`), контейнер кнопки —
+/// бар (`lay.bar`): расширенные зоны не выходят за пределы своей поверхности.
+/// На точном указателе — rect без изменений (десктоп прежний).
 pub fn palette_hit(lay: &PaletteLayout, point: Vec2, open: Option<usize>) -> Option<PaletteHit> {
     if let Some(gi) = open {
         if let Some(group) = lay.groups.get(gi) {
             for (ei, row) in group.rows.iter().enumerate() {
-                if point_in_rect(*row, point) {
+                // FR-097: тач-цель строки ≥ 44 (кламп в колонку группы)
+                if point_in_rect(
+                    crate::touch_targets::touch_hit_xywh(*row, group.dropdown),
+                    point,
+                ) {
                     return Some(PaletteHit::Entry {
                         group: gi,
                         entry: ei,
@@ -1542,6 +1563,90 @@ mod tests {
         );
         // Мимо палитры — None
         assert_eq!(palette_hit(&lay, [1100.0, 700.0], Some(0)), None);
+    }
+
+    /// LAY-W8 (FR-097): на coarse-указателе hit-зона кнопки-триггера
+    /// (PAL_BUTTON=30) дотягивается до 44 лог. px центрированно, с клампом
+    /// в бар. Клик 5 px ниже кнопки (вне 30-px кнопки, но внутри 44-px
+    /// расширенной зоны И внутри бара) попадает в `Trigger(0)` на coarse;
+    /// на precise — Bar (вне кнопки, в баре).
+    #[test]
+    fn lay_w8_palette_trigger_coarse_expands_button() {
+        let (_, lay) = laid_out_palette();
+        let btn = lay.groups[0].button;
+        // 5 px ниже кнопки: всё ещё в баре? Бар = lay.bar — кнопка в баре
+        // с паддингом; точка на 5 px ниже кнопки может выйти за бар.
+        // Поэтому возьмём точку 5 px ПРАВЕЕ кнопки (горизонтальное расширение):
+        // бар шире кнопки (там ещё подписи/соседи) — точка внутри бара.
+        let right_of_btn = [btn[0] + btn[2] + 5.0, btn[1] + btn[3] / 2.0];
+        // Точка внутри бара — иначе тест некорректен.
+        assert!(
+            right_of_btn[0] >= lay.bar[0]
+                && right_of_btn[0] <= lay.bar[0] + lay.bar[2]
+                && right_of_btn[1] >= lay.bar[1]
+                && right_of_btn[1] <= lay.bar[1] + lay.bar[3],
+            "right_of_btn={right_of_btn:?} bar={:?}",
+            lay.bar
+        );
+
+        let was = canvas_core::web_bridge::pointer_coarse();
+        // Precise: вне кнопки 30 px — Bar (или None, но не Trigger(0)).
+        canvas_core::web_bridge::set_pointer_coarse(false);
+        assert_ne!(
+            palette_trigger_at(&lay, right_of_btn),
+            Some(0),
+            "precise: клик 5 px правее кнопки — не Trigger(0)"
+        );
+        // Coarse: расширенная кнопка (кламп в бар) ловит клик.
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        assert_eq!(
+            palette_trigger_at(&lay, right_of_btn),
+            Some(0),
+            "coarse: клик 5 px правее кнопки — Trigger(0) (расширенная hit-зона)"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(was);
+    }
+
+    /// LAY-W8: на coarse hit-зона строки палитры (PAL_ROW_H=26) дотягивается
+    /// до 44 центрированно, с клампом в колонку раскрытой группы. Клик в
+    /// верхней марже колонки (PAL_DROP_PAD=5 px над строкой 0, вне 26-px
+    /// строки, но внутри 44-px расширенной зоны) — `Entry{0}` на coarse,
+    /// `None` на precise (поведение прежнее).
+    #[test]
+    fn lay_w8_palette_row_coarse_expands_row() {
+        let (_, lay) = laid_out_palette();
+        let row0 = lay.groups[0].rows[0];
+        let dropdown = lay.groups[0].dropdown;
+        // 2 px от верха колонки — в верхней марже (PAL_DROP_PAD=5),
+        // выше строки 0 (строка 0 начинается на 5 px ниже верха колонки).
+        let in_top_pad = [row0[0] + row0[2] / 2.0, dropdown[1] + 2.0];
+        // Точка внутри колонки — иначе тест некорректен.
+        assert!(
+            in_top_pad[0] >= dropdown[0]
+                && in_top_pad[0] <= dropdown[0] + dropdown[2]
+                && in_top_pad[1] >= dropdown[1]
+                && in_top_pad[1] <= dropdown[1] + dropdown[3],
+            "in_top_pad={in_top_pad:?} dropdown={dropdown:?}"
+        );
+        // Точка выше строки 0 (не в строке 0 на precise).
+        assert!(in_top_pad[1] < row0[1]);
+
+        let was = canvas_core::web_bridge::pointer_coarse();
+        // Precise: верхняя маржа колонки — None (не в строке/триггере/баре).
+        canvas_core::web_bridge::set_pointer_coarse(false);
+        assert_eq!(
+            palette_hit(&lay, in_top_pad, Some(0)),
+            None,
+            "precise: клик в верхней марже колонки — None"
+        );
+        // Coarse: расширенная строка 0 ловит клик в марже.
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        assert_eq!(
+            palette_hit(&lay, in_top_pad, Some(0)),
+            Some(PaletteHit::Entry { group: 0, entry: 0 }),
+            "coarse: клик в верхней марже — Entry(0) (расширенная hit-зона)"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(was);
     }
 
     /// Hover-автомат: открытие только от триггера, с hover-intent задержкой;

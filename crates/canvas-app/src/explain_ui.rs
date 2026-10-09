@@ -72,13 +72,12 @@ pub const WIN_FRAC_H: f32 = 0.80;
 /// Инвариант читаемости узких окон (как у галереи схем): минимум 320×240.
 pub const WIN_MIN_W: f32 = 320.0;
 pub const WIN_MIN_H: f32 = 240.0;
-/// Высота шапки окна (заголовок + строка крошек/подзаголовка).
-// TODO: migrate to PANEL_HEADER_H_L=44 (FR-046 W-d аудит §4) — текущее
-// значение 56 на 12px отличается от large-варианта шкалы; оставлено как
-// отклонение (визуальный скачок 56→44 нежелателен в W-d-волне без
-// отдельной проверки геометрии шапки explain — заголовок + строка крошек
-// требуют высоты 56; I-1: ноль скачка).
-pub const HEADER_H: f32 = 56.0;
+/// Высота шапки окна (заголовок + строка крошек/подзаголовка). LAY-W7
+/// (аудит layouts-2026-10 §5): канонизация на S3 —
+/// `tokens::PANEL_HEADER_H_L` (44); ранее 56 (вне шкалы, −12px). Бывший
+/// TODO W-d закрыт этой волной. Крупная кнопка ✕ (CLOSE_SIZE=30) в шапке
+/// 44: (44−30)/2=7 — почти совпадает с `SPACING_SM`=8 (kit-канон inset).
+pub const HEADER_H: f32 = canvas_core::tokens::PANEL_HEADER_H_L;
 /// Высота футера окна (статистика + подсказка Esc).
 pub const FOOTER_H: f32 = 40.0;
 /// Размер кнопки ✕ (историческое значение 30 — FR-059 documented
@@ -88,7 +87,9 @@ pub const FOOTER_H: f32 = 40.0;
 pub const CLOSE_SIZE: f32 = 30.0;
 /// Размер чипа «Данные изменены» (кнопка в шапке).
 pub const CHIP_W: f32 = 210.0;
-pub const CHIP_H: f32 = 28.0;
+/// Высота чипа «Данные изменены» (кнопка в шапке). LAY-W7: канонизация
+/// на S3 — `kit::CHIP_HEIGHT` (24); ранее 28 (вне шкалы, −4px).
+pub const CHIP_H: f32 = kit::CHIP_HEIGHT;
 
 /// Прямоугольник окна проверки — `kit::modal` (FR-060): слот = вьюпорт,
 /// сжатый на поля [`WIN_MARGIN`]; FR-083: max = размер слота (потолка
@@ -123,11 +124,11 @@ pub fn window_rect(viewport: [f32; 2]) -> [f32; 4] {
 /// LG-вариант канонического `stage_close_button`: размер 30×30 (вместо
 /// `ICON_BUTTON_SIZE`=26, паритет с прежним `CLOSE_SIZE`=30),
 /// inset `SPACING_SM`=8 (вместо прежнего hand-rolled 14 = `(HEADER_H −
-/// CLOSE_SIZE)/2 = (56−30)/2 = 13`). Сдвиг позиции ~5-6px по диагонали к
-/// углу панели (canonical kit direction, FR-070/§6.1). `HEADER_H=56`
-/// сохраняет отдельный TODO на `PANEL_HEADER_H_L=44` (W-d аудит §4) —
-/// когда высота шапки мигрирует на 44, `(44−30)/2=7` почти совпадает с
-/// `SPACING_SM`=8, и LG-вариант можно будет пересмотреть.
+/// CLOSE_SIZE)/2 = (56−30)/2 = 13`, до волны LAY-W7). Сдвиг позиции
+/// ~5-6px по диагонали к углу панели (canonical kit direction, FR-070/§6.1).
+/// LAY-W7: `HEADER_H` мигрировал на `PANEL_HEADER_H_L`=44 —
+/// `(44−30)/2=7` почти совпадает с `SPACING_SM`=8, LG-вариант
+/// остаётся каноническим; пересмотр размера возможен в отдельной волне.
 pub fn close_rect(win: [f32; 4]) -> [f32; 4] {
     let panel = UiRect::new(win[0], win[1], win[2].max(0.0), win[3]);
     let rect = kit::stage_close_button_lg(panel);
@@ -1712,6 +1713,15 @@ impl ExplainState {
 mod tests {
     use super::*;
     use canvas_core::{LineageChild, LineageNode, LineageNodeId};
+
+    /// LAY-W7 (аудит layouts-2026-10 §5): высоты explain на шкале S3 —
+    /// `HEADER_H` = `tokens::PANEL_HEADER_H_L` (44, large-вариант шапки
+    /// панели), `CHIP_H` = `kit::CHIP_HEIGHT` (24, каноническая высота чипа).
+    #[test]
+    fn lay_w7_heights_are_canonical_s3() {
+        assert_eq!(HEADER_H, canvas_core::tokens::PANEL_HEADER_H_L);
+        assert_eq!(CHIP_H, kit::CHIP_HEIGHT);
+    }
 
     /// Дерево-цепочка A → B → C(лист) + лист-константа D у A.
     fn sample_tree() -> LineageTree {

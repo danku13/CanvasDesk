@@ -121,4 +121,117 @@ mod tests {
         let empty = intersect_xywh([0.0, 0.0, 10.0, 10.0], [50.0, 50.0, 10.0, 10.0]);
         assert!((empty[2]).abs() < EPS && empty[3].abs() < EPS);
     }
+
+    /// LAY-W8: репрезентативные тач-цели поверхностей аудита — what-if чип
+    /// (26 px), AI-статус ⏸/⚙ (24 px), агентская иконочная кнопка (24 px),
+    /// quick-пилюля агента (CHIP_HEIGHT 24 в 36-полосе). Расширение до
+    /// [`MIN_TOUCH_TARGET`] центрированно по обеим осям; кламп в контейнер
+    /// (бар/панель) не даёт зоне вылезти за пределы поверхности. На точном
+    /// указателе [`touch_hit_xywh`] — без изменений (инвариант десктопа).
+    #[test]
+    fn lay_w8_representative_expansions() {
+        // What-if чип 26 px в баре: +9 px по вертикали с каждой стороны.
+        let bar = [100.0, 800.0, 1400.0, 44.0];
+        let chip = [200.0, 809.0, 60.0, 26.0];
+        let expanded = intersect_xywh(expand_xywh(chip, MIN_TOUCH_TARGET), bar);
+        assert!((expanded[1] - (809.0 - 9.0)).abs() < EPS, "{expanded:?}");
+        assert!((expanded[3] - 44.0).abs() < EPS);
+        // Ширина не сжимается (60 > 44) — центрирование по X даёт ту же x.
+        assert!((expanded[0] - 200.0).abs() < EPS);
+        assert!((expanded[2] - 60.0).abs() < EPS);
+
+        // AI-статус ⏸ 24×24 в панели 95 px: расширение вверх/вниз на 10 px
+        // (кнопка в середине панели — расширение не клампится).
+        let panel = [1100.0, 745.0, 302.0, 95.0];
+        let pause = [1360.0, 760.0, 24.0, 24.0];
+        let expanded = intersect_xywh(expand_xywh(pause, MIN_TOUCH_TARGET), panel);
+        assert!((expanded[0] - (1360.0 - 10.0)).abs() < EPS, "{expanded:?}");
+        assert!((expanded[1] - (760.0 - 10.0)).abs() < EPS, "{expanded:?}");
+        assert!((expanded[2] - 44.0).abs() < EPS);
+        assert!((expanded[3] - 44.0).abs() < EPS);
+
+        // Агентская ✕ 26×26 (ICON_BUTTON_SIZE) у правого края панели —
+        // расширение вверх обрезается верхней границей панели (кламп);
+        // ширина 26 < 44 → дотягивается до 44 центрированно.
+        let panel = [1100.0, 0.0, 388.0, 900.0];
+        // close.x = panel.right - PAD(16) - 26 = 1446; close.y = (44-26)/2 = 9
+        let close = [1100.0 + 388.0 - 16.0 - 26.0, 9.0, 26.0, 26.0];
+        let expanded = intersect_xywh(expand_xywh(close, MIN_TOUCH_TARGET), panel);
+        // Верх расширения клампится к panel.y=0 (close.y-9=0 → граница).
+        assert!((expanded[1] - 0.0).abs() < EPS, "{expanded:?}");
+        // Сторона дотянута до 44.
+        assert!((expanded[2] - 44.0).abs() < EPS);
+        assert!((expanded[3] - 44.0).abs() < EPS);
+
+        // Quick-пилюля 24 px (CHIP_HEIGHT) в 36-полосе агента — расширение
+        // до 44 по высоте, контейнер — панель (как в agent_panel_hit).
+        // Пилюля в середине панели (не у края) — расширение не клампится.
+        let panel = [1100.0, 0.0, 388.0, 900.0];
+        let quick = [1100.0 + 16.0, 400.0, 100.0, 24.0];
+        let expanded = intersect_xywh(expand_xywh(quick, MIN_TOUCH_TARGET), panel);
+        // Ширина 100 > 44 — не сжимается; высота дотягивается до 44.
+        assert!((expanded[2] - 100.0).abs() < EPS, "{expanded:?}");
+        assert!((expanded[3] - 44.0).abs() < EPS, "{expanded:?}");
+        // Центрирование по Y: 400 - 10 = 390.
+        assert!((expanded[1] - 390.0).abs() < EPS, "{expanded:?}");
+    }
+
+    /// LAY-W8: инвариант десктопа — на точном указателе [`touch_hit_xywh`]
+    /// возвращает rect без изменений (расширение только на coarse).
+    /// Используется `set_pointer_coarse` (мост тест-виден) — сохраняем и
+    /// восстанавливаем глобальный флаг.
+    #[test]
+    fn lay_w8_touch_hit_noop_on_precise() {
+        let was = pointer_coarse();
+        set_pointer_coarse_for_test(false);
+        let rect = [200.0, 809.0, 60.0, 26.0];
+        let container = [100.0, 800.0, 1400.0, 44.0];
+        assert_eq!(touch_hit_xywh(rect, container), rect);
+        set_pointer_coarse_for_test(was);
+    }
+
+    /// LAY-W8: на coarse-указателе [`touch_hit_xywh`] расширяет rect до
+    /// [`MIN_TOUCH_TARGET`] с клампом в контейнер — клик 5 px вне 26-px чипа
+    /// (но внутри 44-px расширенной зоны) попадает; на точном указателе тот
+    /// же клик проходит мимо. Симметричный сценарий «coarse vs precise».
+    #[test]
+    fn lay_w8_coarse_vs_precise_5px_outside_chip() {
+        let was = pointer_coarse();
+        // Чип 26 px в баре 44 px; клик 5 px ниже чипа — внутри расширенной
+        // зоны (44 px), но снаружи нарисованного чипа.
+        let bar = [100.0, 800.0, 1400.0, 44.0];
+        let chip = [200.0, 809.0, 60.0, 26.0];
+        let below = [chip[0] + 5.0, chip[1] + chip[3] + 5.0]; // 5 px ниже чипа, в баре
+
+        // Coarse: расширение — клик попадает.
+        set_pointer_coarse_for_test(true);
+        let hit_coarse = touch_hit_xywh(chip, bar);
+        assert!(
+            below[0] >= hit_coarse[0]
+                && below[0] <= hit_coarse[0] + hit_coarse[2]
+                && below[1] >= hit_coarse[1]
+                && below[1] <= hit_coarse[1] + hit_coarse[3],
+            "coarse: клик 5 px ниже чипа должен попасть в расширенную зону, hit={hit_coarse:?}"
+        );
+
+        // Precise: без расширения — клик мимо.
+        set_pointer_coarse_for_test(false);
+        let hit_precise = touch_hit_xywh(chip, bar);
+        assert_eq!(hit_precise, chip, "precise: rect без изменений");
+        assert!(
+            !(below[0] >= hit_precise[0]
+                && below[0] <= hit_precise[0] + hit_precise[2]
+                && below[1] >= hit_precise[1]
+                && below[1] <= hit_precise[1] + hit_precise[3]),
+            "precise: клик 5 px ниже чипа проходит мимо"
+        );
+
+        set_pointer_coarse_for_test(was);
+    }
+
+    /// Тестовый мост: выставить `POINTER_COARSE` без прямого импорта
+    /// `canvas_core::web_bridge` (инкапсуляция моста в `touch_targets`).
+    fn set_pointer_coarse_for_test(coarse: bool) {
+        canvas_core::web_bridge::set_pointer_coarse(coarse);
+    }
 }

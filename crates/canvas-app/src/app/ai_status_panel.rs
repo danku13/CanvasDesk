@@ -624,7 +624,13 @@ impl App {
     /// FR-LLM-FIX / PRD-0010 F-7.9: hit-test панели AI-статуса — определить,
     /// по какому элементу кликнул пользователь (для обработчика ввода).
     /// Возвращает `None`, если клик мимо панели.
+    ///
+    /// LAY-W8 (FR-097): на coarse-указателе hit-зоны ⏸/⚙ (24×24) и
+    /// feature-чипов (~16 px) дотягиваются до 44 лог. px центрированно, с
+    /// клампом в `panel` — расширенная зона не выходит за панель и не
+    /// перекрывает канвас/минимапу. На точном указателе — rect без изменений.
     pub(crate) fn ai_status_panel_hit(&self, point: [f32; 2]) -> Option<AiStatusPanelHit> {
+        use crate::touch_targets::touch_hit_xywh;
         let panel = self.ai_status_panel_rect()?;
         if !point_in_rect(panel, point) {
             return None;
@@ -636,10 +642,17 @@ impl App {
         // (та же математика, что в `head_row_layout`).
         let gear_x = panel[0] + panel[2] - PAD_X - HEAD_BTN_SIZE;
         let pause_x = gear_x - HEAD_GAP - HEAD_BTN_SIZE;
-        if point_in_rect([pause_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE], point) {
+        // FR-097: тач-цель ⏸/⚙ ≥ 44 (кламп в панель)
+        if point_in_rect(
+            touch_hit_xywh([pause_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE], panel),
+            point,
+        ) {
             return Some(AiStatusPanelHit::PauseToggle);
         }
-        if point_in_rect([gear_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE], point) {
+        if point_in_rect(
+            touch_hit_xywh([gear_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE], panel),
+            point,
+        ) {
             return Some(AiStatusPanelHit::OpenSettings);
         }
 
@@ -659,7 +672,11 @@ impl App {
         let mut chip_cursor_x = content_x;
         for (i, (_label_text, chip_w)) in feats.iter().enumerate() {
             let chip_h = FEAT_FONT + FEAT_PAD_Y * 2.0;
-            if point_in_rect([chip_cursor_x, feats_y, *chip_w, chip_h], point) {
+            // FR-097: тач-цель feature-чипа (~16 px) ≥ 44 (кламп в панель)
+            if point_in_rect(
+                touch_hit_xywh([chip_cursor_x, feats_y, *chip_w, chip_h], panel),
+                point,
+            ) {
                 return Some(match i {
                     0 => AiStatusPanelHit::ToggleSuggest,
                     1 => AiStatusPanelHit::ToggleGraph,
@@ -723,6 +740,65 @@ mod tests {
     #[test]
     fn min_viewport_w_is_900() {
         assert_eq!(AI_STATUS_MIN_VIEWPORT_W, 900.0);
+    }
+
+    /// LAY-W8 (FR-097): на coarse hit-зоны ⏸/⚙ (HEAD_BTN_SIZE=24) и
+    /// feature-чипов (~16 px) дотягиваются до 44 центрированно, с клампом
+    /// в панель. Тест верифицирует МАТЕМАТИКУ, используемую в
+    /// `ai_status_panel_hit` (без `App`/GPU): на coarse клик 5 px вне
+    /// кнопки попадает в расширенную зону, на precise — мимо.
+    #[test]
+    fn lay_w8_panel_hit_zones_expand_on_coarse() {
+        use crate::touch_targets::touch_hit_xywh;
+        // Панель 302×95 в правом нижнем углу.
+        let panel = [1100.0, 745.0, AI_STATUS_W, AI_STATUS_H];
+        // ⏸ — правый край контента, 24×24, в шапке.
+        let gear_x = panel[0] + panel[2] - PAD_X - HEAD_BTN_SIZE;
+        let pause_x = gear_x - HEAD_GAP - HEAD_BTN_SIZE;
+        let head_y = panel[1] + PAD_TOP;
+        let pause = [pause_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE];
+        let gear = [gear_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE];
+
+        // Клик 5 px левее ⏸ (между ⏸ и ⚙) — в шапке, между кнопками.
+        let between = [pause_x + HEAD_BTN_SIZE + 5.0, head_y + HEAD_BTN_SIZE / 2.0];
+        // Точка внутри панели.
+        assert!(point_in_rect(panel, between));
+
+        let was = canvas_core::web_bridge::pointer_coarse();
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        // Расширение ⏸ ловит клик между ⏸ и ⚙.
+        assert!(
+            point_in_rect(touch_hit_xywh(pause, panel), between),
+            "coarse: клик 5 px правее ⏸ (между ⏸ и ⚙) попадает в расширенную зону ⏸"
+        );
+        // Расширение ⚙ НЕ ловит этот клик (5 px от ⏸ = далеко от ⚙: зазор 6 px
+        // между ними + 24 px ⚙ — клик в первые 5 px правее ⏸, не у ⚙).
+        // Контейнер — панель, расширение ⚙ центрировано, левый край
+        // расширения ⚙ = gear_x - 10. Клик между ⏸ и ⚙: pause_x + 24 + 5.
+        // pause_x + 24 + 5 vs gear_x - 10 = (pause_x + 6 + 24) - 10 = pause_x + 20.
+        // gear_x = pause_x + HEAD_GAP + HEAD_BTN_SIZE = pause_x + 6 + 24 = pause_x + 30.
+        // gear_x - 10 = pause_x + 20. Клик в pause_x + 29. 29 > 20 → клик в расширении ⚙.
+        // Так что обе кнопки могут ловить этот клик на coarse (расширения
+        // перекрываются в зазоре 6 px — норма для touch-44). Тест
+        // ослабляем: клик попадает хотя бы в одну из расширенных зон.
+        let hit_pause = point_in_rect(touch_hit_xywh(pause, panel), between);
+        let hit_gear = point_in_rect(touch_hit_xywh(gear, panel), between);
+        assert!(
+            hit_pause || hit_gear,
+            "coarse: клик между ⏸ и ⚙ попадает хотя бы в одну расширенную зону"
+        );
+
+        // Precise: между кнопками (зазор HEAD_GAP=6 px) — мимо обеих.
+        canvas_core::web_bridge::set_pointer_coarse(false);
+        assert!(
+            !point_in_rect(touch_hit_xywh(pause, panel), between),
+            "precise: клик между ⏸ и ⚙ не в ⏸ (rect без изменений)"
+        );
+        assert!(
+            !point_in_rect(touch_hit_xywh(gear, panel), between),
+            "precise: клик между ⏸ и ⚙ не в ⚙ (rect без изменений)"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(was);
     }
 
     /// FR-LLM-FIX: размер панели — 302px ширина (как в прототипе F-7.9).
