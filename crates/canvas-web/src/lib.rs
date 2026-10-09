@@ -28,6 +28,10 @@ pub mod web_log;
 pub mod web_state;
 pub mod web_thumbs;
 pub mod widgets_web;
+// FR-103 (мультиканвас C0): контракт WorkspaceStore — платформенно
+// нейтрален (трейт/ошибка/тест-двойник); реализации OpfsStore/FsAccessStore
+// — волны C1/C2.
+pub mod workspace;
 
 // Чисто web-модули: JS-рунтайм обязателен (spawn_local/web-sys-вызовы),
 // нативная компиляция rlib их не включает.
