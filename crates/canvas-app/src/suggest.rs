@@ -507,7 +507,9 @@ pub enum SuggestTarget {
 /// что мне предлагается следующая нода».
 pub const SUGGEST_CARD_W: f32 = 240.0;
 pub const SUGGEST_CARD_H: f32 = 80.0;
-pub const SUGGEST_CARD_GAP: f32 = 12.0;
+/// Зазор между карточками-призраками в стопке — токен
+/// `canvas_core::tokens::SPACING_LG` (значение прежнего литерала 12).
+pub use canvas_core::tokens::SPACING_LG as SUGGEST_CARD_GAP;
 /// Прозрачность призрака: fill alpha × 0.5, border alpha × 0.5 —
 /// нода выглядит «призрачно», визуально отличается от реальной ноды,
 /// но структура та же (шапка + тело + скруглённые углы).

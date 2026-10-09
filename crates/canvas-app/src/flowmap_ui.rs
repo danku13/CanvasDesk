@@ -53,8 +53,9 @@ pub const ROW_H: f32 = kit::LIST_ROW_H;
 pub const LIST_MAX_ROWS: usize = 12;
 /// Высота строки пустого состояния (пустой канвас — подсказка).
 pub const FOOTER_H: f32 = 30.0;
-/// Боковые поля строк списка (прежние +8/−16 от краёв панели).
-pub const LIST_PAD_X: f32 = 8.0;
+/// Боковые поля строк списка (прежние +8/−16 от краёв панели) — токен
+/// `canvas_core::tokens::SPACING_SM` (значение прежнего литерала 8).
+pub use canvas_core::tokens::SPACING_SM as LIST_PAD_X;
 
 /// FR-050 Н9-4: строка карты — одно проливание (value-ребро):
 /// `toParam`-проливание (`param: Some`) или позиционный вход-авто-строка

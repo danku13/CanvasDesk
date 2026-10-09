@@ -228,8 +228,9 @@ pub mod ui {
 
     /// Сторона летающей кнопки настроек (логические px).
     pub const SETTINGS_BUTTON: f32 = 36.0;
-    /// Отступ кнопки и панели настроек от краёв окна (логические px).
-    pub const SETTINGS_MARGIN: f32 = 12.0;
+    /// Отступ кнопки и панели настроек от краёв окна (логические px) —
+    /// токен `canvas_core::tokens::SPACING_LG` (значение прежнего литерала 12).
+    pub use canvas_core::tokens::SPACING_LG as SETTINGS_MARGIN;
 
     /// Верхний отступ под DOM-панель хранилища (W6) на web. Тулбар
     /// «Открыть с диска… / Недавние / Экспорт .canvas» занимает полосу
@@ -242,8 +243,9 @@ pub mod ui {
     #[cfg(not(target_arch = "wasm32"))]
     pub const WEB_TOOLBAR_INSET: f32 = 0.0;
 
-    /// Зазор между кнопкой и панелью настроек.
-    pub const SETTINGS_GAP: f32 = 8.0;
+    /// Зазор между кнопкой и панелью настроек — токен
+    /// `canvas_core::tokens::SPACING_SM` (значение прежнего литерала 8).
+    pub use canvas_core::tokens::SPACING_SM as SETTINGS_GAP;
     /// Ширина панели настроек.
     pub const PANEL_WIDTH: f32 = 300.0;
     /// Высота строки настройки.
@@ -252,8 +254,9 @@ pub mod ui {
     pub const PANEL_HEADER_HEIGHT: f32 = 30.0;
     /// Высота строки-подсказки внизу панели.
     pub const PANEL_HINT_HEIGHT: f32 = 24.0;
-    /// Внутренний отступ панели.
-    pub const PANEL_PADDING: f32 = 10.0;
+    /// Внутренний отступ панели — токен `canvas_core::tokens::SPACING_MD`
+    /// (значение прежнего литерала 10).
+    pub use canvas_core::tokens::SPACING_MD as PANEL_PADDING;
 
     /// Точка в rect [x, y, w, h]? (логические px, границы включительны)
     pub fn point_in_rect(rect: [f32; 4], point: Vec2) -> bool {
@@ -546,8 +549,9 @@ pub mod ui {
     pub const HOTKEYS_PANEL_WIDTH: f32 = 340.0;
     /// Высота строки хоткея (логические px).
     pub const HOTKEYS_ROW_HEIGHT: f32 = 22.0;
-    /// Внутренний отступ панели хоткеев.
-    pub const HOTKEYS_PADDING: f32 = 10.0;
+    /// Внутренний отступ панели хоткеев — токен
+    /// `canvas_core::tokens::SPACING_MD` (значение прежнего литерала 10).
+    pub use canvas_core::tokens::SPACING_MD as HOTKEYS_PADDING;
     /// Высота заголовка панели хоткеев.
     pub const HOTKEYS_HEADER_HEIGHT: f32 = 30.0;
     /// Ширина колонки клавиши (выравнивание описаний).
@@ -1216,8 +1220,9 @@ pub mod ui {
     }
 
     /// Ширина подписи призрака дропа в world-px: ширина карточки призрака
-    /// минус боковые отступы.
-    pub const DROP_GHOST_LABEL_PAD: f32 = 12.0;
+    /// минус боковые отступы — токен `canvas_core::tokens::SPACING_LG`
+    /// (значение прежнего литерала 12).
+    pub use canvas_core::tokens::SPACING_LG as DROP_GHOST_LABEL_PAD;
 
     /// Rect пункта меню в логических px (screen-space): [x, y, w, h].
     pub fn menu_item_rect(origin: Vec2, i: usize) -> [f32; 4] {

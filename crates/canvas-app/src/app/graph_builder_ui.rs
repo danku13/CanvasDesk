@@ -43,8 +43,9 @@ const PAD: f32 = 16.0;
 const TEXTAREA_H: f32 = 120.0;
 /// Высота radio-card режима.
 const MODE_CARD_H: f32 = 54.0;
-/// Зазор между radio-cards.
-const MODE_GAP: f32 = 6.0;
+/// Зазор между radio-cards — токен `canvas_core::tokens::SPACING_S`
+/// (значение прежнего литерала 6).
+use canvas_core::tokens::SPACING_S as MODE_GAP;
 /// Высота кнопок Generate / Cancel.
 const BTN_H: f32 = canvas_ui::kit::BUTTON_HEIGHT;
 /// Ширина кнопок.

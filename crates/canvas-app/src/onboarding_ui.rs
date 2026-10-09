@@ -193,8 +193,9 @@ pub const ONBOARDING_CARD_WIDTH: f32 = 720.0;
 /// Минимальная ширина карточки для двухколоночного режима (CR-031/S2):
 /// уже — одноколонный фолбэк без иллюстрации (узкие окна/стресс-viewport'ы).
 pub const ONBOARDING_SPLIT_MIN_W: f32 = 640.0;
-/// Внутренние поля карточки.
-pub const ONBOARDING_PAD: f32 = 24.0;
+/// Внутренние поля карточки — токен `canvas_core::tokens::SPACING_XL`
+/// (значение прежнего литерала 24).
+pub use canvas_core::tokens::SPACING_XL as ONBOARDING_PAD;
 /// Кегли строк карточки: заголовок/тело/кнопки.
 pub const ONBOARDING_TITLE_FONT: f32 = 18.0;
 pub const ONBOARDING_BODY_FONT: f32 = 13.0;
@@ -207,8 +208,9 @@ pub const ONBOARDING_BUTTON_W: f32 = 96.0;
 pub const ONBOARDING_BUTTON_H: f32 = 30.0;
 /// Диаметр прогресс-точки.
 pub const ONBOARDING_DOT: f32 = 8.0;
-/// Зазор между точками прогресса.
-pub const ONBOARDING_DOT_GAP: f32 = 10.0;
+/// Зазор между точками прогресса — токен `canvas_core::tokens::SPACING_MD`
+/// (значение прежнего литерала 10).
+pub use canvas_core::tokens::SPACING_MD as ONBOARDING_DOT_GAP;
 /// Отступ прогресс-точек от заголовка.
 pub const ONBOARDING_DOTS_TOP: f32 = 12.0;
 

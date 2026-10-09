@@ -37,8 +37,9 @@ pub const HINT_WIDTH: f32 = 300.0;
 /// Высота строки popup.
 pub const HINT_ROW_H: f32 = 24.0;
 /// Внутренние поля popup (по вертикали; по горизонтали подсветка строки
-/// инсетится на [`HINT_ROW_INSET_H`]).
-pub const HINT_MARGIN: f32 = 6.0;
+/// инсетится на [`HINT_ROW_INSET_H`]) — токен `canvas_core::tokens::SPACING_S`
+/// (значение прежнего литерала 6).
+pub use canvas_core::tokens::SPACING_S as HINT_MARGIN;
 /// Горизонтальный инсет подсветки строки от краёв popup (прежние +4/−8).
 pub const HINT_ROW_INSET_H: f32 = 4.0;
 /// Высота строки каретки для якоря dropdown (прежний flip «−20» =

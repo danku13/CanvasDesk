@@ -1731,3 +1731,22 @@ Stage Summary:
 - Файлы: crates/canvas-app/src/app/ui_registry.rs (+2 константы, +3 строки комментария декларации, +19 строк тест), crates/canvas-app/src/settings_ui.rs (const-определения → ре-экспорт)
 - Реализация subagent'ом (parallel), коммит и пуш — main-агент
 Tokens: in≈42k, out≈8k, total≈50k, model=GLM (subagent general-purpose), scope=LAY-W5
+
+---
+Task ID: LAY-W6 (сессия web-3b7b2cbb)
+Agent: Super Z (main) + subagent general-purpose
+Task: Сообщение владельца: «Изучи design\layouts-audit-2026-10.md и стартуй LAY-W5 и LAY-W6 отдельными агентами». Этап 2 — LAY-W6 (P2, M): механическая волна — литеральные зазоры-константы §3.7-P3 → псевдонимы токенов SPACING_* (паттерн search_ui.rs, LAY7, I-1 «ноль скачка»); off-scale — вне скоупа до решения LAY-W2.
+
+Work Log:
+- Перечень §3.7-P3 верифицирован по именам (строки уплыли после коммита витрины 6e3e6b1): все 27 констант найдены с ожидаемыми значениями на шкале S1 {6, 8, 10, 12, 24}, видимость совпала
+- Механическая замена по эталону search_ui.rs: `const X: f32 = V` → `use canvas_core::tokens::SPACING_* as X` (приватные) / `pub use … as X` (публичные); док-комментарии дополнены формулировкой «— токен `SPACING_*` (значение прежнего литерала N)»; имена/видимость/тип/значения бит-в-бит, вызовы и тесты не тронуты
+- Покрытие (27 констант / 11 файлов canvas-app): admin_ui 4 (VIEWPORT_MARGIN→XL, ZONE_GAP→LG, SIDEBAR_ITEM_GAP→S, FILL_CELL_GAP→SM); kit_ui 2 (SECTION_GAP→LG, VIEWPORT_MARGIN→XL); template_ui 6 (PANEL_MARGIN→LG, PANEL_PADDING→MD, STRIP_PAD_V→S, FLYOUT_GAP→S, FLYOUT_PAD_V→S, FLYOUT_PAD_H→SM); onboarding_ui 2 (ONBOARDING_PAD→XL, ONBOARDING_DOT_GAP→MD); lib.rs mod ui 5 (SETTINGS_MARGIN→LG, SETTINGS_GAP→SM, PANEL_PADDING→MD, HOTKEYS_PADDING→MD, DROP_GHOST_LABEL_PAD→LG); suggest 1 (SUGGEST_CARD_GAP→LG); app/tooltip 3 (TOOLTIP_PAD_X→SM, TOOLTIP_PAD_Y→S, TOOLTIP_STACK_GAP→SM — фактическое имя STACK_GAP); app/ai_status_panel 1 (ТОЛЬКО HEAD_GAP→S — полушаги 9/11/7/5 не тронуты, скоуп LAY-W2); app/graph_builder_ui 1 (MODE_GAP→S); hints_ui 1 (HINT_MARGIN→S); flowmap_ui 1 (ТОЛЬКО LIST_PAD_X→SM — PANEL_MARGIN 16.0 вне S1 не тронут)
+- Вне скоупа (зафиксировано, не чинилось): template_ui PANEL_TOP_MARGIN 12.0 — на шкале, но в перечне нет (кандидат на следующую итерацию); tooltip TOOLTIP_RADIUS 6.0 — класс RADIUS, не SPACING; hints HINT_ROW_INSET_H 4.0 — вне S1 (LAY-W2); inline-литералы арифметики и `gap: 0.0` — отдельные волны
+- Гейты subagent'а: fmt по 11 файлам ✓, fmt --all --check ✓, check -p canvas-app ✓, clippy -p canvas-app -D warnings ✓, test -p canvas-app 655 unit + 59 integration 0 failed ✓; итоговый воркспейс-прогон main-агентом: fmt ✓, check --workspace ✓, test --workspace 96 наборов 0 failed ✓, clippy --workspace -D warnings ✓
+
+Stage Summary:
+- LAY7-P3 хвост закрыт полностью: 27 именованных зазоров-констант переведены на токены SPACING_S/SM/MD/LG/XL — ноль визуального скачка (I-1), дрейф значений исключён (источник единый — canvas_core::tokens)
+- Новых зависимостей нет (canvas-core уже зависимость canvas-app); WASM-гейт не задействован — правка по построению бит-в-бит, canvas-app вне scripts/wasm_gate.sh
+- Файлы: admin_ui.rs, kit_ui.rs, template_ui.rs, onboarding_ui.rs, lib.rs, suggest.rs, hints_ui.rs, flowmap_ui.rs, app/tooltip.rs, app/ai_status_panel.rs, app/graph_builder_ui.rs (все crates/canvas-app/src/)
+- Реализация subagent'ом (parallel), коммит и пуш — main-агент
+Tokens: in≈55k, out≈9k, total≈64k, model=GLM (subagent general-purpose), scope=LAY-W6

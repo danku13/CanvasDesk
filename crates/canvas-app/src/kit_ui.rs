@@ -55,8 +55,9 @@ pub const FONT_FAMILY: &str = SANS_FAMILY;
 pub const PANEL_MIN: UiVec2 = UiVec2::new(560.0, 420.0);
 /// Панель витрины: максимум (на 1280×800 — 900×640).
 pub const PANEL_MAX: UiVec2 = UiVec2::new(900.0, 640.0);
-/// Отступ секций по вертикали (spacing-scale).
-pub const SECTION_GAP: f32 = 12.0;
+/// Отступ секций по вертикали (spacing-scale) — токен
+/// `canvas_core::tokens::SPACING_LG` (значение прежнего литерала 12).
+pub use canvas_core::tokens::SPACING_LG as SECTION_GAP;
 /// Ширина колонки подписи состояния.
 pub const STATE_LABEL_W: f32 = 84.0;
 /// Кегль подписей контролов.
@@ -475,8 +476,9 @@ fn tr(lang: Language, key: &'static str) -> String {
     crate::i18n::tr(lang, key).to_owned()
 }
 
-/// Отступ панели витрины от краёв вьюпорта (spacing-scale XL).
-const VIEWPORT_MARGIN: f32 = 24.0;
+/// Отступ панели витрины от краёв вьюпорта (spacing-scale XL) — токен
+/// `canvas_core::tokens::SPACING_XL` (значение прежнего литерала 24).
+use canvas_core::tokens::SPACING_XL as VIEWPORT_MARGIN;
 
 /// Панель витрины, зажатая во вьюпорт: constrain(min, max, desired) + кламп
 /// к вьюпорту (модаль не вылезает на малых окнах — G4-линт: hit-rect'ы
