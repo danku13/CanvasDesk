@@ -3465,4 +3465,275 @@ mod tests {
             rule_color: [0.30, 0.33, 0.40, 0.8],
         }
     }
+
+    /// LAY-W3a: золотая геометрия тел демо-секций админки — инвариант
+    /// рефакторинга «ручной курсор `y +=` → Column-скелет примитивов»
+    /// (аудит layouts-2026-10 §3.2/§5 LAY-W3). Y-координаты всех элементов
+    /// сняты с ПРЕЖНЕГО кода пробом (синтетическое окно 800×2400, offset 0,
+    /// RU) и пинены с допуском 0.005 px. Позиционные теги (индексы —
+    /// порядок векторов раскладки).
+    #[test]
+    fn admin_bodies_golden_column_skeleton() {
+        const TOL: f32 = 0.005;
+        let expected: &[(&str, f32)] = &[
+            ("components.h", 982.0),
+            ("c.header.0", 60.0),
+            ("c.header.1", 60.0),
+            ("c.header.2", 60.0),
+            ("c.header.3", 60.0),
+            ("c.header.4", 60.0),
+            ("c.header.5", 60.0),
+            ("c.header.6", 312.0),
+            ("c.header.7", 364.0),
+            ("c.header.8", 416.0),
+            ("c.header.9", 468.0),
+            ("c.header.10", 560.0),
+            ("c.header.11", 706.0),
+            ("c.header.12", 760.0),
+            ("c.header.13", 812.0),
+            ("c.header.14", 930.0),
+            ("c.btnrow.0", 82.0),
+            ("c.btnrow.1", 120.0),
+            ("c.btnrow.2", 158.0),
+            ("c.btnrow.3", 196.0),
+            ("c.icon.0", 240.0),
+            ("c.icon.1", 240.0),
+            ("c.icon.2", 240.0),
+            ("c.icon.3", 240.0),
+            ("c.icon.4", 240.0),
+            ("c.chip.0", 276.0),
+            ("c.chip.1", 276.0),
+            ("c.chip.2", 276.0),
+            ("c.chip.3", 276.0),
+            ("c.chip.4", 276.0),
+            ("c.chip.5", 276.0),
+            ("c.field.0", 328.0),
+            ("c.field.1", 380.0),
+            ("c.field.2", 432.0),
+            ("c.field.3", 484.0),
+            ("c.switch.0", 526.0),
+            ("c.switch.1", 526.0),
+            ("c.switch.2", 526.0),
+            ("c.switch.3", 526.0),
+            ("c.switch.4", 526.0),
+            ("c.switch.5", 526.0),
+            ("c.dd_closed", 576.0),
+            ("c.dd_open.anchor", 576.0),
+            ("c.dd_open.menu", 610.0),
+            ("c.tip.anchor", 722.0),
+            ("c.tip.bubble", 744.0),
+            ("c.toast", 776.0),
+            ("f.header.0", 60.0),
+            ("f.header.1", 60.0),
+            ("f.header.2", 60.0),
+            ("f.row.0", 82.0),
+            ("f.row.1", 184.0),
+            ("f.row.2", 286.0),
+            ("f.row.3", 354.0),
+            ("f.row.4", 414.0),
+            ("f.row.5", 590.0),
+            ("f.row.6", 730.0),
+            ("f.row.7", 788.0),
+            ("f.row.8", 890.0),
+            ("f.field.0", 302.0),
+            ("f.field.1", 302.0),
+            ("f.field.2", 302.0),
+            ("f.chip.0", 354.0),
+            ("f.chip.1", 354.0),
+            ("f.chip.2", 354.0),
+            ("f.chip.3", 354.0),
+            ("f.chip.4", 354.0),
+            ("f.chip.5", 354.0),
+            ("f.chip.6", 354.0),
+            ("f.dd.0.anchor", 414.0),
+            ("f.dd.0.menu", 448.0),
+            ("f.dd.1.anchor", 414.0),
+            ("f.dd.1.menu", 448.0),
+            ("f.dd.2.anchor", 414.0),
+            ("f.dd.2.menu", 448.0),
+            ("f.table.0", 590.0),
+            ("f.table.1", 618.0),
+            ("f.table.2", 590.0),
+            ("f.table.3", 618.0),
+            ("f.table.4", 646.0),
+            ("f.table.5", 674.0),
+            ("c2.node.0", 60.0),
+            ("c2.node.1", 122.0),
+            ("c2.node.2", 184.0),
+            ("c2.node.3", 246.0),
+            ("c2.edge.0", 316.0),
+            ("c2.edge.1", 344.0),
+            ("c2.edge.2", 372.0),
+            ("c2.edge.3", 400.0),
+            ("c2.port.0", 436.0),
+            ("c2.port.1", 484.0),
+            ("c2.port.2", 532.0),
+            ("c2.table.card", 588.0),
+            ("c2.table.header", 588.0),
+            ("t.row.0", 60.0),
+            ("t.row.1", 80.0),
+            ("t.row.2", 102.0),
+            ("t.row.3", 124.0),
+            ("t.row.4", 146.0),
+            ("t.row.5", 168.0),
+            ("t.row.6", 190.0),
+            ("t.row.7", 212.0),
+            ("t.row.8", 234.0),
+            ("t.row.9", 256.0),
+            ("t.row.10", 278.0),
+            ("t.row.11", 300.0),
+            ("t.row.12", 322.0),
+            ("t.row.13", 344.0),
+            ("t.row.14", 366.0),
+            ("t.row.15", 398.0),
+            ("t.row.16", 418.0),
+            ("t.row.17", 440.0),
+            ("t.row.18", 462.0),
+            ("t.row.19", 484.0),
+            ("t.row.20", 506.0),
+            ("t.row.21", 528.0),
+            ("t.row.22", 550.0),
+            ("t.row.23", 572.0),
+            ("t.row.24", 594.0),
+            ("t.row.25", 616.0),
+            ("t.row.26", 638.0),
+            ("t.row.27", 660.0),
+            ("t.row.28", 692.0),
+            ("t.row.29", 712.0),
+            ("t.row.30", 734.0),
+            ("t.row.31", 756.0),
+            ("t.row.32", 778.0),
+            ("t.row.33", 810.0),
+            ("t.row.34", 830.0),
+            ("t.row.35", 852.0),
+            ("t.row.36", 874.0),
+            ("t.row.37", 896.0),
+            ("fill.h", 932.0),
+            ("canvas.h", 656.0),
+            ("tokens.h", 868.0),
+        ];
+        let palette = test_palette();
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut check = |tag: &str, val: f32| {
+            if seen.insert(tag.to_owned()) {
+                let (_, want) = expected
+                    .iter()
+                    .find(|(t, _)| *t == tag)
+                    .unwrap_or_else(|| panic!("золотой тег без ожидаемого значения: {tag}"));
+                assert!(
+                    (val - want).abs() < TOL,
+                    "дрейф тел админки {tag}: {val} != {want}"
+                );
+            }
+        };
+        // --- components_body ---
+        {
+            let demo = UiRect::new(40.0, 60.0, 800.0, 2400.0);
+            let b = components_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+            check("components.h", b.h);
+            for (i, (p, _)) in b.headers.iter().enumerate() {
+                check(&format!("c.header.{i}"), p.y);
+            }
+            for (i, r) in b.button_rows.iter().enumerate() {
+                check(&format!("c.btnrow.{i}"), r.slot.y);
+            }
+            for (i, c) in b.icon_cells.iter().enumerate() {
+                check(&format!("c.icon.{i}"), c.rect.y);
+            }
+            for (i, c) in b.chip_cells.iter().enumerate() {
+                check(&format!("c.chip.{i}"), c.rect.y);
+            }
+            for (i, (_, fl)) in b.fields.iter().enumerate() {
+                check(&format!("c.field.{i}"), fl.rect.y);
+            }
+            for (i, (_, _, r, _)) in b.switches.iter().enumerate() {
+                check(&format!("c.switch.{i}"), r.y);
+            }
+            if let Some(a) = &b.dropdown_closed {
+                check("c.dd_closed", a.y);
+            }
+            if let Some(dd) = &b.dropdown_open {
+                check("c.dd_open.anchor", dd.anchor.y);
+                check("c.dd_open.menu", dd.menu.y);
+            }
+            if let Some((a, t)) = &b.tooltip {
+                check("c.tip.anchor", a.y);
+                check("c.tip.bubble", t.y);
+            }
+            if let Some(t) = &b.toast {
+                check("c.toast", t.y);
+            }
+        }
+        // --- fill_body ---
+        {
+            let demo = UiRect::new(40.0, 60.0, 800.0, 2400.0);
+            let b = fill_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+            check("fill.h", b.h);
+            for (i, (p, _)) in b.headers.iter().enumerate() {
+                check(&format!("f.header.{i}"), p.y);
+            }
+            for (i, r) in b.rows.iter().enumerate() {
+                check(&format!("f.row.{i}"), r.slot.y);
+            }
+            for (i, (_, fl)) in b.field_lays.iter().enumerate() {
+                check(&format!("f.field.{i}"), fl.rect.y);
+            }
+            for (i, (_, r)) in b.chip_lays.iter().enumerate() {
+                check(&format!("f.chip.{i}"), r.y);
+            }
+            for (i, d) in b.dropdown.iter().enumerate() {
+                check(&format!("f.dd.{i}.anchor"), d.anchor.y);
+                check(&format!("f.dd.{i}.menu"), d.menu.y);
+            }
+            for (i, t) in b.row_table.iter().enumerate() {
+                check(&format!("f.table.{i}"), t.lay.row.y);
+            }
+        }
+        // --- canvas_body ---
+        {
+            let demo = UiRect::new(40.0, 60.0, 800.0, 2400.0);
+            let b = canvas_body(
+                demo,
+                0.0,
+                &palette,
+                [0.26, 0.27, 0.30, 1.0],
+                Language::Ru,
+                &mut m,
+                &mut fs,
+            );
+            check("canvas.h", b.h);
+            for (i, (_, r, _, _)) in b.node_demos.iter().enumerate() {
+                check(&format!("c2.node.{i}"), r.y);
+            }
+            for (i, (_, r, _)) in b.edge_demos.iter().enumerate() {
+                check(&format!("c2.edge.{i}"), r.y);
+            }
+            for (i, (_, r, _, _)) in b.port_demos.iter().enumerate() {
+                check(&format!("c2.port.{i}"), r.y);
+            }
+            if let Some(t) = &b.node_table {
+                check("c2.table.card", t.card.y);
+                check("c2.table.header", t.header.y);
+            }
+        }
+        // --- tokens_body ---
+        {
+            let demo = UiRect::new(40.0, 60.0, 800.0, 2400.0);
+            let b = tokens_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+            check("tokens.h", b.h);
+            let mut idx = 0usize;
+            for g in &b.groups {
+                for r in &g.rows {
+                    check(&format!("t.row.{idx}"), r.rect.y);
+                    idx += 1;
+                }
+            }
+        }
+        // Полнота: каждое ожидание снято (секция не исчезла).
+        for (tag, _) in expected {
+            assert!(seen.iter().any(|t| t == tag), "золотой тег не снят: {tag}");
+        }
+    }
 }
