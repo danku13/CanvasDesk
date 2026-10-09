@@ -390,10 +390,22 @@ impl App {
         // кадр всё это время. Ревизия bumped ТОЛЬКО при реальной мутации
         // модели; между правками кадры дёшево пропускаются.
         let scene_changed = self.scene.revision != self.minimap_revision;
+        let viewport_world = self.camera.visible_world_rect(viewport);
         if self.minimap.is_some() && self.minimap_sig == Some(sig) && !scene_changed {
+            // UR-003: рамка могла выйти за world-границы карты (пан/зум-отлёт)
+            // — растим карту вне драга; в драге маппинг заморожен (инвариант
+            // курсора, см. Minimap::set_viewport).
+            if !self.minimap_drag {
+                let grew = self
+                    .minimap
+                    .as_mut()
+                    .is_some_and(|m| m.ensure_viewport_visible(viewport_world));
+                if grew {
+                    self.rerender_minimap();
+                }
+            }
             return;
         }
-        let viewport_world = self.camera.visible_world_rect(viewport);
         if self.minimap.is_none() || scene_changed || size_changed {
             // сцена/размер изменились — полный снимок (T13-A)
             // FR-011: свернутые поддеревья не рисуются на миникарте
@@ -426,11 +438,22 @@ impl App {
             // следующие кадры до новой мутации дёшево пропускаются.
             self.minimap_revision = self.scene.revision;
         } else if let Some(minimap) = self.minimap.as_mut() {
-            // только камера — пересчёт подгонки и рамки (дешевле снимка)
+            // Только камера (UR-003): рамка едет по ЗАМОРОЖЕННОМУ маппингу
+            // (драг стабилен); при выходе рамки за границы — рост карты
+            // (вне драга). Пересборка fit — только capture/рост, не каждый кадр.
             minimap.set_viewport(viewport_world);
+            if !self.minimap_drag {
+                minimap.ensure_viewport_visible(viewport_world);
+            }
         }
         self.minimap_sig = Some(sig);
         // Загрузка текстуры (mutable borrow) — кадр растеризован заранее
+        self.rerender_minimap();
+    }
+
+    /// Перерендерить кадр мини-карты и загрузить в текстуру рендерера
+    /// (UR-003: общий хвост `update_minimap` и роста рамки в раннем выходе).
+    fn rerender_minimap(&mut self) {
         if let Some(minimap) = self.minimap.as_ref() {
             let image = minimap.render();
             if let Some(renderer) = self.renderer.as_mut() {

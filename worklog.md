@@ -1583,3 +1583,20 @@ Stage Summary:
 - Открытые: i18n строк агент-панели (hardcoded RU), точная геометрия Accept/Reject (FR-LLM-D-TODO)
 Tokens: in≈210k, out≈60k, total≈270k (estimate), model=GLM (Super Z main), scope=UR-005/CR-034
 - CI 4b318cc: gates ubuntu/macos/windows ✅, wasm-check ✅, web+docs ✅, licenses ✅, build/deploy ✅ (только artifacts-джобы докатывались — не гейты). Telegram-финал 923.
+Task ID: UR-003-миникарта
+Agent: Super Z (main)
+Task: «Проверь куда пропала мини-карта» — диагностика пропажи мини-карты, корневая причина, фикс, гейты
+
+Work Log:
+- Код-инспекция пайплайна (update_minimap → Minimap::capture/render → minimap_pass) — рендер-путь цел; настройка/флаг скрытия отсутствуют; DOM-web-слой зону мини-карты не перекрывает
+- Эмпирическая верификация: нативная сборка под Xvfb+llvmpipe (скриншоты ffmpeg x11grab) и web-бандл trunk+Playwright (WebGL2-фолбэк) — панель ЕСТЬ на обеих платформах, но содержимое — пятнышко ~16px при zoom-to-fit схемы
+- Корневая причина: MIN_VIEWPORT_COVERAGE=10 (abb2ced, «тихое» решение) — fit клампил content_half снизу viewport_half×10; при открытии канваса весь контент сжимался в ~1/10 карты → визуально «пропала»; панель без контура сливалась с тёмной сеткой (второй компонент симптома)
+- Фикс (canvas-render/minimap.rs, canvas-app/stage.rs, canvas-core/tokens.rs): (1) порог удалён — fit = ноды ∪ viewport, карта заполняется контентом; (2) set_viewport замораживает маппинг (инвариант драга abb2ced выполняется по построению — feedback loop не возвращается); (3) новый Minimap::ensure_viewport_visible — рост карты при выходе рамки, вызывается вне драга (в драге маппинг заморожен); (4) токен MINIMAP_BORDER + 1px контур панели
+- TDD: переписаны fit_viewport_coverage_floor → fit_viewport_only_fills_map, set_viewport_rebuilds_mapping → set_viewport_keeps_mapping_frozen (+инвариант курсора), обновлены hit_test/render_background assertions; добавлены ensure_viewport_visible_noop_when_inside, ensure_viewport_visible_grows_when_frame_leaves
+- Верификация «до/после» на нативе (схема runway: 8 нод+связи+рамка на карте) и в web/WebGL2 — контент читаем; доки: docs/user-reporting/ur-003-minimap-missing.md (разбор до корневой причины), docs/interface-objects/minimap.md §2.1 (контракт масштаба/стабильности)
+- Гейты: fmt ✓, check ✓, test workspace 2676 ✓ (core 639, render 428, app lib 589), clippy -D warnings ✓, wasm-gate --check ✓
+
+Stage Summary:
+- Мини-карта восстановлена как продукт: контент заполняет карту, рамка viewport едет по замороженному маппингу, карта растёт при отлёте камеры, панель имеет контур
+- Порог abb2ced удалён осознанно: его мотивация (стабильность драга) теперь гарантируется заморозкой маппинга — контракт задокументирован в minimap.md §2.1
+- Токены: in≈120k, out≈14k, total≈134k, model=GLM, scope=UR-003
