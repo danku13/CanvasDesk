@@ -154,6 +154,109 @@ pub enum PanelRow {
     Template(usize),
 }
 
+/// Row-окно скролла списка со СМЕШАННЫМ шагом строк (LAY-W9, K3):
+/// состояние — первая видимая строка ([`Self::first`], в строках),
+/// px-состояние — зеркало kit [`canvas_ui::kit::ScrollState`], чей оффсет
+/// считается суммой шагов строк ([`row_step`]) выше окна («px-оффсет =
+/// сумма row_step»). Анти-паттерн K3/LAY10 «offset: f32 + ручной кламп»
+/// в px не воспроизводится: кламп и зеркало живут здесь, в одном месте.
+///
+/// Почему окно в строках, а не px-`ScrollState` напрямую: список панели
+/// чередует заголовки секций ([`SECTION_HEIGHT`]) и карточки шаблонов
+/// ([`ROW_HEIGHT`]) — единого stride нет, `kit::list_rows` неприменим
+/// напрямую; px-зеркало для бегунка `kit::scroll_bar` строит
+/// [`Self::scroll_state`]. Каноническая реализация паттерна «row-window
+/// поверх ScrollState» (K3); оба потребителя (панель и flyout) живут в
+/// этом файле — при третьем потребителе вынести в canvas-ui kit.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RowScroll {
+    /// Первая видимая строка (индекс в полном наборе [`PanelRow`]).
+    pub first: usize,
+}
+
+impl RowScroll {
+    /// Окно с начала списка.
+    pub fn new() -> Self {
+        Self { first: 0 }
+    }
+
+    /// Сброс окна в начало (открытие панели, смена фильтра/категории).
+    pub fn reset(&mut self) {
+        self.first = 0;
+    }
+
+    /// Прокрутка окна на `delta` строк с клампом к `[0, max_scroll]`
+    /// (`max_scroll` считает раскладка — «приклейка хвоста» по измеренной
+    /// высоте окна строк). Знак — как у списков: колесо от себя
+    /// (LineDelta y < 0) увеличивает `first`.
+    pub fn scroll_by(&mut self, delta: i32, max_scroll: usize) {
+        let cur = self.first as i32;
+        self.first = (cur + delta).clamp(0, max_scroll as i32) as usize;
+    }
+
+    /// Кламп окна к пределу прокрутки (протухшее состояние после смены
+    /// фильтра/размера окна — «ввод = тому, что видно»).
+    pub fn clamp_top(&mut self, max_scroll: usize) {
+        self.first = self.first.min(max_scroll);
+    }
+
+    /// px-оффсет окна = сумма шагов ([`row_step`]) строк выше окна;
+    /// окно за концом списка клампится `take`'ом (полная высота).
+    pub fn px_offset(&self, rows: &[PanelRow]) -> f32 {
+        rows.iter().take(self.first).map(row_step).sum()
+    }
+
+    /// px-зеркало для кита (бегунок `kit::scroll_bar`): оффсет окна,
+    /// полная высота списка (сумма всех шагов), высота окна видимости.
+    pub fn scroll_state(&self, rows: &[PanelRow], viewport_h: f32) -> canvas_ui::kit::ScrollState {
+        canvas_ui::kit::ScrollState {
+            offset: self.px_offset(rows),
+            content_h: rows.iter().map(row_step).sum(),
+            viewport_h,
+        }
+    }
+
+    /// Следование окна за выделенной строкой (перенос из
+    /// `TemplatePanel::move_selection`, W-e; чистая функция над состоянием):
+    /// строка выше окна — становится первой (заголовок секции над ней
+    /// показывается); строка ниже окна — хвост прижимается к нижней границе
+    /// (наибольшее s, при котором карточка целиком видна в `viewport_h`);
+    /// уже видима — окно без изменений.
+    pub fn ensure_visible(&mut self, rows: &[PanelRow], row_idx: usize, viewport_h: f32) {
+        if row_idx >= rows.len() {
+            return;
+        }
+        if row_idx < self.first {
+            // Заголовок секции над строкой — показать и его
+            self.first = if row_idx > 0 && matches!(rows[row_idx - 1], PanelRow::Section(_)) {
+                row_idx - 1
+            } else {
+                row_idx
+            };
+        } else {
+            // Строка ниже окна? Видимость от first: сумма шагов
+            // first..row_idx + карточка выделенной строки ≤ высота окна.
+            let steps_to_row: f32 = rows[self.first..row_idx].iter().map(row_step).sum();
+            if steps_to_row + row_card_h(&rows[row_idx]) > viewport_h {
+                // Прижать выделение к нижней границе: наибольшее s ≤ row_idx,
+                // при котором выделенная строка целиком видна (хвост
+                // s..row_idx помещается в окно).
+                let mut s = row_idx;
+                let mut tail = row_card_h(&rows[row_idx]);
+                while s > 0 {
+                    let prev = row_step(&rows[s - 1]);
+                    if tail + prev > viewport_h {
+                        break;
+                    }
+                    tail += prev;
+                    s -= 1;
+                }
+                self.first = s;
+            }
+        }
+    }
+}
+
 /// Состояние боковой палитры шаблонов (FR-018, `Ctrl+P`; FR-025 —
 /// постоянный левый док; ревизия FR-025 2026-09-16 — палитра ПРИМАРНО
 /// свёрнута: вертикальная полоса категорий по центру слева, hover раскрывает
@@ -178,8 +281,9 @@ pub struct TemplatePanel {
     pub category: Option<String>,
     /// Выбранная строка-шаблон (ординал среди [`PanelRow::Template`]).
     pub selected: usize,
-    /// Первая видимая строка (индекс в векторе [`PanelRow`], прокрутка).
-    pub scroll_top: usize,
+    /// Row-окно прокрутки списка (LAY-W9): [`RowScroll`] — первая видимая
+    /// строка; px-зеркало kit ScrollState строит раскладка из него.
+    pub scroll: RowScroll,
 }
 
 impl TemplatePanel {
@@ -193,7 +297,7 @@ impl TemplatePanel {
             filter: canvas_ui::kit::TextFieldModel::default(),
             category: None,
             selected: 0,
-            scroll_top: 0,
+            scroll: RowScroll::default(),
         }
     }
 
@@ -205,7 +309,7 @@ impl TemplatePanel {
         self.filter.set_text(String::new());
         self.category = None;
         self.selected = 0;
-        self.scroll_top = 0;
+        self.scroll.reset();
     }
 
     /// Свернуть док в полосу-ручку (FR-025; Esc). Фокус снимается.
@@ -275,9 +379,8 @@ impl TemplatePanel {
     /// следует за выделением по ИЗМЕРЕННОЙ высоте окна строк
     /// `rows_area_h` (W-e, аудит ui-kit §8 п.11: прежнее константное окно
     /// `SCROLL_WINDOW` не зависело от высоты панели и могло оставить
-    /// выделение за пределами экрана): вверх — строка становится первой
-    /// (с заголовком секции над ней), вниз — выделение прижимается к
-    /// нижней границе окна (максимум контекста сверху).
+    /// выделение за пределами экрана) — логика следования перенесена в
+    /// [`RowScroll::ensure_visible`] (LAY-W9).
     pub fn move_selection(&mut self, delta: i32, rows: &[PanelRow], rows_area_h: f32) -> bool {
         let total = template_row_count(rows);
         if total == 0 {
@@ -288,36 +391,8 @@ impl TemplatePanel {
             return false;
         }
         self.selected = next as usize;
-        let Some(row_idx) = row_of_ordinal(rows, self.selected) else {
-            return true;
-        };
-        if row_idx < self.scroll_top {
-            // Заголовок секции над строкой — показать и его
-            self.scroll_top = if row_idx > 0 && matches!(rows[row_idx - 1], PanelRow::Section(_)) {
-                row_idx - 1
-            } else {
-                row_idx
-            };
-        } else {
-            // Строка ниже окна? Видимость от scroll_top: сумма шагов
-            // scroll_top..row_idx + карточка выделенной строки ≤ высота окна.
-            let steps_to_row: f32 = rows[self.scroll_top..row_idx].iter().map(row_step).sum();
-            if steps_to_row + row_card_h(&rows[row_idx]) > rows_area_h {
-                // Прижать выделение к нижней границе: наибольшее s ≤ row_idx,
-                // при котором выделенная строка целиком видна (хвост
-                // s..row_idx помещается в окно).
-                let mut s = row_idx;
-                let mut tail = row_card_h(&rows[row_idx]);
-                while s > 0 {
-                    let prev = row_step(&rows[s - 1]);
-                    if tail + prev > rows_area_h {
-                        break;
-                    }
-                    tail += prev;
-                    s -= 1;
-                }
-                self.scroll_top = s;
-            }
+        if let Some(row_idx) = row_of_ordinal(rows, self.selected) {
+            self.scroll.ensure_visible(rows, row_idx, rows_area_h);
         }
         true
     }
@@ -326,11 +401,10 @@ impl TemplatePanel {
     /// `[0, max_scroll]` (max_scroll считает `panel_layout` — «приклейка
     /// хвоста» по измеренной высоте окна строк; W-e: кэп
     /// `MAX_VISIBLE_ROWS` удалён — предел задаёт только высота). Знак —
-    /// как у списков: колесо от себя (LineDelta y < 0) увеличивает
-    /// scroll_top; шаг строк — `PANEL_WHEEL_LINES`.
+    /// как у списков: колесо от себя (LineDelta y < 0) увеличивает окно;
+    /// шаг строк — `PANEL_WHEEL_LINES`. Делегат [`RowScroll::scroll_by`].
     pub fn scroll_by(&mut self, delta: i32, max_scroll: usize) {
-        let cur = self.scroll_top as i32;
-        self.scroll_top = (cur + delta).clamp(0, max_scroll as i32) as usize;
+        self.scroll.scroll_by(delta, max_scroll);
     }
 }
 
@@ -502,9 +576,9 @@ pub struct PanelLayout {
     /// шапки) — единый rect для рендера и hit-test.
     pub collapse_rect: [f32; 4],
     /// W-e: применённая первая видимая строка (индекс в полном наборе
-    /// [`PanelRow`]) — `panel.scroll_top`, клампнутый к пределу прокрутки
-    /// (вид может опережать протухшее состояние после смены фильтра или
-    /// размера окна — семантика «применённого значения»
+    /// [`PanelRow`]) — окно `panel.scroll` ([`RowScroll::first`]), клампнутое
+    /// к пределу прокрутки (вид может опережать протухшее состояние после
+    /// смены фильтра или размера окна — семантика «применённого значения»
     /// `settings_ui::ModalLayout::scroll`).
     pub scroll_top: usize,
     /// W-e: окно строк — измеренная доступная высота панели (между чипами
@@ -514,15 +588,16 @@ pub struct PanelLayout {
     /// W-e: состояние скролла окна строк — kit
     /// [`canvas_ui::kit::ScrollState`]: `content_h` — полная высота списка
     /// (шаги всех строк), `viewport_h` — измеренная высота окна
-    /// ([`Self::rows_area`]), `offset` — px применённого `scroll_top`.
+    /// ([`Self::rows_area`]), `offset` — px применённого окна (сумма
+    /// шагов строк выше него — [`RowScroll::scroll_state`]).
     /// Бегунок — `kit::scroll_bar(&rows_area, &scroll, …)` (образец
     /// FR-059/flowmap).
     pub scroll: canvas_ui::kit::ScrollState,
-    /// FR-082: максимум `scroll_top` (кламп колеса) — «приклейка хвоста»:
-    /// наибольший старт, при котором хвост списка ещё целиком у нижней
-    /// границы окна строк. W-e (аудит §8 п.11): предел задаёт ТОЛЬКО
-    /// измеренная высота окна — кэп `MAX_VISIBLE_ROWS` удалён (на высоких
-    /// окнах видно больше дюжины строк). 0 — прокрутка не нужна.
+    /// FR-082: максимум окна прокрутки (кламп колеса) — «приклейка
+    /// хвоста»: наибольший старт, при котором хвост списка ещё целиком у
+    /// нижней границы окна строк. W-e (аудит §8 п.11): предел задаёт
+    /// ТОЛЬКО измеренная высота окна — кэп `MAX_VISIBLE_ROWS` удалён (на
+    /// высоких окнах видно больше дюжины строк). 0 — прокрутка не нужна.
     pub max_scroll: usize,
 }
 
@@ -686,7 +761,7 @@ pub fn flyout_layout(
     scroll_top: usize,
 ) -> FlyoutLayout {
     use canvas_ui::geometry::{UiRect, UiVec2};
-    use canvas_ui::kit::{self, ScrollState};
+    use canvas_ui::kit;
 
     // Вьюпорт: поля PANEL_TOP_MARGIN сверху/снизу, PANEL_MARGIN справа
     // (левая граница — край окна: flyout и так правее полосы).
@@ -731,11 +806,10 @@ pub fn flyout_layout(
         (menu.w - FLYOUT_PAD_H * 2.0).max(0.0),
         (menu.h - FLYOUT_PAD_V * 2.0).max(0.0),
     );
-    let scroll = ScrollState {
-        offset: top as f32 * ROW_HEIGHT,
-        content_h: item_count as f32 * ROW_HEIGHT,
-        viewport_h: area.h,
-    };
+    // LAY-W9: px-состояние — через обёртку RowScroll (окно в строках;
+    // строки flyout однородны — шаг ROW_HEIGHT, сумма шагов ≡ top·ROW_HEIGHT).
+    let rows: Vec<PanelRow> = (0..item_count).map(PanelRow::Template).collect();
+    let scroll = (RowScroll { first: top }).scroll_state(&rows, area.h);
     let row_rects = kit::list_rows(
         area,
         &scroll,
@@ -774,8 +848,9 @@ pub struct StripHover {
     /// Пин по клику: раскрытие держится после ухода курсора до повторного
     /// клика/Esc.
     pub pinned: bool,
-    /// Первая видимая строка flyout (прокрутка колесом).
-    pub scroll_top: usize,
+    /// Row-окно прокрутки flyout (LAY-W9): [`RowScroll`] — первая видимая
+    /// строка (прокрутка колесом, сброс при смене категории).
+    pub scroll: RowScroll,
     /// Строка полосы под курсором (None — мимо полосы) — для подсветки;
     /// смена строки — тоже повод для перерисовки.
     pub hovered_row: Option<usize>,
@@ -796,7 +871,7 @@ impl StripHover {
         Self {
             open: None,
             pinned: false,
-            scroll_top: 0,
+            scroll: RowScroll::default(),
             hovered_row: None,
             trigger_since: None,
             left_since: None,
@@ -831,7 +906,7 @@ impl StripHover {
                             Some((target, since)) if target == cat => {
                                 if now.duration_since(since) >= open_delay {
                                     self.open = Some(cat);
-                                    self.scroll_top = 0;
+                                    self.scroll.reset();
                                     self.trigger_since = None;
                                     changed = true;
                                 }
@@ -870,23 +945,23 @@ impl StripHover {
         } else {
             self.open = Some(category);
             self.pinned = true;
-            self.scroll_top = 0;
+            self.scroll.reset();
             self.trigger_since = None;
             self.left_since = None;
         }
     }
 
-    /// Прокрутка flyout на `delta` строк с клампом к `[0, max_scroll]`.
+    /// Прокрутка flyout на `delta` строк с клампом к `[0, max_scroll]`
+    /// (делегат [`RowScroll::scroll_by`]).
     pub fn scroll_by(&mut self, delta: i32, max_scroll: usize) {
-        let cur = self.scroll_top as i32;
-        self.scroll_top = (cur + delta).clamp(0, max_scroll as i32) as usize;
+        self.scroll.scroll_by(delta, max_scroll);
     }
 
     /// Сброс: flyout закрыт, пин и прокрутка сняты.
     pub fn reset(&mut self) {
         self.open = None;
         self.pinned = false;
-        self.scroll_top = 0;
+        self.scroll.reset();
         self.hovered_row = None;
         self.trigger_since = None;
         self.left_since = None;
@@ -1040,24 +1115,22 @@ pub fn panel_layout(
     // отсутствует), поэтому окно строится по px-границам ScrollState тем
     // же контрактом («строки, целиком влезающие в вьюпорт» — у прохода
     // отрисовки нет scissor'а, как у flyout в W-c): offset — px-граница
-    // строки `scroll_top`, кламп — к пределу «приклейки хвоста»
+    // первой строки окна, кламп — к пределу «приклейки хвоста»
     // ([`PanelLayout::max_scroll_of`]); усечение показывает бегунок
     // `kit::scroll_bar` (потребитель — overlay). Состояние скролла
-    // панели (`panel.scroll_top`, в строках) проводится как у flyout:
-    // layout строит kit-состояние из него, ввод клампит его же
-    // `scroll_by` к `max_scroll` («ввод = тому, что видно» — hit-тесты
-    // берут этот же PanelLayout).
+    // панели (`panel.scroll`, row-окно [`RowScroll`] — LAY-W9/K3)
+    // проводится как у flyout: layout строит px-зеркало из него
+    // ([`RowScroll::scroll_state`], протухшее окно клампится к `max_scroll`
+    // — состояние панели не портится), ввод клампит его же `scroll_by`
+    // к `max_scroll` («ввод = тому, что видно» — hit-тесты берут этот же
+    // PanelLayout).
     let rows_area_h = (bottom_limit - rows_top).max(0.0);
     let rows_area = [inner.x, rows_top, inner_w, rows_area_h];
-    let content_h: f32 = rows.iter().map(row_step).sum();
     let max_scroll = PanelLayout::max_scroll_of(rows, rows_top, bottom_limit);
-    let top = panel.scroll_top.min(max_scroll);
-    let offset: f32 = rows.iter().take(top).map(row_step).sum();
-    let scroll = canvas_ui::kit::ScrollState {
-        offset,
-        content_h,
-        viewport_h: rows_area_h,
-    };
+    let mut applied = panel.scroll.clone();
+    applied.clamp_top(max_scroll);
+    let top = applied.first;
+    let scroll = applied.scroll_state(rows, rows_area_h);
     let mut row_rects = Vec::new();
     let mut visible_rows = Vec::new();
     let mut cursor_y = rows_top;
@@ -2055,7 +2128,7 @@ mod tests {
         hover.update_at(Some(0), false, t0 + Duration::from_millis(150));
         assert_eq!(hover.open, Some(0));
         hover.scroll_by(3, 10);
-        assert_eq!(hover.scroll_top, 3);
+        assert_eq!(hover.scroll.first, 3);
         // Переход на другую категорию — тоже с intent-задержкой, скролл
         // новой категории сброшен
         hover.update_at(Some(1), false, t0 + Duration::from_millis(200));
@@ -2064,7 +2137,7 @@ mod tests {
             "переключение категории меняет состояние"
         );
         assert_eq!(hover.open, Some(1));
-        assert_eq!(hover.scroll_top, 0);
+        assert_eq!(hover.scroll.first, 0);
     }
 
     #[test]
@@ -2100,11 +2173,11 @@ mod tests {
     fn strip_hover_scroll_clamps() {
         let mut hover = StripHover::new();
         hover.scroll_by(7, 5);
-        assert_eq!(hover.scroll_top, 5, "верхняя граница max_scroll");
+        assert_eq!(hover.scroll.first, 5, "верхняя граница max_scroll");
         hover.scroll_by(-99, 5);
-        assert_eq!(hover.scroll_top, 0, "нижняя граница 0");
+        assert_eq!(hover.scroll.first, 0, "нижняя граница 0");
         hover.scroll_by(2, 0);
-        assert_eq!(hover.scroll_top, 0, "max_scroll=0 — скролла нет");
+        assert_eq!(hover.scroll.first, 0, "max_scroll=0 — скролла нет");
     }
 
     #[test]
@@ -2179,14 +2252,14 @@ mod tests {
         assert_eq!(panel.selected, total - 1);
         panel.move_selection(-100, &rows, rows_area_h);
         assert_eq!(panel.selected, 0);
-        assert_eq!(panel.scroll_top, 0);
+        assert_eq!(panel.scroll.first, 0);
         // Прокрутка догоняет выделение: выделенная строка ЦЕЛИКОМ в окне
-        // (видимость от scroll_top: шаги scroll_top..row + карточка ≤ высоты
+        // (видимость от окна: шаги first..row + карточка ≤ высоты
         // окна — тот же предикат, что у прохода раскладки)
         panel.move_selection(total as i32 - 1, &rows, rows_area_h);
         let row_idx = row_of_ordinal(&rows, panel.selected).expect("строка");
-        assert!(row_idx >= panel.scroll_top);
-        let steps_to_row: f32 = rows[panel.scroll_top..row_idx].iter().map(row_step).sum();
+        assert!(row_idx >= panel.scroll.first);
+        let steps_to_row: f32 = rows[panel.scroll.first..row_idx].iter().map(row_step).sum();
         assert!(
             steps_to_row + row_card_h(&rows[row_idx]) <= rows_area_h + 0.01,
             "выделенная строка видна в измеренном окне {rows_area_h}"
@@ -2218,27 +2291,27 @@ mod tests {
         // Вниз за окно: шаги 0..row + карточка > 150 — окно едет вниз
         panel.move_selection(3, &rows, area);
         let row_idx = row_of_ordinal(&rows, panel.selected).expect("строка");
-        let steps: f32 = rows[panel.scroll_top..row_idx].iter().map(row_step).sum();
+        let steps: f32 = rows[panel.scroll.first..row_idx].iter().map(row_step).sum();
         assert!(steps + row_card_h(&rows[row_idx]) <= area + 0.01, "виден");
         // Прижатие к нижней границе: ещё один шаг вверх не помещается
-        if panel.scroll_top > 0 {
-            let extra = row_step(&rows[panel.scroll_top - 1]);
+        if panel.scroll.first > 0 {
+            let extra = row_step(&rows[panel.scroll.first - 1]);
             assert!(steps + extra + row_card_h(&rows[row_idx]) > area + 0.01);
         }
         // Вверх за окно: строка становится первой; над шаблоном после
         // секции показывается и заголовок секции
         panel.move_selection(-3, &rows, area);
         assert_eq!(panel.selected, 0);
-        assert_eq!(panel.scroll_top, 0);
+        assert_eq!(panel.scroll.first, 0);
         let first_tpl = row_of_ordinal(&rows, 0).expect("строка");
         if first_tpl > 0 && matches!(rows[first_tpl - 1], PanelRow::Section(_)) {
-            // Протухшее окно: выделенная строка и её секция выше scroll_top
-            panel.scroll_top = first_tpl + 1;
+            // Протухшее окно: выделенная строка и её секция выше окна
+            panel.scroll.first = first_tpl + 1;
             panel.selected = 1;
             panel.move_selection(-1, &rows, area);
             assert_eq!(panel.selected, 0);
             assert_eq!(
-                panel.scroll_top,
+                panel.scroll.first,
                 first_tpl - 1,
                 "заголовок секции показан над выделенной строкой"
             );
@@ -2684,13 +2757,13 @@ mod tests {
         let mut panel = TemplatePanel::new();
         panel.open = true;
         panel.scroll_by(5, 7);
-        assert_eq!(panel.scroll_top, 5);
+        assert_eq!(panel.scroll.first, 5);
         panel.scroll_by(100, 7);
-        assert_eq!(panel.scroll_top, 7, "кламп сверху");
+        assert_eq!(panel.scroll.first, 7, "кламп сверху");
         panel.scroll_by(-100, 7);
-        assert_eq!(panel.scroll_top, 0, "кламп снизу");
+        assert_eq!(panel.scroll.first, 0, "кламп снизу");
         panel.scroll_by(3, 0);
-        assert_eq!(panel.scroll_top, 0, "max=0 — прокрутки нет");
+        assert_eq!(panel.scroll.first, 0, "max=0 — прокрутки нет");
     }
 
     /// FR-082: «приклейка хвоста» — при scroll_top = max_scroll последняя
@@ -2733,7 +2806,7 @@ mod tests {
         // приклеен к нижней границе окна строк)
         let mut scrolled = TemplatePanel::new();
         scrolled.open = true;
-        scrolled.scroll_top = lay.max_scroll;
+        scrolled.scroll.first = lay.max_scroll;
         let lay2 = panel_layout(
             1280.0,
             800.0,
@@ -2751,7 +2824,7 @@ mod tests {
         let mut panel3 = TemplatePanel::new();
         panel3.open = true;
         panel3.scroll_by(i32::MAX / 2, lay.max_scroll);
-        assert_eq!(panel3.scroll_top, lay.max_scroll, "кламп к max_scroll");
+        assert_eq!(panel3.scroll.first, lay.max_scroll, "кламп к max_scroll");
     }
 
     /// FR-082: панель уже одной строки (микроокно) — max_scroll = 0
@@ -2782,6 +2855,134 @@ mod tests {
             &all_visible(&registry), // UR-003: display-имена чипов
         );
         assert_eq!(lay.max_scroll, 0, "микроокно — прокрутки нет");
+    }
+
+    // --- LAY-W9: RowScroll — row-окно поверх kit ScrollState ----------------
+
+    /// Мок строк со СМЕШАННЫМ шагом: [S, T, T, S, T] — заголовки секций
+    /// ([`SECTION_HEIGHT`]) чередуются с карточками шаблонов ([`ROW_HEIGHT`]);
+    /// полный контент = 204 px, карточка шаблона = 48 px.
+    fn mixed_rows() -> Vec<PanelRow> {
+        vec![
+            PanelRow::Section("backend".to_owned()),
+            PanelRow::Template(0),
+            PanelRow::Template(1),
+            PanelRow::Section("cache".to_owned()),
+            PanelRow::Template(2),
+        ]
+    }
+
+    /// px-оффсет окна = сумма шагов ([`row_step`]) строк ВЫШЕ окна
+    /// (смешанный шаг: секции/шаблоны); протухшее окно за концом списка
+    /// клампится `take`'ом (полная высота).
+    #[test]
+    fn row_scroll_px_offset_sums_mixed_steps() {
+        let rows = mixed_rows();
+        let mut w = RowScroll::new();
+        assert_eq!(w.px_offset(&rows), 0.0, "окно в начале — оффсет 0");
+        w.first = 1; // над окном один заголовок секции
+        assert_eq!(w.px_offset(&rows), SECTION_HEIGHT);
+        w.first = 3; // секция + два шаблона
+        assert_eq!(w.px_offset(&rows), SECTION_HEIGHT + 2.0 * ROW_HEIGHT);
+        w.first = rows.len() + 5;
+        assert_eq!(
+            w.px_offset(&rows),
+            2.0 * SECTION_HEIGHT + 3.0 * ROW_HEIGHT,
+            "за концом списка — сумма всех шагов"
+        );
+    }
+
+    /// scroll_state строит px-зеркало kit [`canvas_ui::kit::ScrollState`]:
+    /// оффсет окна, полная высота контента (сумма всех шагов), высота окна
+    /// видимости — ровно то, что ест `kit::scroll_bar`.
+    #[test]
+    fn row_scroll_state_builds_kit_mirror() {
+        let rows = mixed_rows();
+        let mut w = RowScroll::new();
+        w.first = 3;
+        assert_eq!(
+            w.scroll_state(&rows, 150.0),
+            canvas_ui::kit::ScrollState {
+                offset: SECTION_HEIGHT + 2.0 * ROW_HEIGHT,
+                content_h: 2.0 * SECTION_HEIGHT + 3.0 * ROW_HEIGHT,
+                viewport_h: 150.0,
+            }
+        );
+    }
+
+    /// scroll_by: кламп к [0, max_scroll], max=0 — прокрутки нет (та же
+    /// семантика, что у делегатов TemplatePanel::scroll_by /
+    /// StripHover::scroll_by).
+    #[test]
+    fn row_scroll_by_clamps_to_bounds() {
+        let mut w = RowScroll::new();
+        w.scroll_by(5, 7);
+        assert_eq!(w.first, 5);
+        w.scroll_by(100, 7);
+        assert_eq!(w.first, 7, "кламп сверху");
+        w.scroll_by(-100, 7);
+        assert_eq!(w.first, 0, "кламп снизу");
+        w.scroll_by(3, 0);
+        assert_eq!(w.first, 0, "max=0 — прокрутки нет");
+    }
+
+    /// clamp_top — кламп протухшего окна к пределу прокрутки («ввод = тому,
+    /// что видно»: раскладка применяет его к копии, состояние панели не
+    /// портится); reset — окно в начало (открытие панели/фильтры).
+    #[test]
+    fn row_scroll_clamp_top_and_reset() {
+        let mut w = RowScroll::new();
+        w.first = 10;
+        w.clamp_top(3);
+        assert_eq!(w.first, 3, "кламп к пределу");
+        w.clamp_top(20);
+        assert_eq!(w.first, 3, "валидное окно не трогается");
+        w.reset();
+        assert_eq!(w, RowScroll::default(), "reset — окно в начало");
+    }
+
+    /// ensure_visible (перенос из `move_selection`, W-e): строка ВЫШЕ окна —
+    /// окно встаёт на неё; над шаблоном после секции показывается и
+    /// заголовок секции.
+    #[test]
+    fn row_scroll_ensure_visible_above_shows_section_header() {
+        let rows = mixed_rows(); // [S, T0, T1, S, T2]
+        let mut w = RowScroll::new();
+        w.first = 3;
+        w.ensure_visible(&rows, 0, 150.0); // T0 — выше окна
+        assert_eq!(w.first, 0);
+        w.first = 3;
+        w.ensure_visible(&rows, 1, 150.0); // T1 — выше окна, над ним секция
+        assert_eq!(w.first, 0, "заголовок секции показан над строкой");
+    }
+
+    /// ensure_visible: строка НИЖЕ окна — хвост прижимается к нижней
+    /// границе: наибольшее s, при котором карточка строки целиком видна.
+    #[test]
+    fn row_scroll_ensure_visible_below_presses_tail() {
+        let rows = mixed_rows(); // шаги [24, 52, 52, 24, 52]
+        let mut w = RowScroll::new();
+        w.ensure_visible(&rows, 4, 150.0); // шаги 0..4 = 152 + карточка 48 > 150
+        assert_eq!(w.first, 2, "хвост 2..4 = 76 шага + карточка 48 = 124 ≤ 150");
+        // Прижатие максимальное: ещё один шаг вверх не помещается
+        let steps: f32 = rows[w.first..4].iter().map(row_step).sum();
+        assert!(steps + row_card_h(&rows[4]) <= 150.0 + 0.01, "виден");
+        assert!(
+            steps + row_step(&rows[1]) + row_card_h(&rows[4]) > 150.0 + 0.01,
+            "шаг выше окна уже не влезает — прижатие к границе"
+        );
+    }
+
+    /// ensure_visible: строка уже видна — окно не трогается.
+    #[test]
+    fn row_scroll_ensure_visible_inside_is_noop() {
+        let rows = mixed_rows();
+        let mut w = RowScroll::new();
+        w.first = 2;
+        w.ensure_visible(&rows, 2, 150.0);
+        assert_eq!(w.first, 2, "первая строка окна — уже видна");
+        w.ensure_visible(&rows, 3, 150.0); // шаг 52 + карточка секции 24 ≤ 150
+        assert_eq!(w.first, 2, "строка в окне — окно стоит");
     }
 
     // --- W-e: окно строк — честный скролл по измеренной высоте --------------
@@ -2878,10 +3079,8 @@ mod tests {
             assert_eq!(lay.scroll_top, 0);
             assert_window_contract(&lay);
             // Хвост достижим скроллом (приклейка хвоста)
-            let tail = TemplatePanel {
-                scroll_top: lay.max_scroll,
-                ..panel.clone()
-            };
+            let mut tail = panel.clone();
+            tail.scroll.first = lay.max_scroll;
             let lay_tail = dock_layout(w, h, &registry, &tail, &rows, &mut m, &mut fs);
             assert_eq!(lay_tail.rows.last(), rows.last(), "{w}×{h}: хвост виден");
             assert_window_contract(&lay_tail);
@@ -2947,7 +3146,7 @@ mod tests {
         let mut covered = vec![false; rows.len()];
         for s in 0..=lay.max_scroll {
             let mut p = panel.clone();
-            p.scroll_top = s;
+            p.scroll.first = s;
             let l = dock_layout(800.0, 560.0, &registry, &p, &rows, &mut m, &mut fs);
             assert_eq!(l.scroll_top, s, "старт в границах применяется как есть");
             assert!(!l.rows.is_empty(), "окно не пустое на старте {s}");
@@ -2968,7 +3167,7 @@ mod tests {
         assert!(knob.y + knob.h <= lay.rows_area[1] + lay.rows_area[3] + 0.01);
         // Хвост приклеен: на max_scroll последняя строка у нижней границы
         let mut tail = panel.clone();
-        tail.scroll_top = lay.max_scroll;
+        tail.scroll.first = lay.max_scroll;
         let lay_tail = dock_layout(800.0, 560.0, &registry, &tail, &rows, &mut m, &mut fs);
         assert_eq!(lay_tail.rows.last(), rows.last(), "хвост виден");
         let last_rect = *lay_tail.row_rects.last().expect("хвост не пуст");
@@ -3003,14 +3202,14 @@ mod tests {
         assert!(scrollbar_knob(&lay).is_some(), "бегунок при усечении");
         // Хвост достижим скроллом
         let mut tail = panel.clone();
-        tail.scroll_top = lay.max_scroll;
+        tail.scroll.first = lay.max_scroll;
         let lay_tail = dock_layout(1024.0, 640.0, &registry, &tail, &rows, &mut m, &mut fs);
         assert_eq!(lay_tail.rows.last(), rows.last(), "хвост виден");
         assert_window_contract(&lay_tail);
-        // Протухший scroll_top (за пределом) — вид клампится, состояние
+        // Протухшее окно (за пределом) — вид клампится, состояние
         // панели не портится: max_scroll применяется раскладкой
         let mut stale = panel.clone();
-        stale.scroll_top = usize::MAX / 2;
+        stale.scroll.first = usize::MAX / 2;
         let lay_stale = dock_layout(1024.0, 640.0, &registry, &stale, &rows, &mut m, &mut fs);
         assert_eq!(lay_stale.scroll_top, lay.max_scroll, "кламп к пределу");
         assert_eq!(lay_stale.rows.last(), rows.last(), "хвост виден");
@@ -3039,10 +3238,8 @@ mod tests {
         let mut m = TextMeasurer::new();
         // Начало списка (1280×800), хвост (800×560, скролл к хвосту) и
         // промежуточный размер (1024×640)
-        let tail800x560 = TemplatePanel {
-            scroll_top: usize::MAX / 2, // кламп к max — хвост
-            ..panel.clone()
-        };
+        let mut tail800x560 = panel.clone();
+        tail800x560.scroll.first = usize::MAX / 2; // кламп к max — хвост
         let cases = [
             (1280.0, 800.0, panel.clone()),
             (800.0, 560.0, tail800x560),

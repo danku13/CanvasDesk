@@ -1866,3 +1866,45 @@ Stage Summary:
 - Маркдаун валиден, стиль согласован с документом (нормативный тон, «ёлочки», таблица)
 Tokens: in≈115k, out≈15k, total≈130k (estimate), model=GLM-4.7 (subagent), scope=LAY-W10
  (docs(design): LAY-W10 — раздел «Исключения» в 11-layouts.md (девиации из аудита раскладок))
+
+---
+Task ID: LAY-W9
+Agent: LAY-W9 implementation agent (subagent)
+Task: LAY-W9 — row-скролл панели шаблонов поверх ScrollState: тип RowScroll + миграция TemplatePanel/StripHover + фиксация паттерна в K3 (P3/M)
+
+Work Log:
+- Прочитан контекст: worklog.md (LAY-W10), AGENTS.md (TDD, UI-кит, wasm-гейт, токен-учёт), design/layouts-audit-2026-10.md §3.10/§5 (LAY-W9), design/rules/11-layouts.md LAY10, design/rules/10-components.md K3, template_ui.rs (3259 строк) + точки потребления (app.rs, app/input.rs:1868, app/overlays.rs:2811, app/ui_registry.rs)
+- Обнаружено: в worktree уже была незакоммиченная реализация LAY-W9 от прерванного раннего прогона (diff 6 файлов, точно по постановке). Взято за основу: полный ревью против постановки, верификация паритета, гейты, коммит (не переписывал с нуля)
+- Ревью RowScroll: все требуемые методы (new/reset/scroll_by/clamp_top/px_offset/scroll_state/ensure_visible), derives, док на русском (LAY-W9, K3, «px-оффсет = сумма row_step», почему окно в строках, промоция в kit при третьем потребителе); ensure_visible — бит-в-бит перенос из move_selection (сверено с HEAD: ветка выше окна + заголовок секции, прижатие хвоста наибольшим s, noop)
+- Паритет: panel_layout — clamp_top(max_scroll) на КОПИИ окна + scroll_state (то же top/offset, что прежний min+take+sum); flyout_layout — однородные шаги ROW_HEIGHT, сумма ≡ top·ROW_HEIGHT (f32 точно); PanelLayout/FlyoutLayout (выходные структуры) и max_scroll_of не тронуты; делегаты scroll_by/StripHover::scroll_by и UiFrameSig (scroll.first as u32) — сигнатуры наружу без изменений; scheme_gallery/search/settings — свои scroll_top, не тронуты
+- TDD: 7 новых тестов RowScroll (px_offset смешанные шаги + хвост-кламп, scroll_state-зеркало, клампы scroll_by, clamp_top/reset, ensure_visible 3 кейса). RED-демонстрация: переименование impl RowScroll → 23 ошибки компиляции тестов (тесты связаны с реализацией), файл восстановлен байт-в-байт. Существующие тесты мигрированы механически (panel.scroll_top → panel.scroll.first), дифф имён функций HEAD↔now — только добавления (7 тестов + хелпер mixed_rows), удалений нет
+- Гейты: cargo check/test -p canvas-app --lib — 661 passed/0 failed (было 654); cargo fmt --check OK; cargo clippy -p canvas-app -- -D warnings OK; scripts/wasm_gate.sh --check OK (включая wasip1-тесты canvas-core 8 passed)
+- L2 (Chromium/Xvfb, scripts/wasm_ui_test.sh --no-build + кастомные сценарии в ~/.cache/lay-w9-scratch): собраны стенды HEAD (dist_head, через stash-цикл) и lay-w9; пиксельная паритетность HEAD↔lay-w9 — 0 изменённых пикселей на КАЖДОМ из 18 шагов двух сценариев (wasm_ui_diff.py). Онбординг обходился через localStorage (onboarding_done = true, TOML canvasdesk.config, VLM-калибровка координат)
+- Найдены ДВА пре-существующих wasm-дефекта (воспроизводятся ИДЕНТИЧНО на HEAD 6e3e6b1, НЕ от LAY-W9): (1) Ctrl+P → паника «cannot recursively acquire mutex» (no_threads) — рекурсивный захват FONT_SYSTEM: template_overlay держит guard (overlays.rs ~2876) и вызывает kit_field_view (overlays.rs:26), который захватывает снова; внесён 86d278c (волна input-адекватности); на нативе — вероятный дедлок того же пути; (2) клик мимо кнопок диалога онбординга (729,467) — тихая заморозка без паники. Из-за них интерактивный док (Ctrl+P) на wasm не проверяется колесом/стрелками — путь прикрыт нативными тестами (661, включая dock_layout-контракты окна и прижатие хвоста)
+- Коммит e41d421 на lay-w9 (6 файлов, +325/−121), conventional commits, по-русски; worktree чист, репозиторный worklog.md не тронут, мусор (target/, scratch) вне коммита
+
+Stage Summary:
+- e41d421 «refactor(ui): LAY-W9 — row-скролл панели шаблонов поверх ScrollState (K3)»: template_ui.rs (RowScroll + миграция TemplatePanel/StripHover/panel_layout/flyout_layout + 7 тестов), app.rs/input.rs/overlays.rs/ui_registry.rs (потребители), design/rules/10-components.md (K3 +7 строк: паттерн санкционирован, канон — template_ui::RowScroll, промоция в kit при третьем потребителе, px-анти-паттерн остаётся запрещён)
+- Паритет раскладки бит-в-бит: нативно (сумма шагов ≡ прежний ручной оффсет), на wasm — пиксельный дифф HEAD↔lay-w9 = 0 px на всех шагах
+- Гейты: 661 тестов (+7), fmt/clippy/wasm_gate --check зелёные; L2 выполнен частично (паритет подтверждён, интерактив дока заблокирован пре-существующими дефектами — сообщить владельцу, отдельная задача вне LAY-W9)
+- Отклонения от постановки: нет по существу; уточнения: (а) «FlyoutState» из постановки в коде называется StripHover — мигрирован он; (б) flyout_layout строит временный Vec<PanelRow> для обёртки (малоэлементный, O(item_count) на кадр — осознанно ради единого пути)
+- Ручная проверка (L2-инструкция владельцу): trunk serve / web-Pages → «Пустой холст» → Ctrl+P → колесо над окном строк (бегунок, прижатие хвоста) → стрелки ↑/↓ (следование выделения, заголовок секции над строкой) → Esc → hover чипа «Юнит-экономика · 24» → flyout → колесо (построчно, ▲/▼) → уход курсора (grace-закрытие); сверить с main — бит-в-бит. НА ВЕБЕ СЕЙЧАС Ctrl+P ПАДАЕТ (дефект 86d278c) — чинить отдельной задачей
+Tokens: in≈210k, out≈35k, total≈245k (estimate), model=GLM-4.7 (subagent), scope=LAY-W9
+---
+Task ID: LAY-W9+LAY-W10-интеграция (сессия web-f007af5d-5af9-4a7f-a6f5-4986136a1aa9)
+Agent: Super Z (main)
+Task: Оркестрация сессии — изучение аудита, постановка LAY-W9/LAY-W10 отдельным агентам (параллельные worktrees), слияние, финальные гейты, пуш; Telegram-протокол владельца
+
+Work Log:
+- Постановка: репо склонирован (danku13/CanvasDesk), изучены design/layouts-audit-2026-10.md, design/rules/11-layouts.md, K3 (10-components.md), потребители скролла template_ui (input.rs/overlays.rs); Rust stable 1.99.0 (rustup, minimal+rustfmt+clippy) и wasm32-unknown-unknown развёрнуты в среде
+- Два агента запущены параллельно в worktrees lay-w9/lay-w10 от 6e3e6b1 (файлы задач не пересекаются — конфликтов не было); запуск агента W9 дважды падал по таймауту адаптера — с третьей попытки отработал (в worktree к тому моменту лежала незакоммиченная реализация от прерванного прогона; агент провёл ревью против постановки, RED-верификацию, гейты и закоммитил)
+- Слияние в main: lay-w10 → fast-forward (c24b5c0); lay-w9 ребейз поверх → fast-forward (db5a6ec, бывший e41d421)
+- Финальные гейты на merge: cargo fmt --check OK; cargo test -p canvas-app --lib — 661 passed/0 failed; cargo clippy -p canvas-app -- -D warnings OK; scripts/wasm_gate.sh --check OK
+- Telegram-протокол (чат 274002630, URL сессии в шапке каждого сообщения): план работ → отчёт этапа 1 (LAY-W9) → отчёт этапа 2 (LAY-W10) → финальное саммари
+- Записи задач LAY-W10/LAY-W9 вмонтированы в их коммиты (rebase-edit, конвенция «задача = коммит» с журналом)
+
+Stage Summary:
+- main: c24b5c0 (LAY-W10) + db5a6ec (LAY-W9); все гейты зелёные; пуш в origin main
+- Открытый вопрос владельцу: 2 пре-существующих wasm-дефекта из L2-прогона W9 (не от LAY-W9, воспроизводятся на HEAD): (1) Ctrl+P — паника «cannot recursively acquire mutex» — рекурсивный захват FONT_SYSTEM (template_overlay → kit_field_view, волна 86d278c), на нативе вероятный дедлок того же пути; (2) клик мимо кнопок диалога онбординга — тихая заморозка. Оформить отдельной задачей?
+- Вопрос по AGENTS.md (онбординг/пользовательская документация): LAY-W9 — рефакторинг состояния без изменения поведения (паритет бит-в-бит, L2 0 px diff), LAY-W10 — нормативный док; пользовательское поведение и шаги онбординга не меняются — доработка онбординга/юзердоков не требуется, подтверждающий вопрос задан владельцу в финальном саммари
+Tokens: in≈95k, out≈12k, total≈107k (estimate), model=GLM-4.7 (Super Z main), scope=LAY-W9+LAY-W10-интеграция
