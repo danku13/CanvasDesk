@@ -1069,12 +1069,22 @@ impl App {
         AgentPreview { nodes, edges }
     }
 
-    /// W2 п.2: preview из реальных tool_calls модели. Разбираются вызовы
-    /// `n` (graph_apply батч, FR-033): `n_note {ref, x, y, text}` → ноды,
-    /// `edge_create {fromRef, toRef}` → рёбра (по ref-адресам батча).
+    /// W2 п.2: preview из реальных tool_calls модели. Разбираются:
+    /// - `graph_apply` (батч FR-033): операции `node_create_note` /
+    ///   `node_create_file` / `template_instantiate` → ноды, `edge_create`
+    ///   (`fromRef`/`toRef`, алиасы `from`/`to`) → рёбра по ref-адресам батча;
+    /// - прямые вызовы `node_create_note` / `node_create_file` / `edge_create`
+    ///   (модель может вызвать инструмент вне батча — при `tool_choice=auto`
+    ///   доступны все 42 MCP-инструмента).
+    ///
+    /// Имена ops — по схеме инструмента `graph_apply` (tools_list) и
+    /// валидатору сцены (`canvas-scene/src/mcp.rs`: «неизвестная операция»
+    /// для всего, кроме `node_create_note/node_create_file/…`). Прежние
+    /// `n_note`/`n_file` в промпте/парсере были дрейфом от схемы: модель,
+    /// следующая JSON-схеме, давала пустой preview — «0 нод, 0 связей»
+    /// (репродукция 2026-10-09). `n_note`/`n_file` оставлены алиасами.
     /// Ноды без x/y (модель не задала позицию) — цепочка от якоря (как
-    /// [`Self::agent_build_preview`]). Вызовы без нод — пустой preview
-    /// (панель покажет «нечего применять»).
+    /// [`Self::agent_build_preview`]). Рёбра по неразрешённым ref — пропускаются.
     pub(super) fn agent_preview_from_calls(&self, calls: &[canvas_llm::ToolCall]) -> AgentPreview {
         // Anchor-геометрия — как mock-preview.
         let anchor = self.selected.and_then(|s| match s {
@@ -1087,86 +1097,7 @@ impl App {
             let center = self.camera.position();
             (center[0] - 155.0, center[1] - 60.0)
         };
-
-        let mut nodes: Vec<AgentPreviewNode> = Vec::new();
-        let mut refs: Vec<String> = Vec::new(); // ref → индекс в nodes
-        let mut edges: Vec<(usize, usize, String)> = Vec::new();
-        let mut pending_edges: Vec<(String, String)> = Vec::new();
-
-        for call in calls {
-            if call.name != "graph_apply" {
-                continue;
-            }
-            let ops = call
-                .arguments
-                .to_serde()
-                .get("operations")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            for op in &ops {
-                let op_name = op.get("op").and_then(|v| v.as_str()).unwrap_or("");
-                match op_name {
-                    "n_note" | "n_file" => {
-                        let title = op
-                            .get("text")
-                            .and_then(|v| v.as_str())
-                            .map(|t| t.lines().next().unwrap_or(t).to_string())
-                            .or_else(|| op.get("path").and_then(|v| v.as_str()).map(String::from))
-                            .unwrap_or_else(|| "Новая нода".into());
-                        let i = nodes.len();
-                        let auto_x = base_x + i as f32 * 320.0;
-                        nodes.push(AgentPreviewNode {
-                            title,
-                            x: op
-                                .get("x")
-                                .and_then(|v| v.as_f64())
-                                .map(|v| v as f32)
-                                .unwrap_or(auto_x),
-                            y: op
-                                .get("y")
-                                .and_then(|v| v.as_f64())
-                                .map(|v| v as f32)
-                                .unwrap_or(base_y),
-                            width: op
-                                .get("width")
-                                .and_then(|v| v.as_f64())
-                                .map(|v| v as f32)
-                                .unwrap_or(240.0),
-                            height: op
-                                .get("height")
-                                .and_then(|v| v.as_f64())
-                                .map(|v| v as f32)
-                                .unwrap_or(120.0),
-                        });
-                        if let Some(r) = op.get("ref").and_then(|v| v.as_str()) {
-                            refs.push(r.to_string());
-                        } else {
-                            refs.push(format!("__idx{i}"));
-                        }
-                    }
-                    "edge_create" => {
-                        // Адресация fromRef/toRef резолвится ПОСЛЕ прохода
-                        // нод (ref может ссылаться на более ранний op).
-                        let from = op.get("fromRef").and_then(|v| v.as_str());
-                        let to = op.get("toRef").and_then(|v| v.as_str());
-                        if let (Some(f), Some(t)) = (from, to) {
-                            pending_edges.push((f.to_string(), t.to_string()));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        // Резолв ребер по ref → индекс; неразрешенные пропускаются.
-        // (второй проход: ref-таблица уже заполнена)
-        let resolve = |r: &String| -> Option<usize> { refs.iter().position(|x| x == r) };
-        for (f, t) in pending_edges.drain(..) {
-            if let (Some(fi), Some(ti)) = (resolve(&f), resolve(&t)) {
-                edges.push((fi, ti, String::new()));
-            }
-        }
-        AgentPreview { nodes, edges }
+        preview_from_calls(calls, base_x, base_y)
     }
 
     /// W2 п.2: preview из результата Graph Builder (GeneratedNode/Edge →
@@ -1423,11 +1354,27 @@ impl App {
                 AgentContext::EntireCanvas => "user selected: nothing (entire canvas)".to_owned(),
                 AgentContext::SelectedNodes(ids) => format!("user selected node indexes: {ids:?}"),
             };
-            let system = "You are the CanvasDesk canvas agent. Plan edits and call the \
-                          `graph_apply` tool (batch of FR-033 operations: n_note/n_file/template_instantiate/\
-                          edge_create/edge_delete/param_set/node_move/group_create) to fulfil the \
-                          user's request. Create nodes with n_note (ref/x/y/text/width/height) and \
-                          link them with edge_create (fromRef/toRef). Keep the plan small and useful."
+            // W2-фикс (репродукция 2026-10-09): промпт дрейфовал от схемы —
+            // звал ops «n_note»/«n_file», а схема graph_apply и валидатор
+            // сцены требуют node_create_note/node_create_file (модель,
+            // следующая схеме, давала пустой preview). Канонические имена +
+            // пример батча + запрет прямых вызовов/текстовых ответов.
+            let system = "You are the CanvasDesk canvas agent. Build the user's scheme by \
+                          calling the `graph_apply` tool — ALWAYS via one graph_apply call, \
+                          never by calling node_create_note/edge_create as separate tools, \
+                          never with a plain-text answer. `operations` is an array of ops \
+                          with EXACT names: node_create_note {ref, x, y, text, width?, \
+                          height?} | node_create_file {ref, x, y, path} | \
+                          template_instantiate {ref, template, params?, x, y} | \
+                          edge_create {fromRef, toRef, kind? \"value\"|\"control\"}. \
+                          A `ref` names a node created earlier IN THE SAME batch; edges \
+                          address those refs. Example: {\"operations\":[{\"op\":\
+                          \"node_create_note\",\"ref\":\"a\",\"x\":0,\"y\":0,\"text\":\
+                          \"Traffic = 10k users\"},{\"op\":\"node_create_note\",\"ref\":\
+                          \"b\",\"x\":320,\"y\":0,\"text\":\"CAC = $50\"},{\"op\":\
+                          \"edge_create\",\"fromRef\":\"a\",\"toRef\":\"b\"}]} Place nodes \
+                          on a grid (step 320 by x, 200 by y). Keep the plan small and \
+                          useful."
                 .to_owned();
             let messages = vec![
                 canvas_llm::Message::system(&format!("{system}\n{ctx_hint}")),
@@ -1731,6 +1678,220 @@ pub(super) fn mcp_tools_as_tooldefs() -> Vec<canvas_llm::ToolDef> {
         .unwrap_or_default()
 }
 
+/// W2-фикс (репродукция 2026-10-09 «0 нод, 0 связей»): чистое ядро парсера
+/// tool_calls → ghost-превью (без `&self` — unit-тесты без App). Имена ops —
+/// канонические по схеме `graph_apply` (`node_create_note`/`node_create_file`
+/// /`template_instantiate`/`edge_create`); `n_note`/`n_file` — legacy-алиасы
+/// (дрейф промпта от схемы был корневой причиной пустого превью). Кроме
+/// батча разбираются прямые вызовы инструментов создания (вне graph_apply).
+pub(crate) fn preview_from_calls(
+    calls: &[canvas_llm::ToolCall],
+    base_x: f32,
+    base_y: f32,
+) -> AgentPreview {
+    let mut nodes: Vec<AgentPreviewNode> = Vec::new();
+    let mut refs: Vec<String> = Vec::new(); // ref → индекс в nodes
+    let mut pending_edges: Vec<(String, String)> = Vec::new();
+
+    // Аргументы (батч-операция ИЛИ прямой вызов) → ghost-нода + ref-имя.
+    // Общие поля: x/y/width/height/ref; заголовок — title (явный, FR-072) /
+    // первая строка text / path / имя шаблона; без позиции — цепочка от якоря.
+    let mut push_node = |args: &serde_json::Value, refs: &mut Vec<String>| {
+        let i = nodes.len();
+        let title = args
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .or_else(|| {
+                args.get("text")
+                    .and_then(|v| v.as_str())
+                    .map(|t| t.lines().next().unwrap_or(t).to_string())
+            })
+            .or_else(|| args.get("path").and_then(|v| v.as_str()).map(String::from))
+            .or_else(|| {
+                args.get("template")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+            .unwrap_or_else(|| "Новая нода".into());
+        let auto_x = base_x + i as f32 * 320.0;
+        nodes.push(AgentPreviewNode {
+            title,
+            x: args
+                .get("x")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as f32)
+                .unwrap_or(auto_x),
+            y: args
+                .get("y")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as f32)
+                .unwrap_or(base_y),
+            width: args
+                .get("width")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as f32)
+                .unwrap_or(240.0),
+            height: args
+                .get("height")
+                .and_then(|v| v.as_f64())
+                .map(|v| v as f32)
+                .unwrap_or(120.0),
+        });
+        match args.get("ref").and_then(|v| v.as_str()) {
+            Some(r) => refs.push(r.to_string()),
+            None => refs.push(format!("__idx{i}")),
+        }
+    };
+    // Аргументы ребра → (from, to): канонические fromRef/toRef + алиасы
+    // from/to (схема edge_create их допускает; прямые вызовы — from/to).
+    let edge_ends = |args: &serde_json::Value| -> Option<(String, String)> {
+        let from = args
+            .get("fromRef")
+            .and_then(|v| v.as_str())
+            .or_else(|| args.get("from").and_then(|v| v.as_str()))?;
+        let to = args
+            .get("toRef")
+            .and_then(|v| v.as_str())
+            .or_else(|| args.get("to").and_then(|v| v.as_str()))?;
+        Some((from.to_string(), to.to_string()))
+    };
+
+    for call in calls {
+        let args = call.arguments.to_serde();
+        if matches!(call.name.as_str(), "graph_apply" | "n") {
+            // Батч FR-033: массив operations (схема graph_apply).
+            let ops = args
+                .get("operations")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            for op in &ops {
+                match op.get("op").and_then(|v| v.as_str()).unwrap_or("") {
+                    "node_create_note" | "n_note" => push_node(op, &mut refs),
+                    "node_create_file" | "n_file" => push_node(op, &mut refs),
+                    "template_instantiate" => push_node(op, &mut refs),
+                    "edge_create" => {
+                        // Адресация резолвится ПОСЛЕ прохода нод (ref может
+                        // ссылаться на более ранний op).
+                        if let Some((f, t)) = edge_ends(op) {
+                            pending_edges.push((f, t));
+                        }
+                    }
+                    _ => {} // edge_delete/param_set/node_move/group_create — превью не строят
+                }
+            }
+        } else {
+            // Прямой вызов инструмента (вне батча).
+            match call.name.as_str() {
+                "node_create_note" | "node_create_file" => push_node(&args, &mut refs),
+                "edge_create" => {
+                    if let Some((f, t)) = edge_ends(&args) {
+                        pending_edges.push((f, t));
+                    }
+                }
+                _ => {} // читающие/прочие инструменты — не операции превью
+            }
+        }
+    }
+
+    // Резолв рёбер по ref → индекс; неразрешенные (id существующих нод
+    // канваса, опечатки модели) пропускаются.
+    let resolve = |r: &String| -> Option<usize> { refs.iter().position(|x| x == r) };
+    let mut edges: Vec<(usize, usize, String)> = Vec::new();
+    for (f, t) in pending_edges.drain(..) {
+        if let (Some(fi), Some(ti)) = (resolve(&f), resolve(&t)) {
+            edges.push((fi, ti, String::new()));
+        }
+    }
+    AgentPreview { nodes, edges }
+}
+
+/// W2-фикс (репродукция 2026-10-09): итоговое сообщение панели по результату
+/// агент-запроса. Чистая функция (unit-тесты). Раньше пустой результат
+/// отображался как «Готово: 0 нод, 0 связей» — ложный успех; теперь различаются:
+/// успех (есть превью) / модель не вызвала инструменты / вызвала только
+/// непревьюируемые (читающие) инструменты.
+pub(crate) fn agent_result_message(
+    calls: &[canvas_llm::ToolCall],
+    preview: &AgentPreview,
+) -> (String, AgentMsgKind) {
+    let n = preview.nodes.len();
+    let m = preview.edges.len();
+    if n > 0 || m > 0 {
+        return (
+            format!(
+                "Готово: {} {}, {} {} — ghost-превью на канвасе. \
+                 Accept применит операции одним undo-шагом (FR-033).",
+                n,
+                plural_ru(n, "нода", "ноды", "нод"),
+                m,
+                plural_ru(m, "связь", "связи", "связей")
+            ),
+            AgentMsgKind::Normal,
+        );
+    }
+    if calls.is_empty() {
+        return (
+            "Модель не вызвала инструменты (пустой tool_calls — обычно это \
+             текстовый ответ мимо tool-calling). Переформулируйте запрос \
+             конкретнее — какие ноды создать и как их связать, — либо \
+             выберите модель с tool-calling в «Настройки AI» (9-й таб)."
+                .to_owned(),
+            AgentMsgKind::Error,
+        );
+    }
+    // Вызовы есть, превью пустое: создающих операций нет (только читающие
+    // инструменты либо рёбра по неразрешённым адресам).
+    let mut counts: Vec<(String, u32)> = Vec::new();
+    for call in calls {
+        match counts.iter_mut().find(|(name, _)| name == &call.name) {
+            Some((_, cnt)) => *cnt += 1,
+            None => counts.push((call.name.clone(), 1)),
+        }
+    }
+    let summary = counts
+        .iter()
+        .map(|(name, cnt)| {
+            if *cnt > 1 {
+                format!("{name}×{cnt}")
+            } else {
+                name.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    (
+        format!(
+            "Модель вызвала только {summary} — операций создания нод/связей \
+             нет, превью строить не из чего. Попросите явно: «создай ноды … \
+             и свяжи их»."
+        ),
+        AgentMsgKind::Error,
+    )
+}
+
+/// W2-фикс (репродукция 2026-10-09): подсказка к auth-ошибкам (401/403 —
+/// истёкший/неверный ключ, «API key expired»). Сырое тело API ничего не
+/// говорит о починке — добавляем путь к «Настройки AI». `None` — не auth.
+pub(crate) fn auth_hint(reason: &str) -> Option<String> {
+    let lower = reason.to_lowercase();
+    let is_auth = lower.contains("llm auth")
+        || lower.contains("http 401")
+        || lower.contains("http 403")
+        || lower.contains("api key expired")
+        || lower.contains("invalid api key");
+    if is_auth {
+        Some(format!(
+            "{reason}\n→ Похоже, API-ключ отклонён провайдером. Обновите его: \
+             «Настройки AI» (9-й таб) → строка API-ключ → вставьте актуальный \
+             → «Проверить» (зелёный бейдж «ключ валиден»)."
+        ))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1961,28 +2122,169 @@ mod tests {
         assert!(schema.get("properties").is_some());
     }
 
-    /// W2 п.2: preview из tool_calls — n_note/edge_create → ghost-ноды/рёбра
-    /// (парсинг аргументов батча; позиции модели сохраняются).
+    /// Помощник: ToolCall из JSON-аргументов.
+    fn tc(name: &str, args: serde_json::Value) -> canvas_llm::ToolCall {
+        canvas_llm::ToolCall {
+            id: format!("call_{name}"),
+            name: name.to_owned(),
+            arguments: canvas_llm::JsonVal::from_serde(&args),
+        }
+    }
+
+    /// W2 п.2: preview из tool_calls — legacy-алиасы n_note/edge_create
+    /// (совместимость со старым промптом).
     #[test]
     fn preview_from_calls_parses_batch_ops() {
-        let calls = [canvas_llm::ToolCall {
-            id: "call_1".into(),
-            name: "n".into(),
-            arguments: canvas_llm::JsonVal::from_serde(&serde_json::json!({
+        let calls = [tc(
+            "n",
+            serde_json::json!({
                 "operations": [
                     { "op": "n_note", "ref": "a", "x": 10.0, "y": 20.0, "text": "CAC" },
                     { "op": "n_note", "ref": "b", "y": 20.0, "text": "LTV" },
                     { "op": "edge_create", "fromRef": "a", "toRef": "b" }
                 ]
-            })),
-        }];
-        // agent_preview_from_calls — метод App; здесь проверяем чистую
-        // часть через статический разбор: конвертация аргументов.
-        let args = calls[0].arguments.to_serde();
-        let ops = args.get("operations").and_then(|v| v.as_array()).unwrap();
-        assert_eq!(ops.len(), 3);
-        assert_eq!(ops[0]["ref"], "a");
-        assert_eq!(ops[1]["op"], "n_note");
-        assert_eq!(ops[2]["op"], "edge_create");
+            }),
+        )];
+        let preview = preview_from_calls(&calls, 0.0, 0.0);
+        assert_eq!(preview.nodes.len(), 2);
+        assert_eq!(preview.nodes[0].title, "CAC");
+        assert_eq!(preview.nodes[0].x, 10.0);
+        // Нода без x — авто-позиция цепочкой (шаг 320).
+        assert_eq!(preview.nodes[1].x, 320.0);
+        assert_eq!(preview.edges, vec![(0, 1, String::new())]);
+    }
+
+    /// РЕГРЕСС «0 нод, 0 связей» (репродукция 2026-10-09): схема graph_apply
+    /// (tools_list) и валидатор сцены требуют имена node_create_note — модель,
+    /// следующая схеме, раньше давала пустой preview. Канонические имена
+    /// обязаны парситься.
+    #[test]
+    fn preview_parses_schema_op_names() {
+        let calls = [tc(
+            "graph_apply",
+            serde_json::json!({
+                "operations": [
+                    { "op": "node_create_note", "ref": "tam", "x": 0.0, "y": 0.0, "text": "TAM = 5M" },
+                    { "op": "node_create_note", "ref": "sam", "x": 320.0, "y": 0.0, "text": "SAM = 1M" },
+                    { "op": "node_create_note", "ref": "som", "x": 640.0, "y": 0.0, "text": "SOM = 50k" },
+                    { "op": "edge_create", "fromRef": "tam", "toRef": "sam" },
+                    { "op": "edge_create", "fromRef": "sam", "toRef": "som" }
+                ]
+            }),
+        )];
+        let preview = preview_from_calls(&calls, 0.0, 0.0);
+        assert_eq!(preview.nodes.len(), 3, "канонические имена ops дают ноды");
+        assert_eq!(preview.edges.len(), 2, "рёбра по ref-ам батча резолвятся");
+        assert_eq!(preview.nodes[0].title, "TAM = 5M");
+        assert_eq!(preview.edges[0], (0, 1, String::new()));
+        assert_eq!(preview.edges[1], (1, 2, String::new()));
+    }
+
+    /// W2-фикс: прямые вызовы инструментов создания (вне graph_apply) —
+    /// при tool_choice=auto модель может вызвать node_create_note напрямую;
+    /// раньше такой вызов молча давал пустой preview.
+    #[test]
+    fn preview_parses_direct_tool_calls() {
+        let calls = [
+            tc(
+                "node_create_note",
+                serde_json::json!({ "ref": "a", "x": 5.0, "y": 6.0, "text": "Визиты" }),
+            ),
+            tc(
+                "node_create_note",
+                serde_json::json!({ "ref": "b", "x": 325.0, "y": 6.0, "text": "Регистрации", "title": "Regs" }),
+            ),
+            tc("edge_create", serde_json::json!({ "from": "a", "to": "b" })),
+        ];
+        let preview = preview_from_calls(&calls, 0.0, 0.0);
+        assert_eq!(preview.nodes.len(), 2, "прямые node_create_note → ноды");
+        assert_eq!(preview.nodes[1].title, "Regs", "title — явный заголовок");
+        assert_eq!(preview.edges, vec![(0, 1, String::new())], "from/to алиасы");
+    }
+
+    /// W2-фикс: template_instantiate в батче → preview-нода (раньше — молча
+    /// пропускалась); неразрешённые ref рёбер — пропускаются без паники.
+    #[test]
+    fn preview_parses_template_and_drops_unresolved_edges() {
+        let calls = [tc(
+            "graph_apply",
+            serde_json::json!({
+                "operations": [
+                    { "op": "template_instantiate", "ref": "t1", "template": "ue-cac", "x": 0.0, "y": 0.0 },
+                    { "op": "edge_create", "fromRef": "t1", "toRef": "missing" }
+                ]
+            }),
+        )];
+        let preview = preview_from_calls(&calls, 0.0, 0.0);
+        assert_eq!(preview.nodes.len(), 1);
+        assert_eq!(preview.nodes[0].title, "ue-cac");
+        assert!(preview.edges.is_empty(), "неразрешённый ref отброшен");
+    }
+
+    /// W2-фикс: итоговое сообщение — успех при непустом preview.
+    #[test]
+    fn agent_result_message_success_with_preview() {
+        let preview = AgentPreview {
+            nodes: vec![
+                AgentPreviewNode {
+                    title: "A".into(),
+                    x: 0.0,
+                    y: 0.0,
+                    width: 240.0,
+                    height: 120.0,
+                },
+                AgentPreviewNode {
+                    title: "B".into(),
+                    x: 320.0,
+                    y: 0.0,
+                    width: 240.0,
+                    height: 120.0,
+                },
+            ],
+            edges: vec![(0, 1, String::new())],
+        };
+        let calls = [tc("graph_apply", serde_json::json!({}))];
+        let (text, kind) = agent_result_message(&calls, &preview);
+        assert_eq!(kind, AgentMsgKind::Normal);
+        assert!(text.contains("Готово: 2 ноды, 1 связь"), "text = {text}");
+    }
+
+    /// РЕГРЕСС «Готово: 0 нод, 0 связей» (репродукция 2026-10-09): пустой
+    /// tool_calls — НЕ успех, а честная ошибка с подсказкой.
+    #[test]
+    fn agent_result_message_empty_calls_is_error() {
+        let empty = AgentPreview::default();
+        let (text, kind) = agent_result_message(&[], &empty);
+        assert_eq!(kind, AgentMsgKind::Error);
+        assert!(text.contains("не вызвала инструменты"), "text = {text}");
+        assert!(!text.contains("Готово"), "ложный успех запрещён");
+    }
+
+    /// W2-фикс: только читающие инструменты — ошибка со сводкой имён.
+    #[test]
+    fn agent_result_message_readonly_calls_lists_tools() {
+        let calls = [
+            tc("nodes_list", serde_json::json!({})),
+            tc("nodes_list", serde_json::json!({})),
+            tc("graph_validate", serde_json::json!({})),
+        ];
+        let (text, kind) = agent_result_message(&calls, &AgentPreview::default());
+        assert_eq!(kind, AgentMsgKind::Error);
+        assert!(text.contains("nodes_list×2"), "text = {text}");
+        assert!(text.contains("graph_validate"), "text = {text}");
+    }
+
+    /// W2-фикс: auth-подсказка — 401/API key expired получают путь к
+    /// «Настройки AI»; прочие ошибки — без подсказки (None).
+    #[test]
+    fn auth_hint_matches_401_and_expired_key() {
+        let expired =
+            "llm auth: HTTP 401: {\"error\":{\"message\":\"API key expired.\",\"code\":401}}";
+        let hinted = auth_hint(expired).expect("401 → подсказка");
+        assert!(hinted.contains(expired), "исходный текст сохранён");
+        assert!(hinted.contains("Настройки AI"), "подсказка про настройки");
+        assert!(auth_hint("llm transport: timeout").is_none());
+        assert!(auth_hint("llm protocol: нет tool_calls").is_none());
+        assert!(auth_hint("llm rate limit").is_none());
     }
 }

@@ -9564,6 +9564,10 @@ impl App {
     #[cfg(feature = "l1-llm")]
     fn llm_job_failed(&mut self, kind: crate::llm_executor::LlmJobKind, reason: String) {
         tracing::warn!(kind = ?kind, %reason, "llm-executor: job failed");
+        // W2-фикс (репродукция 2026-10-09): 401 «API key expired» показывался
+        // сырым телом API — юзер не понимал, что чинить. Auth-ошибки получают
+        // подсказку, где обновить ключ.
+        let reason = agent_panel::auth_hint(&reason).unwrap_or(reason);
         match kind {
             crate::llm_executor::LlmJobKind::Agent => {
                 self.agent_panel.busy = false;
@@ -9696,9 +9700,18 @@ impl App {
             return;
         }
         let preview = self.agent_preview_from_calls(&calls);
+        // W2-фикс (репродукция 2026-10-09): пустой результат раньше
+        // отображался как «Готово: 0 нод, 0 связей» — ложный успех. Сообщение
+        // строит agent_result_message: успех / «модель не вызвала
+        // инструменты» / «только читающие инструменты» (kind Error).
+        let (text, kind) = agent_panel::agent_result_message(&calls, &preview);
         let n = preview.nodes.len();
         let m = preview.edges.len();
-        self.agent_panel.preview = Some(preview);
+        // Пустое превью не сохраняем: Accept/Reject над пустым набором
+        // бессмысленны (agent_apply_preview_ops вернул бы «нет операций»).
+        if n > 0 || m > 0 {
+            self.agent_panel.preview = Some(preview);
+        }
         // W2 п.3: фактический cost запроса (estimate по промпту/ответу).
         if cost > 0.0 {
             self.ai_cost_session += cost;
@@ -9710,15 +9723,8 @@ impl App {
         self.agent_panel
             .messages
             .push(agent_panel::AgentMessage::Bot {
-                text: format!(
-                    "Готово: {} {}, {} {} — ghost-превью на канвасе. \
-                 Accept применит операции одним undo-шагом (FR-033).",
-                    n,
-                    agent_panel::plural_ru(n, "нода", "ноды", "нод"),
-                    m,
-                    agent_panel::plural_ru(m, "связь", "связи", "связей")
-                ),
-                kind: agent_panel::AgentMsgKind::Normal,
+                text,
+                kind,
                 tool_calls: Vec::new(),
             });
         self.agent_panel.cost_estimate = Some(cost as f32);
