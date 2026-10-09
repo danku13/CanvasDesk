@@ -89,6 +89,13 @@ pub mod id {
     /// Empty-state карточка пустого канваса (L3, Capture — мимо карточки
     /// канвас жив, AC-1.1 FR-049).
     pub const EMPTY: &str = "empty";
+    /// FR-LLM-D / PRD-0010 F-4: агент-панель (L3, Capture — клики внутри
+    /// глотаются ранней ветвью ввода; HideBelow { 600, 240 } — LAY-W1).
+    pub const AGENT_PANEL: &str = "agent_panel";
+    /// FR-LLM / PRD-0010 F-7.9: AI-статус-панель (L3, Capture; ambient-хром —
+    /// видима, пока AI не выключен; HideBelow { 900, 131 } — LAY-W1, порог —
+    /// derive из констант панели, стыковка LAY-W2).
+    pub const AI_STATUS: &str = "ai_status";
     /// Миникарта (L3, Capture; рисуется проходом рендерера поверх полос).
     pub const MINIMAP: &str = "minimap";
 }
@@ -146,6 +153,57 @@ pub fn owner_of(surface: &str) -> Option<KeyOwner> {
         id::TEMPLATE_PANEL => Some(KeyOwner::TemplatePanel),
         _ => None,
     }
+}
+
+/// LAY8 (п.3, design/rules/11-layouts.md): политики деградации панелей —
+/// ЕДИНСТВЕННЫЙ источник брейкпоинтов показа (LAY8.2: брейкпоинт обязан
+/// жить в `SurfaceRegistry`, а не в теле отрисовки). Draw/hit-тела панелей
+/// консультируются с этими же политиками ([`agent_panel_visible`] /
+/// [`ai_status_visible`]), линт G4 видит те же условия (HideBelow
+/// применяется `UiFrame::from_registry`).
+///
+/// **Агент-панель** (PRD-0010 F-4): min_w 600 — прежний брейкпоинт
+/// `agent_panel::AGENT_PANEL_MIN_VIEWPORT_W`; min_h 240 — фактический
+/// минимум контента: фиксированный вертикальный стек 186 px (44 шапка +
+/// 32 контекст-чипы + 22 cost-строка + 44 полоса ввода + 36 quick + 8
+/// зазор GAP) + 54 px минимума журнала (3 строки по 15) — ниже журнал
+/// схлопывается (`log_h ≤ 0`), панель нечитаема (аудит предлагал { 600, 0
+/// } — осуждено: full-height панель с нулевой высотой — вырожденный rect,
+/// запрещён LAY8 п.4).
+pub(crate) const AGENT_PANEL_DEGRADATION: DegradationPolicy = DegradationPolicy::HideBelow {
+    min_width: agent_panel::AGENT_PANEL_MIN_VIEWPORT_W,
+    min_height: 240.0,
+};
+
+/// LAY8 (п.3): **AI-статус-панель** (PRD-0010 F-7.9): min_w 900 — прежний
+/// брейкпоинт `ai_status_panel::AI_STATUS_MIN_VIEWPORT_W`; min_h — DERIVE
+/// из констант панели (стыковка LAY-W2: единственный источник цифр — сама
+/// панель), worst-case контент с paused-лейблом
+/// `AI_STATUS_H + AI_STATUS_PAUSED_EXTRA` = 100 + 19 = 119 плюс нижний
+/// отступ `AI_STATUS_MARGIN` 12 → 131 (до миграции W2 было 95 + 18 + 12 =
+/// 125): ниже панель вылезает за верх вьюпорта (y < 0) — LAY8 требует
+/// скрыть ЦЕЛИКОМ (клип вместо скрытия запрещён). Порог выведен для
+/// размещения в правом нижнем углу (вне зоны миникарты); над зоной
+/// миникарты (окно ≥ 252×172 — minimap_pass) панель требует большей
+/// высоты, геометрия той ветки не менялась (вне стыковки W2).
+pub(crate) const AI_STATUS_DEGRADATION: DegradationPolicy = DegradationPolicy::HideBelow {
+    min_width: ai_status_panel::AI_STATUS_MIN_VIEWPORT_W,
+    min_height: ai_status_panel::AI_STATUS_H
+        + ai_status_panel::AI_STATUS_PAUSED_EXTRA
+        + ai_status_panel::AI_STATUS_MARGIN,
+};
+
+/// LAY8.2: гейт показа агент-панели для draw/hit-тел — та же политика
+/// HideBelow, что в декларации реестра (единственный источник решения;
+/// inline-сравнения 600px из тел отрисовки удалены — LAY-W1).
+pub(crate) fn agent_panel_visible(viewport: [f32; 2]) -> bool {
+    !AGENT_PANEL_DEGRADATION.hidden_at(viewport[0], viewport[1])
+}
+
+/// LAY8.2: гейт показа AI-статус-панели для draw/hit-тел — HideBelow
+/// декларации реестра (900×131, derive из констант панели; LAY-W1+W2).
+pub(crate) fn ai_status_visible(viewport: [f32; 2]) -> bool {
+    !AI_STATUS_DEGRADATION.hidden_at(viewport[0], viewport[1])
 }
 
 /// Владелец клавиатуры: верх esc_stack активных поверхностей (легаси-head
@@ -392,6 +450,28 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
             CapturePolicy::Capture,
         ));
     }
+    // 21. FR-LLM-D / PRD-0010 F-4: агент-панель (Ctrl+I; чат-UI
+    //     tool-calling). LAY-W1 (аудит §3.8, P1 LAY8.2): брейкпоинт показа
+    //     перенесён из тела отрисовки СЮДА — HideBelow в декларации (LAY8
+    //     п.3: ниже минимума поверхность скрыта ЦЕЛИКОМ). Capture без
+    //     scope: клики по-прежнему обрабатывает agent_panel_click (ранняя
+    //     ветвь ввода до pick), esc-стек и клавиатура не меняются.
+    if app.agent_panel.open {
+        reg.add(
+            SurfaceDecl::new(id::AGENT_PANEL, UiLayer::Panels, CapturePolicy::Capture)
+                .with_degradation(AGENT_PANEL_DEGRADATION),
+        );
+    }
+    // 22. FR-LLM / PRD-0010 F-7.9: AI-статус-панель — ambient-хром (видима,
+    //     пока AI не выключен целиком). Брейкпоинт 900px из тела отрисовки —
+    //     в HideBelow декларации (LAY-W1, LAY8.2); в телеметрии — ambient
+    //     (telemetry::AMBIENT_SURFACES), открытием не считается.
+    if !app.settings.llm.all_off() {
+        reg.add(
+            SurfaceDecl::new(id::AI_STATUS, UiLayer::Panels, CapturePolicy::Capture)
+                .with_degradation(AI_STATUS_DEGRADATION),
+        );
+    }
     reg
 }
 
@@ -414,6 +494,10 @@ const VISUAL_ORDER: &[&str] = &[
     id::TEMPLATE_STRIP,
     id::TEMPLATE_PANEL,
     id::WHATIF,
+    // LAY-W1: панели AI — поверх дока/миникарты, под меню/модалями
+    // (панели Panels-полосы; миникарта при открытой агент-панели скрыта).
+    id::AGENT_PANEL,
+    id::AI_STATUS,
     id::MINIMAP,
     id::EDITOR,
     id::PALETTE,
@@ -491,70 +575,76 @@ pub fn build_frame_at(app: &App, viewport_logical: [f32; 2]) -> UiFrame {
 /// (0 внешних зависимостей у canvas-ui/canvas-app).
 pub mod ui_frame_flags {
     /// Wheel-меню шаблонов открыто (`app.wheel_menu.is_some()`).
-    pub const WHEEL_OPEN: u32 = 1 << 0;
+    pub const WHEEL_OPEN: u64 = 1 << 0;
     /// What-if активен (`app.scene.whatif_active || whatif_pill_visible`).
-    pub const WHATIF_ACTIVE: u32 = 1 << 1;
+    pub const WHATIF_ACTIVE: u64 = 1 << 1;
     /// Список подмен whatif раскрыт (`app.whatif_list_open`).
-    pub const WHATIF_LIST_OPEN: u32 = 1 << 2;
+    pub const WHATIF_LIST_OPEN: u64 = 1 << 2;
     /// Таблица сравнения whatif открыта (`app.whatif_compare_open`).
-    pub const WHATIF_COMPARE_OPEN: u32 = 1 << 3;
+    pub const WHATIF_COMPARE_OPEN: u64 = 1 << 3;
     /// Панель хоткеев открыта (`app.hotkeys_open`).
-    pub const HOTKEYS_OPEN: u32 = 1 << 4;
+    pub const HOTKEYS_OPEN: u64 = 1 << 4;
     /// Модалка настроек открыта (`app.settings_open`).
-    pub const SETTINGS_OPEN: u32 = 1 << 5;
+    pub const SETTINGS_OPEN: u64 = 1 << 5;
     /// Выпадающее меню строки настроек открыто (`app.settings_dropdown.open_row.is_some()`).
-    pub const SETTINGS_DROPDOWN_OPEN: u32 = 1 << 6;
+    pub const SETTINGS_DROPDOWN_OPEN: u64 = 1 << 6;
     /// Контекстное меню канваса открыто (`app.menu.is_some()`).
-    pub const MENU_OPEN: u32 = 1 << 7;
+    pub const MENU_OPEN: u64 = 1 << 7;
     /// Подменю канваса раскрыто (`app.menu.as_ref().and_then(|m| m.submenu.as_ref()).is_some()`).
-    pub const MENU_SUBMENU_OPEN: u32 = 1 << 8;
+    pub const MENU_SUBMENU_OPEN: u64 = 1 << 8;
     /// Меню выбора (choice_menu) открыто (`app.choice_menu.is_some()`).
-    pub const CHOICE_MENU_OPEN: u32 = 1 << 9;
+    pub const CHOICE_MENU_OPEN: u64 = 1 << 9;
     /// Док палитры шаблонов развёрнут (`app.template_panel.open`).
-    pub const TEMPLATE_PANEL_OPEN: u32 = 1 << 10;
+    pub const TEMPLATE_PANEL_OPEN: u64 = 1 << 10;
     /// Палитра выделения видима (`app.palette_geometry().is_some()`).
-    pub const PALETTE_VISIBLE: u32 = 1 << 11;
+    pub const PALETTE_VISIBLE: u64 = 1 << 11;
     /// Hover-раскрытие группы палитры активно (`app.palette_hover.open.is_some()`).
-    pub const PALETTE_HOVER_OPEN: u32 = 1 << 12;
+    pub const PALETTE_HOVER_OPEN: u64 = 1 << 12;
     /// Просмотрщик документации открыт (`app.docs.is_some()`).
-    pub const DOCS_OPEN: u32 = 1 << 13;
+    pub const DOCS_OPEN: u64 = 1 << 13;
     /// Меню помощи «?» открыто (`app.help_menu.is_some()`).
-    pub const HELP_MENU_OPEN: u32 = 1 << 14;
+    pub const HELP_MENU_OPEN: u64 = 1 << 14;
     /// Подменю документации в меню помощи раскрыто (`help_menu.docs_open`).
-    pub const HELP_MENU_DOCS_OPEN: u32 = 1 << 15;
+    pub const HELP_MENU_DOCS_OPEN: u64 = 1 << 15;
     /// Main stage открыт (`app.main_stage.is_some()`).
-    pub const STAGE_OPEN: u32 = 1 << 16;
+    pub const STAGE_OPEN: u64 = 1 << 16;
     /// Панель поиска открыта (`app.search.is_open()`).
-    pub const SEARCH_OPEN: u32 = 1 << 17;
+    pub const SEARCH_OPEN: u64 = 1 << 17;
     /// Карта проливаний открыта (`app.flow_map_open`).
-    pub const FLOW_MAP_OPEN: u32 = 1 << 18;
+    pub const FLOW_MAP_OPEN: u64 = 1 << 18;
     /// Сессия инлайн-редактирования активна (`app.editing.is_some()`).
-    pub const EDITOR_OPEN: u32 = 1 << 19;
+    pub const EDITOR_OPEN: u64 = 1 << 19;
     /// Окно проверки цепочки расчёта открыто (`app.explain.is_some()`).
-    pub const EXPLAIN_OPEN: u32 = 1 << 20;
+    pub const EXPLAIN_OPEN: u64 = 1 << 20;
     /// Диалог ревью автосвязи открыт (`app.autolink_review.is_some()`).
-    pub const AUTOLINK_REVIEW_OPEN: u32 = 1 << 21;
+    pub const AUTOLINK_REVIEW_OPEN: u64 = 1 << 21;
     /// Модальный диалог Да/Нет открыт (`app.dialog.is_some()`).
-    pub const DIALOG_OPEN: u32 = 1 << 22;
+    pub const DIALOG_OPEN: u64 = 1 << 22;
     /// Галерея схем открыта (`app.scheme_gallery.open`).
-    pub const GALLERY_OPEN: u32 = 1 << 23;
+    pub const GALLERY_OPEN: u64 = 1 << 23;
     /// Витрина кита открыта (`app.kit_gallery_open`).
-    pub const KIT_GALLERY_OPEN: u32 = 1 << 24;
+    pub const KIT_GALLERY_OPEN: u64 = 1 << 24;
     /// UI-админпанель открыта (`app.admin_open`).
-    pub const ADMIN_OPEN: u32 = 1 << 25;
+    pub const ADMIN_OPEN: u64 = 1 << 25;
     /// Онбординг-тур активен (`app.onboarding.is_some()`).
-    pub const ONBOARDING_OPEN: u32 = 1 << 26;
+    pub const ONBOARDING_OPEN: u64 = 1 << 26;
     /// Empty-state карточка видна (`app.empty_state_visible()`).
-    pub const EMPTY_VISIBLE: u32 = 1 << 27;
+    pub const EMPTY_VISIBLE: u64 = 1 << 27;
     /// Миникарта видна (`app.minimap_rect().is_some()`).
-    pub const MINIMAP_VISIBLE: u32 = 1 << 28;
+    pub const MINIMAP_VISIBLE: u64 = 1 << 28;
     /// Бейдж автосвязи виден (`app.autolink_badge_visible()`).
-    pub const AUTOLINK_BADGE_VISIBLE: u32 = 1 << 29;
+    pub const AUTOLINK_BADGE_VISIBLE: u64 = 1 << 29;
     /// Drag ноды активен — глушит `palette_target` (см. `palette_target()`).
-    pub const DRAGGING: u32 = 1 << 30;
+    pub const DRAGGING: u64 = 1 << 30;
     /// Drag резиновой линии связи или рамки выделения активен — глушит
     /// `palette_target` (см. `palette_target()`).
-    pub const EDGE_OR_SELECT_DRAG: u32 = 1 << 31;
+    pub const EDGE_OR_SELECT_DRAG: u64 = 1 << 31;
+    /// FR-LLM-D / LAY-W1: агент-панель открыта (`app.agent_panel.open`).
+    /// u32 был исчерпан (32 бита) — флаги расширены до u64.
+    pub const AGENT_PANEL_OPEN: u64 = 1 << 32;
+    /// FR-LLM / LAY-W1: AI-статус-панель в реестре (`!llm.all_off()`,
+    /// ambient); брейкпоинт вьюпорта учитывается сигнатурным `viewport`.
+    pub const AI_STATUS_VISIBLE: u64 = 1 << 33;
 }
 
 /// FR-PERF-A: Сигнатура инвалидации кэша UI-кадра — всё, что влияет на
@@ -598,7 +688,8 @@ pub struct UiFrameSig {
     /// Камера (center_x, center_y, zoom) — PALETTE через world_to_screen.
     pub camera: [f32; 3],
     /// Битовые флаги открытых поверхностей (см. [`ui_frame_flags`]).
-    pub flags: u32,
+    /// u64 — биты 0..31 исчерпаны (LAY-W1: +AGENT_PANEL_OPEN/AI_STATUS_VISIBLE).
+    pub flags: u64,
     /// Хэш выделения (selected + selected_nodes) — для PALETTE.
     pub selection_hash: u64,
     /// Активный whatif-сценарий (-1 = None/«База»).
@@ -634,6 +725,11 @@ pub struct UiFrameSig {
     /// Число шаблонов выбранной категории wheel-меню (0 — категория не
     /// выбрана; влияет на `wheel_geometry.extent` → WHEEL hit-rect).
     pub wheel_template_count: u32,
+    /// LAY-W1: снапшот AI-фич (бит 0 — suggest, 1 — graph, 2 — agent,
+    /// 3 — пауза): ширины чипов AI-статус-панели (`feat_chips_measured`)
+    /// зависят от них — hit-rect'ы поверхности меняются без смены
+    /// `scene_revision`.
+    pub ai_feats: u8,
 }
 
 /// FR-PERF-A: Простой нечётный миксер хэша (FNV-1a вариант) для примитивов.
@@ -693,7 +789,7 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
     let camera_zoom = app.camera.zoom();
     // Битовые флаги открытых поверхностей — единственный источник
     // «какие поверхности в кадре». Порядок проверок — произвольный (OR).
-    let mut flags: u32 = 0;
+    let mut flags: u64 = 0;
     if app.wheel_menu.is_some() {
         flags |= ui_frame_flags::WHEEL_OPEN;
     }
@@ -790,6 +886,13 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
     if app.edge_drag.is_some() || app.select_rect.is_some() {
         flags |= ui_frame_flags::EDGE_OR_SELECT_DRAG;
     }
+    // LAY-W1: панели AI в составе кадра (AGENT_PANEL/AI_STATUS).
+    if app.agent_panel.open {
+        flags |= ui_frame_flags::AGENT_PANEL_OPEN;
+    }
+    if !app.settings.llm.all_off() {
+        flags |= ui_frame_flags::AI_STATUS_VISIBLE;
+    }
     // Hover-раскрытия и скроллы отдельных панелей — влияют на hit-rect'ы
     // внутри поверхности (не на состав кадра).
     let (template_hover_open, template_hover_scroll) = match &app.template_hover {
@@ -806,6 +909,11 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
         .and_then(|m| m.category.as_deref())
         .map(|c| app.visible_templates_by_category(c).len() as u32)
         .unwrap_or(0);
+    // LAY-W1: снапшот AI-фич — ширины чипов AI-статус-панели.
+    let ai_feats = u8::from(app.ai_suggest_enabled)
+        | (u8::from(app.ai_graph_enabled) << 1)
+        | (u8::from(app.ai_agent_enabled) << 2)
+        | (u8::from(app.ai_paused) << 3);
     UiFrameSig {
         viewport,
         scene_revision: app.scene.revision,
@@ -828,6 +936,7 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
         search_rows_count: app.search.rows.len() as u32,
         admin_section: app.admin_section,
         wheel_template_count,
+        ai_feats,
     }
 }
 
@@ -970,23 +1079,39 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 .push(HitRect::interactive(rect(panel), "hotkeys-panel"));
         }
         id::CORNER_BUTTONS => {
-            surface.hit_rects.push(HitRect::interactive(
-                rect(theme_button_rect(app.settings.button_corner, viewport)),
-                "theme-button",
-            ));
-            // FR-040 v2: кнопка переключения языка (RU/EN) — между темой и «?»
-            surface.hit_rects.push(HitRect::interactive(
-                rect(language_button_rect(app.settings.button_corner, viewport)),
-                "language-button",
-            ));
-            surface.hit_rects.push(HitRect::interactive(
-                rect(help_button_rect(app.settings.button_corner, viewport)),
-                "help-button",
-            ));
-            surface.hit_rects.push(HitRect::interactive(
-                rect(button_rect(app.settings.button_corner, viewport)),
-                "settings-button",
-            ));
+            // LAY-W1: кластер ⚙/тема/язык/«?» в ПРАВЫХ углах накрывается
+            // непрозрачной агент-панелью во всю высоту (draw-порядок полосы:
+            // settings_overlay раньше agent_panel_overlay) и не кликабелен
+            // (agent_panel_click глотает клики в rect панели раньше pick) —
+            // «ввод = тому, что видно» (П5/LAY1.2): hit-rect'ы не
+            // публикуются, иначе G4-линт видел бы налезание ⚙ на ✕ панели.
+            // Продуктовый вопрос «хром недоступен при открытой
+            // агент-панели» — вне волны (на web DOM-бары разводит
+            // html_panel_overlap — app.rs).
+            let agent_covers = app.agent_panel_rect().is_some()
+                && matches!(
+                    app.settings.button_corner,
+                    canvas_core::Corner::TopRight | canvas_core::Corner::BottomRight
+                );
+            if !agent_covers {
+                surface.hit_rects.push(HitRect::interactive(
+                    rect(theme_button_rect(app.settings.button_corner, viewport)),
+                    "theme-button",
+                ));
+                // FR-040 v2: кнопка переключения языка (RU/EN) — между темой и «?»
+                surface.hit_rects.push(HitRect::interactive(
+                    rect(language_button_rect(app.settings.button_corner, viewport)),
+                    "language-button",
+                ));
+                surface.hit_rects.push(HitRect::interactive(
+                    rect(help_button_rect(app.settings.button_corner, viewport)),
+                    "help-button",
+                ));
+                surface.hit_rects.push(HitRect::interactive(
+                    rect(button_rect(app.settings.button_corner, viewport)),
+                    "settings-button",
+                ));
+            }
             // PRD-0007 (X4, AC-5.5): бейдж предложений автосвязи — клик
             // открывает ревью (та же видимость, что в рендере бейджа)
             if app.autolink_badge_visible() {
@@ -1314,6 +1439,64 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 ));
             }
         }
+        // FR-LLM-D / LAY-W1 (аудит §3.8): агент-панель — интерактивные зоны
+        // из ЕДИНОЙ раскладки AgentPanelLayout (та же, что draw
+        // `agent_panel_overlay` и hit `agent_panel_hit`; UR-005). Preview
+        // Accept/Reject в реестр не выносятся: их геометрия в hit-тесте
+        // пока приблизительна (FR-LLM-D-TODO), канон линта — стабильный
+        // скелет панели (тело панели — не pick-зона: клики внутри глотает
+        // ранняя ветвь agent_panel_click, как прежде).
+        id::AGENT_PANEL => {
+            if let Some(panel) = app.agent_panel_rect() {
+                let lay = agent_panel::AgentPanelLayout::build(UiRect::new(
+                    panel[0], panel[1], panel[2], panel[3],
+                ));
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(lay.close, "agent-close"));
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(lay.input, "agent-input"));
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(lay.send, "agent-send"));
+                for (i, q) in lay.quick.iter().enumerate() {
+                    surface
+                        .hit_rects
+                        .push(HitRect::interactive(*q, format!("agent-quick-{i}")));
+                }
+            }
+        }
+        // FR-LLM / LAY-W1: AI-статус-панель — ⏸/⚙ (head_button_rects) +
+        // чипы Suggest/Graph/Agent (единый замер feat_chip_rects) — те же
+        // функции геометрии, что draw/`ai_status_panel_hit` (UR-005).
+        id::AI_STATUS => {
+            if let Some(panel) = app.ai_status_panel_rect() {
+                let (pause, gear) = ai_status_panel::head_button_rects(panel);
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(pause, "ai-status-pause"));
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(gear, "ai-status-gear"));
+                let mut m = canvas_ui::measure::TextMeasurer::new();
+                let mut fs = canvas_render::text::measure_font_system();
+                let chips = ai_status_panel::feat_chip_rects(
+                    &mut m,
+                    &mut fs,
+                    panel,
+                    app.ai_suggest_enabled,
+                    app.ai_graph_enabled,
+                    app.ai_agent_enabled,
+                    app.ai_paused,
+                );
+                for (i, chip) in chips.iter().enumerate() {
+                    surface
+                        .hit_rects
+                        .push(HitRect::interactive(*chip, format!("ai-status-chip-{i}")));
+                }
+            }
+        }
         // EDITOR/WORLD: hit-rect'ов нет — клики остаются в canvas-цепочке.
         _ => {}
     }
@@ -1420,6 +1603,8 @@ mod tests {
             id::ONBOARDING,
             id::EMPTY,
             id::MINIMAP,
+            id::AGENT_PANEL,
+            id::AI_STATUS,
         ];
         let mut sorted = ids.to_vec();
         sorted.sort_unstable();
@@ -1676,6 +1861,282 @@ mod tests {
             .find(|d| d.id.as_str() == id::SETTINGS)
             .expect("открытая модалка настроек в реестре");
         assert_eq!(decl.degradation, DegradationPolicy::Always);
+    }
+
+    // --- LAY-W1 (аудит 2026-10 §3.8): панели AI в реестре -------------------
+
+    /// LAY-W1: агент-панель зарегистрирована (Panels/Capture) с HideBelow
+    /// { 600, 240 }: на 800×560 — в кадре с интерактивными зонами (✕/input/
+    /// send/quick), ниже минимума — скрыта ЦЕЛИКОМ (0 rect'ов, LAY8 п.3–4);
+    /// pick по ✕ — Element поверхности (пик = видимой панели).
+    #[test]
+    fn agent_panel_registry_hide_below_and_pick() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.agent_panel.open = true;
+        // test_viewport — rect-функции панели читают viewport_logical()
+        // (в headless-заглушке без окна он нулевой).
+        app.test_viewport = Some([800.0, 560.0]);
+        let reg = build_registry(&app);
+        let decl = reg
+            .declarations()
+            .iter()
+            .find(|d| d.id.as_str() == id::AGENT_PANEL)
+            .expect("агент-панель в реестре");
+        assert_eq!(decl.layer, UiLayer::Panels);
+        assert_eq!(decl.capture, CapturePolicy::Capture);
+        assert!(!decl.degradation.hidden_at(800.0, 560.0));
+        assert!(decl.degradation.hidden_at(599.0, 800.0), "< 600 — скрыта");
+        assert!(decl.degradation.hidden_at(1280.0, 239.0), "< 240 — скрыта");
+
+        let frame = build_frame_at(&app, [800.0, 560.0]);
+        let surface = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::AGENT_PANEL)
+            .expect("панель в кадре на 800×560");
+        let elements: Vec<&str> = surface
+            .hit_rects
+            .iter()
+            .map(|r| r.element.as_str())
+            .collect();
+        for expected in [
+            "agent-close",
+            "agent-input",
+            "agent-send",
+            "agent-quick-0",
+            "agent-quick-2",
+        ] {
+            assert!(elements.contains(&expected), "нет hit-rect {expected}");
+        }
+        // Курсор в центр ✕ → Element панели (пик = видимой панели).
+        let close = surface
+            .hit_rects
+            .iter()
+            .find(|r| r.element == "agent-close")
+            .expect("✕ панели");
+        let c = UiPoint::new(
+            close.rect.x + close.rect.w / 2.0,
+            close.rect.y + close.rect.h / 2.0,
+        );
+        match HitStack::pick(&frame, c) {
+            Some(HitTarget::Element { surface, rect }) => {
+                assert_eq!(surface.surface.as_str(), id::AGENT_PANEL);
+                assert_eq!(rect.element, "agent-close");
+            }
+            other => panic!("✕ агент-панели не пикается: {other:?}"),
+        }
+        // Ниже минимума — поверхности нет в кадре (0 rect'ов).
+        let frame_small = build_frame_at(&app, [599.0, 560.0]);
+        assert!(
+            frame_small
+                .surfaces
+                .iter()
+                .all(|s| s.surface.as_str() != id::AGENT_PANEL),
+            "HideBelow < 600 — панель ЦЕЛИКОМ вне кадра"
+        );
+    }
+
+    /// LAY-W1: AI-статус-панель (ambient: !all_off) с HideBelow { 900, 131 }:
+    /// на 1024×640 — в кадре (⏸/⚙ + чипы), на 800×560 и ниже 131 — скрыта
+    /// ЦЕЛИКОМ; all_off — поверхности нет (ambient-условие, не брейкпоинт).
+    #[test]
+    fn ai_status_registry_hide_below_and_pick() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.settings.llm.provider_suggest = canvas_llm::LlmProviderId::Laya;
+        app.test_viewport = Some([1024.0, 640.0]);
+        let reg = build_registry(&app);
+        let decl = reg
+            .declarations()
+            .iter()
+            .find(|d| d.id.as_str() == id::AI_STATUS)
+            .expect("AI-статус в реестре (AI включён)");
+        assert_eq!(decl.capture, CapturePolicy::Capture);
+        assert!(!decl.degradation.hidden_at(1024.0, 640.0));
+        assert!(decl.degradation.hidden_at(800.0, 560.0), "< 900 — скрыта");
+        // Порог — derive из констант панели (стыковка LAY-W2):
+        // AI_STATUS_H 100 + AI_STATUS_PAUSED_EXTRA 19 + AI_STATUS_MARGIN 12 = 131.
+        assert!(
+            !decl.degradation.hidden_at(1280.0, 131.0),
+            "граница 131 — видима"
+        );
+        assert!(decl.degradation.hidden_at(1280.0, 130.0), "< 131 — скрыта");
+
+        let frame = build_frame_at(&app, [1024.0, 640.0]);
+        let surface = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::AI_STATUS)
+            .expect("панель в кадре на 1024×640");
+        let elements: Vec<&str> = surface
+            .hit_rects
+            .iter()
+            .map(|r| r.element.as_str())
+            .collect();
+        for expected in [
+            "ai-status-pause",
+            "ai-status-gear",
+            "ai-status-chip-0",
+            "ai-status-chip-2",
+        ] {
+            assert!(elements.contains(&expected), "нет hit-rect {expected}");
+        }
+        // Курсор в центр ⚙ → Element панели.
+        let gear = surface
+            .hit_rects
+            .iter()
+            .find(|r| r.element == "ai-status-gear")
+            .expect("⚙ панели");
+        let c = UiPoint::new(
+            gear.rect.x + gear.rect.w / 2.0,
+            gear.rect.y + gear.rect.h / 2.0,
+        );
+        match HitStack::pick(&frame, c) {
+            Some(HitTarget::Element { surface, rect }) => {
+                assert_eq!(surface.surface.as_str(), id::AI_STATUS);
+                assert_eq!(rect.element, "ai-status-gear");
+            }
+            other => panic!("⚙ AI-статуса не пикается: {other:?}"),
+        }
+        // 800×560 — скрыта ЦЕЛИКОМ.
+        let small = build_frame_at(&app, [800.0, 560.0]);
+        assert!(
+            small
+                .surfaces
+                .iter()
+                .all(|s| s.surface.as_str() != id::AI_STATUS),
+            "HideBelow < 900 — панель ЦЕЛИКОМ вне кадра"
+        );
+        // AI выключен — поверхности нет (ambient-условие регистрации).
+        let mut off = test_stub();
+        off.onboarding = None;
+        assert!(off.settings.llm.all_off());
+        assert!(build_registry(&off)
+            .declarations()
+            .iter()
+            .all(|d| d.id.as_str() != id::AI_STATUS));
+    }
+
+    /// LAY-W1: draw-гейт обеих панелей — политика HideBelow реестра
+    /// (`agent_panel_visible` / `ai_status_visible`): ≥ минимума — рисуется,
+    /// ниже — скрыта ЦЕЛИКОМ (0 квадов/текстов/иконок — LAY8 п.4).
+    #[test]
+    fn panels_draw_gated_by_hide_below() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.agent_panel.open = true;
+        app.settings.llm.provider_suggest = canvas_llm::LlmProviderId::Laya;
+
+        // Агент-панель: ≥ 600×240 — рисуется.
+        app.test_viewport = Some([1280.0, 800.0]);
+        let (quads, _, _) = app.agent_panel_overlay();
+        assert!(!quads.is_empty(), "агент-панель ≥ минимума — рисуется");
+        // < 600 по ширине — 0 rect'ов.
+        app.test_viewport = Some([599.0, 800.0]);
+        let (quads, texts, icons) = app.agent_panel_overlay();
+        assert!(
+            quads.is_empty() && texts.is_empty() && icons.is_empty(),
+            "агент-панель < 600 — скрыта ЦЕЛИКОМ"
+        );
+        // < 240 по высоте — 0 rect'ов.
+        app.test_viewport = Some([1280.0, 239.0]);
+        let (quads, texts, icons) = app.agent_panel_overlay();
+        assert!(
+            quads.is_empty() && texts.is_empty() && icons.is_empty(),
+            "агент-панель < 240 — скрыта ЦЕЛИКОМ"
+        );
+        // Закрытая панель не рисуется и на большом вьюпорте.
+        app.agent_panel.open = false;
+        app.test_viewport = Some([1280.0, 800.0]);
+        let (quads, _, _) = app.agent_panel_overlay();
+        assert!(quads.is_empty(), "закрытая панель не рисуется");
+
+        // AI-статус: ≥ 900×131 — рисуется.
+        app.settings.llm.provider_suggest = canvas_llm::LlmProviderId::Laya;
+        app.test_viewport = Some([1280.0, 800.0]);
+        let (quads, _, _) = app.ai_status_panel();
+        assert!(!quads.is_empty(), "AI-статус ≥ минимума — рисуется");
+        // < 900 — 0 rect'ов.
+        app.test_viewport = Some([899.0, 800.0]);
+        let (quads, texts, icons) = app.ai_status_panel();
+        assert!(
+            quads.is_empty() && texts.is_empty() && icons.is_empty(),
+            "AI-статус < 900 — скрыта ЦЕЛИКОМ"
+        );
+        // < 131 — 0 rect'ов.
+        app.test_viewport = Some([1280.0, 130.0]);
+        let (quads, texts, icons) = app.ai_status_panel();
+        assert!(
+            quads.is_empty() && texts.is_empty() && icons.is_empty(),
+            "AI-статус < 131 — скрыта ЦЕЛИКОМ"
+        );
+        // AI выключен — не рисуется (ambient-условие, не брейкпоинт).
+        app.settings.llm = canvas_llm::LlmSettings::default();
+        app.test_viewport = Some([1280.0, 800.0]);
+        let (quads, _, _) = app.ai_status_panel();
+        assert!(quads.is_empty(), "all_off — панель не рисуется");
+    }
+
+    /// LAY-W1: кластер угловых кнопок в ПРАВЫХ углах под агент-панелью не
+    /// публикует hit-rect'ы — «ввод = тому, что видно» (панель непрозрачна и
+    /// глотает клики раньше pick); для левых углов и при закрытой панели
+    /// кластер кликабелен (4 rect'а).
+    #[test]
+    fn corner_buttons_suppressed_under_agent_panel() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.agent_panel.open = true;
+        app.test_viewport = Some([1280.0, 800.0]);
+        let corners = |app: &App| {
+            build_frame_at(app, [1280.0, 800.0])
+                .surfaces
+                .iter()
+                .find(|s| s.surface.as_str() == id::CORNER_BUTTONS)
+                .expect("кластер в кадре")
+                .hit_rects
+                .len()
+        };
+        assert_eq!(corners(&app), 0, "кластер под панелью — 0 hit-rect'ов");
+        // Левый угол: панель кластер не накрывает — rect'ы на месте.
+        app.settings.button_corner = canvas_core::Corner::TopLeft;
+        assert_eq!(corners(&app), 4, "левый угол — кластер кликабелен");
+        // Панель закрыта — правый угол снова в кадре.
+        app.settings.button_corner = canvas_core::Corner::TopRight;
+        app.agent_panel.open = false;
+        assert_eq!(corners(&app), 4, "панель закрыта — кластер кликабелен");
+    }
+
+    /// LAY-W1: сигнатура кадра реагирует на открытие агент-панели, состав
+    /// AI-статуса (all_off ↔ включён) и тумблеры/паузу AI-фич — ширины чипов
+    /// панели = hit-rect'ы, без инвалидации кэш отдал бы устаревший кадр.
+    #[test]
+    fn ui_frame_sig_tracks_agent_and_ai_status() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.agent_panel.open = true;
+        assert_ne!(
+            build_frame_sig(&app).flags & ui_frame_flags::AGENT_PANEL_OPEN,
+            0
+        );
+        app.agent_panel.open = false;
+        assert_eq!(
+            build_frame_sig(&app).flags & ui_frame_flags::AGENT_PANEL_OPEN,
+            0
+        );
+        // AI включён — AI_STATUS_VISIBLE; тумблер фичи меняет сигнатуру.
+        app.settings.llm.provider_suggest = canvas_llm::LlmProviderId::Laya;
+        let sig_ai = build_frame_sig(&app);
+        assert_ne!(sig_ai.flags & ui_frame_flags::AI_STATUS_VISIBLE, 0);
+        assert_ne!(sig_ai.ai_feats & 0b0001, 0, "suggest включён");
+        app.ai_suggest_enabled = false;
+        assert_ne!(
+            build_frame_sig(&app).ai_feats,
+            sig_ai.ai_feats,
+            "тумблер чипа = другая геометрия hit-rect'ов"
+        );
+        app.ai_paused = true;
+        assert_ne!(build_frame_sig(&app).ai_feats & 0b1000, 0, "пауза");
     }
 
     /// W-a (аудит §8 п.6): pick-rect реестра панели хоткеев == draw-rect —

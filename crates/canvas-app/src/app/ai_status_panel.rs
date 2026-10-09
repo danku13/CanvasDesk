@@ -6,8 +6,8 @@
 //!
 //! **Расположение** (прототип `prototype-unified.html` строки 450-481,
 //! 898-930): правый край, над миникартой. Ширина **302px** (как в
-//! прототипе), высота — auto (≈ 92px без paused-лейбла, +18px с ним),
-//! паддинг 9×11px, border-radius 10px.
+//! прототипе), высота — auto (≈ 100px без paused-лейбла, +19px с ним),
+//! паддинг 10×12px (шкала S1, миграция LAY-W2), border-radius 10px.
 //!
 //! **Скрытие** (F-7.9): на узких окнах (viewport < 900px) панель не
 //! рисуется — экономим место под канвас; при `LlmSettings::all_off()`
@@ -49,12 +49,15 @@ use canvas_ui::geometry::UiRect;
 
 /// Ширина панели (прототип: `width:302px`).
 pub const AI_STATUS_W: f32 = 302.0;
-/// Высота панели без paused-лейбла: 9 + 24 + 7 + 16 + 7 + 14 + 5 + 4 + 9 ≈ 95.
-/// Берём с округлением до целого (используется для позиционирования над
-/// миникартой); реальная высота с paused-лейблом — `+ AI_STATUS_PAUSED_EXTRA`.
-pub const AI_STATUS_H: f32 = 95.0;
-/// Дополнительная высота когда показан paused-лейбл (5px margin + ~13px текст).
-pub const AI_STATUS_PAUSED_EXTRA: f32 = 18.0;
+/// Высота панели без paused-лейбла — сумма строк по шкале S1 (LAY-W2):
+/// 10 + 24 + 8 + 16 + 8 + 14 + 6 + 4 + 10 = 100 (прототип F-7.9 давал ≈95 —
+/// полушаги/пятёрки округлены вверх по LAY7.1, сдвиг ≤2 px на зазор).
+/// Используется для позиционирования над миникартой; высота с
+/// paused-лейблом — `+ AI_STATUS_PAUSED_EXTRA`.
+pub const AI_STATUS_H: f32 = 100.0;
+/// Дополнительная высота когда показан paused-лейбл (зазор 6px
+/// [`GAP_BAR_PAUSED`] + ~13px текста; прототип 5px — округлён вверх).
+pub const AI_STATUS_PAUSED_EXTRA: f32 = 19.0;
 /// Зазор над миникартой (прототип: 8px между панелью и миникартой).
 pub const AI_STATUS_GAP_ABOVE_MINIMAP: f32 = 8.0;
 /// Отступ от правого края = отступ миникарты (12px в прототипе `right:12px`).
@@ -90,19 +93,26 @@ pub(super) fn ai_status_panel_origin(
     [panel_x, panel_y]
 }
 
-// FR-LLM-FIX: внутренняя геометрия — 1:1 по CSS прототипа.
-/// Паддинг панели: 9px top/bottom, 11px left/right (`padding:9px 11px`).
-const PAD_TOP: f32 = 9.0;
-const PAD_BOTTOM: f32 = 9.0;
-const PAD_X: f32 = 11.0;
+// FR-LLM-FIX: внутренняя геометрия — по CSS прототипа, зазоры — шкала S1.
+// LAY-W2 (аудит 2026-10 §3.7, LAY7.1): полушаги/пятёрки прототипа F-7.9
+// (9/11/7/5) округлены ВВЕРХ до ближайшего значения шкалы S1
+// (9→10, 11→12, 7→8, 5→6; санкционированный визуальный сдвиг ≤2 px).
+// Форма — константа = токен шкалы (как PANEL_RADIUS/FEAT_RADIUS ниже).
+/// Паддинг панели: 10px top/bottom (`SPACING_MD`), 12px left/right
+/// (`SPACING_LG`; прототип `padding:9px 11px` — округление вверх).
+const PAD_TOP: f32 = canvas_core::tokens::SPACING_MD;
+/// Нижний паддинг — тот же токен `SPACING_MD`; имя — документация суммы
+/// [`AI_STATUS_H`] (в арифметике кадра не участвует, потому const).
+const PAD_BOTTOM: f32 = canvas_core::tokens::SPACING_MD;
+const PAD_X: f32 = canvas_core::tokens::SPACING_LG;
 /// Радиус панели — 10px (`border-radius:10px`).
 const PANEL_RADIUS: f32 = canvas_core::tokens::RADIUS_PANEL;
-/// Зазоры между строками (`margin-bottom:7px` у head, `margin-top:7px` у
-/// costs, `margin-top:5px` у progress-bar).
-const GAP_HEAD_FEATS: f32 = 7.0;
-const GAP_FEATS_COST: f32 = 7.0;
-const GAP_COST_BAR: f32 = 5.0;
-const GAP_BAR_PAUSED: f32 = 5.0;
+/// Зазоры между строками (прототип: `margin-bottom:7px` у head,
+/// `margin-top:7px` у costs, `margin-top:5px` у progress-bar → 8/8/6 по S1).
+const GAP_HEAD_FEATS: f32 = canvas_core::tokens::SPACING_SM;
+const GAP_FEATS_COST: f32 = canvas_core::tokens::SPACING_SM;
+const GAP_COST_BAR: f32 = canvas_core::tokens::SPACING_S;
+const GAP_BAR_PAUSED: f32 = canvas_core::tokens::SPACING_S;
 
 /// Размер цветной точки состояния (`width/height:8px; border-radius:50%`).
 const DOT_SIZE: f32 = 8.0;
@@ -122,22 +132,27 @@ const BAR_RADIUS: f32 = 2.0;
 // Feature chip метрики (прототип `.ais-feat`).
 /// Font-size feature-чипа — 10.5px.
 const FEAT_FONT: f32 = 10.5;
-/// Паддинг feature-чипа — 2.5px 9px.
+/// Вертикальный паддинг feature-чипа — 2.5px (метрика чипа, НЕ зазор между
+/// элементами: задаёт высоту чипа с `FEAT_ROW_H`; микрозначение заморожено
+/// прототипом F-7.9 — вне миграции LAY-W2).
 const FEAT_PAD_Y: f32 = 2.5;
-const FEAT_PAD_X: f32 = 9.0;
-/// Зазор между feature-чипами (`gap:5px`).
-const FEAT_GAP: f32 = 5.0;
+/// Горизонтальный паддинг feature-чипа — 10px (`SPACING_MD`; прототип 9px —
+/// округление вверх по LAY-W2).
+const FEAT_PAD_X: f32 = canvas_core::tokens::SPACING_MD;
+/// Зазор между feature-чипами — 6px (`SPACING_S`; прототип `gap:5px` —
+/// округление вверх по LAY-W2).
+const FEAT_GAP: f32 = canvas_core::tokens::SPACING_S;
 /// Радиус feature-чипа — pill (`border-radius:99px`). Используем RADIUS_PILL
 /// из шкалы токенов (FR-055: единый источник радиусов) — визуально идентичен
 /// 99px для чипов такой высоты, но не ломает хит-тест вёрстки.
 const FEAT_RADIUS: f32 = canvas_core::tokens::RADIUS_PILL;
 
 // FR-LLM-FIX-2: геометрия головной строки — flex-параметры CSS прототипа.
-/// Зазор flex-строки шапки (`gap:6px` в `.ais-head`) — токен
-/// `canvas_core::tokens::SPACING_S` (значение прежнего литерала 6).
-use canvas_core::tokens::SPACING_S as HEAD_GAP;
-/// Горизонтальный паддинг чипа провайдера (`padding:1px 7px` → 7px слева/справа).
-const PROV_CHIP_PAD_X: f32 = 7.0;
+/// Зазор flex-строки шапки — 6px (`SPACING_S`; `gap:6px` в `.ais-head`).
+const HEAD_GAP: f32 = canvas_core::tokens::SPACING_S;
+/// Горизонтальный паддинг чипа провайдера — 8px (`SPACING_SM`; прототип
+/// `padding:1px 7px` — округление вверх по LAY-W2).
+const PROV_CHIP_PAD_X: f32 = canvas_core::tokens::SPACING_SM;
 /// Высота чипа провайдера (`padding:1px` + font 9.5 ≈ 14px).
 const PROV_CHIP_H: f32 = 14.0;
 /// Клампы ширины чипа провайдера: минимум — «Off», максимум — защита от
@@ -185,7 +200,7 @@ fn head_row_layout(
     // Кнопки ⏸/⚙ — правый край контента (как раньше: 24 + gap + 24).
     let gear_x = content_x + content_w - HEAD_BTN_SIZE;
     let pause_x = gear_x - HEAD_GAP - HEAD_BTN_SIZE;
-    // Чип провайдера: контент-ширина (замер + padding 7×2), клампы.
+    // Чип провайдера: контент-ширина (замер + padding 8×2), клампы.
     let prov_text_w = crate::kit_ui::measured_width(m, fs, prov_text, 9.5);
     let prov_chip_w = (prov_text_w + PROV_CHIP_PAD_X * 2.0).clamp(PROV_CHIP_MIN_W, PROV_CHIP_MAX_W);
     let prov_chip = UiRect::new(
@@ -267,6 +282,45 @@ fn feat_chips_measured(
     out
 }
 
+/// LAY-W1 (аудит §3.8): rect'ы кнопок ⏸/⚙ шапки для hit-rect'ов реестра
+/// (`ui_registry::fill_hit_rects`) — та же арифметика правого края
+/// контента, что в `head_row_layout` (draw) и `ai_status_panel_hit`
+/// (ввод): кнопки прибиты к правому краю, 24 + gap 6 + 24. Позиция от
+/// текстов не зависит — замер не нужен. Одна геометрия для draw/hit/pick
+/// (UR-005, LAY1.2).
+pub(super) fn head_button_rects(panel: [f32; 4]) -> (UiRect, UiRect) {
+    let head_y = panel[1] + PAD_TOP;
+    let gear_x = panel[0] + panel[2] - PAD_X - HEAD_BTN_SIZE;
+    let pause_x = gear_x - HEAD_GAP - HEAD_BTN_SIZE;
+    (
+        UiRect::new(pause_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE),
+        UiRect::new(gear_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE),
+    )
+}
+
+/// LAY-W1: rect'ы чипов Suggest/Graph/Agent для hit-rect'ов реестра —
+/// тот же замер [`feat_chips_measured`], что у draw и hit-теста (UR-005):
+/// клик-зона чипа = отрисованный кадр.
+pub(super) fn feat_chip_rects(
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    panel: [f32; 4],
+    suggest_on: bool,
+    graph_on: bool,
+    agent_on: bool,
+    paused: bool,
+) -> [UiRect; 3] {
+    let feats_y = panel[1] + PAD_TOP + HEAD_ROW_H + GAP_HEAD_FEATS;
+    let chips = feat_chips_measured(m, fs, suggest_on, graph_on, agent_on, paused);
+    let mut x = panel[0] + PAD_X;
+    let mut out = [UiRect::new(0.0, 0.0, 0.0, 0.0); 3];
+    for (i, (_, w)) in chips.iter().enumerate() {
+        out[i] = UiRect::new(x, feats_y, *w, FEAT_FONT + FEAT_PAD_Y * 2.0);
+        x += *w + FEAT_GAP;
+    }
+    out
+}
+
 impl App {
     /// FR-LLM-FIX / PRD-0010 F-7.9 (Q4): статусная панель AI — квады + тексты + иконки.
     ///
@@ -276,17 +330,15 @@ impl App {
     /// (как `overlays.rs`). UR-005: иконки KitDraw дрейнятся в рендер —
     /// прежде терялись (SVG-иконки панели не доходили до экрана).
     ///
-    /// Возвращает пустые `Vec`, если:
-    /// - вьюпорт слишком узкий (< 900px, F-7.9);
-    /// - AI выключен (`LlmSettings::all_off()`);
-    /// - вьюпорт нулевой (первый кадр / скрытое окно).
-    ///
     /// Иначе — рендерит 4 строки (плюс опциональный paused-лейбл):
     /// 1. **head**: цветная точка + имя модели + подпись провайдера + ⏸ + ⚙.
     /// 2. **features**: 3 pill-чипа Suggest/Graph/Agent (✓ = включён).
     /// 3. **costs**: «Session: $X.XX · Day: $X.XX / $L.LL».
     /// 4. **progress**: горизонтальный прогресс-бар day/limit.
     /// 5. (если `ai_paused`) — янтарный лейбл «AI на паузе».
+    ///
+    /// LAY-W1 (LAY8.2): брейкпоинт показа — HideBelow в декларации реестра
+    /// (`ui_registry::AI_STATUS_DEGRADATION`, 900×131), НЕ inline-сравнение.
     pub(super) fn ai_status_panel(
         &self,
     ) -> (
@@ -298,7 +350,12 @@ impl App {
         let mut texts = Vec::new();
         let mut icons_out = Vec::new();
         let viewport = self.viewport_logical();
-        if viewport[0] < AI_STATUS_MIN_VIEWPORT_W || viewport[1] <= 0.0 {
+        // LAY-W1 (LAY8.2): показ решает политика HideBelow реестра
+        // (AI_STATUS_DEGRADATION, 900×131) — ниже минимума панель не
+        // рисуется ЦЕЛИКОМ (LAY8 п.4: промежуточных ступеней нет);
+        // нулевой вьюпорт (первый кадр / скрытое окно) покрыт тем же
+        // гейтом (0 < 900/131).
+        if !ui_registry::ai_status_visible(viewport) {
             return (quads, texts, icons_out);
         }
         let llm = &self.settings.llm;
@@ -453,8 +510,9 @@ impl App {
 
         // === Строка 2: features — 3 pill-чипа Suggest/Graph/Agent =========
         // FR-LLM-FIX: pill-форма (radius RADIUS_PILL), font 10.5px,
-        // padding 2.5×9px, gap 5px, flex-wrap (на узких панелях чипы
-        // переносятся на следующую строку — но ширины 302px хватает на 3).
+        // padding 2.5×10px, gap 6px (шкала S1, LAY-W2), flex-wrap (на узких
+        // панелях чипы переносятся на следующую строку — но ширины 302px
+        // хватает на 3).
         let feats_y = head_y + HEAD_ROW_H + GAP_HEAD_FEATS;
         // FR-LLM-FIX-2: подписи+ширины чипов — тот же замер, что и в
         // hit-тесте (единая функция `feat_chips_measured`).
@@ -603,10 +661,11 @@ impl App {
     /// FR-LLM-FIX / PRD-0010 F-7.9: rect панели AI-статуса (для hit-тестов
     /// и клип-области рендера). Учитывает paused-state (панель выше на
     /// `AI_STATUS_PAUSED_EXTRA` когда ai_paused). Возвращает `None`, если
-    /// панель скрыта (узкий вьюпорт / all_off).
+    /// панель скрыта: HideBelow реестра (`ui_registry::ai_status_visible`,
+    /// LAY-W1 — 900×131) или AI выключен (`LlmSettings::all_off()`).
     pub(super) fn ai_status_panel_rect(&self) -> Option<[f32; 4]> {
         let viewport = self.viewport_logical();
-        if viewport[0] < AI_STATUS_MIN_VIEWPORT_W || viewport[1] <= 0.0 {
+        if !ui_registry::ai_status_visible(viewport) {
             return None;
         }
         if self.settings.llm.all_off() {
@@ -803,7 +862,7 @@ mod tests {
     }
 
     /// FR-LLM-FIX: размер панели — 302px ширина (как в прототипе F-7.9).
-    /// Высота — auto (92px без paused-лейбла, +18px с ним).
+    /// Высота — auto (100px без paused-лейбла, +19px с ним — LAY-W2, S1).
     #[test]
     fn panel_size_matches_prototype() {
         assert_eq!(AI_STATUS_W, 302.0);
@@ -851,7 +910,7 @@ mod tests {
         assert!((px - (viewport[0] - AI_STATUS_W - AI_STATUS_MARGIN)).abs() < 1e-3);
     }
 
-    /// UR-005 rev2: paused-панель (выше на 18px) всё ещё не задевает зону —
+    /// UR-005 rev2: paused-панель (выше на 19px) всё ещё не задевает зону —
     /// зазор считается от фактической высоты panel_h.
     #[test]
     fn panel_origin_with_paused_extra_still_above_zone() {
@@ -862,13 +921,24 @@ mod tests {
         assert!((zone_top - (py + panel_h) - AI_STATUS_GAP_ABOVE_MINIMAP).abs() < 1e-3);
     }
 
-    /// FR-LLM-FIX: padding панели — 9px top/bottom, 11px left/right
-    /// (`padding:9px 11px` в прототипе).
+    /// LAY-W2 (аудит 2026-10 §3.7, LAY7.1): зазоры/паддинги панели — ТОЛЬКО
+    /// значения шкалы S1; полушаги прототипа (5/7/9/11) не существуют —
+    /// округлены вверх (5→6, 7→8, 9→10, 11→12), сдвиг ≤2 px санкционирован.
     #[test]
-    fn padding_matches_prototype() {
-        assert_eq!(PAD_TOP, 9.0);
-        assert_eq!(PAD_BOTTOM, 9.0);
-        assert_eq!(PAD_X, 11.0);
+    fn gaps_on_s1_scale_no_half_steps() {
+        // Паддинг панели (прототип 9/9/11).
+        assert_eq!(PAD_TOP, canvas_core::tokens::SPACING_MD);
+        assert_eq!(PAD_BOTTOM, canvas_core::tokens::SPACING_MD);
+        assert_eq!(PAD_X, canvas_core::tokens::SPACING_LG);
+        // Зазоры между строками (прототип 7/7/5/5).
+        assert_eq!(GAP_HEAD_FEATS, canvas_core::tokens::SPACING_SM);
+        assert_eq!(GAP_FEATS_COST, canvas_core::tokens::SPACING_SM);
+        assert_eq!(GAP_COST_BAR, canvas_core::tokens::SPACING_S);
+        assert_eq!(GAP_BAR_PAUSED, canvas_core::tokens::SPACING_S);
+        // Шапка: зазор flex-строки (6 — был на шкале), паддинг чипа
+        // провайдера (прототип 7).
+        assert_eq!(HEAD_GAP, canvas_core::tokens::SPACING_S);
+        assert_eq!(PROV_CHIP_PAD_X, canvas_core::tokens::SPACING_SM);
     }
 
     /// FR-LLM-FIX: радиус панели — 10px (`border-radius:10px`).
@@ -897,15 +967,17 @@ mod tests {
         assert_eq!(BAR_RADIUS, 2.0);
     }
 
-    /// FR-LLM-FIX: feature-чипы — pill-форма (RADIUS_PILL), font 10.5px,
-    /// padding 2.5×9px, gap 5px.
+    /// FR-LLM-FIX: feature-чипы — pill-форма (RADIUS_PILL), font 10.5px.
+    /// Паддинг/зазор — по шкале S1 (LAY-W2): pad_x 10 (SPACING_MD), gap 6
+    /// (SPACING_S); вертикальный пад 2.5px — метрика чипа (высота),
+    /// заморожена прототипом (не зазор между элементами).
     #[test]
-    fn feature_chips_match_prototype() {
+    fn feature_chips_metrics() {
         assert_eq!(FEAT_RADIUS, canvas_core::tokens::RADIUS_PILL);
         assert_eq!(FEAT_FONT, 10.5);
         assert_eq!(FEAT_PAD_Y, 2.5);
-        assert_eq!(FEAT_PAD_X, 9.0);
-        assert_eq!(FEAT_GAP, 5.0);
+        assert_eq!(FEAT_PAD_X, canvas_core::tokens::SPACING_MD);
+        assert_eq!(FEAT_GAP, canvas_core::tokens::SPACING_S);
     }
 
     /// FR-LLM-FIX: provider_fixed_model — модель провайдера для шапки панели.
@@ -953,7 +1025,7 @@ mod tests {
     fn head_row_no_overlap_with_long_labels() {
         let mut m = crate::kit_ui::new_measurer();
         let mut fs = canvas_render::text::measure_font_system();
-        let content_w = AI_STATUS_W - 2.0 * PAD_X; // 280
+        let content_w = AI_STATUS_W - 2.0 * PAD_X; // 278
         let cases = [
             ("не выбрана", "BYOK"),
             ("glm-5.3-flash", "ChatGPT OAuth"),

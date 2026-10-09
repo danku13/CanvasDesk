@@ -413,3 +413,77 @@ fn lint_empty_state() {
         assert!(app.empty_state_visible() || app.scene.canvas.nodes.is_empty());
     });
 }
+
+// --- LAY-W1 (аудит 2026-10 §3.8, P1 LAY8.2): панели AI в реестре ----------
+
+/// Агент-панель (Ctrl+I) — каноническое состояние G4: интерактивные зоны
+/// (✕ / поле ввода / send / quick-пилюли) во всех вьюпортах и на обоих
+/// языках. HideBelow { 600, 240 } на канонических вьюпортах не срабатывает
+/// (минимум 800×560 > 600×240) — геометрия панели под линтом полностью.
+/// `test_viewport` — rect-функции панели читают вьюпорт линта (в
+/// headless-заглушке `viewport_logical()` нулевой).
+#[test]
+fn lint_agent_panel_open() {
+    lint_state("agent_panel", |app, vp| {
+        app.agent_panel.open = true;
+        app.test_viewport = Some(vp);
+    });
+    // Не вакуумно: на 800×560 панель в кадре с полным скелетом (6 rect'ов:
+    // ✕ + input + send + 3 quick); ниже 600 — ЦЕЛИКОМ вне кадра.
+    let mut app = lint_stub(Language::Ru);
+    app.agent_panel.open = true;
+    app.test_viewport = Some([800.0, 560.0]);
+    let frame = build_frame_at(&app, [800.0, 560.0]);
+    let surface = frame
+        .surfaces
+        .iter()
+        .find(|s| s.surface.as_str() == ui_registry::id::AGENT_PANEL)
+        .expect("агент-панель в кадре 800×560");
+    assert_eq!(
+        surface.hit_rects.len(),
+        6,
+        "скелет панели под линтом: ✕/input/send/quick×3"
+    );
+    let mut app = lint_stub(Language::Ru);
+    app.agent_panel.open = true;
+    app.test_viewport = Some([599.0, 560.0]);
+    let frame = build_frame_at(&app, [599.0, 560.0]);
+    assert!(frame
+        .surfaces
+        .iter()
+        .all(|s| s.surface.as_str() != ui_registry::id::AGENT_PANEL));
+}
+
+/// AI-статус-панель — каноническое состояние G4: ⏸/⚙ + чипы
+/// Suggest/Graph/Agent во вьюпортах ≥ 900×131. На 800×560 панель скрыта
+/// HideBelow { 900, 131 } (derive из констант панели — стыковка LAY-W2) —
+/// поверхности в кадре нет, 0 rect'ов (LAY8 п.3 «скрыта ЦЕЛИКОМ»); линт
+/// проходит тривиально (как whatif на 800×560).
+/// AI включён — дефолт `LlmSettings` all_off, панель не регистрируется.
+#[test]
+fn lint_ai_status_open() {
+    lint_state("ai_status", |app, vp| {
+        app.settings.llm.provider_suggest = canvas_llm::LlmProviderId::Laya;
+        app.test_viewport = Some(vp);
+    });
+    // Не вакуумно: на 1024×640 — 5 rect'ов (⏸/⚙ + чипы ×3); на 800×560 —
+    // HideBelow, поверхности в кадре нет (0 rect'ов).
+    let mut app = lint_stub(Language::Ru);
+    app.settings.llm.provider_suggest = canvas_llm::LlmProviderId::Laya;
+    app.test_viewport = Some([1024.0, 640.0]);
+    let frame = build_frame_at(&app, [1024.0, 640.0]);
+    let surface = frame
+        .surfaces
+        .iter()
+        .find(|s| s.surface.as_str() == ui_registry::id::AI_STATUS)
+        .expect("AI-статус в кадре 1024×640");
+    assert_eq!(surface.hit_rects.len(), 5, "⏸/⚙ + чипы Suggest/Graph/Agent");
+    let mut app = lint_stub(Language::Ru);
+    app.settings.llm.provider_suggest = canvas_llm::LlmProviderId::Laya;
+    app.test_viewport = Some([800.0, 560.0]);
+    let frame = build_frame_at(&app, [800.0, 560.0]);
+    assert!(frame
+        .surfaces
+        .iter()
+        .all(|s| s.surface.as_str() != ui_registry::id::AI_STATUS));
+}

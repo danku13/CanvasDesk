@@ -11,9 +11,12 @@
 //!
 //! [`surface_diff`] — событие `surface_opened {surface}` по дифу реестра
 //! поверхностей: новая в реестре поверхность = «открыта». Ambient-хром
-//! (world/corner_buttons/template_strip/empty/minimap) открытием не
-//! считается; what-if — только реальная активация сессии
+//! (world/corner_buttons/template_strip/empty/minimap/ai_status) открытием
+//! не считается; what-if — только реальная активация сессии
 //! (`scene.whatif_active`; пилюля входа видна на больших вьюпортах).
+//! LAY-W1: ai_status — ambient с регистрации в SurfaceRegistry (виден без
+//! действия пользователя, пока AI не выключен); agent_panel — открытие
+//! пользователем (Ctrl+I), в срез попадает.
 
 #[cfg(any(target_arch = "wasm32", test))]
 use super::ui_registry;
@@ -34,6 +37,10 @@ const AMBIENT_SURFACES: &[&str] = &[
     ui_registry::id::TEMPLATE_STRIP,
     ui_registry::id::EMPTY,
     ui_registry::id::MINIMAP,
+    // LAY-W1: AI-статус-панель — ambient-хром (видна без действия
+    // пользователя, пока AI не выключен); регистрация в реестре не делает
+    // её «открытием».
+    ui_registry::id::AI_STATUS,
 ];
 
 /// Отправить продуктовое событие (web — мост в `__cdTelemetry.track`,
@@ -190,12 +197,19 @@ mod tests {
     }
 
     /// Ambient-хром не считается открытием: world/corner_buttons/
-    /// template_strip/empty/minimap отфильтрованы из среза (empty на
-    /// пустом канвасе и свёрнутая полоса присутствуют в реестре).
+    /// template_strip/empty/minimap/ai_status отфильтрованы из среза (empty
+    /// на пустом канвасе, свёрнутая полоса и AI-статус присутствуют в
+    /// реестре — ai_status с LAY-W1).
     #[test]
     fn ambient_surfaces_are_not_tracked() {
-        let app = test_stub();
+        let mut app = test_stub();
+        // AI-статус в реестре (AI включён) — но в срез открытий не попадает.
+        app.settings.llm.provider_suggest = canvas_llm::LlmProviderId::Laya;
         let registry = ui_registry::build_registry(&app);
+        assert!(registry
+            .declarations()
+            .iter()
+            .any(|d| d.id.as_str() == ui_registry::id::AI_STATUS));
         let present = tracked_present(&app, &registry);
         for ambient in AMBIENT_SURFACES {
             assert!(!present.contains(*ambient), "ambient {ambient} в срезе");
@@ -222,5 +236,19 @@ mod tests {
         app.scene.whatif_active = true;
         let registry = ui_registry::build_registry(&app);
         assert!(tracked_present(&app, &registry).contains(ui_registry::id::WHATIF));
+    }
+
+    /// LAY-W1: агент-панель (Ctrl+I) — открытие пользователем → в срезе
+    /// (`surface_opened {agent_panel}`); AI-статус — ambient → вне среза.
+    #[test]
+    fn agent_panel_tracked_ai_status_ambient() {
+        let mut app = test_stub();
+        app.settings.llm.provider_suggest = canvas_llm::LlmProviderId::Laya;
+        let registry = ui_registry::build_registry(&app);
+        assert!(!tracked_present(&app, &registry).contains(ui_registry::id::AGENT_PANEL));
+        app.agent_panel.open = true;
+        let registry = ui_registry::build_registry(&app);
+        assert!(tracked_present(&app, &registry).contains(ui_registry::id::AGENT_PANEL));
+        assert!(!tracked_present(&app, &registry).contains(ui_registry::id::AI_STATUS));
     }
 }
