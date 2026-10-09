@@ -26,9 +26,10 @@ is_dark() и таблицы форкались бы). JSON строго вали
 light()` из примитивов токенов. Выбор в настройках: `theme: Dark|Light` +
 `theme_preset: String` (пусто = классика; неизвестный id мягко деградирует).
 
-## TH3. Обязательные слоты (36)
+## TH3. Обязательные слоты (37)
 
-Каждый JSON несёт все слоты ThemeColors в `#RRGGBB[AA]`:
+Каждый JSON несёт все слоты ThemeColors в `#RRGGBB[AA]` (аудит 2026-10-09:
+фактический размер REQUIRED_KEYS = 37; прежние «36» — счётчик устарел):
 background, grid_minor/major, card_fill, edge_edit_fill, edge_label_fill,
 menu_fill, search_input_fill, search_row_fill, palette_row/chip/tile/selected/
 hover_fill, palette_border, title, icon, body, edge_label, link, quote,
@@ -51,6 +52,8 @@ whatif_fill, whatif_badge, error, hud, stage_dim + `"dark": bool`
 | control_primary_hover_fill | из dialog.button_primary_fill (hover-формула) |
 | control_disabled_text | из примитивов (#8A909C) |
 | formula_fn / formula_op | = link / quote |
+| control_success / control_warning | семантика статусов FR-070 (theme.rs) |
+| scrollbar_thumb / rule_color | слоты FR-070 (overlays: бегунок, `---`) |
 
 Правило: если слот выводим — он выводится, а не копируется в JSON
 (единственная точка вывода — theme_presets.rs).
@@ -66,13 +69,15 @@ whatif_fill, whatif_badge, error, hud, stage_dim + `"dark": bool`
 panel_border = palette_border, control_fill = palette_chip_fill,
 control_border = DIALOG_BUTTON_BORDER, control_primary = DIALOG_BUTTON_PRIMARY,
 control_danger = error, text = body, text_title = title,
-text_muted = DIALOG_TEXT_MUTED, accent = accent. Кит не знает тем — только
-слоты.
+text_muted = DIALOG_TEXT_MUTED, accent = accent — плюс слоты FR-070
+(control_success/control_warning/stage_dim/scrollbar_thumb/rule_color).
+Полный реестр 19 слотов с семантикой — `10-components.md` §K2.
+Кит не знает тем — только слоты.
 
 ## TH7. Правки тем
 
 - Поменять цвет пресета → правка JSON (значение обязано пройти G3).
-- Добавить пресет → JSON + строка PRESETS; количество слотов = 36, иначе
+- Добавить пресет → JSON + строка PRESETS; количество слотов = 37, иначе
   фолбэк.
 - Поменять классическую dark/light → правка конструкторов из примитивов
   (не JSON).
