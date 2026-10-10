@@ -720,6 +720,15 @@ impl App {
                 }
                 true
             }
+            // FR-106 (C3, №9): менеджер канвасов — модаль; Esc/↑/↓/Enter/F2
+            // + ввод в фильтр/буфер ренейма, прочие глотаются
+            ui_registry::KeyOwner::CanvasManager => {
+                if self.canvas_manager.open && event.state == ElementState::Pressed && !event.repeat
+                {
+                    self.on_canvas_manager_key(&event.logical_key);
+                }
+                true
+            }
             ui_registry::KeyOwner::Editor => {
                 // Активное редактирование (T7): клавиатура уходит в редактор
                 self.route_editor_key(&event.logical_key, event.state, event.repeat)
@@ -1483,11 +1492,20 @@ impl App {
                 self.request_redraw();
                 true
             }
+            // FR-106 (C3): элементы менеджера канвасов (строки/зоны имён/
+            // кнопки/строка хранилища); клик по телу — глотается
+            ui_registry::id::CANVAS_MANAGER => {
+                self.click_canvas_manager(element);
+                true
+            }
             // FR-105 (C2, №45b): кнопка «Перезагрузить» тоста внешнего
             // изменения (локальные правки — сперва в .bak)
             ui_registry::id::TOAST => {
-                if element == "toast-reload" {
-                    self.click_toast_reload_external();
+                match element {
+                    "toast-reload" => self.click_toast_reload_external(),
+                    // FR-106 (C3, №15a): «Отменить» тоста мягкого удаления
+                    "toast-undo" => self.click_toast_undo_delete(),
+                    _ => {}
                 }
                 self.request_redraw();
                 true
@@ -1525,6 +1543,12 @@ impl App {
             ui_registry::id::MIGRATE => {
                 self.migrate.close();
                 self.request_redraw();
+                true
+            }
+            // FR-106 (C3): клик мимо менеджера канвасов — закрыть и
+            // глотнуть (паттерн Block-модалей)
+            ui_registry::id::CANVAS_MANAGER => {
+                self.close_canvas_manager();
                 true
             }
             // FR-070: клик мимо админпанели — закрыть и глотнуть (паттерн
@@ -4466,6 +4490,32 @@ impl App {
                     MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),
                 };
                 self.autolink_scroll = (self.autolink_scroll + dy).clamp(0.0, max);
+                self.request_redraw();
+                return;
+            }
+        }
+        // FR-106 (C3): колесо над менеджером канвасов скроллит список
+        // (список > окна видимости), а не панорамирует канвас под модалью.
+        // Образец — ветка миграции выше: hit по rect панели из той же
+        // раскладки, что рисование/реестр.
+        if self.canvas_manager.open {
+            let viewport = self.viewport_logical();
+            let lay = self.manager_layout_current(viewport);
+            if canvas_manager_ui::point_in_rect(lay.panel, self.cursor) {
+                let delta_rows = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => {
+                        -y * scheme_gallery_ui::WHEEL_ROWS_PER_LINE
+                    }
+                    MouseScrollDelta::PixelDelta(pos) => {
+                        -pos.y as f32 / self.scale_factor() / canvas_manager_ui::ROW_STEP
+                    }
+                };
+                let rows_len = self.canvas_manager.rows().len();
+                self.canvas_manager.scroll_top = canvas_manager_ui::wheel_scroll_top(
+                    self.canvas_manager.scroll_top,
+                    delta_rows,
+                    rows_len,
+                );
                 self.request_redraw();
                 return;
             }

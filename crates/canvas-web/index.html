@@ -1291,6 +1291,10 @@
           recentPut: (name) =>
             tx("recent", "readwrite", (s) => s.put({ name: name, ts: Date.now() })),
           recentList: () => tx("recent", "readonly", (s) => s.getAll()),
+          /* FR-106 (мультиканвас C3, №15a): удаление из недавних при мягком
+             удалении канваса (запись не должна переживать свой файл). */
+          recentRemove: (name) =>
+            tx("recent", "readwrite", (s) => s.delete(name)),
           handlePut: (name, handle) =>
             tx("handles", "readwrite", (s) => s.put(handle, name)),
           handleGet: (name) => tx("handles", "readonly", (s) => s.get(name)),
@@ -1583,8 +1587,8 @@
       <button id="btn-open" title="Открыть .canvas с диска (автосейв в файл)">
         Открыть с диска…
       </button>
-      <button id="btn-recent" title="Переоткрыть последний канвас">
-        Недавние
+      <button id="btn-recent" title="Менеджер канвасов: список, создание, переименование, удаление">
+        Канвасы
       </button>
       <button id="btn-export" title="Скачать последнюю сохранённую версию (.canvas)">
         Экспорт .canvas

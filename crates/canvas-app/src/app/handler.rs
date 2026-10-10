@@ -306,6 +306,14 @@ impl ApplicationHandler<AppEvent> for App {
                     let (mig_instances, mig_texts) = self.migrate_dialog_overlay();
                     screen_bands.push(UiLayer::Modals, band_vp_clip, mig_instances, mig_texts);
                 }
+                // FR-106 (мультиканвас C3, issue #7): менеджер канвасов —
+                // модаль поверх канваса (затемнение рисует сам оверлей;
+                // галерея-пикер №38a открывается ПОВЕРХ менеджера — полоса
+                // галереи выше в порядке отрисовки).
+                if self.canvas_manager.open {
+                    let (mgr_instances, mgr_texts) = self.canvas_manager_overlay();
+                    screen_bands.push(UiLayer::Modals, band_vp_clip, mgr_instances, mgr_texts);
+                }
                 // Меню пустого канваса (T7): screen-space, константный размер
                 {
                     let (menu_instances, menu_texts) = self.canvas_menu_overlay();
@@ -838,7 +846,14 @@ impl ApplicationHandler<AppEvent> for App {
                     let mut toast_instances: Vec<CardInstance> = Vec::new();
                     if self.toast_action.is_some() {
                         let lang = self.settings.language;
-                        let label = crate::i18n::tr(lang, keys::CANVAS_EXT_RELOAD_ACTION);
+                        // FR-106 (C3, №15a): подпись кнопки зависит от действия —
+                        // «Перезагрузить» (№45b) или «Отменить» (мягкое удаление).
+                        let label = match &self.toast_action {
+                            Some(crate::app::ToastAction::UndoDelete(_)) => {
+                                crate::i18n::tr(lang, keys::CANVAS_MANAGER_UNDO)
+                            }
+                            _ => crate::i18n::tr(lang, keys::CANVAS_EXT_RELOAD_ACTION),
+                        };
                         let mut m = crate::kit_ui::new_measurer();
                         let mut fs = canvas_render::text::measure_font_system();
                         let family = canvas_render::text::SANS_FAMILY;
@@ -1617,6 +1632,13 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::MigrateDone { moved } => self.on_migrate_done(moved),
             AppEvent::MigrateFailed { moved } => self.on_migrate_failed(moved),
             AppEvent::ExtFileChanged { name } => self.on_ext_file_changed(name),
+            // --- FR-106 (мультиканвас C3): менеджер канвасов (оверлей) ---
+            AppEvent::CanvasManagerOpen => self.open_canvas_manager(),
+            AppEvent::StorageMode {
+                folder,
+                fs_available,
+            } => self.on_storage_mode(folder, fs_available),
+            AppEvent::CanvasSavedAsCopy { name } => self.on_canvas_saved_as_copy(name),
             #[cfg(windows)]
             AppEvent::Desktop(event) => self.on_desktop_event(event),
             #[cfg(windows)]
