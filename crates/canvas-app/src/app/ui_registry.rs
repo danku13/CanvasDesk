@@ -80,6 +80,12 @@ pub mod id {
     pub const GALLERY: &str = "gallery";
     /// Онбординг-карточка (L5, Block).
     pub const ONBOARDING: &str = "onboarding";
+    /// FR-LLM-B / PRD-0010 F-8: экран выбора AI-режима (Local / Cloud /
+    /// Self-hosted) — полноэкранная модаль (L5, Block). LAY-W17 (ревью
+    /// §3.4/§4): зарегистрирован в реестре (был главным «слепым пятном»
+    /// G4 — модаль вне реестра без hit-rect'ов/линта/telemetry). Открытие —
+    /// действие пользователя (пункт «?» «Онбординг AI» / триггер продукта).
+    pub const AI_ONBOARDING: &str = "ai_onboarding";
     /// FR-055 (этап U4, F-8): витрина кита (L5, Block — мимо панели
     /// закрывается и глотает; вход — пункт «?» «О интерфейсе», Q5-a).
     pub const KIT_GALLERY: &str = "kit_gallery";
@@ -434,6 +440,21 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
                 .with_scope(id::ONBOARDING),
         );
     }
+    // FR-LLM-B / PRD-0010 F-8: AI-онбординг — Modals/Block (полноэкранная
+    // модаль выбора AI-режима; backdrop глотается без закрытия — явный
+    // выбор, контракт онбординга). LAY-W17: регистрация в реестре (ревью
+    // §3.4 — ai_onboarding был вне реестра: без id/hit-rect'ов/линта).
+    // Деградация — Always ЯВНО (семантика как у DIALOG/SETTINGS): карточка
+    // АДАПТИРУЕТСЯ клампом к вьюпорту с полями AI_ONB_VIEWPORT_MARGIN
+    // (onboarding_ui::ai_onboarding_layout, kit::modal) вплоть до узких
+    // окон — HideBelow противоречил бы смыслу модали выбора.
+    if app.ai_onboarding.is_some() {
+        reg.add(
+            SurfaceDecl::new(id::AI_ONBOARDING, UiLayer::Modals, CapturePolicy::Block)
+                .with_scope(id::AI_ONBOARDING)
+                .with_degradation(DegradationPolicy::Always),
+        );
+    }
     // 19. Empty-state (Capture: мимо карточки канвас жив — AC-1.1 FR-049).
     if app.empty_state_visible() {
         reg.add(SurfaceDecl::new(
@@ -510,6 +531,10 @@ const VISUAL_ORDER: &[&str] = &[
     id::KIT_GALLERY,
     id::ADMIN,
     id::ONBOARDING,
+    // LAY-W17: AI-онбординг — над туром онбординга (порядок полосы Modals
+    // в handler.rs: ai_onboarding-полоса пушится после onboarding-полосы),
+    // под DIALOG (Да/Нет — верх модального стека).
+    id::AI_ONBOARDING,
     id::DIALOG,
     id::EXPLAIN,
     id::AUTOLINK,
@@ -645,6 +670,10 @@ pub mod ui_frame_flags {
     /// FR-LLM / LAY-W1: AI-статус-панель в реестре (`!llm.all_off()`,
     /// ambient); брейкпоинт вьюпорта учитывается сигнатурным `viewport`.
     pub const AI_STATUS_VISIBLE: u64 = 1 << 33;
+    /// LAY-W17: AI-онбординг открыт (`app.ai_onboarding.is_some()`).
+    /// Регистрация в реестре — состав кадра меняется открытием/закрытием
+    /// модали; без флага кэш отдал бы кадр без поверхности (pick мимо).
+    pub const AI_ONBOARDING_OPEN: u64 = 1 << 34;
 }
 
 /// FR-PERF-A: Сигнатура инвалидации кэша UI-кадра — всё, что влияет на
@@ -730,6 +759,14 @@ pub struct UiFrameSig {
     /// зависят от них — hit-rect'ы поверхности меняются без смены
     /// `scene_revision`.
     pub ai_feats: u8,
+    /// LAY-W17: скролл колонки «Переменные» панели «Как считается»
+    /// (offset px, `stage_calc_vars_scroll.offset`). Видимые строки
+    /// колонки — hit-rect'ы поверхности STAGE — скролл-зависимы; без поля
+    /// кэш кадра отдал бы устаревшие rect'ы после прокрутки колесом.
+    pub stage_calc_vars_offset: f32,
+    /// LAY-W17: скролл колонки «Расчёт» панели «Как считается» (offset px,
+    /// `stage_calc_formulas_scroll.offset`) — см. [`Self::stage_calc_vars_offset`].
+    pub stage_calc_formulas_offset: f32,
 }
 
 /// FR-PERF-A: Простой нечётный миксер хэша (FNV-1a вариант) для примитивов.
@@ -871,6 +908,10 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
     if app.onboarding.is_some() {
         flags |= ui_frame_flags::ONBOARDING_OPEN;
     }
+    // LAY-W17: AI-онбординг в составе кадра.
+    if app.ai_onboarding.is_some() {
+        flags |= ui_frame_flags::AI_ONBOARDING_OPEN;
+    }
     if app.empty_state_visible() {
         flags |= ui_frame_flags::EMPTY_VISIBLE;
     }
@@ -937,6 +978,9 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
         admin_section: app.admin_section,
         wheel_template_count,
         ai_feats,
+        // LAY-W17: скроллы колонок calc-панели — видимые строки STAGE.
+        stage_calc_vars_offset: app.stage_calc_vars_scroll.offset,
+        stage_calc_formulas_offset: app.stage_calc_formulas_scroll.offset,
     }
 }
 
@@ -1260,6 +1304,42 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 UiRect::new(r.x, r.y, r.w, r.h),
                 "stage",
             ));
+            // LAY-W17 (ревью §3.4, «calc — строки мимо кадра»): строки
+            // панели «Как считается» — в кадре реестра. Регресс-аудит
+            // click_main_stage: pick внутри окна stage и прежде отдавал
+            // Element{STAGE,"stage"} (окно = pick-зона), click_main_stage
+            // игнорирует имя элемента и пере-хит-тестит cursor той же
+            // stage_frame_ctx — строки не меняют ни адресата, ни
+            // обработчик клика. Колесо — ранний return до pick (input.rs,
+            // stage_calc_wheel_scroll), hover-глушение absorbs не меняется
+            // (строки — подмножество окна). Скролл-зависимость видимых
+            // строк покрыта сигнатурой (stage_calc_vars_offset /
+            // stage_calc_formulas_offset). Строки пушатся ПОСЛЕ окна —
+            // top_hit_at отдаёт строке клик внутри неё; элемент несёт
+            // МОДЕЛЬНЫЙ индекс строки (как StageCalcFocus —
+            // скролл-независимый).
+            if let Some(stage) = &app.main_stage {
+                // Защита от вырожденных срезов (hand-constructed состояния
+                // тестов: slice без нод) — stage_frame_ctx читает nodes[0..2]:
+                // прод-путь MainStageState::open гарантирует ≥ 2 ноды.
+                if stage.slice.nodes.len() >= 2 {
+                    let ctx = app.stage_frame_ctx(stage, &r, stage.scale.max(f32::EPSILON));
+                    if let Some(panel) = &ctx.panel {
+                        for (i, (_, row)) in panel.var_rows.iter().enumerate() {
+                            surface.hit_rects.push(HitRect::interactive(
+                                UiRect::new(r.x + row[0], r.y + row[1], row[2], row[3]),
+                                format!("calc-var-row-{i}"),
+                            ));
+                        }
+                        for (i, (_, row)) in panel.formula_rows.iter().enumerate() {
+                            surface.hit_rects.push(HitRect::interactive(
+                                UiRect::new(r.x + row[0], r.y + row[1], row[2], row[3]),
+                                format!("calc-formula-row-{i}"),
+                            ));
+                        }
+                    }
+                }
+            }
         }
         id::SEARCH => {
             let lay = search_layout(vw, vh, &app.search);
@@ -1423,6 +1503,41 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 surface
                     .hit_rects
                     .push(HitRect::interactive(rect(lay.card), "onboarding-card"));
+            }
+        }
+        // LAY-W17 (ревью §3.4): AI-онбординг — карточка + интерактивные
+        // зоны из [`onboarding_ui::ai_onboarding_layout`] (та же чистая
+        // функция, что draw `ai_onboarding_overlay` — «ввод = тому, что
+        // видно»). Карточка — базовая pick-зона первой (клик по телу
+        // карточки глотается Block-модалью, контракт ONBOARDING); карточки-
+        // радио и кнопки пушатся после — top_hit_at отдаёт им клик внутри
+        // их rect'ов. Блок privacy — декоративный текст (не интерактивен,
+        // hit-тест `ai_onboarding_button_at` его не возвращает) — не
+        // публикуется.
+        id::AI_ONBOARDING => {
+            if let Some(state) = &app.ai_onboarding {
+                let lay = onboarding_ui::ai_onboarding_layout(viewport, state);
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(rect(lay.card), "ai-onb-card"));
+                for (i, mode) in lay.mode_cards.iter().enumerate() {
+                    surface.hit_rects.push(HitRect::interactive(
+                        rect(*mode),
+                        format!("ai-onb-mode-{i}"),
+                    ));
+                }
+                surface.hit_rects.push(HitRect::interactive(
+                    rect(lay.btn_privacy),
+                    "ai-onb-privacy",
+                ));
+                // «Продолжить» — disabled до выбора режима (прототип F-8):
+                // rect публикуется как интерактивный — зона кнопки видна
+                // линту G4 при любой геометрии карточки; гейт доступности
+                // (state.selected) — обязанность обработчика, не реестра.
+                surface.hit_rects.push(HitRect::interactive(
+                    rect(lay.btn_continue),
+                    "ai-onb-continue",
+                ));
             }
         }
         id::EMPTY => {
@@ -1601,6 +1716,7 @@ mod tests {
             id::GALLERY,
             id::KIT_GALLERY,
             id::ONBOARDING,
+            id::AI_ONBOARDING,
             id::EMPTY,
             id::MINIMAP,
             id::AGENT_PANEL,
@@ -1812,6 +1928,209 @@ mod tests {
             }
             other => panic!("ожидался Backdrop онбординга, получено {other:?}"),
         }
+    }
+
+    /// LAY-W17 (ревью §3.4): AI-онбординг в реестре — Modals/Block/Always
+    /// (полноэкранная модаль адаптируется клампом, не прячется), hit-rect'ы
+    /// карточки/режимов/кнопок из ai_onboarding_layout, backdrop-контракт
+    /// как у онбординга (глотается без закрытия), флаг сигнатуры.
+    #[test]
+    fn ai_onboarding_surface_block_with_card_hit_rects() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.ai_onboarding = Some(crate::onboarding_ui::AiOnboardingState::default());
+        let reg = build_registry(&app);
+        let decl = reg
+            .declarations()
+            .iter()
+            .find(|d| d.id.as_str() == id::AI_ONBOARDING)
+            .expect("ai_onboarding в реестре");
+        assert_eq!(decl.layer, UiLayer::Modals);
+        assert_eq!(decl.capture, CapturePolicy::Block);
+        assert_eq!(decl.degradation, DegradationPolicy::Always);
+        // Esc-стек: модаль присутствует (Block), закрывается раньше тура
+        // онбординга (регистрация после ONBOARDING)
+        let esc: Vec<String> = reg
+            .esc_stack()
+            .iter()
+            .map(|sid| sid.as_str().to_owned())
+            .collect();
+        let pos = |name: &str| esc.iter().position(|s| s == name);
+        if let (Some(a), Some(b)) = (pos(id::AI_ONBOARDING), pos(id::ONBOARDING)) {
+            assert!(a < b, "AI-онбординг в esc-стеке выше тура онбординга");
+        }
+
+        let viewport = [1280.0_f32, 800.0];
+        let frame = build_frame_at(&app, viewport);
+        let surface = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::AI_ONBOARDING)
+            .expect("ai_onboarding в кадре");
+        let elements: Vec<&str> = surface
+            .hit_rects
+            .iter()
+            .map(|r| r.element.as_str())
+            .collect();
+        for expected in [
+            "ai-onb-card",
+            "ai-onb-mode-0",
+            "ai-onb-mode-1",
+            "ai-onb-mode-2",
+            "ai-onb-privacy",
+            "ai-onb-continue",
+        ] {
+            assert!(elements.contains(&expected), "нет hit-rect {expected}");
+        }
+        // Pick-паритет: центр карточки-радио Cloud (индекс 1) → Element
+        // ai-onb-mode-1 (верхний rect выигрывает у карточки-тела).
+        let lay = crate::onboarding_ui::ai_onboarding_layout(
+            viewport,
+            app.ai_onboarding.as_ref().unwrap(),
+        );
+        let mode = lay.mode_cards[1];
+        let c = UiPoint::new(mode[0] + mode[2] / 2.0, mode[1] + mode[3] / 2.0);
+        match HitStack::pick(&frame, c) {
+            Some(HitTarget::Element { surface, rect }) => {
+                assert_eq!(surface.surface.as_str(), id::AI_ONBOARDING);
+                assert_eq!(rect.element, "ai-onb-mode-1");
+            }
+            other => panic!("карточка-радио не пикается: {other:?}"),
+        }
+        // Backdrop-контракт Block-модали: угол экрана — Backdrop ai_onboarding.
+        match HitStack::pick(&frame, UiPoint::new(2.0, 2.0)) {
+            Some(HitTarget::Backdrop { surface }) => {
+                assert_eq!(surface.surface.as_str(), id::AI_ONBOARDING);
+            }
+            other => panic!("ожидался Backdrop AI-онбординга, получено {other:?}"),
+        }
+        // Флаг сигнатуры: открытие/закрытие меняет состав кадра.
+        assert_ne!(
+            build_frame_sig(&app).flags & ui_frame_flags::AI_ONBOARDING_OPEN,
+            0
+        );
+        app.ai_onboarding = None;
+        assert_eq!(
+            build_frame_sig(&app).flags & ui_frame_flags::AI_ONBOARDING_OPEN,
+            0
+        );
+        assert!(build_registry(&app)
+            .declarations()
+            .iter()
+            .all(|d| d.id.as_str() != id::AI_ONBOARDING));
+    }
+
+    /// LAY-W17 (ревью §3.4, «calc — строки мимо кадра»): строки панели
+    /// «Как считается» — hit-rect'ы поверхности STAGE, внутри окна stage
+    /// (пик = видимой строке); элемент — модельный индекс строки.
+    /// Фикстура — как lint_calc_panel_open (пучок веса 2 + формула).
+    #[test]
+    fn stage_calc_rows_published_in_frame() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        let mut src = Node::text("src", "Исток\nusers = 10\nconv = 0.2", 0.0, 0.0);
+        src.width = 420.0;
+        src.height = 200.0;
+        let mut dst = Node::text("dst", "Отчёт\nx = Исток.users * Исток.conv", 700.0, 0.0);
+        dst.width = 420.0;
+        dst.height = 220.0;
+        app.scene.canvas.nodes.push(src);
+        app.scene.canvas.nodes.push(dst);
+        let mut e1 = Edge::new("e1", "src", None, "dst", None);
+        e1.set_flow_kind(FlowKind::Value);
+        e1.from_output = Some("users".to_owned());
+        let mut e2 = Edge::new("e2", "src", None, "dst", None);
+        e2.set_flow_kind(FlowKind::Value);
+        e2.from_output = Some("conv".to_owned());
+        app.scene.canvas.edges.push(e1);
+        app.scene.canvas.edges.push(e2);
+        app.scene.recompute_flow();
+        let index = canvas_core::EdgeBundleIndex::build(&app.scene.canvas);
+        app.main_stage = MainStageState::open(&app.scene.canvas, &index, 0);
+        assert!(app.main_stage.is_some(), "stage открыт на пучке веса 2");
+
+        let viewport = [1280.0_f32, 800.0];
+        let frame = build_frame_at(&app, viewport);
+        let surface = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::STAGE)
+            .expect("stage в кадре");
+        let vars: Vec<&str> = surface
+            .hit_rects
+            .iter()
+            .map(|r| r.element.as_str())
+            .filter(|e| e.starts_with("calc-var-row-"))
+            .collect();
+        let formulas: Vec<&str> = surface
+            .hit_rects
+            .iter()
+            .map(|r| r.element.as_str())
+            .filter(|e| e.starts_with("calc-formula-row-"))
+            .collect();
+        assert_eq!(vars.len(), 2, "2 строки переменных (users, conv)");
+        assert_eq!(formulas.len(), 1, "1 строка формулы (x = …)");
+        // Строки внутри окна stage (регресс-аудит: pick-зона не шире окна).
+        let r = main_stage_rect(viewport);
+        for hit in surface.hit_rects.iter() {
+            if hit.element.starts_with("calc-") {
+                assert!(
+                    hit.rect.x >= r.x
+                        && hit.rect.y >= r.y
+                        && hit.rect.right() <= r.x + r.w
+                        && hit.rect.bottom() <= r.y + r.h,
+                    "строка {} вне окна stage",
+                    hit.element
+                );
+            }
+        }
+        // Пик строки — Element{STAGE, calc-var-row-N} (адресат клика тот же
+        // click_main_stage; элемент информативен для debug-оверлея).
+        let var0 = surface
+            .hit_rects
+            .iter()
+            .find(|r| r.element == "calc-var-row-0")
+            .expect("первая строка переменных");
+        let c = UiPoint::new(
+            var0.rect.x + var0.rect.w / 2.0,
+            var0.rect.y + var0.rect.h / 2.0,
+        );
+        match HitStack::pick(&frame, c) {
+            Some(HitTarget::Element { surface, rect }) => {
+                assert_eq!(surface.surface.as_str(), id::STAGE);
+                assert_eq!(rect.element, "calc-var-row-0");
+            }
+            other => panic!("строка calc-панели не пикается: {other:?}"),
+        }
+        // Клик МИМО окна — по-прежнему Backdrop (закрытие stage).
+        match HitStack::pick(&frame, UiPoint::new(2.0, 2.0)) {
+            Some(HitTarget::Backdrop { surface }) => {
+                assert_eq!(surface.surface.as_str(), id::STAGE);
+            }
+            other => panic!("клик мимо окна stage обязан закрывать: {other:?}"),
+        }
+    }
+
+    /// LAY-W17: сигнатура кадра отслеживает скроллы колонок calc-панели —
+    /// видимые строки (hit-rect'ы STAGE) скролл-зависимы; без полей кэш
+    /// отдал бы устаревшие rect'ы после прокрутки колесом.
+    #[test]
+    fn ui_frame_sig_tracks_stage_calc_scroll() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        let sig = build_frame_sig(&app);
+        app.stage_calc_vars_scroll.offset = 26.0;
+        assert_ne!(
+            build_frame_sig(&app).stage_calc_vars_offset,
+            sig.stage_calc_vars_offset,
+            "скролл переменных = другая сигнатура"
+        );
+        app.stage_calc_formulas_scroll.offset = 52.0;
+        assert_ne!(
+            build_frame_sig(&app).stage_calc_formulas_offset,
+            sig.stage_calc_formulas_offset,
+            "скролл формул = другая сигнатура"
+        );
     }
 
     /// What-if: HideBelow 900×600 — на 800×560 (G4) поверхности нет в кадре;
