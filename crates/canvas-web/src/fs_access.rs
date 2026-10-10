@@ -94,16 +94,67 @@ impl CanvasStorage for FsAccessStorage {
 }
 
 /// Сброс очереди: активное имя → диск (через хэндл), `.bak`-имя → OPFS.
+/// FR-105 (мультиканвас C2): в режиме папки (`ActiveKind::Folder`) И файл,
+/// И `.bak`-близнец пишутся в granted-папку (R-T6: у dir-хэндла есть
+/// родитель — sibling `.bak` возможен, в отличие от одиночного файла);
+/// отказ доступа (NotAllowedError) → событие баннера №44b.
 #[cfg(target_arch = "wasm32")]
 fn spawn_disk_flush(batch: Vec<(PathBuf, String)>) {
     wasm_bindgen_futures::spawn_local(async move {
         let active = crate::web_state::active_name();
         let handle = crate::web_state::disk_handle();
+        // FR-105: режим папки и её dir-хэндл
+        let folder_mode =
+            crate::web_state::active_kind() == Some(crate::web_state::ActiveKind::Folder);
+        let folder = crate::web_state::folder_handle();
+        let mut folder_written = false;
         for (path, text) in batch {
             let Some(name) = opfs_name(&path) else {
                 continue;
             };
             let is_bak = name.ends_with(".bak");
+            // FR-105: папочный режим — все записи в granted-папку.
+            if folder_mode {
+                let Some(dir) = &folder else {
+                    tracing::warn!(target: "canvas_web", file = %name, "папка утрачена — запись уходит в OPFS");
+                    // падаем в OPFS-страховку ниже
+                    write_opfs_fallback(&name, &text).await;
+                    continue;
+                };
+                match crate::fs_folder::dir_write_text(dir, &name, &text).await {
+                    Ok(()) => {
+                        folder_written = true;
+                        tracing::debug!(
+                            target: "canvas_web",
+                            file = %name,
+                            bytes = text.len(),
+                            "папка: автосейв записан"
+                        );
+                    }
+                    Err(err) => {
+                        let denied = err
+                            .dyn_ref::<js_sys::Error>()
+                            .and_then(|e| e.name().as_string())
+                            .is_some_and(|kind| kind == "NotAllowedError");
+                        if denied {
+                            tracing::warn!(target: "canvas_web", file = %name, "папка: доступ потерян (№44b)");
+                            crate::web_state::send_event(
+                                canvas_app::app::AppEvent::StorageAccessLost {
+                                    detail: name.clone(),
+                                },
+                            );
+                        } else {
+                            tracing::error!(
+                                target: "canvas_web",
+                                file = %name,
+                                error = ?err,
+                                "папка: автосейв не записан"
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
             if !is_bak {
                 // Активный канвас — на диск; чужое имя (сменили файл
                 // между save и flush) — в OPFS-хранилище, данные не теряем
@@ -129,18 +180,29 @@ fn spawn_disk_flush(batch: Vec<(PathBuf, String)>) {
                 }
             }
             // Версия-назад (и чужие имена) — в OPFS
-            match crate::opfs::opfs_root().await {
-                Ok(root) => {
-                    if let Err(err) = crate::opfs::write_opfs_text(&root, &name, &text).await {
-                        tracing::warn!(target: "canvas_web", file = %name, error = ?err, "OPFS (страховка): запись не удалась");
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!(target: "canvas_web", file = %name, error = ?err, "OPFS (страховка) недоступен")
-                }
-            }
+            write_opfs_fallback(&name, &text).await;
+        }
+        // FR-105: собственные записи меняют lastModified — база watch
+        // обновляется, чтобы poll на focus не счёл их внешними (№45b).
+        if folder_written {
+            crate::fs_folder::schedule_watch_refresh();
         }
     });
+}
+
+/// OPFS-страховка записи (прежний путь версии-назад).
+#[cfg(target_arch = "wasm32")]
+async fn write_opfs_fallback(name: &str, text: &str) {
+    match crate::opfs::opfs_root().await {
+        Ok(root) => {
+            if let Err(err) = crate::opfs::write_opfs_text(&root, name, text).await {
+                tracing::warn!(target: "canvas_web", file = name, error = ?err, "OPFS (страховка): запись не удалась");
+            }
+        }
+        Err(err) => {
+            tracing::warn!(target: "canvas_web", file = name, error = ?err, "OPFS (страховка) недоступен")
+        }
+    }
 }
 
 /// Записать текст через дисковый хэндл (createWritable → write → close).

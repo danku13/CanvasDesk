@@ -104,6 +104,16 @@ pub mod id {
     pub const AI_STATUS: &str = "ai_status";
     /// Миникарта (L3, Capture; рисуется проходом рендерера поверх полос).
     pub const MINIMAP: &str = "minimap";
+    /// FR-105 (мультиканвас C2): баннер потери доступа к granted-папке
+    /// (L3, Capture — клики по кнопкам баннера глотаются; мимо баннера
+    /// канвас жив: баннер не блокирует работу, №44b).
+    pub const STORAGE_BANNER: &str = "storage_banner";
+    /// FR-105: диалог миграции OPFS→папка (L5, Block — Esc/«Отмена»/«✕»
+    /// закрывают, клик мимо панели — тоже; №42a/№52a).
+    pub const MIGRATE: &str = "migrate";
+    /// FR-105: тост с действием «Перезагрузить» (L7, Capture — интерактивна
+    /// только кнопка; клик мимо проваливается в канвас, №45b).
+    pub const TOAST: &str = "toast";
 }
 
 /// Владелец клавиатуры — верх `esc_stack` реестра (Q4 PRD-0009: NUMI-хоткеи
@@ -134,6 +144,10 @@ pub enum KeyOwner {
     Admin,
     /// Клавиатура идёт в канвас-лестницу (прежнее поведение).
     Canvas,
+    /// FR-105 (мультиканвас C2): диалог миграции — модаль; Esc/Enter
+    /// (кнопка «Переехать»)/стрелки/Space (галочка) — в диалоге, прочие
+    /// глотаются (паттерн галереи схем).
+    Migrate,
 }
 
 /// Владелец-обработчик поверхности (FR-054, Q4-a): `Some` — у поверхности
@@ -157,6 +171,8 @@ pub fn owner_of(surface: &str) -> Option<KeyOwner> {
         // Фокус решает владельца (прежний гейт 8036: панель без фокуса
         // клавиши не перехватывает — Ctrl+P/лестница работают).
         id::TEMPLATE_PANEL => Some(KeyOwner::TemplatePanel),
+        // FR-105 (C2): диалог миграции — модаль (Esc/Enter/стрелки/Space)
+        id::MIGRATE => Some(KeyOwner::Migrate),
         _ => None,
     }
 }
@@ -410,6 +426,34 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
                 .with_scope(id::EXPLAIN),
         );
     }
+    // FR-105 (мультиканвас C2, №44b): баннер потери доступа к granted-папке
+    // — Panels/Capture (клик мимо баннера работает с канвасом: баннер не
+    // блокирует работу; без scope — ввод вне кнопок не глотается).
+    if app.storage_banner.is_some() {
+        reg.add(SurfaceDecl::new(
+            id::STORAGE_BANNER,
+            UiLayer::Panels,
+            CapturePolicy::Capture,
+        ));
+    }
+    // FR-105 (C2, №42a/№52a): диалог миграции OPFS→папка — Modals/Block
+    // (Esc/«Отмена»/«✕» закрывают, клик мимо панели — backdrop-закрытие).
+    if app.migrate.open {
+        reg.add(
+            SurfaceDecl::new(id::MIGRATE, UiLayer::Modals, CapturePolicy::Block)
+                .with_scope(id::MIGRATE),
+        );
+    }
+    // FR-105 (C2, №45b): тост с действием «Перезагрузить» — Toasts/Capture:
+    // интерактивна ТОЛЬКО кнопка (hit-rect ниже); клик мимо — в канвас,
+    // прежняя пассивность строки тоста сохранена.
+    if app.toast_action.is_some() {
+        reg.add(SurfaceDecl::new(
+            id::TOAST,
+            UiLayer::Toasts,
+            CapturePolicy::Capture,
+        ));
+    }
     // PRD-0007 (X4): диалог ревью автосвязи — верхний модал (§6.5): Esc/
     // ✕ закрывают, клик мимо — закрыть и глотнуть; панель объяснения,
     // если открыта, рендером прячется на время диалога
@@ -538,6 +582,8 @@ const VISUAL_ORDER: &[&str] = &[
     id::AGENT_PANEL,
     id::AI_STATUS,
     id::MINIMAP,
+    // FR-105 (C2): баннер потери доступа — Panels-полоса над панелями AI
+    id::STORAGE_BANNER,
     id::EDITOR,
     id::PALETTE,
     id::WHEEL,
@@ -548,6 +594,8 @@ const VISUAL_ORDER: &[&str] = &[
     id::GALLERY,
     id::KIT_GALLERY,
     id::ADMIN,
+    // FR-105 (C2): диалог миграции — модаль уровня галереи/витрины
+    id::MIGRATE,
     id::ONBOARDING,
     // LAY-W17: AI-онбординг — над туром онбординга (порядок полосы Modals
     // в handler.rs: ai_onboarding-полоса пушится после onboarding-полосы),
@@ -557,6 +605,9 @@ const VISUAL_ORDER: &[&str] = &[
     id::EXPLAIN,
     id::AUTOLINK,
     id::STAGE,
+    // FR-105 (C2): тост с действием — верхняя полоса (Toasts-слой и так
+    // выше модалей; ранг — детерминизм отладочного оверлея)
+    id::TOAST,
 ];
 
 fn visual_rank(sid: &str) -> usize {
@@ -692,6 +743,13 @@ pub mod ui_frame_flags {
     /// Регистрация в реестре — состав кадра меняется открытием/закрытием
     /// модали; без флага кэш отдал бы кадр без поверхности (pick мимо).
     pub const AI_ONBOARDING_OPEN: u64 = 1 << 34;
+    /// FR-105 (C2, №44b): баннер потери доступа показан
+    /// (`app.storage_banner.is_some()`).
+    pub const STORAGE_BANNER_VISIBLE: u64 = 1 << 35;
+    /// FR-105 (C2, №42a): диалог миграции открыт (`app.migrate.open`).
+    pub const MIGRATE_OPEN: u64 = 1 << 36;
+    /// FR-105 (C2, №45b): тост с действием активен (`app.toast_action`).
+    pub const TOAST_ACTION_ACTIVE: u64 = 1 << 37;
 }
 
 /// FR-PERF-A: Сигнатура инвалидации кэша UI-кадра — всё, что влияет на
@@ -785,6 +843,13 @@ pub struct UiFrameSig {
     /// LAY-W17: скролл колонки «Расчёт» панели «Как считается» (offset px,
     /// `stage_calc_formulas_scroll.offset`) — см. [`Self::stage_calc_vars_offset`].
     pub stage_calc_formulas_offset: f32,
+    /// FR-105 (C2): скролл окна чекбокс-листа миграции (`migrate.scroll_top`
+    /// — MIGRATE hit-строки двигаются без смены состава кадра).
+    pub migrate_scroll_top: u32,
+    /// FR-105 (C2): выбранный ординал миграции + длина листинга + счётчик
+    /// галочек (упаковка: selected<<40 | checked<<24 | len; hit-строки и
+    /// стили зависят от них).
+    pub migrate_pack: u64,
 }
 
 /// FR-PERF-A: Простой нечётный миксер хэша (FNV-1a вариант) для примитивов.
@@ -952,6 +1017,16 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
     if !app.settings.llm.all_off() {
         flags |= ui_frame_flags::AI_STATUS_VISIBLE;
     }
+    // FR-105 (C2): хранилище рабочего пространства (баннер/миграция/тост).
+    if app.storage_banner.is_some() {
+        flags |= ui_frame_flags::STORAGE_BANNER_VISIBLE;
+    }
+    if app.migrate.open {
+        flags |= ui_frame_flags::MIGRATE_OPEN;
+    }
+    if app.toast_action.is_some() {
+        flags |= ui_frame_flags::TOAST_ACTION_ACTIVE;
+    }
     // Hover-раскрытия и скроллы отдельных панелей — влияют на hit-rect'ы
     // внутри поверхности (не на состав кадра).
     let (template_hover_open, template_hover_scroll) = match &app.template_hover {
@@ -999,6 +1074,11 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
         // LAY-W17: скроллы колонок calc-панели — видимые строки STAGE.
         stage_calc_vars_offset: app.stage_calc_vars_scroll.offset,
         stage_calc_formulas_offset: app.stage_calc_formulas_scroll.offset,
+        // FR-105 (C2): состояние диалога миграции (скролл/выбор/галочки)
+        migrate_scroll_top: app.migrate.scroll_top as u32,
+        migrate_pack: ((app.migrate.selected as u64) << 40)
+            | ((app.migrate.checked.iter().filter(|c| **c).count() as u64) << 24)
+            | (app.migrate.entries.len() as u64),
     }
 }
 
@@ -1428,6 +1508,102 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             surface
                 .hit_rects
                 .push(HitRect::interactive(rect(lay.panel_rect), "gallery-panel"));
+        }
+        // FR-105 (C2, №44b): баннер потери доступа — интерактивны кнопки
+        // «Переподключить»/«Переключиться в браузерное» (геометрия —
+        // storage_ui + измеренные ширины, как у отрисовки; клик мимо
+        // кнопок проваливается — баннер не блокирует канвас).
+        id::STORAGE_BANNER => {
+            let lang = app.settings.language;
+            let label = crate::i18n::tr(lang, keys::CANVAS_STORAGE_LOST_BANNER);
+            let reconnect = crate::i18n::tr(lang, keys::CANVAS_STORAGE_RECONNECT);
+            let switch = crate::i18n::tr(lang, keys::CANVAS_STORAGE_SWITCH_BROWSER);
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let family = canvas_render::text::SANS_FAMILY;
+            let font = canvas_core::tokens::FONT_BODY;
+            let label_w = m.width_of(&mut fs, label, family, font);
+            let rec_w = canvas_ui::kit::button_size(reconnect, &mut m, &mut fs, family, font).x;
+            let sw_w = canvas_ui::kit::button_size(switch, &mut m, &mut fs, family, font).x;
+            let lay = crate::storage_ui::storage_banner_layout(viewport, label_w, rec_w, sw_w);
+            surface.hit_rects.push(HitRect::interactive(
+                rect(lay.reconnect),
+                "storage-reconnect",
+            ));
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(lay.switch), "storage-switch"));
+        }
+        // FR-105 (C2, №42a/№52a): диалог миграции — панели-кнопка (тело,
+        // глотает клик), строки чекбокс-листа, «✕», «Переехать…»/«Отмена»
+        // (геометрия — storage_ui::migrate_layout + измеренные кнопки).
+        id::MIGRATE => {
+            let lang = app.settings.language;
+            let go = crate::i18n::tr(lang, keys::CANVAS_STORAGE_MOVE_TO_DISK);
+            let cancel = crate::i18n::tr(lang, keys::DIALOG_CANCEL);
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let family = canvas_render::text::SANS_FAMILY;
+            let font = canvas_core::tokens::FONT_BODY;
+            let go_w = canvas_ui::kit::button_size(go, &mut m, &mut fs, family, font).x;
+            let cancel_w = canvas_ui::kit::button_size(cancel, &mut m, &mut fs, family, font).x;
+            let lay = crate::storage_ui::migrate_layout(viewport, &app.migrate, go_w, cancel_w);
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(lay.panel), "migrate-panel"));
+            for (index, row) in lay.rows.iter().enumerate() {
+                surface.hit_rects.push(HitRect::interactive(
+                    rect(row.row),
+                    format!("migrate-row-{}", lay.first_row + index),
+                ));
+            }
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(lay.close), "migrate-close"));
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(lay.go), "migrate-go"));
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(lay.cancel), "migrate-cancel"));
+        }
+        // FR-105 (C2, №45b): тост с действием — ТОЛЬКО кнопка
+        // «Перезагрузить» (геометрия — storage_ui::toast_action_rect от
+        // toast-области с whatif-avoid, как у отрисовки).
+        id::TOAST => {
+            if let Some((text, _)) = &app.toast {
+                let lang = app.settings.language;
+                let label = crate::i18n::tr(lang, keys::CANVAS_EXT_RELOAD_ACTION);
+                let mut m = canvas_ui::measure::TextMeasurer::new();
+                let mut fs = canvas_render::text::measure_font_system();
+                let family = canvas_render::text::SANS_FAMILY;
+                let font = crate::storage_ui::TOAST_ACTION_FONT;
+                let action_w = canvas_ui::kit::button_size(label, &mut m, &mut fs, family, font).x;
+                let text_w = m.width_of(&mut fs, text, family, font);
+                let avoid = if app.scene.whatif_active {
+                    Some(UiRect::new(
+                        0.0,
+                        viewport[1] - crate::whatif_ui::BAR_MARGIN - crate::whatif_ui::BAR_HEIGHT,
+                        viewport[0],
+                        crate::whatif_ui::BAR_HEIGHT,
+                    ))
+                } else {
+                    None
+                };
+                let vp_rect = UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
+                let mut toast = canvas_ui::kit::toast_area(vp_rect, avoid);
+                // полоса с действием — высота кнопки (синхронно с рендером:
+                // там клип растёт до TOAST_ACTION_STRIP_H, клип не режет низ)
+                toast.h = crate::storage_ui::TOAST_ACTION_STRIP_H;
+                let r = crate::storage_ui::toast_action_rect(
+                    [toast.x, toast.y, toast.w, toast.h],
+                    text_w,
+                    action_w,
+                );
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(rect(r), "toast-reload"));
+            }
         }
         // FR-055 (этап U4): витрина кита — интерактивные зоны шапки (одни
         // слоты, что у отрисовки — kit_ui::gallery_hit_slots); прочий контент
@@ -3108,5 +3284,117 @@ mod tests {
         assert!(texts
             .iter()
             .any(|t| t.text.contains("× a × b") && t.text.contains("L3·Panels")));
+    }
+
+    /// FR-105 (мультиканвас C2): поверхности хранилища — баннер потери
+    /// доступа (Panels/Capture: hit-rect'ы ТОЛЬКО кнопки — канвас под
+    /// баннером жив, №44b), диалог миграции (Modals/Block, №42a) и тост
+    /// с действием (Toasts/Capture: интерактивна только кнопка, №45b);
+    /// без действия строка тоста в реестре не появляется (пассивна).
+    #[test]
+    fn storage_surfaces_hit_rects() {
+        let mut app = test_stub();
+        // авто-показ онбординга первого запуска не участвует (FR-028);
+        // его Block-модаль выше MIGRATE в VISUAL_ORDER — снят, чтобы
+        // пик строки миграции шёл в сам диалог
+        app.onboarding = None;
+        // №44b: баннер потери доступа — Capture, кнопки пикаются
+        app.storage_banner = Some("permission".to_owned());
+        let frame = build_frame_at(&app, [1280.0, 800.0]);
+        let banner = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::STORAGE_BANNER)
+            .expect("баннер в кадре");
+        assert_eq!(banner.capture, CapturePolicy::Capture);
+        let elements: Vec<&str> = banner
+            .hit_rects
+            .iter()
+            .map(|r| r.element.as_str())
+            .collect();
+        assert!(elements.contains(&"storage-reconnect"), "кнопка есть");
+        assert!(elements.contains(&"storage-switch"), "кнопка есть");
+        assert!(
+            !elements.iter().any(|e| !e.starts_with("storage-")),
+            "интерактивны только кнопки (канвас под баннером жив)"
+        );
+        app.storage_banner = None;
+
+        // №42a: диалог миграции — Block, тело/строки/кнопки пикаются
+        app.migrate.open_with("рабочий.canvas");
+        let entries: Vec<_> = (0..3)
+            .map(|i| canvas_core::workspace::CanvasEntry {
+                name: format!("c{i}.canvas"),
+                ts: i as u64,
+                kind: canvas_core::workspace::EntryKind::Opfs,
+                repo: None,
+            })
+            .collect();
+        app.migrate.set_entries(entries);
+        let frame = build_frame_at(&app, [1280.0, 800.0]);
+        let migrate = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::MIGRATE)
+            .expect("диалог миграции в кадре");
+        assert_eq!(migrate.capture, CapturePolicy::Block);
+        let elements: Vec<&str> = migrate
+            .hit_rects
+            .iter()
+            .map(|r| r.element.as_str())
+            .collect();
+        for expected in [
+            "migrate-panel",
+            "migrate-row-0",
+            "migrate-go",
+            "migrate-cancel",
+            "migrate-close",
+        ] {
+            assert!(elements.contains(&expected), "нет hit-rect {expected}");
+        }
+        // клик по строке пикается в диалог (ввод = тому, что видно)
+        let row = migrate
+            .hit_rects
+            .iter()
+            .find(|r| r.element == "migrate-row-0")
+            .expect("строка списка");
+        let center = UiPoint::new(row.rect.x + 2.0, row.rect.y + row.rect.h / 2.0);
+        match HitStack::pick(&frame, center) {
+            Some(HitTarget::Element { surface, rect }) => {
+                assert_eq!(surface.surface.as_str(), id::MIGRATE);
+                assert_eq!(rect.element, "migrate-row-0");
+            }
+            other => panic!("строка миграции не пикается: {other:?}"),
+        }
+        app.migrate.close();
+
+        // №45b: тост с действием — Capture, интерактивна только кнопка
+        app.toast = Some(("файл изменился".to_owned(), std::time::Instant::now()));
+        app.toast_action = Some(ToastAction::ReloadExternal);
+        let frame = build_frame_at(&app, [1280.0, 800.0]);
+        let toast = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::TOAST)
+            .expect("тост с действием в кадре");
+        assert_eq!(toast.capture, CapturePolicy::Capture);
+        assert_eq!(toast.hit_rects.len(), 1, "интерактивна только кнопка");
+        assert_eq!(toast.hit_rects[0].element, "toast-reload");
+        // hit-зона — вся кнопка (высота полосы = кнопке кита: рендер
+        // растит клип до TOAST_ACTION_STRIP_H, scissor не режет низ)
+        assert!(
+            (toast.hit_rects[0].rect.h - crate::storage_ui::TOAST_ACTION_STRIP_H).abs()
+                < f32::EPSILON
+        );
+        // без действия — поверхности TOAST нет (строка пассивна)
+        app.toast_action = None;
+        let frame = build_frame_at(&app, [1280.0, 800.0]);
+        assert!(
+            frame
+                .surfaces
+                .iter()
+                .all(|s| s.surface.as_str() != id::TOAST),
+            "обычный тост не интерактивен"
+        );
     }
 }

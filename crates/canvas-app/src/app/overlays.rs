@@ -6949,3 +6949,316 @@ impl App {
         }
     }
 }
+
+// --- FR-105 (мультиканвас C2): хранилище рабочего пространства ------------
+
+impl App {
+    /// №44b: баннер потери доступа к granted-папке — полоса Panels (не
+    /// блокирует работу: канвас под баннером жив). Панель сверху-по-центру,
+    /// подпись слева, кнопки «Переподключить…» (primary) и «Переключиться в
+    /// браузерное» (secondary) справа. Стиль — kit::banner Warning (tint
+    /// control_warning + рамка); геометрия — `storage_ui` (чистая, тесты).
+    pub(super) fn storage_banner_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut out = (Vec::new(), Vec::new());
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return out;
+        }
+        let palette = self.effective_palette();
+        let kit_palette = palette.kit_palette();
+        let lang = self.settings.language;
+        let label = crate::i18n::tr(lang, keys::CANVAS_STORAGE_LOST_BANNER);
+        let reconnect = crate::i18n::tr(lang, keys::CANVAS_STORAGE_RECONNECT);
+        let switch = crate::i18n::tr(lang, keys::CANVAS_STORAGE_SWITCH_BROWSER);
+        let family = canvas_render::text::SANS_FAMILY;
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let font = canvas_core::tokens::FONT_BODY;
+        let label_w = m.width_of(&mut fs, label, family, font);
+        let reconnect_size = canvas_ui::kit::button_size(reconnect, &mut m, &mut fs, family, font);
+        let switch_size = canvas_ui::kit::button_size(switch, &mut m, &mut fs, family, font);
+        let lay = crate::storage_ui::storage_banner_layout(
+            viewport,
+            label_w,
+            reconnect_size.x,
+            switch_size.x,
+        );
+        let mut d = crate::kit_ui::KitDraw::new();
+        // Стиль — kit::banner (Warning): tint/radius/цвет подписи из слотов;
+        // раскладка кита даёт одну кнопку — вторую достраивает storage_ui
+        // (та же геометрическая школа: правый край, BUTTON_HEIGHT, пад-токены).
+        let slot = canvas_ui::geometry::UiRect::new(
+            lay.panel[0],
+            lay.panel[1],
+            lay.panel[2],
+            lay.panel[3],
+        );
+        let (_, style) = canvas_ui::kit::banner(
+            slot,
+            label_w,
+            switch_size.x - canvas_ui::kit::BUTTON_PAD_H * 2.0,
+            canvas_ui::kit::BannerKind::Warning,
+            canvas_ui::kit::KitState::Normal,
+            &kit_palette,
+        );
+        d.rect(slot, style.fill, style.border, style.radius);
+        d.label_left(
+            canvas_ui::geometry::UiRect::new(
+                lay.label[0],
+                lay.label[1],
+                lay.label[2],
+                lay.label[3],
+            ),
+            label,
+            style.label_color,
+            font,
+        );
+        let cursor = self.cursor;
+        let hover = |rect: [f32; 4]| {
+            cursor[0] >= rect[0]
+                && cursor[0] <= rect[0] + rect[2]
+                && cursor[1] >= rect[1]
+                && cursor[1] <= rect[1] + rect[3]
+        };
+        // «Переподключить…» — primary (главное действие баннера)
+        let mut rec_widget = WidgetState::default();
+        rec_widget.set_pointer(hover(lay.reconnect), false);
+        let rec_style = canvas_ui::kit::button_style(
+            canvas_ui::kit::ButtonVariant::Primary,
+            rec_widget.kit_state(),
+            &kit_palette,
+        );
+        let rec_rect = canvas_ui::geometry::UiRect::new(
+            lay.reconnect[0],
+            lay.reconnect[1],
+            lay.reconnect[2],
+            lay.reconnect[3],
+        );
+        d.control(rec_rect, &rec_style);
+        d.label_center(rec_rect, reconnect, rec_style.text, font);
+        // «Переключиться в браузерное» — secondary (запасной выход)
+        let mut sw_widget = WidgetState::default();
+        sw_widget.set_pointer(hover(lay.switch), false);
+        let sw_style = canvas_ui::kit::button_style(
+            canvas_ui::kit::ButtonVariant::Secondary,
+            sw_widget.kit_state(),
+            &kit_palette,
+        );
+        let sw_rect = canvas_ui::geometry::UiRect::new(
+            lay.switch[0],
+            lay.switch[1],
+            lay.switch[2],
+            lay.switch[3],
+        );
+        d.control(sw_rect, &sw_style);
+        d.label_center(sw_rect, switch, sw_style.text, font);
+        out.0 = d.quads;
+        out.1 = d
+            .texts
+            .into_iter()
+            .map(|t| OwnedScreenText {
+                text: t.text,
+                origin: t.origin,
+                width: t.width,
+                font_size: t.font_size,
+                color: t.color,
+                align: t.align,
+            })
+            .collect();
+        out
+    }
+
+    /// №42a/№52a: диалог миграции OPFS → granted-папка (модаль по паттерну
+    /// галереи схем): титул + подсказка + чекбокс-лист (активный канвас —
+    /// заблокированная галочка) + футер «Переехать на диск…»/«Отмена».
+    pub(super) fn migrate_dialog_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut out = (Vec::new(), Vec::new());
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return out;
+        }
+        let palette = self.effective_palette();
+        let kit_palette = palette.kit_palette();
+        let lang = self.settings.language;
+        let family = canvas_render::text::SANS_FAMILY;
+        let font = canvas_core::tokens::FONT_BODY;
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let go = crate::i18n::tr(lang, keys::CANVAS_STORAGE_MOVE_TO_DISK);
+        let cancel = crate::i18n::tr(lang, keys::DIALOG_CANCEL);
+        let go_w = canvas_ui::kit::button_size(go, &mut m, &mut fs, family, font).x;
+        let cancel_w = canvas_ui::kit::button_size(cancel, &mut m, &mut fs, family, font).x;
+        let lay = crate::storage_ui::migrate_layout(viewport, &self.migrate, go_w, cancel_w);
+        let mut d = crate::kit_ui::KitDraw::new();
+        // Затемнение + панель — канонический стиль модали кита (kit::modal_style)
+        let vp = canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
+        d.rect(vp, canvas_core::tokens::WHEEL_DIM, [0.0; 4], 0.0);
+        let panel_style = canvas_ui::kit::modal_style(&kit_palette);
+        let panel = canvas_ui::geometry::UiRect::new(
+            lay.panel[0],
+            lay.panel[1],
+            lay.panel[2],
+            lay.panel[3],
+        );
+        d.rect(
+            panel,
+            panel_style.fill,
+            panel_style.border,
+            panel_style.radius,
+        );
+        // Титул
+        let title = crate::i18n::tr(lang, keys::CANVAS_MIGRATE_TITLE);
+        d.label_left(
+            canvas_ui::geometry::UiRect::new(
+                lay.title[0],
+                lay.title[1],
+                lay.title[2],
+                lay.title[3],
+            ),
+            title,
+            kit_palette.text_title,
+            font,
+        );
+        // «✕» — иконка-кнопка кита
+        let cursor = self.cursor;
+        let hover = |rect: [f32; 4]| {
+            cursor[0] >= rect[0]
+                && cursor[0] <= rect[0] + rect[2]
+                && cursor[1] >= rect[1]
+                && cursor[1] <= rect[1] + rect[3]
+        };
+        let mut close_widget = WidgetState::default();
+        close_widget.set_pointer(hover(lay.close), false);
+        let close_style = canvas_ui::kit::icon_button_style(close_widget.kit_state(), &kit_palette);
+        let close_rect = canvas_ui::geometry::UiRect::new(
+            lay.close[0],
+            lay.close[1],
+            lay.close[2],
+            lay.close[3],
+        );
+        d.control(close_rect, &close_style);
+        d.icon(close_rect, "close", "×", close_style.text, font);
+        // Подсказка (перенос по ширине, ≤2 строки)
+        let hint = crate::i18n::tr(lang, keys::CANVAS_MIGRATE_HINT);
+        let hint_lines = crate::admin_ui::wrap_text(
+            &mut m,
+            &mut fs,
+            hint,
+            lay.hint[2].max(canvas_core::tokens::SPACING_LG),
+            canvas_core::tokens::FONT_CAPTION,
+        );
+        for (index, line) in hint_lines.iter().take(2).enumerate() {
+            let top = lay.hint[1]
+                + index as f32
+                    * (canvas_core::tokens::FONT_CAPTION + canvas_core::tokens::SPACING_SM);
+            d.label_left(
+                canvas_ui::geometry::UiRect::new(
+                    lay.hint[0],
+                    top,
+                    lay.hint[2],
+                    canvas_core::tokens::FONT_CAPTION + 2.0,
+                ),
+                line,
+                kit_palette.text,
+                canvas_core::tokens::FONT_CAPTION,
+            );
+        }
+        // Строки чекбокс-листа: выбранный индекс — подсветка строки, чекбокс —
+        // квадрат-индикатор (радиус-токен), галочка — глиф «✓».
+        for (index, row) in lay.rows.iter().enumerate() {
+            let selected = self.migrate.selected == lay.first_row + index;
+            let row_widget = if selected {
+                canvas_ui::kit::KitState::Selected
+            } else if hover(row.row) {
+                canvas_ui::kit::KitState::Hovered
+            } else {
+                canvas_ui::kit::KitState::Normal
+            };
+            let row_style = canvas_ui::kit::button_style(
+                canvas_ui::kit::ButtonVariant::Secondary,
+                row_widget,
+                &kit_palette,
+            );
+            let row_rect =
+                canvas_ui::geometry::UiRect::new(row.row[0], row.row[1], row.row[2], row.row[3]);
+            d.control(row_rect, &row_style);
+            // Чекбокс: заливка выбранного слота при галочке, рамка — всегда
+            let check_state = if row.mandatory {
+                canvas_ui::kit::KitState::Disabled
+            } else {
+                row_widget
+            };
+            let check_style = canvas_ui::kit::button_style(
+                canvas_ui::kit::ButtonVariant::Secondary,
+                check_state,
+                &kit_palette,
+            );
+            let check_rect = canvas_ui::geometry::UiRect::new(
+                row.checkbox[0],
+                row.checkbox[1],
+                row.checkbox[2],
+                row.checkbox[3],
+            );
+            d.control(check_rect, &check_style);
+            if row.checked {
+                d.label_center(check_rect, "✓", kit_palette.text_title, font);
+            }
+            // Имя канваса (display, без .canvas) с эллипсисом по факту места
+            // (TextMeasurer::ellipsis — единый шейпинг с отрисовкой)
+            let entry = &self.migrate.entries[lay.first_row + index];
+            let shown = m.ellipsis(&mut fs, entry.display(), family, font, row.label[2]);
+            d.label_left(
+                canvas_ui::geometry::UiRect::new(
+                    row.label[0],
+                    row.label[1] + (row.label[3] - font - 2.0).max(0.0) * 0.5,
+                    row.label[2],
+                    font + 2.0,
+                ),
+                &shown,
+                kit_palette.text,
+                font,
+            );
+        }
+        // Футер: «Переехать на диск…» (primary, disabled без галочек) + «Отмена»
+        let mut go_widget = WidgetState::default();
+        go_widget.set_pointer(hover(lay.go), false);
+        go_widget.set_disabled(!self.migrate.any_checked());
+        let go_style = canvas_ui::kit::button_style(
+            canvas_ui::kit::ButtonVariant::Primary,
+            go_widget.kit_state(),
+            &kit_palette,
+        );
+        let go_rect = canvas_ui::geometry::UiRect::new(lay.go[0], lay.go[1], lay.go[2], lay.go[3]);
+        d.control(go_rect, &go_style);
+        d.label_center(go_rect, go, go_style.text, font);
+        let mut cancel_widget = WidgetState::default();
+        cancel_widget.set_pointer(hover(lay.cancel), false);
+        let cancel_style = canvas_ui::kit::button_style(
+            canvas_ui::kit::ButtonVariant::Secondary,
+            cancel_widget.kit_state(),
+            &kit_palette,
+        );
+        let cancel_rect = canvas_ui::geometry::UiRect::new(
+            lay.cancel[0],
+            lay.cancel[1],
+            lay.cancel[2],
+            lay.cancel[3],
+        );
+        d.control(cancel_rect, &cancel_style);
+        d.label_center(cancel_rect, cancel, cancel_style.text, font);
+        out.0 = d.quads;
+        out.1 = d
+            .texts
+            .into_iter()
+            .map(|t| OwnedScreenText {
+                text: t.text,
+                origin: t.origin,
+                width: t.width,
+                font_size: t.font_size,
+                color: t.color,
+                align: t.align,
+            })
+            .collect();
+        out
+    }
+}
