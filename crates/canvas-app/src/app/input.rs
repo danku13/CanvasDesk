@@ -327,7 +327,47 @@ impl App {
 
     /// FR-055 U4: клик по витрине — кнопка темы (реальный kit-контрол:
     /// переключение темы — смена слотов палитры) или «✕»/паддинг (глотается).
+    /// Wave D v1 (issue #32): TO-BE — демо-хиты `kit-demo:*` (переходы
+    /// состояния через [`crate::kit_demo::apply_click`]) и навигация сайдбара.
     pub(super) fn click_kit_gallery(&mut self, element: &str) {
+        if let Some(id) = element.strip_prefix(crate::kit_demo::HIT_PREFIX) {
+            // Навигация сайдбара (D5) — скролл к секции (нужен скролл-стейт)
+            if let Some(section_id) = id.strip_prefix("nav:") {
+                self.kit_demo_nav(section_id);
+                return;
+            }
+            // Клик мимо демо-поля снимает его фокус (паттерн модалок)
+            if id != crate::kit_demo::hit::TEXTFIELD {
+                self.kit_demo.text_focus = false;
+            }
+            // Клик по треку слайдера — прыжок значения (drag — в on_cursor_moved)
+            if id == crate::kit_demo::hit::SLIDER {
+                if let Some(sl) = self
+                    .kit_demo_layout
+                    .as_ref()
+                    .and_then(|l| l.demo.as_ref())
+                    .and_then(|d| d.wave_c.slider.as_ref())
+                {
+                    if sl.track.w > 0.0 {
+                        self.kit_demo.slider_value =
+                            ((self.cursor[0] - sl.track.x) / sl.track.w).clamp(0.0, 1.0);
+                    }
+                }
+            }
+            crate::kit_demo::apply_click(&mut self.kit_demo, id);
+            // Тулбар темы — применяем пресет к приложению (settings.theme_preset)
+            if id == crate::kit_demo::hit::TOOLBAR_THEME {
+                if let Some(preset) =
+                    canvas_core::theme_presets::PRESETS.get(self.kit_demo.theme_idx)
+                {
+                    self.settings.theme_preset = preset.id.to_string();
+                    self.apply_effective_theme();
+                    self.save_settings();
+                }
+            }
+            self.request_redraw();
+            return;
+        }
         match element {
             "kit-gallery-theme" => {
                 // Паттерн кнопки темы угловых кнопок (toggle_theme)
@@ -339,6 +379,39 @@ impl App {
             _ => {}
         }
         self.request_redraw();
+    }
+
+    /// Wave D (D5): скролл к секции сайдбара — offset по базовому y
+    /// заголовка (из [`crate::kit_ui::DemoLayout::section_offsets`]).
+    fn kit_demo_nav(&mut self, section_id: &str) {
+        let Some(lay) = self.kit_demo_layout.as_ref() else {
+            return;
+        };
+        let Some(dl) = lay.demo.as_ref() else {
+            return;
+        };
+        let Some((_, base_y)) = dl.section_offsets.iter().find(|(id, _)| *id == section_id) else {
+            return;
+        };
+        let target = (*base_y - lay.sections_viewport.y).max(0.0);
+        let max_off = (lay.content_h - lay.sections_viewport.h).max(0.0);
+        let mut scroll = self.kit_gallery_scroll.clone();
+        scroll.viewport_h = lay.sections_viewport.h;
+        scroll.content_h = lay.content_h;
+        scroll.offset = target.min(max_off);
+        scroll.clamp();
+        self.kit_gallery_scroll = scroll;
+        self.request_redraw();
+    }
+
+    /// Wave D: демо-хит под курсором (из кэша раскладки кадра).
+    fn kit_demo_hit_at(&self, cursor: [f32; 2]) -> Option<&'static str> {
+        let lay = self.kit_demo_layout.as_ref()?;
+        let demo = lay.demo.as_ref()?;
+        demo.demo_hits
+            .iter()
+            .find(|(r, _)| r.w > 0.0 && crate::kit_ui::cursor_in(r, cursor))
+            .map(|(_, id)| *id)
     }
 
     /// FR-052 (U2): Esc-диспетчер реестра — тела прежней лестницы
@@ -681,7 +754,24 @@ impl App {
                     if event.state == ElementState::Pressed && !event.repeat {
                         match &event.logical_key {
                             Key::Named(NamedKey::Escape) => {
-                                self.kit_gallery_open = false;
+                                // Wave D (TO-BE): сначала закрываются демо-
+                                // поповеры (модалка/палитра/поповер/dropdown),
+                                // затем сама витрина — лестница Esc.
+                                if self.kit_demo.tobe {
+                                    if self.kit_demo.palette_open {
+                                        self.kit_demo.palette_open = false;
+                                    } else if self.kit_demo.modal_open {
+                                        self.kit_demo.modal_open = false;
+                                    } else if self.kit_demo.popover_open {
+                                        self.kit_demo.popover_open = false;
+                                    } else if self.kit_demo.dropdown_open {
+                                        self.kit_demo.dropdown_open = false;
+                                    } else {
+                                        self.kit_gallery_open = false;
+                                    }
+                                } else {
+                                    self.kit_gallery_open = false;
+                                }
                                 self.request_redraw();
                             }
                             Key::Named(NamedKey::Tab) => {
@@ -909,6 +999,40 @@ impl App {
     }
 
     pub(super) fn on_key(&mut self, event: &KeyEvent) {
+        // Wave D v1: демо-поле витрины (TO-BE, фокус) — текстовый приёмник
+        // (символы/Backspace/Esc; полный kit-маппер — v2 с TextFieldModel).
+        // IME-маршрут — в App::insert_committed_text (тот же приоритет).
+        if self.kit_gallery_open
+            && self.kit_demo.tobe
+            && self.kit_demo.text_focus
+            && event.state == ElementState::Pressed
+        {
+            match &event.logical_key {
+                Key::Named(NamedKey::Escape) => {
+                    self.kit_demo.text_focus = false;
+                    self.request_redraw();
+                    return;
+                }
+                Key::Named(NamedKey::Backspace) => {
+                    self.kit_demo.text_value.pop();
+                    self.request_redraw();
+                    return;
+                }
+                Key::Named(NamedKey::Enter) => {
+                    self.kit_demo.text_focus = false;
+                    self.request_redraw();
+                    return;
+                }
+                Key::Character(ch) => {
+                    if let Some(ch) = ch.chars().next().filter(|c| !c.is_control()) {
+                        self.kit_demo.text_value.push(ch);
+                        self.request_redraw();
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
         // Волна «input-адекватность» (design/rules/09-input.md IN2/IN9):
         // редактируемое текстовое поле строки настроек — полный клавиатурный
         // контракт через единый kit-маппер (прежде — только append/pop и
@@ -3197,6 +3321,11 @@ impl App {
                 // предыдущего (не потреблённый, например поверхностью UI)
                 // не переживает следующее нажатие
                 self.click_edit = None;
+                // Wave D v1: press-визуал демо-витрины (TO-BE) — id под
+                // курсором из кэша раскладки (переходы — в click_kit_gallery).
+                if self.kit_gallery_open && self.kit_demo.tobe {
+                    self.kit_demo.pressed = self.kit_demo_hit_at(self.cursor);
+                }
                 // FR-079 (S3): C3-карточки — клик до диспетчера поверхностей:
                 // стопка транзиентна (паттерн тултипа, не реестр FR-052);
                 // клик по карточке глотается, мимо — закрывает и проходит
@@ -4110,6 +4239,26 @@ impl App {
     pub(super) fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         let scale = self.scale_factor();
         let logical = [position.x as f32 / scale, position.y as f32 / scale];
+        // Wave D: drag слайдера демо-витрины (TO-BE) — значение по x трека
+        if self.kit_gallery_open
+            && self.kit_demo.tobe
+            && self.kit_demo.pressed == Some(crate::kit_demo::hit::SLIDER)
+        {
+            if let Some(sl) = self
+                .kit_demo_layout
+                .as_ref()
+                .and_then(|l| l.demo.as_ref())
+                .and_then(|d| d.wave_c.slider.as_ref())
+            {
+                if sl.track.w > 0.0 {
+                    self.kit_demo.slider_value =
+                        ((logical[0] - sl.track.x) / sl.track.w).clamp(0.0, 1.0);
+                    self.cursor = logical;
+                    self.request_redraw();
+                    return;
+                }
+            }
+        }
         // Drag по миникарте (T13): пан следует за курсором — раньше
         // канвас-панорамирования, дрги не конкурируют (нажатие перехвачено)
         if self.minimap_drag {

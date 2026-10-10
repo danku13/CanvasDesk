@@ -177,15 +177,38 @@ impl ActionRegistry {
 mod tests {
     use super::*;
 
-    fn always_true() -> bool { true }
-    fn always_false() -> bool { false }
+    fn always_true() -> bool {
+        true
+    }
+    fn always_false() -> bool {
+        false
+    }
 
     fn seed_registry() -> ActionRegistry {
         let mut reg = ActionRegistry::new();
-        reg.register(Action::new("open_settings", "Открыть настройки", CommandCategory::File).kbd("ctrl+,").predicate(always_true));
-        reg.register(Action::new("toggle_whatif", "Переключить what-if", CommandCategory::View).kbd("ctrl+w").predicate(always_true));
-        reg.register(Action::new("save", "Сохранить канвас", CommandCategory::File).kbd("ctrl+s").predicate(always_true));
-        reg.register(Action::new("delete_node", "Удалить ноду", CommandCategory::Edit).predicate(always_false)); // disabled — no selection
+        reg.register(
+            Action::new("open_settings", "Открыть настройки", CommandCategory::File)
+                .kbd("ctrl+,")
+                .predicate(always_true),
+        );
+        reg.register(
+            Action::new(
+                "toggle_whatif",
+                "Переключить what-if",
+                CommandCategory::View,
+            )
+            .kbd("ctrl+w")
+            .predicate(always_true),
+        );
+        reg.register(
+            Action::new("save", "Сохранить канвас", CommandCategory::File)
+                .kbd("ctrl+s")
+                .predicate(always_true),
+        );
+        reg.register(
+            Action::new("delete_node", "Удалить ноду", CommandCategory::Edit)
+                .predicate(always_false),
+        ); // disabled — no selection
         reg
     }
 
@@ -202,7 +225,11 @@ mod tests {
     fn register_idempotent_by_id() {
         let mut reg = ActionRegistry::new();
         reg.register(Action::new("save", "Сохранить", CommandCategory::File));
-        reg.register(Action::new("save", "Сохранить канвас", CommandCategory::File)); // update
+        reg.register(Action::new(
+            "save",
+            "Сохранить канвас",
+            CommandCategory::File,
+        )); // update
         assert_eq!(reg.len(), 1);
         assert_eq!(reg.get("save").unwrap().label, "Сохранить канвас");
     }
@@ -244,12 +271,24 @@ mod tests {
         let reg = seed_registry();
         let groups = reg.cheatsheet();
         // File: open_settings, save; View: toggle_whatif; Edit: delete_node (predicate=false → hidden)
-        let file_count = groups.iter().find(|(c, _)| *c == CommandCategory::File).map(|(_, a)| a.len()).unwrap_or(0);
+        let file_count = groups
+            .iter()
+            .find(|(c, _)| *c == CommandCategory::File)
+            .map(|(_, a)| a.len())
+            .unwrap_or(0);
         assert_eq!(file_count, 2);
-        let view_count = groups.iter().find(|(c, _)| *c == CommandCategory::View).map(|(_, a)| a.len()).unwrap_or(0);
+        let view_count = groups
+            .iter()
+            .find(|(c, _)| *c == CommandCategory::View)
+            .map(|(_, a)| a.len())
+            .unwrap_or(0);
         assert_eq!(view_count, 1);
         // Edit: delete_node hidden (predicate=false)
-        let edit_count = groups.iter().find(|(c, _)| *c == CommandCategory::Edit).map(|(_, a)| a.len()).unwrap_or(0);
+        let edit_count = groups
+            .iter()
+            .find(|(c, _)| *c == CommandCategory::Edit)
+            .map(|(_, a)| a.len())
+            .unwrap_or(0);
         assert_eq!(edit_count, 0);
     }
 
