@@ -7,6 +7,7 @@ Tokens (правило учёта токенов — AGENTS.md). Записи д
 
 ## Journal index (все записи: текущие и архивные)
 
+- 2026-10-11 | HOTFIX-56 (сессия web-b5714086-2f9f-44a0-af82-302aa182533b) | Паника prod-web «cannot recursively acquire mutex» (владелец) — вложенный захват MEASURE_FS: чип C4 каждый кадр/менеджер C3/kit_field_view ×4; фикс (m,fs) параметром + reorder; аудит scripts/audit_fs_locks.py; E2E headless до/после; main снова зелёный (fmt/clippy/тест INT); найдены #57 #58 | worklog.md (текущий)
 - 2026-10-08 | CR-029 (сессия web-c1430de8-9dcf-4130-9380-b5107677d30c) | Репорт владельца «иногда не отрабатывает автодополнение при вставке входящих значений» (скриншот: нода «Корзин | worklog-2026-10-02_10-08.md
 - 2026-10-03 | PRD-0010-UI-прототип | Спроектировать UI 5 новых AI-компонентов LLM-интеграции (PRD-0010/ADR-0016) и доработать docs/prototypes/proto | worklog-2026-10-02_10-08.md
 - 2026-10-02 | FR-089-активация | PostHog-настройки владельца (EU cloud, phc_-ключ) — вписать ключ, включить продуктовые события из приложения,  | worklog-2026-10-02_10-08.md
@@ -344,3 +345,24 @@ Stage Summary:
 - Гейты: cargo недоступен в среде — test/clippy/fmt делегированы CI; код написан carefully с проверкой типов/импортов вручную
 - НЕ закоммичено — изменения в рабочем дереве (по инструкции)
 Tokens: in≈170000, out≈42000, total≈212000 (estimate), model=GLM-4.7, scope=INT-2
+
+---
+Task ID: HOTFIX-56 (сессия web-b5714086-2f9f-44a0-af82-302aa182533b)
+Agent: Super Z (main)
+Task: Владелец прислал панику prod-web: «cannot recursively acquire mutex» (std no_threads, /rustc/b940…/sys/sync/mutex/no_threads.rs:22) + Uncaught RuntimeError: unreachable. Проверить и починить.
+
+Work Log:
+- Ветка обновлена (main был на c83b888, 172 коммита позади origin: C1–C5, Wave D, INT — пуш субагентами шёл напрямую).
+- Воспроизведение на живом Pages-деплое (headless-Chromium/Playwright, 1280×800): паника 1-в-1 на СТАРТЕ (первый кадр после GPU-init) — клики не нужны.
+- Корень: глобальный MEASURE_FS (Mutex<FontSystem>, canvas-render/src/text.rs:2336) — вложенный захват тем же потоком. Прецедент-класс: a11f6c9 (2026-09-26, галерея). 6 путей: (1) canvas_chip_overlay держит guard → chip_layout_current лочит сам — КАЖДЫЙ кадр, чип ambient-хром (3795172 C4; web-паника/натив-дедлок); (2) canvas_manager_overlay → manager_layout_current (822992c C3); (3–6) kit_field_view лочил сам (86d278c input-волна) и звался под живыми guard'ами: галерея 2133, шаблоны 3089, чип-ренейм 7484, менеджер 7706/7827. CI-слепота: тур-тесты — статический анализ сценариев, не браузер; натив-тесты не рендерят оверлеи.
+- Фикс (конвенция «(m, fs) параметром», как layout_with/wrap_lines_with_more): kit_field_view — параметры (m, fs), внутренний лок удалён, 6 call-сайтов (поиск — локальная пара в ограниченном скоупе: ниже свои последовательные захваты theme-кнопки); canvas_chip_overlay/canvas_manager_overlay — *_layout_current ДО guard'а. Геометрия без изменений.
+- Воссоздан scripts/audit_fs_locks.py (удалён при чистках после a11f6c9): статический аудит класса (функции с measure_font_system() в теле = lockers × их вызовы в guard-держащих функциях), стабильные ключи «файл :: вызывающая -> locker», 8 ALLOWLIST-записей (все разобраны вручную — последовательные захваты: блоки/match-arm'ы/порядок). Аудит зелёный.
+- Верификация: до фикса паника воспроизведена; после — полный E2E-сценарий (старт 5с с чипом, Skip онбординга по точной геометрии probe-зонда, empty-state, чип-ренейм+ввод, менеджер по иконке чипа — маяк-лог «открыт менеджер канвасов» + VLM-проверка скриншота: «Канвасы»/поиск/строка default/кнопки/«Хранилище: Браузерное», галерея+фильтр, шаблоны+фильтр) — 0 паник/0 pageerror. Прогнано дважды: до и после rebase.
+- Попутно — восстановление зелёного main (красный от INT c83b888): fmt (actions/handler/kit_ui/kit_demo/ui_layout_lint), clippy dead_code INT-2 → allow с причиной (задел command palette Wave D v2), тест tobe_demo_layout_structure → ожидание 4 группы (Feedback за клампом высоты — D7/P1 ревью 32e337e; параллельная Wave M сделала эквивалентный фикс — при rebase взят её вариант).
+- Найдены отдельные дефекты (issues): #57 чип перекрыт DOM author-bar (клики уходят в GitHub/Telegram/LinkedIn — менеджер недостижим на web; для E2E author-bar скрывался инжект-стилем), #58 карточка мультиканваса онбординга (шаг 9) недостижима — развилка CHOICE_STEP без «Далее», обе опции завершают тур.
+- Гейты: cargo test --workspace 96 сьютов/0 failed; clippy -D warnings; fmt --check; wasm_gate --check; mcp_wasm_gate --check; audit_fs_locks — зелёные. Коммит ab5c18a (rebase поверх Wave M cd4b705), пуш, issue #56 закрыт со сводкой-верификацией.
+
+Stage Summary:
+- Паника #56 закрыта: чип/менеджер/галерея/шаблоны/поиск — без вложенных захватов MEASURE_FS; регрессия — scripts/audit_fs_locks.py; main снова зелёный.
+- Открыто: #57 (чип/author-bar — решение о позиции за владельцем), #58 (карусель онбординга).
+Tokens: in≈390000, out≈98000, total≈488000 (estimate), model=GLM-4.7, scope=HOTFIX-56
