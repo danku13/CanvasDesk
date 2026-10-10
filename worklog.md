@@ -76,6 +76,7 @@ Tokens (правило учёта токенов — AGENTS.md). Записи д
 - 2026-10-10 | MC-C1 (GitHub #5, волна C1 мультиканваса; high-level #14) | Волна C1 на контрактах C0: OpfsStore над OPFS + JS-глю, AppEvent-конвейер + обратный канал App→web, Web Locks №14b + модал №35a, URL-синк №17a, битая ссылка №31c, активный сценарий №32c, persist() R-T3 | текущий
 - 2026-10-10 | DOCS-EN-w2 (issue #24; сессия web-a6dbb853) | Волна 2 перевода агентского контура EN: SPEC/TASKS/RECIPES/ui-kit/WASM-TESTING/активный index-cr-fr/skills-скоупы; 12 файлов 1:1, корпус 70863->63640 o200k | текущий
 - 2026-10-10 | DOCS-EN-w3 (issue #33; сессия web-a6dbb853) | Волна 3 агентского слоя: docs/agent/ (MAP, routes.yaml, брифы, глоссарий, 6 workflow-навыков, eval-скелет), разгрузка AGENTS.md 8280→4860 o200k, doc_lint+бэктик-пути+бюджеты, контракт-тест правила 5–6, дрейф счётчика CONTEXT/SPEC | текущий
+- 2026-10-10 | MC-C2 (GitHub #6, волна C2 мультиканваса; high-level #14) | Волна C2: FsAccessStore над granted-папкой (№41c тихий старт, R-T6 rename с .bak), миграция OPFS→папка №42a/№52a (копирование до удаления), баннер №44b, watch внешних изменений №45b/№53b | текущий
 
 Архив: `worklog/archive/worklog-2026-10-02_10-08.md` (2026-10-02…2026-10-08, 46 записей). Ниже — записи с 2026-10-09.
 
@@ -665,3 +666,26 @@ Stage Summary:
 - Бюджетный гейт защищает от повторного разрастания входных точек (этап 10)
 - Для владельца: (а) прогоны eval-набора E01–E10 в живом ZCode/Kimi Code — этап 8; (б) перевод design/rules/ (~20k символов, normative для UI-волн) — кандидат волны 4; (в) первый зелёный cargo-прогон правил 5–6 — CI
 Tokens: in≈285000, out≈72000, total≈357000 (estimate), model=GLM-5.3 (Super Z main), scope=DOCS-EN-w3
+
+---
+Task ID: MC-C2 (GitHub #6, волна C2 мультиканваса; high-level #14)
+Agent: Super Z (subagent MC-C2 + координатор main при финализации; worktree wt-c2/ветка wave/mc-c2)
+Task: Волна C2 на контрактах C0/C1: FsAccessStore над granted-папкой (FS Access API), миграция OPFS→папка (№42a/№52a, копирование до удаления), баннер потери доступа (№44b), watch внешних изменений (№45b/№53b), тихий старт №41c, браузерная матрица.
+
+Work Log:
+- Сессия агента прерывалась (контекст) — задел зафиксирован коммитом wip 9bf0fae после ребейза на main 990ed92 (C1-конвейер); финальная фаза (WebRequest-унификация, fmt, гейты, FR-105-сверка, работа с worklog) — координатор от имени MC-C2
+- canvas-web fs_folder.rs (новый, ~1285 строк): FsAccessStore — реализация WorkspaceStore (сигнатуры трейта не менялись) над granted-папкой: зеркало + очередь мутаций (паттерн MirrorStore), rename через handle.move() c фолбэком write+delete + перенос .bak-близнеца (R-T6), мягкое удаление №15a, белый список .canvas; StartMode (тихий старт №41c: сохранённый dir-хэндл + queryPermission granted → папка, иначе OPFS; requestPermission — только в жесте); watch: poll lastModified на focus/visibilitychange → ExtFileChanged; WebStorageBridge удалён — обратные вызовы через WebRequest-конвейер C1 (StorageReconnect/StorageSwitchBrowser/MigrateList/MigrateRun/StorageReloadExternal)
+- canvas-web workspace.rs: исполнитель миграции — трейт MigrationIo (IO-шов), MigrationDriver (машина состояний read→write→verify→remove, толерантна к осиротевшим/дублирующимся ответам), MigrationReport{moved,failed,kept,missing}, execute_migration; ИНВАРИАНТ №52a: все копии пишутся ДО первого удаления (частичный сбой не теряет данные — тесты partial_write_failure_keeps_source, remove_failure_keeps_both_sides, writes_all_before_first_remove)
+- canvas-core workspace.rs: аддитивно WatchSnapshot + snapshot_changed (№45b/№53b чистая часть; удалённые снаружи — не «изменение», их обрабатывает листинг C3) — 2 теста; контракты C0 не тронуты
+- JS-глю index.html: dirHandlePut/dirHandleGet (персист DIRECTORY-хэндла, ключ "workspace"), dirList() → {name, ts}, handleMove; web-sys-фичи FileSystemHandleKind/VisibilityState
+- canvas-app: AppEvent-блок // FR-105 (StorageAccessLost/StorageReconnected/MigrateShowDialog/MigrateOpfsList/MigrateDone/MigrateFailed/ExtFileChanged); баннер №44b (canvas.storage.lost_banner + «Переподключить»/«Переключиться в браузерное»), диалог миграции №42a (чекбокс-лист, активный заблокирован, Space/↑↓/Enter/Esc, скролл-следование выбора), тост внешних изменений с действием «Перезагрузить» (8 с), поверхности STORAGE_BANNER/MIGRATE/TOAST в ui_registry (draw==hit); storage_ui.rs (новый) — чистые UI-модели (раскладки баннера/диалога, toast_action_rect); временный отладочный вход ?migrate=1 (до C3, задокументирован); i18n +2 ключа (migrate.failed_toast, ext.reload_action) RU/EN, остальные из C0
+- Автосейв режима папки: файл И .bak — в папку (fs_access.rs); NotAllowedError → баннер; экспорт активной версии из папки (export.rs)
+- Гейты (координатор, финальное состояние): cargo fmt --check OK; clippy --workspace -D warnings OK; cargo test --workspace 2954 passed / 0 failed (31 новый тест C2: core×2, web-workspace×7, fs_folder×6, storage_ui×10, app-поведение×5, url_params×1); wasm_gate.sh --check OK; RED-верификация мутациями ×4 (FR-105 §Проверка)
+- WASM L2 не гонялся (wasm-bindgen CLI отсутствует, 2 ядра/4 ГБ; рендер-пути не тронуты) — ручные сценарии для владельца в FR-105 §Проверка (тихий старт, переезд, баннер, watch, Firefox/Safari, клавиатура)
+
+Stage Summary:
+- C2 закрыта целиком: C3 получает готовый стор + миграцию + баннер; пересечение с C1 унифицировано (WebRequest-конвейер вместо собственного моста — замена в финальной фазе)
+- Пользовательские изменения: тихий старт в папке (granted), переезд чекбокс-списком с удалением OPFS-оригиналов, баннер потери доступа, тост внешних изменений с «Перезагрузить» (локальная версия — в .bak)
+- Открытые пункты: строка «Переехать на диск…» в менеджере и вызов миграции из UI — C3; persist() — у C1; ручной дым — за владельцем
+Tokens: in≈520k, out≈120k, total≈640k (estimate; subagent MC-C2 + координаторская финализация), model=GLM, scope=FR-105
+

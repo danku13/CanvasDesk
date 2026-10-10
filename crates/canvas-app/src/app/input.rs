@@ -711,6 +711,15 @@ impl App {
                 }
                 true
             }
+            // FR-105 (C2, №42a): диалог миграции — модаль; Esc — закрыть,
+            // ↑/↓ — выбор строки, Space — галочка, Enter — «Переехать…",
+            // прочие глотаются (паттерн галереи схем)
+            ui_registry::KeyOwner::Migrate => {
+                if self.migrate.open && event.state == ElementState::Pressed && !event.repeat {
+                    self.on_migrate_key(&event.logical_key);
+                }
+                true
+            }
             ui_registry::KeyOwner::Editor => {
                 // Активное редактирование (T7): клавиатура уходит в редактор
                 self.route_editor_key(&event.logical_key, event.state, event.repeat)
@@ -1456,6 +1465,33 @@ impl App {
                 true
             }
             ui_registry::id::PALETTE => self.click_palette(),
+            // FR-105 (C2, №44b): кнопки баннера потери доступа (hit-rect'ы —
+            // только кнопки; клик мимо уже провалился в канвас)
+            ui_registry::id::STORAGE_BANNER => {
+                match element {
+                    "storage-reconnect" => self.click_storage_reconnect(),
+                    "storage-switch" => self.click_storage_switch_browser(),
+                    _ => {}
+                }
+                self.request_redraw();
+                true
+            }
+            // FR-105 (C2, №42a): строки/кнопки диалога миграции; клик по
+            // телу панели — глотается (модаль жива)
+            ui_registry::id::MIGRATE => {
+                self.click_migrate(element);
+                self.request_redraw();
+                true
+            }
+            // FR-105 (C2, №45b): кнопка «Перезагрузить» тоста внешнего
+            // изменения (локальные правки — сперва в .bak)
+            ui_registry::id::TOAST => {
+                if element == "toast-reload" {
+                    self.click_toast_reload_external();
+                }
+                self.request_redraw();
+                true
+            }
             ui_registry::id::MENU => {
                 self.click_context_menu();
                 true
@@ -1481,6 +1517,13 @@ impl App {
             // Block-поверхности, паттерн галереи схем)
             ui_registry::id::KIT_GALLERY => {
                 self.kit_gallery_open = false;
+                self.request_redraw();
+                true
+            }
+            // FR-105 (C2, №42a): клик мимо диалога миграции — закрыть и
+            // глотнуть (паттерн Block-модалей)
+            ui_registry::id::MIGRATE => {
+                self.migrate.close();
                 self.request_redraw();
                 true
             }
@@ -4423,6 +4466,47 @@ impl App {
                     MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),
                 };
                 self.autolink_scroll = (self.autolink_scroll + dy).clamp(0.0, max);
+                self.request_redraw();
+                return;
+            }
+        }
+        // FR-105 (C2, №42a): колесо над диалогом миграции скроллит
+        // чекбокс-лист (>10 канвасов OPFS), а не панорамирует канвас
+        // под модалью. Образец — ветка автосвязи выше: hit по rect панели
+        // из той же раскладки, что рисование/реестр.
+        if self.migrate.open {
+            let viewport = self.viewport_logical();
+            let lang = self.settings.language;
+            let go = crate::i18n::tr(lang, keys::CANVAS_STORAGE_MOVE_TO_DISK);
+            let cancel = crate::i18n::tr(lang, keys::DIALOG_CANCEL);
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let family = canvas_render::text::SANS_FAMILY;
+            let font = canvas_core::tokens::FONT_BODY;
+            let go_w = canvas_ui::kit::button_size(go, &mut m, &mut fs, family, font).x;
+            let cancel_w = canvas_ui::kit::button_size(cancel, &mut m, &mut fs, family, font).x;
+            let lay = crate::storage_ui::migrate_layout(viewport, &self.migrate, go_w, cancel_w);
+            let panel = [
+                lay.panel[0],
+                lay.panel[1],
+                lay.panel[0] + lay.panel[2],
+                lay.panel[1] + lay.panel[3],
+            ];
+            if point_in_rect(panel, self.cursor) {
+                // Знак — как у списков (галерея/карта): колесо от себя
+                // (y < 0) увеличивает scroll_top; LineDelta — щелчки,
+                // PixelDelta — по высоте строки списка.
+                let delta_rows = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => -y * 3.0,
+                    MouseScrollDelta::PixelDelta(pos) => {
+                        -pos.y as f32 / self.scale_factor() / crate::storage_ui::MIGRATE_ROW_STEP
+                    }
+                };
+                self.migrate.scroll_top = crate::storage_ui::migrate_wheel_scroll(
+                    self.migrate.scroll_top,
+                    delta_rows as i32,
+                    self.migrate.entries.len(),
+                );
                 self.request_redraw();
                 return;
             }

@@ -1392,6 +1392,42 @@
               return result;
             };
           })(),
+          /* FR-105 (мультиканвас C2): granted-папка workspace — персист
+             DIRECTORY-хэндла (ключ "workspace"), листинг с lastModified
+             (watch №45b/№53b), rename через handle.move() (R-T6 — нестанд
+             API Chromium, фолбэк write+delete в Rust-исполнителе). */
+          dirHandlePut: (handle) =>
+            tx("handles", "readwrite", (s) => s.put(handle, "workspace")),
+          dirHandleGet: () => tx("handles", "readonly", (s) => s.get("workspace")),
+          dirList: async (dir) => {
+            const out = [];
+            if (!dir || !dir.values) return out;
+            try {
+              for await (const handle of dir.values()) {
+                if (handle.kind !== "file") continue;
+                let ts = 0;
+                try {
+                  const f = await handle.getFile();
+                  ts = f.lastModified || 0;
+                } catch (e) { /* файл исчез между iter и getFile */ }
+                out.push({ name: handle.name, ts: ts });
+              }
+            } catch (e) {
+              /* потеря доступа посреди листинга — отдаём что успели */
+            }
+            return out;
+          },
+          handleMove: async (handle, newName) => {
+            if (handle && typeof handle.move === "function") {
+              try {
+                await handle.move(newName);
+                return "moved";
+              } catch (e) {
+                return "error";
+              }
+            }
+            return "unsupported";
+          },
           /* FR-028 v2: read current language from localStorage
              canvasdesk.config (TOML `language = "ru"` or `"en"`).
              Tour engine (canvasdesk-tour.js) and dropdown picker use

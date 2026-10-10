@@ -483,6 +483,30 @@ pub enum AppEvent {
     /// показать модал (AppDialog::CanvasTabBusy, №35a). Имя — имя файла
     /// с расширением.
     CanvasLockBusy { name: String },
+    // --- FR-105 (мультиканвас C2, issue #6): события web-хранилища -----
+    // Источник — canvas-web (fs_folder); на нативе не конструируются
+    // (folder-режим — web-only). Волна C3 подвесит строку менеджера к
+    // MigrateShowDialog; до того — отладочный вход ?migrate=1.
+    /// Granted-папка недоступна (потеря доступа, №44b) — показать баннер.
+    StorageAccessLost { detail: String },
+    /// Доступ восстановлен (кнопка «Переподключить» баннера) — снять
+    /// баннер, режим папки жив.
+    StorageReconnected,
+    /// Открыть диалог миграции OPFS→папка (№42a): App запросит листинг
+    /// OPFS обратным каналом (WebRequest::MigrateList).
+    MigrateShowDialog,
+    /// Листинг OPFS для чекбокс-листа диалога приехал.
+    MigrateOpfsList(Vec<canvas_core::workspace::CanvasEntry>),
+    /// Миграция исполнена (№52a): N канвасов переехали, OPFS пуст —
+    /// тост `canvas.migrate.done_toast`, диалог закрыт.
+    MigrateDone { moved: usize },
+    /// Миграция не завершена целиком (частичный сбой; оригиналы в OPFS
+    /// целы — порядок фаз исполнителя) — тост `canvas.migrate.failed_toast`.
+    MigrateFailed { moved: usize },
+    /// Внешнее изменение активного канваса (№45b/№53b) — тост
+    /// `canvas.ext.changed_toast` с действием «Перезагрузить» (всегда,
+    /// независимо от локальных правок).
+    ExtFileChanged { name: String },
 }
 
 /// FR-104 (мультиканвас C1): запрос App к платформенному web-слою —
@@ -493,6 +517,9 @@ pub enum AppEvent {
 /// (FR-028 v2). Ответы приезжают обратно через `AppEvent` по
 /// `EventLoopProxy` (web_state::event_proxy). Документировано в FR-104
 /// §Обратный канал.
+/// FR-105 (C2): тот же канал — для действий хранилища рабочего
+/// пространства (баннер №44b / миграция №42a / перезагрузка №45b);
+/// отдельный мост НЕ заводится — конвейер один.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WebRequest {
     /// Обновить список канвасов (зеркало OpfsStore ← opfsList) — ответ
@@ -509,6 +536,28 @@ pub enum WebRequest {
     /// занятости). Источник — «Выбрать другой» модала Web Locks (№35a;
     /// TODO: C3 заменит на менеджер канвасов).
     CanvasFallback { avoid: String },
+    // --- FR-105 (мультиканвас C2): действия хранилища (issue #6) --------
+    /// «Переподключить» (№44b): requestPermission в жесте клика — успех
+    /// приедет [`AppEvent::StorageReconnected`] (баннер снимется).
+    StorageReconnect,
+    /// «Переключиться в браузерное» (№44b): активный канвас `name` с
+    /// текущим содержимым `json` (несохранённые правки не теряем) сеется
+    /// в OPFS, режим — OPFS.
+    StorageSwitchBrowser { name: String, json: String },
+    /// Листинг OPFS для чекбокс-листа диалога миграции (№42a) — ответ
+    /// [`AppEvent::MigrateOpfsList`].
+    MigrateList,
+    /// Пикер папки + исполнение миграции выбранных (№42a/№52a; пикер
+    /// требует жеста — кнопка «Переехать…» диалога).
+    MigrateRun { selected: Vec<String> },
+    /// Перезагрузить активный канвас после внешнего изменения (№45b):
+    /// `local_json` — несохранённые правки (None — правок не было),
+    /// уходят сперва в `.bak` («правки — в .bak»), сцена переоткрывается
+    /// текстом из папки ([`AppEvent::OpenScene`]).
+    StorageReloadExternal {
+        name: String,
+        local_json: Option<String>,
+    },
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -518,6 +567,17 @@ struct DropPreview {
     origin: Vec2,
     /// План вставки (id/тип/позиция) — переживает без изменений до Drop.
     plan: Vec<crate::ui::DropInsert>,
+}
+
+/// FR-105 (мультиканвас C2): действие живого тоста (кнопка рядом с
+/// текстом, №45b). Тост с действием живёт дольше простого — время
+/// прочитать и нажать.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToastAction {
+    /// Перезагрузить активный канвас после внешнего изменения (№45b):
+    /// локальные правки — сперва в `.bak`, сцена переоткрывается текстом
+    /// из папки (WebRequest::StorageReloadExternal).
+    ReloadExternal,
 }
 
 /// Модальный диалог приложения (T21-B/C: П10/П11): подтверждение
@@ -1095,6 +1155,13 @@ pub trait WebOAuthBridge: Send + Sync {
     fn sign_out(&self) -> Result<(), String>;
 }
 
+// --- FR-105 (мультиканвас C2): действия хранилища идут обратным каналом ----
+// Баннер №44b / диалог миграции №42a / перезагрузка №45b НЕ заводят
+// отдельного моста: те же [`WebRequest`]-ы + дренаж TourAwareApp, что и у
+// конвейера C1 (FR-104 §Обратный канал) — асинхронные FS-операции
+// исполняет web-слой (`web_requests::handle`), App владеет только
+// UI-состоянием.
+
 /// W2 п.8: контекст отложенного suggest-ранжирования (wasm): lex-ответ уже
 /// на экране, LLM mm-ранжирование приедет через executor — fusion по
 /// приходу (поколение сверяется в `on_suggest_llm_choice`).
@@ -1455,6 +1522,14 @@ pub struct App {
     dialog: Option<AppDialog>,
     /// Toast-строка (T21-A: bridge-toast, ошибки установки): живёт 3 с.
     toast: Option<(String, Instant)>,
+    // --- FR-105 (мультиканвас C2): хранилище рабочего пространства ------
+    /// Баннер потери доступа к папке (№44b): Some(detail) — показан.
+    storage_banner: Option<String>,
+    /// Диалог миграции OPFS→папка (№42a/№52a).
+    migrate: crate::storage_ui::MigrateState,
+    /// Действие живого тоста (№45b): кнопка «Перезагрузить» рядом с
+    /// текстом (тост с действием живёт [`crate::storage_ui::TOAST_ACTION_TTL_MS`]).
+    toast_action: Option<ToastAction>,
     /// Файловый вотчер (T10): события ФС → AppEvent::FileEvents;
     /// набор директорий синхронизируется с моделью (sync_watch_dirs).
     /// M8/W3: backend за трейтом (натив — notify, web — NoopWatch).
@@ -1985,6 +2060,10 @@ impl App {
             drop_preview: None,
             dialog: None,
             toast: None,
+            // FR-105 (мультиканвас C2): хранилище рабочего пространства
+            storage_banner: None,
+            migrate: crate::storage_ui::MigrateState::default(),
+            toast_action: None,
             watcher,
             #[cfg(windows)]
             drag_watcher: None,
@@ -9624,6 +9703,191 @@ impl App {
         self.request_redraw();
     }
 
+    // --- FR-105 (мультиканвас C2): события web-хранилища --------------------
+
+    /// Имя файла активного канваса (для миграции/перезагрузки; плоские
+    /// имена web-хранилищ — как у opfs_name).
+    fn active_canvas_name(&self) -> String {
+        self.scene
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// №44b: granted-папка недоступна — показать баннер (не блокирует
+    /// работу: полоса Panels/Capture, канвас под ней жив).
+    fn on_storage_access_lost(&mut self, detail: String) {
+        tracing::warn!(target: "app", detail, "хранилище: доступ к папке потерян (№44b)");
+        self.storage_banner = Some(detail);
+        self.request_redraw();
+    }
+
+    /// №44b: доступ восстановлен («Переподключить») — баннер снять.
+    fn on_storage_reconnected(&mut self) {
+        self.storage_banner = None;
+        self.request_redraw();
+    }
+
+    /// Кнопка «Переподключить» баннера (№44b): запрос уходит обратным
+    /// каналом (WebRequest) — web-слой дёрнет requestPermission В ЖЕСТЕ
+    /// клика (дренаж TourAwareApp после события); успех придёт
+    /// StorageReconnected.
+    fn click_storage_reconnect(&mut self) {
+        self.pending_web_requests.push(WebRequest::StorageReconnect);
+    }
+
+    /// Кнопка «Переключиться в браузерное» баннера (№44b): активный канвас
+    /// с текущим содержимым уезжает в OPFS (несохранённые правки не
+    /// теряем), режим — браузерное хранилище. Баннер снимается.
+    fn click_storage_switch_browser(&mut self) {
+        let name = self.active_canvas_name();
+        let json = self.scene.canvas.to_json().unwrap_or_default();
+        self.pending_web_requests
+            .push(WebRequest::StorageSwitchBrowser { name, json });
+        self.storage_banner = None;
+        self.request_redraw();
+    }
+
+    /// №42a: открыть диалог миграции (строка менеджера — волна C3; до
+    /// неё — отладочный вход `?migrate=1`). Листинг OPFS уедет обратным
+    /// каналом (WebRequest::MigrateList → MigrateOpfsList).
+    pub fn open_migration_dialog(&mut self) {
+        let active = self.active_canvas_name();
+        self.migrate.open_with(&active);
+        self.pending_web_requests.push(WebRequest::MigrateList);
+        self.request_redraw();
+    }
+
+    /// Листинг OPFS приехал — заполнить чекбокс-лист.
+    fn on_migrate_list(&mut self, entries: Vec<canvas_core::workspace::CanvasEntry>) {
+        self.migrate.set_entries(entries);
+        self.request_redraw();
+    }
+
+    /// Миграция исполнена (№52a): тост, диалог закрыт, режим — папка
+    /// (OpenScene уже заменил сцену/хранилище).
+    fn on_migrate_done(&mut self, moved: usize) {
+        tracing::info!(target: "app", moved, "миграция завершена: режим папки");
+        self.migrate.close();
+        self.show_toast(self.tr(keys::CANVAS_MIGRATE_DONE_TOAST));
+    }
+
+    /// Миграция не завершена целиком: оригиналы в OPFS целы (порядок фаз
+    /// исполнителя — копирование до удаления), диалог закрыт, тост-причина.
+    fn on_migrate_failed(&mut self, moved: usize) {
+        tracing::warn!(target: "app", moved, "миграция не завершена целиком");
+        self.migrate.close();
+        self.show_toast(self.tr(keys::CANVAS_MIGRATE_FAILED_TOAST));
+    }
+
+    /// №45b/№53b: внешнее изменение активного канваса — тост ВСЕГДА (даже
+    /// без локальных правок) с действием «Перезагрузить» (тост с
+    /// действием живёт дольше простого).
+    fn on_ext_file_changed(&mut self, name: String) {
+        tracing::info!(target: "app", file = %name, "внешнее изменение активного канваса (№45b)");
+        self.toast = Some((
+            self.tr(keys::CANVAS_EXT_CHANGED_TOAST).to_owned(),
+            Instant::now(),
+        ));
+        self.toast_action = Some(ToastAction::ReloadExternal);
+        self.request_redraw();
+    }
+
+    /// Кнопка «Перезагрузить» тоста (№45b): локальная версия сперва в
+    /// `.bak` («правки — в .bak»), сцена переоткрывается текстом из папки
+    /// (WebRequest → OpenScene из web-слоя).
+    fn click_toast_reload_external(&mut self) {
+        let name = self.active_canvas_name();
+        let local_json = if self.scene.dirty_since.is_some() {
+            self.scene.canvas.to_json().ok()
+        } else {
+            None
+        };
+        self.pending_web_requests
+            .push(WebRequest::StorageReloadExternal { name, local_json });
+        self.toast = None;
+        self.toast_action = None;
+        self.request_redraw();
+    }
+
+    /// №42a: клик по элементу диалога миграции (элементы — из hit-rect'ов
+    /// реестра: `migrate-row-N`/`migrate-go`/`migrate-cancel`/`migrate-close`/
+    /// `migrate-panel`).
+    fn click_migrate(&mut self, element: &str) {
+        if let Some(row) = element.strip_prefix("migrate-row-") {
+            if let Ok(index) = row.parse::<usize>() {
+                // Клик по строке: выбор + тогл галочки (обязательную —
+                // только выбор: `MigrateState::toggle` её не снимает)
+                self.migrate.selected = index;
+                self.migrate.toggle(index);
+            }
+            return;
+        }
+        match element {
+            // «Переехать на диск…»: выбранные — мосту (пикер папки —
+            // жест клика; без галочек кнопка disabled, страховка всё равно)
+            "migrate-go" => {
+                self.run_migration_from_dialog();
+            }
+            // «Отмена»/«✕»/тело панели — закрыть (клик по телу глотается,
+            // модаль не закрывается — паттерн витрины кита)
+            "migrate-cancel" | "migrate-close" => {
+                self.migrate.close();
+            }
+            _ => {}
+        }
+    }
+
+    /// №42a: клавиатура диалога миграции (Esc — закрыть, ↑/↓ — выбор
+    /// строки, Space — галочка, Enter — «Переехать…»). Стрелки ведут
+    /// окно видимости за выбором (`migrate_scroll_to_reveal`).
+    fn on_migrate_key(&mut self, key: &Key<winit::keyboard::SmolStr>) {
+        match key {
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
+                self.migrate.close();
+                self.request_redraw();
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowUp) => {
+                self.migrate.selected = self.migrate.selected.saturating_sub(1);
+                self.migrate.scroll_top = crate::storage_ui::migrate_scroll_to_reveal(
+                    self.migrate.scroll_top,
+                    self.migrate.selected,
+                );
+                self.request_redraw();
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowDown) => {
+                let max = self.migrate.entries.len().saturating_sub(1);
+                self.migrate.selected = (self.migrate.selected + 1).min(max);
+                self.migrate.scroll_top = crate::storage_ui::migrate_scroll_to_reveal(
+                    self.migrate.scroll_top,
+                    self.migrate.selected,
+                );
+                self.request_redraw();
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Space) => {
+                let index = self.migrate.selected;
+                self.migrate.toggle(index);
+                self.request_redraw();
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
+                self.run_migration_from_dialog();
+            }
+            _ => {}
+        }
+    }
+
+    /// №42a: пуск миграции выбранных канвасов (кнопка «Переехать…» / Enter;
+    /// без галочек кнопка disabled — страховка всё равно молчит).
+    fn run_migration_from_dialog(&mut self) {
+        if self.migrate.any_checked() {
+            let selected = self.migrate.selected_names();
+            self.pending_web_requests
+                .push(WebRequest::MigrateRun { selected });
+        }
+    }
+
     // --- FR-LLM-OAUTH-APP: «Вход ChatGPT» (PRD-0010 F-5.2/F-5.3/F-5.8/F-5.9) ---
 
     /// UI-состояние строки «Вход ChatGPT» (для рендера/ввода строки
@@ -14184,6 +14448,151 @@ mod tests {
             app.editing.is_none(),
             "без рендера сессия не открывается (no-op без паники)"
         );
+    }
+
+    // --- FR-105 (мультиканвас C2): события web-хранилища --------------------
+
+    /// Запись OPFS-листинга для тестов миграции.
+    fn opfs_entry(name: &str) -> canvas_core::workspace::CanvasEntry {
+        canvas_core::workspace::CanvasEntry {
+            name: name.to_owned(),
+            ts: 1,
+            kind: canvas_core::workspace::EntryKind::Opfs,
+            repo: None,
+        }
+    }
+
+    /// №44b: потеря доступа — баннер показан; переподключение и переключение
+    /// в браузерное — сняты (клики без моста на нативе — лог-путь, не паника).
+    #[test]
+    fn storage_banner_shown_and_cleared() {
+        let mut app = stub_app_with_canvas(Canvas::default());
+        assert!(app.storage_banner.is_none(), "изначально баннера нет");
+        app.on_storage_access_lost("permission".to_owned());
+        assert!(app.storage_banner.is_some(), "баннер показан (№44b)");
+        app.on_storage_reconnected();
+        assert!(app.storage_banner.is_none(), "переподключение сняло баннер");
+        // «Переключиться в браузерное»: активный канвас уезжает в OPFS
+        // (через мост; без моста — лог), баннер снимается
+        app.on_storage_access_lost("file".to_owned());
+        app.click_storage_switch_browser();
+        assert!(app.storage_banner.is_none(), "переключение сняло баннер");
+        // «Переподключить» без моста — тоже не паника (баннер остаётся:
+        // решение придёт событием StorageReconnected, его не было)
+        app.on_storage_access_lost("permission".to_owned());
+        app.click_storage_reconnect();
+        assert!(app.storage_banner.is_some(), "без события — баннер жив");
+    }
+
+    /// №42a: диалог миграции — открытие/листинг/обязательный активный/
+    /// клики по строкам/закрытие; успех и сбой миграции гасят диалог тостом.
+    #[test]
+    fn migrate_dialog_state_transitions() {
+        let mut app = stub_app_with_canvas(Canvas::default());
+        assert!(!app.migrate.open);
+        app.open_migration_dialog();
+        assert!(app.migrate.open, "диалог открыт (?migrate=1 / менеджер C3)");
+        // имя файла активного канваса — плоское имя web-хранилищ
+        assert_eq!(app.active_canvas_name(), "fr044-stage.canvas");
+        // листинг OPFS приехал: по умолчанию всё отмечено (№42a);
+        // активный канвас (fr044-stage.canvas — путь стаба) в списке —
+        // его галочка обязательна (сцена не может остаться в OPFS)
+        app.on_migrate_list(vec![
+            opfs_entry("fr044-stage.canvas"),
+            opfs_entry("draft.canvas"),
+            opfs_entry("old.canvas"),
+        ]);
+        assert_eq!(app.migrate.checked, vec![true, true, true]);
+        assert!(app.migrate.is_mandatory(0), "активный обязателен");
+        // клик по строке: выбор + тогл галочки
+        app.click_migrate("migrate-row-1");
+        assert_eq!(app.migrate.selected, 1, "клик выбрал строку");
+        assert!(!app.migrate.checked[1], "галочка снята");
+        // клик по обязательной строке — выбор, но галочку не снять
+        app.click_migrate("migrate-row-0");
+        assert_eq!(app.migrate.selected, 0);
+        assert!(app.migrate.checked[0], "обязательная не снимается");
+        assert_eq!(
+            app.migrate.selected_names(),
+            vec!["fr044-stage.canvas".to_owned(), "old.canvas".to_owned()]
+        );
+        // «Отмена» закрывает
+        app.click_migrate("migrate-cancel");
+        assert!(!app.migrate.open);
+        // успех миграции: диалог закрыт, тост показан (№52a)
+        app.open_migration_dialog();
+        app.on_migrate_done(3);
+        assert!(!app.migrate.open, "успех закрыл диалог");
+        assert!(app.toast.is_some(), "тост canvas.migrate.done_toast");
+        // сбой: диалог закрыт, тост-причина, оригиналы целы (порядок фаз)
+        app.open_migration_dialog();
+        app.on_migrate_failed(0);
+        assert!(!app.migrate.open, "сбой закрыл диалог");
+        assert!(app.toast.is_some(), "тост canvas.migrate.failed_toast");
+    }
+
+    /// №45b: внешнее изменение активного канваса — тост ВСЕГДА с действием
+    /// «Перезагрузить»; клик действия гасит и тост, и действие.
+    #[test]
+    fn ext_file_changed_toast_with_action() {
+        let mut app = stub_app_with_canvas(Canvas::default());
+        assert!(app.toast_action.is_none(), "изначально действия нет");
+        app.on_ext_file_changed("a.canvas".to_owned());
+        assert!(app.toast.is_some(), "тост показан");
+        assert_eq!(
+            app.toast_action,
+            Some(ToastAction::ReloadExternal),
+            "тост с действием «Перезагрузить» (№45b/№53b)"
+        );
+        // клик «Перезагрузить» без моста (натив) — не паника, тост погашен
+        app.click_toast_reload_external();
+        assert!(
+            app.toast.is_none() && app.toast_action.is_none(),
+            "действие гасит тост"
+        );
+    }
+
+    /// №42a: клавиатура диалога — стрелки ведут окно видимости за выбором
+    /// (12 ↓ из 0 при окне 10 → selected 12, scroll_top 3; ↑ обратно —
+    /// без дёрганья скролла, пока выбор видим).
+    #[test]
+    fn migrate_keyboard_follows_scroll_window() {
+        let arrow_down = winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowDown);
+        let arrow_up = winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowUp);
+        let mut app = stub_app_with_canvas(Canvas::default());
+        app.open_migration_dialog();
+        app.on_migrate_list(
+            (0..15)
+                .map(|i| opfs_entry(&format!("c{i:02}.canvas")))
+                .collect(),
+        );
+        assert_eq!(app.migrate.scroll_top, 0);
+        // 12×↓: selected 12 > окно 0..10 → окно прижалось хвостом (12+1-10)
+        for _ in 0..12 {
+            app.on_migrate_key(&arrow_down);
+        }
+        assert_eq!(app.migrate.selected, 12);
+        assert_eq!(
+            app.migrate.scroll_top, 3,
+            "окно видимости следует за выбором вниз"
+        );
+        // 2×↑: selected 10 — всё ещё в окне 3..13, скролл не дёргается
+        app.on_migrate_key(&arrow_up);
+        app.on_migrate_key(&arrow_up);
+        assert_eq!(app.migrate.selected, 10);
+        assert_eq!(app.migrate.scroll_top, 3, "видимый выбор — окно на месте");
+        // до верха: окно прижимается к 0 вместе с выбором
+        for _ in 0..10 {
+            app.on_migrate_key(&arrow_up);
+        }
+        assert_eq!(app.migrate.selected, 0);
+        assert_eq!(app.migrate.scroll_top, 0, "окно у первой строки");
+        // кламп: ниже последней строки (14) выбор не уходит
+        for _ in 0..20 {
+            app.on_migrate_key(&arrow_down);
+        }
+        assert_eq!(app.migrate.selected, 14);
+        assert_eq!(app.migrate.scroll_top, 5, "хвост окна у последней строки");
     }
 }
 

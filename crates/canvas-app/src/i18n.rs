@@ -521,6 +521,11 @@ pub mod keys {
     pub const KIT_BTN_SECONDARY: &str = "kit.button.secondary";
     pub const KIT_BTN_GHOST: &str = "kit.button.ghost";
     pub const KIT_BTN_DANGER: &str = "kit.button.danger";
+    /// Fix main (Wave T af5ddb3 +3 варианта ButtonVariant): заголовки рядов
+    /// витрины для новых вариантов (пока не в `button_rows` — exhaustiveness).
+    pub const KIT_BTN_TERTIARY: &str = "kit.button.tertiary";
+    pub const KIT_BTN_TEXT: &str = "kit.button.text";
+    pub const KIT_BTN_INVERSE: &str = "kit.button.inverse";
     /// Dropdown-демо витрины.
     pub const KIT_DROPDOWN_ANCHOR: &str = "kit.dropdown.anchor";
     pub const KIT_DROPDOWN_ITEM: &str = "kit.dropdown.item";
@@ -1064,6 +1069,8 @@ pub mod keys {
     pub const CANVAS_MIGRATE_HINT: &str = "canvas.migrate.hint";
     /// Тост завершения миграции (оригиналы удалены, №52a).
     pub const CANVAS_MIGRATE_DONE_TOAST: &str = "canvas.migrate.done_toast";
+    /// FR-105 (C2): частичный сбой миграции — оригиналы целы в OPFS.
+    pub const CANVAS_MIGRATE_FAILED_TOAST: &str = "canvas.migrate.failed_toast";
     /// Модал Web Locks: канал уже открыт в другой вкладке (№14b/№35a).
     pub const CANVAS_TAB_ALREADY_OPEN: &str = "canvas.tab.already_open";
     /// Модал Web Locks: «Всё равно открыть» (№35a).
@@ -1076,6 +1083,8 @@ pub mod keys {
     pub const CANVAS_LINK_BROKEN_TOAST: &str = "canvas.link.broken_toast";
     /// Тост внешних изменений файла — всегда спрашивать (№45b/№53b).
     pub const CANVAS_EXT_CHANGED_TOAST: &str = "canvas.ext.changed_toast";
+    /// FR-105 (C2): кнопка-действие тоста внешнего изменения (№45b).
+    pub const CANVAS_EXT_RELOAD_ACTION: &str = "canvas.ext.reload_action";
     /// Тост drop-коллизии: сохранено под авто-суффиксом (№26b).
     pub const CANVAS_DROP_RENAMED_TOAST: &str = "canvas.drop.renamed_toast";
     /// Суффикс имени дубликата (№27a; подстановка в copy_name).
@@ -1489,6 +1498,9 @@ const RU: &[(&str, &str)] = &[
     (keys::KIT_BTN_SECONDARY, "Вторичная"),
     (keys::KIT_BTN_GHOST, "Призрачная"),
     (keys::KIT_BTN_DANGER, "Опасная"),
+    (keys::KIT_BTN_TERTIARY, "Третичная"),
+    (keys::KIT_BTN_TEXT, "Текстовая"),
+    (keys::KIT_BTN_INVERSE, "Инверсная"),
     (keys::KIT_DROPDOWN_ANCHOR, "Выпадающий список"),
     (keys::KIT_DROPDOWN_ITEM, "Пункт списка"),
     (keys::KIT_TOAST_BODY, "Тост: внизу по центру, 3 с (T21-A)"),
@@ -2449,6 +2461,11 @@ const RU: &[(&str, &str)] = &[
         "Выберите канвасы, которые переедут на диск (оригиналы из браузерного хранилища удалятся)",
     ),
     (keys::CANVAS_MIGRATE_DONE_TOAST, "Канвасы переехали на диск"),
+    // FR-105 (C2): частичный сбой миграции — оригиналы целы в OPFS.
+    (
+        keys::CANVAS_MIGRATE_FAILED_TOAST,
+        "Переезд не завершён — канвасы остались в браузерном хранилище",
+    ),
     (
         keys::CANVAS_TAB_ALREADY_OPEN,
         "Этот канвас уже открыт в другой вкладке",
@@ -2466,6 +2483,10 @@ const RU: &[(&str, &str)] = &[
     (
         keys::CANVAS_EXT_CHANGED_TOAST,
         "Файл изменился снаружи — перезагрузить?",
+    ),
+    (
+        keys::CANVAS_EXT_RELOAD_ACTION,
+        "Перезагрузить",
     ),
     (
         keys::CANVAS_DROP_RENAMED_TOAST,
@@ -2875,6 +2896,9 @@ const EN: &[(&str, &str)] = &[
     (keys::KIT_BTN_SECONDARY, "Secondary"),
     (keys::KIT_BTN_GHOST, "Ghost"),
     (keys::KIT_BTN_DANGER, "Danger"),
+    (keys::KIT_BTN_TERTIARY, "Tertiary"),
+    (keys::KIT_BTN_TEXT, "Text"),
+    (keys::KIT_BTN_INVERSE, "Inverse"),
     (keys::KIT_DROPDOWN_ANCHOR, "Dropdown"),
     (keys::KIT_DROPDOWN_ITEM, "List item"),
     (keys::KIT_TOAST_BODY, "Toast: bottom center, 3 s (T21-A)"),
@@ -3750,6 +3774,11 @@ const EN: &[(&str, &str)] = &[
         "Choose canvases to move to disk (originals will be removed from browser storage)",
     ),
     (keys::CANVAS_MIGRATE_DONE_TOAST, "Canvases moved to disk"),
+    // FR-105 (C2): частичный сбой миграции — оригиналы целы в OPFS.
+    (
+        keys::CANVAS_MIGRATE_FAILED_TOAST,
+        "Migration incomplete — canvases kept in browser storage",
+    ),
     (keys::CANVAS_TAB_ALREADY_OPEN, "This canvas is already open in another tab"),
     (keys::CANVAS_TAB_OPEN_ANYWAY, "Open anyway"),
     (keys::CANVAS_TAB_CHOOSE_OTHER, "Choose another"),
@@ -3759,6 +3788,10 @@ const EN: &[(&str, &str)] = &[
         "Canvas \"{name}\" not found — opened the most recent one",
     ),
     (keys::CANVAS_EXT_CHANGED_TOAST, "The file changed on disk — reload?"),
+    (
+        keys::CANVAS_EXT_RELOAD_ACTION,
+        "Reload",
+    ),
     (
         keys::CANVAS_DROP_RENAMED_TOAST,
         "Name taken — saved as \"{name}\"",

@@ -152,7 +152,13 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     // FR-104 (C1, №14b): прокси событий web-слоя — занятость Web Locks
     // при переключениях уйдёт событием CanvasLockBusy (стартовая
     // занятость, найденная ДО этой точки, — pending-флагом ниже).
+    // FR-105 (C2): тот же прокси — для фоновых тасков папки (очередь
+    // операций granted-папки, watch-поллинг); до установки send — тихий
+    // no-op (ранние записи — только лог).
     crate::web_state::set_event_proxy(proxy.clone());
+    // FR-105 (C2, №45b/№53b): watch внешних изменений granted-папки —
+    // poll lastModified на focus/visibilitychange (DOM-листенеры).
+    crate::fs_folder::install_watch(proxy.clone());
     // M5 (T20-F): события host'а виджетов (WidgetEvent) — тем же паттерном,
     // что у сервисов W3; W11: Tick из setInterval (widgets_web) тоже идёт
     // сюда и будит цикл как на нативе.
@@ -237,6 +243,15 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     // модал «уже открыт в другой вкладке» (паттерн pending_broken_link).
     if let Some(name) = crate::web_locks::take_pending_busy() {
         app.set_pending_canvas_lock(Some(name));
+    }
+    // FR-105 (C2, №42a): ?migrate=1 — ОТЛАДОЧНЫЙ вход в диалог миграции
+    // OPFS→папка (временный до волны C3 — менеджер канвасов откроет его
+    // строкой «Переехать на диск…»; удалить в C3). Действия диалога/баннера
+    // уходят обратным каналом WebRequest (конвейер FR-104) — отдельного
+    // моста не нужно, листинг приедет MigrateOpfsList-ом.
+    if params.migrate {
+        tracing::info!(target: "canvas_web", "?migrate=1 — отладочный вход в диалог миграции");
+        app.open_migration_dialog();
     }
     // W11: тик LOD/refresh — setInterval 1 с (зеркало widget-tick-потока)
     crate::widgets_web::web::install_tick(widget_sender);

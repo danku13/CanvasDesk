@@ -17,6 +17,17 @@
 //!   СВЕЖИЙ «Canvas N» (default.canvas может быть сам занят другой
 //!   вкладкой — иначе модал зациклится, см. FR-104 §Фолбэк занятости).
 //!   TODO(FR-104): C3 заменит на менеджер канвасов.
+//!
+//! FR-105 (мультиканвас C2): сюда же приходят действия хранилища рабочего
+//! пространства (issue #6) — отдельный мост НЕ заводится, конвейер один:
+//! - `StorageReconnect` — «Переподключить» баннера №44b (requestPermission
+//!   в жесте клика);
+//! - `StorageSwitchBrowser` — «Переключиться в браузерное» №44b;
+//! - `MigrateList` — листинг OPFS для чекбокс-листа диалога миграции №42a;
+//! - `MigrateRun` — пикер папки + исполнитель миграции №42a/№52a;
+//! - `StorageReloadExternal` — перезагрузка после внешнего изменения №45b
+//!   (локальные правки — сперва в `.bak`).
+//! Исполнители — `crate::fs_folder` (granted-папка FS Access).
 
 #![cfg(target_arch = "wasm32")]
 
@@ -44,6 +55,25 @@ pub(crate) fn handle(request: WebRequest, proxy: &EventLoopProxy<AppEvent>) {
             }
             WebRequest::CanvasFallback { avoid } => {
                 open_fallback(&avoid, &proxy).await;
+            }
+            // --- FR-105 (C2): действия хранилища (issue #6) ---------------
+            WebRequest::StorageReconnect => {
+                if crate::fs_folder::reconnect_flow().await {
+                    let _ = proxy.send_event(AppEvent::StorageReconnected);
+                }
+            }
+            WebRequest::StorageSwitchBrowser { name, json } => {
+                crate::fs_folder::switch_to_browser(&name, &json).await;
+            }
+            WebRequest::MigrateList => {
+                let entries = crate::fs_folder::opfs_entries().await;
+                let _ = proxy.send_event(AppEvent::MigrateOpfsList(entries));
+            }
+            WebRequest::MigrateRun { selected } => {
+                crate::fs_folder::pick_folder_and_migrate(proxy, selected).await;
+            }
+            WebRequest::StorageReloadExternal { name, local_json } => {
+                crate::fs_folder::reload_after_external(proxy, &name, local_json.as_deref()).await;
             }
         }
     });
