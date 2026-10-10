@@ -246,6 +246,25 @@ pub fn group_entries(entries: &[CanvasEntry]) -> ListingGroups {
 }
 
 // ============================================================================
+// FR-104 (C1): payload операции хранилища для события CanvasOpDone
+// ============================================================================
+
+/// FR-104 (мультиканвас C1): операция `WorkspaceStore` для события
+/// `AppEvent::CanvasOpDone` — payload живёт в ядре, потому что canvas-app
+/// (владелец `AppEvent`) не зависит от canvas-web, где определён
+/// `WorkspaceError`: результат переносится как `Option<String>`
+/// (человекочитаемый текст ошибки, `WorkspaceError::to_string`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanvasOp {
+    /// Создание пустого канваса.
+    Create { name: String },
+    /// Переименование (файл + `.bak`-близнец).
+    Rename { old: String, new: String },
+    /// Мягкое удаление (№15a: файл → `<name>.bak`).
+    Delete { name: String },
+}
+
+// ============================================================================
 // Ключ камеры и план миграции (№12/№30b, №42a/№52a)
 // ============================================================================
 
@@ -562,5 +581,35 @@ mod tests {
         let plan = migration_plan(&source, &["a.canvas".into(), "ghost.canvas".into()], &[]);
         assert_eq!(plan.missing, ["ghost.canvas".to_owned()]);
         assert_eq!(plan.copies.len(), 1, "остальные копии не блокируются");
+    }
+
+    // --- FR-104 (C1): payload операций ----------------------------------------
+
+    #[test]
+    fn canvas_op_payloads() {
+        let create = CanvasOp::Create {
+            name: "новый.canvas".into(),
+        };
+        let rename = CanvasOp::Rename {
+            old: "a.canvas".into(),
+            new: "b.canvas".into(),
+        };
+        let delete = CanvasOp::Delete {
+            name: "gone.canvas".into(),
+        };
+        // Разные операции — разные payload'ы (равенство различает варианты)
+        assert_ne!(create, rename);
+        assert_ne!(rename, delete);
+        assert_ne!(create, delete);
+        // Клон идентичен (событие уходит в AppEvent как есть)
+        assert_eq!(create.clone(), create);
+        assert_eq!(
+            rename,
+            CanvasOp::Rename {
+                old: "a.canvas".into(),
+                new: "b.canvas".into()
+            }
+        );
+        assert!(format!("{create:?}").contains("новый.canvas"));
     }
 }

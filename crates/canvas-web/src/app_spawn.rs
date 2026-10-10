@@ -126,6 +126,9 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     if let Some(opfs) = init.opfs {
         crate::web_state::set_opfs_storage(opfs);
     }
+    // FR-104 (C1, №31c): битая ссылка ?canvas= — тост на первом кадре
+    // (фолбэк уже открыт init_scene; паттерн ?focus)
+    let broken_link = init.broken_link.clone();
     let mut scene = match params.stress {
         // Нагрузочная сцена — всегда в памяти (не засорять OPFS/recent)
         Some(n) => {
@@ -146,6 +149,10 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     }
     let event_loop = EventLoop::<AppEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
+    // FR-104 (C1, №14b): прокси событий web-слоя — занятость Web Locks
+    // при переключениях уйдёт событием CanvasLockBusy (стартовая
+    // занятость, найденная ДО этой точки, — pending-флагом ниже).
+    crate::web_state::set_event_proxy(proxy.clone());
     // M5 (T20-F): события host'а виджетов (WidgetEvent) — тем же паттерном,
     // что у сервисов W3; W11: Tick из setInterval (widgets_web) тоже идёт
     // сюда и будит цикл как на нативе.
@@ -220,6 +227,17 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     if params.ui_debug {
         app.set_debug_overlay(true);
     }
+    // FR-104 (C1, №31c): битая ссылка ?canvas= — фолбэк открыт, тост
+    // покажется на первом кадре (web-слой передал имя через WebScene).
+    if broken_link.is_some() {
+        app.set_pending_broken_link(broken_link);
+    }
+    // FR-104 (C1, №14b/№35a): занятость Web Locks, найденная на старте
+    // (init_scene → set_active раньше построения event loop) — отложенный
+    // модал «уже открыт в другой вкладке» (паттерн pending_broken_link).
+    if let Some(name) = crate::web_locks::take_pending_busy() {
+        app.set_pending_canvas_lock(Some(name));
+    }
     // W11: тик LOD/refresh — setInterval 1 с (зеркало widget-tick-потока)
     crate::widgets_web::web::install_tick(widget_sender);
     // W6: DOM-панель хранилища (открыть/недавние/экспорт) + приём drop
@@ -233,7 +251,7 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     }
     // Мост ввода кириллицы/IME (wasm-аудит 2026-09-25): winit-web теряет
     // insertText — DOM beforeinput доставляет текст в App через proxy.
-    crate::ime::install(proxy);
+    crate::ime::install(proxy.clone());
     // winit web: цикл не блокирует поток — spawn_app ставит обработчики
     // (rAF/ResizeObserver) и возвращает управление браузеру.
     use winit::platform::web::EventLoopExtWebSys;
@@ -244,7 +262,7 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     // scheme-preview-shown, scheme-applied) накапливаются в
     // App::pending_tour_signals, но никуда не уходят — passive+waitFor
     // шаги tour-сценариев не продвигаются.
-    let app = crate::tour_aware_app::TourAwareApp::new(app);
+    let app = crate::tour_aware_app::TourAwareApp::new(app, proxy);
     event_loop.spawn_app(app);
     Ok(())
 }
