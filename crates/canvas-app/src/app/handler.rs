@@ -145,6 +145,22 @@ impl ApplicationHandler<AppEvent> for App {
                         }
                     }
                 }
+                // FR-104 (C1, №31c): битая ссылка ?canvas= — web-слой уже
+                // открыл фолбэк, здесь остаётся тост (паттерн ?focus).
+                if let Some(name) = self.pending_broken_link.take() {
+                    tracing::warn!(canvas = %name, "?canvas=: канвас не найден (открыт фолбэк)");
+                    self.show_toast(i18n::trf(
+                        self.settings.language,
+                        keys::CANVAS_LINK_BROKEN_TOAST,
+                        &[("{name}", canvas_core::workspace::display_name(&name))],
+                    ));
+                }
+                // FR-104 (C1, №14b/№35a): занятость Web Locks со старта —
+                // модал «уже открыт в другой вкладке» (паттерн ?focus;
+                // поздняя занятость приходит событием CanvasLockBusy).
+                if let Some(name) = self.pending_canvas_lock.take() {
+                    self.on_canvas_lock_busy(name);
+                }
                 // Замер интервала между кадрами для HUD (T5)
                 let now = Instant::now();
                 if let Some(prev) = self.last_frame {
@@ -1526,6 +1542,16 @@ impl ApplicationHandler<AppEvent> for App {
             // но путь пользователя для программной эмиссии сигналов
             // (через EventLoopProxy::send_event) сохранён — debug-only.
             AppEvent::TourSignal(name) => self.push_tour_signal(&name),
+            // --- FR-104 (мультиканвас C1): конвейер хранилища канвасов ---
+            // Запрос листинга (через proxy или из UI C3) — обратный канал
+            // к web-слою (дренаж обёрткой TourAwareApp после события).
+            AppEvent::RequestCanvasList => self.request_canvas_list(),
+            // Листинг от web-слоя — сохранить для менеджера C3
+            AppEvent::CanvasList(entries) => self.on_canvas_list(entries),
+            // Результат операции хранилища — диагностика (тосты — C3)
+            AppEvent::CanvasOpDone { op, error } => self.on_canvas_op_done(op, &error),
+            // Web Locks (№14b/№35a): канвас занят другой вкладкой — модал
+            AppEvent::CanvasLockBusy { name } => self.on_canvas_lock_busy(name),
         }
     }
 

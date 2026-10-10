@@ -231,8 +231,10 @@ impl App {
         match action {
             BarAction::Enter => self.enter_whatif_mode(),
             BarAction::Close => self.exit_whatif_mode(),
-            BarAction::Base => self.scene.whatif_activate(None),
-            BarAction::Scenario(index) => self.scene.whatif_activate(Some(index)),
+            // FR-104 (C1, №32c): чипы сценария/Базы — персистентная запись
+            // активного сценария (`canvasdesk.whatif.active`) одним undo-шагом.
+            BarAction::Base => self.switch_whatif_scenario(None),
+            BarAction::Scenario(index) => self.switch_whatif_scenario(Some(index)),
             BarAction::NewScenario => {
                 // CR-016: имя — пустое, scene выбирает первый свободный
                 // номер (иначе len+1 коллидирует с существующими).
@@ -241,15 +243,18 @@ impl App {
                     Ok(index) => {
                         // Список сценариев персистентен: мутация
                         // `canvasdesk.whatif` одним undo-шагом (FR-006).
+                        // FR-104 (C1, №32c): новый сценарий сразу активен —
+                        // активный ключ пишется тем же шагом.
+                        self.scene.whatif_activate(Some(index));
                         canvas_core::whatif::scenarios_to_canvas(
                             &mut self.scene.canvas,
                             &self.scene.scenarios,
                         );
+                        self.write_whatif_active();
                         if self.scene.canvas != snapshot {
                             self.scene.push_undo(snapshot);
                             self.scene.mark_dirty();
                         }
-                        self.scene.whatif_activate(Some(index));
                     }
                     Err(err) => self.show_toast(err),
                 }
@@ -272,6 +277,9 @@ impl App {
                     &mut self.scene.canvas,
                     &self.scene.scenarios,
                 );
+                // FR-104 (C1, №32c): применённый сценарий удалён — активный
+                // ключ снимается тем же undo-шагом.
+                self.write_whatif_active();
                 if self.scene.canvas != snapshot {
                     self.scene.push_undo(snapshot);
                     self.scene.mark_dirty();
@@ -6699,6 +6707,9 @@ impl App {
                 // пустой список имён (контейнер удаляется, round-trip чистый).
                 let frozen_names: Vec<String> = Vec::new();
                 canvas_core::whatif::frozen_to_canvas(&mut self.scene.canvas, &frozen_names);
+                // FR-104 (C1, №32c): сценарии сброшены — активный ключ
+                // снимается тем же undo-шагом.
+                self.write_whatif_active();
                 if self.scene.canvas != snapshot {
                     self.scene.push_undo(snapshot);
                     self.scene.mark_dirty();
@@ -6729,6 +6740,9 @@ impl App {
                     );
                     let frozen_names = self.scene.whatif_frozen_names();
                     canvas_core::whatif::frozen_to_canvas(&mut self.scene.canvas, &frozen_names);
+                    // FR-104 (C1, №32c): при удалении активного сценария
+                    // активный ключ снимается тем же undo-шагом.
+                    self.write_whatif_active();
                     if self.scene.canvas != snapshot {
                         self.scene.push_undo(snapshot);
                         self.scene.mark_dirty();
@@ -6740,6 +6754,18 @@ impl App {
                         &[("{name}", &name), ("{count}", &removed)],
                     ));
                 }
+                self.request_redraw();
+            }
+            // FR-104 (C1, №35a): «Всё равно открыть» — продолжить БЕЗ лока:
+            // обе вкладки пишут, побеждает последняя (last-write-wins,
+            // семантика автосейва OPFS; документировано в FR-104). Сцена
+            // уже загружена — перезахват лока не выполняем.
+            AppDialog::CanvasTabBusy { name } => {
+                tracing::warn!(
+                    target: "canvas_app",
+                    canvas = %name,
+                    "Web Locks: «Всё равно открыть» — продолжаем без лока (last-write-wins)"
+                );
                 self.request_redraw();
             }
         }

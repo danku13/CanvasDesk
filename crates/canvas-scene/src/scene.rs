@@ -281,6 +281,12 @@ pub struct SceneState {
     /// FR-017: активный сценарий; `None` — «База» (overrides пусты,
     /// дельты нулевые).
     pub active_scenario: Option<usize>,
+    /// FR-104 (C1, №32c/№36b): имя активного сценария, восстановленного
+    /// при загрузке из `canvasdesk.whatif.active` (runtime, не
+    /// сериализуется). Потребляется ОДИН раз ([`Self::take_restored_scenario`])
+    /// приложением для тоста «Активен сценарий "X"»; протухший/отсутствующий
+    /// ключ — тихая «База» (значение None).
+    pub restored_scenario: Option<String>,
     /// FR-017: базовый пересчёт БЕЗ подмен — источник дельт (гипотеза Q9:
     /// чистый пересчёт на каждом ревале, не снапшот при входе). FR-064 P1:
     /// double buffer [`FlowBuffer`] — снимок за Arc<RwLock>, читатель
@@ -476,6 +482,7 @@ impl SceneState {
             whatif_active: false,
             scenarios,
             active_scenario: None,
+            restored_scenario: None,
             flow_baseline: Arc::new(RwLock::new(flow::FlowSolutions::default())),
             flow_active: Arc::new(RwLock::new(flow::FlowSolutions::default())),
             flow_cycle: None,
@@ -504,6 +511,29 @@ impl SceneState {
         // хранится в .canvas — вычисляется, см. инвариант 4 FR-013);
         // FR-014: пересчёт — живой propagator графа потока
         scene.recompute_flow();
+        // FR-104 (C1, №32c/№36b): восстановление активного what-if сценария
+        // по сохранённому имени (`canvasdesk.whatif.active`): валидация по
+        // списку сценариев, протухший — тихая «База». Режим включается
+        // вместе со сценарием (иначе подмены не применялись бы к потоку, а
+        // тост врал). TODO (№36b, план v2.1): семантика
+        // «мультиканвас × мультивкладка» не до конца понята владельцем —
+        // см. FR-104 §Открытые вопросы.
+        let restored = canvas_core::whatif::resolve_active(
+            &scene.scenarios,
+            canvas_core::whatif::active_from_canvas(&scene.canvas).as_deref(),
+        );
+        if let Some(index) = restored
+            .as_ref()
+            .and_then(|name| scene.scenarios.iter().position(|s| &s.name == name))
+        {
+            scene.active_scenario = Some(index);
+            scene.whatif_active = true;
+            scene.restored_scenario = restored;
+            // Активные подмены должны войти в первый пересчёт — повторить
+            // уже нельзя (значения вычислены без них), поэтому пересчёт
+            // выполняется заново с включённым режимом.
+            scene.recompute_flow();
+        }
         // FR-064 P2: восстановление freeze-снимков по persisted именам
         // (пересчёт каждого сценария против персистентного канваса).
         let frozen_names = canvas_core::whatif::frozen_from_canvas(&scene.canvas);
@@ -511,6 +541,13 @@ impl SceneState {
             scene.restore_frozen(&frozen_names);
         }
         scene
+    }
+
+    /// FR-104 (C1, №36b): забрать имя восстановленного при загрузке
+    /// сценария (для тоста «Активен сценарий "X""). Идемпотентно:
+    /// повторный вызов возвращает None.
+    pub fn take_restored_scenario(&mut self) -> Option<String> {
+        self.restored_scenario.take()
     }
 
     /// FR-014: живой пересчёт графа потока значений (инвариант live — в

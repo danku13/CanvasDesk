@@ -299,18 +299,30 @@ pub(crate) async fn write_opfs_text(
 /// `opfs` — Some, когда хранилище — OPFS (переживёт перезагрузку): только
 /// оно регистрируется в web_state как общее (DOM-drop/reopen подставляют
 /// его в OpenScene); `?stress`/отказ OPFS — None (MemStorage, без сейва).
+/// `broken_link` (FR-104, №31c) — имя из `?canvas=`, которого нет в OPFS:
+/// фолбэк уже открыт, App покажет тост на первом кадре (паттерн ?focus).
 #[cfg(target_arch = "wasm32")]
 pub(crate) struct WebScene {
     pub path: PathBuf,
     pub storage: Arc<dyn CanvasStorage>,
     pub opfs: Option<Arc<OpfsStorage>>,
     pub canvas: Canvas,
+    /// FR-104 (C1, №31c): битая ссылка `?canvas=` (имя, которого нет).
+    pub broken_link: Option<String>,
 }
 
 /// Выбор и загрузка стартового канваса (план §4.2, UX-поток):
 /// `?canvas=` → недавний (IndexedDB) → `default.canvas`; файла нет — сеем.
+/// FR-104 (C1, №31c): `?canvas=` задан, файла в OPFS нет → НЕ сеять под
+/// этим именем (ссылка не должна материализовать канвас) — фолбэк:
+/// верхний из недавних, который существует и ≠ битому имени, иначе
+/// default.canvas (сеять допустимо только его) + тост битой ссылки
+/// (`pending_broken_link` → первый кадр).
 /// Отказ OPFS целиком — `MemStorage` (страница открывается всегда).
 /// `?stress` — сразу в память: нагрузочная сцена не пишет OPFS/recent.
+/// FR-104 (R-T3): здесь же — `navigator.storage.persist()` (защита OPFS от
+/// eviction до переезда на диск; TODO: C3 перенесёт вызов в точку первого
+/// открытия менеджера канвасов — осознанный жест вместо автозапуска).
 #[cfg(target_arch = "wasm32")]
 pub(crate) async fn init_scene(params: &WebParams) -> WebScene {
     if params.stress.is_some() {
@@ -319,10 +331,11 @@ pub(crate) async fn init_scene(params: &WebParams) -> WebScene {
             storage: Arc::new(MemStorage::new()),
             opfs: None,
             canvas: Canvas::default(), // реальная сцена строится spawn_desk'ом
+            broken_link: None,
         };
     }
-    let (root, name) = match choose_canvas(params).await {
-        Ok(pair) => pair,
+    let (root, name, broken) = match choose_canvas(params).await {
+        Ok(triple) => triple,
         Err(err) => {
             tracing::warn!(
                 target: "canvas_web",
@@ -334,23 +347,48 @@ pub(crate) async fn init_scene(params: &WebParams) -> WebScene {
                 storage: Arc::new(MemStorage::new()),
                 opfs: None,
                 canvas: Canvas::default(),
+                broken_link: None,
             };
         }
     };
+    // FR-104 (R-T3): persist() — до первой записи (eviction не должен
+    // съесть только что созданный канвас); отказ — тихий warn (жест не
+    // блокирует старт, повтор — в точке менеджера C3).
+    crate::opfs_store::request_storage_persist();
     let storage = Arc::new(OpfsStorage::new());
     match read_opfs_text(&root, &name).await {
         Ok(Some(text)) => match Canvas::from_str(&text) {
             Ok(canvas) => {
                 storage.seed_mirror(Path::new(&name), &text);
                 tracing::info!(target: "canvas_web", file = %name, "канвас загружен из OPFS");
-                record(name, storage, canvas)
+                let mut scene = record(name, storage, canvas);
+                scene.broken_link = broken;
+                scene
             }
             // Битый файл — как натив load_or_seed: сеем поверх (лог + warn)
             Err(err) => {
-                seed_over(storage, &root, &name, format!("битый канвас в OPFS: {err}")).await
+                seed_over(
+                    storage,
+                    &root,
+                    &name,
+                    format!("битый канвас в OPFS: {err}"),
+                    broken,
+                )
+                .await
             }
         },
-        Ok(None) => seed_over(storage, &root, &name, "файла нет — сеется новый".into()).await,
+        // Файла нет — сеем (default.canvas при фолбэке №31c; прочие имена
+        // сюда не доходят: choose_canvas уже отфильтровал битую ссылку).
+        Ok(None) => {
+            seed_over(
+                storage,
+                &root,
+                &name,
+                "файла нет — сеется новый".into(),
+                broken,
+            )
+            .await
+        }
         Err(err) => {
             // Читаемая, но не открываемая OPFS — сеять опасно (перезапись
             // может погубить данные при временной ошибке): честная деградация
@@ -361,6 +399,7 @@ pub(crate) async fn init_scene(params: &WebParams) -> WebScene {
                 storage: Arc::new(MemStorage::new()),
                 opfs: None,
                 canvas: Canvas::default(),
+                broken_link: broken,
             }
         }
     }
@@ -383,17 +422,22 @@ fn record(name: String, storage: Arc<OpfsStorage>, canvas: Canvas) -> WebScene {
         storage: Arc::clone(&storage) as Arc<dyn CanvasStorage>,
         opfs: Some(storage),
         canvas,
+        broken_link: None,
     }
 }
 
 /// Сеять канвас поверх отсутствующего/битого файла (нативная семантика
 /// `load_or_seed`): сериализованный дефолт уходит в OPFS через очередь.
+/// `broken` (FR-104, №31c) — битая ссылка (если фолбэк привёл сюда —
+/// только default.canvas, сеять допустимо только его) — прокидывается в
+/// `WebScene` для тоста на первом кадре.
 #[cfg(target_arch = "wasm32")]
 async fn seed_over(
     storage: Arc<OpfsStorage>,
     root: &web_sys::FileSystemDirectoryHandle,
     name: &str,
     reason: String,
+    broken: Option<String>,
 ) -> WebScene {
     tracing::info!(target: "canvas_web", file = %name, reason, "сеется новый канвас");
     let canvas = Canvas::default();
@@ -403,27 +447,58 @@ async fn seed_over(
     if let Err(err) = write_opfs_text(root, name, &text).await {
         tracing::warn!(target: "canvas_web", file = %name, error = ?err, "OPFS: сеяние не записалось");
     }
+    // FR-104 (C1): созданная запись видна зеркалу workspace сразу
+    // (полную переливку сделает ближайший RequestCanvasList).
+    if let Some(store) = crate::web_state::opfs_workspace() {
+        store.seed_file(name);
+    }
     storage.seed_mirror(Path::new(name), &text);
-    record(name.to_string(), storage, canvas)
+    let mut scene = record(name.to_string(), storage, canvas);
+    scene.broken_link = broken;
+    scene
 }
 
 /// Выбрать имя стартового канваса и получить корень OPFS.
+/// FR-104 (C1): (корень, имя, битая ссылка?) — до выбора имени сеется
+/// зеркало workspace (`OpfsStore`, один листинг на старт: выбор битой
+/// ссылки №31c и менеджер C3 работают по нему).
 #[cfg(target_arch = "wasm32")]
 async fn choose_canvas(
     params: &WebParams,
-) -> Result<(web_sys::FileSystemDirectoryHandle, String), String> {
+) -> Result<(web_sys::FileSystemDirectoryHandle, String, Option<String>), String> {
     let root = opfs_root()
         .await
         .map_err(|err| format!("OPFS root: {err:?}"))?;
+    // FR-104 (C1): зеркало workspace — до выбора (битая ссылка решает
+    // по листингу). Отказ листинга не валит старт: старая семантика.
+    let listed = crate::opfs_store::seed_workspace().await;
     if let Some(name) = &params.canvas {
-        tracing::info!(target: "canvas_web", file = %name, "стартовый канвас из URL (?canvas=)");
-        return Ok((root, name.clone()));
+        // FR-104 (C1, №31c): существование обязательно — битая ссылка
+        // НЕ сеется, фолбэк открывает другой канвас.
+        if listed {
+            let names = crate::web_state::opfs_workspace()
+                .map(|store| store.names())
+                .unwrap_or_default();
+            if let Some(actual) = crate::opfs_store::resolve_url_canvas(name, &names) {
+                tracing::info!(target: "canvas_web", file = actual, "стартовый канвас из URL (?canvas=)");
+                return Ok((root, actual.to_owned(), None));
+            }
+            // Битая ссылка: фолбэк — верхний существующий недавний ≠ имени,
+            // иначе default.canvas (сеять допустимо только его).
+            tracing::warn!(target: "canvas_web", file = %name, "?canvas=: канвас не найден — открывается фолбэк (№31c)");
+            let recent = crate::recent::recent_list().await;
+            let fallback = crate::opfs_store::broken_link_fallback(name, &recent, &names)
+                .unwrap_or_else(|| DEFAULT_CANVAS.to_string());
+            return Ok((root, fallback, Some(name.clone())));
+        }
+        tracing::info!(target: "canvas_web", file = %name, "стартовый канвас из URL (?canvas=; листинг недоступен — старая семантика)");
+        return Ok((root, name.clone(), None));
     }
     if let Some(name) = crate::recent::recent_top().await {
         tracing::info!(target: "canvas_web", file = %name, "стартовый канвас из недавних");
-        return Ok((root, name));
+        return Ok((root, name, None));
     }
-    Ok((root, DEFAULT_CANVAS.to_string()))
+    Ok((root, DEFAULT_CANVAS.to_string(), None))
 }
 
 // ============================================================================
