@@ -240,6 +240,10 @@ pub mod explorer;
 pub mod icons;
 pub mod interop;
 pub mod menu;
+// FR-108 (мультиканвас C5, №34a): файловые диалоги «Открыть…»/«Создать» —
+// смешанный файл (чистые фильтры/суффиксы + cfg(windows)-COM), паттерн
+// menu.rs; не-Windows — заглушка + warn.
+pub mod dialogs;
 
 /// Реэкспорт HWND (координаторская интеграционная точка T15-E):
 /// canvas-app не зависит от windows-crate, но конвертирует raw-window-handle
