@@ -1,40 +1,40 @@
-# Deep dive: методы Lively Wallpaper и Seelen UI как рецепты для CanvasDesk
+# Deep dive: Lively Wallpaper and Seelen UI methods as recipes for CanvasDesk
 
-Анализ актуальных кодовых баз (коммиты на сентябрь 2026). Положить в репозиторий как `docs/RECIPES.md` рядом с `SPEC.md` и `TASKS.md`.
+Analysis of the current codebases (commits as of September 2026). Place into the repository as `docs/RECIPES.md` next to `SPEC.md` and `TASKS.md`.
 
 ---
 
-## 0. Лицензионная рамка — прочитать первым
+## 0. Licensing framework — read this first
 
-| Проект | Лицензия | Что это значит для CanvasDesk |
+| Project | License | What it means for CanvasDesk |
 |---|---|---|
-| Lively Wallpaper | **GPL-3.0** | Копирование кода → весь CanvasDesk обязан стать GPL |
-| Seelen UI | **AGPL-3.0** | Ещё жёстче: copyleft срабатывает даже при сетевом использовании |
+| Lively Wallpaper | **GPL-3.0** | Copying code → all of CanvasDesk is obliged to become GPL |
+| Seelen UI | **AGPL-3.0** | Even stricter: copyleft triggers even on network use |
 
-**Вывод: переиспользуем методы, а не код.** Всё нижелоеописанное — техники Win32, которые не являются чьей-либо интеллектуальной собственностью (Microsoft публично описала raised desktop; сообщение 0x052C известно с 2013 года). Правило для агента: чистая реализация по описанию механики, без копирования идентификаторов, структуры и комментариев из исходников. Seelen UI при этом остаётся ценным как **доказательство, что весь стек реализуем на windows-rs** — те же API, те же типы (`HWND`, `SetWindowLongPtrW`, `FindWindowExA`).
+**Conclusion: we reuse methods, not code.** Everything described below consists of Win32 techniques that are not anyone's intellectual property (Microsoft publicly described the raised desktop; message 0x052C has been known since 2013). Rule for the agent: a clean implementation based on a description of the mechanics, without copying identifiers, structure, or comments from the sources. Seelen UI nevertheless remains valuable as **proof that the entire stack is implementable on windows-rs** — the same APIs, the same types (`HWND`, `SetWindowLongPtrW`, `FindWindowExA`).
 
-## 1. Карта покрытия
+## 1. Coverage map
 
-| Область | Lively (C#) | Seelen UI (Rust) | Куда в CanvasDesk |
+| Area | Lively (C#) | Seelen UI (Rust) | Where in CanvasDesk |
 |---|---|---|---|
-| Детект иерархии десктопа | ✅ два случая | ✅ два случая | T15 |
-| Встройка в raised desktop (24H2/25H2) | ✅ продакшен | ⚠️ упрощённо (см. R3) | T15 |
-| Скрытие иконок | ✅ идемпотентное | — | T16 |
-| Watch на гибель WorkerW | ✅ WinEventHook | — | T15 |
-| Детект краша Explorer | ✅ с анти-флудом | — | T16 |
-| Session lock/unlock | ✅ | ✅ (WTS + гейтинг потоков) | T16 |
-| Пауза рендера (энергия) | ✅ 4 алгоритма | ✅ IS_INTERACTIVE_SESSION | новая задача |
-| Фоновое окно событий | частично | ✅ эталон на Rust | новая задача |
-| Shell-нотификации (корзина!) | — | ✅ SHChangeNotifyRegister | T10 |
-| DPI после репарентинга | ✅ (костыль для WebView2) | ✅ (polling) | T15 |
+| Desktop hierarchy detection | ✅ two cases | ✅ two cases | T15 |
+| Embedding into the raised desktop (24H2/25H2) | ✅ production | ⚠️ simplified (see R3) | T15 |
+| Icon hiding | ✅ idempotent | — | T16 |
+| Watch for WorkerW death | ✅ WinEventHook | — | T15 |
+| Explorer crash detection | ✅ with anti-flood | — | T16 |
+| Session lock/unlock | ✅ | ✅ (WTS + thread gating) | T16 |
+| Render pause (energy) | ✅ 4 algorithms | ✅ IS_INTERACTIVE_SESSION | new task |
+| Background event window | partial | ✅ Rust reference | new task |
+| Shell notifications (recycle bin!) | — | ✅ SHChangeNotifyRegister | T10 |
+| DPI after reparenting | ✅ (workaround for WebView2) | ✅ (polling) | T15 |
 
 ---
 
-## 2. Рецепты встройки в десктоп
+## 2. Desktop-embedding recipes
 
-### R1. Детект иерархии: два независимых источника сходятся
+### R1. Hierarchy detection: two independent sources agree
 
-Оба проекта документируют иерархию Spy++-дампами прямо в коде — использовать их как тестовые фикстуры:
+Both projects document the hierarchy with Spy++ dumps right in the code — use them as test fixtures:
 
 ```
 Классическая (Win10 / Win11 ≤ 23H2):          Raised desktop (Win11 24H2 / 25H2):
@@ -45,16 +45,16 @@ WorkerW   <- целевой, top-level                  WorkerW           <- ц�
 Progman                                        (Progman имеет WS_EX_NOREDIRECTIONBITMAP)
 ```
 
-**Метод детекта (объединение обоих подходов, для T15):**
-1. `is_raised = GetWindowLongPtrW(progman, GWL_EXSTYLE) & WS_EX_NOREDIRECTIONBITMAP != 0` — один вызов, надёжный маркер (Lively).
-2. Если не raised: классический обход — `EnumWindows`, у top-level окна ищем child `SHELLDLL_DefView`, целевой `WorkerW` — следующий sibling (`FindWindowEx(0, tophandle, "WorkerW", 0)`).
-3. Если raised: `WorkerW = FindWindowEx(progman, 0, "WorkerW", 0)` — прямой ребёнок Progman. **С retry:** Seelen делает до 10 попыток с паузой 100 мс — после сообщения 0x052C окно появляется не мгновенно.
+**Detection method (a union of both approaches, for T15):**
+1. `is_raised = GetWindowLongPtrW(progman, GWL_EXSTYLE) & WS_EX_NOREDIRECTIONBITMAP != 0` — a single call, a reliable marker (Lively).
+2. If not raised: the classic traversal — `EnumWindows`; for a top-level window look for the child `SHELLDLL_DefView`; the target `WorkerW` is the next sibling (`FindWindowEx(0, tophandle, "WorkerW", 0)`).
+3. If raised: `WorkerW = FindWindowEx(progman, 0, "WorkerW", 0)` — a direct child of Progman. **With retry:** Seelen makes up to 10 attempts with a 100 ms pause — after message 0x052C the window does not appear instantly.
 
-Источники: `Lively.Common/Helpers/Shell/DesktopUtil.cs`, `Lively/Core/WinDesktopCore.cs → SetupDesktopLayer()`, `Seelen-UI src/background/widgets/wallpaper_manager/mod.rs → detect_worker_w()`.
+Sources: `Lively.Common/Helpers/Shell/DesktopUtil.cs`, `Lively/Core/WinDesktopCore.cs → SetupDesktopLayer()`, `Seelen-UI src/background/widgets/wallpaper_manager/mod.rs → detect_worker_w()`.
 
-### R2. Встройка в raised desktop — полная механика (ядро T15)
+### R2. Embedding into the raised desktop — full mechanics (the core of T15)
 
-Это самый ценный блок Lively — единственная открытая продакшен-реализация под 24H2+. В `WinDesktopCore.cs` есть дословный комментарий Microsoft о механике raised desktop (причина изменения — HDR-обои). Порядок операций из `TryAttachToDesktop()`:
+This is Lively's most valuable block — the only open production implementation for 24H2+. `WinDesktopCore.cs` contains a verbatim Microsoft comment on the raised-desktop mechanics (the reason for the change — HDR wallpapers). Order of operations from `TryAttachToDesktop()`:
 
 ```
 1. Установить WS_CHILD (убрать попутно лишнее — см. R3)
@@ -74,13 +74,13 @@ Progman                                        (Progman имеет WS_EX_NOREDIR
    // Lively логирует это как "Unexpected WorkerW Z-order" — случай реальный.
 ```
 
-Симметрично: при получении события разрушения WorkerW (R6) на raised desktop достаточно перевыполнить шаги 4–5, полный reset не нужен. На классической схеме — полный reset (SetParent на новый WorkerW).
+Symmetrically: on receiving the WorkerW destruction event (R6) on a raised desktop it is enough to re-execute steps 4–5; a full reset is not needed. On the classic scheme — a full reset (SetParent to the new WorkerW).
 
-Источник: `WinDesktopCore.cs → TryAttachToDesktop()`, `EnsureWorkerWZOrder()`.
+Source: `WinDesktopCore.cs → TryAttachToDesktop()`, `EnsureWorkerWZOrder()`.
 
-### R3. Стиль-скраббинг и порядок инициализации окна (Seelen)
+### R3. Style scrubbing and the window initialization order (Seelen)
 
-Перед `SetParent` Seelen принудительно нормализует стили (`try_set_under_desktop_items()`):
+Before `SetParent` Seelen forcibly normalizes the styles (`try_set_under_desktop_items()`):
 
 ```
 style   |= WS_CHILDWINDOW
@@ -88,19 +88,19 @@ style   &= !WS_CLIPSIBLINGS
 exstyle &= !(WS_EX_ACCEPTFILES | WS_EX_APPWINDOW | WS_EX_WINDOWEDGE)
 ```
 
-Зачем каждый пункт: `WS_EX_APPWINDOW` — чтобы окно не появлялось в Alt+Tab и таскбаре; `WS_EX_WINDOWEDGE` — при его наличии окно **исчезает из WorkerW после SetParent** (зафиксированный баг); `WS_EX_ACCEPTFILES` — чтобы дроп не перехватывался на уровне shell до нашей логики (для CanvasDesk важно: у нас свой `IDropTarget`, T9).
+Why each item: `WS_EX_APPWINDOW` — so that the window does not appear in Alt+Tab or the taskbar; `WS_EX_WINDOWEDGE` — when present, the window **disappears from WorkerW after SetParent** (a recorded bug); `WS_EX_ACCEPTFILES` — so that the drop is not intercepted at the shell level before our logic (important for CanvasDesk: we have our own `IDropTarget`, T9).
 
-**Урок про библиотеки окон (применимо к winit напрямую):** Seelen использует tao (форк winit для Tauri), и tao асинхронно восстанавливает стили через `SetWindowLongW(GWL_STYLE)` без `WS_CHILD` — «не зная» о репарентинге. Отсюда правило для T15: **сначала полностью настроить окно через API библиотеки, затем наш репарентинг последним шагом, и после него — верификация:** перечитать `GWL_STYLE`/`GWL_EXSTYLE` и сравнить с ожидаемым; любую последующую смену стилей библиотекой (resize, fullscreen toggle) перехватывать и повторять скраббинг.
+**Lesson about windowing libraries (directly applicable to winit):** Seelen uses tao (a winit fork for Tauri), and tao asynchronously restores the styles via `SetWindowLongW(GWL_STYLE)` without `WS_CHILD` — "unaware" of the reparenting. Hence the rule for T15: **first fully configure the window through the library's API, then our reparenting as the last step, and after it — verification:** re-read `GWL_STYLE`/`GWL_EXSTYLE` and compare against the expected values; intercept any subsequent style change made by the library (resize, fullscreen toggle) and repeat the scrubbing.
 
-Источники: `mod.rs → try_set_under_desktop_items()`, комментарий в `src/ui/svelte/wallpaper-manager/index.ts`.
+Sources: `mod.rs → try_set_under_desktop_items()`, the comment in `src/ui/svelte/wallpaper-manager/index.ts`.
 
-### R4. Идемпотентный спавн WorkerW (Seelen)
+### R4. Idempotent WorkerW spawn (Seelen)
 
-Критичная деталь, которой нет в старых туториалах: **сообщение 0x052C (WPARAM=0xD, LPARAM=0x1) слать только если WorkerW отсутствует.** Если raised WorkerW уже существует, повторная отправка заставляет Explorer снести и пересоздать его → наше окно-ребёнок уничтожается → remount → снова 0x052C → бесконечный цикл create/destroy. Seelen на этом поймал реальный баг. Алгоритм: `detect_worker_w()` → если `None` → `PostMessage(progman, 0x052C, 0xD, 1)` → повторный детект с retry из R1.
+A critical detail missing from the older tutorials: **send message 0x052C (WPARAM=0xD, LPARAM=0x1) only if WorkerW is absent.** If the raised WorkerW already exists, re-sending makes Explorer tear it down and recreate it → our child window is destroyed → remount → 0x052C again → an infinite create/destroy loop. Seelen caught a real bug on this. Algorithm: `detect_worker_w()` → if `None` → `PostMessage(progman, 0x052C, 0xD, 1)` → re-detect with the retry from R1.
 
-Источник: `mod.rs → try_set_under_desktop_items()` (комментарий к setup_desktop_layer).
+Source: `mod.rs → try_set_under_desktop_items()` (the comment on setup_desktop_layer).
 
-### R5. Идемпотентное скрытие иконок (Lively)
+### R5. Idempotent icon hiding (Lively)
 
 ```
 чтение:  SHGetSetSettings(SHELLSTATE, SSF_HIDEICONS, fGet=TRUE) → fHideIcons
@@ -108,100 +108,100 @@ exstyle &= !(WS_EX_ACCEPTFILES | WS_EX_APPWINDOW | WS_EX_WINDOWEDGE)
              SendMessage(DefView, WM_COMMAND, 0x7402, 0)   // toggle
 ```
 
-Команда 0x7402 — **переключатель**, а не установка. Поэтому сначала читаем состояние и шлём toggle только при расхождении — иначе при повторном запуске иконки включатся вместо выключения. `SHGetSetSettings` с `fSet=TRUE` в Windows 10+ не работает — не тратить время (Lively проверил). Для T16: сохраняем исходное состояние при старте, восстанавливаем при выходе; краш-сейф из TASKS.md дополняет это.
+Command 0x7402 is a **toggle**, not a setter. Therefore we first read the state and send the toggle only on a mismatch — otherwise on a repeated run the icons would be turned on instead of off. `SHGetSetSettings` with `fSet=TRUE` does not work on Windows 10+ — do not waste time on it (Lively verified). For T16: save the original state at startup, restore it at exit; the crash-safe from TASKS.md complements this.
 
-Источник: `DesktopUtil.cs → GetDesktopIconVisibility()/SetDesktopIconVisibility()`.
+Source: `DesktopUtil.cs → GetDesktopIconVisibility()/SetDesktopIconVisibility()`.
 
-### R6. Watch на разрушение WorkerW (Lively)
+### R6. Watch for WorkerW destruction (Lively)
 
-Вместо поллинга — **WinEventHook на поток Explorer**: `SetWinEventHook(EVENT_OBJECT_DESTROY, ..., pid/tid потока WorkerW)`. Событие приходит точно в момент гибели окна (Explorer решил перестроить иерархию — смена обоев, настроек, иногда просто так). Реакция различается по схеме: raised → повторный детект + Z-order (R2 шаги 4–5); классическая → полный re-attach.
+Instead of polling — a **WinEventHook on the Explorer thread**: `SetWinEventHook(EVENT_OBJECT_DESTROY, ..., pid/tid of the WorkerW thread)`. The event arrives exactly at the moment the window dies (Explorer decided to rebuild the hierarchy — a wallpaper change, a settings change, sometimes just like that). The reaction differs by scheme: raised → re-detect + Z-order (R2 steps 4–5); classic → a full re-attach.
 
-Для Rust: `windows::Win32::UI::Accessibility::SetWinEventHook` + `WINEVENT_OUTOFCONTEXT` (колбэк в нашем процессе, без инжекта DLL). Поллинг Progman из TASKS.md T15 оставить как резервный канал, основной — hook.
+For Rust: `windows::Win32::UI::Accessibility::SetWinEventHook` + `WINEVENT_OUTOFCONTEXT` (the callback is in our process, no DLL injection). Keep the Progman polling from TASKS.md T15 as the backup channel; the hook is the primary one.
 
-Источник: `WinDesktopCore.cs → конструктор (workerWHook), WorkerWHook_EventReceived()`.
+Source: `WinDesktopCore.cs → the constructor (workerWHook), WorkerWHook_EventReceived()`.
 
-### R7. Детект краша Explorer с анти-флудом (Lively)
+### R7. Explorer crash detection with anti-flood (Lively)
 
-Три элемента, копировать связкой:
-1. Подписка на `RegisterWindowMessage("TaskbarCreated")` — Explorer рассылает при каждом старте таскбара.
-2. Отличие краша от DPI-смены (которая тоже шлёт TaskbarCreated): сравнение PID процесса окна `Shell_TrayWnd` до/после. PID сменился → краш/перезапуск.
-3. Анти-флуд: если перезапусков > 1 за ~30 с — не реагировать автоматикой, показать ошибку и остановиться (у Lively `TaskbarCrashTimeOutDelay`). Иначе crash-loop Explorer утащит нас в бесконечный re-attach.
+Three elements; copy them as a bundle:
+1. A subscription to `RegisterWindowMessage("TaskbarCreated")` — Explorer broadcasts it at every taskbar startup.
+2. Distinguishing a crash from a DPI change (which also sends TaskbarCreated): compare the PID of the process owning the `Shell_TrayWnd` window before/after. The PID changed → crash/restart.
+3. Anti-flood: if there is more than 1 restart within ~30 s — do not react with automation, show an error and stop (in Lively, `TaskbarCrashTimeOutDelay`). Otherwise an Explorer crash-loop will drag us into an infinite re-attach.
 
-Источник: `WinDesktopCore.cs → WndProc_TaskbarCreated(), GetTaskbarExplorerPid()`.
+Source: `WinDesktopCore.cs → WndProc_TaskbarCreated(), GetTaskbarExplorerPid()`.
 
 ### R8. Session lock/unlock/switch
 
-- **Lively (SystemEvents.SessionSwitch):** после unlock проверить `IsWindow(workerW)` — handle мог умереть за время локскрина; если невалиден или обои «crashed after unlock» → reset с задержкой 1 с.
-- **Seelen (Rust-эталон):** `WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_ALL_SESSIONS)` → `WM_WTSSESSION_CHANGE` с `WTS_SESSION_LOCK/UNLOCK`, **обязательно сверять `l_param` session id со своей сессией** (события приходят от всех сессий). На основе этого — глобальный атомик `IS_INTERACTIVE_SESSION`: неинтерактивная сессия → **пауза всех фоновых потоков** (у них — вебвью, у нас — рендер, тамбнейл-пул, вотчер, preview host).
+- **Lively (SystemEvents.SessionSwitch):** after unlock check `IsWindow(workerW)` — the handle may have died while the lock screen was up; if it is invalid or the wallpaper "crashed after unlock" → a reset with a 1 s delay.
+- **Seelen (the Rust reference):** `WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_ALL_SESSIONS)` → `WM_WTSSESSION_CHANGE` with `WTS_SESSION_LOCK/UNLOCK`, **always verify the `l_param` session id against our own session** (events arrive from all sessions). On top of that — the global atomic `IS_INTERACTIVE_SESSION`: a non-interactive session → **a pause of all background threads** (for them it is webviews; for us — rendering, the thumbnail pool, the watcher, the preview host).
 
-Для T16: связка WTS + атомик-гейт — это заодно основа энергосбережения (R14).
+For T16: the WTS + atomic-gate combo is at the same time the foundation of energy saving (R14).
 
-Источники: `WinDesktopCore.cs → SystemEvents_SessionSwitch()`; `Seelen-UI src/background/windows_api/event_window.rs`.
+Sources: `WinDesktopCore.cs → SystemEvents_SessionSwitch()`; `Seelen-UI src/background/windows_api/event_window.rs`.
 
-### R9. Ловушка RefreshDesktop (оба споткнулись)
+### R9. The RefreshDesktop trap (both stumbled into it)
 
-Классический способ «почистить» десктоп — `SystemParametersInfo(SPI_SETDESKWALLPAPER, ..., NULL)`. **На raised desktop это разрушает WorkerW**, на MSIX-сборке — заставляет shell перестроить всю иерархию и выкидывает наше окно из parent. Оба проекта в итоге: на raised desktop не вызывать вообще (Lively — early return; Seelen — log-and-swallow). Для очистки артефактов достаточно `InvalidateRect(DefView) + UpdateWindow(DefView)` (метод Seelen `refresh_desktop()`).
+The classic way to "clean up" the desktop is `SystemParametersInfo(SPI_SETDESKWALLPAPER, ..., NULL)`. **On a raised desktop this destroys WorkerW**; on an MSIX build it makes the shell rebuild the entire hierarchy and kicks our window out of its parent. Both projects ended up with: on a raised desktop, do not call it at all (Lively — early return; Seelen — log-and-swallow). For clearing artifacts, `InvalidateRect(DefView) + UpdateWindow(DefView)` is enough (Seelen's `refresh_desktop()` method).
 
-Источники: `WinDesktopCore.cs → RefreshDesktop()`; `handlers.rs` (комментарий про MSIX).
+Sources: `WinDesktopCore.cs → RefreshDesktop()`; `handlers.rs` (the comment on MSIX).
 
-### R10. DPI после репарентинга (оба)
+### R10. DPI after reparenting (both)
 
-Дочернее окно WorkerW/Progman **не получает корректный DPI и события его смены**: Lively принудительно считывает scale целевого монитора и передаёт в WebView2 («when running as child of WorkerW/Progman, the WebView2 surface does not pick up the correct DPI»); Seelen обнаружил, что `onScaleChanged` после репарентинга не стреляет, и поллит `devicePixelRatio` каждые 500 мс.
+A child window of WorkerW/Progman **does not receive the correct DPI or its change events**: Lively forcibly reads the scale of the target monitor and passes it to WebView2 ("when running as child of WorkerW/Progman, the WebView2 surface does not pick up the correct DPI"); Seelen found that `onScaleChanged` does not fire after reparenting and polls `devicePixelRatio` every 500 ms.
 
-Рецепт для wgpu/winit (T15): после репарентинга не доверять `window.scale_factor()`; вычислять масштаб сами — `GetDpiForSystem` или `GetDpiForWindow(progman)` + подписка на `WM_DPICHANGED` не сработает → **поллинг `GetDpiForWindow` раз в 500–1000 мс или по событию display change**; при смене — пересоздание surface и пересчёт текстовых размеров (см. SPEC §6.5).
+Recipe for wgpu/winit (T15): after reparenting do not trust `window.scale_factor()`; compute the scale ourselves — `GetDpiForSystem` or `GetDpiForWindow(progman)`; a subscription to `WM_DPICHANGED` will not work → **poll `GetDpiForWindow` every 500–1000 ms or on the display-change event**; on a change — recreate the surface and recompute the text sizes (see SPEC §6.5).
 
-Источники: `Lively/Factories/WallpaperPluginFactory.cs` (комментарий); `index.ts → lookupDPI()`.
+Sources: `Lively/Factories/WallpaperPluginFactory.cs` (the comment); `index.ts → lookupDPI()`.
 
 ---
 
-## 3. Инфраструктурные рецепты на Rust (Seelen UI)
+## 3. Infrastructure recipes in Rust (Seelen UI)
 
-### R11. Скрытое окно системных событий — эталон для canvas-shell
+### R11. The hidden system-events window — a reference for canvas-shell
 
-Seelen держит невидимое окно на отдельном потоке с собственным `GetMessageW`-циклом исключительно как **шину системных событий**. Одна точка подписки, события рассылаются подписчикам через channel (`event_manager!` на crossbeam). Что регистрируется на этом окне — прямой список для нашего crate `canvas-shell`:
+Seelen keeps an invisible window on a separate thread with its own `GetMessageW` loop, used exclusively as a **system-events bus**. A single subscription point; events are broadcast to subscribers via a channel (`event_manager!` on crossbeam). What is registered on this window is a direct list for our crate `canvas-shell`:
 
-| Регистрация | События | Зачем CanvasDesk |
+| Registration | Events | Why CanvasDesk needs it |
 |---|---|---|
-| `RegisterShellHookWindow` + `RegisterWindowMessage("SHELLHOOK")` | shell-события окон | контекст для pause-логики |
-| `RegisterSuspendResumeNotification` | sleep/resume | корректный сейв .canvas перед сном |
-| `WTSRegisterSessionNotification` | lock/unlock/switch | R8, энергосбережение |
-| `AddClipboardFormatListener` + `ChangeWindowMessageFilterEx(WM_CLIPBOARDUPDATE, MSGFLT_ALLOW)` | буфер обмена | будущее «вставить файл как ноду»; **важен сам приём:** если процесс когда-либо elevated, UIPI молча блокирует сообщения — фильтр обязателен |
-| `SHChangeNotifyRegister` | shell file events | см. R12 |
-| `RegisterWindowMessage("TaskbarCreated")` (добавить нам) | краш Explorer | R7 |
+| `RegisterShellHookWindow` + `RegisterWindowMessage("SHELLHOOK")` | shell window events | context for the pause logic |
+| `RegisterSuspendResumeNotification` | sleep/resume | a correct .canvas save before sleep |
+| `WTSRegisterSessionNotification` | lock/unlock/switch | R8, energy saving |
+| `AddClipboardFormatListener` + `ChangeWindowMessageFilterEx(WM_CLIPBOARDUPDATE, MSGFLT_ALLOW)` | clipboard | the future "paste file as a node"; **the reception itself matters:** if the process is ever elevated, UIPI silently blocks messages — the filter is mandatory |
+| `SHChangeNotifyRegister` | shell file events | see R12 |
+| `RegisterWindowMessage("TaskbarCreated")` (add it for us) | Explorer crash | R7 |
 
-**Решение для CanvasDesk:** добавить в `canvas-shell` модуль `shell_events` по этому образцу — скрытое message-only окно (`HWND_MESSAGE` как parent) + поток + crossbeam-канал в приложение. Это дешёвый, проверенный в продакшене способ получать всё системное в одном месте, не размазывая Win32-колбэки по коду.
+**Decision for CanvasDesk:** add a `shell_events` module to `canvas-shell` following this pattern — a hidden message-only window (`HWND_MESSAGE` as parent) + a thread + a crossbeam channel into the application. This is a cheap, production-proven way to receive everything system-related in one place, without smearing Win32 callbacks across the code.
 
-Источник: `src/background/windows_api/event_window.rs` (целиком образцовый).
+Source: `src/background/windows_api/event_window.rs` (exemplary as a whole).
 
-### R12. SHChangeNotifyRegister как дополнение к notify (T10)
+### R12. SHChangeNotifyRegister as a complement to notify (T10)
 
-Seelen отслеживает корзину через `SHChangeNotifyRegister(SHCNRF_ShellLevel, SHCNE_ALLEVENTS)`. Почему это важно для нашего вотчера: **удаление файла в корзину — это не Delete для ReadDirectoryChangesW** (это move в системную папку `$Recycle.Bin`), и notify поведёт себя неочевидно. SHChangeNotify даёт события уровня shell (`SHCNE_DELETE`, `SHCNE_RENAMEITEM`, `SHCNE_UPDATEITEM`) — включая операции, сделанные через Explorer, с уже нормализованными путями.
+Seelen tracks the recycle bin via `SHChangeNotifyRegister(SHCNRF_ShellLevel, SHCNE_ALLEVENTS)`. Why this matters for our watcher: **deleting a file into the recycle bin is not a Delete for ReadDirectoryChangesW** (it is a move into the system folder `$Recycle.Bin`), and notify will behave non-obviously. SHChangeNotify provides shell-level events (`SHCNE_DELETE`, `SHCNE_RENAMEITEM`, `SHCNE_UPDATEITEM`) — including operations done through Explorer, with already-normalized paths.
 
-Решение: в T10 оставить `notify` для Modify/Create (быстрее, детальнее), а Rename/Delete дополнить подпиской SHChangeNotify на директории нод — особенно сценарий «пользователь удалил файл в корзину через Explorer» → корректный `brokenLink` по SPEC §7.5.
+Decision: in T10 keep `notify` for Modify/Create (faster, more detailed), and complement Rename/Delete with an SHChangeNotify subscription on the node directories — especially the scenario "the user deleted a file into the recycle bin via Explorer" → a correct `brokenLink` per SPEC §7.5.
 
-Источник: `event_window.rs → register_shell_notifications()`.
+Source: `event_window.rs → register_shell_notifications()`.
 
-### R13. Паттерн безопасных enum-обёрток (копировать как идиому)
+### R13. The safe enum-wrapper pattern (copy as an idiom)
 
-`WindowEnumerator`/`MonitorEnumerator` — канонический безопасный паттерн передачи Rust-замыкания в Win32 enum-колбэк: boxed closure, указатель через `LPARAM`, статическая `extern "system" fn` трамплин, `unsafe impl Send/Sync` с обоснованием. Плюс рекурсивный `for_each_and_descendants`. Это готовая идиома для всего нашего `canvas-shell` (EnumWindows, EnumChildWindows, EnumDisplayMonitors) — чистый safe API поверх unsafe-вызовов, по одному месту unsafe на семейство операций.
+`WindowEnumerator`/`MonitorEnumerator` — the canonical safe pattern for passing a Rust closure into a Win32 enum callback: a boxed closure, the pointer via `LPARAM`, a static `extern "system" fn` trampoline, `unsafe impl Send/Sync` with a justification. Plus the recursive `for_each_and_descendants`. This is a ready-made idiom for all of our `canvas-shell` (EnumWindows, EnumChildWindows, EnumDisplayMonitors) — a clean safe API over unsafe calls, one unsafe spot per family of operations.
 
-Источник: `src/background/windows_api/iterator.rs`.
+Source: `src/background/windows_api/iterator.rs`.
 
-### R14. Graceful degradation при сбое встройки
+### R14. Graceful degradation when embedding fails
 
-`handlers.rs → set_as_wallpaper()`: если attach в иерархию десктопа не удался — не паника и не отказ, а **фолбэк на абсолютное позиционирование** (обычное окно на весь виртуальный экран) + warn в лог. Это ровно наш принцип «неизвестная версия → оконный режим» из SPEC §7.4, но Seelen показывает, что фолбэк нужен на **каждом шаге**, а не только на детекте версии: любой `SetParent`/`SetWindowPos` может вернуть ошибку на конкретной машине (антивирус, кастомный shell, RDP).
+`handlers.rs → set_as_wallpaper()`: if the attach into the desktop hierarchy fails — not a panic and not a refusal, but a **fallback to absolute positioning** (an ordinary window over the entire virtual screen) + a warn in the log. This is exactly our principle "unknown version → windowed mode" from SPEC §7.4, but Seelen shows that the fallback is needed at **every step**, not only at version detection: any `SetParent`/`SetWindowPos` can return an error on a particular machine (antivirus, a custom shell, RDP).
 
 ---
 
-## 4. Энергосбережение и пауза рендера (Lively Playback)
+## 4. Energy saving and render pause (Lively Playback)
 
-Для обоев это вопрос батареи; для нас — тоже: канвас в режиме M4 рендерит постоянно, и жечь GPU, когда десктоп не виден, недопустимо. Методы из `Lively/Core/Suspend/Playback.cs`:
+For wallpapers this is a battery question; for us — likewise: the canvas in M4 mode renders constantly, and burning GPU while the desktop is not visible is unacceptable. Methods from `Lively/Core/Suspend/Playback.cs`:
 
-### R15. Таймер вместо WinEventHook для оконного трекинга
+### R15. A timer instead of WinEventHook for window tracking
 
-Lively осознанно использует **таймер (настраиваемый интервал, ~1 с) вместо `EVENT_OBJECT_LOCATIONCHANGE`** — у хука слишком много шума даже с фильтрами, на части систем он ненадёжен. Тот же принцип для нашей pause-логики: тик раз в секунду → оценка → смена состояния. Дёшево и предсказуемо.
+Lively deliberately uses a **timer (a configurable interval, ~1 s) instead of `EVENT_OBJECT_LOCATIONCHANGE`** — the hook has too much noise even with filters, and on some systems it is unreliable. The same principle for our pause logic: a tick once per second → an evaluation → a state change. Cheap and predictable.
 
-### R16. Иерархия условий паузы (приоритет сверху вниз)
+### R16. The hierarchy of pause conditions (priority top to bottom)
 
 ```
 1. Системное состояние (пауза всегда):
@@ -220,31 +220,31 @@ Lively осознанно использует **таймер (настраив�
    покрытие считается пересечением rect'ов; есть и grid-вариант с порогом покрытия в %
 ```
 
-Для CanvasDesk: состояние «пауза» = остановка рендер-цикла (request_redraw не планируется), заморозка тамбнейл-пула и preview host, снятие живых превью. Просыпание — по следующему тику с «десктоп виден». Достаточно пунктов 1–3; grid-алгоритм — overkill.
+For CanvasDesk: the "pause" state = stopping the render loop (request_redraw is not planned), freezing the thumbnail pool and the preview host, taking down live previews. Wake-up — on the next tick with "desktop visible". Items 1–3 suffice; the grid algorithm is overkill.
 
-### R17. IsDesktop() — проверка «мы на переднем плане»
+### R17. IsDesktop() — the "we are in the foreground" check
 
-`GetForegroundWindow()` и сравнение с `progman` и **оригинальным** WorkerW (тем, что содержит DefView — кэшируется при инициализации, `original_WorkerW`). Используется для input forwarding у Lively; нам — для хоткеев в M4: перехватывать Ctrl+F и прочее только когда foreground — десктоп, иначе отдать системе (SPEC §9, «конфликт хоткеев»).
+`GetForegroundWindow()` and a comparison against `progman` and the **original** WorkerW (the one that contains DefView — cached at initialization, `original_WorkerW`). Lively uses it for input forwarding; for us — for hotkeys in M4: intercept Ctrl+F and the rest only when the foreground is the desktop, otherwise hand it to the system (SPEC §9, "hotkey conflict").
 
 ---
 
-## 5. Маппинг на план разработки
+## 5. Mapping onto the development plan
 
-| Рецепт | Задача | Действие |
+| Recipe | Task | Action |
 |---|---|---|
-| R1–R4, R10, R14 | T15 | Влить в промпт T15 как чек-лист приёмки (см. §6) |
-| R5, R7, R8, R9 | T16 | То же для T16 |
-| R6 (WinEventHook) | T15 | Заменить «поллинг 2с» на hook + поллинг-резерв |
-| R11 (event window) | **новая T15b** | Модуль `shell_events` в canvas-shell: скрытое окно + канал |
-| R12 (SHChangeNotify) | T10 | Дополнить вотчер shell-событиями (корзина!) |
-| R13 (enum-идиома) | T15 | Идиома для всего canvas-shell, в AGENTS.md |
-| R15–R17 (пауза) | **новая T16b** | Энергосбережение: тик 1с, гейт рендера и пулов |
+| R1–R4, R10, R14 | T15 | Fold into the T15 prompt as an acceptance checklist (see §6) |
+| R5, R7, R8, R9 | T16 | The same for T16 |
+| R6 (WinEventHook) | T15 | Replace "polling 2s" with a hook + polling backup |
+| R11 (event window) | **new T15b** | A `shell_events` module in canvas-shell: hidden window + channel |
+| R12 (SHChangeNotify) | T10 | Complement the watcher with shell events (recycle bin!) |
+| R13 (enum idiom) | T15 | The idiom for all of canvas-shell, into AGENTS.md |
+| R15–R17 (pause) | **new T16b** | Energy saving: a 1 s tick, a gate on rendering and the pools |
 
-**Рекомендация:** добавить в SPEC §7.4 ссылку на этот документ и две новые задачи (T15b, T16b) в план — обе маленькие (2–3 дня с Kimi Code каждая), но закрывают классы багов, которые иначе всплывут на приёмке M4.
+**Recommendation:** add a link to this document into SPEC §7.4 and two new tasks (T15b, T16b) into the plan — both are small (2–3 days each with Kimi Code), but they close classes of bugs that would otherwise surface at the M4 acceptance.
 
-## 6. Дополнение к промптам (готово к вставке в TASKS.md)
+## 6. Prompt addenda (ready to paste into TASKS.md)
 
-В T15 добавить чек-лист:
+Add to T15 the checklist:
 ```
 Реализация по docs/RECIPES.md R1–R4, R10:
 - детект raised desktop через WS_EX_NOREDIRECTIONBITMAP на Progman
@@ -260,7 +260,7 @@ Lively осознанно использует **таймер (настраив�
 - фолбэк на обычное окно при ЛЮБОЙ ошибке шага (не только при неизвестной версии)
 ```
 
-В T16 добавить:
+Add to T16:
 ```
 - скрытие иконок идемпотентно: SHGetSetSettings(SSF_HIDEICONS) read → toggle 0x7402
   только при расхождении состояний (RECIPES R5)
@@ -272,41 +272,41 @@ Lively осознанно использует **таймер (настраив�
   IS_INTERACTIVE_SESSION для фоновых потоков (RECIPES R8)
 ```
 
-## 7. Источники (файлы для чтения агентом перед T15/T16)
+## 7. Sources (files for the agent to read before T15/T16)
 
-| Файл | Что брать |
+| File | What to take from it |
 |---|---|
-| `lively/src/Lively/Lively.Common/Helpers/Shell/DesktopUtil.cs` | Детект WorkerW/DefView, иконки |
-| `lively/src/Lively/Lively/Core/WinDesktopCore.cs` | SetupDesktopLayer, TryAttachToDesktop, EnsureWorkerWZOrder, WorkerWHook, TaskbarCreated, SessionSwitch, комментарий Microsoft про raised desktop |
-| `lively/src/Lively/Lively/Core/Suspend/Playback.cs` | Алгоритмы паузы, gamemode, системные условия |
-| `lively/src/Lively/Lively.Common/WindowClassExclusions.cs` | Список классов «это десктоп» |
+| `lively/src/Lively/Lively.Common/Helpers/Shell/DesktopUtil.cs` | WorkerW/DefView detection, icons |
+| `lively/src/Lively/Lively.Core/WinDesktopCore.cs` | SetupDesktopLayer, TryAttachToDesktop, EnsureWorkerWZOrder, WorkerWHook, TaskbarCreated, SessionSwitch, the Microsoft comment on the raised desktop |
+| `lively/src/Lively/Lively.Core/Suspend/Playback.cs` | Pause algorithms, gamemode, system conditions |
+| `lively/src/Lively/Lively.Common/WindowClassExclusions.cs` | The list of "this is the desktop" classes |
 | `Seelen-UI/src/background/widgets/wallpaper_manager/mod.rs` | detect_worker_w, try_set_under_desktop_items, refresh_desktop |
-| `Seelen-UI/src/background/widgets/wallpaper_manager/handlers.rs` | Фолбэк на absolute positioning, MSIX-ловушка |
-| `Seelen-UI/src/background/windows_api/event_window.rs` | Шина системных событий (R11) |
-| `Seelen-UI/src/background/windows_api/iterator.rs` | Enum-идиома (R13) |
-| `Seelen-UI/src/ui/svelte/wallpaper-manager/index.ts` | Порядок инициализации окна, DPI-polling |
+| `Seelen-UI/src/background/widgets/wallpaper_manager/handlers.rs` | The fallback to absolute positioning, the MSIX trap |
+| `Seelen-UI/src/background/windows_api/event_window.rs` | The system-events bus (R11) |
+| `Seelen-UI/src/background/windows_api/iterator.rs` | The enum idiom (R13) |
+| `Seelen-UI/src/ui/svelte/wallpaper-manager/index.ts` | The window initialization order, DPI polling |
 
-Напоминание агенту: читаем как документацию, пишем свой код (GPL-3.0 / AGPL-3.0, §0).
+Reminder to the agent: read as documentation, write your own code (GPL-3.0 / AGPL-3.0, §0).
 
-## 8. Модель permissions виджетов (M5, T21)
+## 8. The widget permissions model (M5, T21)
 
-Кулинарная книга безопасности моста host↔widget (SPEC §7.6, план M5 §4.6/§4.7).
-Принцип: **enforcement на каждый вызов**, разрешения живут в манифесте пакета
-(`~/.canvasdesk/widgets/<id>/widget.json`), не в сообщении виджета.
+A security cookbook for the host↔widget bridge (SPEC §7.6, the M5 plan §4.6/§4.7).
+Principle: **enforcement on every call**; the permissions live in the package manifest
+(`~/.canvasdesk/widgets/<id>/widget.json`), not in the widget's message.
 
-### 8.1. Таблица разрешений
+### 8.1. The permission table
 
-| Permission | Открывает | Где проверяется |
+| Permission | Grants | Where it is checked |
 |---|---|---|
-| `shell:open` | `openFile` (открыть файл в системном приложении) | bridge-обработчик host'а |
-| `fs:read` | `readDir` (листинг allowlist-директорий) | bridge + allowlist П4 |
-| `network` | внешние http(s)-запросы виджета (fetch) | `WebResourceRequested`-фильтр + CSP |
-| `canvas:read` | зарезервировано (v1.1 ни один метод не требует) | — |
+| `shell:open` | `openFile` (open a file in a system application) | the host's bridge handler |
+| `fs:read` | `readDir` (a listing of the allowlist directories) | bridge + the П4 allowlist |
+| `network` | the widget's external http(s) requests (fetch) | the `WebResourceRequested` filter + CSP |
+| `canvas:read` | reserved (in v1.1 no method requires it) | — |
 
-Без разрешения: `ready`/`resize`/`setProps`/`toast`/`stateGet`/`stateSet`
-работают — это собственные данные виджета, утечек нет.
+Without a permission: `ready`/`resize`/`setProps`/`toast`/`stateGet`/`stateSet`
+work — that is the widget's own data, there are no leaks.
 
-### 8.2. Рецепт enforcement (host)
+### 8.2. The enforcement recipe (host)
 
 ```
 1. permissions := манифест ПАКЕТА ноды (не сообщения!)
@@ -317,36 +317,36 @@ Lively осознанно использует **таймер (настраив�
                            (для запросов с id; уведомления — только warn)
 ```
 
-Опечатки в значениях permissions — ошибка манифеста (пакет не ставится):
-строгая десериализация, не молчаливый skip.
+Typos in permission values are a manifest error (the package is not installed):
+strict deserialization, not a silent skip.
 
-### 8.3. Рецепт fs:read allowlist (П4)
+### 8.3. The fs:read allowlist recipe (П4)
 
-Виджет не знает абсолютных путей: `readDir("")` → корень канваса,
-относительные пути резолвятся от него. Разрешены только:
-- корень канваса (папка `.canvas`);
-- папки файловых нод сцены (`watched_dirs`).
+The widget does not know absolute paths: `readDir("")` → the canvas root,
+relative paths are resolved from it. Only the following are allowed:
+- the canvas root (the `.canvas` folder);
+- the folders of the scene's file nodes (`watched_dirs`).
 
-Рецепт: `join` → `canonicalize()` (убивает `..`, симлинки, смешанные
-разделители) → `starts_with` одного из канонических корней. Несуществующий
-путь — отказ до сравнения. Ответ содержит только `name` + `isDir` —
-минимальная поверхность утечки.
+Recipe: `join` → `canonicalize()` (kills `..`, symlinks, mixed
+separators) → `starts_with` against one of the canonical roots. A nonexistent
+path is refused before the comparison. The response contains only `name` + `isDir` —
+a minimal leak surface.
 
-### 8.4. Рецепт network opt-in
+### 8.4. The network opt-in recipe
 
-`network` не открывает произвольные запросы: CSP `default-src 'self'` в
-заголовке ответа + `WebResourceRequested`-фильтр (внешние http(s) — Cancel
-без permission). С permission в CSP добавляется `connect-src https:` —
-иначе фетчи виджета бесполезны.
+`network` does not open arbitrary requests: CSP `default-src 'self'` in
+the response header + a `WebResourceRequested` filter (external http(s) — Cancel
+without the permission). With the permission, `connect-src https:` is added to the CSP —
+otherwise the widget's fetches are useless.
 
-### 8.5. Рецепт изоляции состояния (T21-E)
+### 8.5. The state-isolation recipe (T21-E)
 
-`widget_state(node_id, key, value)` в `cache.db`: API принимает node_id
-только из контекста инстанса (менеджер подставляет сам), виджет не может
-читать чужие строки. Пересоздаваемость: сбой = warn + пустой результат.
+`widget_state(node_id, key, value)` in `cache.db`: the API accepts node_id
+only from the instance's context (the manager substitutes it itself); the widget cannot
+read someone else's rows. Recreatability: a failure = warn + an empty result.
 
-### 8.6. Undo-коалесценция setProps
+### 8.6. Undo coalescing for setProps
 
-Стикер с debounce шлёт setProps потоком — без коалесценции undo разрастается.
-Рецепт: окно 1.5 с на ноду — подряд идущие setProps одной ноды склеиваются
-в один шаг (как в редактировании текста), другая нода — новый шаг.
+A sticker with debounce sends setProps in a stream — without coalescing, the undo grows.
+Recipe: a 1.5 s window per node — consecutive setProps of one node merge
+into a single step (as in text editing); another node starts a new step.
