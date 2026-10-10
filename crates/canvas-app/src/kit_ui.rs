@@ -63,10 +63,13 @@ pub use canvas_core::tokens::SPACING_LG as SECTION_GAP;
 /// кандидат в `kit::CONST` (LAY-W7).
 const SECTION_TITLE_H: f32 = 18.0;
 /// Историческая надбавка зазора после секции Buttons (+4 px к SECTION_GAP;
-/// вне шкалы S1 — LAY7-P3). Геометрия пинена golden-тестом линейки.
+/// вне шкалы S1 — исключение LAY7: «Исключения» 11-layouts.md,
+/// «Hairline-микрозначения 2–4 px», LAY-W16; появилась в W3b, геометрия
+/// пинена golden-тестом линейки gallery_layout_ruler_golden_column_skeleton).
 const BUTTONS_SECTION_GAP_EXTRA: f32 = 4.0;
 /// Исторический зазор между якорем и меню демо-dropdown (вне шкалы S1 —
-/// LAY7-P3). Геометрия пинена golden-тестом линейки.
+/// исключение LAY7: «Исключения» 11-layouts.md, «Hairline-микрозначения
+/// 2–4 px», LAY-W16; геометрия пинена golden-тестом линейки).
 const DROPDOWN_ANCHOR_GAP: f32 = 4.0;
 /// Ширина колонки подписи состояния.
 pub const STATE_LABEL_W: f32 = 84.0;
