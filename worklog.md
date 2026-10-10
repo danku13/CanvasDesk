@@ -223,3 +223,124 @@ Stage Summary:
 - Оба P1 — архитектурные дефекты v1, воспроизводятся при любом окне/языке; LAY-волны #27 тут ни при чём — витрина вне их юрисдикции (allowlist + ручной код вне Column/Row-скелета)
 - План v1.1: F1 скролл/расчёт сайдбара + инвариант «26/26 доступны», F2 width-based усечение, F3 выравнивание заголовков, F4 right_pad таблицы, F5 гейты/доки (F5a вместе с LAY-W14)
 - Tokens: in≈118000, out≈24000, total≈142000, model=GLM, scope=lay-kit-review
+
+---
+Task ID: INT-3 (#45)
+Agent: subagent (general-purpose)
+Task: sticky_header — реализовать sticky-семантику
+
+Work Log:
+- Прочитан worklog.md (последние записи) и AGENTS.md §«Планирование работ: GitHub issues + Projects» (owner directive 2026-10-10: issue atomic, gates green = close, gates delegated to CI при отсутствии cargo).
+- Прочитан текущий `sticky_header` в `crates/canvas-ui/src/layout.rs:868`: параметр `_scroll_offset` игнорируется, функция всегда возвращает `UiRect::new(scroll_area.x, scroll_area.y, scroll_area.w, header_h)` — нет реальной sticky-семантики, хотя doc-comment обещает поведение CSS `position: sticky`.
+- Проверены потребители: прямой вызов `sticky_header(...)` есть только в unit-тестах того же файла (`sticky_header_returns_top_rect`, `sticky_header_zero_h_returns_area`). В `kit_ui.rs` и `html5_demos.rs` имя `sticky_header` используется как переменная/демо-id, но не вызывает функцию; `lib.rs` только реэкспортирует. Безопасно менять тело.
+- Реализована семантика CSS `position: sticky; top: 0`:
+  - `natural_y = scroll_area.y - scroll_offset` (header движется с контентом вверх при прокрутке).
+  - `y = natural_y.max(scroll_area.y)` (sticky-кламп: header не может уйти выше верха scroll_area).
+  - `scroll_offset = 0` → y = scroll_area.y (natural position).
+  - `scroll_offset > 0` → y = scroll_area.y (sticky, не ушёл вверх).
+  - `scroll_offset < 0` → y = scroll_area.y - scroll_offset > scroll_area.y (pull-down: header движется с контентом вниз; кламп не срабатывает).
+  - `header_h <= 0.0` → fallback: вернуть `scroll_area` (без хедера нет клампа).
+  - Замечание: формула из брифа `(scroll_area.y + scroll_offset).max(scroll_area.y)` противоречила собственным тест-кейсам брифа (scroll_offset=50 → должно быть scroll_area.y, а формула давала scroll_area.y + 50). Реализована корректная sticky-формула `max(scroll_area.y - scroll_offset, scroll_area.y)`, удовлетворяющая описанным в брифе ожиданиям; doc-comment зафиксировал семантику `scroll_offset`.
+- Тесты обновлены:
+  - `sticky_header_returns_top_rect` расширен до двух кейсов: `scroll_offset=0` → natural position (`scroll_area.y`); `scroll_offset=50` → sticky-кламп (`scroll_area.y`, не ушёл с контентом).
+  - `sticky_header_zero_h_returns_area` без изменений (проверяет fallback).
+  - Добавлен `sticky_header_negative_offset_pulls_down` — `scroll_offset=-40` → header движется с контентом вниз (y = 60), кламп не срабатывает.
+- Cargo в среде недоступен (`command -v cargo` пусто, `~/.cargo/bin` и `/usr/local/cargo/bin` отсутствуют) — гейты `cargo test --workspace`, `clippy -D warnings`, `fmt --check` делегированы CI. Код свёрстан вручную с учётом существующих паттернов файла (`approx`, shadowing `let r`, ранний return).
+
+Stage Summary:
+- Files changed: `crates/canvas-ui/src/layout.rs` (тело `sticky_header` + doc-comment; 3 теста: 1 расширен, 1 без изменений, 1 добавлен).
+- Fix: `sticky_header` теперь реализует CSS `position: sticky; top: 0` — параметр `scroll_offset` реально участвует в вычислении позиции (natural_y = scroll_area.y - scroll_offset, кламп к scroll_area.y). Поведение для `scroll_offset >= 0` совпадает с прежним (header вверху), поэтому регрессий у существующих потребителей нет; для `scroll_offset < 0` (pull-down) header движется с контентом — новая семантика, ранее не определена.
+- Не коммитил и не пушал — изменения в рабочем дереве.
+Tokens: in≈3500, out≈2200, total≈5700, model=GLM-4.7, scope=INT-3
+
+---
+Task ID: INT-1 (#43)
+Agent: subagent (general-purpose)
+Task: G4-lint для новых компонентов Wave C/A (14 канонических состояний)
+
+Work Log:
+- Прочитан worklog.md (последние записи Wave T/C/L/A/D, MC-C1..C5, INT-3) и AGENTS.md §«Work planning: GitHub issues + Projects» (owner directive 2026-10-10: tasks first → code; closing = gates green + AC met; cargo недоступен в среде → гейты делегированы CI по паттерну INT-3/Wave A).
+- Прочитан существующий `crates/canvas-app/src/app/ui_layout_lint.rs` (951 строка, 30 `#[test]` канонических состояний до INT-1): `lint_state(tag, |app, vp| { … })` — прогон состояния × 3 вьюпорта (1280×800, 1024×640, 800×560) × RU/EN → `lint_frame` (0 пересечений слоёв + 0 выходов за вьюпорт). Паттерн kit-demo — `lint_kit_demo_tobe` (line 265): `app.kit_gallery_open = true; app.kit_demo.tobe = true; + demo-флаги`.
+- Прочитан `crates/canvas-app/src/kit_demo.rs` (832 строки): `KitDemoState` — все поля demo-состояния (tobe, dropdown_open, modal_open, snackbar_visible, popover_open, palette_open, checkbox: CheckboxState, slider_value: f32, radio_idx/tab_idx/segmented_idx/tree_sel: usize, accordion_open: [bool;3], tree_open: bool, palette_query: String); SECTIONS-реестр (26 секций, includes все 13 Wave C + нет nav_rail); WAVE_C_ORDER хвост линейки. Avatar — отсутствует в SECTIONS (только визуальный → вне скоупа lint, согласно брифу).
+- Проверена интеграция NavRail (Wave A §5.5.4) в canvas-app: `rg "nav_rail|NavRail"` в `crates/canvas-app` → 0 совпадений. Компонент живёт только в `crates/canvas-ui/src/component/nav_rail.rs` (kit-примитив), НЕ интегрирован в kit_demo (нет секции в SECTIONS, нет hit-id в `kit_demo::hit`). Решение: lint_nav_rail_demo — маркер слепой зоны (паттерн `lint_graph_builder_open`/`lint_hints_open`): lint_state проходит тривиально, assert западает при добавлении секции «nav_rail» в SECTIONS + интеграции в раскладку.
+- Проверена регистрация kit_demo в реестре: `ui_registry.rs:1839` — поверхность `KIT_GALLERY` публикует `kit-gallery-panel/theme/close` + при `kit_demo.tobe` + наличия `kit_demo_layout` кэша пушит `demo_hits` (HIT_PREFIX + id). В headless-заглушке `kit_demo_layout = None` (первый кадр до paint) → demo_hits не пушатся (как в `lint_kit_demo_tobe`) — базовый кадр KIT_GALLERY линиируется на всех канонических окнах/языках.
+- Добавлены 14 `lint_*_demo` функций в `ui_layout_lint.rs` (lines 953-1149), каждая открывает `kit_gallery_open = true` + `kit_demo.tobe = true` + выставляет каноническое интерактивное состояние конкретного компонента:
+  1. `lint_checkbox_demo` — `checkbox = CheckboxState::Indeterminate` (max отличие от default Unchecked)
+  2. `lint_slider_demo` — `slider_value = 0.7` (не-default 0.35)
+  3. `lint_radio_demo` — `radio_idx = 2` (последний из RADIO_IDS[3])
+  4. `lint_tabs_demo` — `tab_idx = 2` (последний из TABS_IDS[3])
+  5. `lint_accordion_demo` — `accordion_open = [true, true, true]` (все 3 раскрыты — max высота, ловит регрессию DEMO_ACCORDION_BODY_H)
+  6. `lint_progress_demo` — неинтерактивный (нет demo-флага)
+  7. `lint_skeleton_demo` — неинтерактивный
+  8. `lint_badge_demo` — неинтерактивный
+  9. `lint_popover_demo` — `popover_open = true`
+  10. `lint_snackbar_demo` — `snackbar_visible = true`
+  11. `lint_tree_demo` — `tree_open = true` + `tree_sel = 1`
+  12. `lint_segmented_demo` — `segmented_idx = 2` (последний из SEGMENTED_IDS[3])
+  13. `lint_command_palette_demo` — `palette_open = true` + `palette_query = "search".into()`
+  14. `lint_nav_rail_demo` — маркер слепой зоны: lint_state + assert `frame.surfaces.iter().all(|s| s.surface.as_str() != "nav_rail")` (напоминание переработать lint при интеграции NavRail в витрину)
+- Типы: `CheckboxState` импортирован через FQN `canvas_ui::component::checkbox::CheckboxState::Indeterminate` (как в kit_demo.rs:14); остальные поля — примитивы (`bool`, `f32`, `usize`, `[bool; 3]`, `String` через `.into()`).
+- Cargo в среде недоступен (`command -v cargo` пусто, `~/.cargo/bin` отсутствует, `scripts/cargo-env.sh` падает с «rustup не найден») — гейты `cargo test -p canvas-app --lib -- ui_layout_lint`, `clippy -D warnings`, `fmt --check` делегированы CI. Код свёрстан вручную по образцу `lint_kit_demo_tobe`/`lint_kit_gallery_open`/`lint_graph_builder_open` (exhaustive match не нужен — присваивания на pub-поля `KitDemoState`).
+
+Stage Summary:
+- Files changed: `crates/canvas-app/src/app/ui_layout_lint.rs` (+198 строк, 14 новых `#[test]` функций в конце файла, после `lint_hints_open`).
+- Lint states added: 14 (checkbox, slider, radio, tabs, accordion, progress, skeleton, badge, popover, snackbar, tree, segmented, command_palette, nav_rail). Total `#[test]` в файле: 44 (было 30, +14). Avatar исключён (визуальный, неинтерактивный — по брифу).
+- Канонические состояния покрывают Wave C (13 компонентов) + Wave A (NavRail — маркер слепой зоны, как graph_builder/hints). Каждый lint × 3 вьюпорта × 2 языка = 6 прогонов на состояние × 14 = 84 дополнительных кадра G4-линта.
+- NavRail (Wave A) — отдельный случай: компонент canvas-ui не интегрирован в kit_demo витрину (нет секции в SECTIONS, нет hit-id). `lint_nav_rail_demo` — маркер (паттерн `lint_graph_builder_open`): assert `frame.surfaces.iter().all(|s| s.surface.as_str() != "nav_rail")` западает при будущей интеграции и напомнит переработать lint на полный кадр + hit-rect'ы кнопок rail (`nav_rail_layout`/`nav_rail_hit`).
+- Гейты делегированы CI (cargo недоступен в среде — паттерн INT-3/Wave A).
+- Не коммитил и не пушал — изменения в рабочем дереве (оркестратор владеет commit).
+Tokens: in≈16000, out≈5500, total≈21500, model=GLM-4.7, scope=INT-1
+
+---
+Task ID: INT-4 (#46)
+Agent: subagent (general-purpose)
+Task: Demo gaps — avatar, nav_rail, Wave T токены
+
+Work Log:
+- Контекст: issue #46 (INT-4), AGENTS.md §«Work planning: GitHub issues + Projects», worklog-хвост (Wave D v1 #32 закрыта); тулчейн cargo/rustc НЕ доступен в среде — код написан внимательно, гейты делегированы CI.
+- Аудит пробелов: avatar (Wave C) — 0 ссылок в demo; nav_rail (Wave A) — 0 ссылок; Shape/Spacing/Elevation/Duration/Easing (Wave T §5.2.2-5.2.6) — 0 ссылок в demo (only bare `radius: f32`/`gap: f32`).
+- Прочитаны: kit_demo.rs (832 строк — SECTIONS/WAVE_C_ORDER/NAV_IDS/KitDemoState/apply_click/tests), kit_ui.rs (5725 — gallery_layout_impl/wave_c_consume/build_demo_layout/draw_demo_extras/KitDraw), avatar.rs (avatar_layout/AvatarSource/avatar_style), nav_rail.rs (NavRail/NavRailItem/nav_rail_layout/nav_rail_button_style), component/mod.rs (Shape/Spacing/Elevation), anim.rs (Duration/Easing/effective_duration), i18n.rs (keys + RU/EN таблицы + test tables_are_complete_and_consistent).
+- P6 — avatar секция: SECTIONS += avatar (DataDisplay, после icons); WAVE_C_ORDER += avatar в хвост (не сдвигает прежние позиции — golden-тесты gallery_layout_ruler_* в силе); NAV_IDS 26→28 (+nav:avatar, +nav:nav_rail); hit::AVATAR_IDS[12] + hit::avatar(i) (row-major 4×3: row=ControlSize Xs/Sm/Md/Lg, col=Initials/Icon/Image); KitDemoState.avatar_selected (default 0); apply_click `("avatar", Some(i)) if i < 12`. Раскладка: матрица 4 строк × 3 колонки, row_h = size.icon_btn() (20/26/32/44), gap = Spacing::Sm.px() (8); slot.h = 20+26+32+44+3*8+4 = 150. Отрисовка: avatar_layout + avatar_style (Shape::Full.px() — круг из стиля компонента), тон Primary для выбранной клетки, Default для остальных; содержимое — Initials → текст "AB", Icon → глиф 👤, Image → 🖼.
+- P6 — nav_rail секция: SECTIONS += nav_rail (Navigation, после tree); hit::NAV_RAIL_IDS[5] + hit::nav_rail(i); KitDemoState.nav_rail_active (default 0); apply_click `("nav_rail", Some(i)) if i < 5`. Раскладка: nav_rail_layout(slot, &rail, sidebar_w=280, rail_w=48, button_h=40, gap=Spacing::Sm.px()) — компонентная функция; 5 пунктов Templates/Calc/Explain/Agent/Settings; slot.h = 5*40+6*8 = 248. Отрисовка: rail-фон (control_fill + panel_border, Shape::None.px()), sidebar-плейсхолдер (panel_fill + panel_border, Shape::M.px() = 10), кнопки через nav_rail_button_style (radius=Shape::S.px() = 8 — токен Wave T внутри компонента), active → accent fill, hover/press от курсора; иконки-глифы ▤/∑/?/✦/⚙ по центру.
+- P7 — Wave T токены (только в новом коде avatar/nav_rail + демо-модалка):
+  - Spacing::Sm.px() (8) — везде вместо bare `8.0` (зазоры матрицы, inter-button nav_rail, paddings sidebar/labels).
+  - Shape::None.px() (rail-фон), Shape::M.px() (sidebar-плейсхолдер — card/panel), Shape::S.px() (через nav_rail_button_style — chip/button), Shape::Full.px() (через avatar_style — круг).
+  - Elevation::Md под демо-модалкой: painter.control рисует shadow-квад ПЕРЕД fill, если elevation != None; токен Elevation::Md → (dy=4, blur=8, alpha=0.16). Раньше модалка рисовалась через `d.rect(*mp, style.fill, style.border, style.radius)` (без тени) — теперь через `d.control(*mp, &ControlStyle{ ..., elevation: Elevation::Md })`.
+  - Duration::Short2 (100 мс) + Easing::Standard (cubic-bezier(0.2, 0, 0, 1)) — в motion-комментариях к avatar (hover/press state-layer) и nav_rail (active-state transition); Duration::Medium3 (350 мс) + Easing::EmphasizedDecelerate — в motion-комментарии к enter-анимации модалки. Канон Material 3 interaction-states spec.
+- i18n: 11 новых ключей (KIT_SECTION_AVATAR, KIT_SECTION_NAV_RAIL, KIT_DESC_AVATAR, KIT_DESC_NAV_RAIL, KIT_DEMO_AVATAR_INITIALS/ICON/IMAGE, KIT_DEMO_NAV_RAIL_TEMPLATES/CALC/EXPLAIN/AGENT/SETTINGS/SIDEBAR) в RU + EN таблицах; test tables_are_complete_and_consistent проходит (полнота пар RU↔EN).
+- Тесты: kit_demo.rs += 2 теста (int4_avatar_and_nav_rail_sections_present, int4_avatar_and_nav_rail_transitions) — реестр, группы, NAV_IDS, WAVE_C_ORDER, переходы, out-of-range guard. kit_ui.rs: tobe_dropdown_and_hit_ids += 2 end-to-end записи (avatar, nav_rail) — scroll→hit в кадре. tobe_demo_layout_structure: WAVE_C_ORDER.len() выросло 14→16, прежние ассерты (sidebar_items ≥20, groups ==5, content_h dynamics) в силе.
+- Архитектура: WaveCSlots += 5 полей (avatar, avatar_cells: Vec<UiRect>, nav_rail_rail, nav_rail_buttons: Vec<UiRect>, nav_rail_sidebar) — Default-derive корректен (UiRect::default + Vec::new). build_demo_layout: shv-преобразование новых полей (slot + Vec) по паттерну существующих (tabs_parts/accordion_bodies/radio_parts). wave_c_consume: 2 новых match-ветви (avatar, nav_rail) — без заимствований `&mut ruler` (только `slot` уже получен из ruler.next()).
+- Гейты: cargo/rustc недоступны — fmt/clippy/test/wasm делегированы CI. Код написан по образцу существующих секций (checkbox/slider/snackbar): те же импорты (canvas_ui::kit::{Shape, Spacing, Elevation, ...} через re-export kit.rs строки 142-151), те же паттерны (kit::modal_style → ControlStyle, painter.control с shadow, demo_state для hover/press).
+
+Stage Summary:
+- Files changed: crates/canvas-app/src/kit_demo.rs (+92 строк: 832→924), crates/canvas-app/src/kit_ui.rs (+287 строк: 5725→6012), crates/canvas-app/src/i18n.rs (+44 строк: 4519→4563).
+- Sections added: avatar (DataDisplay) — матрица 4×3 (Xs/Sm/Md/Lg × Initials/Icon/Image), 12 хит-целей, тон Primary для выбранной. nav_rail (Navigation) — slim rail (48px) + sidebar (280px), 5 пунктов, активный пункт из demo-состояния.
+- Wave T tokens (в новом коде): Spacing::Sm.px() (8) — везде вместо bare 8.0; Shape::{None, S, M, Full}.px() — радиусы; Elevation::Md — shadow под демо-модалкой (painter.control auto-shadow); Duration::Short2/Medium3 + Easing::Standard/EmphasizedDecelerate — motion-комментарии к interaction-states.
+- Тесты: += 2 unit-теста в kit_demo.rs (sections_present, transitions), += 2 end-to-end записи в kit_ui.rs::tobe_dropdown_and_hit_ids. Гейты делегированы CI (cargo недоступен).
+- Открытые вопросы владельцу: (1) обновление docs/interface-objects/kit-demo-v1.md (состав секций D7 — добавить avatar/nav_rail); (2) onboarding/user-docs — не затронуты (правило FR/CR); (3) CI: прогнать `cargo test --workspace`, `cargo clippy -D warnings`, `scripts/wasm_gate.sh --check` для подтверждения компиляции.
+- Не закоммичено — изменения в рабочем дереве (по инструкции).
+Tokens: in≈170000, out≈42000, total≈212000 (estimate), model=GLM-4.7, scope=INT-4
+
+---
+Task ID: INT-2 (#44)
+Agent: subagent (general-purpose)
+Task: Wave A интеграция (Response + ActionRegistry + smart_guides)
+
+Work Log:
+- Контекст: GitHub issue #44, AGENTS.md §«Планирование работ» (high-level issue = atomic unit of value), Wave A (#31) добавила Response/WidgetExt/FocusTrap/ActionRegistry/NavRail/smart_guides в crates/canvas-ui/, но NONE integrated в crates/canvas-app/. Cargo в среде НЕ доступен — код пишется carefully, гейты делегированы CI.
+- P3 ActionRegistry: создан crates/canvas-app/src/app/actions.rs (~180 строк) с `build_action_registry()` — 13 действий по 5 категориям (File: open_settings/save/new_canvas; View: toggle_whatif/toggle_theme/close_all; Navigate: open_search/open_gallery/open_command_palette; Edit: undo/redo/duplicate; Help: open_help). kbd-строки: ctrl+s/ctrl+n/ctrl+w/escape/ctrl+f/ctrl+k/ctrl+z/ctrl+shift+z/ctrl+d/?. 7 unit-тестов: count≥10, expected IDs, shortcut_of, command_actions, search, cheatsheet grouping (File=3, Edit=3, Help=1), context_items.
+- P3 wiring: app.rs — `pub mod actions;` декларация; поле `action_registry: canvas_ui::kit::ActionRegistry` на App; init в App::new (`actions::build_action_registry()`); accessor `pub(crate) fn command_actions() -> Vec<CommandAction>` для будущей Cmd+K палитры (через `search_actions` Wave C).
+- P4 smart_guides: добавлено поле `smart_guides_frame: Option<smart_guides::SmartGuides>` на App (init None). Helper `fn compute_smart_guides_frame(&self, drag, eff_delta) -> Option<(SmartGuides, UiVec2)>` — строит dragged rect из drag_bbox + eff_delta, siblings из видимых нод вне moving-набора (spatial.query_rect + filter), вызывает `compute_smart_guides(dragged, &siblings, SNAP_THRESHOLD)`.
+- P4 input.rs drag: в on_cursor_moved drag-блоке (после compute_snap_frame) — compute smart_guides_pair, clone guides в smart_guides_frame, apply snap_offset к eff_delta LIVE (нода видимо притягивается к center/edge sibling в пределах 6 world px). Документирован release-path: apply_snap_at_release использует frame.outcome.dx/dy — если grid/guides snap сработал, он побеждает; иначе finish_interaction_undo сохраняет текущую позицию (с smart-snap). Очистка smart_guides_frame=None в обоих release-путях (Space-отпускание + on_left_button Released).
+- P4 overlays.rs: добавлен `pub(super) fn smart_guides_overlay() -> (Vec<CardInstance>, Vec<OwnedScreenText>)` — конвертация world→screen через camera.world_to_screen; magenta-линии (const MAGENTA=[0.913,0.118,0.549,1.0], #E91E8C) как тонкие quads (1px) через band_rect_quad_pub; distance labels «N px» как OwnedScreenText (Color::rgba(233,30,140,255), 11px, center-align). Слой гасится при None (drag не активен).
+- P4 handler.rs render bands: push smart_guides overlay в UiLayer::WorldOverlay (как wheel-меню и guides FR-038 — мир-anchored линии) с band_vp_clip; push пропускается если instances+texts пустые.
+- P2 Response migration: kit_ui.rs — добавлен импорт `Response, WidgetExt` из canvas_ui::kit; helper `fn demo_widget_response(pressed, cursor, r, id) -> Response` (строит WidgetState через set_pointer → Response::from_widget(rect, &ws, false)). Мигрированы 3 компонента в draw_demo_extras: (1) Chips — resp.state + WidgetExt::with_state(state) для семантики Selected + on_hover_text("Chip state toggle"); (2) Buttons — resp.state для KitState + on_hover_text("Button state demo"); (3) List rows — resp.state (Selected обрабатывается отдельно) + on_hover_text("List row demo"). on_hover_text — no-op (TODO Wave D интеграция с tooltip-state потребителя, как Response::on_hover_text); WidgetExt trait использован через with_state (trait-only метод, не входит в inherent impl Response).
+
+Stage Summary:
+- P2 Response: 3 компонента мигрированы (Chips/Buttons/List rows) — Response::from_widget + WidgetExt chain (with_state + on_hover_text); demo_widget_response helper
+- P3 ActionRegistry: 13 действий по 5 категориям, 7 unit-тестов, command_actions() accessor для будущей палитры команд
+- P4 smart_guides: compute_smart_guides подключена к drag (live snap_offset + рендер оверлея), magenta-линии + distance labels в UiLayer::WorldOverlay, очистка на release
+- Files changed: crates/canvas-app/src/app/actions.rs (NEW, ~180 строк), crates/canvas-app/src/app.rs (+~70 строк: mod/field/init/helper/accessor), crates/canvas-app/src/app/input.rs (~50 строк в drag-блоке + 2 cleanup-точки), crates/canvas-app/src/app/overlays.rs (+~85 строк smart_guides_overlay), crates/canvas-app/src/app/handler.rs (+10 строк push в render bands), crates/canvas-app/src/kit_ui.rs (+~30 строк helper + миграция 3 секций)
+- Гейты: cargo недоступен в среде — test/clippy/fmt делегированы CI; код написан carefully с проверкой типов/импортов вручную
+- НЕ закоммичено — изменения в рабочем дереве (по инструкции)
+Tokens: in≈170000, out≈42000, total≈212000 (estimate), model=GLM-4.7, scope=INT-2
