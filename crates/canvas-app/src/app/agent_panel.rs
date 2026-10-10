@@ -804,13 +804,7 @@ impl App {
                         и спросит Accept/Reject. Деструктивные операции — только \
                         с подтверждением.";
             let hint_area_w = log_rect.w - 16.0;
-            let hint_lines = measurer.wrap(
-                &mut fs,
-                hint,
-                sans_family,
-                BUBBLE_FONT,
-                hint_area_w,
-            );
+            let hint_lines = measurer.wrap(&mut fs, hint, sans_family, BUBBLE_FONT, hint_area_w);
             let line_h = 15.0; // bubble_size 11 · 1.35 → 15 (ритм лога)
             let mut line_y = log_rect.y + 8.0;
             for line in &hint_lines {
@@ -2325,8 +2319,11 @@ mod tests {
 
     /// LAY-W15 (P2-1): пара Accept/Reject — sibling-резолюция «ближайший
     /// центр» (паритет ⏸/⚙ AI-статуса): тап в 2 px внутри нарисованного
-    /// Reject — Reject на coarse и на precise. Та же арифметика rect'ов,
-    /// что в `agent_panel_hit` (panel/PAD/16.0/8.0 — без `App`/GPU).
+    /// Reject — Reject на coarse и на precise. Пин САМОЙ РЕЗОЛЮЦИИ
+    /// `touch_hit_sibling_xywh` (без `App`/GPU); rect'ы здесь — копия
+    /// исторической формулы. LAY-W20: источник rect'ов в `agent_panel_hit`
+    /// заменён на единый проход `agent_log_walk` (draw == hit) — резолюция
+    /// поверх rect'ов не изменилась.
     #[test]
     fn lay_w15_accept_reject_coarse_nearest_center() {
         use crate::touch_targets::touch_hit_sibling_xywh;
@@ -2361,6 +2358,179 @@ mod tests {
             "precise: тап в нарисованный Reject — Reject"
         );
         canvas_core::web_bridge::set_pointer_coarse(was);
+    }
+
+    /// App-стаб для hit-тестов (копия ui_registry::test_stub — те же
+    /// нейтральные бэкенды; hit-пути GPU не требуют).
+    fn hit_stub() -> App {
+        let scene = crate::app::SceneState::new(
+            crate::Canvas::default(),
+            std::path::PathBuf::from("target/tmp/lay-w20-agent-hit.canvas"),
+        );
+        let (search_responder, _rx) = {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let responder: canvas_core::SearchResponder = std::sync::Arc::new(move |event| {
+                let _ = tx.send(event);
+            });
+            (responder, rx)
+        };
+        App::new(
+            scene,
+            Box::new(canvas_core::NoopThumbs),
+            crate::Settings::default(),
+            None,
+            Some(std::env::temp_dir().join(format!("canvasdesk-lay-w20-{}", std::process::id()))),
+            std::sync::Arc::new(|_event: canvas_core::DragEvent| {}),
+            std::sync::Arc::new(|_event: canvas_widgets::WidgetEvent| {}),
+            Box::new(canvas_core::NoopWatch),
+            Box::new(canvas_core::MemSearch::new(search_responder)),
+            Box::new(canvas_core::NoopClipboard),
+            Some(Box::new(canvas_core::MemWidgetState::default())),
+            false,
+            Box::new(canvas_render::renderer_init::NoopRendererLaunch),
+        )
+    }
+
+    /// Mock-флоу агента (как `agent_send`): user-запрос → бот с 2
+    /// tool_calls → финальный бот; preview активен (кнопки рисуются у
+    /// обоих Normal-баблов).
+    fn mock_flow_messages() -> Vec<AgentMessage> {
+        vec![
+            AgentMessage::User("Создай воронку из 3 нод".to_owned()),
+            AgentMessage::Bot {
+                text: "Планирую… контекст: весь канвас · оценка ~$0.02".to_owned(),
+                kind: AgentMsgKind::Normal,
+                tool_calls: vec![
+                    ToolCallDisplay {
+                        tool_name: "graph_read".to_owned(),
+                        args_summary: "{context: весь канвас}".to_owned(),
+                        status: ToolCallStatus::Success,
+                    },
+                    ToolCallDisplay {
+                        tool_name: "node_create".to_owned(),
+                        args_summary: "×3".to_owned(),
+                        status: ToolCallStatus::Success,
+                    },
+                ],
+            },
+            AgentMessage::Bot {
+                text: "Предлагаю связку: 3 ноды, 2 связи (последовательность \
+                       graph_apply, один undo-шаг). Ghost-превью — на канвасе. \
+                       Фактический расход: $0.021."
+                    .to_owned(),
+                kind: AgentMsgKind::Normal,
+                tool_calls: Vec::new(),
+            },
+        ]
+    }
+
+    /// LAY-W20 (P3 draw≠hit, аудит §3.2 P2-8): hit Accept/Reject резолвится
+    /// по ЕДИНОМУ проходу журнала `agent_log_walk` — rect'ы из cb_layout
+    /// бабла, как у draw. Проверки:
+    /// 1) у каждого Normal-бабла пара кнопок, привязанная к последней
+    ///    tool_call-строке (или text_area) с зазором SPACING_S;
+    /// 2) тап в нарисованные кнопки (по проходу) → Accept/Reject;
+    /// 3) фантомная зона прежней формулы от низа лога больше не отвечает
+    ///    (клик в тело лога — NoOp).
+    #[test]
+    fn lay_w20_preview_hit_uses_draw_walk() {
+        let mut app = hit_stub();
+        app.test_viewport = Some([1280.0, 800.0]);
+        app.agent_panel.open = true;
+        app.agent_panel.messages = mock_flow_messages();
+        app.agent_panel.preview = Some(AgentPreview::default());
+
+        let panel = app.agent_panel_rect().expect("панель видима на 1280×800");
+        let log_rect = agent_log_rect(panel);
+        // Draw-сторона: единый проход (тот же вызов, что в рендере).
+        // Guard глобального FontSystem — строго на время прохода:
+        // agent_panel_hit ниже сам захватывает тот же мьютекс, повторный
+        // lock() на той же нити — самодедлок (std Mutex не реентерабелен).
+        let walk = {
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            agent_log_walk(
+                &app.agent_panel.messages,
+                true,
+                log_rect,
+                &app.effective_palette().kit_palette(),
+                &mut m,
+                &mut fs,
+            )
+        };
+
+        let mut pairs: Vec<(UiRect, UiRect)> = Vec::new();
+        for g in &walk {
+            if let AgentMsgGeom::Bot {
+                cb,
+                preview: Some((accept, reject)),
+                ..
+            } = g
+            {
+                // Формула привязки кнопок к баблу (draw == hit):
+                // последняя tool_call-строка, иначе text_area; зазор SPACING_S.
+                let expected_y = if let Some(last_tc) = cb.tool_call_rows.last() {
+                    last_tc.bottom() + canvas_core::tokens::SPACING_S
+                } else {
+                    cb.text_area.bottom() + canvas_core::tokens::SPACING_S
+                };
+                assert_eq!(accept.y, expected_y, "Accept.y — от макета бабла");
+                assert_eq!(reject.y, expected_y, "Reject.y — от макета бабла");
+                assert_eq!(accept.w, (cb.rect.w - 8.0) / 2.0);
+                assert_eq!(reject.x, accept.x + accept.w + 8.0);
+                assert_eq!(accept.h, PREVIEW_BTN_H);
+                // Пара укладывается в полосу журнала (правый край Reject
+                // совпадает с правым падом лога; на 8 px выступает за правый
+                // край самого бабла — историческая draw-геометрия, LAY-W20
+                // сохраняет её бит-в-бит: draw — канон).
+                assert!(reject.x + reject.w <= log_rect.right() + 0.01);
+                pairs.push((*accept, *reject));
+            }
+        }
+        // Оба Normal-бабла несут пару (рисуются обе — hit знает все).
+        assert_eq!(pairs.len(), 2, "пара у каждого Normal-бабла с preview");
+        // Пары внутри полосы журнала и не пересекаются между собой.
+        for (accept, _) in &pairs {
+            assert!(accept.y >= log_rect.y && accept.y + accept.h <= log_rect.bottom() + 0.01);
+        }
+        assert!(
+            pairs[1].0.y > pairs[0].0.y + pairs[0].0.h,
+            "пары не накладываются"
+        );
+
+        // Hit-сторона: тап в нарисованные кнопки (из прохода) — Accept/Reject.
+        let (last_accept, last_reject) = pairs[1];
+        assert!(matches!(
+            app.agent_panel_hit([last_reject.x + 2.0, last_reject.y + last_reject.h / 2.0]),
+            Some(AgentPanelHit::Reject)
+        ));
+        assert!(matches!(
+            app.agent_panel_hit([last_accept.x + 2.0, last_accept.y + last_accept.h / 2.0]),
+            Some(AgentPanelHit::Accept)
+        ));
+        // Первая (верхняя) пара тоже кликабельна — прежде hit знал только
+        // одну фантомную пару у низа лога.
+        let (first_accept, first_reject) = pairs[0];
+        assert!(matches!(
+            app.agent_panel_hit([first_reject.x + 2.0, first_reject.y + first_reject.h / 2.0]),
+            Some(AgentPanelHit::Reject)
+        ));
+        assert!(matches!(
+            app.agent_panel_hit([first_accept.x + 2.0, first_accept.y + first_accept.h / 2.0]),
+            Some(AgentPanelHit::Accept)
+        ));
+
+        // Прежняя фантомная формула (низ лога) — точка там больше НЕ кнопка.
+        let old_btn_y = log_rect.bottom() - PREVIEW_BTN_H - 16.0;
+        let old_btn_w = (panel[2] - PAD * 2.0 - 8.0) / 2.0;
+        let old_center = [
+            panel[0] + PAD + 16.0 + old_btn_w / 2.0,
+            old_btn_y + PREVIEW_BTN_H / 2.0,
+        ];
+        assert!(
+            matches!(app.agent_panel_hit(old_center), Some(AgentPanelHit::NoOp)),
+            "фантомная зона прежней hit-формулы не отвечает (draw == hit)"
+        );
     }
 
     /// Панель скрыта если `!state.open`.
