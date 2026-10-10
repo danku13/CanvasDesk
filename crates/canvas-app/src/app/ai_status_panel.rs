@@ -175,6 +175,17 @@ struct HeadRow {
     gear_x: f32,
 }
 
+/// LAY-W20 (P3, аудит layouts-w1-w12 §3.3): единый источник x-позиций
+/// кнопок ⏸/⚙ — правый край контента, 24 + gap 6 + 24. Прежде формула
+/// дублировалась трижды (draw `head_row_layout`, hit `ai_status_panel_hit`,
+/// registry `head_button_rects`) — теперь draw и реестровый хелпер зовут
+/// эту функцию, hit читает [`head_button_rects`] целиком.
+fn head_button_xs(content_right: f32) -> (f32, f32) {
+    let gear_x = content_right - HEAD_BTN_SIZE;
+    let pause_x = gear_x - HEAD_GAP - HEAD_BTN_SIZE;
+    (pause_x, gear_x)
+}
+
 /// FR-LLM-FIX-2: flex-раскладка головной строки ПО ЗАМЕРУ шрифта — единая
 /// для рендера и hit-теста (клик-зоны идентичны кадру отрисовки).
 ///
@@ -198,9 +209,9 @@ fn head_row_layout(
     model_text: &str,
     prov_text: &str,
 ) -> (HeadRow, String, String) {
-    // Кнопки ⏸/⚙ — правый край контента (как раньше: 24 + gap + 24).
-    let gear_x = content_x + content_w - HEAD_BTN_SIZE;
-    let pause_x = gear_x - HEAD_GAP - HEAD_BTN_SIZE;
+    // Кнопки ⏸/⚙ — правый край контента (24 + gap + 24) — из ЕДИНОГО
+    // [`head_button_xs`] (LAY-W20: одна арифметика на draw/hit/registry).
+    let (pause_x, gear_x) = head_button_xs(content_x + content_w);
     // Чип провайдера: контент-ширина (замер + padding 8×2), клампы.
     let prov_text_w = crate::kit_ui::measured_width(m, fs, prov_text, 9.5);
     let prov_chip_w = (prov_text_w + PROV_CHIP_PAD_X * 2.0).clamp(PROV_CHIP_MIN_W, PROV_CHIP_MAX_W);
@@ -283,25 +294,40 @@ fn feat_chips_measured(
     out
 }
 
-/// LAY-W1 (аудит §3.8): rect'ы кнопок ⏸/⚙ шапки для hit-rect'ов реестра
-/// (`ui_registry::fill_hit_rects`) — та же арифметика правого края
-/// контента, что в `head_row_layout` (draw) и `ai_status_panel_hit`
-/// (ввод): кнопки прибиты к правому краю, 24 + gap 6 + 24. Позиция от
-/// текстов не зависит — замер не нужен. Одна геометрия для draw/hit/pick
-/// (UR-005, LAY1.2).
+/// LAY-W1 (аудит §3.8) + LAY-W20: rect'ы кнопок ⏸/⚙ шапки — ЕДИНЫЙ
+/// источник для hit-rect'ов реестра (`ui_registry::fill_hit_rects`),
+/// hit-теста (`ai_status_panel_hit`) и draw (через [`head_button_xs`] —
+/// та же арифметика, что в `head_row_layout`): кнопки прибиты к правому
+/// краю контента, 24 + gap 6 + 24. Позиция от текстов не зависит — замер
+/// не нужен. Одна геометрия для draw/hit/pick (UR-005, LAY1.2).
 pub(super) fn head_button_rects(panel: [f32; 4]) -> (UiRect, UiRect) {
     let head_y = panel[1] + PAD_TOP;
-    let gear_x = panel[0] + panel[2] - PAD_X - HEAD_BTN_SIZE;
-    let pause_x = gear_x - HEAD_GAP - HEAD_BTN_SIZE;
+    let (pause_x, gear_x) = head_button_xs(panel[0] + panel[2] - PAD_X);
     (
         UiRect::new(pause_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE),
         UiRect::new(gear_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE),
     )
 }
 
-/// LAY-W1: rect'ы чипов Suggest/Graph/Agent для hit-rect'ов реестра —
-/// тот же замер [`feat_chips_measured`], что у draw и hit-теста (UR-005):
-/// клик-зона чипа = отрисованный кадр.
+/// LAY-W20: раскладка чипов по ЗАМЕРЕННЫМ ширинам — единый курсор строки
+/// features (от PAD_X, шаг `w + FEAT_GAP`). Прежде этот курсор дублировался
+/// в теле draw и hit-теста (тройная формула, аудит §3.3) — теперь draw,
+/// hit и реестр читают rect'ы из этой функции (через [`feat_chip_rects`]).
+fn feat_chip_rects_measured(chips: &[(String, f32); 3], panel: [f32; 4]) -> [UiRect; 3] {
+    let feats_y = panel[1] + PAD_TOP + HEAD_ROW_H + GAP_HEAD_FEATS;
+    let mut x = panel[0] + PAD_X;
+    let mut out = [UiRect::new(0.0, 0.0, 0.0, 0.0); 3];
+    for (i, (_, w)) in chips.iter().enumerate() {
+        out[i] = UiRect::new(x, feats_y, *w, FEAT_FONT + FEAT_PAD_Y * 2.0);
+        x += *w + FEAT_GAP;
+    }
+    out
+}
+
+/// LAY-W1: rect'ы чипов Suggest/Graph/Agent для hit-rect'ов реестра и
+/// hit-теста — тот же замер [`feat_chips_measured`] и та же раскладка
+/// [`feat_chip_rects_measured`], что у draw (UR-005): клик-зона чипа =
+/// отрисованный кадр.
 pub(super) fn feat_chip_rects(
     m: &mut canvas_ui::measure::TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
@@ -311,15 +337,8 @@ pub(super) fn feat_chip_rects(
     agent_on: bool,
     paused: bool,
 ) -> [UiRect; 3] {
-    let feats_y = panel[1] + PAD_TOP + HEAD_ROW_H + GAP_HEAD_FEATS;
     let chips = feat_chips_measured(m, fs, suggest_on, graph_on, agent_on, paused);
-    let mut x = panel[0] + PAD_X;
-    let mut out = [UiRect::new(0.0, 0.0, 0.0, 0.0); 3];
-    for (i, (_, w)) in chips.iter().enumerate() {
-        out[i] = UiRect::new(x, feats_y, *w, FEAT_FONT + FEAT_PAD_Y * 2.0);
-        x += *w + FEAT_GAP;
-    }
-    out
+    feat_chip_rects_measured(&chips, panel)
 }
 
 impl App {
@@ -514,9 +533,11 @@ impl App {
         // padding 2.5×10px, gap 6px (шкала S1, LAY-W2), flex-wrap (на узких
         // панелях чипы переносятся на следующую строку — но ширины 302px
         // хватает на 3).
-        let feats_y = head_y + HEAD_ROW_H + GAP_HEAD_FEATS;
         // FR-LLM-FIX-2: подписи+ширины чипов — тот же замер, что и в
         // hit-тесте (единая функция `feat_chips_measured`).
+        // LAY-W20: rect'ы чипов — из единой [`feat_chip_rects_measured`]
+        // (та же раскладка, что hit-тест и реестр `feat_chip_rects`; прежде
+        // курсор чипов дублировался в теле draw).
         let feats = feat_chips_measured(
             &mut m,
             &mut fs,
@@ -525,18 +546,21 @@ impl App {
             self.ai_agent_enabled,
             self.ai_paused,
         );
+        let chip_rects = feat_chip_rects_measured(&feats, panel);
+        let feats_y = chip_rects[0].y;
         let feats_on = [
             self.ai_suggest_enabled,
             self.ai_graph_enabled,
             self.ai_agent_enabled,
         ];
-        let mut chip_cursor_x = content_x;
-        for (i, (label_text, chip_w)) in feats.iter().enumerate() {
+        for (i, (label_text, _chip_w)) in feats.iter().enumerate() {
             // «on» = фича включена И не на паузе (как aiSyncFeats() прототипа).
             let on = feats_on[i] && !self.ai_paused;
-            let chip_h = FEAT_FONT + FEAT_PAD_Y * 2.0;
-            let chip_rect = UiRect::new(chip_cursor_x, feats_y, *chip_w, chip_h);
-            let hovered = point_in_rect([chip_cursor_x, feats_y, *chip_w, chip_h], self.cursor);
+            let chip_rect = chip_rects[i];
+            let hovered = point_in_rect(
+                [chip_rect.x, chip_rect.y, chip_rect.w, chip_rect.h],
+                self.cursor,
+            );
             // FR-LLM-C: on → Selected (слот selected_fill), hovered → Hovered,
             // off → Normal. chip_style — слот заливки/рамки/текста, radius=RADIUS_PILL.
             let chip_state = if on {
@@ -551,7 +575,6 @@ impl App {
             // прототип — 99px). Рисуем вручную через d.rect с нужным радиусом.
             d.rect(chip_rect, chip_style.fill, chip_style.border, FEAT_RADIUS);
             d.label_center(chip_rect, label_text, chip_style.text, FEAT_FONT);
-            chip_cursor_x += *chip_w + FEAT_GAP;
             // hit-тест — та же геометрия (см. `ai_status_panel_hit`);
             // порядок чипов = порядок ToggleSuggest/Graph/Agent в hit-enum.
         }
@@ -701,22 +724,23 @@ impl App {
         if !point_in_rect(panel, point) {
             return None;
         }
-        let content_x = panel[0] + PAD_X;
-        let head_y = panel[1] + PAD_TOP;
 
-        // FR-LLM-FIX: кнопки ⏸/⚙ в шапке — 24×24, правый край контента
-        // (та же математика, что в `head_row_layout`).
-        let gear_x = panel[0] + panel[2] - PAD_X - HEAD_BTN_SIZE;
-        let pause_x = gear_x - HEAD_GAP - HEAD_BTN_SIZE;
+        // LAY-W20 (P3, аудит §3.3): rect'ы ⏸/⚙ — из ЕДИНОЙ
+        // [`head_button_rects`] (та же функция, что у реестра
+        // `fill_hit_rects`; арифметика — [`head_button_xs`], общая с draw
+        // `head_row_layout`). Ручная формула здесь удалена — тройное
+        // дублирование сведено к одному источнику.
+        let (pause_btn, gear_btn) = head_button_rects(panel);
         // FR-097: тач-цель ⏸/⚙ ≥ 44 (кламп в панель). LAY-W15 (P2-1):
         // пара кнопок — однородная sibling-группа, резолюция «ближайший
         // центр»: coarse-расширение ⏸ (24→44, ±10) накрывает 4 px
         // нарисованного ⚙ (зазор HEAD_GAP 6), и first-match отдавал тап в
         // ⚙ кнопке ⏸. На точном указателе зоны не пересекаются — бит-в-бит
-        // first-match (LAY1.2 «ввод = тому, что видно»).
+        // first-match (LAY1.2 «ввод = тому, что видно»). Резолюция —
+        // прежняя, заменён только ИСТОЧНИК rect'ов.
         let head_btns = [
-            [pause_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE],
-            [gear_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE],
+            [pause_btn.x, pause_btn.y, pause_btn.w, pause_btn.h],
+            [gear_btn.x, gear_btn.y, gear_btn.w, gear_btn.h],
         ];
         if let Some(i) = crate::touch_targets::touch_hit_sibling_xywh(head_btns, panel, point) {
             return Some(if i == 0 {
@@ -728,29 +752,25 @@ impl App {
 
         // FR-LLM-FIX-2: чипы Suggest/Graph/Agent — тот же замер шрифта, что
         // и в рендере (`feat_chips_measured`): клик-зона = отрисованный кадр.
-        let feats_y = head_y + HEAD_ROW_H + GAP_HEAD_FEATS;
+        // LAY-W20: раскладка — из единой [`feat_chip_rects`] (та же функция,
+        // что у реестра; прежде курсор чипов дублировался в теле hit-теста).
         let mut m = crate::kit_ui::new_measurer();
         let mut fs = canvas_render::text::measure_font_system();
-        let feats = feat_chips_measured(
+        let chip_rects = feat_chip_rects(
             &mut m,
             &mut fs,
+            panel,
             self.ai_suggest_enabled,
             self.ai_graph_enabled,
             self.ai_agent_enabled,
             self.ai_paused,
         );
-        let mut chip_cursor_x = content_x;
-        let mut chip_rects = [[0.0f32; 4]; 3];
-        for (i, (_label_text, chip_w)) in feats.iter().enumerate() {
-            let chip_h = FEAT_FONT + FEAT_PAD_Y * 2.0;
-            chip_rects[i] = [chip_cursor_x, feats_y, *chip_w, chip_h];
-            chip_cursor_x += *chip_w + FEAT_GAP;
-        }
+        let chip_xywh = chip_rects.map(|r| [r.x, r.y, r.w, r.h]);
         // FR-097: тач-цель feature-чипа (~16 px) ≥ 44 (кламп в панель).
         // LAY-W15 (P2-1): тройка чипов — та же sibling-резолюция «ближайший
         // центр», что у ⏸/⚙ (при узких чипах coarse-расширения соседей
         // перекрываются — тап в нарисованный чип не уходит соседу).
-        if let Some(i) = crate::touch_targets::touch_hit_sibling_xywh(chip_rects, panel, point) {
+        if let Some(i) = crate::touch_targets::touch_hit_sibling_xywh(chip_xywh, panel, point) {
             return Some(match i {
                 0 => AiStatusPanelHit::ToggleSuggest,
                 1 => AiStatusPanelHit::ToggleGraph,
@@ -928,6 +948,58 @@ mod tests {
         );
         assert_eq!(touch_hit_sibling_xywh(head_btns, panel, pt_pause), Some(0));
         canvas_core::web_bridge::set_pointer_coarse(was);
+    }
+
+    /// LAY-W20 (P3, аудит §3.3): ЕДИНЫЙ источник rect'ов ⏸/⚙ — draw
+    /// (`head_row_layout` через `head_button_xs`) и registry/hit
+    /// (`head_button_rects`) дают бит-в-бит те же позиции; ручные копии
+    /// формулы в hit-теле больше нет.
+    #[test]
+    fn lay_w20_head_buttons_single_source() {
+        let panel = [1100.0, 745.0, AI_STATUS_W, AI_STATUS_H];
+        // Registry/hit-сторона.
+        let (pause, gear) = head_button_rects(panel);
+        // Draw-сторона (та же раскладка head-строки, что в рендере).
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let content_x = panel[0] + PAD_X;
+        let content_w = panel[2] - 2.0 * PAD_X;
+        let head_y = panel[1] + PAD_TOP;
+        let (head, _, _) = head_row_layout(
+            &mut m, &mut fs, content_x, content_w, head_y, "glm-5", "Laya",
+        );
+        assert_eq!(
+            head.pause_x, pause.x,
+            "⏸ — одна арифметика draw/hit/registry"
+        );
+        assert_eq!(head.gear_x, gear.x, "⚙ — одна арифметика draw/hit/registry");
+        assert_eq!(pause.y, head_y);
+        assert_eq!(gear.y, head_y);
+        assert_eq!(pause.w, HEAD_BTN_SIZE);
+        assert_eq!(pause.h, HEAD_BTN_SIZE);
+        assert_eq!(gear.x, pause.x + HEAD_GAP + HEAD_BTN_SIZE);
+    }
+
+    /// LAY-W20: раскладка feature-чипов — один курсор для draw
+    /// (`feat_chip_rects_measured`) и hit/registry (`feat_chip_rects`):
+    /// вызов с теми же замеренными ширинами даёт бит-в-бит те же rect'ы.
+    #[test]
+    fn lay_w20_feat_chips_single_source() {
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let panel = [1100.0, 745.0, AI_STATUS_W, AI_STATUS_H];
+        // Registry/hit-сторона: замер + раскладка одной функцией.
+        let rects = feat_chip_rects(&mut m, &mut fs, panel, true, true, true, false);
+        // Draw-сторона: тот же замер + общая раскладка.
+        let feats = feat_chips_measured(&mut m, &mut fs, true, true, true, false);
+        let rects_draw = feat_chip_rects_measured(&feats, panel);
+        assert_eq!(rects, rects_draw, "чипы — одна раскладка draw/hit/registry");
+        // Инварианты курсора строки: старт от PAD_X, шаг w + FEAT_GAP.
+        assert_eq!(rects[0].x, panel[0] + PAD_X);
+        for w in rects.windows(2) {
+            assert_eq!(w[1].x, w[0].x + w[0].w + FEAT_GAP);
+        }
+        assert_eq!(rects[0].y, panel[1] + PAD_TOP + HEAD_ROW_H + GAP_HEAD_FEATS);
     }
 
     /// LAY-W15: тройка feature-чипов — резолюция «ближайший центр» (та же,
