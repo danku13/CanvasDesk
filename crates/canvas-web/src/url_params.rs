@@ -44,6 +44,10 @@ pub struct WebParams {
     /// (рамки слоёв/имя под курсором/пересечения — G6). Другие значения —
     /// None (мягкий игнор, страница открывается при любом URL).
     pub ui_debug: bool,
+    /// FR-105 (мультиканвас C2, №42a): `?migrate=1` — отладочный вход в
+    /// диалог миграции OPFS→папка (до волны C3, где входом станет строка
+    /// «Переехать на диск…» в менеджере канвасов; после C3 — удалить).
+    pub migrate: bool,
 }
 
 /// Уровень лога из URL (срез `tracing_subscriber::filter::LevelFilter`:
@@ -260,6 +264,9 @@ pub fn parse_query(query: &str) -> Result<WebParams, String> {
     // значения (в т.ч. пустое) — мягкий игнор (URL с опечаткой не повод
     // отказывать странице в остальных параметрах)
     let ui_debug = string_param(query, "ui").as_deref() == Some("debug");
+    // FR-105 (C2, №42a): `?migrate=1` — отладочный вход в диалог миграции
+    // (временный до C3; другие значения — мягкий игнор)
+    let migrate = string_param(query, "migrate").as_deref() == Some("1");
     Ok(WebParams {
         stress,
         stress_widgets,
@@ -268,6 +275,7 @@ pub fn parse_query(query: &str) -> Result<WebParams, String> {
         template,
         focus,
         ui_debug,
+        migrate,
     })
 }
 
@@ -329,7 +337,8 @@ mod tests {
                 canvas: None,
                 template: None,
                 focus: None,
-                ui_debug: false
+                ui_debug: false,
+                migrate: false
             }
         );
     }
@@ -365,6 +374,24 @@ mod tests {
         assert!(!params.ui_debug);
     }
 
+    /// FR-105 (C2, №42a): `?migrate=1` — отладочный вход в диалог
+    /// миграции OPFS→папка (временный до волны C3); прочие значения
+    /// и отсутствие — false (мягкий игнор).
+    #[test]
+    fn migrate_param_parses() {
+        let params = parse_query("?migrate=1").expect("валидный запрос");
+        assert!(params.migrate);
+        // Комбинируется с остальными
+        let params = parse_query("?canvas=демо&migrate=1&log=debug").expect("валидный запрос");
+        assert!(params.migrate);
+        assert_eq!(params.canvas.as_deref(), Some("демо.canvas"));
+        // Другое значение / пустое — false
+        let params = parse_query("?migrate=да").expect("валидный запрос");
+        assert!(!params.migrate);
+        let params = parse_query("?migrate=").expect("валидный запрос");
+        assert!(!params.migrate);
+    }
+
     /// Ведущий `?` опционален (location.search его всегда даёт, но парсер
     /// не должен требовать).
     #[test]
@@ -378,7 +405,8 @@ mod tests {
                 canvas: None,
                 template: None,
                 focus: None,
-                ui_debug: false
+                ui_debug: false,
+                migrate: false
             }
         );
     }
@@ -399,7 +427,8 @@ mod tests {
                 canvas: Some("x.canvas".to_string()),
                 template: None,
                 focus: None,
-                ui_debug: false
+                ui_debug: false,
+                migrate: false
             }
         );
     }

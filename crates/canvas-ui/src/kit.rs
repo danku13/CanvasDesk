@@ -25,7 +25,13 @@
 // сохранено 1:1 (§Контракт-1 PRD-0009 V-5: потребители не переписываются;
 // `crate::component` — канонический путь, `crate::kit` — совместимость).
 
-pub use crate::component::banner::{banner, paint_banner, BannerKind, BannerLayout, BannerStyle};
+// FR-105 (C2): константы баннера — фасад кита (как RADIO_* из radio_card):
+// потребители баннера потери доступа (storage_ui/overlays) не тянут
+// внутренний путь `component::banner`.
+pub use crate::component::banner::{
+    banner, paint_banner, BannerKind, BannerLayout, BannerStyle, BANNER_H, BANNER_LABEL_LINE_H,
+    BANNER_PAD, BANNER_RADIUS, BANNER_TINT_ALPHA,
+};
 pub use crate::component::button::{
     button_layout, button_size, button_style, chip_layout, chip_size, chip_style, icon_button_rect,
     icon_button_style, icon_glyph, icon_name, stage_close_button, stage_close_button_lg, switch,

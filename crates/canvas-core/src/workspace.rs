@@ -325,6 +325,31 @@ pub fn migration_plan(
 }
 
 // ============================================================================
+// Watch внешних изменений (№45b/№53b) — чистая часть
+// ============================================================================
+
+/// Снимок папки для детекта внешних изменений (№45b): «имя → время
+/// последнего изменения (unix ms)». Строит платформенный слой (poll
+/// `lastModified` на focus/visibilitychange), сравнивает — чистая
+/// функция [`snapshot_changed`] ниже. Ключи — имена файлов (белый список
+/// `.canvas` — обязанность построителя снимка; `.bak`-близнецы в Prompt
+/// не участвуют).
+pub type WatchSnapshot = BTreeMap<String, u64>;
+
+/// Имена файлов, изменившихся снаружи между двумя снимками: `ts` вырос
+/// или файл появился. Удалённые/переименованные наружу НЕ считаются
+/// изменением активного файла (перезагружать нечего — их обрабатывает
+/// листинг менеджера, волна C3). Порядок — алфавит (BTreeMap-итерация,
+/// детерминизм для тестов).
+pub fn snapshot_changed(before: &WatchSnapshot, after: &WatchSnapshot) -> Vec<String> {
+    after
+        .iter()
+        .filter(|(name, ts)| before.get(*name) != Some(ts))
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+// ============================================================================
 // Тесты (нативные + wasip1: модуль чистый, std-only)
 // ============================================================================
 
@@ -611,5 +636,38 @@ mod tests {
             }
         );
         assert!(format!("{create:?}").contains("новый.canvas"));
+    }
+
+    // --- FR-105 (C2): watch внешних изменений (№45b/№53b) -------------------------------
+
+    fn snap(pairs: &[(&str, u64)]) -> WatchSnapshot {
+        pairs
+            .iter()
+            .map(|(name, ts)| (name.to_string(), *ts))
+            .collect()
+    }
+
+    #[test]
+    fn snapshot_changed_detects_modified_and_new() {
+        let before = snap(&[("a.canvas", 10), ("b.canvas", 20)]);
+        let after = snap(&[("a.canvas", 11), ("b.canvas", 20), ("c.canvas", 1)]);
+        assert_eq!(
+            snapshot_changed(&before, &after),
+            ["a.canvas", "c.canvas"],
+            "изменившийся ts + новый файл; нетронутый b молчит"
+        );
+    }
+
+    #[test]
+    fn snapshot_changed_ignores_deleted_and_equal() {
+        let before = snap(&[("a.canvas", 10), ("gone.canvas", 5)]);
+        // gone.canvas удалён снаружи, a.canvas не менялся
+        let after = snap(&[("a.canvas", 10)]);
+        assert!(
+            snapshot_changed(&before, &after).is_empty(),
+            "удаление и равный ts — не «файл изменился» (активный перезагружать нечем)"
+        );
+        // снимки без пересечений
+        assert!(snapshot_changed(&snap(&[]), &snap(&[])).is_empty());
     }
 }

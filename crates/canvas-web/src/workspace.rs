@@ -294,6 +294,259 @@ fn file_name_of(path: &Path) -> Result<&str, CoreError> {
 }
 
 // ============================================================================
+// FR-105 (мультиканвас C2): исполнитель миграции OPFS → granted-папка (№42a/№52a)
+// ============================================================================
+
+/// IO-шов исполнителя миграции для синхронного окружения (нативные
+/// тесты; план — из `canvas_core::workspace::migration_plan`, C0).
+/// wasm-раннер водит ту же машину состояний ([`MigrationDriver`]) по
+/// async-шагам — порядок фаз один и тот же (см. ниже).
+pub trait MigrationIo {
+    /// Прочитать текст исходного файла (OPFS). `NotFound` — источник пропал.
+    fn read_source(&mut self, name: &str) -> Result<String, WorkspaceError>;
+    /// Записать текст в целевой файл (папка), create/replace.
+    fn write_target(&mut self, name: &str, text: &str) -> Result<(), WorkspaceError>;
+    /// Проверить, что целевой файл существует (проверка после копирования).
+    fn target_has(&mut self, name: &str) -> Result<bool, WorkspaceError>;
+    /// Удалить исходный файл (OPFS) — только после успешной проверки копии.
+    fn remove_source(&mut self, name: &str) -> Result<(), WorkspaceError>;
+}
+
+/// Итог миграции: отказоустойчивость №52a — оригинал удаляется ТОЛЬКО
+/// после успешного копирования и проверки цели; любой частичный сбой
+/// оставляет данные в OPFS (переезд можно повторить, потерь нет).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MigrationReport {
+    /// Успешно перенесённые пары (источник → итоговое имя в папке).
+    pub moved: Vec<(String, String)>,
+    /// Отказы копирования: (источник, цель, ошибка) — оригинал не тронут.
+    pub failed: Vec<(String, String, WorkspaceError)>,
+    /// Скопированы, но НЕ удалены (отказ проверки/удаления) — дубль живёт
+    /// в обеих сторонах, повторный прогон идемпотентен (коллизия в цели
+    /// решится авто-суффиксом нового плана).
+    pub kept: Vec<(String, String)>,
+    /// Выбранные, но отсутствующие в источнике (из плана №42a).
+    pub missing: Vec<String>,
+}
+
+/// Шаг исполнителя миграции: возвращается [`MigrationDriver::step`],
+/// исполнитель (натив-двойник или wasm-раннер) выполняет его ровно один
+/// раз и сообщает результат back-методами (`*_complete`/`*_fail`).
+/// Порядок фаз — ПОРЯДОК ВАЖЕН (№52a): сначала ВСЕ копирования, потом
+/// проверка и удаление — частичный сбой не теряет данные.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MigrationStep {
+    /// Прочитать текст источника (ответ: `read_complete`/`copy_fail`).
+    Read { src: String, dst: String },
+    /// Записать текст в цель (ответ: `write_complete`/`copy_fail`).
+    Write {
+        src: String,
+        dst: String,
+        text: String,
+    },
+    /// Проверить наличие цели (ответ: `verify_complete`).
+    Verify { src: String, dst: String },
+    /// Удалить источник — только после Verify=true (ответ: `remove_complete`
+    /// / `remove_fail`).
+    Remove { src: String, dst: String },
+    /// Все шаги исчерпаны — забрать [`MigrationDriver::report`].
+    Done,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum MigrationStage {
+    /// Фаза 1: копирование (Read → Write по каждой паре плана).
+    Copy,
+    /// Фазы 2–3: проверка цели + удаление подтверждённых оригиналов.
+    Remove,
+    Done,
+}
+
+/// Управляемая машина миграции: чистая (std-only, нативные тесты гоняют
+/// её через [`execute_migration`]; wasm-раннер — теми же шагами по
+/// async-операциям). Инвариант: источник удаляется только после
+/// успешных Write И Verify; ВСЕ копирования — до первого удаления
+/// (порядок фаз, №52a).
+#[derive(Debug)]
+pub struct MigrationDriver {
+    /// Пары плана, ожидающие копирования (порядок сохранён).
+    pairs: std::collections::VecDeque<(String, String)>,
+    /// Пара в полёте (Read выдан, Write ещё нет).
+    inflight: Option<(String, String)>,
+    /// Прочитанный текст + пара в полёте (ждут шага Write; живут до
+    /// ответа — повторный `step` переигрывает Write тем же текстом;
+    /// пара хранится вместе с текстом: «текст без пары» невозможен по
+    /// построению, без `expect` в production-пути).
+    inflight_write: Option<((String, String), String)>,
+    /// Успешно скопированные пары (кандидаты на удаление).
+    copied: Vec<(String, String)>,
+    /// Очередь проверки+удаления (заполняется после фазы копий).
+    to_remove: std::collections::VecDeque<(String, String)>,
+    /// Пара в фазе Verify/Remove.
+    removing: Option<(String, String)>,
+    /// Verify пары подтвердил цель — следующий шаг её Remove (живёт до
+    /// ответа: идемпотентность `next` между `remove_complete`/`remove_fail`).
+    removing_ready: bool,
+    stage: MigrationStage,
+    report: MigrationReport,
+}
+
+impl MigrationDriver {
+    /// Новая машина по плану (порядок `copies` сохраняется).
+    pub fn new(plan: &canvas_core::workspace::MigrationPlan) -> Self {
+        Self {
+            pairs: plan.copies.iter().cloned().collect(),
+            inflight: None,
+            inflight_write: None,
+            copied: Vec::new(),
+            to_remove: std::collections::VecDeque::new(),
+            removing: None,
+            removing_ready: false,
+            stage: MigrationStage::Copy,
+            report: MigrationReport {
+                missing: plan.missing.clone(),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Следующий шаг (идемпотентен между ответами: повторный вызов без
+    /// `*_complete`/`*_fail` возвращает тот же шаг).
+    pub fn step(&mut self) -> MigrationStep {
+        loop {
+            match self.stage {
+                MigrationStage::Copy => {
+                    // Текст прочитан — Write (текст живёт до ответа Write)
+                    if let Some(((src, dst), text)) = self.inflight_write.clone() {
+                        return MigrationStep::Write { src, dst, text };
+                    }
+                    // Read в полёте без ответа — переигрываем его
+                    if let Some((src, dst)) = self.inflight.clone() {
+                        return MigrationStep::Read { src, dst };
+                    }
+                    if let Some((src, dst)) = self.pairs.pop_front() {
+                        self.inflight = Some((src.clone(), dst.clone()));
+                        return MigrationStep::Read { src, dst };
+                    }
+                    // Фаза копий исчерпана → проверка/удаление скопированных
+                    self.to_remove = std::mem::take(&mut self.copied).into();
+                    self.stage = MigrationStage::Remove;
+                }
+                MigrationStage::Remove => {
+                    // Пара в полёте: Verify без ответа — переигрываем Verify;
+                    // подтверждённая (Verify=true) — её Remove
+                    if let Some((src, dst)) = self.removing.clone() {
+                        return if self.removing_ready {
+                            MigrationStep::Remove { src, dst }
+                        } else {
+                            MigrationStep::Verify { src, dst }
+                        };
+                    }
+                    if let Some((src, dst)) = self.to_remove.pop_front() {
+                        self.removing = Some((src.clone(), dst.clone()));
+                        self.removing_ready = false;
+                        return MigrationStep::Verify { src, dst };
+                    }
+                    self.stage = MigrationStage::Done;
+                }
+                MigrationStage::Done => return MigrationStep::Done,
+            }
+        }
+    }
+
+    /// Источник прочитан (ответ на `Read`): текст присоединяется к паре
+    /// в полёте (нет пары — лишний ответ, игнорируем).
+    pub fn read_complete(&mut self, text: String) {
+        if let Some(pair) = self.inflight.clone() {
+            self.inflight_write = Some((pair, text));
+        }
+    }
+
+    /// Копия записана в цель (ответ на `Write`).
+    pub fn write_complete(&mut self) {
+        if let Some(pair) = self.inflight.take() {
+            self.inflight_write = None;
+            self.copied.push(pair);
+        }
+    }
+
+    /// Отказ копирования (ответ на `Read`/`Write`): пара — в `failed`,
+    /// оригинал не тронут.
+    pub fn copy_fail(&mut self, err: WorkspaceError) {
+        if let Some((src, dst)) = self.inflight.take() {
+            self.inflight_write = None;
+            self.report.failed.push((src, dst, err));
+        }
+    }
+
+    /// Ответ на `Verify`: `has=false` — пара уходит в `kept` (без
+    /// удаления); `has=true` — пара подтверждена, следующий шаг — её Remove.
+    pub fn verify_complete(&mut self, has: bool) {
+        self.removing_ready = has;
+        if !has {
+            if let Some(pair) = self.removing.take() {
+                self.report.kept.push(pair);
+            }
+        }
+    }
+
+    /// Оригинал удалён (ответ на `Remove`).
+    pub fn remove_complete(&mut self) {
+        self.removing_ready = false;
+        if let Some(pair) = self.removing.take() {
+            self.report.moved.push(pair);
+        }
+    }
+
+    /// Отказ удаления ПОСЛЕ успешной копии (ответ на `Remove`): обе
+    /// стороны живы (kept) — данные не теряются.
+    pub fn remove_fail(&mut self) {
+        self.removing_ready = false;
+        if let Some(pair) = self.removing.take() {
+            self.report.kept.push(pair);
+        }
+    }
+
+    /// Итог (после `MigrationStep::Done`).
+    pub fn report(self) -> MigrationReport {
+        self.report
+    }
+}
+
+/// Синхронный прогон машины по IO-двойнику (нативные тесты; wasm
+/// использует [`MigrationDriver`] напрямую — тот же порядок шагов).
+pub fn execute_migration(
+    plan: &canvas_core::workspace::MigrationPlan,
+    io: &mut dyn MigrationIo,
+) -> MigrationReport {
+    let mut driver = MigrationDriver::new(plan);
+    loop {
+        match driver.step() {
+            MigrationStep::Read { src, .. } => match io.read_source(&src) {
+                Ok(text) => driver.read_complete(text),
+                Err(err) => driver.copy_fail(err),
+            },
+            MigrationStep::Write { dst, text, .. } => match io.write_target(&dst, &text) {
+                Ok(()) => driver.write_complete(),
+                Err(err) => driver.copy_fail(err),
+            },
+            MigrationStep::Verify { dst, .. } => {
+                driver.verify_complete(io.target_has(&dst).unwrap_or(false));
+            }
+            MigrationStep::Remove { src, .. } => {
+                if io.remove_source(&src).is_ok() {
+                    driver.remove_complete();
+                } else {
+                    driver.remove_fail();
+                }
+            }
+            MigrationStep::Done => break,
+        }
+    }
+    driver.report()
+}
+
+// ============================================================================
 // Контрактные тесты трейта (нативные — эталон для OpfsStore/FsAccessStore)
 // ============================================================================
 
@@ -437,5 +690,333 @@ mod tests {
             WorkspaceError::LimitReached.to_string(),
             format!("достигнут лимит канвасов ({MAX_CANVASES})")
         );
+    }
+
+    // --- FR-105: исполнитель миграции (№42a/№52a) --------------------------
+
+    use canvas_core::workspace::migration_plan;
+
+    /// Запись OPFS-листинга для плана (kind — источник = OPFS).
+    fn entry(name: &str, ts: u64) -> canvas_core::workspace::CanvasEntry {
+        canvas_core::workspace::CanvasEntry {
+            name: name.to_owned(),
+            ts,
+            kind: canvas_core::workspace::EntryKind::Opfs,
+            repo: None,
+        }
+    }
+
+    /// Двойник миграционного IO: OPFS-текст и папка в памяти + счётчики
+    /// отказов (инъекция сбоя на N-й операции конкретного вида) + журнал
+    /// операций (проверка порядка фаз: все записи — до первого удаления).
+    struct MemIo {
+        opfs: BTreeMap<String, String>,
+        folder: BTreeMap<String, String>,
+        fail_read: Option<String>,
+        fail_write: Option<String>,
+        fail_remove: Option<String>,
+        /// Порядок фактических IO-операций ("read:a", "write:b", …).
+        log: Vec<String>,
+    }
+
+    impl MemIo {
+        fn new(opfs: &[(&str, &str)]) -> Self {
+            Self {
+                opfs: opfs
+                    .iter()
+                    .map(|(n, t)| (n.to_string(), t.to_string()))
+                    .collect(),
+                folder: BTreeMap::new(),
+                fail_read: None,
+                fail_write: None,
+                fail_remove: None,
+                log: Vec::new(),
+            }
+        }
+    }
+
+    impl MigrationIo for MemIo {
+        fn read_source(&mut self, name: &str) -> Result<String, WorkspaceError> {
+            self.log.push(format!("read:{name}"));
+            if self.fail_read.as_deref() == Some(name) {
+                return Err(WorkspaceError::Io("read fail".into()));
+            }
+            self.opfs
+                .get(name)
+                .cloned()
+                .ok_or_else(|| WorkspaceError::NotFound(name.to_owned()))
+        }
+        fn write_target(&mut self, name: &str, text: &str) -> Result<(), WorkspaceError> {
+            self.log.push(format!("write:{name}"));
+            if self.fail_write.as_deref() == Some(name) {
+                return Err(WorkspaceError::Io("write fail".into()));
+            }
+            self.folder.insert(name.to_owned(), text.to_owned());
+            Ok(())
+        }
+        fn target_has(&mut self, name: &str) -> Result<bool, WorkspaceError> {
+            Ok(self.folder.contains_key(name))
+        }
+        fn remove_source(&mut self, name: &str) -> Result<(), WorkspaceError> {
+            self.log.push(format!("remove:{name}"));
+            if self.fail_remove.as_deref() == Some(name) {
+                return Err(WorkspaceError::Io("remove fail".into()));
+            }
+            self.opfs
+                .remove(name)
+                .map(|_| ())
+                .ok_or_else(|| WorkspaceError::NotFound(name.to_owned()))
+        }
+    }
+
+    fn plan_of(source: &[CanvasEntry], selected: &[&str]) -> canvas_core::workspace::MigrationPlan {
+        let selected: Vec<String> = selected.iter().map(|s| s.to_string()).collect();
+        migration_plan(source, &selected, &[])
+    }
+
+    /// Счастливый путь: копирование → проверка → удаление оригиналов (№52a),
+    /// содержимое приезжает в папку, OPFS пуст.
+    #[test]
+    fn migration_moves_all_and_empties_opfs() {
+        let source = [entry("a.canvas", 1), entry("b.canvas", 2)];
+        let plan = plan_of(&source, &["a.canvas", "b.canvas"]);
+        let mut io = MemIo::new(&[("a.canvas", "текст A"), ("b.canvas", "текст B")]);
+        let report = execute_migration(&plan, &mut io);
+        assert_eq!(report.moved.len(), 2);
+        assert!(report.failed.is_empty() && report.kept.is_empty());
+        assert!(io.opfs.is_empty(), "OPFS пуст (чистый переезд)");
+        assert_eq!(io.folder["a.canvas"], "текст A");
+        assert_eq!(io.folder["b.canvas"], "текст B");
+    }
+
+    /// Частичный сбой копирования: отказавший файл ОСТАЁТСЯ в OPFS,
+    /// остальные переезжают (данные не теряются — порядок фаз).
+    #[test]
+    fn migration_partial_write_failure_keeps_source() {
+        let source = [entry("a.canvas", 1), entry("b.canvas", 2)];
+        let plan = plan_of(&source, &["a.canvas", "b.canvas"]);
+        let mut io = MemIo::new(&[("a.canvas", "A"), ("b.canvas", "B")]);
+        io.fail_write = Some("b.canvas".into());
+        let report = execute_migration(&plan, &mut io);
+        assert_eq!(report.moved, [("a.canvas".into(), "a.canvas".into())]);
+        assert_eq!(report.failed.len(), 1, "b не скопирован");
+        assert_eq!(
+            io.opfs.keys().collect::<Vec<_>>(),
+            [&"b.canvas".to_string()],
+            "оригинал b не тронут — повторный прогон доедет"
+        );
+        assert_eq!(io.folder.len(), 1, "только a в папке");
+    }
+
+    /// Отказ удаления ПОСЛЕ успешной копии: файл остаётся в обеих сторонах
+    /// (kept), данные не теряются; удаление не предшествует проверке.
+    #[test]
+    fn migration_remove_failure_keeps_both_sides() {
+        let source = [entry("a.canvas", 1)];
+        let plan = plan_of(&source, &["a.canvas"]);
+        let mut io = MemIo::new(&[("a.canvas", "A")]);
+        io.fail_remove = Some("a.canvas".into());
+        let report = execute_migration(&plan, &mut io);
+        assert!(report.moved.is_empty());
+        assert_eq!(report.kept, [("a.canvas".into(), "a.canvas".into())]);
+        assert!(io.folder.contains_key("a.canvas"), "копия в папке есть");
+        assert!(io.opfs.contains_key("a.canvas"), "оригинал тоже жив");
+    }
+
+    /// Порядок фаз (№52a): ВСЕ записи — до ПЕРВОГО удаления (журнал
+    /// операций двойника). Сбой одной копии не блокирует остальные —
+    /// но удаления начинаются только после исчерпания фазы копий.
+    #[test]
+    fn migration_writes_all_before_first_remove() {
+        let source = [entry("a.canvas", 1), entry("b.canvas", 2)];
+        let plan = plan_of(&source, &["a.canvas", "b.canvas"]);
+        let mut io = MemIo::new(&[("a.canvas", "A"), ("b.canvas", "B")]);
+        // Сбой чтения первого файла: b всё равно переезжает целиком
+        io.fail_read = Some("a.canvas".into());
+        let report = execute_migration(&plan, &mut io);
+        assert_eq!(
+            report.moved,
+            [("b.canvas".to_owned(), "b.canvas".to_owned())],
+            "b доезжает: сбой a не блокирует остальные пары"
+        );
+        assert!(report.kept.is_empty());
+        assert_eq!(report.failed.len(), 1, "a не прочитан");
+        assert_eq!(io.folder.len(), 1, "b скопирован");
+        assert!(io.opfs.contains_key("a.canvas"), "оригинал a не тронут");
+        assert!(
+            io.log.iter().any(|op| op.starts_with("remove")),
+            "b удалён после успешной копии (частичный переезд честен)"
+        );
+        // Счастливый прогон: все write строго до первого remove
+        let mut io = MemIo::new(&[("a.canvas", "A"), ("b.canvas", "B")]);
+        let _ = execute_migration(&plan, &mut io);
+        let last_write = io
+            .log
+            .iter()
+            .rposition(|op| op.starts_with("write"))
+            .expect("были записи");
+        let first_remove = io
+            .log
+            .iter()
+            .position(|op| op.starts_with("remove"))
+            .expect("были удаления");
+        assert!(
+            last_write < first_remove,
+            "порядок фаз: копии до удалений (журнал: {:?})",
+            io.log
+        );
+    }
+
+    /// Коллизия в цели: план даёт авто-суффикс, исполнитель пишет под ним;
+    /// отсутствующие в источнике попадают в missing без блокировки остальных.
+    #[test]
+    fn migration_suffixes_and_reports_missing() {
+        let source = [entry("x.canvas", 1)];
+        let target = [entry("x.canvas", 9)];
+        let plan = migration_plan(
+            &source,
+            &["x.canvas".to_string(), "ghost.canvas".to_string()],
+            &target,
+        );
+        let mut io = MemIo::new(&[("x.canvas", "X")]);
+        io.folder.insert("x.canvas".into(), "старое".into());
+        let report = execute_migration(&plan, &mut io);
+        assert_eq!(
+            report.moved,
+            [("x.canvas".into(), "x (1).canvas".into())],
+            "коллизия в цели — авто-суффикс плана (№26b)"
+        );
+        assert_eq!(report.missing, ["ghost.canvas".to_owned()]);
+        assert_eq!(io.folder["x (1).canvas"], "X");
+        assert_eq!(io.folder["x.canvas"], "старое", "цель не перезаписана");
+    }
+
+    /// Машина состояний (wasm-путь): шаги качаются по одному — порядок
+    /// фаз тот же (копирование ВСЕХ пар до первого удаления), ответ
+    /// read_complete/write_complete двигает пару по конвейеру.
+    #[test]
+    fn migration_driver_pumps_steps_like_wasm_runner() {
+        let source = [entry("a.canvas", 1), entry("b.canvas", 2)];
+        let plan = plan_of(&source, &["a.canvas", "b.canvas"]);
+        let mut driver = MigrationDriver::new(&plan);
+        // Пара a: Read → Write
+        assert_eq!(
+            driver.step(),
+            MigrationStep::Read {
+                src: "a.canvas".into(),
+                dst: "a.canvas".into()
+            }
+        );
+        driver.read_complete("A".into());
+        assert_eq!(
+            driver.step(),
+            MigrationStep::Write {
+                src: "a.canvas".into(),
+                dst: "a.canvas".into(),
+                text: "A".into()
+            }
+        );
+        driver.write_complete();
+        // Пара b идёт СТРОГО после a — удаления ещё не было (№52a)
+        assert_eq!(
+            driver.step(),
+            MigrationStep::Read {
+                src: "b.canvas".into(),
+                dst: "b.canvas".into()
+            }
+        );
+        driver.read_complete("B".into());
+        assert_eq!(
+            driver.step(),
+            MigrationStep::Write {
+                src: "b.canvas".into(),
+                dst: "b.canvas".into(),
+                text: "B".into()
+            }
+        );
+        driver.write_complete();
+        // Только теперь — проверка и удаление
+        assert_eq!(
+            driver.step(),
+            MigrationStep::Verify {
+                src: "a.canvas".into(),
+                dst: "a.canvas".into()
+            }
+        );
+        driver.verify_complete(true);
+        assert_eq!(
+            driver.step(),
+            MigrationStep::Remove {
+                src: "a.canvas".into(),
+                dst: "a.canvas".into()
+            }
+        );
+        driver.remove_complete();
+        // verify=false у b — удаления не будет, kept
+        assert_eq!(
+            driver.step(),
+            MigrationStep::Verify {
+                src: "b.canvas".into(),
+                dst: "b.canvas".into()
+            }
+        );
+        driver.verify_complete(false);
+        assert_eq!(driver.step(), MigrationStep::Done);
+        let report = driver.report();
+        assert_eq!(report.moved, [("a.canvas".into(), "a.canvas".into())]);
+        assert_eq!(report.kept, [("b.canvas".into(), "b.canvas".into())]);
+    }
+
+    /// Машина терпит посторонние/дублированные ответы (контракт
+    /// идемпотентности): `read_complete` без пары в полёте — игнор,
+    /// дубль `write_complete`/`verify_complete` — no-op, шаги
+    /// воспроизводятся корректно, отчёт не искажается.
+    #[test]
+    fn migration_driver_tolerates_orphan_and_duplicate_answers() {
+        let source = [entry("a.canvas", 1)];
+        let plan = plan_of(&source, &["a.canvas"]);
+        let mut driver = MigrationDriver::new(&plan);
+        // посторонний ответ до первого шага — пары в полёте нет
+        driver.read_complete("лишний".into());
+        assert_eq!(
+            driver.step(),
+            MigrationStep::Read {
+                src: "a.canvas".into(),
+                dst: "a.canvas".into()
+            }
+        );
+        driver.read_complete("A".into());
+        assert_eq!(
+            driver.step(),
+            MigrationStep::Write {
+                src: "a.canvas".into(),
+                dst: "a.canvas".into(),
+                text: "A".into()
+            }
+        );
+        driver.write_complete();
+        driver.write_complete(); // дубль ответа Write — no-op
+        assert_eq!(
+            driver.step(),
+            MigrationStep::Verify {
+                src: "a.canvas".into(),
+                dst: "a.canvas".into()
+            }
+        );
+        driver.verify_complete(true);
+        driver.verify_complete(true); // дубль Verify — окно идемпотентности
+        assert_eq!(
+            driver.step(),
+            MigrationStep::Remove {
+                src: "a.canvas".into(),
+                dst: "a.canvas".into()
+            }
+        );
+        driver.remove_complete();
+        driver.remove_complete(); // дубль Remove — no-op
+        assert_eq!(driver.step(), MigrationStep::Done);
+        let report = driver.report();
+        assert_eq!(report.moved, [("a.canvas".into(), "a.canvas".into())]);
+        assert!(report.failed.is_empty() && report.kept.is_empty());
     }
 }

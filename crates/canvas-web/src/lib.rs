@@ -17,6 +17,10 @@
 
 pub mod app_spawn;
 pub mod fs_access;
+// FR-105 (мультиканвас C2): рабочее пространство в granted-папке FS
+// Access — FsAccessStore + пикер + миграция OPFS→папка + watch внешних
+// изменений + баннер потери доступа.
+pub mod fs_folder;
 pub mod opfs;
 pub mod panic_hook;
 pub mod recent;

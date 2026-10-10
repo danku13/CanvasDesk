@@ -8,7 +8,8 @@
 //! Потребители: `opfs` (инициализация), `fs_access` (открытие с диска),
 //! `drop_files` (импорт копии), `export` (экспорт активной версии),
 //! `web_locks`/`url_sync` (FR-104: единая точка смены активного канваса
-//! — `set_active` захватывает Web Lock и синкает `?canvas=`).
+//! — `set_active` захватывает Web Lock и синкает `?canvas=`),
+//! FR-105 (C2): `fs_folder` (granted-папка, миграция, watch).
 
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // потребители — opfs/fs_access/drop/export (wasm); натив: только тесты
 
@@ -21,10 +22,14 @@ use crate::opfs_store::OpfsStore;
 /// Где живёт активный канвас: OPFS origin'а или настоящий диск (FS Access
 /// хэндл). Влияет на экспорт (чтение свежей версии) и reopen из недавних
 /// (нужно ли перезапрашивать разрешение).
+/// FR-105 (мультиканвас C2): `Folder` — granted-папка рабочего пространства
+/// (после переезда №42a/старта №41c): автосейв и watch идут через папку.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ActiveKind {
     Opfs,
     Disk,
+    /// Granted-папка workspace (FS Access, волна C2).
+    Folder,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,8 +61,17 @@ thread_local! {
     /// Web Locks → `CanvasLockBusy`). Регистрируется spawn_desk_web ПОСЛЕ
     /// построения event loop — до этого init_scene копит занятость в
     /// `web_locks::take_pending_busy` (pending-флаг App, первый кадр).
+    /// FR-105 (C2): тот же прокси — канал событий фоновых тасков папки
+    /// (очередь операций granted-папки, watch-поллинг; `send_event`).
     #[cfg(target_arch = "wasm32")]
     static EVENT_PROXY: RefCell<Option<winit::event_loop::EventLoopProxy<canvas_app::app::AppEvent>>> =
+        const { RefCell::new(None) };
+    // FR-105 (мультиканвас C2): granted-папка рабочего пространства —
+    // dir-хэндл + общее хранилище-зеркало `FsAccessStore` (менеджер C3 и
+    // миграция C2 читают листинг). JsValue-хэндл — только здесь (!Send).
+    static FOLDER_HANDLE: RefCell<Option<web_sys::FileSystemDirectoryHandle>> =
+        const { RefCell::new(None) };
+    static FS_STORE: RefCell<Option<Arc<crate::fs_folder::FsAccessStore>>> =
         const { RefCell::new(None) };
 }
 
@@ -131,9 +145,48 @@ pub(crate) fn opfs_workspace() -> Option<Arc<OpfsStore>> {
     OPFS_WORKSPACE.with(|cell| cell.borrow().clone())
 }
 
+// --- FR-105 (мультиканвас C2): granted-папка рабочего пространства --------
+
+/// Запомнить dir-хэндл granted-папки (старт №41c / переезд №42a /
+/// переподключение №44b). `None` (очистка) — переключение в OPFS.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn set_folder_handle(handle: web_sys::FileSystemDirectoryHandle) {
+    FOLDER_HANDLE.with(|cell| *cell.borrow_mut() = Some(handle));
+    // Папка подключена — общее хранилище-зеркало обязано существовать
+    if FS_STORE.with(|cell| cell.borrow().is_none()) {
+        FS_STORE.with(|cell| {
+            *cell.borrow_mut() = Some(Arc::new(crate::fs_folder::FsAccessStore::new()));
+        });
+    }
+}
+
+/// Хэндл granted-папки (клон JsValue-ссылки — дёшево).
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn folder_handle() -> Option<web_sys::FileSystemDirectoryHandle> {
+    FOLDER_HANDLE.with(|cell| cell.borrow().clone())
+}
+
+/// Забыть granted-папку (переключение в браузерное хранилище №44b).
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn clear_folder_handle() {
+    FOLDER_HANDLE.with(|cell| *cell.borrow_mut() = None);
+}
+
+/// Общее хранилище-зеркало папки (`Arc` — один на страницу; None до
+/// первого подключения папки).
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn fs_store() -> Arc<crate::fs_folder::FsAccessStore> {
+    FS_STORE.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        slot.get_or_insert_with(|| Arc::new(crate::fs_folder::FsAccessStore::new()))
+            .clone()
+    })
+}
+
 /// Зарегистрировать прокси событий web-слоя (FR-104, C1: spawn_desk_web
 /// сразу после построения event loop — занятость Web Locks со старта
-/// копится в `web_locks::take_pending_busy` до этой точки).
+/// копится в `web_locks::take_pending_busy` до этой точки). FR-105 (C2):
+/// тот же прокси — канал фоновых тасков папки (`send_event`).
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn set_event_proxy(proxy: winit::event_loop::EventLoopProxy<canvas_app::app::AppEvent>) {
     EVENT_PROXY.with(|cell| *cell.borrow_mut() = Some(proxy));
@@ -145,6 +198,20 @@ pub(crate) fn set_event_proxy(proxy: winit::event_loop::EventLoopProxy<canvas_ap
 pub(crate) fn event_proxy() -> Option<winit::event_loop::EventLoopProxy<canvas_app::app::AppEvent>>
 {
     EVENT_PROXY.with(|cell| cell.borrow().clone())
+}
+
+/// Отправить событие из фонового таска (нет прокси — тихо, только лог).
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn send_event(event: canvas_app::app::AppEvent) {
+    let sent = EVENT_PROXY.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map(|proxy| proxy.send_event(event).is_ok())
+            .unwrap_or(false)
+    });
+    if !sent {
+        tracing::debug!(target: "canvas_web", "web-событие без прокси отброшено (ранний старт)");
+    }
 }
 
 /// Заглушка для нативных тестов: thread_local-контракт web-состояния.
@@ -179,5 +246,8 @@ mod tests {
         // Повторная установка того же канваса — идемпотентна (значение то же)
         set_active("диск.canvas", ActiveKind::Disk);
         assert_eq!(active_name().as_deref(), Some("диск.canvas"));
+        // FR-105: вариант Folder — тот же контракт
+        set_active("папка.canvas", ActiveKind::Folder);
+        assert_eq!(active_kind(), Some(ActiveKind::Folder));
     }
 }
