@@ -7,9 +7,9 @@
 >
 > **База:** `main` @ `1408f87` (2026-10-09). Контекст состояния wasm/ИИ:
 > [WASM-AI-FEATURES.md](../WASM-AI-FEATURES.md) (§8 — сводка TODO-маркеров),
-> [PRD-0010](../prd/prd-0010-llm-integration-byok-chatgpt.html),
-> [ADR-0011](../adr/adr-0011-wasm-build-gate.html) (wasm-гейт),
-> [ADR-0016](../adr/adr-0016-llm-layer-canvas-llm.html) (LLM-слой).
+> [PRD-0010](../prd/prd-0010-llm-integration-byok-chatgpt.md),
+> [ADR-0011](../adr/adr-0011-wasm-build-gate.md) (wasm-гейт),
+> [ADR-0016](../adr/adr-0016-llm-layer-canvas-llm.md) (LLM-слой).
 >
 > **Поиск точек в коде** — по маркерам: `FR-LLM-D-TODO`, `FR-LLM-FIX-TODO`,
 > `AI_OAUTH_UNAVAILABLE`, `OPFS — TODO`, `fetch-транспорт F-5.10`.
