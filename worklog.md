@@ -74,6 +74,7 @@ Tokens (правило учёта токенов — AGENTS.md). Записи д
 
 - 2026-10-10 | DOCS-EN-w1 (issues #17+#18–#25; сессия web-a6dbb853) | Реализация backlog'а документации: битые ссылки+линт, факты AGENTS.md, ротация worklog, полные пути, prd-0006, разгрузка индексов, CLAUDE.md, волна 1 перевода EN | текущий
 - 2026-10-10 | MC-C1 (GitHub #5, волна C1 мультиканваса; high-level #14) | Волна C1 на контрактах C0: OpfsStore над OPFS + JS-глю, AppEvent-конвейер + обратный канал App→web, Web Locks №14b + модал №35a, URL-синк №17a, битая ссылка №31c, активный сценарий №32c, persist() R-T3 | текущий
+- 2026-10-10 | DOCS-EN-w2 (issue #24; сессия web-a6dbb853) | Волна 2 перевода агентского контура EN: SPEC/TASKS/RECIPES/ui-kit/WASM-TESTING/активный index-cr-fr/skills-скоупы; 12 файлов 1:1, корпус 70863->63640 o200k | текущий
 
 Архив: `worklog/archive/worklog-2026-10-02_10-08.md` (2026-10-02…2026-10-08, 46 записей). Ниже — записи с 2026-10-09.
 
@@ -600,3 +601,23 @@ Stage Summary:
 - Backwards-compat: deprecated aliases, radius: f32 сохранён, wildcard match работает
 - Фундамент для Wave C (ControlSize/state-layer) и Wave A (Response) готов
 Tokens: in≈180000, out≈45000, total≈225000 (estimate), model=GLM-4.7 (Super Z main), scope=WAVE-T
+
+---
+Task ID: DOCS-EN-w2 (issue #24; сессия web-a6dbb853)
+Agent: Super Z (main)
+Task: Волна 2 перевода агентского контура RU→EN (языковая политика владельца 2026-10-10, issue #24): docs/SPEC, TASKS, RECIPES, ui-kit, WASM-TESTING, активная часть index-cr-fr, скоуп-файлы skills/
+
+Work Log:
+- docs/: SPEC.md (733=733 строк, 43=43 заголовка, 4 фенса byte-identical), TASKS.md (520=520, 32 код-блока byte-exact), RECIPES.md (352=352), ui-kit.md (484→480, 15=15 заголовков), WASM-TESTING.md (189=189), change-requests/index-cr-fr.md (активная часть: заголовки/легенда/проза EN, статус-токены в ячейках и в статусе — RU по translation-guide, дословные цитаты владельца сохранены; fr-104 строка допереведена при rebase)
+- skills/: canvasdesk-mcp/SKILL.md, references/tools.md, model-build/SKILL.md, model-verify/SKILL.md, whatif/SKILL.md, UPDATE-PROTOCOL.md; инвариант контракт-теста: 44→44 call-токенов каталога, 4/4 правила, 0 нарушений; tool-имена/параметры/JSON-ключи byte-identical; фронтматтер Triggers без изменений; UPDATE-PROTOCOL «Язык — русский» → «Language — English (policy 2026-10-10, #24)»
+- Следствие #19: счётчик «39 tools» в mcp SKILL.md (2 места) исправлен на 43 — канон skills/README.md (единственный источник истины)
+- Правило 1:1 по docs/translation-guide.md: структура markdown сохранена (заголовки/таблицы/списки/фенсы/ссылки byte-структура); идентификаторы FR/CR/ADR/PRD/T/M/R/G/UR/CP не переводились; код-блоки не переводились; якорей на переводимые файлы извне нет (проверено)
+- Проверка реестра: все tool-подобные id lib.rs присутствуют в каталоге; «missing» — только JSON-схемные ключи (properties/required/...) и cfg-строки, не инструменты
+- Замер корпуса волны 2 (tiktoken o200k_base, scripts/measure_wave2_tokens.py): 70863 -> 63640 (−10.2%); SPEC 18566→16054, TASKS 9729→9299, RECIPES 7026→6380, ui-kit 10430→9669, WASM 3237→2909, index-cr-fr 8215→7043, skills 13656→12286
+- Гейты: doc_lint 891 ссылок 0 ошибок (после каждого файла); cargo недоступен в среде — skills-контракт верифицирован строково-точным Python-портом сканера lib.rs, полный прогон — CI
+- Организация: 5 параллельных агентов (SPEC / TASKS / RECIPES+WASM / ui-kit / skills) с самоверификацией, активный index-cr-fr — main-агентом; записи агентов в scripts/wave2_logs (вне репо); rebase волны 1 на LAY-W19..W21 и волны 2 на MC-C1/Wave T (конфликты: index-cr-fr +1 строка fr-104, worklog — обе стороны сохранены)
+
+Stage Summary:
+- Волны 1+2 закрывают скоуп #24 полностью (machine-consumed слой EN); по политике не переводятся: user-docs/, worklog, prd/*, исторические ADR
+- Открытое для владельца: (а) 2 RU-шаблона в код-фенсах RECIPES §6 (карточки задач для TASKS) оставлены RU по правилу «код не переводим» — решение о переводе отдельно; (б) типовое чтение корпуса волны 2 агентом теперь ~63.6k o200k (было ~70.9k)
+Tokens: in≈240000, out≈70000, total≈310000 (estimate), model=GLM-5.3 (Super Z main), scope=DOCS-EN-w2
