@@ -16,6 +16,7 @@ use std::time::Duration;
 
 // Чистые UI-helpers (геометрия, hit-тесты, меню, двойной клик) — единый
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
+use crate::canvas_manager_ui;
 use crate::docs_ui;
 use crate::hints_ui;
 use crate::i18n::{self, keys};
@@ -507,6 +508,24 @@ pub enum AppEvent {
     /// `canvas.ext.changed_toast` с действием «Перезагрузить» (всегда,
     /// независимо от локальных правок).
     ExtFileChanged { name: String },
+    // --- FR-106 (мультиканвас C3, issue #7): менеджер канвасов (оверлей) ---
+    /// Открыть менеджер канвасов (вход — кнопка «Недавние» DOM-панели до
+    /// волны C4; там вход заменит двухзонный чип №21c). Открывает оверлей
+    /// и запрашивает листинг (RequestCanvasList) + persist (R-T3).
+    CanvasManagerOpen,
+    /// Режим рабочего пространства от web-слоя (ActiveKind/StartMode C2):
+    /// строка хранилища менеджера (№51a). Приезжает вместе с листингом
+    /// (`CanvasList`) — конвейер FR-104/105.
+    StorageMode {
+        /// Granted-папка — режим папки.
+        folder: bool,
+        /// FS Access доступен (Chromium): кнопка «Переехать на диск…»
+        /// показывается только в браузерном режиме с ним (№51a).
+        fs_available: bool,
+    },
+    /// Импорт с коллизией имени сохранён под авто-суффиксом (№26b: DOM-drop
+    /// и пикер «Импорт файла…») — тост `canvas.drop.renamed_toast`.
+    CanvasSavedAsCopy { name: String },
 }
 
 /// FR-104 (мультиканвас C1): запрос App к платформенному web-слою —
@@ -558,6 +577,36 @@ pub enum WebRequest {
         name: String,
         local_json: Option<String>,
     },
+    // --- FR-106 (мультиканвас C3, issue #7): действия менеджера канвасов ---
+    /// `navigator.storage.persist()` в точке первого открытия менеджера
+    /// (R-T3: TODO из FR-104 — вызов переезжает из init_scene; повторные
+    /// вызовы дёшевы и идемпотентны со стороны браузера).
+    CanvasPersist,
+    /// Открыть канвас из списка менеджера (или созданный только что):
+    /// web-слой читает текст из workspace-хранилища (режим папки/OPFS) →
+    /// `OpenScene` + set_active + record_recent (механика CanvasFallback).
+    CanvasOpen { name: String },
+    /// Дубликат (№8/№27a): копия ПОЛНОГО `.canvas` (сценарии/заморозки/
+    /// extra) `from` → `to` (имя уже вычислено `copy_name`); web-слой
+    /// копирует в workspace-хранилище и открывает копию (`OpenScene`) —
+    /// дубликат сразу активен.
+    CanvasDuplicate { from: String, to: String },
+    /// «Импорт файла…» (№25b): пикер файла (жест кнопки менеджера) —
+    /// копия в workspace-хранилище с авто-суффиксом коллизии (№26b) +
+    /// тост `CanvasSavedAsCopy`, НЕ открытие как диск.
+    CanvasImport,
+    /// Пустое состояние №23a — вторичное «Открыть файл с диска…»
+    /// (fs_access::open_from_disk — открытие как диск, существующий путь).
+    CanvasOpenDisk,
+    /// «Экспорт» активного канваса из менеджера (№25b): существующий
+    /// export-механизм web-слоя (download-blob последней сохранённой).
+    CanvasExportActive,
+    /// Undo мягкого удаления (№15a): восстановить `<name>.bak` → `<name>`;
+    /// web-слой вернёт свежий листинг ([`AppEvent::CanvasList`]).
+    CanvasRestoreBak { name: String },
+    /// Перенос ключа камеры при ренейме АКТИВНОГО канваса (№30b,
+    /// localStorage `canvasdesk.camera.<имя>` — формат C0).
+    CanvasMoveCameraKey { old: String, new: String },
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -572,12 +621,25 @@ struct DropPreview {
 /// FR-105 (мультиканвас C2): действие живого тоста (кнопка рядом с
 /// текстом, №45b). Тост с действием живёт дольше простого — время
 /// прочитать и нажать.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ToastAction {
     /// Перезагрузить активный канвас после внешнего изменения (№45b):
     /// локальные правки — сперва в `.bak`, сцена переоткрывается текстом
     /// из папки (WebRequest::StorageReloadExternal).
     ReloadExternal,
+    /// FR-106 (C3, №15a): отменить мягкое удаление канваса — восстановить
+    /// из `<name>.bak` (WebRequest::CanvasRestoreBak). Payload — имя файла.
+    UndoDelete(String),
+}
+
+/// FR-106 (C3, №38a): отложенное действие после открытия СОЗДАННОГО
+/// канваса — срабатывает в `on_open_scene` (сцена уже новая), пока
+/// менеджер остаётся источником потока.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ManagerAfterOpen {
+    /// Открыть галерею-пикер шаблонов (создание «Из шаблона…»: применить
+    /// схему к только что созданному пустому канвасу).
+    OpenGallery,
 }
 
 /// Модальный диалог приложения (T21-B/C: П10/П11): подтверждение
@@ -1671,6 +1733,15 @@ pub struct App {
     /// ([`AppEvent::CanvasList`]) — источник менеджера C3 (пустой до
     /// первого запроса).
     pub canvas_entries: Vec<canvas_core::workspace::CanvasEntry>,
+    /// FR-106 (C3): состояние оверлея менеджера канвасов (№7).
+    pub(crate) canvas_manager: canvas_manager_ui::CanvasManagerState,
+    /// FR-106 (C3): последний клик по строке/имени — (индекс записи, момент):
+    /// детект двойного клика (открытие по строке №49, ренейм по имени №9).
+    manager_last_click: Option<(usize, Instant)>,
+    /// FR-106 (C3, №38a): действие после открытия созданного канваса
+    /// (создание «Из шаблона…» открывает галерею-пикер поверх нового
+    /// пустого канваса; срабатывает в `on_open_scene`).
+    manager_after_open: Option<ManagerAfterOpen>,
     /// FR-104 (C1): очередь запросов к web-слою ([`WebRequest`]) — обратный
     /// канал, дренажируется обёрткой TourAwareApp после каждого события
     /// (паттерн tour-сигналов).
@@ -2003,6 +2074,11 @@ impl App {
             pending_broken_link: None,
             pending_canvas_lock: None,
             canvas_entries: Vec::new(),
+            // FR-106 (C3): менеджер канвасов (оверлей) + двойной клик +
+            // отложенное действие после открытия созданного (№38a).
+            canvas_manager: canvas_manager_ui::CanvasManagerState::default(),
+            manager_last_click: None,
+            manager_after_open: None,
             pending_web_requests: Vec::new(),
             settings,
             config_path,
@@ -6071,26 +6147,85 @@ impl App {
 
     /// FR-104 (C1): листинг канвасов от web-слоя — сохранить (потребитель —
     /// менеджер C3) и перерисовать.
+    /// FR-106 (C3): листинг приезжает и в менеджер (ренейм отменяется —
+    /// индексы устарели, выбор/скролл клампятся).
     fn on_canvas_list(&mut self, entries: Vec<canvas_core::workspace::CanvasEntry>) {
         tracing::debug!(
             target: "canvas_app",
             count = entries.len(),
             "листинг канвасов обновлён (FR-104)"
         );
-        self.canvas_entries = entries;
+        self.canvas_entries = entries.clone();
+        if self.canvas_manager.open {
+            self.canvas_manager.set_entries(entries);
+        }
         self.request_redraw();
     }
 
-    /// FR-104 (C1): результат асинхронной операции хранилища. В C1 —
-    /// только диагностика: тосты операций — волна C3 (i18n-ключи операций
-    /// не входят в каркас C0).
+    /// FR-104 (C1) / FR-106 (C3): результат асинхронной операции хранилища.
+    /// Успех: тосты менеджера + пост-действия — созданный открывается,
+    /// ренейм активного переносит сцену/ключ камеры (№30b), удаление
+    /// активного оставляет менеджер открытым и создаёт под ним новый
+    /// «Canvas N» (№22c/№40b) + тост «Отменить» (№15a). Отказ — тост с
+    /// текстом ошибки (`WorkspaceError::to_string`).
     fn on_canvas_op_done(&mut self, op: canvas_core::workspace::CanvasOp, error: &Option<String>) {
         match error {
             Some(err) => {
-                tracing::warn!(target: "canvas_app", op = ?op, %err, "операция хранилища канвасов не удалась")
+                tracing::warn!(target: "canvas_app", op = ?op, %err, "операция хранилища канвасов не удалась");
+                self.show_toast(
+                    self.trf(keys::CANVAS_MANAGER_OP_FAILED_TOAST, &[("{reason}", err)]),
+                );
             }
             None => {
-                tracing::info!(target: "canvas_app", op = ?op, "операция хранилища канвасов выполнена")
+                tracing::info!(target: "canvas_app", op = ?op, "операция хранилища канвасов выполнена");
+                match op {
+                    canvas_core::workspace::CanvasOp::Create { name } => {
+                        // Созданный — сразу активен (открыть). «Из шаблона…»
+                        // (№38a) откроет галерею-пикер поверх нового пустого
+                        // канваса — отложенное действие срабатывает в
+                        // `on_open_scene` (менеджер остаётся под галереей).
+                        self.pending_web_requests
+                            .push(WebRequest::CanvasOpen { name });
+                        self.request_canvas_list();
+                    }
+                    canvas_core::workspace::CanvasOp::Rename { old, new } => {
+                        // Активный ренейм: сцена живёт под новым именем +
+                        // ключ камеры переезжает (№30b; web-слой уже
+                        // переключил web_state/недавние/подпись тулбара).
+                        if self.active_canvas_name().eq_ignore_ascii_case(&old) {
+                            self.scene.path = PathBuf::from(&new);
+                            self.pending_web_requests
+                                .push(WebRequest::CanvasMoveCameraKey { old, new });
+                        }
+                        self.request_canvas_list();
+                    }
+                    canvas_core::workspace::CanvasOp::Delete { name } => {
+                        // Локальное зеркало: удалённая строка уходит сразу
+                        // (recent вычистил web-слой — recentRemove №15a).
+                        let deleted = name.to_lowercase();
+                        self.canvas_entries
+                            .retain(|entry| entry.name.to_lowercase() != deleted);
+                        self.canvas_manager.entries = self.canvas_entries.clone();
+                        self.canvas_manager.clamp();
+                        // Тост «Отменить» — восстановление из .bak (№15a).
+                        let display = canvas_core::workspace::display_name(&name).to_owned();
+                        self.toast = Some((
+                            self.trf(keys::CANVAS_MANAGER_DELETE_TOAST, &[("{name}", &display)]),
+                            Instant::now(),
+                        ));
+                        self.toast_action = Some(ToastAction::UndoDelete(name.clone()));
+                        // Удалён АКТИВНЫЙ (№22c/№40b): менеджер остаётся
+                        // открытым, под ним создаётся и активируется новый
+                        // пустой «Canvas N» (Create → открыт той же веткой).
+                        if self.active_canvas_name().eq_ignore_ascii_case(&name) {
+                            let fresh = canvas_core::workspace::auto_name(&self.canvas_entries);
+                            self.request_canvas_op(canvas_core::workspace::CanvasOp::Create {
+                                name: fresh,
+                            });
+                        }
+                        self.request_canvas_list();
+                    }
+                }
             }
         }
         self.request_redraw();
@@ -6113,6 +6248,412 @@ impl App {
             avoid: avoid.to_owned(),
         });
         self.request_redraw();
+    }
+
+    // --- FR-106 (мультиканвас C3, issue #7): менеджер канвасов (оверлей) ---
+
+    /// Открыть менеджер (событие `CanvasManagerOpen` — кнопка «Недавние»
+    /// DOM-панели web до волны C4; чип №21c заменит вход). Запрашивает
+    /// листинг (`CanvasList` → режим хранилища приедет `StorageMode`) и
+    /// `navigator.storage.persist()` (R-T3 — TODO из FR-104: вызов
+    /// переезжает из init_scene в точку первого открытия менеджера).
+    pub fn open_canvas_manager(&mut self) {
+        tracing::info!(target: "canvas_app", "открыт менеджер канвасов (FR-106)");
+        self.canvas_manager.open();
+        self.canvas_manager.entries = self.canvas_entries.clone();
+        self.canvas_manager.clamp();
+        self.request_canvas_list();
+        self.pending_web_requests.push(WebRequest::CanvasPersist);
+        self.request_redraw();
+    }
+
+    /// Закрыть менеджер.
+    pub fn close_canvas_manager(&mut self) {
+        self.canvas_manager.close();
+        self.request_redraw();
+    }
+
+    /// Режим рабочего пространства от web-слоя (№51a): строка хранилища.
+    fn on_storage_mode(&mut self, folder: bool, fs_available: bool) {
+        self.canvas_manager.storage = if folder {
+            canvas_manager_ui::StorageRowMode::Folder
+        } else {
+            canvas_manager_ui::StorageRowMode::Browser { fs_available }
+        };
+        self.request_redraw();
+    }
+
+    /// Импорт с коллизией имени (№26b): тост «сохранено как копия»
+    /// (DOM-drop и пикер «Импорт файла…» — общий ответ web-слоя).
+    fn on_canvas_saved_as_copy(&mut self, name: String) {
+        let display = canvas_core::workspace::display_name(&name).to_owned();
+        self.show_toast(self.trf(keys::CANVAS_DROP_RENAMED_TOAST, &[("{name}", &display)]));
+    }
+
+    /// Кнопка «Отменить» тоста удаления (№15a): восстановить из `.bak`.
+    fn click_toast_undo_delete(&mut self) {
+        if let Some(ToastAction::UndoDelete(name)) = self.toast_action.clone() {
+            self.pending_web_requests
+                .push(WebRequest::CanvasRestoreBak { name });
+        }
+        self.toast = None;
+        self.toast_action = None;
+        self.request_redraw();
+    }
+
+    /// Создать пустой канвас (№6/№39c): автоимя «Canvas N» → CanvasOp::Create
+    /// → активировать (открытие — ветка Create в `on_canvas_op_done`).
+    fn manager_create_empty(&mut self) {
+        let name = canvas_core::workspace::auto_name(&self.canvas_entries);
+        self.manager_after_open = None;
+        self.request_canvas_op(canvas_core::workspace::CanvasOp::Create { name });
+    }
+
+    /// Создать из шаблона (№18c/№38a): пустой канвас автоименем → после
+    /// открытия поверх него — галерея-пикер (механизм apply_scheme).
+    fn manager_create_from_template(&mut self) {
+        let name = canvas_core::workspace::auto_name(&self.canvas_entries);
+        self.manager_after_open = Some(ManagerAfterOpen::OpenGallery);
+        self.request_canvas_op(canvas_core::workspace::CanvasOp::Create { name });
+    }
+
+    /// Дубликат выбранного (№8/№27a): «Имя (копия)» (суффикс из i18n) —
+    /// копия ПОЛНОГО `.canvas` (сценарии/заморозки/extra) в web-слое,
+    /// сразу активен (OpenScene оттуда же).
+    fn manager_duplicate(&mut self) {
+        let Some(index) = self.canvas_manager.selected_entry() else {
+            return;
+        };
+        let Some(entry) = self.canvas_entries.get(index) else {
+            return;
+        };
+        let from = entry.name.clone();
+        let suffix = self.tr(keys::CANVAS_COPY_SUFFIX);
+        let to = canvas_core::workspace::copy_name(&from, &self.canvas_entries, suffix);
+        self.pending_web_requests
+            .push(WebRequest::CanvasDuplicate { from, to });
+        self.request_redraw();
+    }
+
+    /// Открыть выбранный канвас (Enter/двойной клик): активный — просто
+    /// закрыть оверлей; иначе web-слой читает текст и открывает
+    /// (`OpenScene` — тихая потеря undo №11, уже семантика открытия).
+    fn manager_open_selected(&mut self) {
+        let Some(index) = self.canvas_manager.selected_entry() else {
+            return;
+        };
+        let Some(entry) = self.canvas_entries.get(index) else {
+            return;
+        };
+        if entry.name.eq_ignore_ascii_case(&self.active_canvas_name()) {
+            self.close_canvas_manager();
+            return;
+        }
+        let name = entry.name.clone();
+        self.pending_web_requests
+            .push(WebRequest::CanvasOpen { name });
+        self.request_redraw();
+    }
+
+    /// Начать ренейм выбранного (F2/кнопка/двойной клик по имени, №9).
+    fn manager_begin_rename_selected(&mut self) {
+        if let Some(index) = self.canvas_manager.selected_entry() {
+            self.canvas_manager.begin_rename(index);
+            self.request_redraw();
+        }
+    }
+
+    /// Подтвердить ренейм (Enter в буфере): валидация `validate_canvas_name` +
+    /// коллизия `name_taken` (№9) → тост-запрет; успех — CanvasOp::Rename.
+    fn manager_commit_rename(&mut self) {
+        // Буфер забирается ТОЛЬКО на успех (№9): запрет (валидация/коллизия)
+        // оставляет инлайн-ренейм живым — пользователь правит имя дальше,
+        // Esc всё ещё отменяет ренейм, а не закрывает оверлей.
+        let Some((index, buffer)) = self.canvas_manager.editing.clone() else {
+            return;
+        };
+        let Some(entry) = self.canvas_entries.get(index) else {
+            return;
+        };
+        let old = entry.name.clone();
+        match canvas_core::workspace::validate_canvas_name(&buffer) {
+            Ok(name) => {
+                let new = canvas_core::workspace::to_file_name(&name);
+                if new.eq_ignore_ascii_case(&old) {
+                    self.canvas_manager.cancel_edit(); // no-op ренейм
+                    self.request_redraw();
+                    return;
+                }
+                if canvas_core::workspace::name_taken(&new, &self.canvas_entries) {
+                    let display = canvas_core::workspace::display_name(&new).to_owned();
+                    self.show_toast(self.trf(
+                        keys::CANVAS_MANAGER_NAME_TAKEN_TOAST,
+                        &[("{name}", &display)],
+                    ));
+                } else {
+                    let _ = self.canvas_manager.take_edit();
+                    self.request_canvas_op(canvas_core::workspace::CanvasOp::Rename { old, new });
+                }
+            }
+            Err(err) => {
+                let reason = err.to_string();
+                self.show_toast(self.trf(
+                    keys::CANVAS_MANAGER_NAME_INVALID_TOAST,
+                    &[("{reason}", &reason)],
+                ));
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// Удалить выбранный (№15a): мягкое (файл → `.bak`, стор уже делает) +
+    /// web-слой убирает из recent; тост «Отменить»; активный — менеджер
+    /// остаётся открытым, под ним новый «Canvas N» (№22c/№40b —
+    /// пост-действие в `on_canvas_op_done`).
+    fn manager_delete_selected(&mut self) {
+        let Some(index) = self.canvas_manager.selected_entry() else {
+            return;
+        };
+        let Some(entry) = self.canvas_entries.get(index) else {
+            return;
+        };
+        let name = entry.name.clone();
+        self.request_canvas_op(canvas_core::workspace::CanvasOp::Delete { name });
+    }
+
+    /// Клавиатура менеджера (№9): Esc/↑/↓/Enter/F2 + ввод в фильтр/буфер
+    /// ренейма. Esc в ренейме — отмена ренейма, НЕ закрытие оверлея.
+    fn on_canvas_manager_key(&mut self, key: &Key<winit::keyboard::SmolStr>) {
+        use winit::keyboard::NamedKey;
+        // 1) Инлайн-ренейм: ввод уходит в буфер, Esc — отмена ренейма.
+        if self.canvas_manager.editing.is_some() {
+            match key {
+                Key::Named(NamedKey::Escape) => self.canvas_manager.cancel_edit(),
+                Key::Named(NamedKey::Enter) => self.manager_commit_rename(),
+                Key::Named(NamedKey::Backspace) => self.canvas_manager.edit_backspace(),
+                Key::Character(ch) => {
+                    if let Some(ch) = ch.chars().next().filter(|c| !c.is_control()) {
+                        self.canvas_manager.edit_insert(ch);
+                    }
+                }
+                _ => {}
+            }
+            self.request_redraw();
+            return;
+        }
+        // 2) Обычный режим: навигация/действия/фильтр.
+        match key {
+            Key::Named(NamedKey::Escape) => self.close_canvas_manager(),
+            Key::Named(NamedKey::Enter) => self.manager_open_selected(),
+            Key::Named(NamedKey::F2) => self.manager_begin_rename_selected(),
+            Key::Named(NamedKey::ArrowUp) => {
+                let rows = self.canvas_manager.rows();
+                self.canvas_manager.selected =
+                    canvas_manager_ui::move_selection(&rows, self.canvas_manager.selected, -1);
+                self.canvas_manager.scroll_top = canvas_manager_ui::scroll_to_reveal(
+                    self.canvas_manager.scroll_top,
+                    self.canvas_manager.selected,
+                    self.canvas_manager
+                        .rows()
+                        .len()
+                        .saturating_sub(canvas_manager_ui::VISIBLE_ROWS),
+                );
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                let rows = self.canvas_manager.rows();
+                self.canvas_manager.selected =
+                    canvas_manager_ui::move_selection(&rows, self.canvas_manager.selected, 1);
+                self.canvas_manager.scroll_top = canvas_manager_ui::scroll_to_reveal(
+                    self.canvas_manager.scroll_top,
+                    self.canvas_manager.selected,
+                    self.canvas_manager
+                        .rows()
+                        .len()
+                        .saturating_sub(canvas_manager_ui::VISIBLE_ROWS),
+                );
+            }
+            Key::Named(NamedKey::Backspace) => {
+                self.canvas_manager.filter.pop();
+                self.canvas_manager.clamp();
+            }
+            Key::Character(ch) => {
+                if let Some(ch) = ch.chars().next().filter(|c| !c.is_control()) {
+                    self.canvas_manager.filter.push(ch);
+                    self.canvas_manager.clamp();
+                }
+            }
+            _ => {}
+        }
+        self.request_redraw();
+    }
+
+    /// Клик по элементу менеджера (hit-зоны — реестр поверхностей:
+    /// `manager-row-N`/`manager-row-N-name`/кнопки/строка хранилища).
+    fn click_canvas_manager(&mut self, element: &str) {
+        // Строка (выбор; двойной клик — открыть) / имя (двойной — ренейм).
+        if let Some(rest) = element.strip_prefix("manager-row-") {
+            let (index_part, name_zone) = match rest.strip_suffix("-name") {
+                Some(index) => (index, true),
+                None => (rest, false),
+            };
+            if let Ok(index) = index_part.parse::<usize>() {
+                self.canvas_manager.select_entry(index);
+                let now = Instant::now();
+                let is_double = self.manager_last_click.is_some_and(|(last, at)| {
+                    last == index
+                        && now.duration_since(at).as_millis() <= canvas_manager_ui::DOUBLE_CLICK_MS
+                });
+                self.manager_last_click = Some((index, now));
+                if is_double {
+                    if name_zone {
+                        self.canvas_manager.begin_rename(index);
+                    } else {
+                        // Двойной клик по строке: активный — закрыть, иначе открыть.
+                        let active = self.active_canvas_name();
+                        if self
+                            .canvas_entries
+                            .get(index)
+                            .is_some_and(|e| e.name.eq_ignore_ascii_case(&active))
+                        {
+                            self.close_canvas_manager();
+                        } else if let Some(entry) = self.canvas_entries.get(index) {
+                            let name = entry.name.clone();
+                            self.pending_web_requests
+                                .push(WebRequest::CanvasOpen { name });
+                        }
+                    }
+                }
+            }
+            self.request_redraw();
+            return;
+        }
+        match element {
+            "manager-close" => self.close_canvas_manager(),
+            "manager-sort" => {
+                // Тогл сортировки: по имени ↔ по дате изменения.
+                self.canvas_manager.sort = match self.canvas_manager.sort {
+                    canvas_core::workspace::SortMode::Name => {
+                        canvas_core::workspace::SortMode::ModifiedDesc
+                    }
+                    canvas_core::workspace::SortMode::ModifiedDesc => {
+                        canvas_core::workspace::SortMode::Name
+                    }
+                };
+                self.canvas_manager.clamp();
+            }
+            "manager-create" | "manager-empty-create" => self.manager_create_empty(),
+            "manager-template" => self.manager_create_from_template(),
+            "manager-import" => {
+                self.pending_web_requests.push(WebRequest::CanvasImport);
+            }
+            "manager-empty-disk" => {
+                self.pending_web_requests.push(WebRequest::CanvasOpenDisk);
+            }
+            "manager-duplicate" => self.manager_duplicate(),
+            "manager-rename" => self.manager_begin_rename_selected(),
+            "manager-delete" => self.manager_delete_selected(),
+            "manager-export" => {
+                self.pending_web_requests
+                    .push(WebRequest::CanvasExportActive);
+            }
+            // №51a: «Переехать на диск…» — диалог миграции C2 (MigrateShowDialog).
+            "manager-storage-move" => self.open_migration_dialog(),
+            // Тело панели и прочее — глотается (модаль жива).
+            _ => {}
+        }
+        self.request_redraw();
+    }
+
+    /// Текущая раскладка менеджера (единый источник геометрии для
+    /// отрисовки/ввода/реестра поверхностей — «ввод = тому, что видно»):
+    /// измеряет кнопки (`kit::button_size`) от текущего языка и строит
+    /// чистую [`canvas_manager_ui::manager_layout`].
+    pub(crate) fn manager_layout_current(
+        &self,
+        viewport: [f32; 2],
+    ) -> canvas_manager_ui::ManagerLayout {
+        let lang = self.settings.language;
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let family = canvas_render::text::SANS_FAMILY;
+        let font = canvas_core::tokens::FONT_BODY;
+        // Локальный замер ширины кнопки (замер/фонт-система — по ссылке в
+        // каждый вызов: несколько замеров не дерутся за владение).
+        let button_w =
+            |m: &mut canvas_ui::measure::TextMeasurer,
+             fs: &mut cosmic_text::FontSystem,
+             label: &str| { canvas_ui::kit::button_size(label, m, fs, family, font).x };
+        let sort_key = match self.canvas_manager.sort {
+            canvas_core::workspace::SortMode::Name => keys::CANVAS_MANAGER_SORT_NAME,
+            canvas_core::workspace::SortMode::ModifiedDesc => keys::CANVAS_MANAGER_SORT_MODIFIED,
+        };
+        let sort_w = button_w(&mut m, &mut fs, crate::i18n::tr(lang, sort_key));
+        let storage_key = match self.canvas_manager.storage {
+            canvas_manager_ui::StorageRowMode::Folder => keys::CANVAS_STORAGE_FOLDER,
+            canvas_manager_ui::StorageRowMode::Browser { .. } => keys::CANVAS_STORAGE_BROWSER,
+        };
+        let storage_label = crate::i18n::tr(lang, storage_key);
+        let storage_label_w = m.width_of(&mut fs, storage_label, family, font);
+        let widths = canvas_manager_ui::ManagerWidths {
+            sort_chip: sort_w,
+            create: button_w(
+                &mut m,
+                &mut fs,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_CREATE_EMPTY),
+            ),
+            template: button_w(
+                &mut m,
+                &mut fs,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_CREATE_TEMPLATE),
+            ),
+            import: button_w(
+                &mut m,
+                &mut fs,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_IMPORT),
+            ),
+            duplicate: button_w(
+                &mut m,
+                &mut fs,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_DUPLICATE),
+            ),
+            rename: button_w(
+                &mut m,
+                &mut fs,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_RENAME),
+            ),
+            delete: button_w(
+                &mut m,
+                &mut fs,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_DELETE),
+            ),
+            export: button_w(
+                &mut m,
+                &mut fs,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_EXPORT),
+            ),
+            storage_label: storage_label_w,
+            storage_move: button_w(
+                &mut m,
+                &mut fs,
+                crate::i18n::tr(lang, keys::CANVAS_STORAGE_MOVE_TO_DISK),
+            ),
+            empty_create: button_w(
+                &mut m,
+                &mut fs,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_CREATE),
+            ),
+            empty_disk: button_w(
+                &mut m,
+                &mut fs,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_OPEN_DISK),
+            ),
+        };
+        canvas_manager_ui::manager_layout(
+            viewport,
+            &self.canvas_manager,
+            &self.active_canvas_name(),
+            &widths,
+        )
     }
 
     /// FR-055 (этап U4, F-10): включить/выключить DebugOverlay извне
@@ -7378,6 +7919,12 @@ impl App {
                 &[("{name}", name.as_str())],
             );
             self.show_toast(text);
+        }
+        // FR-106 (C3, №38a): «Из шаблона…» — галерея-пикер открывается
+        // поверх только что созданного (пустого) канваса; выбор схемы
+        // применится уже к нему. Менеджер остаётся под галереей.
+        if self.manager_after_open.take() == Some(ManagerAfterOpen::OpenGallery) {
+            self.scheme_gallery.open();
         }
         self.request_redraw();
     }
@@ -13931,6 +14478,382 @@ mod tests {
             app.dialog,
             Some(AppDialog::CanvasTabBusy { name }) if name == "занятый.canvas"
         ));
+    }
+
+    // --- FR-106 (мультиканвас C3): менеджер канвасов (оверлей) ---------------
+
+    /// Хелпер FR-106: App с активной сценой под именем `active` и листингом
+    /// менеджера (canvas_entries + сам менеджер открытым).
+    fn manager_app_with(active: &str, entries: &[&str]) -> App {
+        let mut app = stub_app_on_storage(
+            &format!("target/tmp/{active}"),
+            Arc::new(canvas_core::MemStorage::new()),
+        )
+        .0;
+        let list = entries
+            .iter()
+            .map(|name| canvas_core::workspace::CanvasEntry {
+                name: (*name).to_owned(),
+                ts: 1,
+                kind: canvas_core::workspace::EntryKind::Opfs,
+                repo: None,
+            })
+            .collect();
+        app.open_canvas_manager();
+        app.on_canvas_list(list);
+        app
+    }
+
+    /// FR-106: открытие менеджера — листинг + persist уходят обратным каналом
+    /// (R-T3: TODO из FR-104 — persist в точке первого открытия менеджера);
+    /// ответ CanvasList наполняет и App-зеркало, и сам менеджер; StorageMode
+    /// переключает строку хранилища (№51a).
+    #[test]
+    fn manager_open_requests_list_and_persist() {
+        let mut app = manager_app_with("fr106-open.canvas", &[]);
+        assert!(app.canvas_manager.open, "оверлей открыт");
+        let drained = app.drain_web_requests();
+        assert_eq!(
+            drained,
+            vec![WebRequest::CanvasList, WebRequest::CanvasPersist],
+            "открытие: листинг + persist (R-T3)"
+        );
+        // Ответ web-слоя: листинг попадает в менеджер
+        app.on_canvas_list(vec![opfs_entry("a.canvas")]);
+        assert_eq!(app.canvas_entries.len(), 1);
+        assert_eq!(app.canvas_manager.entries.len(), 1, "листинг в менеджере");
+        // Режим хранилища (№51a): папка — без кнопки «Переехать…»
+        app.on_storage_mode(true, true);
+        assert_eq!(
+            app.canvas_manager.storage,
+            canvas_manager_ui::StorageRowMode::Folder
+        );
+        // Firefox/Safari: браузерное без FS — тоже без кнопки
+        app.on_storage_mode(false, false);
+        assert_eq!(
+            app.canvas_manager.storage,
+            canvas_manager_ui::StorageRowMode::Browser {
+                fs_available: false
+            }
+        );
+        // Закрытие — Esc (клавиатура №9)
+        let esc = winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape);
+        app.on_canvas_manager_key(&esc);
+        assert!(!app.canvas_manager.open, "Esc закрыл оверлей");
+    }
+
+    /// FR-106 (№6/№39c): создание пустого — автоимя «Canvas N» → CanvasOp →
+    /// успешный CanvasOpDone открывает созданный (CanvasOpen) и освежает
+    /// листинг; «Из шаблона…» (№38a) дополнительно открывает галерею-пикер
+    /// поверх созданного в `on_open_scene`.
+    #[test]
+    fn manager_create_empty_and_from_template_flows() {
+        let mut app = manager_app_with("fr106-create.canvas", &["существующий.canvas"]);
+        let _ = app.drain_web_requests();
+        app.manager_create_empty();
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![WebRequest::CanvasOp(
+                canvas_core::workspace::CanvasOp::Create {
+                    name: "Canvas.canvas".into()
+                }
+            )],
+            "автоимя по листингу (№39c)"
+        );
+        // Успех: созданный сразу активен (открыть) + свежий листинг
+        app.on_canvas_op_done(
+            canvas_core::workspace::CanvasOp::Create {
+                name: "Canvas.canvas".into(),
+            },
+            &None,
+        );
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![
+                WebRequest::CanvasOpen {
+                    name: "Canvas.canvas".into()
+                },
+                WebRequest::CanvasList,
+            ]
+        );
+        assert!(app.canvas_manager.open, "менеджер жив под созданием");
+
+        // «Из шаблона…» (№38a): тот же конвейер, но после открытия — галерея
+        app.manager_create_from_template();
+        app.drain_web_requests();
+        app.on_canvas_op_done(
+            canvas_core::workspace::CanvasOp::Create {
+                name: "Canvas 2.canvas".into(),
+            },
+            &None,
+        );
+        app.drain_web_requests();
+        assert!(!app.scheme_gallery.open, "галерея ждёт on_open_scene");
+        app.on_open_scene(
+            PathBuf::from("Canvas 2.canvas"),
+            Canvas::default().to_json().unwrap_or_default(),
+            None,
+        );
+        assert!(
+            app.scheme_gallery.open,
+            "пикер шаблонов поверх нового (№38a)"
+        );
+        assert!(app.canvas_manager.open, "менеджер под галереей жив");
+    }
+
+    /// FR-106 (№8/№27a): дубликат — имя copy_name с суффиксом i18n, полный
+    /// `.canvas` уезжает в web-слой (CanvasDuplicate), менеджер остаётся.
+    #[test]
+    fn manager_duplicate_uses_i18n_copy_name() {
+        let mut app = manager_app_with("Идея.canvas", &["Идея.canvas"]);
+        let _ = app.drain_web_requests();
+        // Выбор — активная строка (первая в списке)
+        app.manager_duplicate();
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![WebRequest::CanvasDuplicate {
+                from: "Идея.canvas".into(),
+                to: "Идея (копия).canvas".into()
+            }],
+            "«Имя (копия)» — суффикс из i18n (№27a)"
+        );
+        // Коллизия поверх копии — авто-суффикс « (1)»
+        app.on_canvas_list(vec![
+            opfs_entry("Идея.canvas"),
+            opfs_entry("Идея (копия).canvas"),
+        ]);
+        app.manager_duplicate();
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![WebRequest::CanvasDuplicate {
+                from: "Идея.canvas".into(),
+                to: "Идея (копия) (1).canvas".into()
+            }]
+        );
+    }
+
+    /// FR-106 (№15a/№22c/№40b): удаление — мягкое: строка уходит из зеркала,
+    /// тост с действием «Отменить»; удалённый АКТИВНЫЙ — менеджер остаётся
+    /// открытым и под ним создаётся новый «Canvas N»; клик «Отменить»
+    /// отправляет восстановление из `.bak`.
+    #[test]
+    fn manager_delete_active_keeps_manager_and_offers_undo() {
+        let mut app = manager_app_with("активный.canvas", &["активный.canvas", "другой.canvas"]);
+        let _ = app.drain_web_requests();
+        // Выбор — активная строка (первая в порядке сортировки равных ts)
+        app.canvas_manager.select_entry(0);
+        app.manager_delete_selected();
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![WebRequest::CanvasOp(
+                canvas_core::workspace::CanvasOp::Delete {
+                    name: "активный.canvas".into()
+                }
+            )]
+        );
+        app.on_canvas_op_done(
+            canvas_core::workspace::CanvasOp::Delete {
+                name: "активный.canvas".into(),
+            },
+            &None,
+        );
+        // Менеджер остаётся открытым (№22c)
+        assert!(app.canvas_manager.open);
+        // Строка ушла из локального зеркала (листинг приедет отдельно)
+        assert!(app
+            .canvas_entries
+            .iter()
+            .all(|entry| entry.name != "активный.canvas"));
+        // Тост «Отменить» (№15a) — действие восстановления из .bak
+        assert_eq!(
+            app.toast_action,
+            Some(ToastAction::UndoDelete("активный.canvas".into()))
+        );
+        // Под менеджером создаётся новый пустой «Canvas N» (№40b)
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![
+                // auto_name по остатку листинга (другой.canvas не Canvas N)
+                WebRequest::CanvasOp(canvas_core::workspace::CanvasOp::Create {
+                    name: "Canvas.canvas".into()
+                }),
+                WebRequest::CanvasList,
+            ]
+        );
+        // «Отменить» — восстановление из .bak (web-слой вернёт свежий листинг)
+        app.click_toast_undo_delete();
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![WebRequest::CanvasRestoreBak {
+                name: "активный.canvas".into()
+            }],
+            "undo = .bak → файл (№15a)"
+        );
+        assert!(
+            app.toast.is_none() && app.toast_action.is_none(),
+            "клик действия гасит тост"
+        );
+    }
+
+    /// FR-106 (№9/№30b): ренейм — валидация + коллизия → тост-запрет;
+    /// успех — CanvasOp::Rename; ренейм АКТИВНОГО после CanvasOpDone
+    /// переключает сцену на новое имя и переносит ключ камеры.
+    #[test]
+    fn manager_rename_validation_collision_and_camera_key_move() {
+        let mut app = manager_app_with("старый.canvas", &["старый.canvas", "занято.canvas"]);
+        let _ = app.drain_web_requests();
+        // Выбор — активная строка (сортировка не гарантирует порядок имён)
+        app.canvas_manager.select_entry(0);
+        // F2 — ренейм выбранного (активный канвас)
+        let f2 = winit::keyboard::Key::Named(winit::keyboard::NamedKey::F2);
+        app.on_canvas_manager_key(&f2);
+        assert_eq!(app.canvas_manager.edit_buffer(), Some("старый"));
+        let enter = winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter);
+        let backspace = winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace);
+        // Коллизия: буфер = занятое имя — тост, операции нет
+        for _ in 0.."старый".chars().count() {
+            app.on_canvas_manager_key(&backspace);
+        }
+        for ch in "занято".chars() {
+            let key = winit::keyboard::Key::Character(ch.to_string().into());
+            app.on_canvas_manager_key(&key);
+        }
+        app.on_canvas_manager_key(&enter);
+        assert!(app.toast.is_some(), "коллизия — тост-запрет (№9)");
+        assert!(app.drain_web_requests().is_empty(), "операция не ушла");
+        // Невалидное имя — тоже запрет (validate_canvas_name №9)
+        app.on_canvas_manager_key(&f2);
+        for _ in 0.."старый".chars().count() {
+            app.on_canvas_manager_key(&backspace);
+        }
+        for ch in "a/b".chars() {
+            let key = winit::keyboard::Key::Character(ch.to_string().into());
+            app.on_canvas_manager_key(&key);
+        }
+        app.on_canvas_manager_key(&enter);
+        assert!(app.toast.is_some(), "запрещённый символ — тост-запрет");
+        assert!(app.drain_web_requests().is_empty(), "операция не ушла");
+        // Esc в ренейме — отмена ренейма, НЕ закрытие оверлея (№9)
+        let esc = winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape);
+        app.on_canvas_manager_key(&esc);
+        assert!(
+            app.canvas_manager.open,
+            "Esc в ренейме не закрывает оверлей"
+        );
+        assert_eq!(app.canvas_manager.edit_buffer(), None, "ренейм отменён");
+        // Валидное имя — операция уходит
+        app.on_canvas_manager_key(&f2);
+        for _ in 0.."старый".chars().count() {
+            app.on_canvas_manager_key(&backspace);
+        }
+        for ch in "новый".chars() {
+            let key = winit::keyboard::Key::Character(ch.to_string().into());
+            app.on_canvas_manager_key(&key);
+        }
+        app.on_canvas_manager_key(&enter);
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![WebRequest::CanvasOp(
+                canvas_core::workspace::CanvasOp::Rename {
+                    old: "старый.canvas".into(),
+                    new: "новый.canvas".into()
+                }
+            )]
+        );
+        // Успех ренейма АКТИВНОГО: сцена под новым именем + ключ камеры (№30b)
+        app.on_canvas_op_done(
+            canvas_core::workspace::CanvasOp::Rename {
+                old: "старый.canvas".into(),
+                new: "новый.canvas".into(),
+            },
+            &None,
+        );
+        assert_eq!(app.active_canvas_name(), "новый.canvas");
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![
+                WebRequest::CanvasMoveCameraKey {
+                    old: "старый.canvas".into(),
+                    new: "новый.canvas".into()
+                },
+                WebRequest::CanvasList,
+            ],
+            "перенос ключа камеры (№30b) + свежий листинг"
+        );
+    }
+
+    /// FR-106 (№9): клавиатура менеджера — ↑/↓ выбирают канвас-строки
+    /// (заголовки групп пропускаются), Enter открывает выбранный (активный —
+    /// просто закрывает), печать идёт в фильтр и сужает список.
+    #[test]
+    fn manager_keyboard_navigation_filter_and_open() {
+        let mut app = manager_app_with("a.canvas", &["a.canvas", "b.canvas", "z.canvas"]);
+        let _ = app.drain_web_requests();
+        let arrow_down = winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowDown);
+        let arrow_up = winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowUp);
+        let enter = winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter);
+        // a → b → z, назад b
+        app.on_canvas_manager_key(&arrow_down);
+        assert_eq!(app.canvas_manager.selected_entry(), Some(1), "b выбран");
+        app.on_canvas_manager_key(&arrow_down);
+        assert_eq!(app.canvas_manager.selected_entry(), Some(2), "z выбран");
+        app.on_canvas_manager_key(&arrow_up);
+        assert_eq!(app.canvas_manager.selected_entry(), Some(1));
+        // Enter на активном (a.canvas — выбор вернули вверх)
+        app.on_canvas_manager_key(&arrow_up);
+        assert_eq!(app.canvas_manager.selected_entry(), Some(0));
+        app.on_canvas_manager_key(&enter);
+        assert!(!app.canvas_manager.open, "активный — просто закрыть (№49)");
+        assert!(app.drain_web_requests().is_empty(), "запросов нет");
+        // Enter на другом — открыть (CanvasOpen)
+        app.open_canvas_manager();
+        app.on_canvas_list(vec![
+            opfs_entry("a.canvas"),
+            opfs_entry("b.canvas"),
+            opfs_entry("z.canvas"),
+        ]);
+        let _ = app.drain_web_requests();
+        app.on_canvas_manager_key(&arrow_down);
+        app.on_canvas_manager_key(&enter);
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![WebRequest::CanvasOpen {
+                name: "b.canvas".into()
+            }]
+        );
+        // Печать — в фильтр; список сузился, выбор клампится
+        for ch in "z".chars() {
+            let key = winit::keyboard::Key::Character(ch.to_string().into());
+            app.on_canvas_manager_key(&key);
+        }
+        assert_eq!(app.canvas_manager.filter, "z");
+        assert_eq!(
+            app.canvas_manager.selected_entry(),
+            Some(2),
+            "z.canvas — единственная строка фильтра"
+        );
+    }
+
+    /// FR-106: импорт с коллизией (№26b) — тост «создана копия» от web-слоя;
+    /// «Экспорт»/«Импорт файла…»/«Открыть с диска…» уходят обратным каналом.
+    #[test]
+    fn manager_import_export_and_disk_requests() {
+        let mut app = manager_app_with("fr106-io.canvas", &["fr106-io.canvas"]);
+        let _ = app.drain_web_requests();
+        app.click_canvas_manager("manager-import");
+        app.click_canvas_manager("manager-export");
+        app.click_canvas_manager("manager-empty-disk");
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![
+                WebRequest::CanvasImport,
+                WebRequest::CanvasExportActive,
+                WebRequest::CanvasOpenDisk,
+            ]
+        );
+        // №26b: ответ web-слоя — тост «сохранено как …»
+        app.on_canvas_saved_as_copy("проект (1).canvas".to_owned());
+        assert!(app.toast.is_some(), "тост canvas.drop.renamed_toast");
     }
 
     // --- FR-038 (T-038.5): batch-операции выравнивания (п.16-17) ------------

@@ -7267,4 +7267,403 @@ impl App {
             .collect();
         out
     }
+
+    /// FR-106 (мультиканвас C3, issue #7): менеджер канвасов — модаль по
+    /// паттерну диалога миграции C2 (свежий эталон): затемнение, панель
+    /// `kit::modal_style`, шапка (титул + «✕»), поиск + чип-тогл
+    /// сортировки, кнопки создания (№7), строки списка (имя + бейдж
+    /// источника + дата, инлайн-ренейм №9, активная — маркер-акцент),
+    /// кнопки выбранной строки (дубликат/ренейм/удаление/экспорт), строка
+    /// хранилища №51a и пустое состояние №23a. Геометрия — чистая
+    /// `manager_layout` (одна для отрисовки/ввода/реестра — draw == hit).
+    pub(super) fn canvas_manager_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut out = (Vec::new(), Vec::new());
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return out;
+        }
+        let palette = self.effective_palette();
+        let kit_palette = palette.kit_palette();
+        let lang = self.settings.language;
+        let family = canvas_render::text::SANS_FAMILY;
+        let font = canvas_core::tokens::FONT_BODY;
+        let caption = canvas_core::tokens::FONT_CAPTION;
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let lay = self.manager_layout_current(viewport);
+        let rect = |r: [f32; 4]| canvas_ui::geometry::UiRect::new(r[0], r[1], r[2], r[3]);
+        let cursor = self.cursor;
+        let hover = |r: [f32; 4]| {
+            cursor[0] >= r[0]
+                && cursor[0] <= r[0] + r[2]
+                && cursor[1] >= r[1]
+                && cursor[1] <= r[1] + r[3]
+        };
+        let mut d = crate::kit_ui::KitDraw::new();
+        // Затемнение + панель — канонический стиль модали кита.
+        let vp = canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
+        d.rect(vp, canvas_core::tokens::WHEEL_DIM, [0.0; 4], 0.0);
+        let panel_style = canvas_ui::kit::modal_style(&kit_palette);
+        d.rect(
+            rect(lay.panel),
+            panel_style.fill,
+            panel_style.border,
+            panel_style.radius,
+        );
+        // Титул + «✕» (иконка-кнопка кита).
+        d.label_left(
+            rect(lay.title),
+            self.tr(keys::CANVAS_MANAGER_TITLE),
+            kit_palette.text_title,
+            font,
+        );
+        let mut close_widget = WidgetState::default();
+        close_widget.set_pointer(hover(lay.close), false);
+        let close_style = canvas_ui::kit::icon_button_style(close_widget.kit_state(), &kit_palette);
+        d.control(rect(lay.close), &close_style);
+        d.icon(rect(lay.close), "close", "×", close_style.text, font);
+        // Кнопка кита (secondary/primary/danger) + центрированная подпись.
+        let draw_button = |d: &mut crate::kit_ui::KitDraw,
+                           slot: [f32; 4],
+                           label: &str,
+                           variant: canvas_ui::kit::ButtonVariant| {
+            let mut widget = WidgetState::default();
+            widget.set_pointer(hover(slot), false);
+            let style = canvas_ui::kit::button_style(variant, widget.kit_state(), &kit_palette);
+            d.control(rect(slot), &style);
+            d.label_center(rect(slot), label, style.text, font);
+        };
+        if lay.has_entries {
+            // Поле поиска (прецедент галереи схем: заливка слота + kit::text_field
+            // для текста/каретки — IN3: каретка 1.5 px, литерал «|» запрещён).
+            d.rect(
+                rect(lay.search),
+                palette.search_input_fill,
+                [0.0; 4],
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            let mut filter_field = canvas_ui::kit::TextFieldModel::default();
+            filter_field.set_text(self.canvas_manager.filter.clone());
+            let (shown, caret) = kit_field_view(
+                &filter_field,
+                lay.search,
+                self.tr(keys::CANVAS_MANAGER_SEARCH),
+                caption,
+                &kit_palette,
+            );
+            d.label_left(rect(lay.search), &shown, kit_palette.text, caption);
+            if let Some(c) = caret {
+                d.rect(
+                    canvas_ui::geometry::UiRect::new(c[0], c[1], c[2], c[3]),
+                    palette.accent,
+                    [0.0; 4],
+                    0.0,
+                );
+            }
+            // Чип-тогл сортировки (№43a): «По имени» ↔ «По дате изменения».
+            let sort_label = match self.canvas_manager.sort {
+                canvas_core::workspace::SortMode::Name => self.tr(keys::CANVAS_MANAGER_SORT_NAME),
+                canvas_core::workspace::SortMode::ModifiedDesc => {
+                    self.tr(keys::CANVAS_MANAGER_SORT_MODIFIED)
+                }
+            };
+            let mut sort_widget = WidgetState::default();
+            sort_widget.set_pointer(hover(lay.sort_chip), false);
+            let sort_style = canvas_ui::kit::chip_style(sort_widget.kit_state(), &kit_palette);
+            d.control(rect(lay.sort_chip), &sort_style);
+            d.label_center(rect(lay.sort_chip), sort_label, sort_style.text, caption);
+            // Кнопки создания (№7): Пустой / Из шаблона… / Импорт файла…
+            draw_button(
+                &mut d,
+                lay.create,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_CREATE_EMPTY),
+                canvas_ui::kit::ButtonVariant::Secondary,
+            );
+            draw_button(
+                &mut d,
+                lay.template,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_CREATE_TEMPLATE),
+                canvas_ui::kit::ButtonVariant::Secondary,
+            );
+            draw_button(
+                &mut d,
+                lay.import,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_IMPORT),
+                canvas_ui::kit::ButtonVariant::Secondary,
+            );
+            // Строки списка (окно видимости) — стиль строк диалога миграции.
+            for row in &lay.rows {
+                if row.is_header {
+                    // Заголовок группы-зеркала репо (№43a): приглушённая
+                    // подпись «Из репозиториев: <имя>».
+                    let group = row.group.as_deref().unwrap_or_default();
+                    let label = format!(
+                        "{}: {group}",
+                        crate::i18n::tr(lang, keys::CANVAS_MANAGER_GROUP_REPOS)
+                    );
+                    let shown = m.ellipsis(&mut fs, &label, family, caption, row.row[2]);
+                    d.label_left(
+                        canvas_ui::geometry::UiRect::new(
+                            row.row[0],
+                            row.row[1] + (kit::LIST_ROW_H - caption - 2.0).max(0.0) * 0.5,
+                            row.row[2],
+                            caption + 2.0,
+                        ),
+                        &shown,
+                        kit_palette.text_muted,
+                        caption,
+                    );
+                    continue;
+                }
+                let Some(index) = row.entry else {
+                    continue;
+                };
+                let Some(entry) = self.canvas_manager.entries.get(index) else {
+                    continue;
+                };
+                let row_widget = if row.is_selected {
+                    canvas_ui::kit::KitState::Selected
+                } else if hover(row.row) {
+                    canvas_ui::kit::KitState::Hovered
+                } else {
+                    canvas_ui::kit::KitState::Normal
+                };
+                let row_style = canvas_ui::kit::button_style(
+                    canvas_ui::kit::ButtonVariant::Secondary,
+                    row_widget,
+                    &kit_palette,
+                );
+                d.control(rect(row.row), &row_style);
+                // Активный канвас — маркер-акцент у левого края строки.
+                if row.is_active {
+                    d.rect(
+                        canvas_ui::geometry::UiRect::new(row.row[0], row.row[1], 3.0, row.row[3]),
+                        kit_palette.accent,
+                        [0.0; 4],
+                        0.0,
+                    );
+                }
+                // Имя: инлайн-ренейм (№9) — поле с кареткой; иначе подпись с
+                // эллипсисом по фактической ширине зоны имени.
+                if row.editing {
+                    d.rect(
+                        rect(row.name),
+                        palette.search_input_fill,
+                        [0.0; 4],
+                        canvas_core::tokens::RADIUS_CHIP,
+                    );
+                    let mut edit_field = canvas_ui::kit::TextFieldModel::default();
+                    if let Some(buffer) = self.canvas_manager.edit_buffer() {
+                        edit_field.set_text(buffer.to_owned());
+                    }
+                    let (shown, caret) =
+                        kit_field_view(&edit_field, row.name, "", caption, &kit_palette);
+                    d.label_left(rect(row.name), &shown, kit_palette.text, caption);
+                    if let Some(c) = caret {
+                        d.rect(
+                            canvas_ui::geometry::UiRect::new(c[0], c[1], c[2], c[3]),
+                            palette.accent,
+                            [0.0; 4],
+                            0.0,
+                        );
+                    }
+                } else {
+                    let shown = m.ellipsis(&mut fs, entry.display(), family, font, row.name[2]);
+                    d.label_left(
+                        canvas_ui::geometry::UiRect::new(
+                            row.name[0],
+                            row.name[1] + (kit::LIST_ROW_H - font - 2.0).max(0.0) * 0.5,
+                            row.name[2],
+                            font + 2.0,
+                        ),
+                        &shown,
+                        if row.is_active {
+                            kit_palette.text_title
+                        } else {
+                            kit_palette.text
+                        },
+                        font,
+                    );
+                }
+                // Бейдж источника (браузерное/папка/диск) + дата изменения.
+                let badge = match entry.kind {
+                    canvas_core::workspace::EntryKind::Opfs => {
+                        crate::i18n::tr(lang, keys::CANVAS_MANAGER_BADGE_BROWSER)
+                    }
+                    canvas_core::workspace::EntryKind::Folder => {
+                        crate::i18n::tr(lang, keys::CANVAS_MANAGER_BADGE_FOLDER)
+                    }
+                    canvas_core::workspace::EntryKind::Disk => {
+                        crate::i18n::tr(lang, keys::CANVAS_MANAGER_BADGE_DISK)
+                    }
+                };
+                let badge_x = row.row[0] + row.row[2]
+                    - canvas_manager_ui::TS_W
+                    - canvas_manager_ui::BADGE_W
+                    - canvas_core::tokens::SPACING_MD;
+                d.label_left(
+                    canvas_ui::geometry::UiRect::new(
+                        badge_x,
+                        row.row[1] + (kit::LIST_ROW_H - caption - 2.0).max(0.0) * 0.5,
+                        canvas_manager_ui::BADGE_W,
+                        caption + 2.0,
+                    ),
+                    badge,
+                    kit_palette.text_muted,
+                    caption,
+                );
+                let ts = canvas_manager_ui::format_ts(entry.ts);
+                d.label_left(
+                    canvas_ui::geometry::UiRect::new(
+                        row.row[0] + row.row[2] - canvas_manager_ui::TS_W,
+                        row.row[1] + (kit::LIST_ROW_H - caption - 2.0).max(0.0) * 0.5,
+                        canvas_manager_ui::TS_W,
+                        caption + 2.0,
+                    ),
+                    &ts,
+                    kit_palette.text_muted,
+                    caption,
+                );
+            }
+            // Бегунок скролла списка (контент выше окна) — как у витрины.
+            if !lay.rows.is_empty() {
+                let rows_area = canvas_ui::geometry::UiRect::new(
+                    lay.rows[0].row[0],
+                    lay.rows[0].row[1],
+                    lay.rows[0].row[2],
+                    lay.rows.last().map(|r| r.row[1] + r.row[3]).unwrap_or(0.0)
+                        - lay.rows[0].row[1],
+                );
+                let rows_len = self.canvas_manager.rows().len();
+                let scroll = canvas_ui::kit::ScrollState {
+                    offset: self.canvas_manager.scroll_top as f32 * canvas_manager_ui::ROW_STEP,
+                    content_h: rows_len as f32 * canvas_manager_ui::ROW_STEP,
+                    viewport_h: lay.rows.len() as f32 * canvas_manager_ui::ROW_STEP,
+                };
+                if let Some(knob) = canvas_ui::kit::scroll_bar(rows_area, &scroll, &kit_palette) {
+                    d.rect(knob, kit_palette.control_border, [0.0; 4], 2.0);
+                }
+            }
+            // Кнопки выбранной строки: дубликат/ренейм/экспорт — secondary,
+            // удаление (№15a) — danger (разрушающее действие).
+            draw_button(
+                &mut d,
+                lay.duplicate,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_DUPLICATE),
+                canvas_ui::kit::ButtonVariant::Secondary,
+            );
+            draw_button(
+                &mut d,
+                lay.rename,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_RENAME),
+                canvas_ui::kit::ButtonVariant::Secondary,
+            );
+            draw_button(
+                &mut d,
+                lay.delete,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_DELETE),
+                canvas_ui::kit::ButtonVariant::Danger,
+            );
+            draw_button(
+                &mut d,
+                lay.export,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_EXPORT),
+                canvas_ui::kit::ButtonVariant::Secondary,
+            );
+        } else if let Some(empty) = &lay.empty {
+            // Пустое состояние (№23a): заголовок + подсказка + CTA
+            // «Создать канвас» (primary) + вторичное «Открыть файл с диска…».
+            d.label_left(
+                rect(empty.title),
+                self.tr(keys::CANVAS_MANAGER_EMPTY_TITLE),
+                kit_palette.text_title,
+                font,
+            );
+            let hint = crate::i18n::tr(lang, keys::CANVAS_MANAGER_EMPTY_HINT);
+            for (index, line) in crate::admin_ui::wrap_text(
+                &mut m,
+                &mut fs,
+                hint,
+                empty.hint[2].max(canvas_core::tokens::SPACING_LG),
+                caption,
+            )
+            .into_iter()
+            .take(2)
+            .enumerate()
+            {
+                let top =
+                    empty.hint[1] + index as f32 * (caption + canvas_core::tokens::SPACING_SM);
+                d.label_left(
+                    canvas_ui::geometry::UiRect::new(
+                        empty.hint[0],
+                        top,
+                        empty.hint[2],
+                        caption + 2.0,
+                    ),
+                    line.as_str(),
+                    kit_palette.text,
+                    caption,
+                );
+            }
+            draw_button(
+                &mut d,
+                empty.create,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_CREATE),
+                canvas_ui::kit::ButtonVariant::Primary,
+            );
+            draw_button(
+                &mut d,
+                empty.open_disk,
+                crate::i18n::tr(lang, keys::CANVAS_MANAGER_OPEN_DISK),
+                canvas_ui::kit::ButtonVariant::Secondary,
+            );
+        }
+        // Строка хранилища (№51a) — ВСЕГДА внизу панели: подпись слева
+        // («Хранилище: браузерное/папка на диске»), кнопка «Переехать на
+        // диск…» справа (только OPFS-режим с FS Access; пикер требует
+        // жеста — WebRequest из клика).
+        let storage_label = match self.canvas_manager.storage {
+            canvas_manager_ui::StorageRowMode::Folder => {
+                crate::i18n::tr(lang, keys::CANVAS_STORAGE_FOLDER)
+            }
+            canvas_manager_ui::StorageRowMode::Browser { .. } => {
+                crate::i18n::tr(lang, keys::CANVAS_STORAGE_BROWSER)
+            }
+        };
+        let shown = m.ellipsis(
+            &mut fs,
+            storage_label,
+            family,
+            caption,
+            lay.storage_label[2].max(0.0),
+        );
+        d.label_left(
+            rect(lay.storage_label),
+            &shown,
+            kit_palette.text_muted,
+            caption,
+        );
+        if lay.storage_move[2] > 0.0 {
+            draw_button(
+                &mut d,
+                lay.storage_move,
+                crate::i18n::tr(lang, keys::CANVAS_STORAGE_MOVE_TO_DISK),
+                canvas_ui::kit::ButtonVariant::Secondary,
+            );
+        }
+        out.0 = d.quads;
+        out.1 = d
+            .texts
+            .into_iter()
+            .map(|t| OwnedScreenText {
+                text: t.text,
+                origin: t.origin,
+                width: t.width,
+                font_size: t.font_size,
+                color: t.color,
+                align: t.align,
+            })
+            .collect();
+        out
+    }
 }

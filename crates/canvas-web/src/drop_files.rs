@@ -5,7 +5,9 @@
 //!
 //! `.canvas`-файл → «Импортировать копию»: текст читается через
 //! `File.text()`, копия пишется в OPFS (санитизация имени из
-//! [`crate::url_params::sanitize_canvas_name`]), сцена открывается
+//! [`crate::url_params::sanitize_canvas_name`]); FR-106 (C3, №26b):
+//! коллизия имени — авто-суффикс « (N)» + тост «создана копия» (тихая
+//! перезапись create:true запрещена). Сцена открывается
 //! (`AppEvent::OpenScene`) с OPFS-хранилищем — автосейв продолжает жить
 //! для копии (первый `.canvas` выигрывает).
 //!
@@ -227,11 +229,14 @@ async fn accept_file_to_opfs(
     Ok(Some(format!("/files/{name}")))
 }
 
-/// Импортировать канвас как копию: безопасное имя, OPFS, недавние,
+/// Импортировать канвас как копию: безопасное имя, коллизия — авто-суффикс
+/// №26b («имя (1).canvas» + тост «создана копия»), OPFS, недавние,
 /// открытие сцены с OPFS-хранилищем. Общий путь для DOM-drop и «Открыть
 /// копию» (fallback «Открыть с диска» без readwrite-разрешения).
+/// FR-106: коллизия считается по листингу OPFS (зеркало рабочего
+/// стола, `opfsList`) — семантика C0 `collision_suffix`.
 pub(crate) async fn import_to_opfs(proxy: &EventLoopProxy<AppEvent>, raw_name: &str, json: String) {
-    let Some(name) = crate::url_params::sanitize_canvas_name(raw_name) else {
+    let Some(sanitized) = crate::url_params::sanitize_canvas_name(raw_name) else {
         tracing::warn!(target: "canvas_web", file = %raw_name, "имя файла небезопасно — импорт отклонён");
         return;
     };
@@ -239,6 +244,24 @@ pub(crate) async fn import_to_opfs(proxy: &EventLoopProxy<AppEvent>, raw_name: &
         tracing::error!(target: "canvas_web", "OPFS недоступен — импорт невозможен");
         return;
     };
+    // №26b: занято — авто-суффикс « (N)», файл НЕ перезаписывается молча.
+    let existing: Vec<canvas_core::workspace::CanvasEntry> = crate::opfs_store::opfs_list()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, ts)| canvas_core::workspace::CanvasEntry {
+            name,
+            ts,
+            kind: canvas_core::workspace::EntryKind::Opfs,
+            repo: None,
+        })
+        .collect();
+    let name = if canvas_core::workspace::name_taken(&sanitized, &existing) {
+        canvas_core::workspace::collision_suffix(&sanitized, &existing)
+    } else {
+        sanitized
+    };
+    let renamed = name != raw_name;
     if let Err(err) = crate::opfs::write_opfs_text(&root, &name, &json).await {
         tracing::error!(target: "canvas_web", file = %name, error = ?err, "запись копии в OPFS не удалась");
         return;
@@ -253,8 +276,13 @@ pub(crate) async fn import_to_opfs(proxy: &EventLoopProxy<AppEvent>, raw_name: &
     crate::toolbar::set_recent_label(&name);
     tracing::info!(target: "canvas_web", file = %name, "канвас импортирован копией в OPFS");
     let _ = proxy.send_event(AppEvent::OpenScene {
-        path: std::path::PathBuf::from(name),
+        path: std::path::PathBuf::from(name.clone()),
         json,
         storage: Some(storage),
     });
+    // №26b: тост «создана копия» — ПОСЛЕ OpenScene (тост открытия его не
+    // затирает; без коллизии DOM-drop импортирует молча, как прежде).
+    if renamed {
+        let _ = proxy.send_event(AppEvent::CanvasSavedAsCopy { name });
+    }
 }

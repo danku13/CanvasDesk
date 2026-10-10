@@ -1089,6 +1089,22 @@ pub mod keys {
     pub const CANVAS_DROP_RENAMED_TOAST: &str = "canvas.drop.renamed_toast";
     /// Суффикс имени дубликата (№27a; подстановка в copy_name).
     pub const CANVAS_COPY_SUFFIX: &str = "canvas.copy_suffix";
+    /// Тост мягкого удаления (№15a): канвас в .bak, кнопка «Отменить».
+    pub const CANVAS_MANAGER_DELETE_TOAST: &str = "canvas.manager.delete_toast";
+    /// «Экспорт» активного канваса из менеджера (№25b).
+    pub const CANVAS_MANAGER_EXPORT: &str = "canvas.manager.export";
+    /// Ренейм-коллизия (№9): имя уже занято.
+    pub const CANVAS_MANAGER_NAME_TAKEN_TOAST: &str = "canvas.manager.name_taken_toast";
+    /// Ренейм-валидация (№9): имя не прошло validate_canvas_name.
+    pub const CANVAS_MANAGER_NAME_INVALID_TOAST: &str = "canvas.manager.name_invalid_toast";
+    /// Отказ операции хранилища (CanvasOpDone error) — человекочитаемый текст.
+    pub const CANVAS_MANAGER_OP_FAILED_TOAST: &str = "canvas.manager.op_failed_toast";
+    /// Бейдж источника записи (№43a): браузерное OPFS.
+    pub const CANVAS_MANAGER_BADGE_BROWSER: &str = "canvas.manager.badge_browser";
+    /// Бейдж источника записи: папка на диске (FS Access).
+    pub const CANVAS_MANAGER_BADGE_FOLDER: &str = "canvas.manager.badge_folder";
+    /// Бейдж источника записи: индивидуальный файл с диска.
+    pub const CANVAS_MANAGER_BADGE_DISK: &str = "canvas.manager.badge_disk";
 }
 
 /// Русская таблица (эталон — порядок и полнота проверяются тестом).
@@ -2493,6 +2509,26 @@ const RU: &[(&str, &str)] = &[
         "Имя занято — сохранено как «{name}»",
     ),
     (keys::CANVAS_COPY_SUFFIX, "(копия)"),
+    (
+        keys::CANVAS_MANAGER_DELETE_TOAST,
+        "Канвас «{name}» удалён",
+    ),
+    (keys::CANVAS_MANAGER_EXPORT, "Экспорт"),
+    (
+        keys::CANVAS_MANAGER_NAME_TAKEN_TOAST,
+        "Имя «{name}» уже занято",
+    ),
+    (
+        keys::CANVAS_MANAGER_NAME_INVALID_TOAST,
+        "Недопустимое имя: {reason}",
+    ),
+    (
+        keys::CANVAS_MANAGER_OP_FAILED_TOAST,
+        "Операция не удалась: {reason}",
+    ),
+    (keys::CANVAS_MANAGER_BADGE_BROWSER, "браузерное"),
+    (keys::CANVAS_MANAGER_BADGE_FOLDER, "папка"),
+    (keys::CANVAS_MANAGER_BADGE_DISK, "диск"),
 ];
 
 /// Английская таблица — полный перевод каждого ключа (инвариант полноты).
@@ -3797,6 +3833,26 @@ const EN: &[(&str, &str)] = &[
         "Name taken — saved as \"{name}\"",
     ),
     (keys::CANVAS_COPY_SUFFIX, "(copy)"),
+    (
+        keys::CANVAS_MANAGER_DELETE_TOAST,
+        "Canvas \"{name}\" deleted",
+    ),
+    (keys::CANVAS_MANAGER_EXPORT, "Export"),
+    (
+        keys::CANVAS_MANAGER_NAME_TAKEN_TOAST,
+        "Name \"{name}\" is already taken",
+    ),
+    (
+        keys::CANVAS_MANAGER_NAME_INVALID_TOAST,
+        "Invalid name: {reason}",
+    ),
+    (
+        keys::CANVAS_MANAGER_OP_FAILED_TOAST,
+        "Operation failed: {reason}",
+    ),
+    (keys::CANVAS_MANAGER_BADGE_BROWSER, "browser"),
+    (keys::CANVAS_MANAGER_BADGE_FOLDER, "folder"),
+    (keys::CANVAS_MANAGER_BADGE_DISK, "disk"),
 ];
 
 /// Поиск по таблице (линейный — таблицы статические, чтение раз в кадр).
