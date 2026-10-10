@@ -5,8 +5,7 @@
 //! Keyboard: Space toggles. Touch: hit ≥ 44px (box + label).
 
 use super::{ControlSize, ControlStyle, KitPalette, KitState, Shape};
-use crate::geometry::{UiPoint, UiRect, UiVec2};
-use crate::layout::{stack, HAlign, VAlign};
+use crate::geometry::{UiPoint, UiRect};
 use crate::measure::TextMeasurer;
 
 /// Состояние чек-бокса (Wave C §5.3.1).
@@ -45,6 +44,7 @@ pub struct CheckboxLayout {
 ///
 /// `size` — определяет сторону квадрата (`size.chip_h()`). `label_gap` —
 /// зазор между квадратом и подписью (обычно `Spacing::Sm` = 8px).
+#[allow(clippy::too_many_arguments)] // прецедент kit: layout-функции
 pub fn checkbox_layout(
     slot: UiRect,
     label: &str,
@@ -57,13 +57,18 @@ pub fn checkbox_layout(
     font_size: f32,
 ) -> CheckboxLayout {
     let box_side = size.chip_h();
-    let box_rect = UiRect::new(slot.x, slot.y + (slot.h - box_side).max(0.0) / 2.0, box_side, box_side);
+    let box_rect = UiRect::new(
+        slot.x,
+        slot.y + (slot.h - box_side).max(0.0) / 2.0,
+        box_side,
+        box_side,
+    );
     let label_x = box_rect.right() + label_gap;
     let label_w = (slot.right() - label_x).max(0.0);
     let shown = if label.is_empty() {
         String::new()
     } else {
-        m.ellipsis(fs, label, family, font_size, label_w).unwrap_or_else(|| label.to_owned())
+        m.ellipsis(fs, label, family, font_size, label_w)
     };
     let label_rect = UiRect::new(label_x, slot.y, label_w, slot.h);
     CheckboxLayout {
@@ -76,11 +81,7 @@ pub fn checkbox_layout(
 
 /// Стиль чек-бокса: Checked → primary fill + on_primary glyph;
 /// Indeterminate → control_fill + accent glyph; Unchecked → control_fill border.
-pub fn checkbox_style(
-    state: CheckboxState,
-    kit_state: KitState,
-    p: &KitPalette,
-) -> ControlStyle {
+pub fn checkbox_style(state: CheckboxState, kit_state: KitState, p: &KitPalette) -> ControlStyle {
     let fill = match state {
         CheckboxState::Checked => p.control_primary,
         CheckboxState::Indeterminate => p.control_fill,
@@ -137,7 +138,17 @@ mod tests {
         let mut m = TextMeasurer::new();
         let mut fs = cosmic_text::FontSystem::new();
         let slot = UiRect::new(10.0, 20.0, 200.0, 30.0);
-        let lay = checkbox_layout(slot, "Accept", CheckboxState::Unchecked, ControlSize::Sm, 8.0, &mut m, &mut fs, "sans", 13.0);
+        let lay = checkbox_layout(
+            slot,
+            "Accept",
+            CheckboxState::Unchecked,
+            ControlSize::Sm,
+            8.0,
+            &mut m,
+            &mut fs,
+            "sans",
+            13.0,
+        );
         // Box слева: x=10, сторона=24 (chip_h Sm), центрирован по высоте
         assert!((lay.box_rect.x - 10.0).abs() < 0.01);
         assert!((lay.box_rect.w - 24.0).abs() < 0.01);
@@ -154,7 +165,17 @@ mod tests {
         let mut m = TextMeasurer::new();
         let mut fs = cosmic_text::FontSystem::new();
         let slot = UiRect::new(0.0, 0.0, 200.0, 30.0);
-        let lay = checkbox_layout(slot, "Test", CheckboxState::Checked, ControlSize::Sm, 8.0, &mut m, &mut fs, "sans", 13.0);
+        let lay = checkbox_layout(
+            slot,
+            "Test",
+            CheckboxState::Checked,
+            ControlSize::Sm,
+            8.0,
+            &mut m,
+            &mut fs,
+            "sans",
+            13.0,
+        );
         // Клик по квадрату
         assert!(checkbox_hit(&lay, UiPoint::new(5.0, 15.0)));
         // Клик по подписи

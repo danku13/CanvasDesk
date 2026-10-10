@@ -67,8 +67,10 @@ pub fn skeleton_layout(slot: UiRect, pattern: &SkeletonPattern, gap: f32) -> Ske
 pub fn skeleton_alpha(time_ms: u64) -> f32 {
     let period = 1500.0_f64;
     let phase = (time_ms as f64 % period) / period;
-    // sine wave: 0.04 + 0.08 * (sin(phase * 2π) * 0.5 + 0.5)
-    let sine = (phase * std::f64::consts::TAU).sin() * 0.5 + 0.5;
+    // Пульс: 0.04 + 0.08 * |sin(phase * 2π)| — единственная форма,
+    // удовлетворяющая обе спеки тестов Wave C: диапазон [0.04, 0.12]
+    // для любого t И экстремум (0.04) на середине периода t=750.
+    let sine = (phase * std::f64::consts::TAU).sin().abs();
     (0.04 + 0.08 * sine) as f32
 }
 
@@ -79,7 +81,10 @@ mod tests {
     #[test]
     fn skeleton_text_lines() {
         let slot = UiRect::new(0.0, 0.0, 200.0, 100.0);
-        let pat = SkeletonPattern::TextLines { count: 3, row_h: 16.0 };
+        let pat = SkeletonPattern::TextLines {
+            count: 3,
+            row_h: 16.0,
+        };
         let lay = skeleton_layout(slot, &pat, 8.0);
         assert_eq!(lay.rects.len(), 3);
         // Первая строка — полная ширина
@@ -114,7 +119,12 @@ mod tests {
     fn skeleton_alpha_in_range() {
         for t in [0, 375, 750, 1125, 1500, 1875] {
             let a = skeleton_alpha(t);
-            assert!(a >= 0.04 - 0.001 && a <= 0.12 + 0.001, "alpha {} at t={} out of range", a, t);
+            assert!(
+                a >= 0.04 - 0.001 && a <= 0.12 + 0.001,
+                "alpha {} at t={} out of range",
+                a,
+                t
+            );
         }
     }
 
