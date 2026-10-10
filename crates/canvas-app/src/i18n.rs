@@ -1105,6 +1105,17 @@ pub mod keys {
     pub const CANVAS_MANAGER_BADGE_FOLDER: &str = "canvas.manager.badge_folder";
     /// Бейдж источника записи: индивидуальный файл с диска.
     pub const CANVAS_MANAGER_BADGE_DISK: &str = "canvas.manager.badge_disk";
+    // --- FR-108 (мультиканвас C5): тонкий нативный слой ----------------
+    /// Тулбар менеджера (натив): «Открыть…» — файловый диалог (№20).
+    pub const CANVAS_MANAGER_OPEN: &str = "canvas.manager.open";
+    /// Строка хранилища менеджера (натив, №20): файлы на диске, без
+    /// кнопки переезда (файлами владеет ОС).
+    pub const CANVAS_STORAGE_DISK_FILES: &str = "canvas.storage.disk_files";
+    /// Пункт контекстного меню канваса — вход в менеджер (натив-вход C5;
+    /// web-вход — чип C4/кнопка «Недавние»).
+    pub const MENU_CANVAS_MANAGER: &str = "menu.canvas_manager";
+    /// Тост «Создать» (натив, №34a): файл не записан (отказ ФС).
+    pub const CANVAS_NATIVE_CREATE_FAILED_TOAST: &str = "canvas.native.create_failed_toast";
 }
 
 /// Русская таблица (эталон — порядок и полнота проверяются тестом).
@@ -2529,6 +2540,14 @@ const RU: &[(&str, &str)] = &[
     (keys::CANVAS_MANAGER_BADGE_BROWSER, "браузерное"),
     (keys::CANVAS_MANAGER_BADGE_FOLDER, "папка"),
     (keys::CANVAS_MANAGER_BADGE_DISK, "диск"),
+    // --- FR-108 (C5): тонкий нативный слой ---
+    (keys::CANVAS_MANAGER_OPEN, "Открыть…"),
+    (keys::CANVAS_STORAGE_DISK_FILES, "Хранилище: файлы на диске"),
+    (keys::MENU_CANVAS_MANAGER, "Менеджер канвасов…"),
+    (
+        keys::CANVAS_NATIVE_CREATE_FAILED_TOAST,
+        "Не удалось создать файл: {err}",
+    ),
 ];
 
 /// Английская таблица — полный перевод каждого ключа (инвариант полноты).
@@ -3853,6 +3872,14 @@ const EN: &[(&str, &str)] = &[
     (keys::CANVAS_MANAGER_BADGE_BROWSER, "browser"),
     (keys::CANVAS_MANAGER_BADGE_FOLDER, "folder"),
     (keys::CANVAS_MANAGER_BADGE_DISK, "disk"),
+    // --- FR-108 (C5): тонкий нативный слой ---
+    (keys::CANVAS_MANAGER_OPEN, "Open…"),
+    (keys::CANVAS_STORAGE_DISK_FILES, "Storage: files on disk"),
+    (keys::MENU_CANVAS_MANAGER, "Canvas manager…"),
+    (
+        keys::CANVAS_NATIVE_CREATE_FAILED_TOAST,
+        "Failed to create the file: {err}",
+    ),
 ];
 
 /// Поиск по таблице (линейный — таблицы статические, чтение раз в кадр).

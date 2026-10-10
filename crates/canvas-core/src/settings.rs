@@ -594,6 +594,13 @@ pub struct Settings {
     /// `$1.00`, `0.5`, `telemetry=false`).
     #[serde(default)]
     pub llm: canvas_llm::LlmSettings,
+    /// FR-108 (мультиканвас C5, №20): недавние канвасы натива — абсолютные
+    /// пути к `.canvas`-файлам, свежайший первым, cap
+    /// [`crate::recent_files::RECENT_CAP`]. Web не использует (недавние
+    /// web — IndexedDB, FR-104); старые конфиги без поля грузятся пустым
+    /// списком (serde default — обратная совместимость).
+    #[serde(default)]
+    pub recent: Vec<String>,
 }
 
 /// FR-028: лимит откладываний онбординга — после третьего «Пропустить» подряд
@@ -705,6 +712,8 @@ impl Default for Settings {
             telemetry_analytics: true,
             // FR-079: ИИ-подсказки — OFF до гейта S5 (продуктовое решение 1).
             suggest: SuggestSettings::default(),
+            // FR-108 (C5): недавние натива — пусты до первого открытия файла.
+            recent: Vec::new(),
             // FR-LLM-B: LLM-слой — дефолт `all_off`/`Local`/`$1.00`/`0.5`/
             // `telemetry=false` (самый приватный режим до онбординга AI).
             llm: canvas_llm::LlmSettings::default(),
@@ -993,6 +1002,9 @@ impl Settings {
         if !self.llm.provider_agent.allowed_for_graph_or_agent() {
             self.llm.provider_agent = canvas_llm::LlmProviderId::Off;
         }
+        // FR-108 (C5): cap недавних — ручная правка config.toml (раздутый
+        // список) не тащит лишние строки в менеджер; dedup делает push_recent.
+        self.recent.truncate(crate::recent_files::RECENT_CAP);
     }
 
     /// FR-087: видимость категории шаблонных нод — приоритет ручного
@@ -1147,6 +1159,12 @@ mod tests {
                 chatgpt_email: "user@example.com".to_owned(),
                 ext_agent_host_id: "ext-agent-host-id-43chars_________".to_owned(),
             },
+            // FR-108 (C5): недавние канвасы натива round-trip (порядок
+            // сохраняется — свежайший первым).
+            recent: vec![
+                "/home/x/отчёт.canvas".to_owned(),
+                "C:\\Docs\\Notes.canvas".to_owned(),
+            ],
         };
         let dir = crate::test_scratch_root().join("canvasdesk-settings-test"); // FR-036: wasm-совместимая песочница
         let path = dir.join("config.toml");
@@ -1155,6 +1173,49 @@ mod tests {
         assert_eq!(loaded, settings);
         assert!(warn.is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FR-108 (C5, №20): недавние — старый config.toml без поля `recent`
+    /// грузится пустым списком (обратная совместимость serde default),
+    /// список путей парсится и клампится к cap в normalize.
+    #[test]
+    fn recent_files_back_compat_and_cap() {
+        // Конфиг до FR-108 (полное отсутствие поля) — пусто, без warn.
+        let (settings, warn) = Settings::load_toml_str("language = \"ru\"\n");
+        assert!(warn.is_none(), "{warn:?}");
+        assert!(
+            settings.recent.is_empty(),
+            "старый конфиг — пустые недавние"
+        );
+        // Дефолт — тоже пуст.
+        assert!(Settings::default().recent.is_empty());
+        // Список абсолютных путей парсится в порядке файла (TOML-literal
+        // строка: backslash без эскейпа — как пишет serde toml).
+        let text = concat!(
+            "recent = [",
+            "  '/home/x/a.canvas',",
+            "  'C:\\Docs\\b.canvas'",
+            "]\n"
+        );
+        let (settings, warn) = Settings::load_toml_str(text);
+        assert!(warn.is_none(), "{warn:?}");
+        assert_eq!(settings.recent.len(), 2);
+        assert_eq!(settings.recent[0], "/home/x/a.canvas");
+        // normalize (внутри load): cap — ручная правка раздутого списка
+        // обрезается уже при загрузке, выживает голова (свежайшие).
+        let oversized = format!(
+            "recent = [{}]\n",
+            (0..(crate::recent_files::RECENT_CAP + 5))
+                .map(|i| format!("'f{i}.canvas'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let (settings, _) = Settings::load_toml_str(&oversized);
+        assert_eq!(settings.recent.len(), crate::recent_files::RECENT_CAP);
+        assert_eq!(
+            settings.recent[0], "f0.canvas",
+            "голова (свежайшие) выживает"
+        );
     }
 
     /// FR-083: `explain_sources_left` — старый конфиг без поля грузится

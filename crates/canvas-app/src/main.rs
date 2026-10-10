@@ -107,6 +107,14 @@ fn main() -> anyhow::Result<()> {
     // CanvasStorage; натив — файловый (диск + .bak, сегодняшнее поведение);
     // web (W6) подставит FS Access/OPFS при своей сборке.
     let storage: Arc<dyn canvas_core::CanvasStorage> = Arc::new(canvas_core::FsCanvasStorage);
+    // FR-108 (C5, №20): стартовый канвас — копия пути до переноса в сцену
+    // (запись в недавние ниже, после App::new); нагрузочные режимы
+    // (--stress) стресс-файлы в списке недавних не оставляют.
+    let recent_start_path = if args.stress.is_none() {
+        Some(args.path.clone())
+    } else {
+        None
+    };
     let scene = match args.stress {
         Some(n) => {
             tracing::info!(nodes = n, path = %args.path.display(), "нагрузочный режим --stress");
@@ -277,6 +285,11 @@ fn main() -> anyhow::Result<()> {
             // подставит SpawnLocalRendererLaunch (spawn_local + слот)
             Box::new(BlockOnRendererLaunch),
         );
+        // FR-108 (C5, №20): стартовый канвас (CLI-путь/default.canvas) —
+        // в недавние натива (config.toml, запись/декей/сейв внутри).
+        if let Some(path) = &recent_start_path {
+            app.record_recent_canvas(path);
+        }
         // M5 (T20-F): реестр виджетов (материализация встроенных + скан)
         app.init_widgets();
         // FR-079 (S3): suggest-воркер — ранжирование подсказок вне UI-треда

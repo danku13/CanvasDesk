@@ -1300,6 +1300,9 @@ pub mod ui {
     /// Пункт меню пустого канваса (ПКМ мимо нод и связей).
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum CanvasMenuItem {
+        /// FR-108 (C5, №20): «Менеджер канвасов…» — вход в оверлей
+        /// (натив-вход тонкого слоя; web — дубль кнопки/чипа до волны C4).
+        CanvasManager,
         /// «Создать группу» в центре текущего viewport.
         NewGroup,
         /// T23: «Фокус на связях» — переключатель режима brainstorm-focus
@@ -1360,7 +1363,8 @@ pub mod ui {
     }
 
     /// Меню пустого канваса (базовые пункты — видны всегда).
-    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 11] = [
+    pub const CANVAS_MENU_ITEMS: [CanvasMenuItem; 12] = [
+        CanvasMenuItem::CanvasManager,
         CanvasMenuItem::NewGroup,
         CanvasMenuItem::FocusMode,
         CanvasMenuItem::Hotkeys,
@@ -1440,6 +1444,10 @@ pub mod ui {
         // фраза — ключ таблицы i18n (FR-040, ключ = полная фраза)
         let check = "✓ ";
         match item {
+            // FR-108 (C5, №20): действие — открыть менеджер (не тумблер).
+            CanvasMenuItem::CanvasManager => {
+                i18n::tr(language, crate::i18n::keys::MENU_CANVAS_MANAGER).to_owned()
+            }
             CanvasMenuItem::NewGroup => {
                 i18n::tr(language, crate::i18n::keys::MENU_NEW_GROUP).to_owned()
             }
@@ -2722,17 +2730,45 @@ pub mod ui {
             // FR-050 Н9-4: перед ним — карта проливаний (действие)
             // FR-087: последний — «Об авторе» (всегда виден, opens DOM overlay)
             // W2 (PRD-0010 F-3): добавлен пункт «Генератор графа (AI)…»
-            // (предпоследний, действие) — меню выросло до 11.
-            assert_eq!(n, 11);
-            assert_eq!(CANVAS_MENU_ITEMS[10], CanvasMenuItem::About);
-            assert_eq!(CANVAS_MENU_ITEMS[9], CanvasMenuItem::AiGraphBuilder);
-            assert_eq!(CANVAS_MENU_ITEMS[8], CanvasMenuItem::AutolinkFind);
-            assert_eq!(CANVAS_MENU_ITEMS[7], CanvasMenuItem::FlowMap);
-            // M5 (T20-F): четвёртый пункт — вход в подменю виджетов
-            assert_eq!(CANVAS_MENU_ITEMS[3], CanvasMenuItem::Widgets);
+            // (предпоследний, действие).
+            // FR-108 (C5, №20): в голове меню — «Менеджер канвасов…»
+            // (вход в оверлей; натив-вход тонкого слоя) — меню выросло до 12.
+            assert_eq!(n, 12);
+            assert_eq!(CANVAS_MENU_ITEMS[11], CanvasMenuItem::About);
+            assert_eq!(CANVAS_MENU_ITEMS[10], CanvasMenuItem::AiGraphBuilder);
+            assert_eq!(CANVAS_MENU_ITEMS[9], CanvasMenuItem::AutolinkFind);
+            assert_eq!(CANVAS_MENU_ITEMS[8], CanvasMenuItem::FlowMap);
+            // FR-108 (C5, №20): первый пункт — вход в менеджер канвасов
+            assert_eq!(CANVAS_MENU_ITEMS[0], CanvasMenuItem::CanvasManager);
             assert_eq!(
                 canvas_menu_label(
-                    CANVAS_MENU_ITEMS[3],
+                    CANVAS_MENU_ITEMS[0],
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::Ru
+                ),
+                "Менеджер канвасов…"
+            );
+            assert_eq!(
+                canvas_menu_label(
+                    CANVAS_MENU_ITEMS[0],
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::En
+                ),
+                "Canvas manager…"
+            );
+            // M5 (T20-F): пятый пункт — вход в подменю виджетов
+            assert_eq!(CANVAS_MENU_ITEMS[4], CanvasMenuItem::Widgets);
+            assert_eq!(
+                canvas_menu_label(
+                    CANVAS_MENU_ITEMS[4],
                     false,
                     false,
                     false,
@@ -2744,7 +2780,7 @@ pub mod ui {
             );
             assert_eq!(
                 canvas_menu_label(
-                    CANVAS_MENU_ITEMS[0],
+                    CANVAS_MENU_ITEMS[1],
                     false,
                     false,
                     false,
@@ -2754,11 +2790,11 @@ pub mod ui {
                 ),
                 "Создать группу"
             );
-            // T23: второй пункт — переключатель фокуса с ✓-галочкой
-            assert_eq!(CANVAS_MENU_ITEMS[1], CanvasMenuItem::FocusMode);
+            // T23: третий пункт — переключатель фокуса с ✓-галочкой
+            assert_eq!(CANVAS_MENU_ITEMS[2], CanvasMenuItem::FocusMode);
             assert_eq!(
                 canvas_menu_label(
-                    CANVAS_MENU_ITEMS[1],
+                    CANVAS_MENU_ITEMS[2],
                     true,
                     false,
                     false,
@@ -2770,7 +2806,7 @@ pub mod ui {
             );
             assert_eq!(
                 canvas_menu_label(
-                    CANVAS_MENU_ITEMS[1],
+                    CANVAS_MENU_ITEMS[2],
                     false,
                     false,
                     false,
@@ -2780,11 +2816,11 @@ pub mod ui {
                 ),
                 "Фокус на связях"
             );
-            // FR-004.1: третий пункт — переключатель оверлея хоткеев
-            assert_eq!(CANVAS_MENU_ITEMS[2], CanvasMenuItem::Hotkeys);
+            // FR-004.1: четвёртый пункт — переключатель оверлея хоткеев
+            assert_eq!(CANVAS_MENU_ITEMS[3], CanvasMenuItem::Hotkeys);
             assert_eq!(
                 canvas_menu_label(
-                    CANVAS_MENU_ITEMS[2],
+                    CANVAS_MENU_ITEMS[3],
                     false,
                     true,
                     false,
@@ -2796,7 +2832,7 @@ pub mod ui {
             );
             assert_eq!(
                 canvas_menu_label(
-                    CANVAS_MENU_ITEMS[2],
+                    CANVAS_MENU_ITEMS[3],
                     false,
                     false,
                     false,
@@ -2806,11 +2842,11 @@ pub mod ui {
                 ),
                 "Горячие клавиши (F1)"
             );
-            // T15: пятый пункт — переключатель desktop-режима с ✓-галочкой
-            assert_eq!(CANVAS_MENU_ITEMS[4], CanvasMenuItem::DesktopMode);
+            // T15: шестой пункт — переключатель desktop-режима с ✓-галочкой
+            assert_eq!(CANVAS_MENU_ITEMS[5], CanvasMenuItem::DesktopMode);
             assert_eq!(
                 canvas_menu_label(
-                    CANVAS_MENU_ITEMS[4],
+                    CANVAS_MENU_ITEMS[5],
                     false,
                     false,
                     true,
@@ -2822,7 +2858,7 @@ pub mod ui {
             );
             assert_eq!(
                 canvas_menu_label(
-                    CANVAS_MENU_ITEMS[4],
+                    CANVAS_MENU_ITEMS[5],
                     false,
                     false,
                     false,
@@ -2832,11 +2868,11 @@ pub mod ui {
                 ),
                 "Режим десктопа"
             );
-            // FR-016 (CP5): шестой пункт — переключатель оверлея узких мест
-            assert_eq!(CANVAS_MENU_ITEMS[5], CanvasMenuItem::BottleneckOverlay);
+            // FR-016 (CP5): седьмой пункт — переключатель оверлея узких мест
+            assert_eq!(CANVAS_MENU_ITEMS[6], CanvasMenuItem::BottleneckOverlay);
             assert_eq!(
                 canvas_menu_label(
-                    CANVAS_MENU_ITEMS[5],
+                    CANVAS_MENU_ITEMS[6],
                     false,
                     false,
                     false,
@@ -2848,7 +2884,7 @@ pub mod ui {
             );
             assert_eq!(
                 canvas_menu_label(
-                    CANVAS_MENU_ITEMS[5],
+                    CANVAS_MENU_ITEMS[6],
                     false,
                     false,
                     false,
@@ -2858,11 +2894,11 @@ pub mod ui {
                 ),
                 "Узкие места (Ctrl+B)"
             );
-            // FR-017: седьмой пункт — переключатель what-if режима
-            assert_eq!(CANVAS_MENU_ITEMS[6], CanvasMenuItem::WhatIf);
+            // FR-017: восьмой пункт — переключатель what-if режима
+            assert_eq!(CANVAS_MENU_ITEMS[7], CanvasMenuItem::WhatIf);
             assert_eq!(
                 canvas_menu_label(
-                    CANVAS_MENU_ITEMS[6],
+                    CANVAS_MENU_ITEMS[7],
                     false,
                     false,
                     false,
@@ -2874,7 +2910,7 @@ pub mod ui {
             );
             assert_eq!(
                 canvas_menu_label(
-                    CANVAS_MENU_ITEMS[6],
+                    CANVAS_MENU_ITEMS[7],
                     false,
                     false,
                     false,
@@ -2901,14 +2937,17 @@ pub mod ui {
         #[test]
         fn canvas_menu_align_items_visible_only_for_n_ge_3() {
             use super::canvas_menu_visible_items;
-            // Меньше трёх выделенных — только базовые 7
+            // Меньше трёх выделенных — только базовые пункты
             let base = canvas_menu_visible_items(false);
             assert_eq!(base.len(), CANVAS_MENU_ITEMS.len());
-            assert_eq!(base[0], CanvasMenuItem::NewGroup);
+            // FR-108 (C5, №20): голова меню — «Менеджер канвасов…», за ним
+            // базовое создание группы (порядок остальных не смещается)
+            assert_eq!(base[0], CanvasMenuItem::CanvasManager);
+            assert_eq!(base[1], CanvasMenuItem::NewGroup);
             assert!(!base
                 .iter()
                 .any(|item| matches!(item, CanvasMenuItem::AlignHorizontal)));
-            // N≥3 — ровно 10 пунктов, batch-хвост в фиксированном порядке
+            // N≥3 — базовые + batch-хвост в фиксированном порядке
             let full = canvas_menu_visible_items(true);
             assert_eq!(full.len(), CANVAS_MENU_ITEMS.len() + ALIGN_MENU_ITEMS.len());
             assert_eq!(
