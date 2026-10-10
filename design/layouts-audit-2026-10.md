@@ -65,7 +65,7 @@ kit-витрины (LAY9.1). **Сцена (LAY5) потребителями не
 | Настройки (settings_ui) | ✅ | ✅ | ✅ | — | — | ✅ | ⚠️ | ✅ | ✅ | ⚠️ | ⚠️ |
 | Схема-галерея (scheme_gallery_ui) | ✅ | ✅ | ✅ | — | — | ✅ | ⚠️ | ⚠️ | ✅ | ✅ | ⚠️ |
 | Kit-витрина (kit_ui) | ✅ | ⚠️ | ✅ | ✅ | — | ✅ | ⚠️ | ✅ | ✅ | ⚠️ | ✅ |
-| Админка/UI-консоль (admin_ui) | ✅ | ❌ | ⚠️ | — | — | ✅ | ⚠️ | ✅ | ✅ | ❌ | ⚠️ |
+| Админка/UI-консоль (admin_ui) | ✅ | ✅ W13 | ⚠️ | — | — | ✅ | ⚠️ | ✅ | ✅ | ✅ W13 | ⚠️ |
 | Поиск (search_ui) | ✅ | ⚠️ | ✅ | — | — | ✅ | ⚠️ | ⚠️ | ✅ | ⚠️ | ⚠️ |
 | Explain (explain_ui) | ✅ | ⚠️ | ✅ | — | — | ✅ | ⚠️ | ⚠️ | ✅ | ⚠️ | ⚠️ |
 | Template-панель/wheel (template_ui) | ✅ | ⚠️ | ✅ | — | — | ✅ | ⚠️ | ⚠️ | ✅ | ⚠️ | ⚠️ |
@@ -312,7 +312,7 @@ template), «модалка» (stack+constrain). Скролл — `ScrollState` 
 | Настройки | ✅ | ✅ | ⚠️ 14/4 | ✅ | ✅ | ✅ lint_settings | ✅ Always+бп | ✅ | ⚠️ | — |
 | Схема-галерея | ✅ | ✅ | ⚠️ 40/34/62 | ✅ | ✅ Fit честный | ✅ lint_gallery | ⚠️ кламп 320×240 | ✅ | ⚠️ | — |
 | Kit-витрина | ✅ | ⚠️ скелет y+= | ⚠️ gap 6.0 литерал | ✅ | ✅ демо Squeeze/Wrap | ✅ lint_kit_gallery | ✅ Block | ✅ | ⚠️ | ✅ |
-| Админка | ✅ | ❌ тела демо y+= | ⚠️ 16/18/20-шаги | ✅ | ⚠️ row_gap 2.0 | ✅ lint_admin | ✅ Block | ✅ тест | ⚠️ | — |
+| Админка | ✅ | ✅ Column-скелет (W13) | ⚠️ 16/18/20-шаги | ✅ | ⚠️ row_gap 2.0 | ✅ lint_admin | ✅ Block | ✅ тест | ⚠️ | — |
 | Поиск | ✅ | ⚠️ смесь | ⚠️ поле 36, gap 2 | ✅ FR-088 | ✅ MAX_VISIBLE_ROWS | ✅ lint_search | ⚠️ кламп | ✅ | ⚠️ | — |
 | Explain | ✅ | ⚠️ tidy-дерево | ⚠️ 56/28/20 | ✅ | ✅ take_while крошки | ✅ lint_explain | ⚠️ min 320×240 | ✅ | ⚠️ | — |
 | Template-панель | ✅ | ⚠️ rows вручную | ⚠️ 4/26/52 | ✅ | ✅ Wrap+«приклейка» | ✅ lint_template×2 | ⚠️ | ✅ | ⚠️ | — |
@@ -336,14 +336,17 @@ hints, graph_builder, палитры (частично — lint_palette_selected
   демо-секций с ручного курсора `y +=` на Column-скелет из примитивов
   (или новый санкционированный каркас «линейка витрины» в LAY10 с запретом
   вне этих двух файлов).
-  ✅ реализовано 2026-10-10: W3a (admin_ui, 4 тела) — в main (e319cc1,
-  перенесено параллельной сессией из ветки `wave/lay-w3-admin-kit`);
-  W3b (kit_ui) — `wave/lay-w3b-kit` (ребейз на W1–W12, слияние 4d58afa).
-  Линейки — Column-скелет примитивов через `pilot_backend()`; y+= 93 → 0
-  в коде; зазоры — токены S1, off-scale пины задокументированы.
-  Golden-тесты бит-в-бит: `gallery_layout_ruler_golden_column_skeleton`
-  (65 тегов, W3b) и `admin_bodies_golden_column_skeleton` (135 тегов —
-  добавлен поверх W3a отдельным коммитом как независимая верификация).
+  ✅ реализовано 2026-10-10 повторно (LAY-W13): прежний коммит W3a e319cc1
+  УТЕРЯН (не существует в истории ни одной ветки; миграция в main не
+  попадала, admin_ui сохранял 32 вхождения `y +=` — вскрыто ревью
+  [`layouts-w1-w12-review.md`](layouts-w1-w12-review.md) §3.1 P1-1).
+  Миграция admin_ui выполнена заново (LAY-W13, ветка `lay/w13-admin-skeleton`):
+  32 y+= → 0, тела — Column/Row-скелет примитивов через `pilot_backend()`,
+  дрейф 0 — golden `admin_bodies_golden_column_skeleton` (135 тегов,
+  допуск 0.005 px) бит-в-бит; row_gap 2.0 — задокументированное демо-
+  исключение, не тронуто.
+  W3b (kit_ui) — `wave/lay-w3b-kit` (ребейз на W1–W12, слияние 4d58afa),
+  y+= 0, golden `gallery_layout_ruler_golden_column_skeleton` (65 тегов).
   Кандидат в LAY-W10: `pilot_backend()` в не-пилотных потребителях.
 - **LAY-W4 (P2, M).** agent_panel: `AgentPanelLayout::build` → Column/Row
   (шапка/контекст/лог-grow/input/quick), результат — та же структура;
