@@ -1,99 +1,100 @@
-# Каталог инструментов CanvasDesk MCP — 43 инструмента
+# CanvasDesk MCP tool catalog — 43 tools
 
-Полный реестр инструментов MCP-сервера CanvasDesk по группам. Канонический
-источник — ответ `tools/list` живого сервера (реестр `TOOLS` в
-`crates/canvas-mcp/src/lib.rs`); при расхождении текста и схемы права схема.
-Пакет скиллов синхронен этому каталогу (контракт-тест `skills_sync` в
-`canvas-mcp`, см. [UPDATE-PROTOCOL](../../UPDATE-PROTOCOL.md)).
+The full registry of the CanvasDesk MCP server's tools, by group. The
+canonical source is the response of `tools/list` from the live server
+(the `TOOLS` registry in `crates/canvas-mcp/src/lib.rs`); when the text
+and the schema disagree, the schema wins. The skill package is
+synchronized with this catalog (the `skills_sync` contract test in
+`canvas-mcp`, see [UPDATE-PROTOCOL](../../UPDATE-PROTOCOL.md)).
 
-Обозначения: `?` — необязательный параметр; перечисление через `|`;
-типы — string / number / boolean / integer / null. Вызовы показаны в
-канонической форме `инструмент` {параметры}.
+Notation: `?` — an optional parameter; alternatives are separated by `|`;
+types — string / number / boolean / integer / null. Calls are shown in
+the canonical form `<tool>` {params}.
 
-## Разведка и навигация (10)
+## Exploration and navigation (10)
 
-| Инструмент | Сигнатура | Назначение |
+| Tool | Signature | Purpose |
 |---|---|---|
-| `canvas_info` {} | — | Сводка по канвасу: число нод и связей, путь к файлу .canvas, версия приложения |
-| `nodes_list` {text?} | text: boolean | Список нод: id, тип, координаты, размеры, подпись, файл; поле text — только при text=true |
-| `node_get` {id} | id: string | Одна нода по id со всеми полями (включая text) |
-| `nodes_search` {query} | query: string | Поиск нод: подстрока без учёта регистра по text/title/label/file (title — явный заголовок canvasdesk.title, FR-072) |
-| `edges_list` {} | — | Все связи: {id, from, to, kind, fromLine?, fromOutput?, toParam?, fromSide, toSide} — восстановление топологии графа |
-| `edge_get` {id} | id: string | Одна связь по id — схема как у элементов edges_list |
-| `template_list` {} | — | Реестр шаблонов: id, name, version, category, expr, params, outputs (именованные выходы для fromOutput) |
-| `schemes_list` {} | — | Галерея встроенных схем: {id, name, name_en, category, version, description, nodes, edges} — RU-первично |
-| `viewport_get` {} | — | Центр viewport в world-координатах и зум |
-| `viewport_set` {x, y, zoom?} | x, y: number; zoom: number | Установить центр viewport и опционально зум |
+| `canvas_info` {} | — | Canvas summary: node and edge counts, path to the .canvas file, application version |
+| `nodes_list` {text?} | text: boolean | Node list: id, type, coordinates, sizes, label, file; the text field — only when text=true |
+| `node_get` {id} | id: string | One node by id with all fields (including text) |
+| `nodes_search` {query} | query: string | Node search: case-insensitive substring over text/title/label/file (title — the explicit canvasdesk.title heading, FR-072) |
+| `edges_list` {} | — | All edges: {id, from, to, kind, fromLine?, fromOutput?, toParam?, fromSide, toSide} — reconstructing the graph topology |
+| `edge_get` {id} | id: string | One edge by id — the schema is the same as for edges_list elements |
+| `template_list` {} | — | Template registry: id, name, version, category, expr, params, outputs (named outputs for fromOutput) |
+| `schemes_list` {} | — | Gallery of built-in schemes: {id, name, name_en, category, version, description, nodes, edges} — RU-primary |
+| `viewport_get` {} | — | Viewport center in world coordinates and the zoom |
+| `viewport_set` {x, y, zoom?} | x, y: number; zoom: number | Set the viewport center and optionally the zoom |
 
-## Ноды: создание и правка (8)
+## Nodes: creation and editing (8)
 
-| Инструмент | Сигнатура | Назначение |
+| Tool | Signature | Purpose |
 |---|---|---|
-| `node_create_note` {x, y, text?, title?, width?, height?} | x, y: number | Создать ноду-заметку (Numi-лист); возвращает id. Дефолт 260×120; высота меньше контента клампится до минимума (FR-081). title (FR-072, волна 1) — явный заголовок карточки; без него в шапке плейсхолдер «—», первая строка текста в шапку не протекает (легаси-ноды мигрируют при загрузке) |
-| `node_create_file` {path, x, y, width?, height?} | path: string | Создать файловую ноду по пути (файл на диске НЕ создаётся) |
-| `node_update_text` {id, text} | id, text: string | Заменить текст ноды-заметки целиком |
-| `node_edit` {id, text?, title?, label?, color?, expr?, x?, y?, width?, height?} | id: string | Править ТОЛЬКО переданные поля; label/color/expr/title = null — сброс (title = null — в шапке плейсхолдер «—», первая строка текста в шапку не протекает, волна 1); expr — Numi-формула; width/height: высота меньше контента клампится до измеренного минимума (FR-081); возвращает обновлённую ноду |
-| `node_move` {id, x, y} | — | Переместить ноду в world-координаты |
-| `node_resize` {id, width, height, fit?} | width/height: number > 0; fit: boolean (опц., default false) | Изменить размеры ноды. Высота меньше контента НЕ применяется — клампится до измеренного минимума (FR-081); fit:true — подогнать высоту точно под видимый контент. Возвращает {id, width, height, fit_applied, height_clamped, min_height} |
-| `node_delete` {id} | — | Удалить ноду (связи — каскадно; дети группы НЕ удаляются) |
-| `node_set_color` {id, color} | color: "1".."6" \| null | Пресет цвета ноды или null для сброса |
+| `node_create_note` {x, y, text?, title?, width?, height?} | x, y: number | Create a note node (a Numi sheet); returns the id. Default 260×120; height smaller than the content is clamped to the minimum (FR-081). title (FR-072, wave 1) — the explicit card heading; without it the header shows the «—» placeholder, the first text line does not leak into the header (legacy nodes migrate on load) |
+| `node_create_file` {path, x, y, width?, height?} | path: string | Create a file node by path (the file is NOT created on disk) |
+| `node_update_text` {id, text} | id, text: string | Replace the text of a note node in full |
+| `node_edit` {id, text?, title?, label?, color?, expr?, x?, y?, width?, height?} | id: string | Edit ONLY the passed fields; label/color/expr/title = null — reset (title = null — the header shows the «—» placeholder, the first text line does not leak into the header, wave 1); expr — a Numi formula; width/height: height smaller than the content is clamped to the measured minimum (FR-081); returns the updated node |
+| `node_move` {id, x, y} | — | Move a node to world coordinates |
+| `node_resize` {id, width, height, fit?} | width/height: number > 0; fit: boolean (optional, default false) | Resize a node. Height smaller than the content is NOT applied — it is clamped to the measured minimum (FR-081); fit:true — fit the height exactly to the visible content. Returns {id, width, height, fit_applied, height_clamped, min_height} |
+| `node_delete` {id} | — | Delete a node (edges — cascading; group children are NOT deleted) |
+| `node_set_color` {id, color} | color: "1".."6" \| null | Node color preset, or null to reset |
 
-## Группы (1)
+## Groups (1)
 
-| Инструмент | Сигнатура | Назначение |
+| Tool | Signature | Purpose |
 |---|---|---|
-| `group_create` {nodes, label?, padding?} | nodes: array of id, ≥1; label: string (дефолт «Группа»); padding: number 0..500 (дефолт 40) | FR-012 v4 (MCP-паритет UI «Сгруппировать»): обернуть ноды новой группой — рамка bbox(ноды)+padding, дети — ЯВНЫЙ список. Инварант одного членства: обёрнутые вычёркиваются из прочих групп, новая группа встаёт ребёнком самой внутренней группы-предка, цепочка предков авторасширяется. Группировать можно и сами группы. Ответ: {id, label, children, parent\|null, x, y, width, height}. Один undo-шаг |
+| `group_create` {nodes, label?, padding?} | nodes: array of id, ≥1; label: string (default «Группа»); padding: number 0..500 (default 40) | FR-012 v4 (MCP parity of the UI «Сгруппировать» / Group): wrap the nodes in a new group — the frame is bbox(nodes)+padding, children — an EXPLICIT list. Single-membership invariant: the wrapped nodes are struck out of other groups, the new group becomes a child of the innermost ancestor group, the ancestor chain auto-expands. Groups themselves can be grouped too. Response: {id, label, children, parent\|null, x, y, width, height}. One undo step |
 
-## Раскладка (1)
+## Layout (1)
 
-| Инструмент | Сигнатура | Назначение |
+| Tool | Signature | Purpose |
 |---|---|---|
-| `nodes_layout_apply` {mode?, rows?, x?, y?, colGap?, rowGap?, fit?} | mode: grid \| smart (дефолт grid); rows: массив рядов-массивов id; colGap/rowGap: number 0..500 (дефолты 80/48); fit: boolean (дефолт true) | FR-081: расстановка нод ДЛЯ АГЕНТА одним вызовом. grid — «порядок чтения» (транскрипция раскладки со скриншота): колонки по макс. ширине, ряды по макс. высоте; группы в rows запрещены, рамки групп с переехавшими детьми авторасширяются; ответ {mode, moved, positions, bbox, groups_resized}. smart — смысловая раскладка всего канваса (plan_scheme_layout FR-071), bbox сохраняется. Перед раскладкой высоты клампятся к контенту (fit, дефолт true). Один undo-шаг |
+| `nodes_layout_apply` {mode?, rows?, x?, y?, colGap?, rowGap?, fit?} | mode: grid \| smart (default grid); rows: array of row-arrays of ids; colGap/rowGap: number 0..500 (defaults 80/48); fit: boolean (default true) | FR-081: node arrangement FOR THE AGENT in one call. grid — the “reading order” (a transcription of the layout from a screenshot): columns by max width, rows by max height; groups in rows are forbidden, group frames with moved children auto-expand; response {mode, moved, positions, bbox, groups_resized}. smart — semantic layout of the whole canvas (plan_scheme_layout FR-071), the bbox is preserved. Before layout, heights are clamped to the content (fit, default true). One undo step |
 
-## Связи и поток (4)
+## Edges and flow (4)
 
-| Инструмент | Сигнатура | Назначение |
+| Tool | Signature | Purpose |
 |---|---|---|
-| `edge_create` {from, to, kind?, fromLine?, fromOutput?, toParam?, fromSide?, toSide?} | from, to: id нод | Создать связь; kind "value" включает поток значений (дефолт "control" — визуальная); fromLine — построчный исток; fromOutput — именованный выход; toParam — проливание в параметр приёмника |
-| `edge_delete` {id} | id: string | Удалить связь по id |
-| `flow_set_kind` {id, kind} | kind: value \| control | Тип потока связи; тогл в value, замыкающий цикл, — ошибка; пересчёт сразу |
-| `edge_ports` {id, pin} | pin: auto \| from \| to \| both | Стороны подключения: "auto" — снять закрепления, остальное — закрепить текущие эффективные стороны (WYSIWYG) |
+| `edge_create` {from, to, kind?, fromLine?, fromOutput?, toParam?, fromSide?, toSide?} | from, to: node ids | Create an edge; kind "value" enables the value flow (default "control" — visual); fromLine — a per-line source; fromOutput — a named output; toParam — a spill into a parameter of the receiver |
+| `edge_delete` {id} | id: string | Delete an edge by id |
+| `flow_set_kind` {id, kind} | kind: value \| control | The edge's flow type; a toggle to value that closes a cycle — an error; recalculation is immediate |
+| `edge_ports` {id, pin} | pin: auto \| from \| to \| both | Connection sides: "auto" — release the pins, anything else — pin the current effective sides (WYSIWYG) |
 
-## Батч-композиция (1)
+## Batch composition (1)
 
-| Инструмент | Сигнатура | Назначение |
+| Tool | Signature | Purpose |
 |---|---|---|
-| `graph_apply` {operations} | массив 1..256 объектов с полем op | Атомарный батч «всё или ничего»: node_create_note, node_create_file, template_instantiate, edge_create, edge_delete, param_set, node_move, group_create (+ ref-адресация внутри батча; группы считаются в лимит 128 новых нод); один undo-шаг |
+| `graph_apply` {operations} | an array of 1..256 objects with an op field | An atomic all-or-nothing batch: node_create_note, node_create_file, template_instantiate, edge_create, edge_delete, param_set, node_move, group_create (+ ref addressing inside the batch; groups count toward the limit of 128 new nodes); one undo step |
 
-## Шаблоны и схемы (2)
+## Templates and schemes (2)
 
-| Инструмент | Сигнатура | Назначение |
+| Tool | Signature | Purpose |
 |---|---|---|
-| `template_instantiate` {id, x, y, params?} | id: id шаблона | Создать text-ноду из шаблона; params — {имя: число \| {num, unit}}; вне min/max — ошибка |
-| `schemes_apply` {id, x?, y?} | id: id схемы | Вставить схему галереи в текущий канвас: ремап id без коллизий, один undo-шаг, ответ {applied, name, nodes, edges, bbox, flow} |
+| `template_instantiate` {id, x, y, params?} | id: a template id | Create a text node from a template; params — {<name>: number \| {num, unit}}; outside min/max — an error |
+| `schemes_apply` {id, x?, y?} | id: a scheme id | Insert a gallery scheme into the current canvas: id remap without collisions, one undo step, response {applied, name, nodes, edges, bbox, flow} |
 
-## Вычисление и проверка (7)
+## Computation and verification (7)
 
-| Инструмент | Сигнатура | Назначение |
+| Tool | Signature | Purpose |
 |---|---|---|
-| `flow_recalc` {} | — | Карта значений потока АКТИВНОГО what-if состояния: {node_id: {value, unit, outputs, lines, warnings?, spilled?, autoRows?}} |
-| `lineage` {node_id, line?} | line: integer \| null | Дерево происхождения цифры (паритет с окном проверки цепочки): {root, nodes[]}, kind calc\|leaf\|cycle\|unmapped\|unlinked\|truncated, via-рёбра |
-| `explain_number` {node_id, line?} | line: integer \| null | Объяснение цифры ТЕКСТОМ (F-9, PRD-0007): линейная развёртка дерева с адресами и значениями; ответ {render: "text", text, root, nodes, truncated} — мост отдаёт text как content text |
-| `flow_cycle_check` {} | — | Проверка DAG-инварианта value-рёбер: [] — циклов нет, иначе список id участников |
-| `graph_validate` {} | — | Валидация модели: {valid, issues: [{severity, code, node_id, edge_id, message}]} — коды E-CYCLE, E-OVERLOAD, E-UNIT, E-PORT-UNKNOWN, E-DOUBLE-INPUT, W-AMBIGUOUS-SRC, W-UNUSED-SLOT |
-| `analyze_bottlenecks` {} | — | Узкие места и риск очередей АКТИВНОГО состояния: {nodes: [{id, severity, utilization?, queue_length?, wait_sec?, badge}], thresholds} |
-| `monte_carlo_run` {runs, params, mode?, seed?, quantiles?} | runs: integer 1..10⁶; params: {"node:param": {dist, mean/sd \| lambda}}; mode: qmc \| mc (дефолт qmc); seed: u64 (дефолт 0); quantiles: [0..1] | FR-066: MC/QMC-прогон N ≥ 10⁴ с распределёнными параметрами → квантили P50/P90/P99 итогов/строк/именованных выходов + analysis (узкие места на хвостовом P90); dist: normal/lognormal {mean, sd} (натуральное пространство), exp/poisson {lambda}; параметр — строка «param = …» листа; тот же seed → те же квантили (native-only: wasm без qmc, §5.8) |
+| `flow_recalc` {} | — | Value map of the flow of the ACTIVE what-if state: {node_id: {value, unit, outputs, lines, warnings?, spilled?, autoRows?}} |
+| `lineage` {node_id, line?} | line: integer \| null | Lineage tree of a number (parity with the chain-check window): {root, nodes[]}, kind calc\|leaf\|cycle\|unmapped\|unlinked\|truncated, via edges |
+| `explain_number` {node_id, line?} | line: integer \| null | Explains a number AS TEXT (F-9, PRD-0007): a linear expansion of the tree with addresses and values; response {render: "text", text, root, nodes, truncated} — the bridge returns text as the content text |
+| `flow_cycle_check` {} | — | Checks the DAG invariant of value edges: [] — no cycles, otherwise the list of participant ids |
+| `graph_validate` {} | — | Model validation: {valid, issues: [{severity, code, node_id, edge_id, message}]} — codes E-CYCLE, E-OVERLOAD, E-UNIT, E-PORT-UNKNOWN, E-DOUBLE-INPUT, W-AMBIGUOUS-SRC, W-UNUSED-SLOT |
+| `analyze_bottlenecks` {} | — | Bottlenecks and queue risk of the ACTIVE state: {nodes: [{id, severity, utilization?, queue_length?, wait_sec?, badge}], thresholds} |
+| `monte_carlo_run` {runs, params, mode?, seed?, quantiles?} | runs: integer 1..10⁶; params: {"node:param": {dist, mean/sd \| lambda}}; mode: qmc \| mc (default qmc); seed: u64 (default 0); quantiles: [0..1] | FR-066: an MC/QMC run of N ≥ 10⁴ with distributed parameters → quantiles P50/P90/P99 of totals/lines/named outputs + analysis (bottlenecks at the tail P90); dist: normal/lognormal {mean, sd} (the natural space), exp/poisson {lambda}; a parameter — the sheet's “param = …” line; the same seed → the same quantiles (native-only: wasm has no qmc, §5.8) |
 
-## What-if сценарии (9)
+## What-if scenarios (9)
 
-| Инструмент | Сигнатура | Назначение |
+| Tool | Signature | Purpose |
 |---|---|---|
-| `whatif_set_override` {node_id, line, expr} | line: integer ≥ 0 | Построчная подмена активного сценария; режим/сценарий поднимаются автоматически |
-| `whatif_set_param` {node_id, param, value} | value: string | Sugar для шаблонных нод: находит строку «param = …» сам; параметра нет — ошибка |
-| `whatif_scenario_list` {} | — | {active, whatif_active, scenarios: [{name, overrides, stale}]} — stale = протухшие подмены |
-| `whatif_scenario_create` {name?} | — | Создать именованный сценарий (лимит 3), сразу активен; freeze в .canvas, один undo-шаг |
-| `whatif_scenario_delete` {name} | — | Удалить сценарий (мутация .canvas, undo-шаг) |
-| `whatif_scenario_activate` {name} | name: «База» \| имя | Переключить активный сценарий; runtime-only, файл не меняется |
-| `whatif_deltas` {} | — | Дельты активного сценария против базы: {node:line \| node:value: {node, line?, base, whatif, delta}} |
-| `whatif_apply` {} | — | Записать подмены в канвас (один undo-шаг), сценарий удаляется |
-| `whatif_reset` {} | — | Сбросить подмены активного сценария (runtime); режим остаётся активным |
+| `whatif_set_override` {node_id, line, expr} | line: integer ≥ 0 | Per-line override in the active scenario; the mode/scenario are raised automatically |
+| `whatif_set_param` {node_id, param, value} | value: string | Sugar for template nodes: finds the “param = …” line itself; no such parameter — an error |
+| `whatif_scenario_list` {} | — | {active, whatif_active, scenarios: [{name, overrides, stale}]} — stale = expired overrides |
+| `whatif_scenario_create` {name?} | — | Create a named scenario (limit 3), active immediately; frozen into the .canvas, one undo step |
+| `whatif_scenario_delete` {name} | — | Delete a scenario (a .canvas mutation, an undo step) |
+| `whatif_scenario_activate` {name} | name: «База» \| name | Switch the active scenario; runtime-only, the file is not changed |
+| `whatif_deltas` {} | — | Deltas of the active scenario against the base: {node:line \| node:value: {node, line?, base, whatif, delta}} |
+| `whatif_apply` {} | — | Write the overrides into the canvas (one undo step), the scenario is deleted |
+| `whatif_reset` {} | — | Reset the overrides of the active scenario (runtime); the mode stays active |

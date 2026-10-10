@@ -1,112 +1,116 @@
 ---
 name: canvasdesk-mcp
-description: CanvasDesk MCP — подключение к визуальной системе математического моделирования и разведка канваса. Используйте, когда нужно читать содержимое канваса (ноды, связи, шаблоны, схемы) через MCP, настроить соединение или выбрать нужный скилл CanvasDesk. Triggers: CanvasDesk, canvas, MCP, math modeling canvas, canvas nodes, read canvas, schemes gallery, template registry.
+description: CanvasDesk MCP — connection to the visual mathematical modeling system and canvas exploration. Use when you need to read canvas content (nodes, edges, templates, schemes) via MCP, set up the connection, or pick the right CanvasDesk skill. Triggers: CanvasDesk, canvas, MCP, math modeling canvas, canvas nodes, read canvas, schemes gallery, template registry.
 version: 1
 ---
 
-# CanvasDesk MCP: подключение и разведка
+# CanvasDesk MCP: connection and exploration
 
-CanvasDesk — визуальная система математического моделирования: на
-бесконечном зумируемом канвасе исполняемые модели собираются из расчётных
-нод (Numi-списки и шаблоны), значения проливаются по value-связям
-(DAG-движок с единицами измерения). Доступ агента — MCP-сервер
-(39 инструментов). Ключевое свойство: **агент видит то же, что
-пользователь** — все инструменты чтения значений возвращают числа
-активного what-if состояния, то есть ровно те, что отображены на канвасе.
+CanvasDesk is a visual mathematical modeling system: on an infinite
+zoomable canvas, executable models are assembled from computational
+nodes (Numi sheets and templates), and values spill along value edges
+(a DAG engine with units of measurement). Agent access goes through an
+MCP server (43 tools). Key property: **the agent sees exactly what the
+user sees** — all value-reading tools return the numbers of the active
+what-if state, i.e. precisely those displayed on the canvas.
 
-## Подключение (настройка MCP-хоста)
+## Connection (MCP host setup)
 
-Сервер — stdio-мост `canvasdesk mcp` (или автономный `canvasdesk-mcp`):
+The server is the stdio bridge `canvasdesk mcp` (or the standalone
+`canvasdesk-mcp`):
 
 ```json
 { "mcpServers": { "canvasdesk": { "command": "canvasdesk", "args": ["mcp"] } } }
 ```
 
-Поведение моста, важное агенту:
+Bridge behavior that matters to the agent:
 
-- Handshake (`initialize`) успешен всегда; версии протокола —
-  2025-06-18 / 2025-03-26 / 2024-11-05 (версия клиента эхом).
-- Если GUI-приложение не запущено: `tools/call` вернёт isError
-  «CanvasDesk не запущен». Мост живёт и сам переподключается (500 мс)
-  перед каждым пакетом — поднявшееся позже приложение подхватывается
-  без перезапуска MCP-сессии. Достаточно запустить CanvasDesk и
-  повторить вызов.
-- Фрейминг — newline-delimited JSON-RPC 2.0; ответ tools/call —
-  `content[0].text` с чистым JSON + `structuredContent` (тот же объект).
-  Таймаут вызова — 30 с.
-- `initialize`/`tools/list`/`tools/call` — методы JSON-RPC; инструменты
-  ниже — значения параметра name в tools/call.
-- Канонический каталог схем параметров — живой `tools/list`: при
-  расхождении текста скилла и схемы права схема.
+- The handshake (`initialize`) always succeeds; protocol versions —
+  2025-06-18 / 2025-03-26 / 2024-11-05 (the client version is echoed).
+- If the GUI application is not running: `tools/call` returns the isError
+  «CanvasDesk не запущен» (“CanvasDesk is not running”). The bridge stays
+  alive and reconnects on its own (500 ms) before every packet — an
+  application started later is picked up without restarting the MCP
+  session. Just start CanvasDesk and repeat the call.
+- Framing is newline-delimited JSON-RPC 2.0; the tools/call response is
+  `content[0].text` with plain JSON + `structuredContent` (the same
+  object). Call timeout — 30 s.
+- `initialize`/`tools/list`/`tools/call` are JSON-RPC methods; the tools
+  below are values of the name parameter in tools/call.
+- The canonical catalog of parameter schemas is the live `tools/list`:
+  when the skill text and the schema disagree, the schema wins.
 
-## Инварианты CanvasDesk (нарушение = сломанная модель)
+## CanvasDesk invariants (a violation = a broken model)
 
-1. **Значения текут только по value-связям.** Число, которое можно
-   вычислить из другой ноды, нельзя вписывать руками (хардкодом) — оно
-   должно пролиться по связи с `kind: "value"` (дефолт `control` —
-   визуальная связь, значение НЕ переносится). Тогда правка одного
-   стартового допущения пересчитывает всю модель.
-2. **MCP-видимость = UI.** `flow_recalc`, `lineage`,
-   `analyze_bottlenecks` и поле `flow` у `graph_apply`/`schemes_apply`
-   отдают активное what-if состояние. Смотрите на числа из этих
-   инструментов, а не «на базу».
-3. **Каскад приоритетов значений:** локальное значение параметра →
-   toParam-проливание по ребру → what-if подмена (последнее сильнее).
-4. **Undo-дисциплина:** батч `graph_apply`, вставка схемы, apply
-   сценария — каждый ОДИН undo-шаг. Чтение (`flow_recalc`, `lineage`,
-   валидация) не трогает undo-историю.
+1. **Values flow only along value edges.** A number that can be computed
+   from another node must not be typed in by hand (hardcoded) — it must
+   spill along an edge with `kind: "value"` (the default `control` is a
+   visual edge, the value is NOT carried). Then editing one starting
+   assumption recalculates the whole model.
+2. **MCP visibility = UI.** `flow_recalc`, `lineage`,
+   `analyze_bottlenecks` and the `flow` field of `graph_apply`/
+   `schemes_apply` return the active what-if state. Look at the numbers
+   from these tools, not “at the base”.
+3. **Value priority cascade:** the local parameter value →
+   the toParam spill along an edge → the what-if override (the last
+   one wins).
+4. **Undo discipline:** the `graph_apply` batch, scheme insertion,
+   scenario apply — each is ONE undo step. Reading (`flow_recalc`,
+   `lineage`, validation) does not touch the undo history.
 
-## Разведка канваса (первые вызовы в сессии)
+## Canvas exploration (first calls in a session)
 
-- `canvas_info` {} — что открыто: число нод/связей, путь к файлу.
-- `nodes_list` {text: true} — все ноды с текстами; `nodes_search` {query}
-  — найти ноду по подстроке; `node_get` {id} — одна нода целиком.
-- `edges_list` {} — топология: у каждой связи from/to/kind и адресация
-  портов (fromLine/fromOutput/toParam); `edge_get` {id} — одна связь.
-- `template_list` {} — библиотека шаблонов: параметры (default, min/max,
-  unit) и именованные выходы (потребляются рёбрами fromOutput). Выпишите
-  имена параметров и выходов ДО сборки модели.
-- `schemes_list` {} — галерея готовых схем (бюджет, unit-экономика,
-  ёмкость сервиса): если задача похожа на готовую схему, быстрее
-  вставить её и править, чем собирать с нуля.
-- `viewport_get` {} / `viewport_set` {x, y, zoom?} — где смотрит
-  пользователь; после вставки большой структуры центрируйте viewport
-  по bbox из ответа.
+- `canvas_info` {} — what is open: node/edge counts, path to the file.
+- `nodes_list` {text: true} — all nodes with texts; `nodes_search` {query}
+  — find a node by substring; `node_get` {id} — a single node in full.
+- `edges_list` {} — topology: each edge carries from/to/kind and port
+  addressing (fromLine/fromOutput/toParam); `edge_get` {id} — one edge.
+- `template_list` {} — the template library: parameters (default, min/max,
+  unit) and named outputs (consumed by edges' fromOutput). Write down
+  the parameter and output names BEFORE assembling the model.
+- `schemes_list` {} — the gallery of ready-made schemes (budget, unit
+  economics, service capacity): if the task resembles a ready scheme,
+  it is faster to insert it and edit than to build from scratch.
+- `viewport_get` {} / `viewport_set` {x, y, zoom?} — where the user is
+  looking; after inserting a large structure, center the viewport
+  on the bbox from the response.
 
-## Карта скиллов: задача → скилл
+## Skill map: task → skill
 
-| Задача | Скилл |
+| Task | Skill |
 |---|---|
-| Собрать/изменить модель (ноды, value-связи, батч) | `canvasdesk-model-build` |
-| Проверить числа, происхождение, валидность, узкие места | `canvasdesk-model-verify` |
-| Ответить «а что если» без правки файла | `canvasdesk-whatif` |
-| Полный каталог 39 инструментов | [references/tools.md](references/tools.md) |
+| Build/modify a model (nodes, value edges, batch) | `canvasdesk-model-build` |
+| Verify numbers, lineage, validity, bottlenecks | `canvasdesk-model-verify` |
+| Answer a “what if” question without editing the file | `canvasdesk-whatif` |
+| Full catalog of 43 tools | [references/tools.md](references/tools.md) |
 
-## Подводные камни
+## Pitfalls
 
-1. **Многострочный текст:** перенос строки в JSON — настоящий `\n`
-   (один управляющий символ). Двухсимвольная эскапировка `\\n`
-   нормализуется толерантно, но канон — настоящий перенос. Проверка:
-   `flow_recalc` вернул столько `lines`, сколько строк вы задумали.
-2. **Забытый `kind: "value"`** при создании связи — самая частая ошибка:
-   связь есть, значение не течёт.
-3. **Два ребра в один toParam** запрещены (`E-DOUBLE-INPUT`):
-   разветвление нагрузки делается шаблоном-делителем, а не вторым входом.
-4. **Единицы проверяются** (`E-UNIT`): rps не прольётся в ms — сверяйте
-   unit выхода и параметра по `template_list` перед созданием ребра.
-5. **Value-рёбра образуют DAG** (`E-CYCLE`): обратную связь
-   «потребитель → производитель» моделируйте разрывом (очередью), не
-   ребром.
-6. **Текстовый исток в батче:** `fromOutput` переменной Numi-листа
-   работает у прямого `edge_create`, но в `graph_apply` источник
-   проверяется по снапшоту шаблона (`E-PORT-UNKNOWN`) — для текстовой
-   ноды-истока в батче используйте `fromLine` (номер нужной строки).
+1. **Multiline text:** a line break in JSON is a real `\n`
+   (one control character). The two-character escape `\\n` is normalized
+   tolerantly, but the canon is a real line break. Check:
+   `flow_recalc` returned as many `lines` as the number of lines you
+   intended.
+2. **A forgotten `kind: "value"`** when creating an edge — the most
+   common mistake: the edge exists, the value does not flow.
+3. **Two edges into one toParam** are forbidden (`E-DOUBLE-INPUT`):
+   fan-out of load is done with a divider template, not a second input.
+4. **Units are checked** (`E-UNIT`): rps will not spill into ms — compare
+   the unit of the output and of the parameter via `template_list`
+   before creating the edge.
+5. **Value edges form a DAG** (`E-CYCLE`): model the “consumer →
+   producer” feedback as a break (a queue), not as an edge.
+6. **A text source in the batch:** `fromOutput` of a Numi sheet variable
+   works with a direct `edge_create`, but in `graph_apply` the source
+   is validated against the template snapshot (`E-PORT-UNKNOWN`) — for a
+   text source node in the batch use `fromLine` (the number of the
+   needed line).
 
-## Дальше
+## Next steps
 
-- Сборка модели: скилл `canvasdesk-model-build` (рецепт 7 шагов,
-  эталонный пример Instagram MVP с оракулами).
-- Проверка: скилл `canvasdesk-model-verify` (структура flow-ответа,
-  коды валидации, discipline оракулов ±1 %).
-- Сценарии: скилл `canvasdesk-whatif` (дельты, apply/reset).
-- Каталог сигнатур: [references/tools.md](references/tools.md).
+- Model building: the skill `canvasdesk-model-build` (a 7-step recipe,
+  the Instagram MVP reference example with oracles).
+- Verification: the skill `canvasdesk-model-verify` (the structure of the
+  flow response, validation codes, the ±1 % oracle discipline).
+- Scenarios: the skill `canvasdesk-whatif` (deltas, apply/reset).
+- Signature catalog: [references/tools.md](references/tools.md).
