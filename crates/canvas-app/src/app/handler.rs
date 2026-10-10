@@ -310,10 +310,12 @@ impl ApplicationHandler<AppEvent> for App {
                     screen_bands.push(UiLayer::Modals, band_vp_clip, aionb_instances, aionb_texts);
                 }
                 // FR-LLM-B / PRD-0010 F-7.9 (Q4): AI status panel — правый
-                // нижний угол, над миникартой. Скрыта на узких окнах (< 900px)
-                // и когда AI выключен (`LlmSettings::all_off`). Полоса Panels
-                // (не модальна — клик мимо кнопок проваливается под канвас,
-                // но `ai_status_panel_hit` глотает ввод в пределах rect).
+                // нижний угол, над миникартой. Скрыта политикой реестра
+                // HideBelow { 900, 131 } (`ui_registry::ai_status_visible`,
+                // LAY-W1) и когда AI выключен (`LlmSettings::all_off`).
+                // Полоса Panels (не модальна — клик мимо кнопок проваливается
+                // под канвас, но `ai_status_panel_hit` глотает ввод в
+                // пределах rect).
                 {
                     // UR-005: +icons — дрейн иконок KitDraw (pause/play/gear)
                     // в icon_instances (прежде SVG-иконки панели терялись).
@@ -327,7 +329,9 @@ impl ApplicationHandler<AppEvent> for App {
                 }
                 // FR-LLM-D / PRD-0010 F-4: Agent panel — правая боковая
                 // панель чат-UI (tool-calling через LLM). Скрыта если закрыта
-                // (`Ctrl+I` toggle) или вьюпорт < 600px. Полоса Panels (как
+                // (`Ctrl+I` toggle) или политикой реестра HideBelow
+                // { 600, 240 } (`ui_registry::agent_panel_visible`, LAY-W1).
+                // Полоса Panels (как
                 // status panel — не модальна, клики мимо активных элементов
                 // глотаются `agent_panel_hit`). UR-005: +icons — иконки
                 // KitDraw (zap/close/send) дрейнятся в icon_instances (прежде
