@@ -1,46 +1,46 @@
-# 06 — Движение и анимации
+# 06 — Motion and animation
 
-> Токены: `design/tokens/motion.json` ↔ `canvas_core::tokens` (мс).
-> Механика: `crates/canvas-ui/src/anim.rs`.
+> Tokens: `design/tokens/motion.json` ↔ `canvas_core::tokens` (ms).
+> Mechanics: `crates/canvas-ui/src/anim.rs`.
 
-## M1. Шкала длительностей
+## M1. Duration scale
 
-| Токен | мс | Что делает |
+| Token | ms | What it does |
 |---|---|---|
-| focus_fade_ms | 150 | затухание не-фокусных элементов (T23), флип блока тела, кламп описания |
-| camera_flight_ms | 300 | перелёт камеры, ease-out |
-| spill_wave_edge_ms | 600 | пульс одного ребра волны каскада проливаний |
-| spill_wave_step_ms | 200 | шаг волны между топологическими порядками рёбер |
-| result_pulse_ms | 1200 | пульс рамки свежего результата |
-| focus_breath_ms | 1600 | «дыхание» фокусной связи |
-| show_source_ms | 2500 | «Показать источник»: подсветка истока/связи/приёмника с затемнением |
-| body_block_flip_ms | 150 | переход свёрнутости блока-ведомости |
-| body_clamp_ms | 150 | переход клампа описания «⋯ целиком ▾» |
+| focus_fade_ms | 150 | fading of non-focused elements (T23), body block flip, description clamp |
+| camera_flight_ms | 300 | camera flight, ease-out |
+| spill_wave_edge_ms | 600 | pulse of one edge of the spill-cascade wave |
+| spill_wave_step_ms | 200 | wave step between topological orders of edges |
+| result_pulse_ms | 1200 | pulse of the fresh-result border |
+| focus_breath_ms | 1600 | "breathing" of the focused edge |
+| show_source_ms | 2500 | "Show source": highlighting of the source/edge/receiver with dimming |
+| body_block_flip_ms | 150 | collapse transition of the statement block |
+| body_clamp_ms | 150 | transition of the description clamp «⋯ целиком ▾» ("⋯ full ▾") |
 
-Правило выбора: реакция на ввод — 150; перемещение вью/крупные переходы —
-300; волны/пульсации — 600–2500. Длительность вне шкалы — правка токена,
-не локальная константа.
+Selection rule: input reaction — 150; view movement/large transitions —
+300; waves/ripples — 600–2500. An off-scale duration is a token edit,
+not a local constant.
 
-## M2. Механика
+## M2. Mechanics
 
-- `animate_value(from, to, t01)` — линейная интерполяция; кривая (ease-out
-  для полёта) задаётся потребителем, не аниматором.
-- `BoolAnim` — 0..1 тоггл, шаг `dt · speed_per_sec`.
-- **dt-детерминизм**: анимации считаются от дельты кадра, никаких обращений к
-  глобальным часам — одинаковый кадр = одинаковая картинка (воспроизводимость
-  golden-геометрии и тестов).
+- `animate_value(from, to, t01)` — linear interpolation; the curve (ease-out
+  for the flight) is set by the consumer, not the animator.
+- `BoolAnim` — a 0..1 toggle, step `dt · speed_per_sec`.
+- **dt-determinism**: animations are computed from the frame delta, no access
+  to global clocks — the same frame = the same picture (reproducibility
+  of the golden geometry and the tests).
 
-## M3. Принципы
+## M3. Principles
 
-1. Анимируется только то, что помогает понять (подсветка направления,
-   источник значения, свежесть результата). Декоративных анимаций нет.
-2. У каждого движения есть смысловая длительность из M1; прерывание
-   допустимо вводом (клик/панорама отменяет полёт).
-3. Отсутствие анимации — тоже состояние: если токен = 0, переход мгновенный
-   (важно для тестов и скриншотов).
-4. Времена задержек интерфейса вне motion-токенов (свои группы):
-   тултип 500 мс, тост TTL 3000 мс, открытие flyout палитры 150 мс /
-   закрытие 300 мс, дебаунс поиска 200 мс, дабл-клик 500 мс & ≤5 px.
-5. Компоненты кита статичны (аудит 2026-10-09): переходы состояний ST1
-   мгновенны, анимации — на стороне потребителя/поверхностей (dt-детерминизм
-   M2 там же). Кит не держит таймеров и dt.
+1. Only what helps understanding is animated (direction highlighting,
+   the source of a value, result freshness). No decorative animations.
+2. Every movement has a semantic duration from M1; interruption
+   by input is allowed (a click/pan cancels the flight).
+3. No animation is also a state: if a token = 0, the transition is instant
+   (important for tests and screenshots).
+4. Interface delay times outside the motion tokens (their own groups):
+   tooltip 500 ms, toast TTL 3000 ms, palette flyout opening 150 ms /
+   closing 300 ms, search debounce 200 ms, double-click 500 ms & ≤5 px.
+5. Kit components are static (the 2026-10-09 audit): ST1 state transitions
+   are instant, animations are on the consumer/surface side (dt-determinism
+   M2 there as well). The kit keeps no timers and no dt.

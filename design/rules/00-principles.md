@@ -1,107 +1,107 @@
-# 00 — Принципы UI-системы
+# 00 — UI System Principles
 
-> Фундамент, на котором стоят все остальные правила. Источники архитектуры:
-> `docs/prd/prd-0006-design-system-tokens.md` (токены), `docs/prd/prd-0009-ui-layering-uikit.md`
-> (слои/кит), `docs/ui-kit.md` (гайд каркаса экрана). Архитектурные решения
-> не меняются правкой этой папки — только через ADR.
+> The foundation on which all the other rules stand. Architecture sources:
+> `docs/prd/prd-0006-design-system-tokens.md` (tokens), `docs/prd/prd-0009-ui-layering-uikit.md`
+> (layers/kit), `docs/ui-kit.md` (screen-frame guide). Architectural decisions
+> are not changed by editing this folder — only via an ADR.
 
-## П1. Три слоя токенов
+## П1. Three token layers
 
-Цвет и метрика проходят путь из трёх слоёв, перескакивать слои запрещено:
+Color and metric travel a path of three layers; skipping layers is forbidden:
 
-1. **Слой 1 — примитивы**: `design/tokens/*.json` (colors, dimensions, motion,
-   themes/*). Machine-readable, W3C-дух (`$type`/`$value`/`$desc`). Хранят
-   только значения и их происхождение ($desc — координаты источника в коде).
-2. **Слой 2 — зеркало + семантика**: `canvas_core::tokens` — Rust-константы,
-   попиксельно равные JSON (тест паритета I-5 обязан падать при расхождении);
-   поверх примитивов — семантические слоты `ThemeColors` (render) и
+1. **Layer 1 — primitives**: `design/tokens/*.json` (colors, dimensions, motion,
+   themes/*). Machine-readable, in the W3C spirit (`$type`/`$value`/`$desc`). They store
+   only values and their provenance ($desc — the coordinates of the source in code).
+2. **Layer 2 — mirror + semantics**: `canvas_core::tokens` — Rust constants,
+   pixel-identical to the JSON (the parity test I-5 must fail on any divergence);
+   on top of the primitives — the semantic slots `ThemeColors` (render) and
    `KitPalette` (ui).
-3. **Слой 3 — потребители**: компоненты кита, поверхности app, CSS-переменные
-   web-виджетов. Цвет доходит до шейдера только из экземпляра
-   `ThemeColors`/`KitPalette`, заполненного из слоя 2.
+3. **Layer 3 — consumers**: kit components, app surfaces, CSS variables of
+   web widgets. Color reaches a shader only from a `ThemeColors`/`KitPalette`
+   instance filled from layer 2.
 
-Следствие: **рантайм никогда не парсит JSON** (wasm-чистота); JSON нужен
-тестам паритета и человеку.
+Corollary: **the runtime never parses JSON** (wasm purity); the JSON is needed
+by the parity tests and by humans.
 
-## П2. Инвариант I-1 — ноль визуального скачка
+## П2. Invariant I-1 — zero visual jump
 
-Значения токенов = текущим константам репозитория. Перевод компонента на
-токен не меняет ни пикселя. Любое осознанное изменение значения (например
-дифференциация selected от hover) — отдельное решение владельца через правку
-этой папки + кода, никогда «попутно».
+Token values = the current constants of the repository. Moving a component
+onto a token does not change a single pixel. Any deliberate change of a value (for
+example, differentiating selected from hover) is a separate owner decision through
+an edit of this folder + the code, never "in passing".
 
-## П3. Инвариант I-5 — паритет JSON ↔ Rust
+## П3. Invariant I-5 — JSON ↔ Rust parity
 
-`design/tokens/*.json` и `canvas_core::tokens` обязаны совпадать. Тест
-паритета в `tokens.rs` валит CI при расхождении. Правишь JSON — синхронно
-правится зеркало, и наоборот.
+`design/tokens/*.json` and `canvas_core::tokens` must match. The parity test in
+`tokens.rs` fails CI on any divergence. You edit the JSON — the mirror is edited
+in sync, and vice versa.
 
-## П4. Slot-only кит (запрет цвета в компонентах)
+## П4. Slot-only kit (no color in components)
 
-В `canvas-ui` нет цветовых констант и цветовой арифметики. Компоненты кита
-(кнопка, чип, поле, свитч, тост, модалка…) берут цвет только из слотов
-`KitPalette` (полный реестр — `10-components.md` §K2) и выбирают слот по
-состоянию (`button_style` — сопоставление состояние → слот, без вычислений
-`c*1.3` на месте). Новое состояние = новый слот, а не новая формула.
-Единственное исключение — alpha-tint слота (`paint::tint`): подмена
-альфа-канала константой из C2 без правки rgb (см. C8); rgb-арифметика
-остаётся запрещённой.
+There are no color constants and no color arithmetic in `canvas-ui`. Kit components
+(button, chip, field, switch, toast, modal…) take color only from the `KitPalette`
+slots (full registry — `10-components.md` §K2) and choose a slot by state
+(`button_style` — a state → slot mapping, without on-the-spot `c*1.3`
+computations). A new state = a new slot, not a new formula.
+The only exception — the alpha-tint of a slot (`paint::tint`): swapping
+the alpha channel with a constant from C2 without editing rgb (see C8); rgb arithmetic
+remains forbidden.
 
-## П5. Ввод = тому, что видно
+## П5. Input = what is visible
 
-Геометрия едина: hit-rect'ы поверхности строятся из **тех же layout-функций**,
-что и отрисовка. Порядок pick и порядок draw выводятся из `SurfaceRegistry`
-(слои → capture-политики → порядок регистрации). Ручные z-списки, дублирующая
-геометрия для хитов, «невидимые кликабельные зоны» запрещены.
+The geometry is single: a surface's hit-rects are built from the **same layout functions**,
+as the drawing. The pick order and the draw order are derived from `SurfaceRegistry`
+(layers → capture policies → registration order). Manual z-lists, duplicate
+geometry for hits, "invisible clickable zones" are forbidden.
 
-## П6. Измеренный текст
+## П6. Measured text
 
-Ширины для раскладки — только через `TextMeasurer` (реальный шейпинг
-cosmic-text, те же метрики, что у рендера). Посимвольные эвристики
-(`chars.len() × ширина`), молчаливые обрезки (`take()`, `break`-клампы)
-запрещены (класс CR-015). Усечение — только осознанной политикой
-Wrap/Ellipsis/Clip; каретка поля считается в символах, не в байтах.
-Замер и рендер используют одну пару (семейство, вес) — тест
+Widths for layout — only via `TextMeasurer` (real cosmic-text shaping,
+the same metrics as the render). Per-character heuristics
+(`chars.len() × width`), silent truncations (`take()`, `break` clamps)
+are forbidden (the CR-015 class). Truncation — only by a deliberate policy
+Wrap/Ellipsis/Clip; the field caret is counted in characters, not in bytes.
+Measurement and render use one (family, weight) pair — the test
 `ui_measure_weight_matches_render_attrs`.
 
-## П7. Layout-примитивы, не ad-hoc-квады
+## П7. Layout primitives, not ad-hoc quads
 
-Вёрстка — `Row`/`Column`/`stack`/`constrain`/`pad`/`grid_cells` из
-`canvas_ui::layout`; дети — `Child::fixed/spacer/flexible(grow)`. Переполнение
-не маскируется молча: `Fit`-перелив ловит линт G4, узкие слоты деградируют
-именованно (`SqueezeTail`), экзотика (полярные координаты wheel-меню) — через
-`Custom(rect)` с комментарием-обоснованием. Taffy отклонён (ADR-0013:
-108.5 КБ wasm flexbox / 376 КБ grid против нулевых затрат примитивов).
+Layout — `Row`/`Column`/`stack`/`constrain`/`pad`/`grid_cells` from
+`canvas_ui::layout`; children — `Child::fixed/spacer/flexible(grow)`. Overflow
+is not masked silently: a `Fit` overflow is caught by lint G4, narrow slots degrade
+in a named way (`SqueezeTail`), exotica (polar coordinates of the wheel menu) — via
+`Custom(rect)` with a justifying comment. Taffy was rejected (ADR-0013:
+108.5 KB of wasm flexbox / 376 KB of grid versus the zero cost of the primitives).
 
-## П8. Поверхность за 3 шага
+## П8. A surface in 3 steps
 
-Новая поверхность: 1) декларация в `SurfaceRegistry` (id, слой, capture,
-keyboard-scope, деградация `HideBelow{min_w,min_h}`); 2) hit-rect'ы из тех же
-layout-функций; 3) диспетчер клика/клавиатуры + arm в Esc-обработчике.
-Тела обработчиков выносятся в методы `click_<surface>`.
+A new surface: 1) a declaration in `SurfaceRegistry` (id, layer, capture,
+keyboard-scope, degradation `HideBelow{min_w,min_h}`); 2) hit-rects from the same
+layout functions; 3) a click/keyboard dispatcher + arm in the Esc handler.
+Handler bodies are moved into `click_<surface>` methods.
 
-## П9. Линты геометрии
+## П9. Geometry lints
 
-- **G1** — grep-аудит цветовых литералов вне токенов/тем (дефект).
-- **G3** — контраст-машина прогоняет каждую тему (текст ≥ 4.5:1, графика ≥ 3:1).
-- **G4** — канонические сцены × 3 вьюпорта (1280×800 / 1024×640 / 800×560) ×
-  RU/EN: 0 пересечений интерактивных rect'ов разных поверхностей одного слоя,
-  0 выходов за вьюпорт, 0 текстовых переливов.
-- **G5** — grep-аудит эвристик текста (`take(`, обрезки, посимвольные ширины).
-- **G8** — реестр поверхностей: заявленные поверхности зарегистрированы.
-- Пик-матрица: клик под `Block`/`Capture`-поверхностью никогда не доходит до
-  канваса.
-- Golden-image пиксельных тестов нет — только геометрические линты
-  (`testing::snap` — золотая геометрия, округление до целого ui-px).
+- **G1** — grep audit of color literals outside tokens/themes (a defect).
+- **G3** — the contrast machine runs every theme (text ≥ 4.5:1, graphics ≥ 3:1).
+- **G4** — canonical scenes × 3 viewports (1280×800 / 1024×640 / 800×560) ×
+  RU/EN: 0 overlaps of interactive rects of different surfaces of one layer,
+  0 exits beyond the viewport, 0 text overflows.
+- **G5** — grep audit of text heuristics (`take(`, truncations, per-character widths).
+- **G8** — the surface registry: the declared surfaces are registered.
+- Peak matrix: a click under a `Block`/`Capture` surface never reaches the
+  canvas.
+- There are no golden-image pixel tests — only geometric lints
+  (`testing::snap` — golden geometry, rounding to whole ui-px).
 
-## П10. Деградация вместо уродства
+## П10. Degradation instead of ugliness
 
-Окно меньше минимума поверхности → поверхность **скрывается целиком**
-(`HideBelow`), а не сжимается в нечитаемый кашу-малашу. Референсные вьюпорты
-линта: 1280×800, 1024×640, 800×560; what-if бар скрыт ниже 900×600.
+A window below a surface's minimum → the surface is **hidden entirely**
+(`HideBelow`), not squeezed into unreadable mush. Reference viewports of the
+lint: 1280×800, 1024×640, 800×560; the what-if bar is hidden below 900×600.
 
-## П11. Два масштаба координат
+## П11. Two coordinate scales
 
-World px — канвас (карточки, рёбра, подписи; масштабируются зумом).
-Screen px — экранный хром (панели, HUD, бейджи; зумом не масштабируются).
-Правило подписано в токенах: `typography.*` — world px, кроме `hud_*`/`badge_*`.
+World px — the canvas (cards, edges, captions; scaled by zoom).
+Screen px — the screen chrome (panels, HUD, badges; not scaled by zoom).
+The rule is written into the tokens: `typography.*` — world px, except `hud_*`/`badge_*`.

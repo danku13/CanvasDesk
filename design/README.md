@@ -1,96 +1,96 @@
-# Design — правила дизайн-системы и UI-системы CanvasDesk
+# Design — CanvasDesk design-system and UI-system rules
 
-Эта папка — **нормативный источник правил**, по которым строится интерфейс
-CanvasDesk. Она отделена от кода специально: владелец правит здесь,
-агент переносит правки в код (токены → `canvas-core::tokens`/`ThemeColors`,
-правила → рефакторинг компонентов, use cases → контракты поведения).
+This folder is the **normative source of rules** from which the CanvasDesk UI
+is built. It is deliberately separated from the code: the owner edits here,
+the agent carries the edits into code (tokens → `canvas-core::tokens`/`ThemeColors`,
+rules → component refactoring, use cases → behavior contracts).
 
-Три контура, три типа файлов:
+Three contours, three file types:
 
-| Папка | Что лежит | Как правится | Что происходит при правке |
+| Folder | Contents | How it is edited | What happens on an edit |
 |---|---|---|---|
-| `tokens/` | **Примитивы** — machine-readable JSON (цвета, размеры, движение, темы) в W3C-духе (`$type`/`$value`/`$desc`) | Меняются значения `$value` | Зеркало `crates/canvas-core/src/tokens.rs` + тест паритета (I-5); инвариант I-1: правка значения = управляемый визуальный сдвиг, а не случайный |
-| `rules/` | **Нормативные правила** дизайн-системы и UI-системы (человекочитаемые) | Меняются правила | Агент рефакторит компоненты под новое правило; правило вступает в силу для всего нового кода немедленно |
-| `use-cases/` | **Контракты поведения компонентов** — анатомия, состояния, взаимодействие | Меняется сценарий/геометрия компонента | Агент приводит реализацию компонента к новому контракту |
+| `tokens/` | **Primitives** — machine-readable JSON (colors, dimensions, motion, themes) in the W3C spirit (`$type`/`$value`/`$desc`) | `$value`s change | The mirror `crates/canvas-core/src/tokens.rs` + parity test (I-5); invariant I-1: a value edit = a managed visual shift, not an accidental one |
+| `rules/` | **Normative rules** of the design system and UI system (human-readable) | Rules change | The agent refactors components to the new rule; the rule takes effect for all new code immediately |
+| `use-cases/` | **Component behavior contracts** — anatomy, states, interaction | A component's scenario/geometry changes | The agent brings the component implementation to the new contract |
 
-## Состав
+## Contents
 
-**Правила** (`rules/`) — читать по порядку:
+**Rules** (`rules/`) — read in order:
 
-1. `rules/00-principles.md` — фундамент: три слоя токенов, инварианты (I-1
-   ноль визуального скачка, I-5 паритет JSON↔Rust), slot-only кит,
-   «ввод = тому, что видно», измеренный текст, линты G1–G8.
-2. `rules/01-colors.md` — система цвета: единственный акцент, альфа-ступени,
-   семантические состояния, запрет цветовых литералов.
-3. `rules/02-typography.md` — шрифты (Noto Sans Display / Noto Sans Mono /
-   CanvasDesk Mono Oblique), шкала кеглей 10/10.5/11/12/13/14/16, интерлиньяж,
-   правила измерения и усечения текста.
-4. `rules/03-spacing-radius.md` — шкалы отступов 6/8/10/12/24 и радиусов
-   6/8/10/12, фиксированные высоты компонентов, зазоры.
-5. `rules/04-contrast-a11y.md` — контраст-машина (текст ≥ 4.5:1, графика
-   ≥ 3:1), auto-contrast пользовательских заливок, hit-зоны, деградация окон.
-6. `rules/05-layering.md` — 9 слоёв L0–L8, capture-политики (Block/Capture/
-   PassThrough/Passive), Esc-стек, scissor-политика.
-7. `rules/06-motion.md` — шкала длительностей 150/300/600/1200/1600/2500 мс,
-   dt-детерминизм, принципы анимации.
-8. `rules/07-theming.md` — темы как данные (7 пресетов), dark/light,
-   derived-слоты, мост в кит.
-9. `rules/08-states.md` — матрица состояний контролов
-   (Disabled > Pressed > Hovered > Selected > Normal), слоты состояний.
-10. `rules/09-input.md` — адекватность поведения input-модулей: единая
-   модель поля (kit TextFieldModel), клавиатурный контракт, скролл-вслед
-   за кареткой, маска пароля, IME/web-паритет, запрет дублей.
-11. `rules/10-components.md` — реестр компонентов кита v2 (K1), реестр
-   слотов KitPalette (K2), скролл-модель (K3), состав витрины UI-консоли
-   (K4). Введён аудитом 2026-10-09 (`rules-audit-2026-10.md`).
-12. `rules/11-layouts.md` — раскладки и адаптивность: слот-модель
-   (LAY1), примитивы ↔ web-эквиваленты (LAY2), политики переполнения
-   Fit/SqueezeTail/Wrap (LAY3), flex-факторы (LAY4), grid + SceneNode-
-   сцена: percent/aspect/sticky/minmax (LAY5), измеренный текст (LAY6),
-   шкалы зазоров в gap (LAY7), адаптивность: вьюпорты G4 / HideBelow /
-   брейкпоинты / тач-цели 44 / safe-area (LAY8), движки и HTML5-паритет
-   (LAY9), типовые каркасы и анти-паттерны (LAY10), чек-лист (LAY11).
-   Введён 2026-10-09 — закрытие пробела «layout-правила отсутствуют»
-   (фрагменты прежде жили в П7/П10/S6).
+1. `rules/00-principles.md` — the foundation: three token layers, invariants (I-1
+   zero visual shift, I-5 JSON↔Rust parity), the slot-only kit,
+   "input = what is visible", measured text, lints G1–G8.
+2. `rules/01-colors.md` — the color system: a single accent, alpha steps,
+   semantic states, the ban on color literals.
+3. `rules/02-typography.md` — fonts (Noto Sans Display / Noto Sans Mono /
+   CanvasDesk Mono Oblique), the size scale 10/10.5/11/12/13/14/16, line height,
+   text measurement and truncation rules.
+4. `rules/03-spacing-radius.md` — spacing scales 6/8/10/12/24 and radii
+   6/8/10/12, fixed component heights, gaps.
+5. `rules/04-contrast-a11y.md` — the contrast machine (text ≥ 4.5:1, graphics
+   ≥ 3:1), auto-contrast for user fills, hit zones, window degradation.
+6. `rules/05-layering.md` — 9 layers L0–L8, capture policies (Block/Capture/
+   PassThrough/Passive), the Esc stack, the scissor policy.
+7. `rules/06-motion.md` — the duration scale 150/300/600/1200/1600/2500 ms,
+   dt-determinism, animation principles.
+8. `rules/07-theming.md` — themes as data (7 presets), dark/light,
+   derived slots, the bridge into the kit.
+9. `rules/08-states.md` — the control state matrix
+   (Disabled > Pressed > Hovered > Selected > Normal), state slots.
+10. `rules/09-input.md` — behavioral adequacy of input modules: a single
+    field model (kit TextFieldModel), the keyboard contract, scroll-follows-caret,
+    the password mask, IME/web parity, the ban on duplicates.
+11. `rules/10-components.md` — the kit v2 component registry (K1), the
+    KitPalette slot registry (K2), the scroll model (K3), the UI console
+    showcase composition (K4). Introduced by the 2026-10-09 audit
+    (`rules-audit-2026-10.md`).
+12. `rules/11-layouts.md` — layouts and adaptivity: the slot model
+    (LAY1), primitives ↔ web equivalents (LAY2), overflow policies
+    Fit/SqueezeTail/Wrap (LAY3), flex factors (LAY4), grid + the SceneNode
+    scene: percent/aspect/sticky/minmax (LAY5), measured text (LAY6),
+    gap scales (LAY7), adaptivity: G4 viewports / HideBelow /
+    breakpoints / 44 touch targets / safe-area (LAY8), engines and HTML5 parity
+    (LAY9), typical skeletons and anti-patterns (LAY10), the checklist (LAY11).
+    Introduced 2026-10-09 — closing the "no layout rules" gap
+    (the fragments previously lived in П7/П10/S6).
 
-**Use cases** (`use-cases/`) — по файлу на компонент:
+**Use cases** (`use-cases/`) — one file per component:
 
-- Элементы кита: `use-cases/button.md`, `use-cases/chip-badge.md`, `use-cases/text-field.md`,
+- Kit elements: `use-cases/button.md`, `use-cases/chip-badge.md`, `use-cases/text-field.md`,
   `use-cases/switch.md`, `use-cases/dropdown.md`, `use-cases/tooltip.md`, `use-cases/toast.md`, `use-cases/modal-dialog.md`,
   `use-cases/scrollbar.md`, `use-cases/icon.md`.
-- Канвас: `use-cases/card.md` (карточка ноды), `use-cases/edge.md` (связи), `use-cases/minimap.md`,
+- Canvas: `use-cases/card.md` (node card), `use-cases/edge.md` (edges), `use-cases/minimap.md`,
   `use-cases/wheel-menu.md`.
-- Поверхности: `use-cases/context-menu.md`, `use-cases/search-panel.md`, `use-cases/template-palette.md`,
+- Surfaces: `use-cases/context-menu.md`, `use-cases/search-panel.md`, `use-cases/template-palette.md`,
   `use-cases/scheme-gallery.md` (+ empty state), `use-cases/whatif-bar.md`, `use-cases/hud.md`.
 
-Каждый use case имеет единую структуру: Назначение → Анатомия и размеры →
-Токены → Состояния → Взаимодействие (мышь/клавиатура) → Граничные случаи →
-Где в коде → Что меняется при правке файла.
+Every use case follows a single structure: Purpose → Anatomy and dimensions →
+Tokens → States → Interaction (mouse/keyboard) → Edge cases →
+Where it is in the code → What changes when the file is edited.
 
-Аудит соответствия «правила ↔ кит»: `rules-audit-2026-10.md`
-(матрица 00–09 → реализация, пробелы правил, приоритизированный бэклог
-W1–W4).
+The rules↔kit conformance audit: `rules-audit-2026-10.md`
+(the 00–09 → implementation matrix, rule gaps, the prioritized W1–W4 backlog).
 
-## Источники и приоритет
+## Sources and priority
 
-Если `rules/` или `use-cases/` противоречат коду — приоритет у этих файлов
-(они целевое состояние), расхождение фиксируется как задача рефакторинга.
-Если противоречат `docs/prd/prd-0006-design-system-tokens.md`,
-`docs/prd/prd-0009-ui-layering-uikit.md`, `docs/ui-kit.md` — приоритет у
-этой папки для **визуальных/поведенческих** значений; архитектурные решения
-(ADR-0013 отказ от taffy, ADR-0015 стратегия UI-стека) не пересматриваются
-здесь — только через ADR.
+If `rules/` or `use-cases/` contradict the code — these files win (they are
+the target state), and the divergence is filed as a refactoring task.
+If they contradict `docs/prd/prd-0006-design-system-tokens.md`,
+`docs/prd/prd-0009-ui-layering-uikit.md`, `docs/ui-kit.md` — this folder wins
+for **visual/behavioral** values; architectural decisions
+(ADR-0013 dropping taffy, ADR-0015 the UI-stack strategy) are not revisited
+here — only via an ADR.
 
-## Быстрая шпаргалка значений
+## Quick value cheatsheet
 
-| Группа | Значения |
+| Group | Values |
 |---|---|
-| Отступы | 6 / 8 / 10 / 12 / 24 (SPACING_S/SM/MD/LG/XL) |
-| Радиусы | 6 чип / 8 карточка / 10 панель / 12 пилюля |
-| Высоты | кнопка 30, чип 24, строка списка 26, поле 30, карточка-хедер 34 |
-| Кегли | 10 бейдж / 10.5 зона / 11 шаблон / 12 label·result / 13 строки / 14 body·HUD / 16 title |
-| Текст | text ≥ 4.5:1, графика ≥ 3:1, межстрочный ×1.3 (экран) |
-| Анимации | 150 мс микро / 300 мс полёт / 1200+ мс декоративные |
-| Слои | World → WorldOverlay → Widgets → Panels → Popups → Modals → Drag → Toasts → Debug |
-| Состояния | Disabled > Pressed > Hovered > Selected > Normal |
-| Раскладки | слот → Row/Column/grid_cells/stack → сцена (percent/sticky) → Custom; перелив — именованная политика; 3 вьюпорта G4 (11-layouts) |
+| Spacing | 6 / 8 / 10 / 12 / 24 (SPACING_S/SM/MD/LG/XL) |
+| Radii | 6 chip / 8 card / 10 panel / 12 pill |
+| Heights | button 30, chip 24, list row 26, field 30, card header 34 |
+| Font sizes | 10 badge / 10.5 zone / 11 template / 12 label·result / 13 rows / 14 body·HUD / 16 title |
+| Text | text ≥ 4.5:1, graphics ≥ 3:1, line spacing ×1.3 (screen) |
+| Animations | 150 ms micro / 300 ms flight / 1200+ ms decorative |
+| Layers | World → WorldOverlay → Widgets → Panels → Popups → Modals → Drag → Toasts → Debug |
+| States | Disabled > Pressed > Hovered > Selected > Normal |
+| Layouts | slot → Row/Column/grid_cells/stack → scene (percent/sticky) → Custom; overflow — a named policy; 3 G4 viewports (11-layouts) |

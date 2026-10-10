@@ -1,78 +1,80 @@
-# 08 — Состояния контролов
+# 08 — Control states
 
-> Код: `crates/canvas-ui/src/widget.rs` (WidgetState), `kit.rs` (button_style/
-> chip_style), слоты — `01-colors.md §C7`.
+> Code: `crates/canvas-ui/src/widget.rs` (WidgetState), `kit.rs` (button_style/
+> chip_style), slots — `01-colors.md §C7`.
 
-## ST1. Матрица состояний
+## ST1. State matrix
 
 `KitState::Normal | Hovered | Selected | Pressed | Disabled`
 
-Приоритет при вычислении (верхний глотает нижние):
+Priority when evaluating (the upper one swallows the lower ones):
 
 ```
 Disabled > Pressed > Hovered > Selected > Normal
 ```
 
-Правила:
-- `Pressed` = кнопка зажата и курсор над ней; ушел курсор → возврат в
-  Hovered (отмена нажатия).
-- `Selected` — постоянное состояние выбора (выбранная строка галереи, чип
-  фильтра), ортогонально hover.
-- `Disabled` — никогда не подсвечивается hover'ом; нажатие на disabled не
-  «заряжает» клик (press на disabled не армит release-событие).
+Rules:
+- `Pressed` = the button is held down and the cursor is over it; the cursor
+  leaves → return to Hovered (the press is cancelled).
+- `Selected` — a persistent selection state (the selected gallery row, a
+  filter chip), orthogonal to hover.
+- `Disabled` — never highlighted by hover; pressing a disabled control does
+  not “charge” a click (press on disabled does not arm the release event).
 
-## ST2. Слоты состояний
+## ST2. State slots
 
-Цвет выбирается сопоставлением состояния → слот палитры (никакой арифметики):
+The color is chosen by mapping state → palette slot (no arithmetic):
 
-| Состояние | Слот (обычные контролы) | Слот (primary) |
+| State | Slot (normal controls) | Slot (primary) |
 |---|---|---|
 | Normal | control_fill | control_primary |
 | Hovered | control_hover_fill | control_primary_hover_fill |
 | Selected | control_selected_fill | — |
-| Pressed | = Hovered (hover-слоты; аудит 2026-10-09 приведён к факту `button_style` — прежний текст «= Normal» коду противоречил) | = primary_hover_fill |
+| Pressed | = Hovered (the hover slots; the 2026-10-09 audit was aligned to the actual `button_style` — the earlier “= Normal” text contradicted the code) | = primary_hover_fill |
 | Disabled | control_fill + text → control_disabled_text | ← |
 
-Отдельный слот `control_pressed_fill` (полная дифференциация pressed) —
-управляемое изменение v2: правка этой таблицы + KitPalette + токенов.
+A separate `control_pressed_fill` slot (full pressed differentiation) —
+a managed v2 change: editing this table + KitPalette + the tokens.
 
-Инвариант I-1: сегодня selected_fill = hover_fill (строка галереи не
-различает выбор/hover) — семантика уже разделена слотами, визуальная
-дифференциация — управляемое изменение v2 через правку этой папки и токенов.
+Invariant I-1: today selected_fill = hover_fill (a gallery row does not
+distinguish selection/hover) — the semantics are already separated by slots,
+the visual differentiation is a managed v2 change via editing this folder and
+the tokens.
 
-## ST3. Клик-контракт
+## ST3. Click contract
 
-Клик срабатывает один раз: press внутри + release внутри (`clicked =
-released_inside`). Press вне → release внутри НЕ срабатывает. Press внутри →
-release вне — не срабатывает. Это контракт всех интерактивных rect'ов кита.
+A click fires once: press inside + release inside (`clicked =
+released_inside`). Press outside → release inside does NOT fire. Press inside →
+release outside — does not fire. This is the contract of all interactive rects
+of the kit.
 
-## ST4. Состояния не-контрольных сущностей
+## ST4. States of non-control entities
 
-| Сущность | Состояния |
+| Entity | States |
 |---|---|
-| Карточка ноды | обычная / selected (рамка accent) / broken (рамка #737373) / в группе (заливка accent α0.08) — приоритет рамки: selected > broken > group |
-| Ребро | default / flow (teal) / draft (accent α0.70) / focus (accent + breath) / dimmed (α floor 0.35) / amber (unmapped) |
-| Порт | idle (точка 10) / hover (растёт до 26 max) / active draft |
-| Поверхность | открыта / закрыта / скрыта по HideBelow |
+| Node card | normal / selected (accent border) / broken (#737373 border) / in a group (accent α0.08 fill) — border priority: selected > broken > group |
+| Edge | default / flow (teal) / draft (accent α0.70) / focus (accent + breath) / dimmed (α floor 0.35) / amber (unmapped) |
+| Port | idle (dot 10) / hover (grows up to 26 max) / active draft |
+| Surface | open / closed / hidden by HideBelow |
 
-## ST5. Ховер-тайминги
+## ST5. Hover timings
 
-| Поведение | Значение |
+| Behavior | Value |
 |---|---|
-| Задержка тултипа | 500 мс |
-| Открытие flyout палитры | 150 мс (hover) |
-| Закрытие flyout | 300 мс (после ухода курсора) |
-| Дабл-клик | 500 мс окно & ≤5 px смещения |
+| Tooltip delay | 500 ms |
+| Palette flyout opening | 150 ms (hover) |
+| Flyout closing | 300 ms (after the cursor leaves) |
+| Double click | a 500 ms window & ≤5 px offset |
 
-Витрина: вся матрица ST1–ST4 показывается в UI-админпанели (FR-070,
-меню «?» → «UI-консоль», секции «Компоненты» и «Канвас») — живой образец
-слотов палитры, включая уровни наполнения контейнеров и live-правку слотов.
-Полный состав секций по компонентам — `10-components.md` §K4 (аудит
-2026-10-09: для 6 компонентов секции отсутствуют — бэклог W2).
+Showcase: the entire ST1–ST4 matrix is shown in the UI admin panel (FR-070,
+the “?” menu → “UI console”, the “Components” and “Canvas” sections) — a live
+sample of the palette slots, including container fill levels and live slot
+editing. The full per-component section list — `10-components.md` §K4 (the
+2026-10-09 audit: 6 components lack sections — the W2 backlog).
 
-## ST6. Что считается контролом
+## ST6. What counts as a control
 
-Контрол = интерактивный rect с состоянием из ST1. Не-контролы (текст,
-иконки, разделители) не имеют hover-состояний и не пикются как
-interactive (`HitRect::decoration`). Если декорация должна ловить клик —
-это контрол, и он обязан иметь все состояния матрицы.
+A control = an interactive rect with a state from ST1. Non-controls (text,
+icons, separators) have no hover states and are not picked as interactive
+(`HitRect::decoration`). If a decoration must catch a click — it is a control,
+and it must have all the states of the matrix.
