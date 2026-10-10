@@ -1272,7 +1272,7 @@ impl App {
     /// прокручивается ([`WidgetState`] для состояний шапки — вместо
     /// deprecated-делегатов; бегунок — kit::scroll_bar).
     pub(super) fn kit_gallery_overlay(
-        &self,
+        &mut self,
     ) -> (
         Vec<CardInstance>,
         Vec<OwnedScreenText>,
@@ -1288,7 +1288,23 @@ impl App {
         let mut m = crate::kit_ui::new_measurer();
         let mut fs = canvas_render::text::measure_font_system();
         let scroll = self.kit_gallery_scroll.clone();
-        let lay = crate::kit_ui::gallery_layout(viewport, lang, &scroll, &palette, &mut m, &mut fs);
+        // Wave D v1 (issue #32): TO-BE — интерактивная demo-раскладка
+        // (тулбар/сайдбар/секции Wave C); AS-IS — прежняя дословно.
+        let lay = if self.kit_demo.tobe {
+            crate::kit_ui::gallery_layout_tobe(
+                viewport,
+                lang,
+                &scroll,
+                &palette,
+                &mut m,
+                &mut fs,
+                &self.kit_demo,
+            )
+        } else {
+            crate::kit_ui::gallery_layout(viewport, lang, &scroll, &palette, &mut m, &mut fs)
+        };
+        // Кэш кадра — реестр хитов (kit-demo:*) и навигация/press читают отсюда
+        self.kit_demo_layout = Some(lay.clone());
         let mut d = crate::kit_ui::KitDraw::new();
         // FR-ICONS: установить активный набор (None = Glyph fallback).
         d.set_icon_set(self.icon_set_active());
@@ -1960,6 +1976,24 @@ impl App {
         // FR-059: бегунок скролла контента витрины (контент выше панели)
         if let Some(knob) = canvas_ui::kit::scroll_bar(lay.sections_viewport, &scroll, &palette) {
             d.rect(knob, palette.control_border, [0.0; 4], 2.0);
+        }
+
+        // Wave D v1 (issue #32): TO-BE демо-слои (тулбар/сайдбар/секции
+        // Wave C/интерактивные оверрайды/оверлеи) — поверх статичных секций
+        // (те же rect'ы, что у demo_hits реестра — draw==hit).
+        if self.kit_demo.tobe {
+            let mut ctx = crate::kit_ui::DemoDrawCtx {
+                d: &mut d,
+                lay: &lay,
+                demo: &self.kit_demo,
+                pressed: self.kit_demo.pressed,
+                cursor,
+                palette: &palette,
+                lang,
+                m: &mut m,
+                fs: &mut fs,
+            };
+            crate::kit_ui::draw_demo_extras(&mut ctx);
         }
 
         // Конвертация владеемых текстов адаптера в OwnedScreenText кадра

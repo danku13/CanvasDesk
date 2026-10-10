@@ -41,6 +41,8 @@ pub mod paint;
 // FR-057 (волна 2 кита): WidgetState — машина состояний виджета (KitState + ребро клика).
 pub mod layer;
 pub mod widget;
+// Wave A §5.5.3: ActionRegistry — единый реестр действий (command palette, context menu, cheatsheet).
+pub mod action;
 // FR-053 U3 (F-7): layout-примитивы — микро-движок вёрстки от слота родителя.
 pub mod layout;
 // FR-053 U3 (F-6): TextMeasurer — измеренный текст (cosmic-text + кэш).
@@ -55,10 +57,12 @@ pub mod row_guides;
 
 pub use anim::{animate_value, BoolAnim};
 pub use capture::CapturePolicy;
+// Wave A §5.5.3: ActionRegistry.
+pub use action::{Action, ActionRegistry};
 pub use frame::{HitRect, Overlap, SurfaceFrame, UiFrame};
 pub use geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
 pub use hit::{HitStack, HitTarget};
-pub use keyboard::{Activation, FocusRing, KeyboardRouter};
+pub use keyboard::{Activation, FocusRing, FocusTrap, KeyboardRouter};
 pub use layer::UiLayer;
 pub use layout::{
     aspect_ratio, constrain, grid_auto, grid_cells, grid_template, pad, responsive, stack,

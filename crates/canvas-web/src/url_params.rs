@@ -44,6 +44,9 @@ pub struct WebParams {
     /// (рамки слоёв/имя под курсором/пересечения — G6). Другие значения —
     /// None (мягкий игнор, страница открывается при любом URL).
     pub ui_debug: bool,
+    /// `?ui=demo` (Wave D v1, issue #32 D6): витрина кита открыта со старта
+    /// в TO-BE-режиме (интерактивная demo). Другие значения — мягкий игнор.
+    pub ui_demo: bool,
     /// FR-105 (мультиканвас C2, №42a): `?migrate=1` — отладочный вход в
     /// диалог миграции OPFS→папка (до волны C3, где входом станет строка
     /// «Переехать на диск…» в менеджере канвасов; после C3 — удалить).
@@ -264,6 +267,8 @@ pub fn parse_query(query: &str) -> Result<WebParams, String> {
     // значения (в т.ч. пустое) — мягкий игнор (URL с опечаткой не повод
     // отказывать странице в остальных параметрах)
     let ui_debug = string_param(query, "ui").as_deref() == Some("debug");
+    // Wave D v1 (issue #32 D6): `?ui=demo` — витрина в TO-BE со старта
+    let ui_demo = string_param(query, "ui").as_deref() == Some("demo");
     // FR-105 (C2, №42a): `?migrate=1` — отладочный вход в диалог миграции
     // (временный до C3; другие значения — мягкий игнор)
     let migrate = string_param(query, "migrate").as_deref() == Some("1");
@@ -275,6 +280,7 @@ pub fn parse_query(query: &str) -> Result<WebParams, String> {
         template,
         focus,
         ui_debug,
+        ui_demo,
         migrate,
     })
 }
@@ -338,6 +344,7 @@ mod tests {
                 template: None,
                 focus: None,
                 ui_debug: false,
+                ui_demo: false,
                 migrate: false
             }
         );
@@ -406,6 +413,7 @@ mod tests {
                 template: None,
                 focus: None,
                 ui_debug: false,
+                ui_demo: false,
                 migrate: false
             }
         );
@@ -428,6 +436,7 @@ mod tests {
                 template: None,
                 focus: None,
                 ui_debug: false,
+                ui_demo: false,
                 migrate: false
             }
         );

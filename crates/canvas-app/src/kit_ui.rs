@@ -222,11 +222,113 @@ pub struct ButtonRow {
     pub buttons: Vec<UiRect>,
 }
 
-/// Раскладка витрины (чистая функция от вьюпорта; ширины подписей —
-/// измеренные TextMeasurer'ом). FR-059: секции v2 + скролл контента —
-/// rect'ы секций уже сдвинуты на `scroll.offset` и отфильтрованы по
-/// полной видимости в окне контента ([`GalleryLayout::sections_viewport`]);
-/// при offset 0 — прежняя раскладка дословно.
+// === Wave D v1 (issue #32): интерактивная demo-витрина =====================
+//
+// Тулбар (D3/D4) и сайдбар (D5) — фиксированные зоны панели; секции Wave C
+// (D2) — хвост линейки; интерактивные состояния — из `kit_demo::KitDemoState`
+// (AS-IS режим = прежняя статичная раскладка дословно, golden-пины в силе).
+// Раскладка витрины (чистая функция от вьюпорта; ширины подписей —
+// измеренные TextMeasurer'ом). FR-059: секции v2 + скролл контента —
+// rect'ы секций уже сдвинуты на `scroll.offset` и отфильтрованы по
+// полной видимости в окне контента ([`GalleryLayout::sections_viewport`]);
+// при offset 0 — прежняя раскладка дословно.
+
+/// Ширина сайдбара навигации (TO-BE).
+pub const DEMO_SIDEBAR_W: f32 = 200.0;
+/// Зазор сайдбар ↔ колонка секций.
+pub const DEMO_SIDEBAR_GAP: f32 = 12.0;
+/// Высота тулбара (AS-IS/TO-BE, тема, язык, размер, плотность).
+pub const DEMO_TOOLBAR_H: f32 = 32.0;
+/// Высота строки описания секции (D7).
+pub const DEMO_DESC_H: f32 = 14.0;
+/// Отступ описания от заголовка.
+pub const DEMO_DESC_GAP: f32 = 2.0;
+/// Высота строки сайдбара.
+pub const DEMO_NAV_ROW_H: f32 = 20.0;
+/// Высота тела раскрытой секции аккордеона (Wave C, LAY7: именованный
+/// шаг курсора вместо литерала `y += 48.0`).
+pub const DEMO_ACCORDION_BODY_H: f32 = 48.0;
+/// Высота заголовка группы сайдбара.
+pub const DEMO_NAV_GROUP_H: f32 = 18.0;
+
+/// TO-BE раскладка демо-витрины (базовые координаты секций; тулбар/сайдбар —
+/// фиксированные). Слоты секций Wave C — уровни секций (draw==hit на уровне
+/// слота; компонентные layout-функции воспроизводятся в draw из слотов).
+#[derive(Debug, Clone, Default)]
+pub struct DemoLayout {
+    /// Тулбар: (rect, hit-id) — подписи вычисляет draw.
+    pub toolbar: Vec<(UiRect, &'static str)>,
+    /// Сайдбар: заголовки групп (rect, ключ i18n).
+    pub sidebar_groups: Vec<(UiRect, &'static str)>,
+    /// Сайдбар: пункты секций (rect, id секции).
+    pub sidebar_items: Vec<(UiRect, &'static str)>,
+    /// Слоты секций Wave C (базовые → сдвинутые в `gallery_layout_impl`).
+    pub wave_c: WaveCSlots,
+    /// Хит-цели демо (rect, id без префикса) — реестр поверхностей.
+    pub demo_hits: Vec<(UiRect, &'static str)>,
+    /// Описания секций Wave C (D7): (rect, ключ i18n).
+    pub desc: Vec<(UiRect, &'static str)>,
+    /// Смещения секций (id, базовый y заголовка) — навигация D5.
+    pub section_offsets: Vec<(&'static str, f32)>,
+    /// Демо-модалка (панель, крестик) — None = закрыта/AS-IS.
+    pub modal: Option<(UiRect, UiRect)>,
+    /// Демо-палитра команд (панель, поле, пункты) — None = закрыта.
+    pub palette: Option<(UiRect, UiRect, Vec<UiRect>)>,
+    /// Демо-снекбар — None = скрыт.
+    pub snackbar_bar: Option<(UiRect, UiRect)>,
+    /// Демо-поповер (пузырь) — None = закрыт.
+    pub popover_bubble: Option<UiRect>,
+}
+
+/// Слоты секций Wave C (v1: слоты-строки; draw==hit на уровне слота).
+#[derive(Debug, Clone, Default)]
+pub struct WaveCSlots {
+    /// Чек-бокс: (интерактивный слот, статичный Checked, статичный Indeterminate).
+    pub checkbox: [UiRect; 3],
+    /// Слайдер (track/filled/knob — компонентная раскладка от слота).
+    pub slider: Option<canvas_ui::component::slider::SliderLayout>,
+    /// Радио-строки (слот группы + части: circle+label на пункт).
+    pub radio: UiRect,
+    pub radio_parts: Vec<UiRect>,
+    /// Вкладки (слот с баром+панелью + отдельные табы).
+    pub tabs: UiRect,
+    pub tabs_parts: Vec<UiRect>,
+    /// Сегменты (слот + отдельные сегменты).
+    pub segmented: UiRect,
+    pub segmented_parts: Vec<UiRect>,
+    /// Палитра команд: якорь.
+    pub palette_anchor: UiRect,
+    /// Модалка: якорь-кнопка.
+    pub modal_anchor: UiRect,
+    /// Дерево: корень + листья (раскрыт — листья видимы).
+    pub tree_root: UiRect,
+    pub tree_leaves: Vec<UiRect>,
+    /// Аккордеон: 3 заголовка + тела раскрытых (rect, индекс).
+    pub accordion: [UiRect; 3],
+    pub accordion_bodies: Vec<(UiRect, usize)>,
+    /// Бейджи: якорная строка.
+    pub badges: UiRect,
+    /// Прогресс: линейный + спиннер слоты.
+    pub progress_linear: UiRect,
+    pub progress_spin: UiRect,
+    /// Скелетон: слот паттерна.
+    pub skeleton: UiRect,
+    /// Снекбар: якорь-кнопка.
+    pub snackbar_anchor: UiRect,
+    /// Поповер: якорь.
+    pub popover_anchor: UiRect,
+}
+
+/// Измеренные подписи демо-секций Wave C (заголовки уже в section_titles).
+#[derive(Debug, Clone, Default)]
+struct WaveCBase {
+    slots: WaveCSlots,
+    /// Описания секций D7: (rect строки, ключ описания) — базовые координаты.
+    desc: Vec<(UiRect, &'static str)>,
+    /// Хиты секций Wave C (базовые координаты).
+    hits: Vec<(UiRect, &'static str)>,
+}
+
 #[derive(Debug, Clone)]
 pub struct GalleryLayout {
     /// Панель витрины (kit Modal).
@@ -350,6 +452,10 @@ pub struct GalleryLayout {
     /// LAY-SHOWCASE (LAY8): HideBelow — слот + панель (None при скрытии
     /// ниже порога [`GALLERY_HIDE_BELOW_MIN`] — скрывается ЦЕЛИКОМ).
     pub layout_hide_below: HideBelowDemo,
+    /// Wave D v1 (issue #32): TO-BE демо-раскладка (тулбар/сайдбар/секции
+    /// Wave C/хиты/навигация). None = AS-IS (статичная витрина — прежнее
+    /// поведение и golden-пины).
+    pub demo: Option<DemoLayout>,
 }
 
 /// LAY-SHOWCASE (LAY7): строка демо шкалы зазоров S1 — два блока с зазором
@@ -511,6 +617,8 @@ pub fn gallery_panel(vp: UiRect) -> UiRect {
 /// панели — секции сдвигаются на `scroll.offset` и фильтруются по полной
 /// видимости в окне секций (при offset 0 — прежняя раскладка дословно);
 /// полная высота колонки — в `content_h` (скролл-контракт кита).
+/// AS-IS раскладка витрины (Wave D v1): прежняя статичная витрина дословно —
+/// golden-пины и потребители FR-055/FR-059/FR-062/LAY-SHOWCASE без изменений.
 pub fn gallery_layout(
     viewport: [f32; 2],
     lang: Language,
@@ -519,12 +627,55 @@ pub fn gallery_layout(
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> GalleryLayout {
+    gallery_layout_impl(viewport, lang, scroll, p, m, fs, None)
+}
+
+/// TO-BE раскладка витрины (Wave D v1, issue #32): интерактивная demo —
+/// тулбар тем/языка/размера/плотности (D3), сайдбар-навигация (D5),
+/// секции Wave C (D2), интерактивные контролы (D1). Геометрия секций —
+/// та же линейка, но колонка уже (сайдбар) и ниже на тулбар.
+pub fn gallery_layout_tobe(
+    viewport: [f32; 2],
+    lang: Language,
+    scroll: &kit::ScrollState,
+    p: &KitPalette,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    demo: &crate::kit_demo::KitDemoState,
+) -> GalleryLayout {
+    gallery_layout_impl(viewport, lang, scroll, p, m, fs, Some(demo))
+}
+
+fn gallery_layout_impl(
+    viewport: [f32; 2],
+    lang: Language,
+    scroll: &kit::ScrollState,
+    p: &KitPalette,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    demo: Option<&crate::kit_demo::KitDemoState>,
+) -> GalleryLayout {
+    // D3: язык демо — оверрайд (None = следовать языку приложения).
+    let lang = demo.and_then(|d| d.lang_override).unwrap_or(lang);
     let vp = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
     // Панель: kit Modal (constrain + stack по центру, зажата во вьюпорт)
     let panel = gallery_panel(vp);
     let content = panel.inset(&EdgeInsets::uniform(canvas_core::tokens::SPACING_LG));
 
     let y = content.y;
+    // Wave D (TO-BE): шапка — на всю ширину панели (`body`); сайдбар+тулбар
+    // съедают ширину/высоту у колонки секций (`content`). AS-IS — дословно.
+    let body = content;
+    let content = if demo.is_some() {
+        UiRect::new(
+            body.x + DEMO_SIDEBAR_W + DEMO_SIDEBAR_GAP,
+            body.y + 30.0 + SECTION_GAP + DEMO_TOOLBAR_H,
+            (body.w - DEMO_SIDEBAR_W - DEMO_SIDEBAR_GAP).max(0.0),
+            (body.h - 30.0 - SECTION_GAP - DEMO_TOOLBAR_H).max(0.0),
+        )
+    } else {
+        body
+    };
     let full_w = content.w;
 
     // Шапка: заголовок слева, кнопка темы + «✕» справа — раскладываются
@@ -539,12 +690,12 @@ pub fn gallery_layout(
     // на 8px влево (внутрь панели), визуально canonical-выравнивание с
     // `kit::modal`/`kit::panel` хромой.
     let title = UiRect::new(
-        content.x,
+        body.x,
         y,
-        (full_w - 2.0 * (kit::ICON_BUTTON_SIZE + 8.0)).max(0.0),
+        (body.w - 2.0 * (kit::ICON_BUTTON_SIZE + 8.0)).max(0.0),
         30.0,
     );
-    let header_slot = UiRect::new(content.x, y, content.w, 30.0);
+    let header_slot = UiRect::new(body.x, y, body.w, 30.0);
     // Порядок справа-налево: theme (toggle, левее), close (icon, правее).
     // `panel_header` класть кнопки right-to-left от `slot.right - SPACING_SM`.
     let header_buttons = [
@@ -569,7 +720,8 @@ pub fn gallery_layout(
     }
     // Шаг шапки (30 + SECTION_GAP) фиксирован — скролл-контракт FR-059:
     // тот же шаг повторяет `gallery_scroll_viewport` (окно секций).
-    let sections_top = y + 30.0 + SECTION_GAP;
+    // Wave D: тулбар (TO-BE) — фиксированная строка между шапкой и секциями.
+    let sections_top = y + 30.0 + SECTION_GAP + if demo.is_some() { DEMO_TOOLBAR_H } else { 0.0 };
     // Окно скролла секций (шапка выше — фиксирована)
     let sections_viewport = UiRect::new(
         content.x,
@@ -577,6 +729,60 @@ pub fn gallery_layout(
         content.w,
         (content.bottom() - sections_top).max(0.0),
     );
+
+    // --- Wave D: тулбар (D3/D4) и сайдбар (D5) — фиксированные зоны ---
+    let mut demo_toolbar: Vec<(UiRect, &'static str)> = Vec::new();
+    let mut demo_sidebar_groups: Vec<(UiRect, &'static str)> = Vec::new();
+    let mut demo_sidebar_items: Vec<(UiRect, &'static str)> = Vec::new();
+    if demo.is_some() {
+        // Тулбар: 5 контролов-пилюль слева направо (высота 24, Sm)
+        let tb_y = y + 30.0 + SECTION_GAP;
+        let controls: [(&'static str, f32); 5] = [
+            (crate::kit_demo::hit::TOOLBAR_MODE, 118.0),
+            (crate::kit_demo::hit::TOOLBAR_THEME, 148.0),
+            (crate::kit_demo::hit::TOOLBAR_LANG, 64.0),
+            (crate::kit_demo::hit::TOOLBAR_SIZE, 108.0),
+            (crate::kit_demo::hit::TOOLBAR_DENSITY, 148.0),
+        ];
+        let mut tx = body.x;
+        for (id, w) in controls {
+            let w = w.min((body.right() - tx).max(0.0));
+            if w <= 0.0 {
+                break;
+            }
+            demo_toolbar.push((UiRect::new(tx, tb_y, w, 24.0), id));
+            tx += w + kit::GAP_CONTROLS;
+        }
+        // Сайдбар: группы + секции реестра (v1 — без скролла: компактный
+        // список 26 секций × 20px + 5 групп × 18px ≈ 610px, окно ≥ 640px)
+        let sb_top = tb_y + DEMO_TOOLBAR_H;
+        let mut sy = sb_top;
+        // Кламп по высоте окна секций (G4-линт: хиты внутри вьюпорта):
+        // в узких окнах сайдбар обрезается снизу (v1, без скролла — D7).
+        let sb_bottom = sections_viewport.bottom();
+        let mut last_group: Option<crate::kit_demo::DemoGroup> = None;
+        for s in crate::kit_demo::SECTIONS {
+            if sy + DEMO_NAV_ROW_H > sb_bottom {
+                break;
+            }
+            if last_group != Some(s.group) {
+                if sy + DEMO_NAV_GROUP_H > sb_bottom {
+                    break;
+                }
+                demo_sidebar_groups.push((
+                    UiRect::new(body.x, sy, DEMO_SIDEBAR_W, DEMO_NAV_GROUP_H),
+                    crate::kit_demo::group_title_key(s.group),
+                ));
+                sy += DEMO_NAV_GROUP_H;
+                last_group = Some(s.group);
+            }
+            demo_sidebar_items.push((
+                UiRect::new(body.x + 8.0, sy, DEMO_SIDEBAR_W - 8.0, DEMO_NAV_ROW_H),
+                s.id,
+            ));
+            sy += DEMO_NAV_ROW_H;
+        }
+    }
 
     let mut section_titles: Vec<(UiPoint, &'static str)> = Vec::new();
     let mut button_rows: Vec<ButtonRow> = Vec::new();
@@ -606,6 +812,9 @@ pub fn gallery_layout(
     let card_h = 64.0;
     let dropdown_item_h = 26.0;
     let dropdown_menu_h = 3.0 * dropdown_item_h + 2.0 * 4.0;
+    // Wave D (D1): в TO-BE меню dropdown видимо только при открытом состоянии
+    // (клик по якорю); AS-IS — статичное меню как прежде (golden-пин).
+    let dropdown_open_layout = demo.map(|d| d.dropdown_open).unwrap_or(true);
     let wrap_slot_h = 2.0 * kit::CHIP_HEIGHT + kit::GAP_CONTROLS;
     let grid_cell_h = 32.0;
     let grid_slot_h = 2.0 * grid_cell_h + kit::GAP_CONTROLS;
@@ -657,7 +866,13 @@ pub fn gallery_layout(
         block(full_w, SECTION_TITLE_H),
         block(
             full_w,
-            kit::BUTTON_HEIGHT + DROPDOWN_ANCHOR_GAP + dropdown_menu_h,
+            kit::BUTTON_HEIGHT
+                + DROPDOWN_ANCHOR_GAP
+                + if dropdown_open_layout {
+                    dropdown_menu_h
+                } else {
+                    0.0
+                },
         ),
         ruler_gap(SECTION_GAP),
     ]);
@@ -823,6 +1038,19 @@ pub fn gallery_layout(
     // секцию (подпись, контент) — отдельный зазор съедался бы как подпись
     // следующей секции (сдвиг линейки на величину зазора). Слияние
     // сохраняет сумму высот и все позиции бит-в-бит; зазоры остаются
+    // --- Wave D (D2): секции Wave C — хвост линейки (только TO-BE) ---
+    if let Some(d) = demo {
+        for id in crate::kit_demo::WAVE_C_ORDER {
+            let h = wave_c_section_h(id, d);
+            ruler_items.extend([
+                block(full_w, SECTION_TITLE_H),
+                block(full_w, DEMO_DESC_GAP + DEMO_DESC_H),
+                block(full_w, h),
+                ruler_gap(SECTION_GAP),
+            ]);
+        }
+    }
+
     // токенами S1 (SECTION_GAP / BUTTONS_SECTION_GAP_EXTRA).
     let mut merged_items: Vec<MeasuredItem> = Vec::with_capacity(ruler_items.len());
     for item in ruler_items {
@@ -990,15 +1218,21 @@ pub fn gallery_layout(
     );
     let dropdown_anchor = anchor_btn.rect;
     let dd = kit::dropdown_menu(dropdown_anchor, vp, UiVec2::new(190.0, dropdown_menu_h));
-    for i in 0..3 {
-        dropdown_items.push(UiRect::new(
-            dd.menu.x + 4.0,
-            dd.menu.y + 4.0 + i as f32 * (dropdown_item_h + 4.0),
-            dd.menu.w - 8.0,
-            dropdown_item_h,
-        ));
+    if dropdown_open_layout {
+        for i in 0..3 {
+            dropdown_items.push(UiRect::new(
+                dd.menu.x + 4.0,
+                dd.menu.y + 4.0 + i as f32 * (dropdown_item_h + 4.0),
+                dd.menu.w - 8.0,
+                dropdown_item_h,
+            ));
+        }
     }
-    let dropdown_menu = dd.menu;
+    let dropdown_menu = if dropdown_open_layout {
+        dd.menu
+    } else {
+        UiRect::default()
+    };
 
     // --- Toast: строка внизу контента (kit Toast) ---
     let toast_title = ruler.next().unwrap_or_default();
@@ -2001,6 +2235,21 @@ pub fn gallery_layout(
         panel: hide_below_panel,
         hidden: hide_below_hidden,
     };
+    // --- Wave D (D2/D7): потребление секций Wave C + описания (TO-BE) ---
+    let wc_base = match demo {
+        Some(d) => wave_c_consume(
+            &mut ruler,
+            full_w,
+            control_x,
+            control_w,
+            d,
+            lang,
+            m,
+            fs,
+            &mut section_titles,
+        ),
+        None => WaveCBase::default(),
+    };
     // Полная высота колонки секций (для скролла) — сумма блоков и распорок
     // линейки (накопление Column тождественно прежнему курсору `y +=`;
     // скролл-контракт FR-059 сохранён, включая хвостовую распорку).
@@ -2016,6 +2265,20 @@ pub fn gallery_layout(
     // === FR-059: сдвиг на scroll.offset + фильтр полной видимости ===
     // Тексты кита не клипятся по вертикали — секция за краем окна не
     // рисуется вовсе (при offset 0 фильтр ничего не отрезает).
+    // Wave D: базовые y заголовков — ДО сдвига (навигация D5).
+    let demo_section_offsets: Vec<(&'static str, f32)> = if demo.is_some() {
+        section_titles
+            .iter()
+            .filter_map(|(pt, key)| {
+                crate::kit_demo::SECTIONS
+                    .iter()
+                    .find(|s| s.title_key == *key)
+                    .map(|s| (s.id, pt.y))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let off = scroll.offset;
     let visible = |r: &UiRect| -> bool {
         r.y - off >= sections_viewport.y - 0.01
@@ -2331,6 +2594,55 @@ pub fn gallery_layout(
     };
     // focus_targets НЕ сдвигаются/фильтруются — контент-координаты Tab-кольца
 
+    // --- Wave D: сборка демо-раскладки (TO-BE): сдвиг слотов, оверлеи ---
+    let mut demo_layout = demo.map(|d| {
+        build_demo_layout(
+            d,
+            wc_base,
+            demo_toolbar,
+            demo_sidebar_groups,
+            demo_sidebar_items,
+            demo_section_offsets,
+            panel,
+            body,
+            sections_viewport,
+            off,
+            &visible,
+        )
+    });
+    // Хиты существующих секций (rect'ы уже сдвинуты FR-059-проходом)
+    if let Some(dl) = demo_layout.as_mut() {
+        for (i, r) in chips.iter().enumerate() {
+            dl.demo_hits.push((*r, crate::kit_demo::hit::chip(i)));
+        }
+        if let Some((r, _, _, _)) = switches.first() {
+            dl.demo_hits.push((*r, crate::kit_demo::hit::SWITCH));
+        }
+        for (idx, r) in &list_rows {
+            dl.demo_hits
+                .push((*r, crate::kit_demo::hit::list_row(*idx)));
+        }
+        if let Some((_, _, tf)) = text_fields.first() {
+            dl.demo_hits
+                .push((tf.rect, crate::kit_demo::hit::TEXTFIELD));
+        }
+        for row in &button_rows {
+            for (i, r) in row.buttons.iter().enumerate() {
+                dl.demo_hits.push((*r, crate::kit_demo::hit::button(i)));
+            }
+        }
+        dl.demo_hits
+            .push((toast, crate::kit_demo::hit::TOAST_TOGGLE));
+        dl.demo_hits
+            .push((dropdown_anchor, crate::kit_demo::hit::DROPDOWN_ANCHOR));
+        if dropdown_open_layout {
+            for (i, r) in dropdown_items.iter().enumerate() {
+                dl.demo_hits
+                    .push((*r, crate::kit_demo::hit::dropdown_item(i)));
+            }
+        }
+    }
+
     GalleryLayout {
         panel,
         content,
@@ -2379,7 +2691,1293 @@ pub fn gallery_layout(
         layout_aspect,
         layout_sticky,
         layout_hide_below,
+        demo: demo_layout,
     }
+}
+
+// === Wave D v1: хелперы демо-раскладки =====================================
+
+/// Высота контента секции Wave C (динамика состояний — дерево/аккордеон).
+fn wave_c_section_h(id: &str, d: &crate::kit_demo::KitDemoState) -> f32 {
+    let md = canvas_ui::component::ControlSize::Md.button_h(); // 36
+    match id {
+        "checkbox" | "slider" | "snackbar" | "popover" | "modal" | "command_palette" => md,
+        "radio" => 3.0 * 24.0 + 2.0 * 6.0,
+        "tabs" => 32.0 + 48.0,
+        "segmented" => 32.0,
+        "tree" => {
+            if d.tree_open {
+                4.0 * 26.0
+            } else {
+                26.0
+            }
+        }
+        "accordion" => {
+            let bodies: f32 = d
+                .accordion_open
+                .iter()
+                .map(|&o| if o { DEMO_ACCORDION_BODY_H } else { 0.0 })
+                .sum();
+            3.0 * 32.0 + bodies
+        }
+        "badge" => 24.0,
+        "progress" => 40.0,
+        "skeleton" => 3.0 * 10.0 + 2.0 * 6.0,
+        _ => 0.0,
+    }
+}
+
+/// Кнопка-якорь секции (kit Button, Start/Center).
+fn wave_c_anchor_btn(
+    cell: UiRect,
+    label: &str,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> UiRect {
+    kit::button_layout(
+        cell,
+        label,
+        (
+            canvas_ui::layout::HAlign::Start,
+            canvas_ui::layout::VAlign::Center,
+        ),
+        m,
+        fs,
+        FONT_FAMILY,
+        LABEL_SIZE,
+    )
+    .rect
+}
+
+/// Потребление блоков секций Wave C из линейки (TO-BE): заголовки/описания
+/// в section_titles, слоты/хиты — в WaveCBase (базовые координаты).
+#[allow(clippy::too_many_arguments)] // прецедент gallery_layout
+fn wave_c_consume(
+    ruler: &mut std::vec::IntoIter<UiRect>,
+    full_w: f32,
+    control_x: f32,
+    control_w: f32,
+    d: &crate::kit_demo::KitDemoState,
+    lang: Language,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    section_titles: &mut Vec<(UiPoint, &'static str)>,
+) -> WaveCBase {
+    let mut base = WaveCBase::default();
+    let mut hits: Vec<(UiRect, &'static str)> = Vec::new();
+    for id in crate::kit_demo::WAVE_C_ORDER {
+        let Some(sec) = crate::kit_demo::section(id) else {
+            // Реестр и порядок согласованы — ветвь недостижима; блоки всё
+            // равно потребляем, чтобы не разъехалась линейка.
+            let _ = (ruler.next(), ruler.next(), ruler.next());
+            continue;
+        };
+        let title = ruler.next().unwrap_or_default();
+        section_titles.push((UiPoint::new(title.x, title.y), sec.title_key));
+        let desc_block = ruler.next().unwrap_or_default();
+        base.desc.push((
+            UiRect::new(control_x, desc_block.y, full_w, DEMO_DESC_H),
+            sec.desc_key,
+        ));
+        let block = ruler.next().unwrap_or_default();
+        let h = wave_c_section_h(id, d);
+        let slot = UiRect::new(control_x, block.y, control_w, h);
+        match *id {
+            "checkbox" => {
+                let per = ((control_w - 2.0 * kit::GAP_CONTROLS) / 3.0).max(0.0);
+                for (i, r) in base.slots.checkbox.iter_mut().enumerate() {
+                    *r = UiRect::new(
+                        control_x + i as f32 * (per + kit::GAP_CONTROLS),
+                        slot.y,
+                        per,
+                        h,
+                    );
+                }
+                hits.push((base.slots.checkbox[0], crate::kit_demo::hit::CHECKBOX));
+            }
+            "slider" => {
+                let opts = canvas_ui::component::slider::SliderOpts {
+                    min: 0.0,
+                    max: 1.0,
+                    step: None,
+                    discrete_ticks: false,
+                    label_format: None,
+                };
+                let lay = canvas_ui::component::slider::slider_layout(
+                    slot,
+                    d.slider_value,
+                    &opts,
+                    canvas_ui::component::ControlSize::Md,
+                );
+                hits.push((slot, crate::kit_demo::hit::SLIDER));
+                base.slots.slider = Some(lay);
+            }
+            "radio" => {
+                base.slots.radio = slot;
+                let group = canvas_ui::component::radio::RadioGroup {
+                    options: vec![
+                        tr(lang, crate::i18n::keys::KIT_DEMO_TAB_1).to_string(),
+                        tr(lang, crate::i18n::keys::KIT_DEMO_TAB_2).to_string(),
+                        tr(lang, crate::i18n::keys::KIT_DEMO_TAB_3).to_string(),
+                    ],
+                    selected: d.radio_idx,
+                };
+                let rows = canvas_ui::component::radio::radio_group_layout(
+                    slot,
+                    &group,
+                    canvas_ui::component::radio::RadioOrientation::Vertical,
+                    canvas_ui::component::ControlSize::Sm,
+                    6.0,
+                    8.0,
+                    m,
+                    fs,
+                    FONT_FAMILY,
+                    LABEL_SIZE,
+                );
+                for (i, r) in rows.iter().enumerate() {
+                    let w = (r.label_rect.right() - r.circle.x).max(r.circle.w);
+                    base.slots
+                        .radio_parts
+                        .push(UiRect::new(r.circle.x, r.circle.y, w, r.circle.h));
+                    hits.push((base.slots.radio_parts[i], crate::kit_demo::hit::radio(i)));
+                }
+            }
+            "tabs" => {
+                base.slots.tabs = slot;
+                let labels: Vec<String> = vec![
+                    tr(lang, crate::i18n::keys::KIT_DEMO_TAB_1).to_string(),
+                    tr(lang, crate::i18n::keys::KIT_DEMO_TAB_2).to_string(),
+                    tr(lang, crate::i18n::keys::KIT_DEMO_TAB_3).to_string(),
+                ];
+                let lay = canvas_ui::component::tabs::tabs_layout(
+                    slot,
+                    &labels,
+                    d.tab_idx,
+                    canvas_ui::component::tabs::TabStyle::Underline,
+                    32.0,
+                    8.0,
+                    m,
+                    fs,
+                    FONT_FAMILY,
+                    LABEL_SIZE,
+                );
+                base.slots.tabs_parts = lay.tabs.iter().map(|t| t.rect).collect();
+                for (i, r) in lay.tabs.iter().enumerate() {
+                    hits.push((r.rect, crate::kit_demo::hit::tab(i)));
+                }
+            }
+            "segmented" => {
+                base.slots.segmented = slot;
+                let labels: Vec<String> = vec![
+                    tr(lang, crate::i18n::keys::KIT_DEMO_TAB_1).to_string(),
+                    tr(lang, crate::i18n::keys::KIT_DEMO_TAB_2).to_string(),
+                    tr(lang, crate::i18n::keys::KIT_DEMO_TAB_3).to_string(),
+                ];
+                let lay = canvas_ui::component::segmented::segmented_layout(
+                    slot,
+                    &labels,
+                    d.segmented_idx,
+                    m,
+                    fs,
+                    FONT_FAMILY,
+                    LABEL_SIZE,
+                );
+                base.slots.segmented_parts = lay.segments.clone();
+                for (i, r) in lay.segments.iter().enumerate() {
+                    hits.push((*r, crate::kit_demo::hit::segmented(i)));
+                }
+            }
+            "command_palette" => {
+                let r = wave_c_anchor_btn(
+                    UiRect::new(control_x, slot.y, 200.0, h),
+                    &tr(lang, crate::i18n::keys::KIT_DEMO_PALETTE_OPEN),
+                    m,
+                    fs,
+                );
+                base.slots.palette_anchor = r;
+                hits.push((r, crate::kit_demo::hit::PALETTE_OPEN));
+            }
+            "tree" => {
+                let row_h = 26.0;
+                base.slots.tree_root = UiRect::new(control_x, slot.y, control_w, row_h);
+                hits.push((base.slots.tree_root, crate::kit_demo::hit::TREE_TOGGLE));
+                if d.tree_open {
+                    for i in 0..3usize {
+                        let r = UiRect::new(
+                            control_x + 18.0,
+                            slot.y + row_h * (i as f32 + 1.0),
+                            (control_w - 18.0).max(0.0),
+                            row_h,
+                        );
+                        base.slots.tree_leaves.push(r);
+                        hits.push((r, crate::kit_demo::hit::tree(i)));
+                    }
+                }
+            }
+            "modal" => {
+                let r = wave_c_anchor_btn(
+                    UiRect::new(control_x, slot.y, 170.0, h),
+                    &tr(lang, crate::i18n::keys::KIT_DEMO_MODAL_OPEN),
+                    m,
+                    fs,
+                );
+                base.slots.modal_anchor = r;
+                hits.push((r, crate::kit_demo::hit::MODAL_OPEN));
+            }
+            "accordion" => {
+                let hh = 32.0;
+                let mut y = slot.y;
+                for i in 0..3usize {
+                    base.slots.accordion[i] = UiRect::new(control_x, y, control_w, hh);
+                    hits.push((base.slots.accordion[i], crate::kit_demo::hit::accordion(i)));
+                    y += hh;
+                    if d.accordion_open[i] {
+                        base.slots.accordion_bodies.push((
+                            UiRect::new(control_x, y, control_w, DEMO_ACCORDION_BODY_H),
+                            i,
+                        ));
+                        y += DEMO_ACCORDION_BODY_H;
+                    }
+                }
+            }
+            "badge" => {
+                base.slots.badges = slot;
+            }
+            "progress" => {
+                base.slots.progress_linear = UiRect::new(control_x, slot.y, control_w * 0.6, 16.0);
+                base.slots.progress_spin =
+                    UiRect::new(control_x + control_w * 0.6 + 16.0, slot.y, 24.0, 24.0);
+            }
+            "skeleton" => {
+                base.slots.skeleton = UiRect::new(control_x, slot.y, control_w.min(260.0), h);
+            }
+            "snackbar" => {
+                let r = wave_c_anchor_btn(
+                    UiRect::new(control_x, slot.y, 160.0, h),
+                    &tr(lang, crate::i18n::keys::KIT_DEMO_SNACKBAR_SHOW),
+                    m,
+                    fs,
+                );
+                base.slots.snackbar_anchor = r;
+                hits.push((r, crate::kit_demo::hit::SNACKBAR_SHOW));
+            }
+            "popover" => {
+                let cl = kit::chip_layout(
+                    UiPoint::new(control_x, slot.y),
+                    &tr(lang, crate::i18n::keys::KIT_DEMO_CLICK_ME),
+                    120.0,
+                    m,
+                    fs,
+                    FONT_FAMILY,
+                    LABEL_SIZE,
+                );
+                base.slots.popover_anchor = cl.rect;
+                hits.push((cl.rect, crate::kit_demo::hit::POPOVER_ANCHOR));
+            }
+            _ => {}
+        }
+    }
+    base.hits = hits;
+    base
+}
+
+/// Сборка `DemoLayout` (TO-BE): сдвиг слотов на `off` с фильтром видимости,
+/// фиксированные тулбар/сайдбар, оверлеи (модалка/палитра/снекбар/поповер).
+#[allow(clippy::too_many_arguments)] // сборка демо-раскладки: все зоны панели
+fn build_demo_layout(
+    d: &crate::kit_demo::KitDemoState,
+    wc: WaveCBase,
+    toolbar: Vec<(UiRect, &'static str)>,
+    sidebar_groups: Vec<(UiRect, &'static str)>,
+    sidebar_items: Vec<(UiRect, &'static str)>,
+    section_offsets: Vec<(&'static str, f32)>,
+    panel: UiRect,
+    body: UiRect,
+    sections_viewport: UiRect,
+    off: f32,
+    visible: &impl Fn(&UiRect) -> bool,
+) -> DemoLayout {
+    let shv = |r: UiRect| -> UiRect {
+        if visible(&r) {
+            UiRect::new(r.x, r.y - off, r.w, r.h)
+        } else {
+            UiRect::default()
+        }
+    };
+    let mut s = wc.slots;
+    s.checkbox = [shv(s.checkbox[0]), shv(s.checkbox[1]), shv(s.checkbox[2])];
+    s.slider = s
+        .slider
+        .map(|l| canvas_ui::component::slider::SliderLayout {
+            track: shv(l.track),
+            filled: shv(l.filled),
+            knob: shv(l.knob),
+            value: l.value,
+        });
+    s.radio = shv(s.radio);
+    s.radio_parts = s.radio_parts.into_iter().map(shv).collect();
+    s.tabs = shv(s.tabs);
+    s.tabs_parts = s.tabs_parts.into_iter().map(shv).collect();
+    s.segmented = shv(s.segmented);
+    s.segmented_parts = s.segmented_parts.into_iter().map(shv).collect();
+    s.palette_anchor = shv(s.palette_anchor);
+    s.modal_anchor = shv(s.modal_anchor);
+    s.tree_root = shv(s.tree_root);
+    s.tree_leaves = s.tree_leaves.into_iter().map(shv).collect();
+    s.accordion = [
+        shv(s.accordion[0]),
+        shv(s.accordion[1]),
+        shv(s.accordion[2]),
+    ];
+    s.accordion_bodies = s
+        .accordion_bodies
+        .into_iter()
+        .map(|(r, i)| (shv(r), i))
+        .collect();
+    s.badges = shv(s.badges);
+    s.progress_linear = shv(s.progress_linear);
+    s.progress_spin = shv(s.progress_spin);
+    s.skeleton = shv(s.skeleton);
+    s.snackbar_anchor = shv(s.snackbar_anchor);
+    s.popover_anchor = shv(s.popover_anchor);
+
+    let mut hits: Vec<(UiRect, &'static str)> =
+        wc.hits.into_iter().map(|(r, id)| (shv(r), id)).collect();
+    let desc: Vec<(UiRect, &'static str)> = wc.desc.into_iter().map(|(r, k)| (shv(r), k)).collect();
+
+    // Оверлеи (фиксированные — от panel/body, не скроллятся)
+    let modal = if d.modal_open {
+        let mp = canvas_ui::layout::stack(
+            panel,
+            UiVec2::new(360.0, 180.0),
+            canvas_ui::layout::HAlign::Center,
+            canvas_ui::layout::VAlign::Center,
+        );
+        let close = UiRect::new(mp.right() - 28.0, mp.y + 4.0, 24.0, 24.0);
+        hits.push((close, crate::kit_demo::hit::MODAL_CLOSE));
+        Some((mp, close))
+    } else {
+        None
+    };
+    let palette = if d.palette_open {
+        let pp = canvas_ui::layout::stack(
+            panel,
+            UiVec2::new(320.0, 200.0),
+            canvas_ui::layout::HAlign::Center,
+            canvas_ui::layout::VAlign::Center,
+        );
+        let input = UiRect::new(pp.x + 8.0, pp.y + 8.0, pp.w - 16.0, 28.0);
+        let mut rows = Vec::new();
+        for i in 0..3usize {
+            let r = UiRect::new(
+                pp.x + 8.0,
+                input.bottom() + 6.0 + i as f32 * 28.0,
+                pp.w - 16.0,
+                24.0,
+            );
+            hits.push((r, crate::kit_demo::hit::palette_item(i)));
+            rows.push(r);
+        }
+        Some((pp, input, rows))
+    } else {
+        None
+    };
+    let snackbar_bar = if d.snackbar_visible {
+        let w = 320.0_f32.min(body.w.max(0.0));
+        let r = UiRect::new(
+            panel.x + (panel.w - w).max(0.0) / 2.0,
+            panel.bottom() - 48.0,
+            w,
+            36.0,
+        );
+        let close = UiRect::new(r.right() - 28.0, r.y + 6.0, 24.0, 24.0);
+        hits.push((close, crate::kit_demo::hit::SNACKBAR_CLOSE));
+        Some((r, close))
+    } else {
+        None
+    };
+    let popover_bubble = if d.popover_open && s.popover_anchor.w > 0.0 {
+        let w = 200.0;
+        let h = 64.0;
+        let below = s.popover_anchor.bottom() + 6.0 + h <= sections_viewport.bottom();
+        let y = if below {
+            s.popover_anchor.bottom() + 6.0
+        } else {
+            (s.popover_anchor.y - 6.0 - h).max(sections_viewport.y)
+        };
+        let x = s
+            .popover_anchor
+            .x
+            .min(sections_viewport.right() - w)
+            .max(sections_viewport.x);
+        let r = UiRect::new(x, y, w, h);
+        hits.push((r, crate::kit_demo::hit::POPOVER_CLOSE));
+        Some(r)
+    } else {
+        None
+    };
+
+    // Навигация сайдбара — статические nav-id
+    for (r, id) in &sidebar_items {
+        let nav_id = crate::kit_demo::hit::nav(id);
+        if !nav_id.is_empty() {
+            hits.push((*r, nav_id));
+        }
+    }
+    for (r, id) in &toolbar {
+        hits.push((*r, id));
+    }
+
+    DemoLayout {
+        toolbar,
+        sidebar_groups,
+        sidebar_items,
+        wave_c: s,
+        demo_hits: hits,
+        desc,
+        section_offsets,
+        modal,
+        palette,
+        snackbar_bar,
+        popover_bubble,
+    }
+}
+
+// === Wave D v1: отрисовка демо (TO-BE) =====================================
+
+/// Контекст отрисовки demo-витрины (TO-BE) — все заимствования кадра.
+pub(crate) struct DemoDrawCtx<'a> {
+    /// Кадровый адаптер «кит → квад/текст».
+    pub d: &'a mut KitDraw,
+    /// Раскладка кадра (gallery_layout_tobe).
+    pub lay: &'a GalleryLayout,
+    /// Демо-состояние.
+    pub demo: &'a crate::kit_demo::KitDemoState,
+    /// Зажатый контрол (id без префикса) — press-визуал.
+    pub pressed: Option<&'a str>,
+    /// Курсор (логические px).
+    pub cursor: [f32; 2],
+    /// Активная палитра.
+    pub palette: &'a KitPalette,
+    /// Язык демо.
+    pub lang: Language,
+    /// Измеритель (компонентные раскладки badge/skeleton).
+    pub m: &'a mut TextMeasurer,
+    pub fs: &'a mut cosmic_text::FontSystem,
+}
+
+/// Состояние контрола от курсора/зажатия: press > hover > normal.
+/// Поля контекста передаются явно — вызов совместим с активным &mut ctx.d.
+fn demo_state(pressed: Option<&str>, cursor: [f32; 2], r: &UiRect, id: &str) -> kit::KitState {
+    if pressed == Some(id) && cursor_in(r, cursor) {
+        kit::KitState::Pressed
+    } else if cursor_in(r, cursor) {
+        kit::KitState::Hovered
+    } else {
+        kit::KitState::Normal
+    }
+}
+
+/// Отрисовка demo-слоёв TO-BE поверх статичной витрины (draw==hit: rect'ы
+/// из той же GalleryLayout, что и demo_hits реестра). Вызывается ПОСЛЕ
+/// отрисовки существующих секций — интерактивные контролы перекрывают
+/// статичные матрицы по тем же rect'ам (непрозрачные заливки стилей).
+pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
+    let Some(dl) = ctx.lay.demo.as_ref() else {
+        return;
+    };
+    let p = ctx.palette;
+    let d = &mut *ctx.d;
+    let label = |key: &'static str| crate::i18n::tr(ctx.lang, key).to_owned();
+    let m: &mut TextMeasurer = &mut *ctx.m;
+    let fs: &mut cosmic_text::FontSystem = &mut *ctx.fs;
+
+    // --- Тулбар (D3/D4): 5 пилюль ---
+    for (r, id) in &dl.toolbar {
+        let active = match *id {
+            crate::kit_demo::hit::TOOLBAR_MODE => ctx.demo.tobe,
+            _ => false,
+        };
+        let state = demo_state(ctx.pressed, ctx.cursor, r, id);
+        let variant = if active {
+            kit::ButtonVariant::Primary
+        } else {
+            kit::ButtonVariant::Secondary
+        };
+        let style = kit::button_style(variant, state, p);
+        d.control(*r, &style);
+        let text = match *id {
+            crate::kit_demo::hit::TOOLBAR_MODE => label(if ctx.demo.tobe {
+                crate::i18n::keys::KIT_DEMO_MODE_TOBE
+            } else {
+                crate::i18n::keys::KIT_DEMO_MODE_ASIS
+            }),
+            crate::kit_demo::hit::TOOLBAR_THEME => crate::i18n::trf(
+                ctx.lang,
+                crate::i18n::keys::KIT_DEMO_THEME_LABEL,
+                &[(
+                    "name",
+                    canvas_core::theme_presets::PRESETS
+                        .get(ctx.demo.theme_idx)
+                        .map(|preset| preset.label)
+                        .unwrap_or("?"),
+                )],
+            ),
+            crate::kit_demo::hit::TOOLBAR_LANG => match ctx.demo.lang_override {
+                Some(canvas_core::Language::En) => "EN".to_string(),
+                Some(canvas_core::Language::Ru) => "RU".to_string(),
+                None => match ctx.lang {
+                    canvas_core::Language::Ru => "RU".to_string(),
+                    canvas_core::Language::En => "EN".to_string(),
+                },
+            },
+            crate::kit_demo::hit::TOOLBAR_SIZE => crate::i18n::trf(
+                ctx.lang,
+                crate::i18n::keys::KIT_DEMO_SIZE_LABEL,
+                &[(
+                    "name",
+                    match ctx.demo.size {
+                        canvas_ui::component::ControlSize::Xs => "Xs",
+                        canvas_ui::component::ControlSize::Sm => "Sm",
+                        canvas_ui::component::ControlSize::Md => "Md",
+                        canvas_ui::component::ControlSize::Lg => "Lg",
+                    },
+                )],
+            ),
+            _ => crate::i18n::trf(
+                ctx.lang,
+                crate::i18n::keys::KIT_DEMO_DENSITY_LABEL,
+                &[(
+                    "name",
+                    match ctx.demo.density {
+                        canvas_ui::layout::Density::Compact => {
+                            crate::i18n::tr(ctx.lang, crate::i18n::keys::KIT_DEMO_DENSITY_COMPACT)
+                        }
+                        canvas_ui::layout::Density::Comfortable => crate::i18n::tr(
+                            ctx.lang,
+                            crate::i18n::keys::KIT_DEMO_DENSITY_COMFORTABLE,
+                        ),
+                        canvas_ui::layout::Density::Spacious => {
+                            crate::i18n::tr(ctx.lang, crate::i18n::keys::KIT_DEMO_DENSITY_SPACIOUS)
+                        }
+                    },
+                )],
+            ),
+        };
+        d.label_center(*r, &text, style.text, 11.0);
+    }
+
+    // --- Сайдбар (D5): группы + секции ---
+    for (r, key) in &dl.sidebar_groups {
+        d.label_left(
+            UiRect::new(r.x + 8.0, r.y + 2.0, r.w - 8.0, 14.0),
+            &label(key),
+            p.text_muted,
+            10.0,
+        );
+    }
+    for (r, id) in &dl.sidebar_items {
+        let hover = cursor_in(r, ctx.cursor);
+        if hover {
+            d.rect(*r, p.hover_fill, [0.0; 4], 4.0);
+        }
+        let Some(sec) = crate::kit_demo::section(id) else {
+            continue;
+        };
+        let mut title = label(sec.title_key);
+        // Сайдбар узкий — укорачиваем до ~36 символов (без замера: метки
+        // секций длинные; v1 — грубое усечение, документировано в D7).
+        if title.chars().count() > 36 {
+            title = format!("{}…", title.chars().take(35).collect::<String>());
+        }
+        d.label_left(
+            UiRect::new(r.x + 8.0, r.y + 3.0, r.w - 8.0, 14.0),
+            &title,
+            p.text,
+            11.0,
+        );
+    }
+
+    // --- Описания секций Wave C (D7) ---
+    for (r, key) in &dl.desc {
+        if r.w <= 0.0 {
+            continue;
+        }
+        d.label_left(
+            UiRect::new(r.x, r.y, r.w, 12.0),
+            &label(key),
+            p.text_muted,
+            10.0,
+        );
+    }
+
+    // --- Секции Wave C (D2) ---
+    let wc = &dl.wave_c;
+    // Checkbox: интерактивный + 2 статичных
+    for (i, r) in wc.checkbox.iter().enumerate() {
+        if r.w <= 0.0 {
+            continue;
+        }
+        let state = if i == 0 {
+            let st = demo_state(ctx.pressed, ctx.cursor, r, crate::kit_demo::hit::CHECKBOX);
+            if st == kit::KitState::Normal
+                && ctx.demo.checkbox != canvas_ui::component::checkbox::CheckboxState::Unchecked
+            {
+                kit::KitState::Normal
+            } else {
+                st
+            }
+        } else {
+            kit::KitState::Normal
+        };
+        let cb_state = if i == 0 {
+            ctx.demo.checkbox
+        } else if i == 1 {
+            canvas_ui::component::checkbox::CheckboxState::Checked
+        } else {
+            canvas_ui::component::checkbox::CheckboxState::Indeterminate
+        };
+        let lay = canvas_ui::component::checkbox::checkbox_layout(
+            *r,
+            "",
+            cb_state,
+            canvas_ui::component::ControlSize::Md,
+            8.0,
+            m,
+            fs,
+            FONT_FAMILY,
+            LABEL_SIZE,
+        );
+        let style = canvas_ui::component::checkbox::checkbox_style(cb_state, state, p);
+        d.control(lay.box_rect, &style);
+        let glyph = canvas_ui::component::checkbox::checkbox_glyph(cb_state);
+        if !glyph.is_empty() {
+            d.label_center(lay.box_rect, glyph, style.text, 12.0);
+        }
+    }
+    // Slider (компонентная раскладка из слота)
+    if let Some(sl) = &wc.slider {
+        if sl.track.w > 0.0 {
+            let id = crate::kit_demo::hit::SLIDER;
+            let state = demo_state(ctx.pressed, ctx.cursor, &sl.knob, id);
+            let (style, knob_fill) = canvas_ui::component::slider::slider_style(state, p);
+            d.rect(sl.track, style.fill, style.border, 2.0);
+            d.rect(sl.filled, knob_fill, [0.0; 4], 2.0);
+            d.rect(sl.knob, knob_fill, p.control_border, sl.knob.w / 2.0);
+        }
+    }
+    // Radio (части раскладки компонента)
+    for (i, r) in wc.radio_parts.iter().enumerate() {
+        if r.w <= 0.0 {
+            continue;
+        }
+        let selected = i == ctx.demo.radio_idx;
+        let state = demo_state(ctx.pressed, ctx.cursor, r, crate::kit_demo::hit::radio(i));
+        let style = canvas_ui::component::radio::radio_style(selected, state, p);
+        let circle = UiRect::new(r.x, r.y, r.h, r.h);
+        d.control(circle, &style);
+        if selected {
+            let dot = UiRect::new(
+                circle.x + 4.0,
+                circle.y + 4.0,
+                circle.w - 8.0,
+                circle.h - 8.0,
+            );
+            d.rect(dot, p.accent, [0.0; 4], dot.w / 2.0);
+        }
+        let label_rect = UiRect::new(
+            circle.right() + 8.0,
+            r.y,
+            (r.right() - circle.right() - 8.0).max(0.0),
+            r.h,
+        );
+        d.label_left(
+            label_rect,
+            &label(crate::i18n::keys::KIT_LIST_ROW),
+            style.text,
+            12.0,
+        );
+    }
+    // Tabs
+    if wc.tabs.w > 0.0 {
+        let tab_labels = [
+            crate::i18n::keys::KIT_DEMO_TAB_1,
+            crate::i18n::keys::KIT_DEMO_TAB_2,
+            crate::i18n::keys::KIT_DEMO_TAB_3,
+        ];
+        let bar_h = 32.0;
+        for (i, r) in wc.tabs_parts.iter().enumerate() {
+            let active = i == ctx.demo.tab_idx;
+            let state = if active {
+                kit::KitState::Selected
+            } else {
+                demo_state(ctx.pressed, ctx.cursor, r, crate::kit_demo::hit::tab(i))
+            };
+            let style = kit::button_style(kit::ButtonVariant::Ghost, state, p);
+            d.control(*r, &style);
+            let Some(text_key) = tab_labels.get(i) else {
+                continue;
+            };
+            d.label_center(*r, &label(text_key), style.text, 12.0);
+            if active {
+                let ind = UiRect::new(r.x + r.w * 0.2, r.y + bar_h - 2.0, r.w * 0.6, 2.0);
+                d.rect(ind, p.accent, [0.0; 4], 1.0);
+            }
+        }
+        // Панель активной вкладки
+        let panel = UiRect::new(wc.tabs.x, wc.tabs.y + bar_h, wc.tabs.w, wc.tabs.h - bar_h);
+        let body_style = kit::button_style(kit::ButtonVariant::Secondary, kit::KitState::Normal, p);
+        d.rect(panel, body_style.fill, body_style.border, 4.0);
+        if let Some(text_key) = tab_labels.get(ctx.demo.tab_idx) {
+            d.label_center(panel, &label(text_key), body_style.text, 12.0);
+        }
+    }
+    // Segmented
+    if wc.segmented.w > 0.0 {
+        let seg_labels = [
+            crate::i18n::keys::KIT_DEMO_TAB_1,
+            crate::i18n::keys::KIT_DEMO_TAB_2,
+            crate::i18n::keys::KIT_DEMO_TAB_3,
+        ];
+        let container = kit::button_style(kit::ButtonVariant::Secondary, kit::KitState::Normal, p);
+        d.rect(wc.segmented, container.fill, container.border, 4.0);
+        for (i, r) in wc.segmented_parts.iter().enumerate() {
+            let active = i == ctx.demo.segmented_idx;
+            let state = if active {
+                kit::KitState::Selected
+            } else {
+                demo_state(
+                    ctx.pressed,
+                    ctx.cursor,
+                    r,
+                    crate::kit_demo::hit::segmented(i),
+                )
+            };
+            let style = if active {
+                kit::button_style(kit::ButtonVariant::Primary, kit::KitState::Normal, p)
+            } else {
+                kit::button_style(kit::ButtonVariant::Ghost, state, p)
+            };
+            d.control(*r, &style);
+            let Some(key) = seg_labels.get(i) else {
+                continue;
+            };
+            d.label_center(*r, &label(key), style.text, 11.0);
+        }
+    }
+    // Command palette: якорь
+    if wc.palette_anchor.w > 0.0 {
+        let style = kit::button_style(
+            kit::ButtonVariant::Secondary,
+            demo_state(
+                ctx.pressed,
+                ctx.cursor,
+                &wc.palette_anchor,
+                crate::kit_demo::hit::PALETTE_OPEN,
+            ),
+            p,
+        );
+        d.control(wc.palette_anchor, &style);
+        d.label_center(
+            wc.palette_anchor,
+            &label(crate::i18n::keys::KIT_DEMO_PALETTE_OPEN),
+            style.text,
+            12.0,
+        );
+    }
+    // Modal: якорь
+    if wc.modal_anchor.w > 0.0 {
+        let style = kit::button_style(
+            kit::ButtonVariant::Primary,
+            demo_state(
+                ctx.pressed,
+                ctx.cursor,
+                &wc.modal_anchor,
+                crate::kit_demo::hit::MODAL_OPEN,
+            ),
+            p,
+        );
+        d.control(wc.modal_anchor, &style);
+        d.label_center(
+            wc.modal_anchor,
+            &label(crate::i18n::keys::KIT_DEMO_MODAL_OPEN),
+            style.text,
+            12.0,
+        );
+    }
+    // Tree: корень + листья
+    if wc.tree_root.w > 0.0 {
+        let chevron = if ctx.demo.tree_open { "▾" } else { "▸" };
+        let state = demo_state(
+            ctx.pressed,
+            ctx.cursor,
+            &wc.tree_root,
+            crate::kit_demo::hit::TREE_TOGGLE,
+        );
+        let style = kit::button_style(kit::ButtonVariant::Ghost, state, p);
+        d.control(wc.tree_root, &style);
+        d.label_left(
+            UiRect::new(wc.tree_root.x + 8.0, wc.tree_root.y + 4.0, 16.0, 18.0),
+            chevron,
+            style.text,
+            12.0,
+        );
+        d.label_left(
+            UiRect::new(
+                wc.tree_root.x + 26.0,
+                wc.tree_root.y + 4.0,
+                wc.tree_root.w - 26.0,
+                18.0,
+            ),
+            &label(crate::i18n::keys::KIT_DEMO_TREE_ROOT),
+            style.text,
+            12.0,
+        );
+        for (i, r) in wc.tree_leaves.iter().enumerate() {
+            if r.w <= 0.0 {
+                continue;
+            }
+            let selected = i == ctx.demo.tree_sel;
+            let state = if selected {
+                kit::KitState::Selected
+            } else {
+                demo_state(ctx.pressed, ctx.cursor, r, crate::kit_demo::hit::tree(i))
+            };
+            let style = kit::button_style(kit::ButtonVariant::Ghost, state, p);
+            d.control(*r, &style);
+            let text = crate::i18n::trf(
+                ctx.lang,
+                crate::i18n::keys::KIT_LIST_ROW,
+                &[("{n}", &(i + 1).to_string())],
+            );
+            d.label_left(
+                UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 8.0, 18.0),
+                &text,
+                style.text,
+                12.0,
+            );
+        }
+    }
+    // Accordion: заголовки + тела
+    let acc_labels = [
+        crate::i18n::keys::KIT_DEMO_ACCORDION_1,
+        crate::i18n::keys::KIT_DEMO_ACCORDION_2,
+        crate::i18n::keys::KIT_DEMO_ACCORDION_3,
+    ];
+    for (i, r) in wc.accordion.iter().enumerate() {
+        if r.w <= 0.0 {
+            continue;
+        }
+        let open = ctx.demo.accordion_open[i];
+        let state = if open {
+            kit::KitState::Selected
+        } else {
+            demo_state(
+                ctx.pressed,
+                ctx.cursor,
+                r,
+                crate::kit_demo::hit::accordion(i),
+            )
+        };
+        let (style, _) = canvas_ui::component::accordion::accordion_style(open, state, p);
+        d.control(*r, &style);
+        let chevron = if open { "▾" } else { "▸" };
+        d.label_left(
+            UiRect::new(r.x + 8.0, r.y + 7.0, 16.0, 18.0),
+            chevron,
+            style.text,
+            12.0,
+        );
+        let Some(key) = acc_labels.get(i) else {
+            continue;
+        };
+        d.label_left(
+            UiRect::new(r.x + 26.0, r.y + 7.0, r.w - 26.0, 18.0),
+            &label(key),
+            style.text,
+            12.0,
+        );
+    }
+    for (r, i) in &wc.accordion_bodies {
+        if r.w <= 0.0 {
+            continue;
+        }
+        let style = kit::button_style(kit::ButtonVariant::Secondary, kit::KitState::Normal, p);
+        d.rect(*r, style.fill, style.border, 4.0);
+        d.label_left(
+            UiRect::new(r.x + 12.0, r.y + 8.0, r.w - 24.0, 16.0),
+            &label(crate::i18n::keys::KIT_DEMO_ACCORDION_BODY),
+            p.text_muted,
+            11.0,
+        );
+        let _ = i;
+    }
+    // Badge: 3 варианта от якорных чипов
+    if wc.badges.w > 0.0 {
+        let anchors = [
+            UiRect::new(wc.badges.x + 24.0, wc.badges.y + 8.0, 32.0, 20.0),
+            UiRect::new(wc.badges.x + 96.0, wc.badges.y + 8.0, 32.0, 20.0),
+            UiRect::new(wc.badges.x + 168.0, wc.badges.y + 8.0, 32.0, 20.0),
+        ];
+        let kinds = [
+            (
+                canvas_ui::component::badge::BadgeKind::Dot,
+                canvas_ui::component::badge::BadgeTone::Danger,
+            ),
+            (
+                canvas_ui::component::badge::BadgeKind::Count(3),
+                canvas_ui::component::badge::BadgeTone::Primary,
+            ),
+            (
+                canvas_ui::component::badge::BadgeKind::Text("NEW".to_string()),
+                canvas_ui::component::badge::BadgeTone::Success,
+            ),
+        ];
+        for (anchor, (kind, tone)) in anchors.into_iter().zip(kinds) {
+            let chip_style = kit::chip_style(kit::KitState::Normal, p);
+            d.control(anchor, &chip_style);
+            let bl = canvas_ui::component::badge::badge_layout(
+                anchor,
+                kind,
+                tone,
+                m,
+                fs,
+                FONT_FAMILY,
+                LABEL_SIZE,
+            );
+            let style = canvas_ui::component::badge::badge_style(tone, p);
+            d.control(bl.rect, &style);
+            if let canvas_ui::component::badge::BadgeKind::Text(t) = &bl.kind {
+                d.label_center(bl.rect, t, style.text, 9.0);
+            } else if let canvas_ui::component::badge::BadgeKind::Count(n) = bl.kind {
+                d.label_center(bl.rect, &n.to_string(), style.text, 9.0);
+            }
+        }
+    }
+    // Progress: bar 66% + спиннер (кольцо — рамка-круг)
+    if wc.progress_linear.w > 0.0 {
+        let lay = canvas_ui::component::progress::progress_layout(
+            wc.progress_linear,
+            canvas_ui::component::progress::ProgressKind::Linear { value: 0.66 },
+            canvas_ui::component::ControlSize::Md,
+        );
+        let (style, fill) =
+            canvas_ui::component::progress::progress_style(kit::KitState::Normal, p);
+        d.rect(lay.track, style.fill, style.border, 2.0);
+        d.rect(lay.fill, fill, [0.0; 4], 2.0);
+        let lay = canvas_ui::component::progress::progress_layout(
+            wc.progress_spin,
+            canvas_ui::component::progress::ProgressKind::Spinner { radius: 10.0 },
+            canvas_ui::component::ControlSize::Md,
+        );
+        d.rect(lay.track, [0.0; 4], fill, 2.0);
+    }
+    // Skeleton: паттерн «строки текста», phase 0.5 (v1 — статичная альфа)
+    if wc.skeleton.w > 0.0 {
+        let lay = canvas_ui::component::skeleton::skeleton_layout(
+            wc.skeleton,
+            &canvas_ui::component::skeleton::SkeletonPattern::TextLines {
+                count: 3,
+                row_h: 10.0,
+            },
+            6.0,
+        );
+        let (style, _) = canvas_ui::component::progress::progress_style(kit::KitState::Normal, p);
+        for r in lay.rects {
+            let mut fill = style.fill;
+            fill[3] = 0.5;
+            d.rect(r, fill, [0.0; 4], 4.0);
+        }
+    }
+    // Snackbar: якорь + бар
+    if wc.snackbar_anchor.w > 0.0 {
+        let style = kit::button_style(
+            kit::ButtonVariant::Secondary,
+            demo_state(
+                ctx.pressed,
+                ctx.cursor,
+                &wc.snackbar_anchor,
+                crate::kit_demo::hit::SNACKBAR_SHOW,
+            ),
+            p,
+        );
+        d.control(wc.snackbar_anchor, &style);
+        d.label_center(
+            wc.snackbar_anchor,
+            &label(crate::i18n::keys::KIT_DEMO_SNACKBAR_SHOW),
+            style.text,
+            12.0,
+        );
+    }
+    // Popover: якорь
+    if wc.popover_anchor.w > 0.0 {
+        let style = kit::chip_style(
+            demo_state(
+                ctx.pressed,
+                ctx.cursor,
+                &wc.popover_anchor,
+                crate::kit_demo::hit::POPOVER_ANCHOR,
+            ),
+            p,
+        );
+        d.control(wc.popover_anchor, &style);
+        d.label_center(
+            wc.popover_anchor,
+            &label(crate::i18n::keys::KIT_DEMO_CLICK_ME),
+            style.text,
+            11.0,
+        );
+    }
+
+    // --- Интерактивные оверрайды существующих секций (D1) ---
+    // Chips: состояние из демо (Selected) / курсора (Hovered/Pressed)
+    for (i, r) in ctx.lay.chips.iter().enumerate() {
+        if r.w <= 0.0 {
+            continue;
+        }
+        let id = crate::kit_demo::hit::chip(i);
+        let state = if ctx.demo.chips[i] {
+            if ctx.pressed == Some(id) && cursor_in(r, ctx.cursor) {
+                kit::KitState::Pressed
+            } else {
+                kit::KitState::Selected
+            }
+        } else {
+            demo_state(ctx.pressed, ctx.cursor, r, id)
+        };
+        let style = kit::chip_style(state, p);
+        d.control(*r, &style);
+        let Some(text_key) = STATE_LABELS.get(i) else {
+            continue;
+        };
+        d.label_center(*r, crate::i18n::tr(ctx.lang, text_key), style.text, 12.0);
+    }
+    // Buttons: интерактивные состояния первого ряда матрицы
+    if let Some(row) = ctx.lay.button_rows.first() {
+        for (i, r) in row.buttons.iter().enumerate() {
+            if r.w <= 0.0 {
+                continue;
+            }
+            let id = crate::kit_demo::hit::button(i);
+            let state = demo_state(ctx.pressed, ctx.cursor, r, id);
+            let style = kit::button_style(row.variant, state, p);
+            d.control(*r, &style);
+            let Some(text_key) = STATE_LABELS.get(i) else {
+                continue;
+            };
+            d.label_center(*r, crate::i18n::tr(ctx.lang, text_key), style.text, 13.0);
+        }
+    }
+    // Switch: первое (Normal) — состояние из демо (kit::switch — слоты)
+    if let Some((r, _, _, _)) = ctx.lay.switches.first() {
+        let id = crate::kit_demo::hit::SWITCH;
+        let state = demo_state(ctx.pressed, ctx.cursor, r, id);
+        let sw = canvas_ui::kit::switch(*r, ctx.demo.switch_on, state, p);
+        d.control(sw.track, &sw.track_style);
+        d.rect(sw.knob, sw.knob_fill, [0.0; 4], sw.track_style.radius / 2.0);
+    }
+    // TextField: интерактивное поле (фокус/текст/каретка из демо)
+    if let Some((_, _, tf)) = ctx.lay.text_fields.first() {
+        let id = crate::kit_demo::hit::TEXTFIELD;
+        let focused = ctx.demo.text_focus;
+        let state = if focused {
+            kit::KitState::Focused
+        } else {
+            demo_state(ctx.pressed, ctx.cursor, &tf.rect, id)
+        };
+        let style = kit::button_style(kit::ButtonVariant::Secondary, state, p);
+        d.control(tf.rect, &style);
+        d.label_left(tf.text_area, &ctx.demo.text_value, p.text, 13.0);
+        if focused {
+            let caret_x =
+                tf.text_area.x + ctx.m.width_of(fs, &ctx.demo.text_value, FONT_FAMILY, 13.0);
+            d.rect(
+                UiRect::new(caret_x, tf.text_area.y + 4.0, 1.0, tf.text_area.h - 8.0),
+                p.accent,
+                [0.0; 4],
+                0.5,
+            );
+        }
+    }
+    // List: выделение из демо + hover
+    for (idx, r) in &ctx.lay.list_rows {
+        if r.w <= 0.0 {
+            continue;
+        }
+        let selected = *idx == ctx.demo.list_sel;
+        let id = crate::kit_demo::hit::list_row(*idx);
+        let state = if selected {
+            kit::KitState::Selected
+        } else {
+            demo_state(ctx.pressed, ctx.cursor, r, id)
+        };
+        let style = kit::row_style(state, p);
+        d.rect(*r, style.fill, [0.0; 4], 4.0);
+        let text = crate::i18n::trf(
+            ctx.lang,
+            crate::i18n::keys::KIT_LIST_ROW,
+            &[("{n}", &(idx + 1).to_string())],
+        );
+        d.label_left(
+            UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 16.0, r.h - 6.0),
+            &text,
+            style.label,
+            12.0,
+        );
+    }
+    // Dropdown: подпись якоря = выбранное; меню при открытом + hover пунктов
+    {
+        let id = crate::kit_demo::hit::DROPDOWN_ANCHOR;
+        let state = demo_state(ctx.pressed, ctx.cursor, &ctx.lay.dropdown_anchor, id);
+        let style = kit::button_style(kit::ButtonVariant::Secondary, state, p);
+        d.control(ctx.lay.dropdown_anchor, &style);
+        d.label_center(
+            ctx.lay.dropdown_anchor,
+            &crate::i18n::trf(
+                ctx.lang,
+                crate::i18n::keys::KIT_DROPDOWN_ANCHOR,
+                &[("{n}", &(ctx.demo.dropdown_sel + 1).to_string())],
+            ),
+            style.text,
+            13.0,
+        );
+        if ctx.demo.dropdown_open {
+            for (i, r) in ctx.lay.dropdown_items.iter().enumerate() {
+                if r.w <= 0.0 {
+                    continue;
+                }
+                let selected = i == ctx.demo.dropdown_sel;
+                let state = if selected {
+                    kit::KitState::Selected
+                } else {
+                    let mut ws = canvas_ui::widget::WidgetState::default();
+                    ws.set_pointer(cursor_in(r, ctx.cursor), false);
+                    ws.kit_state()
+                };
+                let style = kit::button_style(kit::ButtonVariant::Ghost, state, p);
+                d.rect(*r, style.fill, [0.0; 4], 4.0);
+                let text = crate::i18n::trf(
+                    ctx.lang,
+                    crate::i18n::keys::KIT_LIST_ROW,
+                    &[("{n}", &(i + 1).to_string())],
+                );
+                d.label_left(
+                    UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 8.0, r.h - 4.0),
+                    &text,
+                    style.text,
+                    12.0,
+                );
+            }
+        }
+    }
+    // Toast: скрыт в демо — перекрываем фоновой rect панельным фоном
+    if !ctx.demo.toast_visible && ctx.lay.toast.w > 0.0 {
+        d.rect(ctx.lay.toast, panel_fill(p), [0.0; 4], 4.0);
+    }
+
+    // --- Оверлеи ---
+    if let Some((mp, close)) = &dl.modal {
+        // Backdrop поверх контента витрины
+        d.rect(ctx.lay.panel, canvas_core::tokens::WHEEL_DIM, [0.0; 4], 0.0);
+        let style = kit::modal_style(p);
+        d.rect(*mp, style.fill, style.border, style.radius);
+        d.label_left(
+            UiRect::new(mp.x + 16.0, mp.y + 12.0, mp.w - 56.0, 20.0),
+            &label(crate::i18n::keys::KIT_DEMO_MODAL_TITLE),
+            p.text_title,
+            13.0,
+        );
+        d.label_left(
+            UiRect::new(mp.x + 16.0, mp.y + 44.0, mp.w - 32.0, 40.0),
+            &label(crate::i18n::keys::KIT_DEMO_MODAL_BODY),
+            p.text,
+            12.0,
+        );
+        let close_style = kit::icon_button_style(
+            demo_state(
+                ctx.pressed,
+                ctx.cursor,
+                close,
+                crate::kit_demo::hit::MODAL_CLOSE,
+            ),
+            p,
+        );
+        d.control(*close, &close_style);
+        d.label_center(*close, "×", close_style.text, 13.0);
+    }
+    if let Some((pp, input, rows)) = &dl.palette {
+        d.rect(ctx.lay.panel, canvas_core::tokens::WHEEL_DIM, [0.0; 4], 0.0);
+        let style = kit::modal_style(p);
+        d.rect(*pp, style.fill, style.border, style.radius);
+        let field_style =
+            canvas_ui::component::panel::control_style_of(p.control_fill, p.accent, p.text, 4.0);
+        d.rect(*input, field_style.fill, p.accent, 4.0);
+        d.label_left(
+            UiRect::new(input.x + 8.0, input.y + 6.0, input.w - 16.0, 16.0),
+            &if ctx.demo.palette_query.is_empty() {
+                label(crate::i18n::keys::KIT_DEMO_PALETTE_PH)
+            } else {
+                ctx.demo.palette_query.clone()
+            },
+            p.text,
+            12.0,
+        );
+        let items = [
+            crate::i18n::keys::KIT_DEMO_PALETTE_ITEM_1,
+            crate::i18n::keys::KIT_DEMO_PALETTE_ITEM_2,
+            crate::i18n::keys::KIT_DEMO_PALETTE_ITEM_3,
+        ];
+        for (i, r) in rows.iter().enumerate() {
+            let mut ws = canvas_ui::widget::WidgetState::default();
+            ws.set_pointer(cursor_in(r, ctx.cursor), false);
+            let state = ws.kit_state();
+            let style = kit::button_style(kit::ButtonVariant::Ghost, state, p);
+            d.rect(*r, style.fill, [0.0; 4], 4.0);
+            let Some(key) = items.get(i) else { continue };
+            d.label_left(
+                UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 8.0, 16.0),
+                &label(key),
+                style.text,
+                12.0,
+            );
+        }
+    }
+    if let Some((bar, close)) = &dl.snackbar_bar {
+        let style = kit::button_style(kit::ButtonVariant::Inverse, kit::KitState::Normal, p);
+        d.rect(*bar, style.fill, style.border, 6.0);
+        d.label_left(
+            UiRect::new(bar.x + 12.0, bar.y + 9.0, bar.w - 48.0, 18.0),
+            &label(crate::i18n::keys::KIT_DEMO_SNACKBAR_TEXT),
+            style.text,
+            12.0,
+        );
+        let close_style = kit::icon_button_style(
+            demo_state(
+                ctx.pressed,
+                ctx.cursor,
+                close,
+                crate::kit_demo::hit::SNACKBAR_CLOSE,
+            ),
+            p,
+        );
+        d.control(*close, &close_style);
+        d.label_center(*close, "×", close_style.text, 12.0);
+    }
+    if let Some(bubble) = &dl.popover_bubble {
+        let style = kit::modal_style(p);
+        d.rect(*bubble, style.fill, style.border, 6.0);
+        d.label_left(
+            UiRect::new(bubble.x + 12.0, bubble.y + 10.0, bubble.w - 24.0, 44.0),
+            &label(crate::i18n::keys::KIT_DEMO_ACCORDION_BODY),
+            p.text,
+            11.0,
+        );
+    }
+}
+
+/// Заливка «фона панели» — перекрытие скрытых демо-контролов (тост).
+fn panel_fill(p: &KitPalette) -> [f32; 4] {
+    kit::modal_style(p).fill
 }
 
 /// Слот-раскладка интерактивных зон для hit-rect'ов реестра (без
@@ -3950,6 +5548,177 @@ mod tests {
             assert!(
                 seen.iter().any(|t| t == tag),
                 "золотой тег не снят сканом: {tag}"
+            );
+        }
+    }
+
+    // === Wave D v1 (issue #32): TO-BE demo-раскладка ========================
+
+    /// TO-BE: тулбар (5 контролов), сайдбар (26 секций + 5 групп), хвост
+    /// Wave C (14 секций), demo_hits непусты, section_offsets покрывают
+    /// реестр. AS-IS: demo-поле None (регрессия прежнего поведения).
+    #[test]
+    fn tobe_demo_layout_structure() {
+        let viewport = [1280.0, 800.0];
+        let lang = Language::Ru;
+        let scroll = kit::ScrollState::default();
+        let palette = gallery_palette();
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let demo = crate::kit_demo::KitDemoState {
+            tobe: true,
+            ..crate::kit_demo::KitDemoState::default()
+        };
+        let lay = gallery_layout_tobe(viewport, lang, &scroll, &palette, &mut m, &mut fs, &demo);
+        let Some(dl) = lay.demo.as_ref() else {
+            panic!("TO-BE раскладка без DemoLayout");
+        };
+        assert_eq!(dl.toolbar.len(), 5, "тулбар: 5 контролов (D3/D4)");
+        // Сайдбар клампится по высоте окна секций (PANEL_MAX 640 → окно
+        // ~538px; 26 секций × 20px + 5 групп × 18px = 610px — Feedback-хвост
+        // за краем): v1 без скролла сайдбара — видимые секции навигируются,
+        // ограничение задокументировано в D7 (kit-demo-v1.md).
+        assert!(
+            dl.sidebar_items.len() >= 20,
+            "сайдбар: большинство секций видно ({} из {})",
+            dl.sidebar_items.len(),
+            crate::kit_demo::SECTIONS.len(),
+        );
+        assert!(dl.sidebar_items.len() <= crate::kit_demo::SECTIONS.len());
+        assert_eq!(
+            dl.sidebar_groups.len(),
+            5,
+            "сайдбар: 5 групп (Inputs/Navigation/Containers/Data/Feedback)"
+        );
+        assert!(!dl.demo_hits.is_empty(), "demo_hits заполнены (draw==hit)");
+        // Секции Wave C присутствуют в сдвигах заголовков (навигация D5)
+        for id in crate::kit_demo::WAVE_C_ORDER {
+            assert!(
+                dl.section_offsets.iter().any(|(sid, _)| sid == id),
+                "нет offset секции {id}"
+            );
+        }
+        // Динамические высоты: закрытое дерево ниже открытого
+        let demo_closed = crate::kit_demo::KitDemoState {
+            tobe: true,
+            tree_open: false,
+            accordion_open: [false; 3],
+            ..crate::kit_demo::KitDemoState::default()
+        };
+        let lay2 = gallery_layout_tobe(
+            viewport,
+            lang,
+            &scroll,
+            &palette,
+            &mut m,
+            &mut fs,
+            &demo_closed,
+        );
+        assert!(
+            lay2.content_h < lay.content_h,
+            "закрытые дерево/аккордеон — контент ниже"
+        );
+        // AS-IS: demo None (golden-пины прежней раскладки в силе)
+        let lay_asis = gallery_layout(viewport, lang, &scroll, &palette, &mut m, &mut fs);
+        assert!(lay_asis.demo.is_none(), "AS-IS без DemoLayout");
+        assert!(
+            lay_asis.content_h < lay.content_h,
+            "TO-BE длиннее AS-IS (секции Wave C добавлены)"
+        );
+    }
+
+    /// TO-BE: dropdown-меню в раскладке только при открытом состоянии
+    /// (D1); хиты закрывают тулбар/сайдбар/секции (выборочная проверка id).
+    #[test]
+    fn tobe_dropdown_and_hit_ids() {
+        let viewport = [1280.0, 800.0];
+        let palette = gallery_palette();
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let mk = |open: bool| crate::kit_demo::KitDemoState {
+            tobe: true,
+            dropdown_open: open,
+            ..crate::kit_demo::KitDemoState::default()
+        };
+        let closed = gallery_layout_tobe(
+            viewport,
+            Language::Ru,
+            &kit::ScrollState::default(),
+            &palette,
+            &mut m,
+            &mut fs,
+            &mk(false),
+        );
+        let opened = gallery_layout_tobe(
+            viewport,
+            Language::Ru,
+            &kit::ScrollState::default(),
+            &palette,
+            &mut m,
+            &mut fs,
+            &mk(true),
+        );
+        assert!(closed.dropdown_items.is_empty(), "меню скрыто при закрытом");
+        assert_eq!(opened.dropdown_items.len(), 3, "меню из 3 пунктов");
+        let Some(dl) = opened.demo.as_ref() else {
+            panic!("нет DemoLayout");
+        };
+        // Всегда видимы (фиксированные зоны): тулбар + nav-хиты сайдбара
+        for id in [
+            crate::kit_demo::hit::TOOLBAR_MODE,
+            crate::kit_demo::hit::TOOLBAR_THEME,
+        ] {
+            assert!(
+                dl.demo_hits.iter().any(|(_, hid)| *hid == id),
+                "нет хита {id}"
+            );
+        }
+        assert!(
+            dl.demo_hits.iter().any(|(_, id)| id.starts_with("nav:")),
+            "есть nav-хиты сайдбара"
+        );
+        // Секции — скролл-зависимы (фильтр полной видимости FR-059): навигация
+        // D5 по section_offsets приводит к появлению хитов секции (end-to-end).
+        let scroll_for = |lay: &GalleryLayout, sid: &str| {
+            let mut st = kit::ScrollState::default();
+            st.viewport_h = lay.sections_viewport.h;
+            st.content_h = lay.content_h;
+            if let Some((_, base_y)) = lay
+                .demo
+                .as_ref()
+                .and_then(|d| d.section_offsets.iter().find(|(id, _)| *id == sid))
+            {
+                st.offset = (*base_y - lay.sections_viewport.y).max(0.0);
+            }
+            st.clamp();
+            st
+        };
+        for (sid, expected) in [
+            ("switch", crate::kit_demo::hit::SWITCH),
+            ("checkbox", crate::kit_demo::hit::CHECKBOX),
+            ("slider", crate::kit_demo::hit::SLIDER),
+            ("modal", crate::kit_demo::hit::MODAL_OPEN),
+            ("command_palette", crate::kit_demo::hit::PALETTE_OPEN),
+            ("tree", crate::kit_demo::hit::TREE_TOGGLE),
+            ("snackbar", crate::kit_demo::hit::SNACKBAR_SHOW),
+            ("popover", crate::kit_demo::hit::POPOVER_ANCHOR),
+        ] {
+            let st = scroll_for(&opened, sid);
+            let lay = gallery_layout_tobe(
+                viewport,
+                Language::Ru,
+                &st,
+                &palette,
+                &mut m,
+                &mut fs,
+                &mk(true),
+            );
+            let Some(dls) = lay.demo.as_ref() else {
+                panic!("нет DemoLayout");
+            };
+            assert!(
+                dls.demo_hits.iter().any(|(_, hid)| *hid == expected),
+                "нет хита {expected} после навигации к секции {sid}"
             );
         }
     }
