@@ -1,6 +1,6 @@
 # 07 — Темизация
 
-> Код: `canvas-render/src/theme.rs` (ThemeColors), `canvas-core/src/theme_presets.rs`
+> Код: `crates/canvas-render/src/theme.rs` (ThemeColors), `crates/canvas-core/src/theme_presets.rs`
 > (пресеты), `design/tokens/themes/*.json` (данные тем).
 
 ## TH1. Темы — данные, не код
@@ -43,7 +43,7 @@ whatif_fill, whatif_badge, error, hud, stage_dim + `"dark": bool`
 
 ## TH4. Derived-слоты (в JSON не хранятся)
 
-Вычисляются при сборке палитры (`canvas-render/src/theme_presets.rs`):
+Вычисляются при сборке палитры (`crates/canvas-render/src/theme_presets.rs`):
 
 | Слот | Правило |
 |---|---|

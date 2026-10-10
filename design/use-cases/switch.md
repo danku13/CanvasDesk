@@ -40,7 +40,7 @@ value, не KitState.Selected) > Normal. Значение on/off анимиру�
 - Анимация обрывается вводом — состояние скачком = целевое (без откатов).
 
 ## 7. Где в коде
-`canvas-ui/src/kit.rs` — switch (852–902, SWITCH_* константы 156–160);
+`crates/canvas-ui/src/kit.rs` — switch (852–902, SWITCH_* константы 156–160);
 inline-вариант — `settings_ui.rs` (PILL_TRACK 34×18, knob 14).
 
 ## 8. Что меняется при правке файла

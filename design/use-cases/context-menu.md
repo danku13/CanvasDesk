@@ -45,7 +45,7 @@ control_disabled_text, не реагирует).
 - Пустое меню (нет действий) не показывается.
 
 ## 7. Где в коде
-`canvas-app/src/lib.rs` (131–139 MENU_*; ALIGN_MIN_SELECTION 1160),
+`crates/canvas-app/src/lib.rs` (131–139 MENU_*; ALIGN_MIN_SELECTION 1160),
 choice-меню — app.rs (197, 8251–8274), списки — list_rows + ScrollState.
 
 ## 8. Что меняется при правке файла

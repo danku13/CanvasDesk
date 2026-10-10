@@ -35,8 +35,8 @@
   (HideBelow-политика поверхности).
 
 ## 7. Где в коде
-`canvas-render/src/minimap.rs` (18–30 константы); surface-декларация —
-`app/ui_registry.rs` (Panels/Capture); переходы — animate.rs (полёт 300 мс).
+`crates/canvas-render/src/minimap.rs` (18–30 константы); surface-декларация —
+`crates/canvas-app/src/app/ui_registry.rs` (Panels/Capture); переходы — animate.rs (полёт 300 мс).
 
 ## 8. Что меняется при правке файла
 Размеры/отступы → minimap.rs. Порог 500 → константа minimap.rs. Поведение

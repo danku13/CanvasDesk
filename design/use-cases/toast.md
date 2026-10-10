@@ -39,11 +39,11 @@
   проверено CR-016).
 
 ## 7. Где в коде
-`canvas-ui/src/kit.rs` — toast_area (458–467), TOAST_TTL_MS (134);
-показ — `canvas-app/src/app.rs` show_toast (17261–17263): текст TOAST_TEXT,
+`crates/canvas-ui/src/kit.rs` — toast_area (458–467), TOAST_TTL_MS (134);
+показ — `crates/canvas-app/src/app.rs` show_toast (17261–17263): текст TOAST_TEXT,
 CR-016 lift 26. Референс-поверхность Passive — capture.rs/lib.rs тесты.
 
 ## 8. Что меняется при правке файла
 TTL/позиции → TOAST_TTL_MS и геометрия toast_area. Цвет текста →
 colors.json toast.text (паритет I-5). Изменение «не кликабелен» — правка
-capture-контракта Passive (запрещено без пересмотра `rules/05-layering.md`).
+capture-контракта Passive (запрещено без пересмотра `../rules/05-layering.md`).

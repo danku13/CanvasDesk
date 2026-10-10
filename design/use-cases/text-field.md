@@ -49,13 +49,13 @@ Hover-заливки у поля нет (поле идентифицируетс
   значение откатывается.
 
 ## 7. Где в коде
-Модель/действия/раскладка — `canvas-ui/src/component/text_field.rs`
+Модель/действия/раскладка — `crates/canvas-ui/src/component/text_field.rs`
 (`TextFieldModel` — текст/каретка/селекция в символах + `max_chars`;
 `TextFieldAction`/`TextFieldEffect` + `apply` — клавиатурный контракт;
 `text_field()`/`text_field_masked()` — placeholder/ellipsis/скролл-вслед/
-маска; `caret_index_at_x` — клик → каретка). Фасад — `canvas-ui/src/kit.rs`.
+маска; `caret_index_at_x` — клик → каретка). Фасад — `crates/canvas-ui/src/kit.rs`.
 Маппер клавиш (winit → TextFieldAction, буфер) —
-`canvas-app/src/app/input.rs` (`text_field_action`, `apply_text_field_key`).
+`crates/canvas-app/src/app/input.rs` (`text_field_action`, `apply_text_field_key`).
 Потребители: `search_ui.rs` (`SearchInput` — обёртка kit-модели),
 `scheme_gallery_ui.rs` (filter), `template_ui.rs` (filter), настройки
 (`App::settings_text_edit` — (строка, kit-модель), маска API-ключей),

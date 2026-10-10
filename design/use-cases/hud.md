@@ -36,7 +36,7 @@ hud color + hud_shadow (state-токены). DebugOverlay — служебная
 - Данные HUD не считаются, если HUD скрыт (нулевая цена).
 
 ## 7. Где в коде
-`canvas-render/src/text.rs` (HUD_COLOR/тень/PADDING — 134–140, 254–257;
+`crates/canvas-render/src/text.rs` (HUD_COLOR/тень/PADDING — 134–140, 254–257;
 сборка строки — canvas-app app.rs 8195–8225), DebugOverlay — canvas-ui +
 app (PRD-0009 F-10), хоткеи — HOTKEYS (lib.rs, F1-оверлей).
 
