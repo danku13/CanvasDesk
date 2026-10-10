@@ -44,6 +44,7 @@ pub struct CommandPaletteLayout {
 }
 
 /// Вёрстка command palette: центрировано-top, 560px wide, 8 results visible.
+#[allow(clippy::too_many_arguments)] // прецедент kit: layout-функции
 pub fn command_palette_layout(
     viewport: UiRect,
     results: &[usize], // индексы отфильтрованных действий
@@ -51,8 +52,8 @@ pub fn command_palette_layout(
     input_h: f32,
     row_h: f32,
     max_visible: usize,
-    m: &mut TextMeasurer,
-    fs: &mut cosmic_text::FontSystem,
+    _m: &mut TextMeasurer,
+    _fs: &mut cosmic_text::FontSystem,
 ) -> CommandPaletteLayout {
     let width = 560.0_f32.min(viewport.w - 80.0);
     let x = viewport.x + (viewport.w - width).max(0.0) / 2.0;
@@ -65,12 +66,16 @@ pub fn command_palette_layout(
             (UiRect::new(x, row_y, width, row_h), results[i])
         })
         .collect();
-    CommandPaletteLayout { input, results: results_layout, selected }
+    CommandPaletteLayout {
+        input,
+        results: results_layout,
+        selected,
+    }
 }
 
 /// Fuzzy search по действиям: возвращает индексы matching actions.
 /// Простая подстрока (case-insensitive); Wave A может заменить на fuzzy-matcher.
-pub fn search_actions<'a>(actions: &'a [CommandAction], query: &str) -> Vec<usize> {
+pub fn search_actions(actions: &[CommandAction], query: &str) -> Vec<usize> {
     if query.is_empty() {
         return (0..actions.len()).collect();
     }
@@ -94,7 +99,11 @@ pub enum CommandPaletteKey {
 
 /// Hit-test: возвращает индекс результата по точке.
 pub fn command_palette_hit(layout: &CommandPaletteLayout, p: UiPoint) -> Option<usize> {
-    layout.results.iter().find(|(r, _)| r.contains(p)).map(|(_, i)| *i)
+    layout
+        .results
+        .iter()
+        .find(|(r, _)| r.contains(p))
+        .map(|(_, i)| *i)
 }
 
 #[cfg(test)]
@@ -103,9 +112,24 @@ mod tests {
 
     fn test_actions() -> Vec<CommandAction> {
         vec![
-            CommandAction { id: "open_settings".into(), label: "Открыть настройки".into(), kbd: Some("ctrl+,".into()), category: CommandCategory::File },
-            CommandAction { id: "toggle_whatif".into(), label: "Переключить what-if".into(), kbd: Some("ctrl+w".into()), category: CommandCategory::View },
-            CommandAction { id: "save".into(), label: "Сохранить канвас".into(), kbd: Some("ctrl+s".into()), category: CommandCategory::File },
+            CommandAction {
+                id: "open_settings".into(),
+                label: "Открыть настройки".into(),
+                kbd: Some("ctrl+,".into()),
+                category: CommandCategory::File,
+            },
+            CommandAction {
+                id: "toggle_whatif".into(),
+                label: "Переключить what-if".into(),
+                kbd: Some("ctrl+w".into()),
+                category: CommandCategory::View,
+            },
+            CommandAction {
+                id: "save".into(),
+                label: "Сохранить канвас".into(),
+                kbd: Some("ctrl+s".into()),
+                category: CommandCategory::File,
+            },
         ]
     }
 
@@ -122,7 +146,7 @@ mod tests {
         let result = search_actions(&actions, "настрой");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], 0); // "Открыть настройки"
-        // "сохран" matches "Сохранить"
+                                  // "сохран" matches "Сохранить"
         let result = search_actions(&actions, "сохран");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], 2);
@@ -156,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn command_palette_hit() {
+    fn hit_test_resolves_result_rows() {
         let mut m = TextMeasurer::new();
         let mut fs = cosmic_text::FontSystem::new();
         let viewport = UiRect::new(0.0, 0.0, 1280.0, 800.0);
@@ -165,6 +189,9 @@ mod tests {
         // Click on input
         assert_eq!(command_palette_hit(&lay, UiPoint::new(400.0, 70.0)), None);
         // Click on first result (y = 60 + 40 = 100..132)
-        assert_eq!(command_palette_hit(&lay, UiPoint::new(400.0, 110.0)), Some(0));
+        assert_eq!(
+            command_palette_hit(&lay, UiPoint::new(400.0, 110.0)),
+            Some(0)
+        );
     }
 }

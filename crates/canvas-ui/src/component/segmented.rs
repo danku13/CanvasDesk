@@ -25,14 +25,19 @@ pub fn segmented_layout(
     slot: UiRect,
     labels: &[String],
     active: usize,
-    m: &mut TextMeasurer,
-    fs: &mut cosmic_text::FontSystem,
-    family: &str,
-    font_size: f32,
+    _m: &mut TextMeasurer,
+    _fs: &mut cosmic_text::FontSystem,
+    _family: &str,
+    _font_size: f32,
 ) -> SegmentedLayout {
     let container = slot;
     if labels.is_empty() {
-        return SegmentedLayout { container, segments: Vec::new(), active_rect: UiRect::default(), active };
+        return SegmentedLayout {
+            container,
+            segments: Vec::new(),
+            active_rect: UiRect::default(),
+            active,
+        };
     }
     let n = labels.len();
     let seg_w = slot.w / n as f32;
@@ -40,11 +45,20 @@ pub fn segmented_layout(
         .map(|i| UiRect::new(slot.x + i as f32 * seg_w, slot.y, seg_w, slot.h))
         .collect::<Vec<_>>();
     let active_rect = segments.get(active).copied().unwrap_or_default();
-    SegmentedLayout { container, segments, active_rect, active }
+    SegmentedLayout {
+        container,
+        segments,
+        active_rect,
+        active,
+    }
 }
 
 /// Стиль segmented: container — control_fill; active — control_primary + on_primary.
-pub fn segmented_style(active: bool, state: KitState, p: &KitPalette) -> (super::ControlStyle, super::ControlStyle) {
+pub fn segmented_style(
+    active: bool,
+    state: KitState,
+    p: &KitPalette,
+) -> (super::ControlStyle, super::ControlStyle) {
     let container_fill = match state {
         KitState::Hovered | KitState::Pressed => p.hover_fill,
         _ => p.control_fill,
@@ -77,10 +91,20 @@ pub fn segmented_key(active: usize, count: usize, key: SegmentedKey) -> Option<u
         return None;
     }
     let new = match key {
-        SegmentedKey::Prev => if active == 0 { count - 1 } else { active - 1 },
+        SegmentedKey::Prev => {
+            if active == 0 {
+                count - 1
+            } else {
+                active - 1
+            }
+        }
         SegmentedKey::Next => (active + 1) % count,
     };
-    if new != active { Some(new) } else { None }
+    if new != active {
+        Some(new)
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn segmented_hit() {
+    fn hit_test_resolves_segments() {
         let mut m = TextMeasurer::new();
         let mut fs = cosmic_text::FontSystem::new();
         let slot = UiRect::new(0.0, 0.0, 300.0, 32.0);

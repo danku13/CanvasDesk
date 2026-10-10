@@ -3,8 +3,9 @@
 //! Анатомия: `message` + optional `action_button`. Bottom-center.
 //! Auto-dismiss по ttl_ms. Queue — стакаются вертикально.
 
-use super::{BadgeTone, KitPalette, KitState, Shape};
+use super::{KitPalette, Shape};
 use crate::geometry::UiRect;
+use crate::kit::BadgeTone;
 use crate::measure::TextMeasurer;
 
 /// Snackbar (Wave C §5.3.12).
@@ -43,6 +44,7 @@ pub struct SnackbarLayout {
 }
 
 /// Вёрстка snackbar: bottom-center, pill shape, message + optional action.
+#[allow(clippy::too_many_arguments)] // прецедент kit: layout-функции
 pub fn snackbar_layout(
     viewport: UiRect,
     snack: &Snackbar,
@@ -54,10 +56,16 @@ pub fn snackbar_layout(
     font_size: f32,
 ) -> SnackbarLayout {
     let msg_w = m.width_of(fs, &snack.message, family, font_size);
-    let action_w = snack.action_label.as_ref().map(|l| {
-        m.width_of(fs, l, family, font_size) + 2.0 * pad_h
-    }).unwrap_or(0.0);
-    let gap = if snack.action_label.is_some() { pad_h } else { 0.0 };
+    let action_w = snack
+        .action_label
+        .as_ref()
+        .map(|l| m.width_of(fs, l, family, font_size) + 2.0 * pad_h)
+        .unwrap_or(0.0);
+    let gap = if snack.action_label.is_some() {
+        pad_h
+    } else {
+        0.0
+    };
     let total_w = msg_w + 2.0 * pad_h + gap + action_w;
     // Bottom-center, с отступом 24px от низа.
     let x = viewport.x + (viewport.w - total_w).max(0.0) / 2.0;
@@ -111,7 +119,8 @@ impl SnackbarQueue {
 
     /// Добавить snackbar. `now_ms` — текущее время.
     pub fn push(&mut self, snack: Snackbar, now_ms: u64) {
-        self.items.push((snack, now_ms + snack.ttl_ms));
+        let expire = now_ms + snack.ttl_ms;
+        self.items.push((snack, expire));
     }
 
     /// Удалить истёкшие. `now_ms` — текущее время.
@@ -146,7 +155,10 @@ mod tests {
         let mut m = TextMeasurer::new();
         let mut fs = cosmic_text::FontSystem::new();
         let viewport = UiRect::new(0.0, 0.0, 800.0, 600.0);
-        let snack = Snackbar { message: "Saved".into(), ..Default::default() };
+        let snack = Snackbar {
+            message: "Saved".into(),
+            ..Default::default()
+        };
         let lay = snackbar_layout(viewport, &snack, 36.0, 12.0, &mut m, &mut fs, "sans", 13.0);
         // Bottom: y = 600 - 36 - 24 = 540
         assert!((lay.rect.y - 540.0).abs() < 0.01);
@@ -171,7 +183,11 @@ mod tests {
     fn snackbar_queue_push_tick() {
         let mut q = SnackbarQueue::new();
         assert!(q.is_empty());
-        let s = Snackbar { message: "Test".into(), ttl_ms: 1000, ..Default::default() };
+        let s = Snackbar {
+            message: "Test".into(),
+            ttl_ms: 1000,
+            ..Default::default()
+        };
         q.push(s, 0);
         assert_eq!(q.len(), 1);
         // Not expired at t=500

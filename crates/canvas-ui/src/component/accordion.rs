@@ -21,17 +21,18 @@ pub struct AccordionLayout {
 }
 
 /// Вёрстка accordion: header сверху, content снизу (если expanded).
+#[allow(clippy::too_many_arguments)] // прецедент kit: layout-функции
 pub fn accordion_layout(
     slot: UiRect,
-    label: &str,
+    _label: &str,
     expanded: bool,
     header_h: f32,
     content_h: f32,
     chevron_w: f32,
-    m: &mut TextMeasurer,
-    fs: &mut cosmic_text::FontSystem,
-    family: &str,
-    font_size: f32,
+    _m: &mut TextMeasurer,
+    _fs: &mut cosmic_text::FontSystem,
+    _family: &str,
+    _font_size: f32,
 ) -> AccordionLayout {
     let header = UiRect::new(slot.x, slot.y, slot.w, header_h);
     let chevron = UiRect::new(slot.x, slot.y, chevron_w, header_h);
@@ -40,11 +41,20 @@ pub fn accordion_layout(
     } else {
         UiRect::new(slot.x, slot.y + header_h, slot.w, 0.0)
     };
-    AccordionLayout { header, content, chevron, expanded }
+    AccordionLayout {
+        header,
+        content,
+        chevron,
+        expanded,
+    }
 }
 
 /// Стиль accordion: header — control_fill; expanded → accent chevron.
-pub fn accordion_style(expanded: bool, state: KitState, p: &KitPalette) -> (super::ControlStyle, [f32; 4]) {
+pub fn accordion_style(
+    expanded: bool,
+    state: KitState,
+    p: &KitPalette,
+) -> (super::ControlStyle, [f32; 4]) {
     let fill = match state {
         KitState::Hovered | KitState::Pressed => p.hover_fill,
         _ => p.control_fill,
@@ -74,7 +84,9 @@ mod tests {
         let mut m = TextMeasurer::new();
         let mut fs = cosmic_text::FontSystem::new();
         let slot = UiRect::new(0.0, 0.0, 300.0, 500.0);
-        let lay = accordion_layout(slot, "Section", true, 32.0, 100.0, 24.0, &mut m, &mut fs, "sans", 13.0);
+        let lay = accordion_layout(
+            slot, "Section", true, 32.0, 100.0, 24.0, &mut m, &mut fs, "sans", 13.0,
+        );
         assert!(lay.expanded);
         assert!((lay.header.h - 32.0).abs() < 0.01);
         assert!((lay.content.h - 100.0).abs() < 0.01);
@@ -87,7 +99,9 @@ mod tests {
         let mut m = TextMeasurer::new();
         let mut fs = cosmic_text::FontSystem::new();
         let slot = UiRect::new(0.0, 0.0, 300.0, 500.0);
-        let lay = accordion_layout(slot, "Section", false, 32.0, 100.0, 24.0, &mut m, &mut fs, "sans", 13.0);
+        let lay = accordion_layout(
+            slot, "Section", false, 32.0, 100.0, 24.0, &mut m, &mut fs, "sans", 13.0,
+        );
         assert!(!lay.expanded);
         assert!((lay.content.h - 0.0).abs() < 0.01);
     }
@@ -97,7 +111,9 @@ mod tests {
         let mut m = TextMeasurer::new();
         let mut fs = cosmic_text::FontSystem::new();
         let slot = UiRect::new(0.0, 0.0, 300.0, 500.0);
-        let lay = accordion_layout(slot, "Section", true, 32.0, 100.0, 24.0, &mut m, &mut fs, "sans", 13.0);
+        let lay = accordion_layout(
+            slot, "Section", true, 32.0, 100.0, 24.0, &mut m, &mut fs, "sans", 13.0,
+        );
         // Click on header
         assert!(accordion_hit(&lay, UiPoint::new(10.0, 10.0)));
         // Click on chevron (inside header)

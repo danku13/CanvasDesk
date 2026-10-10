@@ -3,8 +3,8 @@
 //! Анатомия: `rect` (маленький квад/pill) + glyph/text.
 //! Tone: Default/Primary/Success/Warning/Danger/Info.
 
-use super::{KitPalette, KitState, Shape};
-use crate::geometry::{UiPoint, UiRect};
+use super::{KitPalette, Shape};
+use crate::geometry::UiRect;
 use crate::measure::TextMeasurer;
 
 /// Тип бейджа (Wave C §5.3.9).
@@ -22,12 +22,12 @@ pub enum BadgeKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BadgeTone {
     #[default]
-    Default,  // secondary
-    Primary,  // accent
-    Success,  // green
-    Warning,  // amber
-    Danger,   // red
-    Info,     // blue
+    Default, // secondary
+    Primary, // accent
+    Success, // green
+    Warning, // amber
+    Danger,  // red
+    Info,    // blue
 }
 
 /// Раскладка бейджа (Wave C §5.3.9).
@@ -105,7 +105,15 @@ mod tests {
         let mut m = TextMeasurer::new();
         let mut fs = cosmic_text::FontSystem::new();
         let anchor = UiRect::new(10.0, 10.0, 30.0, 30.0);
-        let lay = badge_layout(anchor, BadgeKind::Dot, BadgeTone::Danger, &mut m, &mut fs, "sans", 10.0);
+        let lay = badge_layout(
+            anchor,
+            BadgeKind::Dot,
+            BadgeTone::Danger,
+            &mut m,
+            &mut fs,
+            "sans",
+            10.0,
+        );
         // Dot: 8×8, top-right corner
         assert!((lay.rect.w - 8.0).abs() < 0.01);
         assert!((lay.rect.h - 8.0).abs() < 0.01);
@@ -120,7 +128,15 @@ mod tests {
         let mut m = TextMeasurer::new();
         let mut fs = cosmic_text::FontSystem::new();
         let anchor = UiRect::new(10.0, 10.0, 30.0, 30.0);
-        let lay = badge_layout(anchor, BadgeKind::Count(3), BadgeTone::Danger, &mut m, &mut fs, "sans", 10.0);
+        let lay = badge_layout(
+            anchor,
+            BadgeKind::Count(3),
+            BadgeTone::Danger,
+            &mut m,
+            &mut fs,
+            "sans",
+            10.0,
+        );
         // Count: pill, минимум 16px высота
         assert!(lay.rect.h >= 16.0);
         assert!(lay.rect.w >= 16.0);
@@ -139,15 +155,25 @@ mod tests {
 
     fn test_palette() -> KitPalette {
         KitPalette {
-            panel_fill: [0.0; 4], panel_border: [0.0; 4],
-            control_fill: [0.3, 0.3, 0.3, 1.0], control_border: [0.0; 4],
-            control_primary: [0.1, 0.5, 0.9, 1.0], control_danger: [0.9, 0.1, 0.1, 1.0],
-            hover_fill: [0.0; 4], primary_hover_fill: [0.0; 4], selected_fill: [0.0; 4],
-            text: [0.9, 0.9, 0.9, 1.0], text_title: [1.0, 1.0, 1.0, 1.0],
-            text_muted: [0.6, 0.6, 0.6, 1.0], disabled_text: [0.5, 0.5, 0.5, 1.0],
+            panel_fill: [0.0; 4],
+            panel_border: [0.0; 4],
+            control_fill: [0.3, 0.3, 0.3, 1.0],
+            control_border: [0.0; 4],
+            control_primary: [0.1, 0.5, 0.9, 1.0],
+            control_danger: [0.9, 0.1, 0.1, 1.0],
+            hover_fill: [0.0; 4],
+            primary_hover_fill: [0.0; 4],
+            selected_fill: [0.0; 4],
+            text: [0.9, 0.9, 0.9, 1.0],
+            text_title: [1.0, 1.0, 1.0, 1.0],
+            text_muted: [0.6, 0.6, 0.6, 1.0],
+            disabled_text: [0.5, 0.5, 0.5, 1.0],
             accent: [0.0, 0.5, 1.0, 1.0],
-            control_success: [0.1, 0.8, 0.3, 1.0], control_warning: [0.9, 0.7, 0.1, 1.0],
-            stage_dim: [0.0; 4], scrollbar_thumb: [0.0; 4], rule_color: [0.0; 4],
+            control_success: [0.1, 0.8, 0.3, 1.0],
+            control_warning: [0.9, 0.7, 0.1, 1.0],
+            stage_dim: [0.0; 4],
+            scrollbar_thumb: [0.0; 4],
+            rule_color: [0.0; 4],
         }
     }
 }

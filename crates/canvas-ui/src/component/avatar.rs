@@ -3,8 +3,9 @@
 //! Анатомия: `rect` (квадрат) + source (Initials/Icon/Image).
 //! Tone — цвет фона для initials/icon.
 
-use super::{BadgeTone, ControlSize, KitPalette, Shape};
+use super::{ControlSize, KitPalette, Shape};
 use crate::geometry::UiRect;
+use crate::kit::BadgeTone;
 
 /// Источник аватара (Wave C §5.3.10).
 #[derive(Debug, Clone, PartialEq)]

@@ -4,8 +4,7 @@
 //! Keyboard: ←/→/↑/↓ navigation (FocusZone pattern).
 
 use super::{ControlSize, ControlStyle, KitPalette, KitState, Shape};
-use crate::geometry::{UiPoint, UiRect, UiVec2};
-use crate::layout::{stack, HAlign, VAlign};
+use crate::geometry::{UiPoint, UiRect};
 use crate::measure::TextMeasurer;
 
 /// Ориентация группы radio (Wave C §5.3.4).
@@ -25,7 +24,10 @@ pub struct RadioGroup {
 
 impl RadioGroup {
     pub fn new(options: Vec<String>) -> Self {
-        Self { options, selected: 0 }
+        Self {
+            options,
+            selected: 0,
+        }
     }
 }
 
@@ -43,6 +45,7 @@ pub struct RadioLayout {
 }
 
 /// Вёрстка группы radio: вертикально или горизонтально (Wave C §5.3.4).
+#[allow(clippy::too_many_arguments)] // прецедент kit: layout-функции
 pub fn radio_group_layout(
     slot: UiRect,
     group: &RadioGroup,
@@ -72,9 +75,7 @@ pub fn radio_group_layout(
         let circle = UiRect::new(item_slot.x, item_slot.y, circle_d, circle_d);
         let label_x = circle.right() + label_gap;
         let label_w = (item_slot.right() - label_x).max(0.0);
-        let shown = m
-            .ellipsis(fs, opt, family, font_size, label_w)
-            .unwrap_or_else(|| opt.clone());
+        let shown = m.ellipsis(fs, opt, family, font_size, label_w);
         let label_rect = UiRect::new(label_x, item_slot.y, label_w, circle_d);
         out.push(RadioLayout {
             circle,
@@ -131,16 +132,16 @@ pub fn radio_group_key(
     if n == 0 {
         return false;
     }
-    let new_sel = match (key, orientation) {
-        (RadioKey::Next, RadioOrientation::Vertical)
-        | (RadioKey::Next, RadioOrientation::Horizontal) => {
-            Some((group.selected + 1) % n)
-        }
-        (RadioKey::Prev, RadioOrientation::Vertical)
-        | (RadioKey::Prev, RadioOrientation::Horizontal) => {
-            Some(if group.selected == 0 { n - 1 } else { group.selected - 1 })
-        }
-        _ => None,
+    // Ориентация не меняет циклическую навигацию радио-группы — параметр
+    // сохранён для паритета сигнатур *-key компонентов (segmented_key).
+    let _ = orientation;
+    let new_sel = match key {
+        RadioKey::Next => Some((group.selected + 1) % n),
+        RadioKey::Prev => Some(if group.selected == 0 {
+            n - 1
+        } else {
+            group.selected - 1
+        }),
     };
     if let Some(ns) = new_sel {
         if ns != group.selected {
@@ -175,7 +176,18 @@ mod tests {
         let mut fs = cosmic_text::FontSystem::new();
         let group = RadioGroup::new(vec!["Local".into(), "Laya".into(), "Ollama".into()]);
         let slot = UiRect::new(0.0, 0.0, 200.0, 300.0);
-        let layouts = radio_group_layout(slot, &group, RadioOrientation::Vertical, ControlSize::Sm, 8.0, 8.0, &mut m, &mut fs, "sans", 13.0);
+        let layouts = radio_group_layout(
+            slot,
+            &group,
+            RadioOrientation::Vertical,
+            ControlSize::Sm,
+            8.0,
+            8.0,
+            &mut m,
+            &mut fs,
+            "sans",
+            13.0,
+        );
         assert_eq!(layouts.len(), 3);
         // Vertical: y increments by circle_d + gap = 24 + 8 = 32
         assert!((layouts[0].circle.y - 0.0).abs() < 0.01);
@@ -189,15 +201,31 @@ mod tests {
     #[test]
     fn radio_group_key_next_prev() {
         let mut g = RadioGroup::new(vec!["A".into(), "B".into(), "C".into()]);
-        assert!(radio_group_key(&mut g, RadioKey::Next, RadioOrientation::Vertical));
+        assert!(radio_group_key(
+            &mut g,
+            RadioKey::Next,
+            RadioOrientation::Vertical
+        ));
         assert_eq!(g.selected, 1);
-        assert!(radio_group_key(&mut g, RadioKey::Next, RadioOrientation::Vertical));
+        assert!(radio_group_key(
+            &mut g,
+            RadioKey::Next,
+            RadioOrientation::Vertical
+        ));
         assert_eq!(g.selected, 2);
         // Wrap around
-        assert!(radio_group_key(&mut g, RadioKey::Next, RadioOrientation::Vertical));
+        assert!(radio_group_key(
+            &mut g,
+            RadioKey::Next,
+            RadioOrientation::Vertical
+        ));
         assert_eq!(g.selected, 0);
         // Prev from 0 → wrap to last
-        assert!(radio_group_key(&mut g, RadioKey::Prev, RadioOrientation::Vertical));
+        assert!(radio_group_key(
+            &mut g,
+            RadioKey::Prev,
+            RadioOrientation::Vertical
+        ));
         assert_eq!(g.selected, 2);
     }
 
@@ -207,7 +235,18 @@ mod tests {
         let mut fs = cosmic_text::FontSystem::new();
         let group = RadioGroup::new(vec!["Test".into()]);
         let slot = UiRect::new(0.0, 0.0, 200.0, 30.0);
-        let layouts = radio_group_layout(slot, &group, RadioOrientation::Vertical, ControlSize::Sm, 8.0, 8.0, &mut m, &mut fs, "sans", 13.0);
+        let layouts = radio_group_layout(
+            slot,
+            &group,
+            RadioOrientation::Vertical,
+            ControlSize::Sm,
+            8.0,
+            8.0,
+            &mut m,
+            &mut fs,
+            "sans",
+            13.0,
+        );
         let lay = &layouts[0];
         // Клик по кругу
         assert!(radio_hit(lay, UiPoint::new(5.0, 12.0)));

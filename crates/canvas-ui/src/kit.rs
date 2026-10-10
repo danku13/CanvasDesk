@@ -108,13 +108,15 @@ pub use crate::component::progress::{
     progress_layout, progress_phase, progress_style, ProgressKind, ProgressLayout,
 };
 pub use crate::component::radio::{
-    radio_group_key, radio_group_layout, radio_hit, radio_style, RadioGroup, RadioKey,
-    RadioLayout, RadioOrientation,
+    radio_group_key, radio_group_layout, radio_hit, radio_style, RadioGroup, RadioKey, RadioLayout,
+    RadioOrientation,
 };
 pub use crate::component::segmented::{
     segmented_hit, segmented_key, segmented_layout, segmented_style, SegmentedKey, SegmentedLayout,
 };
-pub use crate::component::skeleton::{skeleton_alpha, skeleton_layout, SkeletonLayout, SkeletonPattern};
+pub use crate::component::skeleton::{
+    skeleton_alpha, skeleton_layout, SkeletonLayout, SkeletonPattern,
+};
 pub use crate::component::slider::{
     slider_hit, slider_key, slider_layout, slider_style, SliderHit, SliderKey, SliderLayout,
     SliderOpts,
@@ -126,9 +128,7 @@ pub use crate::component::tabs::{
     tab_style, tabs_hit, tabs_key, tabs_layout, TabKey, TabLayout, TabStyle, TabStyleResult,
     TabsLayout,
 };
-pub use crate::component::tree::{
-    tree_hit, tree_layout, TreeAction, TreeNode, TreeRow,
-};
+pub use crate::component::tree::{tree_hit, tree_layout, TreeAction, TreeNode, TreeRow};
 
 pub use crate::component::{
     resolve_state, state_layer_alpha, ButtonVariant, ControlSize, ControlStyle, Elevation,

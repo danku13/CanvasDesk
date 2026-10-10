@@ -50,12 +50,16 @@ pub fn progress_layout(slot: UiRect, kind: ProgressKind, size: ControlSize) -> P
             let fill = UiRect::new(slot.x, track_y, fill_w, track_h);
             ProgressLayout { track, fill, kind }
         }
-        ProgressKind::Circular { value, radius } | ProgressKind::Spinner { radius } => {
+        ProgressKind::Circular { radius, .. } | ProgressKind::Spinner { radius } => {
             let diameter = radius * 2.0;
             let cx = slot.x + slot.w / 2.0 - radius;
             let cy = slot.y + slot.h / 2.0 - radius;
             let track = UiRect::new(cx, cy, diameter, diameter);
-            ProgressLayout { track, fill: track, kind }
+            ProgressLayout {
+                track,
+                fill: track,
+                kind,
+            }
         }
     }
 }
@@ -126,7 +130,14 @@ mod tests {
     #[test]
     fn progress_circular_centered() {
         let slot = UiRect::new(0.0, 0.0, 100.0, 100.0);
-        let lay = progress_layout(slot, ProgressKind::Circular { value: 0.5, radius: 20.0 }, ControlSize::Sm);
+        let lay = progress_layout(
+            slot,
+            ProgressKind::Circular {
+                value: 0.5,
+                radius: 20.0,
+            },
+            ControlSize::Sm,
+        );
         // diameter = 40, centered
         assert!((lay.track.w - 40.0).abs() < 0.01);
         assert!((lay.track.x - 30.0).abs() < 0.01); // (100-40)/2
