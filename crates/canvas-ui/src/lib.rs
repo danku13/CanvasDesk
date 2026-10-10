@@ -61,8 +61,9 @@ pub use hit::{HitStack, HitTarget};
 pub use keyboard::{Activation, FocusRing, KeyboardRouter};
 pub use layer::UiLayer;
 pub use layout::{
-    constrain, grid_cells, pad, stack, Child, Column, CrossAlign, Custom, FlexLayoutEngine, HAlign,
-    MainAlign, MeasuredItem, Row, RowPolicy, VAlign,
+    aspect_ratio, constrain, grid_auto, grid_cells, grid_template, pad, responsive, stack,
+    sticky_header, Child, Column, CrossAlign, Custom, Density, FlexLayoutEngine, GridAuto, HAlign,
+    MainAlign, MeasuredItem, Row, RowPolicy, Track, TrackMax, TrackMin, VAlign, WindowClass,
 };
 pub use measure::{Measured, TextMeasurer, TextSpec, SCREEN_LINE_FACTOR};
 // FR-068 W2: шейпинг за trait boundary (cosmic-text — default impl).

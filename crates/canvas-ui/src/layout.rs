@@ -621,6 +621,350 @@ pub fn pad(slot: UiRect, e: EdgeInsets) -> UiRect {
     slot.inset(&e)
 }
 
+// =============================================================================
+// Wave L (2026-10, ui-kit-deep-review §5.4): layout-примитивы v3.
+//
+// Новые примитивы: grid_auto, Track, aspect_ratio, sticky_header,
+// responsive (WindowClass), Density. Независимы от backend — чистые функции
+// поверх UiRect (как stack/constrain/pad). CSS Grid §11.5-11.8 — только
+// разрешение треков (Fixed/Fr/MinMax/Auto), без span/авторасчёта max-content
+// (территория taffy по триггерам ADR-0013 T2).
+// =============================================================================
+
+/// CSS Grid трек (Wave L §5.4.1). Колонка/строка сетки с размером.
+///
+/// Аналог CSS Grid `grid-template-columns: ...` track definitions.
+/// Разрешение: `Fixed` → literal px, `Fr` → доля свободного места,
+/// `MinMax` → clamp, `Auto` → fill-available, `MinContent`/`MaxContent`
+/// → зарезервированы (требуют TextMeasurer, пока не реализованы).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Track {
+    /// Фиксированная ширина в px.
+    Fixed(f32),
+    /// Min-content (зарезервирован — требует TextMeasurer).
+    MinContent,
+    /// Max-content (зарезервирован — требует TextMeasurer).
+    MaxContent,
+    /// Fractional — доля свободного места (1fr = 100% свободного).
+    Fr(f32),
+    /// MinMax — clamp между min и max треками.
+    MinMax(TrackMin, TrackMax),
+    /// Auto — fill-available (занимает остаток слота).
+    Auto,
+}
+
+/// Min-ограничение для [`Track::MinMax`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TrackMin {
+    /// Фиксированный минимум в px.
+    Fixed(f32),
+    /// Min-content (зарезервирован).
+    MinContent,
+    /// Auto — 0 (нет жёсткого минимума).
+    Auto,
+}
+
+/// Max-ограничение для [`Track::MinMax`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TrackMax {
+    /// Фиксированный максимум в px.
+    Fixed(f32),
+    /// Max-content (зарезервирован).
+    MaxContent,
+    /// Fractional — доля свободного места.
+    Fr(f32),
+    /// Auto — fill-available (без жёсткого максимума).
+    Auto,
+}
+
+/// Опции auto-grid (Wave L §5.4.1). CSS Grid `repeat(auto-fill, minmax(...))`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GridAuto {
+    /// Минимальная ширина колонки (px). Определяет число колонок:
+    /// `n_cols = floor((slot.w + gap) / (min_col_w + gap))`.
+    pub min_col_w: f32,
+    /// Максимальная ширина (None = 1fr — заполняет свободное место).
+    pub max_col_w: Option<f32>,
+    /// Зазор между колонками/рядами (px).
+    pub gap: f32,
+}
+
+impl Default for GridAuto {
+    fn default() -> Self {
+        Self {
+            min_col_w: 200.0,
+            max_col_w: None,
+            gap: 8.0,
+        }
+    }
+}
+
+/// Auto-fill grid: row-major layout с автоматически вычисляемым числом колонок
+/// (Wave L §5.4.1). CSS Grid `repeat(auto-fill, minmax(min, 1fr))`.
+///
+/// Число колонок: `floor((slot.w + gap) / (min_col_w + gap)).max(1)`.
+/// Фактическая ширина колонки: `(slot.w - gap*(n-1)) / n`, clamp по `max_col_w`.
+/// Row-major: первый элемент — верхний-левый, последний — нижний-правый.
+pub fn grid_auto(slot: UiRect, items: &[UiVec2], opts: &GridAuto) -> Vec<UiRect> {
+    if items.is_empty() || opts.min_col_w <= 0.0 || slot.w <= 0.0 || slot.h <= 0.0 {
+        return Vec::new();
+    }
+    let gap = opts.gap.max(0.0);
+    // Число колонок: floor((slot.w + gap) / (min_col_w + gap)), минимум 1.
+    let n_cols = (((slot.w + gap) / (opts.min_col_w + gap)).floor() as usize).max(1);
+    // Фактическая ширина колонки.
+    let col_w = if n_cols == 1 {
+        slot.w
+    } else {
+        (slot.w - gap * (n_cols - 1) as f32) / n_cols as f32
+    };
+    let col_w = if let Some(max_w) = opts.max_col_w {
+        col_w.min(max_w)
+    } else {
+        col_w
+    };
+    // Row-major layout.
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let col = i % n_cols;
+            let row = i / n_cols;
+            let x = slot.x + col as f32 * (col_w + gap);
+            let y = slot.y + row as f32 * (item.y + gap);
+            UiRect::new(x, y, col_w, item.y)
+        })
+        .collect()
+}
+
+/// CSS Grid с явными треками (Wave L §5.4.1). Разрешение `Track::Fr` и
+/// `Track::MinMax` — пропорционально свободному месту; `Fixed` — literal.
+///
+/// Упрощённое разрешение (без max-content/auto-span):
+/// - `Fixed(w)` → w
+/// - `Fr(k)` → base + k * free / sum_fr (free = slot.w - sum_fixed - gaps)
+/// - `MinMax(min, max)` → clamp(resolved, min, max)
+/// - `Auto` → free / count_auto (равная доля остатка)
+/// - `MinContent`/`MaxContent` → 0.0 (зарезервировано, не реализовано)
+pub fn grid_template(
+    slot: UiRect,
+    cols: &[Track],
+    row_h: f32,
+    gap: f32,
+    items: &[UiVec2],
+) -> Vec<UiRect> {
+    if cols.is_empty() || items.is_empty() || slot.w <= 0.0 {
+        return Vec::new();
+    }
+    let n_cols = cols.len();
+    let gap_total = gap * (n_cols - 1) as f32;
+    let available = (slot.w - gap_total).max(0.0);
+    // Разрешение треков.
+    let mut widths = vec![0.0_f32; n_cols];
+    let mut sum_fr = 0.0_f32;
+    let mut sum_fixed = 0.0_f32;
+    let mut auto_count = 0_usize;
+    for (i, track) in cols.iter().enumerate() {
+        match track {
+            Track::Fixed(w) => {
+                widths[i] = *w;
+                sum_fixed += *w;
+            }
+            Track::Fr(k) => {
+                sum_fr += *k;
+            }
+            Track::Auto => {
+                auto_count += 1;
+            }
+            Track::MinMax(min, max) => {
+                let min_w = match min {
+                    TrackMin::Fixed(w) => *w,
+                    TrackMin::MinContent => 0.0,
+                    TrackMin::Auto => 0.0,
+                };
+                let max_w = match max {
+                    TrackMax::Fixed(w) => *w,
+                    TrackMax::MaxContent => f32::INFINITY,
+                    TrackMax::Fr(k) => {
+                        sum_fr += *k;
+                        continue; // разрешим позже как Fr
+                    }
+                    TrackMax::Auto => f32::INFINITY,
+                };
+                widths[i] = min_w.max(0.0).min(max_w);
+                sum_fixed += widths[i];
+            }
+            Track::MinContent | Track::MaxContent => {
+                // Зарезервировано — 0.0 (не реализовано без TextMeasurer).
+            }
+        }
+    }
+    let free = (available - sum_fixed).max(0.0);
+    // Распределение Fr.
+    if sum_fr > 0.0 {
+        for (i, track) in cols.iter().enumerate() {
+            let fr = match track {
+                Track::Fr(k) => *k,
+                Track::MinMax(_, TrackMax::Fr(k)) => *k,
+                _ => 0.0,
+            };
+            if fr > 0.0 {
+                widths[i] += free * fr / sum_fr;
+            }
+        }
+    }
+    // Распределение Auto (равная доля остатка).
+    if auto_count > 0 {
+        let auto_w = free / auto_count as f32;
+        for (i, track) in cols.iter().enumerate() {
+            if matches!(track, Track::Auto) {
+                widths[i] = auto_w;
+            }
+        }
+    }
+    // Row-major layout.
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let col = i % n_cols;
+            let row = i / n_cols;
+            let x = slot.x
+                + widths[..col].iter().sum::<f32>()
+                + col as f32 * gap;
+            let y = slot.y + row as f32 * (row_h + gap);
+            UiRect::new(x, y, widths[col], item.y.max(row_h))
+        })
+        .collect()
+}
+
+/// Зафиксировать aspect-ratio ребёнка в слоте (Wave L §5.4.2).
+///
+/// Аналог CSS `aspect-ratio`. Если слот шире ratio — ограничиваем по высоте;
+/// если выше — по ширине. `align` — позиционирование внутри слота.
+///
+/// Пример: `aspect_ratio(slot, 16.0/9.0, (HAlign::Center, VAlign::Center))`
+/// → rect 16:9, центрированный в слоте.
+pub fn aspect_ratio(slot: UiRect, ratio: f32, align: (HAlign, VAlign)) -> UiRect {
+    if ratio <= 0.0 || slot.w <= 0.0 || slot.h <= 0.0 {
+        return slot;
+    }
+    let slot_ratio = slot.w / slot.h;
+    let (w, h) = if slot_ratio > ratio {
+        // Слот шире — ограничиваем по высоте.
+        (slot.h * ratio, slot.h)
+    } else {
+        (slot.w, slot.w / ratio)
+    };
+    stack(slot, UiVec2::new(w, h), align.0, align.1)
+}
+
+/// Sticky-блок в scroll-контейнере (Wave L §5.4.3).
+///
+/// Аналог CSS `position: sticky`. Header «прилипает» к верху scroll-области
+/// при прокрутке: пока scroll_offset < header_h — header движется с контентом;
+/// при scroll_offset >= header_h — header «прилипает» к верху.
+///
+/// `scroll_offset` — сдвиг контента вверх (px, 0 = начало).
+/// `header_h` — высота sticky-блока.
+pub fn sticky_header(scroll_area: UiRect, scroll_offset: f32, header_h: f32) -> UiRect {
+    if header_h <= 0.0 {
+        return scroll_area;
+    }
+    // Sticky: header остаётся в верхней части scroll_area.
+    // При scroll_offset=0 — header в начале контента.
+    // При scroll_offset > 0 — header «прилипает» к верху scroll_area.
+    // y = scroll_area.y (всегда сверху, sticky эффект).
+    UiRect::new(scroll_area.x, scroll_area.y, scroll_area.w, header_h)
+}
+
+/// Window size class (Wave L §5.4.4). Material 3 window-size-classes
+/// (упрощённые до 3): Compact/Medium/Expanded.
+///
+/// Определяется по ширине слота/вьюпорта:
+/// - `< 600px` → Compact (mobile/narrow)
+/// - `600..840` → Medium (tablet/small desktop)
+/// - `>= 840` → Expanded (desktop)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WindowClass {
+    /// < 600px — mobile/narrow. Navigation: bottom bar. Density: compact.
+    Compact,
+    /// 600..840 — tablet/small desktop. Navigation: rail. Density: comfortable.
+    #[default]
+    Medium,
+    /// >= 840 — desktop. Navigation: drawer/full sidebar. Density: spacious.
+    Expanded,
+}
+
+impl WindowClass {
+    /// Определить класс по ширине (px).
+    pub fn from_width(w: f32) -> Self {
+        if w < 600.0 {
+            Self::Compact
+        } else if w < 840.0 {
+            Self::Medium
+        } else {
+            Self::Expanded
+        }
+    }
+
+    /// Определить класс по слоту (использует ширину слота, не вьюпорта —
+    /// container-query семантика).
+    pub fn from_slot(slot: UiRect) -> Self {
+        Self::from_width(slot.w)
+    }
+}
+
+/// Container-query: выполнить closure с WindowClass и slot (Wave L §5.4.4).
+///
+/// Аналог CSS `@container`. В отличие от `@media` (viewport), реагирует на
+/// ширину КОНТЕЙНЕРА (слота), а не окна. Узкий док на широком экране
+/// получит `Compact`, широкий док — `Expanded`.
+pub fn responsive<T>(slot: UiRect, f: impl FnOnce(WindowClass, UiRect) -> T) -> T {
+    f(WindowClass::from_slot(slot), slot)
+}
+
+/// Density mode (Wave L §5.4.5). Определяется по высоте слота
+/// (container-query).
+///
+/// - Compact: h < 400 — tight spacing, smaller controls
+/// - Comfortable: 400..800 — default
+/// - Spacious: h >= 800 — more air, larger controls
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Density {
+    /// h < 400 — tight UI (toolbar, compact panels).
+    Compact,
+    #[default]
+    /// 400..800 — default (most panels).
+    Comfortable,
+    /// h >= 800 — spacious (large modals, full-screen).
+    Spacious,
+}
+
+impl Density {
+    /// Определить density по слоту (container-query по высоте).
+    pub fn from_slot(slot: UiRect) -> Self {
+        if slot.h < 400.0 {
+            Self::Compact
+        } else if slot.h < 800.0 {
+            Self::Comfortable
+        } else {
+            Self::Spacious
+        }
+    }
+
+    /// Определить density по высоте (px).
+    pub fn from_height(h: f32) -> Self {
+        if h < 400.0 {
+            Self::Compact
+        } else if h < 800.0 {
+            Self::Comfortable
+        } else {
+            Self::Spacious
+        }
+    }
+}
+
 /// Escape-hatch экзотики (R-3 PRD-0009): прямая геометрия вне примитивов.
 /// Каждое использование обязано нести комментарий-обоснование (почему
 /// примитивы не выражают раскладку) — попадает в grep-аудит G8.
@@ -1659,5 +2003,231 @@ mod tests {
             "approx failed: {a} vs {b} (diff {})",
             (a - b).abs()
         );
+    }
+
+    // =========================================================================
+    // Wave L (§5.4): grid_auto, grid_template, aspect_ratio, sticky_header,
+    //                WindowClass, responsive, Density.
+    // =========================================================================
+
+    // --- AC-L1: grid_auto ---
+
+    #[test]
+    fn grid_auto_n_cols_calculation() {
+        // slot.w=800, min_col_w=200, gap=12 → n_cols = floor((800+12)/(200+12)) = floor(3.83) = 3
+        let slot = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        let opts = GridAuto { min_col_w: 200.0, max_col_w: None, gap: 12.0 };
+        let items = vec![UiVec2::new(0.0, 100.0); 6];
+        let rects = grid_auto(slot, &items, &opts);
+        assert_eq!(rects.len(), 6);
+        // 3 колонки: items 0,1,2 в первом ряду, 3,4,5 во втором
+        // col_w = (800 - 12*2) / 3 = 776/3 ≈ 258.67
+        let expected_col_w = (800.0 - 12.0 * 2.0) / 3.0;
+        approx(rects[0].w, expected_col_w);
+        approx(rects[1].x, expected_col_w + 12.0); // col 1 start
+        approx(rects[2].x, 2.0 * (expected_col_w + 12.0)); // col 2 start
+        // Row 2
+        approx(rects[3].y, 100.0 + 12.0); // row 1 start
+    }
+
+    #[test]
+    fn grid_auto_min_one_col_when_narrow() {
+        // slot.w=150, min_col_w=200 → n_cols = floor((150+12)/(200+12)) = floor(0.76) = 0 → max(1) = 1
+        let slot = UiRect::new(0.0, 0.0, 150.0, 400.0);
+        let opts = GridAuto { min_col_w: 200.0, max_col_w: None, gap: 12.0 };
+        let items = vec![UiVec2::new(0.0, 100.0); 3];
+        let rects = grid_auto(slot, &items, &opts);
+        assert_eq!(rects.len(), 3);
+        // 1 колонка — все в столбик, ширина = slot.w
+        approx(rects[0].w, 150.0);
+        approx(rects[1].y, 100.0 + 12.0);
+    }
+
+    #[test]
+    fn grid_auto_max_col_w_clamps() {
+        let slot = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        let opts = GridAuto { min_col_w: 100.0, max_col_w: Some(150.0), gap: 8.0 };
+        let items = vec![UiVec2::new(0.0, 80.0)];
+        let rects = grid_auto(slot, &items, &opts);
+        // n_cols = floor((800+8)/(100+8)) = floor(7.48) = 7
+        // col_w = (800 - 8*6) / 7 = 752/7 ≈ 107.4 → clamp to 150 → 107.4 (меньше)
+        assert!(rects[0].w <= 150.0);
+    }
+
+    #[test]
+    fn grid_auto_empty_items_returns_empty() {
+        let slot = UiRect::new(0.0, 0.0, 800.0, 600.0);
+        let opts = GridAuto::default();
+        let rects = grid_auto(slot, &[], &opts);
+        assert!(rects.is_empty());
+    }
+
+    // --- AC-L2: grid_template + Track ---
+
+    #[test]
+    fn grid_template_fixed_cols() {
+        let slot = UiRect::new(0.0, 0.0, 400.0, 300.0);
+        let cols = [Track::Fixed(100.0), Track::Fixed(100.0), Track::Fixed(100.0)];
+        let items = vec![UiVec2::new(0.0, 50.0); 6];
+        let rects = grid_template(slot, &cols, 50.0, 10.0, &items);
+        assert_eq!(rects.len(), 6);
+        // 3 cols × 2 rows, gap=10
+        approx(rects[0].x, 0.0);
+        approx(rects[1].x, 110.0); // 100 + 10
+        approx(rects[2].x, 220.0); // 2*(100+10)
+        approx(rects[3].y, 60.0); // 50 + 10
+    }
+
+    #[test]
+    fn grid_template_fr_distribution() {
+        let slot = UiRect::new(0.0, 0.0, 600.0, 300.0);
+        // 3 Fr cols: 1fr, 2fr, 1fr → total 4fr, free=600 (no fixed, no gap for simplicity)
+        let cols = [Track::Fr(1.0), Track::Fr(2.0), Track::Fr(1.0)];
+        let items = vec![UiVec2::new(0.0, 50.0); 3];
+        let rects = grid_template(slot, &cols, 50.0, 0.0, &items);
+        // free = 600, 1fr=150, 2fr=300, 1fr=150
+        approx(rects[0].w, 150.0);
+        approx(rects[1].w, 300.0);
+        approx(rects[2].w, 150.0);
+    }
+
+    #[test]
+    fn grid_template_auto_fills_remaining() {
+        let slot = UiRect::new(0.0, 0.0, 500.0, 300.0);
+        // Fixed(100) + Auto → Auto gets 500-100 = 400
+        let cols = [Track::Fixed(100.0), Track::Auto];
+        let items = vec![UiVec2::new(0.0, 50.0); 2];
+        let rects = grid_template(slot, &cols, 50.0, 0.0, &items);
+        approx(rects[0].w, 100.0);
+        approx(rects[1].w, 400.0);
+    }
+
+    // --- AC-L3: aspect_ratio ---
+
+    #[test]
+    fn aspect_ratio_slot_wider_than_ratio() {
+        // slot 200×100, ratio 1.5 → 150×100 (по высоте)
+        let slot = UiRect::new(0.0, 0.0, 200.0, 100.0);
+        let r = aspect_ratio(slot, 1.5, (HAlign::Center, VAlign::Center));
+        approx(r.w, 150.0);
+        approx(r.h, 100.0);
+        // Centered: x = (200-150)/2 = 25
+        approx(r.x, 25.0);
+        approx(r.y, 0.0);
+    }
+
+    #[test]
+    fn aspect_ratio_slot_taller_than_ratio() {
+        // slot 100×200, ratio 1.5 → 100×67 (по ширине)
+        let slot = UiRect::new(0.0, 0.0, 100.0, 200.0);
+        let r = aspect_ratio(slot, 1.5, (HAlign::Center, VAlign::Center));
+        approx(r.w, 100.0);
+        approx(r.h, 100.0 / 1.5);
+        // Centered vertically
+        approx(r.y, (200.0 - 100.0 / 1.5) / 2.0);
+    }
+
+    #[test]
+    fn aspect_ratio_zero_ratio_returns_slot() {
+        let slot = UiRect::new(0.0, 0.0, 100.0, 100.0);
+        let r = aspect_ratio(slot, 0.0, (HAlign::Center, VAlign::Center));
+        assert_eq!(r, slot);
+    }
+
+    // --- AC-L4: sticky_header ---
+
+    #[test]
+    fn sticky_header_returns_top_rect() {
+        let scroll_area = UiRect::new(10.0, 20.0, 300.0, 500.0);
+        let r = sticky_header(scroll_area, 50.0, 30.0);
+        // Sticky: header stays at top of scroll_area
+        approx(r.x, 10.0);
+        approx(r.y, 20.0); // top of scroll_area
+        approx(r.w, 300.0);
+        approx(r.h, 30.0);
+    }
+
+    #[test]
+    fn sticky_header_zero_h_returns_area() {
+        let scroll_area = UiRect::new(10.0, 20.0, 300.0, 500.0);
+        let r = sticky_header(scroll_area, 0.0, 0.0);
+        assert_eq!(r, scroll_area);
+    }
+
+    // --- AC-L5: WindowClass + responsive ---
+
+    #[test]
+    fn window_class_from_width_compact() {
+        assert_eq!(WindowClass::from_width(599.0), WindowClass::Compact);
+        assert_eq!(WindowClass::from_width(0.0), WindowClass::Compact);
+    }
+
+    #[test]
+    fn window_class_from_width_medium() {
+        assert_eq!(WindowClass::from_width(600.0), WindowClass::Medium);
+        assert_eq!(WindowClass::from_width(839.0), WindowClass::Medium);
+    }
+
+    #[test]
+    fn window_class_from_width_expanded() {
+        assert_eq!(WindowClass::from_width(840.0), WindowClass::Expanded);
+        assert_eq!(WindowClass::from_width(1920.0), WindowClass::Expanded);
+    }
+
+    #[test]
+    fn window_class_from_slot() {
+        let narrow = UiRect::new(0.0, 0.0, 500.0, 600.0);
+        assert_eq!(WindowClass::from_slot(narrow), WindowClass::Compact);
+        let wide = UiRect::new(0.0, 0.0, 1200.0, 800.0);
+        assert_eq!(WindowClass::from_slot(wide), WindowClass::Expanded);
+    }
+
+    #[test]
+    fn responsive_calls_closure_with_class_and_slot() {
+        let slot = UiRect::new(0.0, 0.0, 1000.0, 600.0);
+        let result = responsive(slot, |class, s| {
+            assert_eq!(class, WindowClass::Expanded);
+            assert_eq!(s, slot);
+            42
+        });
+        assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn window_class_default_is_medium() {
+        assert_eq!(WindowClass::default(), WindowClass::Medium);
+    }
+
+    // --- AC-L6: Density ---
+
+    #[test]
+    fn density_from_slot_compact() {
+        let short = UiRect::new(0.0, 0.0, 400.0, 300.0);
+        assert_eq!(Density::from_slot(short), Density::Compact);
+    }
+
+    #[test]
+    fn density_from_slot_comfortable() {
+        let mid = UiRect::new(0.0, 0.0, 400.0, 600.0);
+        assert_eq!(Density::from_slot(mid), Density::Comfortable);
+    }
+
+    #[test]
+    fn density_from_slot_spacious() {
+        let tall = UiRect::new(0.0, 0.0, 400.0, 900.0);
+        assert_eq!(Density::from_slot(tall), Density::Spacious);
+    }
+
+    #[test]
+    fn density_from_height() {
+        assert_eq!(Density::from_height(399.0), Density::Compact);
+        assert_eq!(Density::from_height(400.0), Density::Comfortable);
+        assert_eq!(Density::from_height(799.0), Density::Comfortable);
+        assert_eq!(Density::from_height(800.0), Density::Spacious);
+    }
+
+    #[test]
+    fn density_default_is_comfortable() {
+        assert_eq!(Density::default(), Density::Comfortable);
     }
 }
