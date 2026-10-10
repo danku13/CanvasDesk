@@ -119,6 +119,11 @@ pub mod id {
     /// FR-105: тост с действием «Перезагрузить» (L7, Capture — интерактивна
     /// только кнопка; клик мимо проваливается в канвас, №45b).
     pub const TOAST: &str = "toast";
+    /// FR-107 (C4): чип активного канваса — ambient-хром верхнего ЛЕВОГО
+    /// угла (L3, Capture — клики по зонам имени/иконки; пока жив
+    /// инлайн-ренейм, поверхность дополнительно объявляет keyboard-scope
+    /// — ввод уходит в буфер ренейма, Esc отменяет).
+    pub const CANVAS_CHIP: &str = "canvas_chip";
 }
 
 /// Владелец клавиатуры — верх `esc_stack` реестра (Q4 PRD-0009: NUMI-хоткеи
@@ -157,6 +162,12 @@ pub enum KeyOwner {
     /// F2 (ренейм №9) + ввод в фильтр/буфер ренейма, прочие глотаются
     /// (паттерн галереи схем).
     CanvasManager,
+    /// FR-107 (мультиканвас C4): инлайн-ренейм чипа активного канваса
+    /// (№21c) — Esc — отмена, Enter — применить, печатаемые/Backspace —
+    /// в буфер; прочие глотаются (правка короткоживущая, паттерн
+    /// менеджера). Ренейма нет — скоуп не регистрируется (чип —
+    /// ambient-хром, клавиатура канваса живёт как прежде).
+    CanvasChip,
 }
 
 /// Владелец-обработчик поверхности (FR-054, Q4-a): `Some` — у поверхности
@@ -184,6 +195,8 @@ pub fn owner_of(surface: &str) -> Option<KeyOwner> {
         id::MIGRATE => Some(KeyOwner::Migrate),
         // FR-106 (C3): менеджер канвасов — модаль (Esc/стрелки/Enter/F2/фильтр)
         id::CANVAS_MANAGER => Some(KeyOwner::CanvasManager),
+        // FR-107 (C4): инлайн-ренейм чипа (scope только на время правки)
+        id::CANVAS_CHIP => Some(KeyOwner::CanvasChip),
         _ => None,
     }
 }
@@ -294,6 +307,23 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
         SurfaceDecl::new(id::WORLD, UiLayer::World, CapturePolicy::PassThrough)
             .with_scope(KeyboardScopeId::CANVAS),
     );
+    // FR-107 (C4, №21c): чип активного канваса — ambient-хром (Panels,
+    // Capture: клики по зонам; деградация Always — вход в менеджер обязан
+    // жить на любом вьюпорте, чип мал и клампится). Пока жив инлайн-ренейм
+    // — дополнительный keyboard-scope (Esc/Enter/ввод у буфера; Esc в
+    // лестнице закрывает ПРАВКУ, не оверлеи под ней).
+    if app.canvas_chip.is_editing() {
+        reg.add(
+            SurfaceDecl::new(id::CANVAS_CHIP, UiLayer::Panels, CapturePolicy::Capture)
+                .with_scope(id::CANVAS_CHIP),
+        );
+    } else {
+        reg.add(SurfaceDecl::new(
+            id::CANVAS_CHIP,
+            UiLayer::Panels,
+            CapturePolicy::Capture,
+        ));
+    }
     // 2. Wheel-меню (Esc — последний в лестнице; Block: глотает любой клик,
     //    мимо секторов — near/far логика внутри обработчика).
     if app.wheel_menu.is_some() {
@@ -590,6 +620,9 @@ fn whatif_pill_visible(app: &App) -> bool {
 /// Ранг визуального порядка внутри кадра (bottom→top глобально; pick и
 /// draw-полосы сортируют по слою, внутри слоя — по этому рангу).
 const VISUAL_ORDER: &[&str] = &[
+    // FR-107 (C4): чип — самый нижний в Panels-полосе (ambient-хром:
+    // любые панели/модали поверх него)
+    id::CANVAS_CHIP,
     id::SETTINGS,
     id::HOTKEYS,
     id::CORNER_BUTTONS,
@@ -888,6 +921,14 @@ pub struct UiFrameSig {
     /// scroll_top<<32 | entries.len()<<16 | editing<<3 | sort<<2 |
     /// storage (0 — браузерное+FS, 1 — браузерное без FS, 2 — папка).
     pub manager_pack: u64,
+    /// FR-107 (C4): имя активного канваса чипа (измеренная ширина имени —
+    /// геометрия hit-зон; строка не Copy, сравнение — PartialEq, как
+    /// manager_filter).
+    pub chip_name: String,
+    /// FR-107 (C4): упаковка состояния чипа: editing<<2 (декларация
+    /// поверхности получает keyboard-scope) | save_failed<<1 (значок
+    /// №29b сужает зону имени) | disk (режим «только просмотр» №21c).
+    pub chip_pack: u64,
 }
 
 /// FR-PERF-A: Простой нечётный миксер хэша (FNV-1a вариант) для примитивов.
@@ -1140,6 +1181,12 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
                     << 2)
                 | storage
         },
+        // FR-107 (C4): состояние чипа активного канваса (имя — геометрия
+        // hit-зон; правка — keyboard-scope декларации; ошибка — значок).
+        chip_name: app.active_canvas_name(),
+        chip_pack: (u64::from(app.canvas_chip.is_editing()) << 2)
+            | (u64::from(app.canvas_chip.save_failed) << 1)
+            | u64::from(app.active_canvas_disk),
     }
 }
 
@@ -1699,6 +1746,25 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                     rect(empty.open_disk),
                     "manager-empty-disk",
                 ));
+            }
+        }
+        // FR-107 (C4, №21c): чип активного канваса — две интерактивные
+        // зоны из той же раскладки `chip_layout_current`, что рисует
+        // overlays (draw == hit): имя (инлайн-ренейм) и иконка списка
+        // (менеджер). Значок ошибки №29b — маркер, не интерактивен (живёт
+        // в зоне имени). Порядок: иконка ПОСЛЕ имени — реверс-обход pick'а
+        // отдаёт стык иконке (правый край — частый жест «открыть список»).
+        id::CANVAS_CHIP => {
+            let lay = app.chip_layout_current(viewport);
+            if lay.name[2] > 0.0 {
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(rect(lay.name), "chip-name"));
+            }
+            if lay.icon[2] > 0.0 {
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(rect(lay.icon), "chip-list"));
             }
         }
         // FR-105 (C2, №45b): тост с действием — ТОЛЬКО кнопка
@@ -3542,6 +3608,111 @@ mod tests {
                 .iter()
                 .all(|s| s.surface.as_str() != id::TOAST),
             "обычный тост не интерактивен"
+        );
+    }
+
+    /// FR-107 (C4, №21c): чип активного канваса — поверхности в кадре на
+    /// любом состоянии (ambient-хром), hit-зоны имя/иконка пикаются;
+    /// инлайн-ренейм добавляет keyboard-scope (Esc/Enter у буфера).
+    #[test]
+    fn chip_surface_hit_rects_and_keyboard_scope() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        let viewport = [1280.0_f32, 800.0];
+        let frame = build_frame_at(&app, viewport);
+        let chip = frame
+            .surfaces
+            .iter()
+            .find(|s| s.surface.as_str() == id::CANVAS_CHIP)
+            .expect("чип в кадре (ambient-хром)");
+        assert_eq!(chip.capture, CapturePolicy::Capture);
+        let elements: Vec<&str> = chip.hit_rects.iter().map(|r| r.element.as_str()).collect();
+        assert!(elements.contains(&"chip-name"), "нет hit-зоны имени");
+        assert!(elements.contains(&"chip-list"), "нет hit-зоны иконки");
+        // Пик в центр имени → элемент chip-name (ввод = тому, что видно)
+        let name = chip
+            .hit_rects
+            .iter()
+            .find(|r| r.element == "chip-name")
+            .expect("зона имени");
+        match HitStack::pick(
+            &frame,
+            UiPoint::new(name.rect.x + 2.0, name.rect.y + name.rect.h / 2.0),
+        ) {
+            Some(HitTarget::Element { surface, rect }) => {
+                assert_eq!(surface.surface.as_str(), id::CANVAS_CHIP);
+                assert_eq!(rect.element, "chip-name");
+            }
+            other => panic!("имя чипа не пикается: {other:?}"),
+        }
+        // Инлайн-ренейм — поверхность объявляет keyboard-scope; без
+        // правки чип клавиатуру канваса не трогает (ambient-хром)
+        let reg = build_registry(&app);
+        let decl = reg
+            .declarations()
+            .iter()
+            .find(|d| d.id.as_str() == id::CANVAS_CHIP)
+            .expect("чип в реестре");
+        assert!(
+            decl.keyboard_scope.is_none(),
+            "без правки — без keyboard-scope"
+        );
+        app.canvas_chip.begin_rename("имя");
+        let reg = build_registry(&app);
+        let decl = reg
+            .declarations()
+            .iter()
+            .find(|d| d.id.as_str() == id::CANVAS_CHIP)
+            .expect("чип в реестре");
+        assert!(
+            decl.keyboard_scope
+                .as_ref()
+                .is_some_and(|s| s.as_str() == id::CANVAS_CHIP),
+            "правка объявляет keyboard-scope чипа"
+        );
+        // Роутер клавиатуры доставляет события владельцу чипа (проход
+        // мимо скоупов без обработчика — тот же паттерн дока палитры)
+        let router = canvas_ui::KeyboardRouter::from_registry(&reg);
+        let owner = router
+            .deliver(|a| owner_of(a.surface.as_str()).is_some())
+            .and_then(|a| owner_of(a.surface.as_str()));
+        assert_eq!(owner, Some(KeyOwner::CanvasChip));
+    }
+
+    /// FR-107 (C4): сигнатура кадра отслеживает состояние чипа (имя —
+    /// ширина hit-зон, правка — keyboard-scope, ошибка №29b — значок).
+    #[test]
+    fn ui_frame_sig_tracks_chip_state() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        let base = build_frame_sig(&app);
+        // Правка: keyboard-scope декларации + зона имени (поле)
+        app.canvas_chip.begin_rename("имя");
+        let editing = build_frame_sig(&app);
+        assert_ne!(editing.chip_pack, base.chip_pack, "правка меняет сигнатуру");
+        // Ошибка сохранения №29b: значок сужает зону имени
+        app.canvas_chip.cancel_edit();
+        app.canvas_chip.save_failed = true;
+        assert_ne!(
+            build_frame_sig(&app).chip_pack,
+            base.chip_pack,
+            "значок №29b"
+        );
+        // Дисковый режим №21c: «только просмотр» (подсказка клика)
+        app.canvas_chip.save_failed = false;
+        app.active_canvas_disk = true;
+        assert_ne!(
+            build_frame_sig(&app).chip_pack,
+            base.chip_pack,
+            "диск-режим"
+        );
+        // Имя активного канваса: измеренная ширина — геометрия hit-зон
+        app.active_canvas_disk = false;
+        app.scene.path = std::path::PathBuf::from("target/tmp/другое-имя.canvas");
+        assert_ne!(
+            build_frame_sig(&app).chip_name,
+            base.chip_name,
+            "смена активного канваса меняет геометрию чипа"
         );
     }
 }

@@ -16,6 +16,7 @@ use std::time::Duration;
 
 // Чистые UI-helpers (геометрия, hit-тесты, меню, двойной клик) — единый
 // источник в библиотеке, здесь только платформенно-зависимое состояние.
+use crate::canvas_chip_ui;
 use crate::canvas_manager_ui;
 use crate::docs_ui;
 use crate::hints_ui;
@@ -526,6 +527,24 @@ pub enum AppEvent {
     /// Импорт с коллизией имени сохранён под авто-суффиксом (№26b: DOM-drop
     /// и пикер «Импорт файла…») — тост `canvas.drop.renamed_toast`.
     CanvasSavedAsCopy { name: String },
+    // --- FR-107 (мультиканвас C4, issue #8): чип/камера/title ------------
+    /// Камера открытого канваса из localStorage (№12/№30b): `None` —
+    /// ключа нет (тихий дефолт), `Some` — восстановить зум/центр. Ответ
+    /// на `WebRequest::CanvasCameraLoad` (запрос уходит из
+    /// `on_open_scene` — рядом с восстановлением активного сценария C1).
+    CanvasCameraRestored {
+        snapshot: Option<canvas_core::workspace::CameraSnapshot>,
+    },
+    /// Режим активного канваса от web-слоя: `disk` — файл открыт с диска
+    /// (`«Открыть с диска…»`) — ренейм чипа не поддерживается, чип в
+    /// режиме «только просмотр» (№21c). Ответ на `WebRequest::CanvasActiveKind`.
+    CanvasActiveKind { disk: bool },
+    /// Страница скрывается/выгружается (beforeunload/visibilitychange→
+    /// hidden — листенер canvas-web) — немедленно сохранить камеру
+    /// активного канваса в localStorage (№12/№30b; App отвечает
+    /// `WebRequest::CanvasCameraSave` — дренаж обёртки TourAwareApp
+    /// выполняется в том же микротаске).
+    CameraFlushRequested,
 }
 
 /// FR-104 (мультиканвас C1): запрос App к платформенному web-слою —
@@ -539,7 +558,9 @@ pub enum AppEvent {
 /// FR-105 (C2): тот же канал — для действий хранилища рабочего
 /// пространства (баннер №44b / миграция №42a / перезагрузка №45b);
 /// отдельный мост НЕ заводится — конвейер один.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// FR-107 (C4): `Eq` снят — `CanvasCameraSave` несёт `CameraSnapshot`
+/// (f32-центр/зум, №12/№30b); сравнение на равенство значений — PartialEq.
+#[derive(Debug, Clone, PartialEq)]
 pub enum WebRequest {
     /// Обновить список канвасов (зеркало OpfsStore ← opfsList) — ответ
     /// [`AppEvent::CanvasList`].
@@ -607,6 +628,22 @@ pub enum WebRequest {
     /// Перенос ключа камеры при ренейме АКТИВНОГО канваса (№30b,
     /// localStorage `canvasdesk.camera.<имя>` — формат C0).
     CanvasMoveCameraKey { old: String, new: String },
+    // --- FR-107 (мультиканвас C4, issue #8): чип/камера -------------------
+    /// Сохранить камеру канваса (№12/№30b) в localStorage по
+    /// `camera_key_for(name)`: уход с канваса (`on_open_scene`) и
+    /// выгрузка страницы (`CameraFlushRequested`). Ренейм не сохраняет —
+    /// ключ переносится готовым `CanvasMoveCameraKey`.
+    CanvasCameraSave {
+        name: String,
+        snapshot: canvas_core::workspace::CameraSnapshot,
+    },
+    /// Прочитать камеру канваса (№12/№30b) — ответ
+    /// [`AppEvent::CanvasCameraRestored`] (ключа нет — `None`: тихий
+    /// дефолт, камера как при первом открытии).
+    CanvasCameraLoad { name: String },
+    /// Режим активного канваса (№21c: Disk — чип «только просмотр») —
+    /// ответ [`AppEvent::CanvasActiveKind`].
+    CanvasActiveKind,
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -1742,6 +1779,14 @@ pub struct App {
     /// (создание «Из шаблона…» открывает галерею-пикер поверх нового
     /// пустого канваса; срабатывает в `on_open_scene`).
     manager_after_open: Option<ManagerAfterOpen>,
+    /// FR-107 (C4): состояние чипа активного канваса (№21c: инлайн-ренейм
+    /// активного через конвейер менеджера; №29b: стойкий значок ошибки
+    /// сохранения).
+    pub(crate) canvas_chip: canvas_chip_ui::CanvasChipState,
+    /// FR-107 (C4, №21c): активный канвас открыт с диска (ActiveKind::Disk
+    /// от web-слоя) — ренейм чипа не поддерживается (файл вне
+    /// workspace-хранилища), чип в режиме «только просмотр».
+    active_canvas_disk: bool,
     /// FR-104 (C1): очередь запросов к web-слою ([`WebRequest`]) — обратный
     /// канал, дренажируется обёрткой TourAwareApp после каждого события
     /// (паттерн tour-сигналов).
@@ -2079,6 +2124,9 @@ impl App {
             canvas_manager: canvas_manager_ui::CanvasManagerState::default(),
             manager_last_click: None,
             manager_after_open: None,
+            // FR-107 (C4): чип активного канваса (№21c/№29b)
+            canvas_chip: canvas_chip_ui::CanvasChipState::default(),
+            active_canvas_disk: false,
             pending_web_requests: Vec::new(),
             settings,
             config_path,
@@ -6259,6 +6307,9 @@ impl App {
     /// переезжает из init_scene в точку первого открытия менеджера).
     pub fn open_canvas_manager(&mut self) {
         tracing::info!(target: "canvas_app", "открыт менеджер канвасов (FR-106)");
+        // FR-107 (C4): фокус уходит менеджеру — инлайн-ренейм чипа
+        // отменяется (потеря фокуса = отмена, №21c).
+        self.canvas_chip.cancel_edit();
         self.canvas_manager.open();
         self.canvas_manager.entries = self.canvas_entries.clone();
         self.canvas_manager.clamp();
@@ -6419,6 +6470,204 @@ impl App {
         };
         let name = entry.name.clone();
         self.request_canvas_op(canvas_core::workspace::CanvasOp::Delete { name });
+    }
+
+    // --- FR-107 (мультиканвас C4, issue #8): чип активного канваса ----------
+
+    /// Раскладка чипа для текущего кадра (один источник геометрии для
+    /// отрисовки, hit-rect'ов реестра и клавиатурного фокуса-мимо —
+    /// draw == hit). Ширина имени измеряется здесь (кламп/эллипсис —
+    /// `canvas_chip_ui::chip_layout`).
+    pub(crate) fn chip_layout_current(&self, viewport: [f32; 2]) -> canvas_chip_ui::ChipLayout {
+        let name = self.chip_display_name();
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let family = canvas_render::text::SANS_FAMILY;
+        let font = canvas_core::tokens::FONT_BODY;
+        let mut text_w = m.width_of(&mut fs, &name, family, font);
+        // Пады зоны имени — как у кит-кнопки (BUTTON_PAD_H с двух сторон)
+        text_w += canvas_ui::kit::BUTTON_PAD_H * 2.0;
+        // UR-003-паритет: развёрнутый левый док палитры сдвигает чип правее
+        // себя (DOM-бары уходят за док cd-panel-left — GPU-чип делает то же;
+        // в сигнатуре кадра — флаг TEMPLATE_PANEL_OPEN).
+        let left_offset = if self.template_panel.open {
+            canvas_chip_ui::template_dock_offset()
+        } else {
+            0.0
+        };
+        canvas_chip_ui::chip_layout(viewport, text_w, self.canvas_chip.save_failed, left_offset)
+    }
+
+    /// Отображаемое имя активного канваса для чипа (display_name: без
+    /// `.canvas`; пустое имя (нет файла) — тире-заглушка, чип не пустует).
+    fn chip_display_name(&self) -> String {
+        let raw = self.active_canvas_name();
+        if raw.is_empty() {
+            "—".to_owned()
+        } else {
+            canvas_core::workspace::display_name(&raw).to_owned()
+        }
+    }
+
+    /// Клик по зонам чипа (hit-зоны — реестр поверхностей:
+    /// `chip-name`/`chip-list`). Имя — инлайн-ренейм активного (№21c);
+    /// иконка — менеджер (единственный вход после чистки DOM-панели
+    /// №37b). Дисковый режим — «только просмотр» (подсказка-тост).
+    fn click_canvas_chip(&mut self, element: &str) {
+        match element {
+            "chip-name" => {
+                if self.active_canvas_disk {
+                    // №21c: ренейм дискового файла менеджером не
+                    // поддерживается — честная деградация (тултип + тост).
+                    self.show_toast(self.tr(keys::CANVAS_CHIP_DISK_HINT));
+                } else {
+                    let name = self.chip_display_name();
+                    self.canvas_chip.begin_rename(&name);
+                }
+            }
+            "chip-list" => {
+                self.canvas_chip.cancel_edit();
+                self.open_canvas_manager();
+            }
+            _ => {}
+        }
+        self.request_redraw();
+    }
+
+    /// Клавиатура чипа (№21c): жив только инлайн-ренейм — Esc — отмена,
+    /// Enter — применить (валидация как у менеджера №9), Backspace/
+    /// печатаемые — в буфер. Ренейма нет — клавиатура не слушателем
+    /// (scope регистрируется только на время правки).
+    fn on_canvas_chip_key(&mut self, key: &Key<winit::keyboard::SmolStr>) {
+        use winit::keyboard::NamedKey;
+        if self.canvas_chip.rename.is_none() {
+            return;
+        }
+        match key {
+            Key::Named(NamedKey::Escape) => self.canvas_chip.cancel_edit(),
+            Key::Named(NamedKey::Enter) => self.chip_commit_rename(),
+            Key::Named(NamedKey::Backspace) => self.canvas_chip.edit_backspace(),
+            Key::Character(ch) => {
+                if let Some(ch) = ch.chars().next().filter(|c| !c.is_control()) {
+                    self.canvas_chip.edit_insert(ch);
+                }
+            }
+            _ => {}
+        }
+        self.request_redraw();
+    }
+
+    /// Подтвердить ренейм активного из чипа (№21c): валидация
+    /// `validate_canvas_name` + коллизия `name_taken` (№9) → тост-запрет;
+    /// успех — `CanvasOp::Rename` ТЕМ ЖЕ конвейером менеджера (перенос
+    /// `.bak` — стор, ключа камеры — `CanvasMoveCameraKey` в
+    /// `on_canvas_op_done`; web-слой синкает web_state/URL/title).
+    fn chip_commit_rename(&mut self) {
+        // Буфер забирается ТОЛЬКО на успех (как у менеджера №9): запрет
+        // оставляет правку живой — пользователь правит имя дальше.
+        let Some(buffer) = self.canvas_chip.rename.clone() else {
+            return;
+        };
+        let old = self.active_canvas_name();
+        match canvas_core::workspace::validate_canvas_name(&buffer) {
+            Ok(name) => {
+                let new = canvas_core::workspace::to_file_name(&name);
+                if new.eq_ignore_ascii_case(&old) {
+                    self.canvas_chip.cancel_edit(); // no-op ренейм
+                    self.request_redraw();
+                    return;
+                }
+                if canvas_core::workspace::name_taken(&new, &self.canvas_entries) {
+                    let display = canvas_core::workspace::display_name(&new).to_owned();
+                    self.show_toast(self.trf(
+                        keys::CANVAS_MANAGER_NAME_TAKEN_TOAST,
+                        &[("{name}", &display)],
+                    ));
+                } else {
+                    let _ = self.canvas_chip.take_edit();
+                    self.request_canvas_op(canvas_core::workspace::CanvasOp::Rename { old, new });
+                }
+            }
+            Err(err) => {
+                let reason = err.to_string();
+                self.show_toast(self.trf(
+                    keys::CANVAS_MANAGER_NAME_INVALID_TOAST,
+                    &[("{reason}", &reason)],
+                ));
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// Потеря фокуса инлайн-ренейма чипа (№21c: клик мимо зон чипа —
+    /// отмена; сам клик продолжает обычный путь). Вызывается из
+    /// `on_left_button` ДО pick'а поверхностей.
+    fn blur_canvas_chip_rename(&mut self) {
+        if self.canvas_chip.rename.is_some() {
+            self.canvas_chip.cancel_edit();
+            self.request_redraw();
+        }
+    }
+
+    /// Камера активного канваса — снимок для localStorage (№12/№30b).
+    fn camera_snapshot(&self) -> canvas_core::workspace::CameraSnapshot {
+        canvas_core::workspace::CameraSnapshot {
+            center: self.camera.position(),
+            zoom: self.camera.zoom(),
+        }
+    }
+
+    /// Сохранить камеру канваса `name` (№12/№30b): уход с канваса и
+    /// выгрузка страницы (`CameraFlushRequested`). На нативе — тихий
+    /// no-op (очередь дренажируется только web-обёрткой TourAwareApp).
+    fn save_camera_of(&mut self, name: &str) {
+        if name.is_empty() {
+            return;
+        }
+        let snapshot = self.camera_snapshot();
+        self.pending_web_requests
+            .push(WebRequest::CanvasCameraSave {
+                name: name.to_owned(),
+                snapshot,
+            });
+    }
+
+    /// Камера открытого канваса приехала из localStorage (№12/№30b):
+    /// применить зум/центр (зум — через `set_zoom`: кламп диапазона);
+    /// `None` — ключа нет, камера уже сброшена дефолтом `on_open_scene`.
+    fn on_canvas_camera_restored(
+        &mut self,
+        snapshot: Option<canvas_core::workspace::CameraSnapshot>,
+    ) {
+        if let Some(snapshot) = snapshot {
+            self.camera.set_center(snapshot.center);
+            self.camera.set_zoom(snapshot.zoom);
+            tracing::debug!(
+                target: "canvas_app",
+                center = ?snapshot.center,
+                zoom = snapshot.zoom,
+                "камера канваса восстановлена (FR-107 №12)"
+            );
+        }
+        self.request_redraw();
+    }
+
+    /// Режим активного канваса от web-слоя (№21c): Disk — чип «только
+    /// просмотр» (ренейм не поддерживается), ренейм-буфер гасится.
+    fn on_canvas_active_kind(&mut self, disk: bool) {
+        self.active_canvas_disk = disk;
+        if disk {
+            self.canvas_chip.cancel_edit();
+        }
+        self.request_redraw();
+    }
+
+    /// Выгрузка/скрытие страницы (№12/№30b): немедленно persist камеры
+    /// активного канваса (запрос уйдёт в том же микротаске — дренаж
+    /// TourAwareApp сразу после события; localStorage-запись синхронна).
+    fn on_camera_flush(&mut self) {
+        let name = self.active_canvas_name();
+        self.save_camera_of(&name);
     }
 
     /// Клавиатура менеджера (№9): Esc/↑/↓/Enter/F2 + ввод в фильтр/буфер
@@ -7853,9 +8102,20 @@ impl App {
         json: String,
         storage: Option<Arc<dyn CanvasStorage>>,
     ) {
+        // FR-107 (C4, №12/№30b): камера УХОДЯЩЕГО канваса — в localStorage
+        // до подмены сцены (ренейм не сохраняет: ключ переносится
+        // `CanvasMoveCameraKey`); сюда же — флаг ошибки сохранения чипа
+        // (правки прежнего канваса уехали с ним).
+        let outgoing_name = self.active_canvas_name();
+        self.save_camera_of(&outgoing_name);
         // Незакрытые правки прежней сцены — в её хранилище до подмены
         if self.scene.dirty_since.is_some() {
-            self.scene.save_now();
+            let saved = self.scene.save_now();
+            if !saved {
+                tracing::warn!(target: "canvas_app", file = %outgoing_name,
+                    "правки уходящего канваса не сохранились при переключении");
+                self.show_toast(self.tr(keys::CANVAS_CHIP_SAVE_ERROR_TOAST));
+            }
         }
         let opened = path.display().to_string();
         let canvas = match Canvas::from_str(&json) {
@@ -7912,6 +8172,19 @@ impl App {
             renderer.clear_guides();
         }
         self.camera = Camera::default();
+        // FR-107 (C4): чип — новое имя/чистый значок ошибки; камера нового
+        // канваса (№12/№30b) и режим (№21c: Disk) — обратным каналом (ответ
+        // придёт до следующего кадра — микротаск между событиями).
+        self.canvas_chip = canvas_chip_ui::CanvasChipState::default();
+        self.active_canvas_disk = false;
+        let opened_name = self.active_canvas_name();
+        if !opened_name.is_empty() {
+            self.pending_web_requests
+                .push(WebRequest::CanvasCameraLoad {
+                    name: opened_name.clone(),
+                });
+            self.pending_web_requests.push(WebRequest::CanvasActiveKind);
+        }
         self.show_toast(self.trf(keys::TOAST_CANVAS_OPENED, &[("{name}", &opened)]));
         if let Some(name) = restored_scenario {
             let text = self.trf(
@@ -14856,6 +15129,145 @@ mod tests {
         assert!(app.toast.is_some(), "тост canvas.drop.renamed_toast");
     }
 
+    // --- FR-107 (мультиканвас C4, issue #8): чип активного канваса ----------
+
+    /// FR-107 (№21c): ренейм из чипа — та же валидация и конвейер, что у
+    /// менеджера (№9): коллизия и запретённые символы — тост-запрет с
+    /// живой правкой (буфер не закрывается), успех — `CanvasOp::Rename`
+    /// активного (перенос .bak/ключа камеры — конвейер C3).
+    #[test]
+    fn chip_rename_validation_collision_and_disk_mode() {
+        let (mut app, _old) = stub_app_on_storage(
+            "target/tmp/fr107-chip.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        app.on_canvas_list(vec![
+            opfs_entry("fr107-chip.canvas"),
+            opfs_entry("занято.canvas"),
+        ]);
+        let _ = app.drain_web_requests();
+        let enter = winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter);
+        // Коллизия: имя другого канваса из листинга — тост, правка жива
+        app.canvas_chip.begin_rename("занято");
+        app.on_canvas_chip_key(&enter);
+        assert!(
+            app.canvas_chip.is_editing(),
+            "запрет оставляет правку живой"
+        );
+        assert!(app.toast.is_some(), "коллизия — тост-запрет");
+        assert!(app.drain_web_requests().is_empty(), "операция не ушла");
+        // Невалидное имя — тоже запрет (validate_canvas_name)
+        app.canvas_chip.begin_rename("плохое/имя");
+        app.on_canvas_chip_key(&enter);
+        assert!(
+            app.canvas_chip.is_editing(),
+            "запрещённый символ — правка жива"
+        );
+        assert!(app.drain_web_requests().is_empty());
+        // Успех: ренейм активного тем же конвейером менеджера
+        app.canvas_chip.begin_rename("новое имя");
+        app.on_canvas_chip_key(&enter);
+        assert!(!app.canvas_chip.is_editing(), "успех забирает буфер");
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![WebRequest::CanvasOp(
+                canvas_core::workspace::CanvasOp::Rename {
+                    old: "fr107-chip.canvas".into(),
+                    new: "новое имя.canvas".into()
+                }
+            )],
+            "ренейм чипа — тем же CanvasOp, что у менеджера (№21c)"
+        );
+        // Дисковый режим (№21c): клик по имени — тост-подсказка, буфер
+        // не открывается; иконка — менеджер
+        app.on_canvas_active_kind(true);
+        app.click_canvas_chip("chip-name");
+        assert!(!app.canvas_chip.is_editing(), "диск — «только просмотр»");
+        app.click_canvas_chip("chip-list");
+        assert!(app.canvas_manager.open, "иконка чипа открывает менеджер");
+    }
+
+    /// FR-107 (№21c/№29b/№12): клик по имени открывает правку с текущим
+    /// именем; Esc отменяет; потеря фокуса (клик мимо) — тоже отменяет.
+    #[test]
+    fn chip_rename_opens_esc_and_blur_cancel() {
+        let (mut app, _old) = stub_app_on_storage(
+            "target/tmp/fr107-chip-blur.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        app.click_canvas_chip("chip-name");
+        assert!(app.canvas_chip.is_editing(), "клик по имени — правка");
+        assert_eq!(
+            app.canvas_chip.edit_buffer(),
+            Some("fr107-chip-blur"),
+            "буфер стартует с отображаемого имени (№9)"
+        );
+        let esc = winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape);
+        app.on_canvas_chip_key(&esc);
+        assert!(!app.canvas_chip.is_editing(), "Esc — отмена");
+        // Повтор: клик мимо (blur ДО pick) гасит правку
+        app.click_canvas_chip("chip-name");
+        app.blur_canvas_chip_rename();
+        assert!(!app.canvas_chip.is_editing(), "потеря фокуса — отмена");
+    }
+
+    /// FR-107 (№12/№30b/№21c): хуки камеры — уход с канваса сохраняет камеру
+    /// уходящего, on_open_scene запрашивает камеру нового и режим диска;
+    /// ответ применяется; выгрузка страницы — флеш камеры активного.
+    #[test]
+    fn chip_camera_save_load_and_flush_hooks() {
+        let (mut app, _old) = stub_app_on_storage(
+            "target/tmp/fr107-cam-old.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        app.camera.set_center([111.0, -222.0]);
+        app.camera.set_zoom(0.5);
+        let _ = app.drain_web_requests();
+        // Переключение: камера уходящего — в localStorage до подмены сцены,
+        // нового — запрос загрузки + режим (№12/№30b/№21c)
+        app.on_open_scene(
+            PathBuf::from("target/tmp/fr107-cam-new.canvas"),
+            Canvas::default().to_json().unwrap_or_default(),
+            None,
+        );
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![
+                WebRequest::CanvasCameraSave {
+                    name: "fr107-cam-old.canvas".into(),
+                    snapshot: canvas_core::workspace::CameraSnapshot {
+                        center: [111.0, -222.0],
+                        zoom: 0.5,
+                    },
+                },
+                WebRequest::CanvasCameraLoad {
+                    name: "fr107-cam-new.canvas".into()
+                },
+                WebRequest::CanvasActiveKind,
+            ]
+        );
+        // Ответ web-слоя: снимок применяется (кламп зума — сторона камеры)
+        app.on_canvas_camera_restored(Some(canvas_core::workspace::CameraSnapshot {
+            center: [42.0, 24.0],
+            zoom: 2.0,
+        }));
+        let pos = app.camera.position();
+        assert!((pos[0] - 42.0).abs() < 1e-3 && (pos[1] - 24.0).abs() < 1e-3);
+        assert!((app.camera.zoom() - 2.0).abs() < 1e-3);
+        // Выгрузка/скрытие страницы — флеш камеры активного
+        app.on_camera_flush();
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![WebRequest::CanvasCameraSave {
+                name: "fr107-cam-new.canvas".into(),
+                snapshot: canvas_core::workspace::CameraSnapshot {
+                    center: [42.0, 24.0],
+                    zoom: 2.0,
+                },
+            }]
+        );
+    }
+
     // --- FR-038 (T-038.5): batch-операции выравнивания (п.16-17) ------------
 
     /// distribute_axis_for: ряд (размах центров по X больше) → X, колонна → Y,
@@ -16822,9 +17234,11 @@ mod we_onboarding_draw_tests {
             let (quads, texts) = app.onboarding_overlay();
             assert!(!quads.is_empty() && !texts.is_empty(), "кадр не пустой");
             let card = full.card;
+            // FR-107 (C4): зона CTA резервируется у финала FR-028 (CHOICE_STEP)
+            // и у карточки мультиканваса №19 (последний шаг с собственным CTA).
             let body = crate::onboarding_ui::body_area(
                 card,
-                step + 1 == crate::onboarding_ui::ONBOARDING_STEPS.len(),
+                crate::onboarding_ui::step_has_cta_zone(step),
             );
             let footer_top = card[1] + card[3] - crate::onboarding_ui::ONBOARDING_FOOTER_H;
             // Строки тела: только видимое окно (kit::list_rows) — меньше
@@ -16854,10 +17268,14 @@ mod we_onboarding_draw_tests {
                 assert!(t.origin[1] >= body[1] - 0.01, "строка выше зоны тела");
             }
             // CTA виден: подпись кнопки «Далее» (футер) — внутри rect кнопки
-            // (hit-тест и отрисовка — одна геометрия). CR-031: на финальном
-            // шаге CTA — полноширинная опция «Открыть шаблонную схему».
-            let next_rect = if step + 1 == crate::onboarding_ui::ONBOARDING_STEPS.len() {
+            // (hit-тест и отрисовка — одна геометрия). CR-031: на финале
+            // FR-028 (CHOICE_STEP) CTA — полноширинная опция «Открыть
+            // шаблонную схему»; FR-107 (C4): последний шаг — карточка
+            // мультиканваса №19 с собственным CTA «Создать канвас».
+            let next_rect = if step == crate::onboarding_ui::CHOICE_STEP {
                 crate::onboarding_ui::option_rects(card)[0]
+            } else if step + 1 == crate::onboarding_ui::ONBOARDING_STEPS.len() {
+                crate::onboarding_ui::cta_rect(card)
             } else {
                 crate::onboarding_ui::button_rect(
                     card,

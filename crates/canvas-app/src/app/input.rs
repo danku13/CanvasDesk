@@ -729,6 +729,19 @@ impl App {
                 }
                 true
             }
+            // FR-107 (C4, №21c): инлайн-ренейм чипа активного канваса —
+            // Esc/Enter/Backspace/печатаемые — в буфер ренейма, прочие
+            // глотаются (правка короткоживущая; скоуп живёт только пока
+            // открыт буфер — паттерн менеджера, реестр поверхностей)
+            ui_registry::KeyOwner::CanvasChip => {
+                if self.canvas_chip.is_editing()
+                    && event.state == ElementState::Pressed
+                    && !event.repeat
+                {
+                    self.on_canvas_chip_key(&event.logical_key);
+                }
+                true
+            }
             ui_registry::KeyOwner::Editor => {
                 // Активное редактирование (T7): клавиатура уходит в редактор
                 self.route_editor_key(&event.logical_key, event.state, event.repeat)
@@ -1498,6 +1511,13 @@ impl App {
                 self.click_canvas_manager(element);
                 true
             }
+            // FR-107 (C4, №21c/№37b): чип активного канваса — имя (ренейм) и
+            // иконка списка (менеджер, единственный вход после чистки
+            // DOM-панели); клик по зонам обрабатывает click_canvas_chip
+            ui_registry::id::CANVAS_CHIP => {
+                self.click_canvas_chip(element);
+                true
+            }
             // FR-105 (C2, №45b): кнопка «Перезагрузить» тоста внешнего
             // изменения (локальные правки — сперва в .bak)
             ui_registry::id::TOAST => {
@@ -1685,6 +1705,12 @@ impl App {
                     // CR-031: финальный CTA «Начать самому» — тур пройден,
                     // чистый холст
                     self.complete_onboarding();
+                }
+                Some(OnboardingButton::Cta) => {
+                    // FR-107 (C4, №19): CTA «Создать канвас» — тур пройден,
+                    // открыт менеджер канвасов (в нём свои CTA создания)
+                    self.complete_onboarding();
+                    self.open_canvas_manager();
                 }
                 Some(OnboardingButton::Prev) => {
                     if let Some(state) = self.onboarding.as_mut() {
@@ -3197,6 +3223,11 @@ impl App {
                 // предыдущего (не потреблённый, например поверхностью UI)
                 // не переживает следующее нажатие
                 self.click_edit = None;
+                // FR-107 (C4, №21c): потеря фокуса инлайн-ренейма чипа —
+                // ЛЮБОЙ клик отменяет правку ДО pick'а поверхностей (сам
+                // жест продолжает обычный путь; клик по зонам чипа затем
+                // откроет новую правку).
+                self.blur_canvas_chip_rename();
                 // FR-079 (S3): C3-карточки — клик до диспетчера поверхностей:
                 // стопка транзиентна (паттерн тултипа, не реестр FR-052);
                 // клик по карточке глотается, мимо — закрывает и проходит

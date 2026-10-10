@@ -32,11 +32,12 @@ use canvas_ui::kit;
 /// Высота чипа (лог. px): ряд верхнего хрома — как поле поиска
 /// (`kit::BUTTON_HEIGHT` = 30, кит-каноническая высота контрола).
 pub const CHIP_H: f32 = kit::BUTTON_HEIGHT;
-/// Кап ширины чипа (лог. px): длинные имена эллипсируются. 160 — не
+/// Кап ширины чипа (лог. px): длинные имена эллипсируются. 156 — не
 /// наезжает на панель поиска топ-центр (460px, левый край vw/2−230) в
-/// минимальном G4-вьюпорте 800×560 (край поиска 170 > 12+160) и не
+/// минимальном G4-вьюпорте 800×560: правый край чипа 12+156 = 168 <
+/// 170 (2px зазор; при 160 капе — налезание 2px, гейт G4) и не
 /// перекрывает HUD-зону диагностики сверх необходимого.
-pub const CHIP_MAX_W: f32 = 160.0;
+pub const CHIP_MAX_W: f32 = 156.0;
 /// Сторона квадратной зоны иконки списка (клик = менеджер).
 pub const ICON_ZONE: f32 = CHIP_H;
 /// Сторона значка ошибки сохранения (№29b; не интерактивен).
@@ -78,18 +79,22 @@ pub struct ChipLayout {
 /// ряд, что у панели поиска топ-центр), ширина = имя + значок ошибки
 /// (если есть) + иконка списка, кап `CHIP_MAX_W` + кламп к вьюпорту
 /// (вырожденный вьюпорт схлопывает чип в точку — без паники).
-pub fn chip_layout(viewport: [f32; 2], name_w: f32, save_failed: bool) -> ChipLayout {
+/// `left_offset` — сдвиг правее развёрнутого левого дока палитры
+/// (UR-003-паритет: DOM-бары уходят за док `cd-panel-left`; 0 — дока
+/// нет).
+pub fn chip_layout(
+    viewport: [f32; 2],
+    name_w: f32,
+    save_failed: bool,
+    left_offset: f32,
+) -> ChipLayout {
     let badge_w = if save_failed { BADGE_ZONE } else { 0.0 };
     let wanted = (name_w + badge_w + ICON_ZONE).max(CHIP_H);
-    let avail = (viewport[0] - tokens::SPACING_LG * 2.0).max(0.0);
+    let x = tokens::SPACING_LG + left_offset.max(0.0);
+    let avail = (viewport[0] - x - tokens::SPACING_LG).max(0.0);
     let width = wanted.min(CHIP_MAX_W).min(avail);
     let height = CHIP_H.min(viewport[1].max(0.0));
-    let pill = [
-        tokens::SPACING_LG,
-        tokens::SPACING_LG,
-        width.max(0.0),
-        height,
-    ];
+    let pill = [x, tokens::SPACING_LG, width.max(0.0), height];
     let icon = [
         pill[0] + width - ICON_ZONE,
         pill[1],
@@ -115,6 +120,14 @@ pub fn chip_layout(viewport: [f32; 2], name_w: f32, save_failed: bool) -> ChipLa
         badge,
         name_text_w: name_zone_w,
     }
+}
+
+/// Сдвиг чипа правее развёрнутого левого дока палитры (UR-003-паритет):
+/// `PANEL_MARGIN + PANEL_WIDTH + зазор` — тот же край, за который уходят
+/// DOM-бары (`cd-panel-left`, index.html). Константы дока — `template_ui`
+/// (единственный источник); здесь — производная ширины (чипу док безразличен).
+pub fn template_dock_offset() -> f32 {
+    crate::template_ui::PANEL_MARGIN + crate::template_ui::PANEL_WIDTH + tokens::SPACING_SM
 }
 
 /// Hit-зона чипа под точкой (draw == hit: зоны те же, что у отрисовки).
@@ -213,7 +226,7 @@ mod tests {
 
     #[test]
     fn layout_top_left_with_margins() {
-        let lay = chip_layout(VP, 120.0, false);
+        let lay = chip_layout(VP, 120.0, false, 0.0);
         assert_eq!(lay.pill[0], tokens::SPACING_LG);
         assert_eq!(lay.pill[1], tokens::SPACING_LG);
         assert_eq!(lay.pill[3], CHIP_H);
@@ -228,7 +241,7 @@ mod tests {
 
     #[test]
     fn layout_caps_long_name() {
-        let lay = chip_layout(VP, 500.0, false);
+        let lay = chip_layout(VP, 500.0, false, 0.0);
         assert!((lay.pill[2] - CHIP_MAX_W).abs() < 1e-4, "кап ширины");
         assert!((lay.name[2] - (CHIP_MAX_W - ICON_ZONE)).abs() < 1e-4);
         assert!((lay.name_text_w - lay.name[2]).abs() < 1e-4);
@@ -237,16 +250,16 @@ mod tests {
     #[test]
     fn layout_clamps_to_viewport() {
         // Узкий вьюпорт: чип не вылезает за правый край
-        let lay = chip_layout([100.0, 100.0], 500.0, false);
+        let lay = chip_layout([100.0, 100.0], 500.0, false, 0.0);
         assert!(lay.pill[0] + lay.pill[2] <= 100.0);
         // Вырожденный вьюпорт — нулевая ширина, без паник
-        let lay = chip_layout([0.0, 0.0], 100.0, false);
+        let lay = chip_layout([0.0, 0.0], 100.0, false, 0.0);
         assert_eq!(lay.pill[2], 0.0);
     }
 
     #[test]
     fn layout_save_error_badge_before_icon() {
-        let lay = chip_layout(VP, 120.0, true);
+        let lay = chip_layout(VP, 120.0, true, 0.0);
         // Значок — между именем и иконкой
         assert!((lay.badge[0] + lay.badge[2] - lay.icon[0]).abs() < 1e-4);
         assert_eq!(lay.badge[3], BADGE_ZONE);
@@ -254,11 +267,23 @@ mod tests {
         assert!((lay.name[2] - (lay.pill[2] - ICON_ZONE - BADGE_ZONE)).abs() < 1e-4);
     }
 
+    #[test]
+    fn layout_shifts_right_of_left_dock() {
+        // UR-003-паритет: развёрнутый левый док палитры (340 + поля) — чип
+        // уезжает правее дока, не под него (DOM-бары делают то же).
+        let dock = template_dock_offset();
+        let lay = chip_layout(VP, 120.0, false, dock);
+        assert!((lay.pill[0] - (tokens::SPACING_LG + dock)).abs() < 1e-4);
+        // Узкий вьюпорт за доком: кламп ширины держит чип в экране
+        let lay = chip_layout([dock + 100.0, 800.0], 500.0, false, dock);
+        assert!(lay.pill[0] + lay.pill[2] <= dock + 100.0 - tokens::SPACING_LG + 0.01);
+    }
+
     // --- hit-зоны (draw == hit) --------------------------------------------------
 
     #[test]
     fn hit_zones_name_icon_and_miss() {
-        let lay = chip_layout(VP, 120.0, false);
+        let lay = chip_layout(VP, 120.0, false, 0.0);
         // Центр зоны имени
         let name_c = [lay.name[0] + lay.name[2] * 0.5, lay.name[1] + CHIP_H * 0.5];
         assert_eq!(chip_hit(&lay, name_c), ChipHit::Name);
@@ -283,7 +308,7 @@ mod tests {
     fn hit_icon_wins_on_overlap() {
         // Точка на стыке имени и иконки (граница) — иконка: она проверяется
         // первой (правый край чипа — самый частый жест «открыть список»).
-        let lay = chip_layout(VP, 120.0, false);
+        let lay = chip_layout(VP, 120.0, false, 0.0);
         let border = [lay.icon[0], lay.icon[1] + CHIP_H * 0.5];
         assert_eq!(chip_hit(&lay, border), ChipHit::ListIcon);
     }
@@ -334,6 +359,9 @@ mod tests {
         let mut chip = CanvasChipState::default();
         assert!(!chip.save_failed);
         chip.save_failed = true;
-        assert!(chip.save_failed, "стойкий флаг живёт до успешного сохранения");
+        assert!(
+            chip.save_failed,
+            "стойкий флаг живёт до успешного сохранения"
+        );
     }
 }

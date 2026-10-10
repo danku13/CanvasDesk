@@ -4126,10 +4126,10 @@ impl App {
         // Тело шага: видимое окно строк — kit::list_rows над скролл-состоянием
         // тела (строки — тот же измеренный источник, что высота карточки:
         // lay.lines). При клампе высоты видны только строки окна — контент
-        // ужимается прокруткой, футер с CTA не перекрывается. CR-031: на
-        // финальном шаге зона тела уже — снизу резервируются CTA-опции.
-        let is_last = state.is_last();
-        let body = onboarding_ui::body_area(card, is_last);
+        // ужимается прокруткой, футер с CTA не перекрывается. CR-031/
+        // FR-107 (C4): на шагах с CTA-зоной (финал FR-028 и карточка
+        // мультиканваса №19) тело уже — снизу резервируются опции.
+        let body = onboarding_ui::body_area(card, state.has_cta_zone());
         for (idx, row) in kit::list_rows(
             canvas_ui::geometry::UiRect::new(body[0], body[1], body[2], body[3]),
             &scroll,
@@ -4169,7 +4169,10 @@ impl App {
                 onboarding_ui::button_label_font(k),
             ));
         }
-        if !is_last {
+        if !state.is_choice() {
+            // FR-107 (C4): «Далее»/«Готово» рисуется на всех шагах, кроме
+            // финала FR-028 (там — две CTA-опции); карточка мультиканваса
+            // несёт и CTA, и «Готово» (завершение без создания).
             buttons.push((
                 OnboardingButton::Next,
                 kit::ButtonVariant::Primary,
@@ -4215,6 +4218,35 @@ impl App {
                     PaintAlign::Center,
                 );
             }
+        }
+        // FR-107 (C4, №19): CTA карточки мультиканваса — полноширинная
+        // кнопка в зоне опций (верхний слот; primary, открывает менеджер).
+        if state.cta().is_some() {
+            let rect = onboarding_ui::cta_rect(card);
+            let opt_font = onboarding_ui::button_label_font(k);
+            let mut widget = WidgetState::default();
+            widget.set_pointer(point_in_rect(rect, self.cursor), false);
+            let style = kit::button_style(
+                kit::ButtonVariant::Primary,
+                widget.kit_state(),
+                &kit_palette,
+            );
+            d.control(
+                canvas_ui::geometry::UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                &style,
+            );
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    rect[0],
+                    rect[1] + (rect[3] - opt_font * 1.3) / 2.0,
+                    rect[2],
+                    opt_font * 1.3,
+                ),
+                self.tr(keys::ONBOARDING_MULTICANVAS_CTA),
+                style.text,
+                opt_font,
+                PaintAlign::Center,
+            );
         }
         buttons.push((
             OnboardingButton::Skip,
@@ -7265,6 +7297,216 @@ impl App {
                 align: t.align,
             })
             .collect();
+        out
+    }
+
+    /// FR-107 (мультиканвас C4, issue #8): чип активного канваса —
+    /// двухзонный ambient-хром верхней ЛЕВОЙ зоны (№21c): имя (клик —
+    /// инлайн-ренейм активного через конвейер менеджера) + иконка списка
+    /// (клик — менеджер, единственный вход после чистки DOM-панели №37b).
+    /// Значок ошибки сохранения №29b — стойкий маркер между именем и
+    /// иконкой (не интерактивен). Геометрия — чистая `chip_layout`
+    /// (одна для отрисовки/ввода/реестра — draw == hit); hover-состояния —
+    /// KitState по конвенции кита, цвета — только слоты KitPalette.
+    /// Тултип-подсказка зоны — мини-панель ПОД чипом (не интерактивна,
+    /// в pick не участвует): ренейм/менеджер/диск/ошибка сохранения.
+    pub(super) fn canvas_chip_overlay(
+        &self,
+    ) -> (
+        Vec<CardInstance>,
+        Vec<OwnedScreenText>,
+        Vec<canvas_render::IconInstance>,
+    ) {
+        let mut out = (Vec::new(), Vec::new(), Vec::new());
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return out;
+        }
+        let kit_palette = self.effective_palette().kit_palette();
+        let lang = self.settings.language;
+        let font = canvas_core::tokens::FONT_BODY;
+        let caption = canvas_core::tokens::FONT_CAPTION;
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let lay = self.chip_layout_current(viewport);
+        if lay.pill[2] <= 0.0 || lay.pill[3] <= 0.0 {
+            return out; // вырожденный вьюпорт — чип схлопнут
+        }
+        let cursor = self.cursor;
+        let hover = |r: [f32; 4]| {
+            cursor[0] >= r[0]
+                && cursor[0] <= r[0] + r[2]
+                && cursor[1] >= r[1]
+                && cursor[1] <= r[1] + r[3]
+        };
+        let rect = |r: [f32; 4]| canvas_ui::geometry::UiRect::new(r[0], r[1], r[2], r[3]);
+        let mut d = crate::kit_ui::KitDraw::new();
+        // FR-ICONS: активный набор иконок (None = Glyph fallback).
+        d.set_icon_set(self.icon_set_active());
+        // Пилюля — чип-контроль кита; hover любой зоны поднимает всю
+        // пилюлю (зона под курсором — своим состоянием ниже).
+        let mut pill_widget = WidgetState::default();
+        pill_widget.set_pointer(hover(lay.pill), false);
+        let pill_style = canvas_ui::kit::chip_style(pill_widget.kit_state(), &kit_palette);
+        d.control(rect(lay.pill), &pill_style);
+        // --- зона имени: инлайн-ренейм (поле + каретка) или подпись -------
+        if self.canvas_chip.is_editing() {
+            // Правка (№21c): фон поля + текст буфера + каретка (kit_field_view,
+            // IN3 — литералы-каретки запрещены) + подсказка «Rename (Enter)»
+            // правее пилюли (ключ C0 canvas.chip.rename_hint).
+            d.rect(
+                rect(lay.name),
+                self.effective_palette().search_input_fill,
+                [0.0; 4],
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            let mut edit_field = canvas_ui::kit::TextFieldModel::default();
+            if let Some(buffer) = self.canvas_chip.edit_buffer() {
+                edit_field.set_text(buffer.to_owned());
+            }
+            let (shown, caret) = kit_field_view(&edit_field, lay.name, "", font, &kit_palette);
+            d.label_left(rect(lay.name), &shown, kit_palette.text, font);
+            if let Some(c) = caret {
+                d.rect(
+                    canvas_ui::geometry::UiRect::new(c[0], c[1], c[2], c[3]),
+                    self.effective_palette().accent,
+                    [0.0; 4],
+                    0.0,
+                );
+            }
+            let hint = crate::i18n::tr(lang, keys::CANVAS_CHIP_RENAME_HINT);
+            let hint_w = m.width_of(&mut fs, hint, canvas_render::text::SANS_FAMILY, caption)
+                + canvas_core::tokens::SPACING_MD;
+            d.label_left(
+                canvas_ui::geometry::UiRect::new(
+                    lay.pill[0] + lay.pill[2] + canvas_core::tokens::SPACING_SM,
+                    lay.pill[1] + (lay.pill[3] - caption - 2.0).max(0.0) * 0.5,
+                    hint_w.min((viewport[0] - lay.pill[0] - lay.pill[2]).max(0.0)),
+                    caption + 2.0,
+                ),
+                hint,
+                kit_palette.text_muted,
+                caption,
+            );
+        } else {
+            // Подпись имени (display_name, эллипсис по зоне — как у строк
+            // менеджера; активный канвас — титульный цвет текста).
+            let shown = m.ellipsis(
+                &mut fs,
+                &self.chip_display_name(),
+                canvas_render::text::SANS_FAMILY,
+                font,
+                lay.name_text_w.max(0.0),
+            );
+            d.label_left(
+                canvas_ui::geometry::UiRect::new(
+                    lay.name[0],
+                    lay.name[1] + (lay.pill[3] - font - 2.0).max(0.0) * 0.5,
+                    lay.name[2],
+                    font + 2.0,
+                ),
+                &shown,
+                kit_palette.text_title,
+                font,
+            );
+        }
+        // --- значок ошибки сохранения (№29b): стойкий, не интерактивен ----
+        if self.canvas_chip.save_failed && lay.badge[2] > 0.0 && lay.badge[3] > 0.0 {
+            d.rect(
+                canvas_ui::geometry::UiRect::new(
+                    lay.badge[0],
+                    lay.badge[1],
+                    lay.badge[2],
+                    lay.badge[3],
+                ),
+                kit_palette.control_danger,
+                [0.0; 4],
+                lay.badge[2] * 0.5, // круг
+            );
+            d.label_center(
+                canvas_ui::geometry::UiRect::new(
+                    lay.badge[0],
+                    lay.badge[1] + (lay.badge[3] - caption).max(0.0) * 0.5,
+                    lay.badge[2],
+                    caption,
+                ),
+                "!",
+                kit_palette.text_title,
+                caption,
+            );
+        }
+        // --- зона иконки списка: менеджер (№21c/№37b) ----------------------
+        let mut icon_widget = WidgetState::default();
+        icon_widget.set_pointer(hover(lay.icon), false);
+        let icon_style = canvas_ui::kit::icon_button_style(icon_widget.kit_state(), &kit_palette);
+        d.control(rect(lay.icon), &icon_style);
+        d.icon(
+            canvas_ui::geometry::UiRect::new(
+                lay.icon[0] + 5.0,
+                lay.icon[1] + 5.0,
+                (lay.icon[2] - 10.0).max(0.0),
+                (lay.icon[3] - 10.0).max(0.0),
+            ),
+            "tab_canvas",
+            "▦",
+            icon_style.text,
+            font,
+        );
+        // --- тултип зоны (не интерактивен; правка его сменяет подсказкой) --
+        let tooltip = if self.canvas_chip.is_editing() {
+            None
+        } else if hover(lay.icon) {
+            Some(crate::i18n::tr(lang, keys::CANVAS_CHIP_MANAGER_HINT))
+        } else if hover(lay.name) {
+            if self.active_canvas_disk {
+                Some(crate::i18n::tr(lang, keys::CANVAS_CHIP_DISK_HINT))
+            } else {
+                Some(crate::i18n::tr(lang, keys::CANVAS_CHIP_RENAME_HINT))
+            }
+        } else if self.canvas_chip.save_failed && hover(lay.pill) {
+            Some(crate::i18n::tr(lang, keys::CANVAS_CHIP_SAVE_ERROR_HINT))
+        } else {
+            None
+        };
+        if let Some(text) = tooltip {
+            let text_w = m.width_of(&mut fs, text, canvas_render::text::SANS_FAMILY, caption);
+            let w = text_w + canvas_core::tokens::SPACING_MD * 2.0;
+            let h = caption + 8.0;
+            let x = lay.pill[0];
+            let y = lay.pill[1] + lay.pill[3] + canvas_core::tokens::SPACING_SM;
+            d.rect(
+                canvas_ui::geometry::UiRect::new(x, y, w.min((viewport[0] - x).max(0.0)), h),
+                kit_palette.panel_fill,
+                kit_palette.panel_border,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            d.label_left(
+                canvas_ui::geometry::UiRect::new(
+                    x + canvas_core::tokens::SPACING_MD,
+                    y + 4.0,
+                    text_w + 1.0,
+                    caption + 1.0,
+                ),
+                text,
+                kit_palette.text,
+                caption,
+            );
+        }
+        out.0 = d.quads;
+        out.1 = d
+            .texts
+            .into_iter()
+            .map(|t| OwnedScreenText {
+                text: t.text,
+                origin: t.origin,
+                width: t.width,
+                font_size: t.font_size,
+                color: t.color,
+                align: t.align,
+            })
+            .collect();
+        // FR-ICONS: иконка списка (SVG-атлас; пусто для Glyph).
+        out.2 = d.icons;
         out
     }
 
