@@ -689,8 +689,13 @@ impl App {
     /// feature-чипов (~16 px) дотягиваются до 44 лог. px центрированно, с
     /// клампом в `panel` — расширенная зона не выходит за панель и не
     /// перекрывает канвас/минимапу. На точном указателе — rect без изменений.
+    ///
+    /// LAY-W15 (P2-1): пары/тройки однородных целей (⏸/⚙; чипы) резолвятся
+    /// «ближайшим центром» — coarse-тап в нарисованный ⚙/чип N не уходит
+    /// соседу N−1 (расширение которого наезжает). Порядок слоёв (кнопки →
+    /// чипы → тело) не меняется — first-match между разнородными стадиями
+    /// сохранён.
     pub(crate) fn ai_status_panel_hit(&self, point: [f32; 2]) -> Option<AiStatusPanelHit> {
-        use crate::touch_targets::touch_hit_xywh;
         let panel = self.ai_status_panel_rect()?;
         if !point_in_rect(panel, point) {
             return None;
@@ -702,18 +707,22 @@ impl App {
         // (та же математика, что в `head_row_layout`).
         let gear_x = panel[0] + panel[2] - PAD_X - HEAD_BTN_SIZE;
         let pause_x = gear_x - HEAD_GAP - HEAD_BTN_SIZE;
-        // FR-097: тач-цель ⏸/⚙ ≥ 44 (кламп в панель)
-        if point_in_rect(
-            touch_hit_xywh([pause_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE], panel),
-            point,
-        ) {
-            return Some(AiStatusPanelHit::PauseToggle);
-        }
-        if point_in_rect(
-            touch_hit_xywh([gear_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE], panel),
-            point,
-        ) {
-            return Some(AiStatusPanelHit::OpenSettings);
+        // FR-097: тач-цель ⏸/⚙ ≥ 44 (кламп в панель). LAY-W15 (P2-1):
+        // пара кнопок — однородная sibling-группа, резолюция «ближайший
+        // центр»: coarse-расширение ⏸ (24→44, ±10) накрывает 4 px
+        // нарисованного ⚙ (зазор HEAD_GAP 6), и first-match отдавал тап в
+        // ⚙ кнопке ⏸. На точном указателе зоны не пересекаются — бит-в-бит
+        // first-match (LAY1.2 «ввод = тому, что видно»).
+        let head_btns = [
+            [pause_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE],
+            [gear_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE],
+        ];
+        if let Some(i) = crate::touch_targets::touch_hit_sibling_xywh(head_btns, panel, point) {
+            return Some(if i == 0 {
+                AiStatusPanelHit::PauseToggle
+            } else {
+                AiStatusPanelHit::OpenSettings
+            });
         }
 
         // FR-LLM-FIX-2: чипы Suggest/Graph/Agent — тот же замер шрифта, что
@@ -730,20 +739,22 @@ impl App {
             self.ai_paused,
         );
         let mut chip_cursor_x = content_x;
+        let mut chip_rects = [[0.0f32; 4]; 3];
         for (i, (_label_text, chip_w)) in feats.iter().enumerate() {
             let chip_h = FEAT_FONT + FEAT_PAD_Y * 2.0;
-            // FR-097: тач-цель feature-чипа (~16 px) ≥ 44 (кламп в панель)
-            if point_in_rect(
-                touch_hit_xywh([chip_cursor_x, feats_y, *chip_w, chip_h], panel),
-                point,
-            ) {
-                return Some(match i {
-                    0 => AiStatusPanelHit::ToggleSuggest,
-                    1 => AiStatusPanelHit::ToggleGraph,
-                    _ => AiStatusPanelHit::ToggleAgent,
-                });
-            }
+            chip_rects[i] = [chip_cursor_x, feats_y, *chip_w, chip_h];
             chip_cursor_x += *chip_w + FEAT_GAP;
+        }
+        // FR-097: тач-цель feature-чипа (~16 px) ≥ 44 (кламп в панель).
+        // LAY-W15 (P2-1): тройка чипов — та же sibling-резолюция «ближайший
+        // центр», что у ⏸/⚙ (при узких чипах coarse-расширения соседей
+        // перекрываются — тап в нарисованный чип не уходит соседу).
+        if let Some(i) = crate::touch_targets::touch_hit_sibling_xywh(chip_rects, panel, point) {
+            return Some(match i {
+                0 => AiStatusPanelHit::ToggleSuggest,
+                1 => AiStatusPanelHit::ToggleGraph,
+                _ => AiStatusPanelHit::ToggleAgent,
+            });
         }
 
         // Клик мимо кнопок — клик по телу панели (не проваливается под
@@ -857,6 +868,103 @@ mod tests {
         assert!(
             !point_in_rect(touch_hit_xywh(gear, panel), between),
             "precise: клик между ⏸ и ⚙ не в ⚙ (rect без изменений)"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(was);
+    }
+
+    /// LAY-W15 (P2-1 coarse mis-target): тап в первые пиксели нарисованного
+    /// ⚙ резолвится в ⚙, а НЕ в ⏸. Coarse-расширение ⏸ (24→44, ±10)
+    /// накрывает 4 px нарисованного ⚙ (pause_x+30..+34 = gear_x..gear_x+4),
+    /// прежний first-match отдавал их ⏸. Тест верифицирует ту же математику
+    /// констант, что использует `ai_status_panel_hit` (без `App`/GPU).
+    /// На precise точки внутри нарисованного ⚙ — ⚙ (десктоп прежний).
+    #[test]
+    fn lay_w15_pause_gear_coarse_nearest_center_gear_wins() {
+        use crate::touch_targets::{touch_hit_sibling_xywh, touch_hit_xywh};
+        let panel = [1100.0, 745.0, AI_STATUS_W, AI_STATUS_H];
+        // Та же арифметика шапки, что в `ai_status_panel_hit`/
+        // `head_button_rects`: правый край контента, 24 + gap 6 + 24.
+        let gear_x = panel[0] + panel[2] - PAD_X - HEAD_BTN_SIZE;
+        let pause_x = gear_x - HEAD_GAP - HEAD_BTN_SIZE;
+        let head_y = panel[1] + PAD_TOP;
+        let pause = [pause_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE];
+        let gear = [gear_x, head_y, HEAD_BTN_SIZE, HEAD_BTN_SIZE];
+        let head_btns = [pause, gear];
+
+        // Предпосылка mis-target: coarse-зона ⏸ накрывает левые 4 px ⚙.
+        let was = canvas_core::web_bridge::pointer_coarse();
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        let zone_pause = touch_hit_xywh(pause, panel);
+        assert!(
+            zone_pause[0] + zone_pause[2] > gear_x + 2.0,
+            "зона ⏸ наезжает на ⚙: zone_pause={zone_pause:?}"
+        );
+
+        // Тап в 2 px внутри нарисованного ⚙ (вертикально по центру) — ⚙
+        // (index 1), не ⏸. Инвариант LAY1.2: точка в нарисованном ⚙.
+        let pt = [gear_x + 2.0, head_y + HEAD_BTN_SIZE / 2.0];
+        assert!(point_in_rect(gear, pt) && !point_in_rect(pause, pt));
+        assert_eq!(
+            touch_hit_sibling_xywh(head_btns, panel, pt),
+            Some(1),
+            "coarse: тап в 2 px внутри нарисованного ⚙ — ⚙ (LAY1.2)"
+        );
+        // Симметрично: тап в 2 px внутри нарисованного ⏸ (правый край) — ⏸.
+        let pt_pause = [pause_x + HEAD_BTN_SIZE - 2.0, head_y + HEAD_BTN_SIZE / 2.0];
+        assert_eq!(
+            touch_hit_sibling_xywh(head_btns, panel, pt_pause),
+            Some(0),
+            "coarse: тап в 2 px внутри нарисованного ⏸ — ⏸"
+        );
+
+        // Precise: точки в нарисованных кнопках — свои кнопки (бит-в-бит
+        // first-match: зоны не пересекаются).
+        canvas_core::web_bridge::set_pointer_coarse(false);
+        assert_eq!(
+            touch_hit_sibling_xywh(head_btns, panel, pt),
+            Some(1),
+            "precise: тап в нарисованный ⚙ — ⚙"
+        );
+        assert_eq!(touch_hit_sibling_xywh(head_btns, panel, pt_pause), Some(0));
+        canvas_core::web_bridge::set_pointer_coarse(was);
+    }
+
+    /// LAY-W15: тройка feature-чипов — резолюция «ближайший центр» (та же,
+    /// что у ⏸/⚙): тап в 2 px внутри нарисованного чипа Graph — Graph, не
+    /// Suggest. Rect'ы — из [`feat_chip_rects`] (тот же замер, что у draw и
+    /// hit-теста). На precise — тот же чип (десктоп прежний).
+    #[test]
+    fn lay_w15_feat_chips_coarse_nearest_center() {
+        use crate::touch_targets::touch_hit_sibling_xywh;
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let panel = [1100.0, 745.0, AI_STATUS_W, AI_STATUS_H];
+        let chips = feat_chip_rects(&mut m, &mut fs, panel, true, true, true, false);
+        let c0 = chips[0];
+        let c1 = chips[1];
+        // Предпосылка однородности: чипы в одной строке, зазор FEAT_GAP.
+        assert_eq!(c0.y, c1.y);
+        assert!((c1.x - (c0.x + c0.w + FEAT_GAP)).abs() < 1e-3);
+
+        let to_xywh = |r: UiRect| [r.x, r.y, r.w, r.h];
+        let chip_rects = [to_xywh(c0), to_xywh(c1), to_xywh(chips[2])];
+        // Тап в 2 px внутри нарисованного чипа 1 (Graph), вертикально по
+        // центру чипа.
+        let pt = [c1.x + 2.0, c1.y + c1.h / 2.0];
+        assert!(point_in_rect(to_xywh(c1), pt) && !point_in_rect(to_xywh(c0), pt));
+
+        let was = canvas_core::web_bridge::pointer_coarse();
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        assert_eq!(
+            touch_hit_sibling_xywh(chip_rects, panel, pt),
+            Some(1),
+            "coarse: тап в 2 px внутри нарисованного чипа Graph — Graph (LAY1.2)"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(false);
+        assert_eq!(
+            touch_hit_sibling_xywh(chip_rects, panel, pt),
+            Some(1),
+            "precise: тап в нарисованный чип Graph — Graph"
         );
         canvas_core::web_bridge::set_pointer_coarse(was);
     }
