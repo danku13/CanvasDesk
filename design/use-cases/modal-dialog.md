@@ -50,12 +50,12 @@ stage_dim (dark α0.6 / light α0.5).
 - Диалог не «прыгает»: позиция центрируется на вьюпорт, не на курсор.
 
 ## 7. Где в коде
-`canvas-ui/src/kit.rs` — modal (478–488); confirm — `canvas-app/src/app.rs`
+`crates/canvas-ui/src/kit.rs` — modal (478–488); confirm — `crates/canvas-app/src/app.rs`
 (181–192 DIALOG_* константы, 10726+ цвета); настройки —
-`canvas-app/src/settings_ui.rs` (30–76 константы); surface-декларации —
-`app/ui_registry.rs`.
+`crates/canvas-app/src/settings_ui.rs` (30–76 константы); surface-декларации —
+`crates/canvas-app/src/app/ui_registry.rs`.
 
 ## 8. Что меняется при правке файла
 Габариты/паддинги → DIALOG_* / settings_ui константы. Цвета → colors.json
-dialog.* + tokens.rs (паритет). Поведение Block/дима — `rules/05-layering.md`
+dialog.* + tokens.rs (паритет). Поведение Block/дима — `../rules/05-layering.md`
 (правка через ADR, не через этот файл).

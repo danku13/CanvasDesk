@@ -49,7 +49,7 @@ capture = **Block** (клик мимо — закрытие).
   скрывается под димом (L3 < L5).
 
 ## 7. Где в коде
-`canvas-app/src/scheme_gallery_ui.rs` (8–10 клавиатурный контракт, 24–60
+`crates/canvas-app/src/scheme_gallery_ui.rs` (8–10 клавиатурный контракт, 24–60
 константы), empty state — app.rs (7114–7179), каталог — ADR-0006 эталоны,
 surface — ui_registry.rs (Modals/Block).
 

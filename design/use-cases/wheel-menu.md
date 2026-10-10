@@ -50,7 +50,7 @@ WorldOverlay (L1) для секторов + Capture-поверхность на 
 - Меню поверх модалки не открывается (модалка Block глотает правый клик).
 
 ## 7. Где в коде
-Геометрия/константы — `canvas-app/src/template_ui.rs` (823–843 WHEEL_*),
+Геометрия/константы — `crates/canvas-app/src/template_ui.rs` (823–843 WHEEL_*),
 отрисовка — app.rs (7833–7967), цвета — tokens.rs WHEEL_* (93–103),
 drag-порог — template_ui.rs (285, 4 px).
 

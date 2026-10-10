@@ -108,7 +108,7 @@ tooltip, text_field, switch, card, list, icons, table, panel_header —
 **Витрина раскладок** (норматив `design/rules/11-layouts.md`, чек-лист
 LAY11 п.10): секция витрины обновляется в той же волне, что и новая
 раскладка/механизм LAY. Состав layout-секций на 2026-10-10 (код —
-`canvas-app/src/kit_ui.rs`, константы `SECTION_*`/`SECTION_LAYOUT_*`):
+`crates/canvas-app/src/kit_ui.rs`, константы `SECTION_*`/`SECTION_LAYOUT_*`):
 
 | Секция | Механизм 11-layouts.md |
 |---|---|

@@ -63,10 +63,10 @@ auto-contrast (`rules/04-contrast-a11y.md §A2`).
   автоматом, ужимание — вне v1, I-6).
 
 ## 7. Где в коде
-Рендер: `canvas-render/src/cards.rs` (константы 16–40, severity 34–130,
+Рендер: `crates/canvas-render/src/cards.rs` (константы 16–40, severity 34–130,
 template 332–340, рёбра/порты 614–670), текст — `text.rs` (86–160, футер,
-бейджи). Взаимодействие: `canvas-app/src/lib.rs` (MIN_NODE_*, SELECT_DRAG_
-THRESHOLD 4, порты/зоны — `canvas-core/src/edgegeom.rs`), тело — FR-069
+бейджи). Взаимодействие: `crates/canvas-app/src/lib.rs` (MIN_NODE_*, SELECT_DRAG_
+THRESHOLD 4, порты/зоны — `crates/canvas-core/src/edgegeom.rs`), тело — FR-069
 row_grid.rs/kit.rs RowParts. Токены: tokens.rs (CARD_*, TABLE_*).
 
 ## 8. Что меняется при правке файла

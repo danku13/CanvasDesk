@@ -34,8 +34,8 @@
 - Иконка в disabled-кнопке — control_disabled_text.
 
 ## 7. Где в коде
-`canvas-ui/src/kit.rs` — Icon глифы (939–971); угловой кластер —
-`canvas-app/src/lib.rs` (163–177 SETTINGS_*); иконки шаблонов — cards.rs
+`crates/canvas-ui/src/kit.rs` — Icon глифы (939–971); угловой кластер —
+`crates/canvas-app/src/lib.rs` (163–177 SETTINGS_*); иконки шаблонов — cards.rs
 (332–340).
 
 ## 8. Что меняется при правке файла
