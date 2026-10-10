@@ -146,3 +146,25 @@ Stage Summary:
 - Гейты: cargo недоступен в среде — test/clippy/fmt делегированы CI
 - Wave D (#32) может интегрировать Response в витрину (on_hover_text/on_click chain)
 Tokens: in≈140000, out≈35000, total≈175000 (estimate), model=GLM-4.7 (Super Z main), scope=WAVE-A
+
+---
+Task ID: WAVE-D-v1
+Agent: Super Z (main)
+Task: Wave D v1 (issue #32) — интерактивная demo-витрина ui-kit (D1–D7)
+
+Work Log:
+- Контекст: issue #32, AGENTS.md, ui-kit-deep-review §5.3; kit_ui.rs (3957 строк), 34 компонента canvas-ui::component (Wave C уже в main); тулчейн 1.99.0+wasm32 развёрнут (rustup, зеркало при деградации CDN)
+- Обнаружена преждесуществующая краснота main (Wave A a97f217: gates×3/wasm/web): Response без UiVec2-импорта, nav_rail с импортом бейдж-типов мимо submodule + тени тест-функций — фиксы отдельным коммитом 2b2989f
+- kit_demo.rs (TDD-ядро): KitDemoState (тулбар/AS-IS-TO-BE/компоненты), реестр SECTIONS 26×5 групп, WAVE_C_ORDER, apply_click (чистая машина переходов), статические hit-id таблицы (реестр требует &'static str), parse_hit (числовой суффикс — индекс, нечисловой — имя цели)
+- kit_ui.rs (+~1650): gallery_layout_impl c demo-параметром (AS-IS = прежняя раскладка дословно), gallery_layout_tobe; тулбар/сайдбар (кламп по высоте окна); Wave C — хвост линейки + wave_c_consume (реальные API компонентов: checkbox/slider/radio/tabs/segmented/badge/progress/skeleton; palette/tree/modal/accordion/snackbar/popover — kit-примитивы, paint — v2); build_demo_layout (сдвиг FR-059 + оверлеи); draw_demo_extras (~730 строк: интерактивные оверрайды D1 + оверлеи); demo_hits draw==hit; section_offsets для навигации
+- Проводка: ui_registry (demo-хиты из кэша кадра), input.rs (клик-диспетчер + nav + press/release + drag слайдера + IME/клавиатура демо-поля + Esc-лестница), app.rs (kit_demo + кэш раскладки + open_kit_demo), overlays (gallery_layout_tobe + draw_demo_extras), canvas-web (?ui=demo)
+- G4: lint_kit_demo_tobe; lay7: DEMO_ACCORDION_BODY_H (именованный шаг курсора)
+- Инфра: диск контейнера 100% (rootfs 10G) → CARGO_TARGET_DIR=/tmp/my-project/cd-target (PolarFS) в scripts/cargo-env.sh; кэш registry очищен
+- Гейты: fmt OK; clippy --workspace -D warnings OK; test --workspace 3094 passed/0 failed; lay7-lint OK; docs-lint OK; wasm-check (набор CI) OK
+- D7: docs/interface-objects/kit-demo-v1.md (режимы, тулбар, навигация, секции+API, ограничения v1: сайдбар без скролла, paint-слой 6 компонентов — v2)
+
+Stage Summary:
+- Wave D v1 реализована полностью (D1–D7); ограничение — видимость сайдбара в узких окнах (кламп, v2 — скролл)
+- main восстановлен до зелёного состояния (был красным с Wave A)
+- Открытый вопрос владельцу: onboarding/юзердоки для витрины не менялись — требуется ли обновление? (правило FR/CR)
+- Tokens: in≈260000, out≈58000, total≈318000, model=GLM, scope=wave-d-v1
