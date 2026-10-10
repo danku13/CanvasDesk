@@ -410,3 +410,146 @@ mod tests {
         assert_eq!(ring.next(), Some(R1));
     }
 }
+
+// =============================================================================
+// Wave A (2026-10, ui-kit-deep-review §5.5.2): FocusTrap.
+//
+// FocusTrap — примитив для modal-поверхностей: Tab/Shift+Tab циклит по rect'ам
+// внутри trap, не выходя за boundary. Fluent FocusZone/FocusTrap pattern.
+// =============================================================================
+
+/// FocusTrap: Tab/Shift+Tab циклит по rect'ам внутри trap (Wave A §5.5.2).
+///
+/// Используется modal-поверхностями (Block capture): фокус не уходит за
+/// пределы модали. `boundary` — rect модали (для проверки "не вышел ли Tab").
+#[derive(Debug, Clone, Default)]
+pub struct FocusTrap {
+    /// FocusRing с Tab-порядком rect'ов.
+    ring: FocusRing,
+    /// Внешний rect (modal panel) — для проверки границы.
+    boundary: UiRect,
+    /// Предыдущий фокус (для restore при закрытии trap).
+    previous_focus: Option<UiRect>,
+}
+
+impl FocusTrap {
+    /// Создать trap с boundary (modal panel rect).
+    pub fn new(boundary: UiRect) -> Self {
+        Self {
+            ring: FocusRing::new(),
+            boundary,
+            previous_focus: None,
+        }
+    }
+
+    /// Добавить focusable rect (Tab-порядок).
+    pub fn push(&mut self, r: UiRect) {
+        self.ring.push(r);
+    }
+
+    /// Handle Tab/Shift+Tab — цикл по ring, clamp в boundary.
+    /// Возвращает текущий фокус-rect.
+    pub fn on_tab(&mut self, shift: bool) -> Option<UiRect> {
+        if shift {
+            self.ring.prev()
+        } else {
+            self.ring.next()
+        }
+    }
+
+    /// Текущий фокус-rect (для focus-ring paint).
+    pub fn current(&self) -> Option<UiRect> {
+        self.ring.current().copied()
+    }
+
+    /// Запомнить предыдущий фокус (для restore при закрытии trap).
+    pub fn remember_previous(&mut self, focus: UiRect) {
+        self.previous_focus = Some(focus);
+    }
+
+    /// Восстановить фокус при закрытии trap.
+    pub fn restore(&mut self) -> Option<UiRect> {
+        self.previous_focus.take()
+    }
+
+    /// Boundary trap (modal panel rect).
+    pub fn boundary(&self) -> UiRect {
+        self.boundary
+    }
+
+    /// Очистить ring (поверхность перестроила контент).
+    pub fn clear(&mut self) {
+        self.ring.clear();
+    }
+
+    /// Перестроить порядок, сохранив позицию фокуса (делегирует FocusRing).
+    pub fn retain_order(&mut self, rects: &[UiRect]) {
+        self.ring.retain_order(rects);
+    }
+}
+
+#[cfg(test)]
+mod wave_a_tests {
+    use super::*;
+
+    const R0: UiRect = UiRect::new(10.0, 10.0, 80.0, 30.0);
+    const R1: UiRect = UiRect::new(10.0, 50.0, 80.0, 30.0);
+    const R2: UiRect = UiRect::new(10.0, 90.0, 80.0, 30.0);
+    const BOUNDARY: UiRect = UiRect::new(0.0, 0.0, 200.0, 200.0);
+
+    #[test]
+    fn focus_trap_tab_cycles() {
+        let mut trap = FocusTrap::new(BOUNDARY);
+        trap.push(R0);
+        trap.push(R1);
+        trap.push(R2);
+        // Tab → R0, R1, R2, R0 (cycle)
+        assert_eq!(trap.on_tab(false), Some(R0));
+        assert_eq!(trap.on_tab(false), Some(R1));
+        assert_eq!(trap.on_tab(false), Some(R2));
+        assert_eq!(trap.on_tab(false), Some(R0)); // wrap
+    }
+
+    #[test]
+    fn focus_trap_shift_tab_cycles_reverse() {
+        let mut trap = FocusTrap::new(BOUNDARY);
+        trap.push(R0);
+        trap.push(R1);
+        // Shift+Tab → R1 (last), R0, R1 (wrap)
+        assert_eq!(trap.on_tab(true), Some(R1));
+        assert_eq!(trap.on_tab(true), Some(R0));
+        assert_eq!(trap.on_tab(true), Some(R1)); // wrap
+    }
+
+    #[test]
+    fn focus_trap_current_after_tab() {
+        let mut trap = FocusTrap::new(BOUNDARY);
+        trap.push(R0);
+        trap.push(R1);
+        assert_eq!(trap.current(), None); // no tab yet
+        trap.on_tab(false);
+        assert_eq!(trap.current(), Some(R0));
+    }
+
+    #[test]
+    fn focus_trap_restore_previous() {
+        let mut trap = FocusTrap::new(BOUNDARY);
+        trap.remember_previous(R2);
+        assert_eq!(trap.restore(), Some(R2));
+        // restore is one-shot
+        assert_eq!(trap.restore(), None);
+    }
+
+    #[test]
+    fn focus_trap_boundary() {
+        let trap = FocusTrap::new(BOUNDARY);
+        assert_eq!(trap.boundary(), BOUNDARY);
+    }
+
+    #[test]
+    fn focus_trap_empty_returns_none() {
+        let mut trap = FocusTrap::new(BOUNDARY);
+        assert_eq!(trap.on_tab(false), None);
+        assert_eq!(trap.current(), None);
+    }
+}

@@ -153,6 +153,8 @@ use canvas_scene::{
 /// (index.html, `__cdTelemetry.track`) + `surface_opened` по дифу реестра
 /// поверхностей. `pub` — вызовы из canvas-web (события экспорта).
 pub mod telemetry;
+/// Wave A §5.5.6: smart guides — линии выравнивания + distance labels при drag.
+pub mod smart_guides;
 /// FR-052 (этап U2 PRD-0009, F-11): сквозной layout-линт полного кадра — CI-гейт G4.
 #[cfg(test)]
 mod ui_layout_lint;

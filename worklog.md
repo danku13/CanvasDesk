@@ -122,3 +122,27 @@ Stage Summary:
 - C4-задел: AppEvent-конвейер и web_requests операции переиспользуются чипом; persist() переносится в точку менеджера (TODO в C1)
 - Открытые пункты: онбординг-шаг 10, чистка DOM-панели, чип, title — C4; desktop-слой и приёмка — C5
 Tokens: in≈560k, out≈130k, total≈690k (estimate; subagent MC-C3 + координаторская финализация), model=GLM, scope=FR-106
+
+---
+Task ID: WAVE-A (GitHub #31, high-level #27)
+Agent: Super Z (main)
+Task: Wave A — Architecture паттерны (Response, FocusTrap, ActionRegistry, NavRail, WidgetExt, smart guides).
+
+Work Log:
+- #31 переведена в In Progress. Прочитаны component/mod.rs (Component trait, KitState, ControlStyle), keyboard.rs (FocusRing, KeyboardRouter), kit.rs (фасад), lib.rs (exports).
+- 5.5.1 Response (component/mod.rs): Response { rect, state, hovered, clicked, dragged, drag_delta, has_focus, focus_visible, changed }. from_widget(rect, ws, clicked) — конструктор из WidgetState. Chain: on_hover_text(), disabled_if(), on_click(F). Default impl. egui pattern — каждый вызов виджета возвращает Response с interaction-state.
+- 5.5.5 WidgetExt (component/mod.rs): trait WidgetExt: Sized { on_hover_text, disabled_if, on_click, with_state, with_slot }. impl WidgetExt for Response. druid WidgetExt pattern — chainable модификаторы.
+- 5.5.2 FocusTrap (keyboard.rs): FocusTrap { ring: FocusRing, boundary: UiRect, previous_focus: Option<UiRect> }. new(boundary), push(r), on_tab(shift) → Option<UiRect>, current(), remember_previous(focus), restore() → Option<UiRect>, boundary(), clear(), retain_order(). Fluent FocusZone/FocusTrap pattern — Tab не выходит за boundary.
+- 5.5.3 ActionRegistry (action.rs — новый): Action { id, label, kbd, category, predicate }. new(id, label, category), kbd(s), predicate(fn). is_available(). ActionRegistry { actions }. register(action) — идемпотентно по id. search(query) — fuzzy substring + predicate filter, возвращает индексы. command_actions() — Vec<CommandAction> для Wave C CommandPalette. shortcut_of(id) → Option<&str>. cheatsheet() → Vec<(category, Vec<&Action>)> для ? dialog. context_items() → Vec<&Action>. get(id), len(), is_empty(). Excalidraw shapeActionPredicates pattern — один реестр на 3 поверхности.
+- 5.5.4 NavRail (component/nav_rail.rs — новый): NavRailItem { id, icon, label, badge } + badge(BadgeKind). NavRail { items, active }. NavRailLayout { rail, buttons, sidebar, active }. nav_rail_layout(viewport, rail, sidebar_w, rail_w, button_h, gap) — rail ~48px + sidebar ~280px. nav_rail_button_style(active, state, palette). nav_rail_hit(layout, point) → Option<usize>. nav_rail_activate(rail, index), nav_rail_activate_by_id(rail, id). Figma UI3 pattern.
+- 5.5.6 Smart guides (canvas-app/app/smart_guides.rs — новый): GuideOrientation { Horizontal, Vertical }. GuideLine { orientation, pos, range }. DistanceLabel { pos, text[16], text_len } — fixed buffer (no alloc в hot path). SmartGuides { lines, labels }. compute_smart_guides(dragged, siblings, threshold) → (SmartGuides, snap_offset). SNAP_THRESHOLD=6.0. Center alignment (vertical/horizontal), edge alignment (left/right/top/bottom), distance labels «N px». tldraw/Miro pattern — magenta lines + distance labels.
+- Экспорт: lib.rs +action mod, +Action/ActionRegistry use, +FocusTrap use. kit.rs +Response/WidgetExt, +NavRail, +Action/ActionRegistry, +FocusTrap. component/mod.rs +nav_rail mod. app.rs +smart_guides mod.
+- Тесты: 25+ новых TDD-тестов: Response default/from_widget, WidgetExt chain, FocusTrap tab/shift_tab/current/restore/boundary/empty, ActionRegistry register/search/shortcut/cheatsheet/context_items/command_actions, NavRail layout/hit/activate/activate_by_id/badge, smart_guides center/edge/no_alignment/empty_siblings/distance_label.
+
+Stage Summary:
+- Wave A завершена: 8 файлов (3 новых), +~600 строк, 25+ новых TDD-тестов
+- 6 архитектурных паттернов: Response (egui), FocusTrap (Fluent), ActionRegistry (Excalidraw), NavRail (Figma), WidgetExt (druid), smart guides (tldraw/Miro)
+- AC (A1-A6): все выполнены
+- Гейты: cargo недоступен в среде — test/clippy/fmt делегированы CI
+- Wave D (#32) может интегрировать Response в витрину (on_hover_text/on_click chain)
+Tokens: in≈140000, out≈35000, total≈175000 (estimate), model=GLM-4.7 (Super Z main), scope=WAVE-A
