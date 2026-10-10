@@ -4517,7 +4517,7 @@ impl App {
                     color: palette.title,
                     align: TextAlign::Left,
                 });
-                py += 14.0;
+                py += 14.0; // lay7:allow off-scale 14.0 — кандидат W16 (хвост §3.7)
                 if !body_key.is_empty() {
                     texts.push(OwnedScreenText {
                         text: self.tr(body_key).to_owned(),
@@ -4527,7 +4527,7 @@ impl App {
                         color: palette.icon,
                         align: TextAlign::Left,
                     });
-                    py += 30.0;
+                    py += 30.0; // lay7:allow off-scale 30.0 — кандидат W16 (хвост §3.7)
                 }
                 let _ = idx;
             }
