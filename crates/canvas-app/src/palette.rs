@@ -951,18 +951,19 @@ pub fn palette_layout(
 /// дотягивается до 44 лог. px центрированно, с клампом в бар — расширенная
 /// зона не выходит за бар и не перекрывает канвас. На точном указателе —
 /// rect без изменений (десктоп прежний).
+///
+/// LAY-W15 (P2-1): кнопки-триггеры — однородная sibling-группа, резолюция
+/// «ближайший центр» ([`crate::touch_targets::touch_hit_sibling_xywh`]):
+/// при PAL_GAP 5 coarse-расширение кнопки N−1 (узкой — минимум 30 px,
+/// расширение ±7 px) наезжает на левые пиксели кнопки N, и first-match
+/// отдавал тап кнопке N−1. На точном указателе зоны не пересекаются —
+/// результат бит-в-бит first-match.
 pub fn palette_trigger_at(lay: &PaletteLayout, point: Vec2) -> Option<usize> {
-    lay.groups
-        .iter()
-        .enumerate()
-        .find(|(_, g)| {
-            // FR-097: тач-цель кнопки-триггера ≥ 44 (кламп в бар)
-            point_in_rect(
-                crate::touch_targets::touch_hit_xywh(g.button, lay.bar),
-                point,
-            )
-        })
-        .map(|(i, _)| i)
+    crate::touch_targets::touch_hit_sibling_xywh(
+        lay.groups.iter().map(|g| g.button),
+        lay.bar,
+        point,
+    )
 }
 
 /// Задержка открытия по наведению (hover-intent, NN/g «задержка и
@@ -1127,20 +1128,30 @@ impl PaletteHover {
 /// строки — колонка раскрытой группы (`group.dropdown`), контейнер кнопки —
 /// бар (`lay.bar`): расширенные зоны не выходят за пределы своей поверхности.
 /// На точном указателе — rect без изменений (десктоп прежний).
+///
+/// LAY-W15 (P2-1): внутри каждой однородной группы (строки раскрытой
+/// колонки; кнопки-триггеры) — резолюция «ближайший центр» (см.
+/// [`palette_trigger_at`]); порядок групп поверхностей (колонка → бар)
+/// не меняется — first-match между слоями сохранён.
 pub fn palette_hit(lay: &PaletteLayout, point: Vec2, open: Option<usize>) -> Option<PaletteHit> {
     if let Some(gi) = open {
         if let Some(group) = lay.groups.get(gi) {
-            for (ei, row) in group.rows.iter().enumerate() {
-                // FR-097: тач-цель строки ≥ 44 (кламп в колонку группы)
-                if point_in_rect(
-                    crate::touch_targets::touch_hit_xywh(*row, group.dropdown),
-                    point,
-                ) {
-                    return Some(PaletteHit::Entry {
-                        group: gi,
-                        entry: ei,
-                    });
-                }
+            // FR-097: тач-цель строки ≥ 44 (кламп в колонку группы).
+            // LAY-W15 (P2-1): строки вплотную (шаг PAL_ROW_H, зазор 0) —
+            // coarse-расширение строки N−1 наезжает на верхние ~9 px
+            // строки N, и first-match отдавал тап строке N−1. Однородная
+            // sibling-группа → резолюция «ближайший центр»: тап в верхнюю
+            // треть строки N активирует строку N (LAY1.2 «ввод = тому,
+            // что видно»); на точном указателе — бит-в-бит first-match.
+            if let Some(ei) = crate::touch_targets::touch_hit_sibling_xywh(
+                group.rows.iter().copied(),
+                group.dropdown,
+                point,
+            ) {
+                return Some(PaletteHit::Entry {
+                    group: gi,
+                    entry: ei,
+                });
             }
         }
     }
@@ -1657,6 +1668,139 @@ mod tests {
             palette_hit(&lay, in_top_pad, Some(0)),
             Some(PaletteHit::Entry { group: 0, entry: 0 }),
             "coarse: клик в верхней марже — Entry(0) (расширенная hit-зона)"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(was);
+    }
+
+    /// LAY-W15 (P2-1 coarse mis-target): тап в верхнюю треть строки N на
+    /// coarse НЕ активирует строку N−1. Строки вплотную (шаг PAL_ROW_H,
+    /// зазор 0): coarse-расширение строки N−1 до 44 наезжает на верхние
+    /// ~9 px строки N, и прежний first-match отдавал тап строке N−1.
+    /// Резолюция «ближайший центр» возвращает строку N; на precise те же
+    /// точки — строка N (нарисованная), десктоп бит-в-бит прежний.
+    #[test]
+    fn lay_w15_palette_row_top_third_not_previous_row() {
+        use crate::touch_targets::touch_hit_xywh;
+        let (_, lay) = laid_out_palette();
+        let dropdown = lay.groups[0].dropdown;
+        let rows = &lay.groups[0].rows;
+        assert!(rows.len() >= 2, "нужна пара соседних строк");
+        let row0 = rows[0];
+        let row1 = rows[1];
+        // Предпосылка mis-target: строки вплотную, coarse-расширение
+        // строки 0 наезжает на строку 1 (шаг/пад — без шрифтовых замеров).
+        assert!((row1[1] - (row0[1] + row0[3])).abs() < 1e-3, "зазор 0");
+        let was = canvas_core::web_bridge::pointer_coarse();
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        let zone0 = touch_hit_xywh(row0, dropdown);
+        assert!(
+            zone0[1] + zone0[3] > row1[1] + 1.0,
+            "зона строки 0 наезжает на верх строки 1: zone0={zone0:?} row1={row1:?}"
+        );
+
+        // Точки в верхней трети строки 1: сразу под границей и на нижней
+        // кромке верхней трети.
+        let probes = [row1[1] + 1.0, row1[1] + PAL_ROW_H / 3.0];
+        for (k, &y) in probes.iter().enumerate() {
+            let pt = [row1[0] + 8.0, y];
+            // Инвариант LAY1.2: точка внутри нарисованной строки 1.
+            assert!(pt[1] >= row1[1] && pt[1] <= row1[1] + row1[3]);
+            // Coarse: строка 1 (было: расширение строки 0 → строка 0).
+            canvas_core::web_bridge::set_pointer_coarse(true);
+            assert_eq!(
+                palette_hit(&lay, pt, Some(0)),
+                Some(PaletteHit::Entry { group: 0, entry: 1 }),
+                "coarse probe #{k}: тап в верхнюю треть строки 1 — строка 1 (LAY1.2)"
+            );
+            // Precise: строка 1 — прежнее поведение (нарисованная строка).
+            canvas_core::web_bridge::set_pointer_coarse(false);
+            assert_eq!(
+                palette_hit(&lay, pt, Some(0)),
+                Some(PaletteHit::Entry { group: 0, entry: 1 }),
+                "precise probe #{k}: тап в нарисованную строку 1 — строка 1"
+            );
+        }
+        // Верхняя маржа колонки — строка 0 (пин lay_w8 выше, тут — parity
+        // с резолюцией): единственный кандидат.
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        let top_pad_pt = [row1[0] + 8.0, dropdown[1] + 2.0];
+        assert_eq!(
+            palette_hit(&lay, top_pad_pt, Some(0)),
+            Some(PaletteHit::Entry { group: 0, entry: 0 }),
+            "coarse: верхняя маржа колонки — строка 0"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(was);
+    }
+
+    /// LAY-W15 (P2-1 coarse mis-target): пара узких триггеров — тап в
+    /// левые пиксели нарисованной кнопки N не уходит кнопке N−1. Синтетика
+    /// (без шрифтовых замеров): кнопки 30×30 (минимум PAL_BUTTON) с зазором
+    /// PAL_GAP=5 — coarse-расширение кнопки 0 (30→44, ±7) накрывает 2 px
+    /// левого края кнопки 1, прежний first-match отдавал их кнопке 0.
+    #[test]
+    fn lay_w15_palette_trigger_nearest_center_not_previous() {
+        use crate::touch_targets::{touch_hit_sibling_xywh, touch_hit_xywh};
+        // Бар 44 высотой, кнопки 30×30 по центру (y=7).
+        let bar = [0.0, 0.0, 200.0, 44.0];
+        let b0 = [10.0, 7.0, 30.0, 30.0];
+        let b1 = [10.0 + 30.0 + PAL_GAP, 7.0, 30.0, 30.0]; // зазор 5
+        let lay = PaletteLayout {
+            bar,
+            groups: vec![
+                GroupLayout {
+                    button: b0,
+                    caption: [b0[0], b0[1] + PAL_BUTTON + 1.0],
+                    dropdown: [0.0; 4],
+                    rows: Vec::new(),
+                },
+                GroupLayout {
+                    button: b1,
+                    caption: [b1[0], b1[1] + PAL_BUTTON + 1.0],
+                    dropdown: [0.0; 4],
+                    rows: Vec::new(),
+                },
+            ],
+        };
+
+        let was = canvas_core::web_bridge::pointer_coarse();
+        // Предпосылка mis-target: coarse-зона кнопки 0 накрывает левый
+        // край нарисованной кнопки 1 (±7 от 30-px кнопки при зазоре 5).
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        let zone0 = touch_hit_xywh(b0, bar);
+        assert!(
+            zone0[0] + zone0[2] > b1[0] + 1.0,
+            "зона кнопки 0 наезжает на кнопку 1: zone0={zone0:?} b1={b1:?}"
+        );
+        // Тап в 2 px внутри нарисованной кнопки 1 — Trigger(1) (было:
+        // Trigger(0) — зона кнопки 0). Пин через публичный hit-тест.
+        let pt = [b1[0] + 2.0, b1[1] + PAL_BUTTON / 2.0];
+        assert_eq!(
+            palette_trigger_at(&lay, pt),
+            Some(1),
+            "coarse: тап в нарисованную кнопку 1 — кнопка 1 (LAY1.2)"
+        );
+        assert_eq!(
+            palette_hit(&lay, pt, None),
+            Some(PaletteHit::Trigger(1)),
+            "coarse: palette_hit отдаёт Trigger(1)"
+        );
+        // Середина зазора между центрами (граница решения) — тай →
+        // меньший индекс (кнопка 0).
+        let mid = [(b0[0] + b0[2] / 2.0 + b1[0] + b1[2] / 2.0) / 2.0, pt[1]];
+        assert_eq!(touch_hit_sibling_xywh([b0, b1], bar, mid), Some(0));
+        // Тап в 2 px внутри нарисованной кнопки 0 — кнопка 0.
+        let pt0 = [b0[0] + b0[2] - 2.0, pt[1]];
+        assert_eq!(palette_trigger_at(&lay, pt0), Some(0));
+
+        // Precise: зоны = нарисованные кнопки, бит-в-бит first-match.
+        canvas_core::web_bridge::set_pointer_coarse(false);
+        assert_eq!(palette_trigger_at(&lay, pt), Some(1), "precise: кнопка 1");
+        assert_eq!(palette_trigger_at(&lay, pt0), Some(0), "precise: кнопка 0");
+        let gap_pt = [b1[0] - 2.0, pt[1]]; // в зазоре PAL_GAP
+        assert_eq!(
+            palette_trigger_at(&lay, gap_pt),
+            None,
+            "precise: зазор между кнопками — None (не Trigger)"
         );
         canvas_core::web_bridge::set_pointer_coarse(was);
     }
