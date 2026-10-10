@@ -15,15 +15,22 @@ use super::*;
 /// Литералы-каретки `format!("{}|")` в тексте полей ЗАПРЕЩЕНЫ (IN3).
 /// Потребитель: панель поиска, галерея схем, палитра шаблонов (поля владеют
 /// клавиатурой → `focused = true`).
+///
+/// W3.2-контракт (прецедент 2026-09-26 + хотфикс 2026-10-11): НЕ лочит
+/// `measure_font_system` — замерщик/FontSystem передаёт вызывающий
+/// параметром (как `wrap_lines_with_more`). Вызовы под живым guard'ом
+/// оверлея (галерея/шаблоны/чип/менеджер) давали второй лок того же
+/// глобального Mutex → wasm-паника «cannot recursively acquire mutex»
+/// (std no_threads), натив — дедлок кадра.
 pub(super) fn kit_field_view(
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
     field: &canvas_ui::kit::TextFieldModel,
     input: [f32; 4],
     placeholder: &str,
     font_size: f32,
     kit_palette: &canvas_ui::kit::KitPalette,
 ) -> (String, Option<[f32; 4]>) {
-    let mut m = canvas_ui::measure::TextMeasurer::new();
-    let mut fs = canvas_render::text::measure_font_system();
     let slot = canvas_ui::geometry::UiRect::new(input[0], input[1], input[2], input[3]);
     let lay = canvas_ui::kit::text_field(
         slot,
@@ -37,8 +44,8 @@ pub(super) fn kit_field_view(
         true,
         canvas_ui::kit::KitState::Normal,
         kit_palette,
-        &mut m,
-        &mut fs,
+        m,
+        fs,
         canvas_render::text::SANS_FAMILY,
         font_size,
     );
@@ -930,14 +937,23 @@ impl App {
             corners: [0.0; 4],
         });
         // Поле поиска: текст/каретка — через kit::text_field (IN3: каретка
-        // 1.5 px слот accent, скролл-вслед; литерал «|» в тексте запрещён)
-        let (query_shown, caret_rect) = kit_field_view(
-            &self.search.input.field,
-            input,
-            "",
-            14.0,
-            &palette.kit_palette(),
-        );
+        // 1.5 px слот accent, скролл-вслед; литерал «|» в тексте запрещён).
+        // W3.2: локальная пара (m, fs) в ОГРАНИЧЕННОМ скоупе — ниже по
+        // функции есть свои последовательные захваты (theme-кнопка),
+        // guard не должен жить дольше вызова.
+        let (query_shown, caret_rect) = {
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            kit_field_view(
+                &mut m,
+                &mut fs,
+                &self.search.input.field,
+                input,
+                "",
+                14.0,
+                &palette.kit_palette(),
+            )
+        };
         texts.push(OwnedScreenText {
             text: query_shown,
             origin: [input[0] + 10.0, input[1] + 9.0],
@@ -2131,6 +2147,8 @@ impl App {
         // каретка 1.5 px слот accent, скролл-вслед; литерал «|» запрещён)
         let gallery_input = rect_xywh(lay.input_rect);
         let (gallery_shown, gallery_caret) = kit_field_view(
+            &mut measurer,
+            &mut fs,
             &self.scheme_gallery.filter,
             gallery_input,
             self.tr(keys::GALLERY_SEARCH),
@@ -3103,6 +3121,8 @@ impl App {
             // (IN3: каретка 1.5 px слот accent, скролл-вслед; «|» запрещён)
             let tpl_input = lay.input_rect;
             let (tpl_shown, tpl_caret) = kit_field_view(
+                &mut measurer,
+                &mut fs,
                 &self.template_panel.filter,
                 tpl_input,
                 self.tr(keys::TEMPLATES_SEARCH),
@@ -7467,9 +7487,14 @@ impl App {
         let lang = self.settings.language;
         let font = canvas_core::tokens::FONT_BODY;
         let caption = canvas_core::tokens::FONT_CAPTION;
+        // W3.2-контракт (хотфикс 2026-10-11): `chip_layout_current` лочит
+        // `measure_font_system` ВНУТРИ — раскладка ДО guard'а оверлея
+        // (последовательные захваты, не вложенные: вложенный лок того же
+        // глобального Mutex = паника wasm «cannot recursively acquire
+        // mutex» / дедлок натива на КАЖДОМ кадре — чип ambient-хром).
+        let lay = self.chip_layout_current(viewport);
         let mut m = crate::kit_ui::new_measurer();
         let mut fs = canvas_render::text::measure_font_system();
-        let lay = self.chip_layout_current(viewport);
         if lay.pill[2] <= 0.0 || lay.pill[3] <= 0.0 {
             return out; // вырожденный вьюпорт — чип схлопнут
         }
@@ -7505,7 +7530,15 @@ impl App {
             if let Some(buffer) = self.canvas_chip.edit_buffer() {
                 edit_field.set_text(buffer.to_owned());
             }
-            let (shown, caret) = kit_field_view(&edit_field, lay.name, "", font, &kit_palette);
+            let (shown, caret) = kit_field_view(
+                &mut m,
+                &mut fs,
+                &edit_field,
+                lay.name,
+                "",
+                font,
+                &kit_palette,
+            );
             d.label_left(rect(lay.name), &shown, kit_palette.text, font);
             if let Some(c) = caret {
                 d.rect(
@@ -7671,9 +7704,12 @@ impl App {
         let family = canvas_render::text::SANS_FAMILY;
         let font = canvas_core::tokens::FONT_BODY;
         let caption = canvas_core::tokens::FONT_CAPTION;
+        // W3.2-контракт (хотфикс 2026-10-11): `manager_layout_current` лочит
+        // `measure_font_system` ВНУТРИ — раскладка ДО guard'а оверлея
+        // (последовательные захваты, не вложенные).
+        let lay = self.manager_layout_current(viewport);
         let mut m = crate::kit_ui::new_measurer();
         let mut fs = canvas_render::text::measure_font_system();
-        let lay = self.manager_layout_current(viewport);
         let rect = |r: [f32; 4]| canvas_ui::geometry::UiRect::new(r[0], r[1], r[2], r[3]);
         let cursor = self.cursor;
         let hover = |r: [f32; 4]| {
@@ -7728,6 +7764,8 @@ impl App {
             let mut filter_field = canvas_ui::kit::TextFieldModel::default();
             filter_field.set_text(self.canvas_manager.filter.clone());
             let (shown, caret) = kit_field_view(
+                &mut m,
+                &mut fs,
                 &filter_field,
                 lay.search,
                 self.tr(keys::CANVAS_MANAGER_SEARCH),
@@ -7847,8 +7885,15 @@ impl App {
                     if let Some(buffer) = self.canvas_manager.edit_buffer() {
                         edit_field.set_text(buffer.to_owned());
                     }
-                    let (shown, caret) =
-                        kit_field_view(&edit_field, row.name, "", caption, &kit_palette);
+                    let (shown, caret) = kit_field_view(
+                        &mut m,
+                        &mut fs,
+                        &edit_field,
+                        row.name,
+                        "",
+                        caption,
+                        &kit_palette,
+                    );
                     d.label_left(rect(row.name), &shown, kit_palette.text, caption);
                     if let Some(c) = caret {
                         d.rect(
