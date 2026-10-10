@@ -3138,14 +3138,18 @@ impl App {
                 }
                 // FR-LLM-FIX / PRD-0010 F-7.9 (Q4): AI status panel —
                 // hit-test активных элементов (⏸/⚙ + 3 чипа Suggest/Graph/
-                // Agent). Панель НЕ в реестре FR-052 (транзиентна, как
-                // suggest-карточки) — глотаем ввод в пределах rect, мимо —
-                // проходит в обычный canvas-pick ниже.
+                // Agent). Панель зарегистрирована в реестре FR-052 с
+                // LAY-W1 (id `ai_status`, HideBelow { 900, 131 } в
+                // декларации, hit-rect'ы в кадре — lint/telemetry); путь
+                // клика — прежняя ранняя ветвь ДО pick: глотаем ввод в
+                // пределах rect, мимо — проходит в обычный canvas-pick ниже.
                 if self.ai_status_panel_click() {
                     return;
                 }
                 // W2 п.1 (PRD-0010 F-3/F-4): Agent Panel и Graph Builder —
-                // транзиентные AI-поверхности (как ai-status-panel): клик
+                // ранние ветви клика. Agent panel в реестре FR-052 с LAY-W1
+                // (id `agent_panel`, HideBelow { 600, 240 }); graph builder —
+                // документированный статус «вне реестра» (LAY-W17). Клик
                 // внутри — диспетчер панели, мимо диалога graph builder —
                 // Backdrop-закрытие; дальше — обычный canvas-pick.
                 let cursor_pt = [self.cursor[0], self.cursor[1]];
