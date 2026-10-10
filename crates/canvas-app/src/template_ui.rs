@@ -609,7 +609,9 @@ pub const STRIP_MIN_W: f32 = 64.0;
 /// шевроном) — токен `canvas_core::tokens::SPACING_S` (значение прежнего
 /// литерала 6).
 pub use canvas_core::tokens::SPACING_S as STRIP_PAD_V;
-/// Горизонтальный внутренний паддинг полосы.
+/// Горизонтальный внутренний паддинг полосы — 4 px hairline, вне шкалы S1
+/// (исключение LAY7 — «Исключения» 11-layouts.md, «Hairline-микрозначения
+/// 2–4 px», LAY-W16: чипы полосы вплотную к краям, 4→6 расширит полосу).
 pub const STRIP_PAD_H: f32 = 4.0;
 /// Запас ширины полосы под счётчик шаблонов («backend · 10») рядом с именем.
 pub const STRIP_COUNT_SLACK: f32 = 28.0;

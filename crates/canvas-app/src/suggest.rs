@@ -575,6 +575,9 @@ pub fn card_rects(
     }
     // 4 px поля с каждой стороны — кодируются в viewport kit-функции
     // (паритет прежнему `viewport[0] - 4.0` / `viewport[1] - 4.0` / `.max(4.0)`).
+    // 4 px hairline, вне шкалы S1 (исключение LAY7 — «Исключения»
+    // 11-layouts.md, «Hairline-микрозначения 2–4 px», LAY-W16: кламп
+    // kit-viewport карточек, паритет прежнему поведению).
     const VP_MARGIN: f32 = 4.0;
     let vp = UiRect::new(
         VP_MARGIN,
