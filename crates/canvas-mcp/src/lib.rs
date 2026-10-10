@@ -1571,6 +1571,60 @@ mod tests {
         }
     }
 
+    /// Правило 5 (входные точки, план v2.1 этап 4, issue #33): AGENTS.md и
+    /// CONTEXT.md не содержат «зашитых» счётчиков инструментов — единственный
+    /// источник числа: skills/README.md (правило 3 выше). Изменчивое число,
+    /// скопированное во входную точку, расходится при первом же изменении
+    /// реестра — поэтому во входных точках его быть не должно вовсе.
+    #[test]
+    fn entry_points_do_not_embed_tool_counters() {
+        let agents = include_str!("../../../AGENTS.md");
+        let context = include_str!("../../../CONTEXT.md");
+        for text in [agents, context] {
+            for stale in [
+                "39 инструмент", "39 tools", "40 инструмент", "40 tools",
+                "41 инструмент", "41 tools", "42 инструмент", "42 tools",
+                "43 инструмент", "43 tools",
+            ] {
+                assert!(
+                    !text.contains(stale),
+                    "входная точка (AGENTS.md/CONTEXT.md) содержит зашитый \
+                     счётчик «{stale}» — единственный источник числа: \
+                     skills/README.md (AGENTS.md «Documentation — single \
+                     sources of truth»)"
+                );
+            }
+        }
+    }
+
+    /// Правило 6 (навигационный слой, план v2.1 этап 6, issue #33): AGENTS.md
+    /// ведёт к карте документации, маршрутизации и workflow-навыкам, а
+    /// CONTEXT.md — к глоссарию агента и единственному источнику счётчика.
+    /// Ломается, если слои перемещены/переименованы без обновления входной
+    /// точки — агенты теряют маршрутизацию.
+    #[test]
+    fn agents_md_navigation_markers_are_current() {
+        let agents = include_str!("../../../AGENTS.md");
+        for marker in [
+            "docs/agent/MAP.md",
+            "docs/agent/routes.yaml",
+            "docs/agent/skills/",
+            "skills/README.md",
+        ] {
+            assert!(
+                agents.contains(marker),
+                "AGENTS.md не содержит маркер навигации «{marker}» — \
+                 обновите входную точку (docs/agent/MAP.md, routes.yaml)"
+            );
+        }
+        let context = include_str!("../../../CONTEXT.md");
+        assert!(
+            context.contains("skills/README.md"),
+            "CONTEXT.md не ссылается на skills/README.md как на единый \
+             источник счётчика инструментов"
+        );
+    }
+
     /// Автомат: initialize → initialized → tools/list → tools/call форвардит
     /// строку и разворачивает конверт приложения в text + structuredContent
     /// (FR-034; FakeTransport теперь возвращает конверт, как прод-`on_mcp_wake`).
