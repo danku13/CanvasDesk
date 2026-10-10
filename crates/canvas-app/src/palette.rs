@@ -1199,7 +1199,7 @@ pub fn icon_text(icon: PaletteIcon) -> Option<&'static str> {
 ///
 /// Прежний локальный `icon_quad` (private helper) удалён — ручная
 /// сборка `CardInstance { pos, size, fill, border, params, corners }`
-/// в overlay-логике запрещена (AGENTS.md §«UI-кит» правило 6);
+/// в overlay-логике запрещена (AGENTS.md §"UI kit" правило 6);
 /// kit + `paint_items_to_cards` — единственный путь.
 ///
 /// `Swatch` — единственный вариант, требующий цвет пресета: потребитель

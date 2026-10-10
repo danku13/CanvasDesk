@@ -13,7 +13,7 @@ description = "FR-079: suggest-движок — гибрид lex+Laya (чист�
 # или `l1-llm` (FR-LLM-C, PRD-0010 F-2 — LLM mm-source через canvas-llm).
 [dependencies]
 # только за feature `l1-laya` (off by default): дефолтное дерево остаётся
-# без сетевых/ML-зависимостей (правило AGENTS.md «без сети в хосте»;
+# без сетевых/ML-зависимостей (правило AGENTS.md "no network in the host";
 # sidecar — отдельный процесс, клиент говорит только с localhost)
 ureq = { version = "2", default-features = false, features = ["json"], optional = true }
 serde = { workspace = true, optional = true }

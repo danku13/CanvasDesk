@@ -1587,7 +1587,7 @@ const SWITCH_GEOMETRY_PALETTE: canvas_ui::kit::KitPalette = canvas_ui::kit::KitP
     // `control_warning`/`stage_dim`/`scrollbar_thumb`/`rule_color` не
     // читаются геометрическим вызовом `kit::switch`, но значения берём из
     // `KitPalette::dark()` (Agent B) — чтобы test fixture не расходился с
-    // production-коридором (single source of truth — AGENTS.md §UI-кит).
+    // production-коридором (single source of truth — AGENTS.md §"UI kit").
     control_success: [0.30, 0.75, 0.55, 1.0],
     control_warning: [0.95, 0.65, 0.30, 1.0],
     stage_dim: [0.02, 0.02, 0.04, 0.6],

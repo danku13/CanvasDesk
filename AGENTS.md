@@ -1,405 +1,450 @@
-# CanvasDesk — инструкции для агента
+# CanvasDesk — Agent Instructions
 
-## Проект
+## Language policy
 
-CanvasDesk — **визуальная система математического моделирования** (ADR-0007):
-бесконечный зумируемый канвас, на котором исполняемые математические модели
-строятся из расчётных нод (Numi-листы и шаблоны), значения проливаются по
-value-связям (DAG-движок), доменная математика (единицы, queueing, финансы)
-встроена в ядро, а ИИ-агент собирает и проверяет модели через MCP
-(`canvas-mcp`). Носитель модели — файловый канвас (карточки — настоящие
-файлы), JS/HTML-виджеты (M5) и режим «вместо рабочего стола» (M4).
-**Кроссплатформенный (M7): Windows 10/11 x64 — полная функциональность;
-Linux (X11/Wayland) и macOS — оконное приложение, платформенные разрывы
-закрываются по плану `docs/plans/M7-crossplatform.md`.** Язык — Rust stable
-(1.80+), edition 2021.
+**Agent-facing documentation is maintained in English** (owner decision,
+2026-10-10): English-first improves instruction-following and reduces token
+cost. Scope: `AGENTS.md`, `CONTEXT.md`, `skills/`, and the machine-consumed
+layer of `docs/` (SPEC, TASKS, RECIPES, ui-kit, WASM-TESTING, active
+`index-cr-fr.md`) — translated in waves (#24); wave 1 = AGENTS.md, CONTEXT.md,
+skills/README.md + `docs/translation-guide.md` (terminology for the next
+waves). **Not translated:** `user-docs/` (user-facing, Russian),
+`worklog.md` (journal, Russian), historical ADRs and `docs/prd/*` (human
+review artifacts). Code comments remain Russian (project language) unless the
+owner decides otherwise. Terminology and "what not to translate" —
+`docs/translation-guide.md`.
 
-**Текущее состояние репозитория:** M1–M4 выполнены, M5 (T20–T22) выполнен
-целиком — рантайм виджетов, bridge/permissions, SDK и документация
-(`docs/WIDGETS.md`); M6 — T24 (MCP) выполнен. Кроссплатформенность (M7) —
-план `docs/plans/M7-crossplatform.md`. Статус задач — README.md и
-`docs/TASKS.md`.
+## Project
 
-## Документация — единственные источники истины
+CanvasDesk is a **visual mathematical modeling system** (ADR-0007): an
+infinite zoomable canvas on which executable mathematical models are built
+from computation nodes (Numi sheets and templates); values are spilled along
+value-edges (DAG engine); domain math (units, queueing, finance) is built
+into the core; and an AI agent assembles and verifies models via MCP
+(`canvas-mcp`). The model carrier is a file-backed canvas (cards are real
+files), JS/HTML widgets (M5), and a "replace the desktop" mode (M4).
+**Cross-platform (M7): Windows 10/11 x64 — full functionality; Linux
+(X11/Wayland) and macOS — windowed application, platform gaps are closed per
+the plan `docs/plans/M7-crossplatform.md`.** Language — Rust stable (1.80+),
+edition 2021.
 
-- `docs/SPEC.md` — спецификация: стек, модель данных, рендер, shell-интеграция, виджеты,
-  риски, критерии готовности milestone'ов. Читать перед любой задачей.
-- `docs/TASKS.md` — план инфраструктурной волны (T0–T22, M1–M5). Порядок внутри
-  milestone'а строгий.
-- `docs/adr/` — архитектурные решения (индекс — `docs/adr/README.md`, шаблон —
-  `docs/adr/adr-template.md`). Позиционирование продукта и контракты
-  «один шаблон = один расчёт», портов значений и MCP-композиции — здесь.
-  ADR пишется ДО реализации решения; `Статус: принято` — только по прямому
-  запросу владельца (ADR-0001, п. 2 правил).
-- `docs/change-requests/` — FR/CR-документы по шаблону `docs/change-requests/cr-template.md` (индекс —
-  `docs/change-requests/index-cr-fr.md`, только активные записи: в работе /
-  анализ / ожидает приёмки / черновик; выполненные — в
-  `docs/change-requests/index-cr-fr-archive.md`, архив без задачи не читать).
-  Расчётная волна (моделирование) — FR-013…FR-029, CR-013:
-  эталоны приёмки — ADR-0005 (Instagram MVP) и ADR-0006 (каталог №1–№5).
-  Реализация — только по документу; по завершении агент обновляет статус
-  («реализовано»), Changelog документа и `docs/ACCEPTANCE.md` (постоянная
-  методика приёмки §1–12; датированные волны — `docs/ACCEPTANCE-archive.md`).
-- `skills/` — пакет скиллов CanvasDesk MCP для внешних ИИ-агентов
-  (публикуемая производная реестра инструментов; актуальный счётчик
-  инструментов — только `skills/README.md`, единственный источник числа;
-  при правке руководствоваться им, не памятью). **Любое изменение состава/семантики MCP-инструментов
-  (`TOOLS` в canvas-mcp, `crates/canvas-scene/src/mcp.rs` в canvas-scene) обязано обновлять
-  `skills/` в том же коммите**: контракт-тест `skills_*` в canvas-mcp
-  (полнота каталога, покрытие скиллами, счётчик README, call-позиции)
-  валит CI при рассинхроне. Протокол — `skills/UPDATE-PROTOCOL.md`.
-- `docs/plans/product-roadmap.md` — продуктовый роадмап (принят владельцем
-  2026-09-18 вместе с ADR-0008): волны 0/A/B/V/S, гейт востребованности
-  «≥ 5 внешних пользователей сами построили модель и вернулись второй раз»,
-  привязка M0–M6 архдока и R1–R5 CR-013 к волнам. Порядок реализации
-  FR/CR моделирования и новых зависимостей сверяется с этим документом.
-- `docs/RECIPES.md` — рецепты R1–R17 по встройке в десктоп (анализ Lively Wallpaper
-  и Seelen UI) + список файлов-источников. **Обязателен перед T15–T18** и любой задачей
-  по shell-интеграции.
-- `docs/DEMO.md` — рецепт быстрой подготовки демо-стенда под Linux (Xvfb + lavapipe
-  + `scripts/xdemo.py`): скриншоты и GIF с живого запуска. Читать перед записью
-  любых демо-материалов.
-- `docs/WASM-TESTING.md` — рецепт быстрой настройки WASM-тестирования UI
-  (уровни L0–L3, сборка web-стенда без trunk, Chromium/WebGPU под Xvfb,
-  сценарии и оракулы, грабли). Читать перед первой wasm-проверкой UI
-  (разовая настройка ~10 минут; команды — в шпаргалке §6 рецепта).
+**Current repository state:** M1–M4 done; M5 (T20–T22) done in full — widget
+runtime, bridge/permissions, SDK and docs (`docs/WIDGETS.md`); M6 — T24 (MCP)
+done. Cross-platform (M7) — plan in `docs/plans/M7-crossplatform.md`. Task
+status — README.md and `docs/TASKS.md`.
 
-Правило: агент сверяется с этими документами, а не с собственной памятью — API меняются,
-недокументированное поведение Windows различается по версиям ОС (см. §7.4 SPEC:
-иерархия Progman/WorkerW/DefView в Win11 24H2+ отличается от классической).
+## Documentation — single sources of truth
 
-Именование ссылок в документации: внутри репозитория ссылки на md-источники —
-только относительные `*.md`; `*.html` допустим только для реальных артефактов
-на диске (например `docs/prototypes/*.html`) и внутри `user-docs/` (FR-031,
-линк-чек в тестах `docs_ui`). Ссылки на собранные страницы Pages — абсолютными
-web-путями. Гейт: `python3 scripts/doc_lint.py` (CI-джоба `docs-lint`;
-0 ошибок обязательна, правило введено 2026-10-10, issue #18).
+- `docs/SPEC.md` — the specification: stack, data model, rendering, shell
+  integration, widgets, risks, milestone readiness criteria. Read before any
+  task. (Still Russian — wave 2 translation; treat as canonical regardless.)
+- `docs/TASKS.md` — infrastructure wave plan (T0–T22, M1–M5). Order within a
+  milestone is strict.
+- `docs/adr/` — architecture decision records (index — `docs/adr/README.md`,
+  template — `docs/adr/adr-template.md`). Product positioning and the
+  contracts "one template = one computation", value ports, and MCP
+  composition live here. An ADR is written BEFORE implementing the decision;
+  `Статус: принято` ("accepted") — only on the owner's direct request
+  (ADR-0001, rule 2).
+- `docs/change-requests/` — FR/CR documents following
+  `docs/change-requests/cr-template.md` (index —
+  `docs/change-requests/index-cr-fr.md`, active entries only: in progress /
+  analysis / awaiting acceptance / draft; completed ones — in
+  `docs/change-requests/index-cr-fr-archive.md`, do not read the archive
+  without a task). The modeling wave is FR-013…FR-029, CR-013; acceptance
+  references — ADR-0005 (Instagram MVP) and ADR-0006 (catalog №1–№5).
+  Implementation follows the document only; upon completion the agent
+  updates the status ("реализовано"), the document's Changelog, and
+  `docs/ACCEPTANCE.md` (standing acceptance methodology §1–12; dated waves —
+  `docs/ACCEPTANCE-archive.md`).
+- `skills/` — the CanvasDesk MCP skill package for external AI agents
+  (published derivative of the tool registry; the current tool counter lives
+  only in `skills/README.md` — the single source of the number; consult it,
+  not memory). **Any change to MCP tool set/semantics (`TOOLS` in
+  canvas-mcp, `crates/canvas-scene/src/mcp.rs` in canvas-scene) must update
+  `skills/` in the same commit**: the `skills_*` contract tests in canvas-mcp
+  (catalog completeness, skill coverage, README counter, call positions)
+  fail CI on drift. Protocol — `skills/UPDATE-PROTOCOL.md`.
+- `docs/plans/product-roadmap.md` — the product roadmap (accepted by the
+  owner 2026-09-18 together with ADR-0008): waves 0/A/B/V/S, the demand gate
+  "≥ 5 external users built a model themselves and returned a second time",
+  mapping of M0–M6 archdoc and R1–R5 of CR-013 to waves. Order of FR/CR
+  modeling work and new dependencies is checked against this document.
+- `docs/RECIPES.md` — recipes R1–R17 for desktop embedding (analysis of
+  Lively Wallpaper and Seelen UI) + the list of source files. **Mandatory
+  before T15–T18** and any shell-integration task.
+- `docs/DEMO.md` — the recipe for a quick demo stand on Linux (Xvfb +
+  lavapipe + `scripts/xdemo.py`): screenshots and GIFs from a live run. Read
+  before recording any demo material.
+- `docs/WASM-TESTING.md` — the recipe for quick WASM UI testing setup
+  (levels L0–L3, web stand build without trunk, Chromium/WebGPU under Xvfb,
+  scenarios and oracles, pitfalls). Read before the first wasm UI check
+  (one-time setup ~10 minutes; commands in the recipe's §6 cheat sheet).
 
-## Обязательный вопрос при реализации FR/CR: онбординг и документация
+Rule: the agent verifies against these documents, not its own memory — APIs
+change, undocumented Windows behavior differs across OS versions (see SPEC
+§7.4: the Progman/WorkerW/DefView hierarchy in Win11 24H2+ differs from the
+classic one).
 
-**Завершая реализацию любого FR или CR, агент ОБЯЗАН явно спросить владельца,
-требуется ли доработка онбординга и пользовательской документации.** Вопрос задаётся
-в итоговом ответе по задаче — молчание владельца не отменяет его необходимости.
-Что проверять:
+Link naming in documentation: within the repository, links to md sources —
+relative `*.md` only; `*.html` is allowed only for real on-disk artifacts
+(e.g. `docs/prototypes/*.html`) and inside `user-docs/` (FR-031, link check
+in the `docs_ui` tests). Links to built Pages pages use absolute web paths.
+Gate: `python3 scripts/doc_lint.py` (CI job `docs-lint`; 0 errors required;
+rule introduced 2026-10-10, issue #18).
 
-1. **Онбординг** (`crates/canvas-app/src/onboarding_ui.rs`, FR-028): новая
-   функциональность меняет шаги тура? Добавить/переформулировать шаги
-   (8±2, «один шаг = одна мысль»), обновить юнит-тесты шагов и
+## Mandatory question for every FR/CR: onboarding and documentation
+
+**When finishing any FR or CR implementation, the agent MUST explicitly ask
+the owner whether onboarding and user documentation need updating.** The
+question is asked in the task's final report — the owner's silence does not
+cancel the need. What to check:
+
+1. **Onboarding** (`crates/canvas-app/src/onboarding_ui.rs`, FR-028): does
+   the new functionality change tour steps? Add/reword steps (8±2, "one step
+   = one thought"), update the step unit tests and
    `docs/interface-objects/onboarding.md`.
-2. **Пользовательская документация** (`user-docs/`, 7 страниц; вшита в бинарь
-   просмотрщиком FR-031 — `include_str!`, источник `crates/canvas-app/src/docs_ui.rs`):
-   не устарели ли формулировки (поведение, хоткеи, названия объектов)?
-   Обновить затронутые страницы + таблицы `user-docs/README.md` и `user-docs/index.md`;
-   ссылки между страницами — только относительные `*.html` (линк-чек в тестах
-   `docs_ui` валит CI на битых). Горячие клавиши держать в синкре со списком
-   `HOTKEYS` (`crates/canvas-app/src/lib.rs`, F1-оверлей) и `user-docs/hotkeys.md`.
+2. **User documentation** (`user-docs/`, 7 pages; built into the binary by
+   the FR-031 viewer — `include_str!`, source
+   `crates/canvas-app/src/docs_ui.rs`): are any formulations stale
+   (behavior, hotkeys, object names)? Update the affected pages + the tables
+   in `user-docs/README.md` and `user-docs/index.md`; links between pages —
+   relative `*.html` only (the link check in the `docs_ui` tests fails CI on
+   broken ones). Keep hotkeys in sync with the `HOTKEYS` list
+   (`crates/canvas-app/src/lib.rs`, F1 overlay) and `user-docs/hotkeys.md`.
 
-Изменение доков/онбординга может быть отдельным коммитом по решению владельца;
-вопрос не подразумевает автоматической правки без подтверждения.
+Docs/onboarding changes may be a separate commit at the owner's discretion;
+the question does not imply automatic edits without confirmation.
 
-## Целевой стек и структура workspace
+## Target stack and workspace layout
 
-Стек (детали и версии — SPEC §3): winit 0.30 (окно/ввод), wgpu 22+ (рендер),
-glyphon/cosmic-text (текст), rstar (R-tree, spatial index), serde_json (формат
-`.canvas` — JSON Canvas spec 1.0), rusqlite bundled (тамбнейл-кэш, FTS5-поиск, сессии),
-notify 6+ (файловый вотчер), windows-rs (Win32/COM), pdfium-render (PDF), image,
-webview2-com + WebView2 Evergreen (виджеты M5), tracing (логи), cargo-wix (MSI).
+Stack (details and versions — SPEC §3): winit 0.30 (window/input), wgpu 22+
+(rendering), glyphon/cosmic-text (text), rstar (R-tree, spatial index),
+serde_json (the `.canvas` format — JSON Canvas spec 1.0), rusqlite bundled
+(thumbnail cache, FTS5 search, sessions), notify 6+ (file watcher),
+windows-rs (Win32/COM), pdfium-render (PDF), image, webview2-com + WebView2
+Evergreen (M5 widgets), tracing (logs), cargo-wix (MSI).
 
-Структура workspace после T0 (SPEC §4):
+Workspace layout after T0 (SPEC §4):
 
 ```
 Cargo.toml                 # workspace
 crates/
-  canvas-core/             # модель данных, JSON Canvas I/O, spatial index, Numi-движок (expr/),
-                           # DAG-поток значений (flow.rs), реестр шаблонов (templates.rs)
-  canvas-render/           # wgpu-рендер: камера, батчинг, текст, текстуры, LOD
-  canvas-shell/            # Windows-only: тамбнейлы, preview handlers, drag-drop, WorkerW
-  canvas-preview-host/     # отдельный exe — песочница для IPreviewHandler
-  canvas-widgets/          # M5: WebView2-хост, bridge, манифесты, снапшоты
-  canvas-mcp/              # MCP-посредник: stdio JSON-RPC ↔ named pipe, run_stdio_with_transport (FR-037)
-  canvas-scene/            # модель сцены + mcp_dispatch (каталог инструментов — реестр TOOLS в canvas-mcp; счётчик — skills/README.md) — платформенно-нейтральный, wasm (FR-037/ADR-0012)
-  canvas-mcp-headless/     # headless MCP-сервер для wasmtime/wasip1 — верификация MCP-сессий без Windows (FR-037, лист-крейт)
-  canvas-web/              # M8/W4 (wasm-port): web-платформенный слой — bindgen-обвязка, web-сервисы; трек B, лист в DAG (каркас)
-  canvas-app/              # приложение: event loop, команды, UI-состояние, main()
-assets/                    # шрифты, иконки нод, встроенные виджеты (assets/widgets/), шаблоны (assets/templates/)
+  canvas-core/             # data model, JSON Canvas I/O, spatial index, Numi engine (expr/),
+                           # DAG value-flow (flow.rs), template registry (templates.rs)
+  canvas-render/           # wgpu renderer: camera, batching, text, textures, LOD
+  canvas-shell/            # Windows-only: thumbnails, preview handlers, drag-drop, WorkerW
+  canvas-preview-host/     # separate exe — sandbox for IPreviewHandler
+  canvas-widgets/          # M5: WebView2 host, bridge, manifests, snapshots
+  canvas-mcp/              # MCP mediator: stdio JSON-RPC <-> named pipe, run_stdio_with_transport (FR-037)
+  canvas-scene/            # scene model + mcp_dispatch (tool catalog — TOOLS registry in canvas-mcp; counter — skills/README.md) — platform-neutral, wasm (FR-037/ADR-0012)
+  canvas-mcp-headless/     # headless MCP server for wasmtime/wasip1 — MCP session verification without Windows (FR-037, leaf crate)
+  canvas-web/              # M8/W4 (wasm-port): web platform layer — bindgen wrappers, web services; track B, leaf in the DAG (scaffold)
+  canvas-app/              # the application: event loop, commands, UI state, main()
+assets/                    # fonts, node icons, built-in widgets (assets/widgets/), templates (assets/templates/)
 docs/                      # SPEC.md, TASKS.md, RECIPES.md, adr/, change-requests/
 ```
 
-## Правила архитектуры
+## Architecture rules
 
-1. `canvas-core` не импортирует ничего из `canvas-shell`, `canvas-render` и вообще
-   не зависит от ОС и GPU. Платформенная логика — только за трейтами
-   (`ThumbnailProvider`, `PreviewProvider`, `ShellIntegration`), чтобы core
-   тестировался на любой ОС.
-2. Платформенный код — в `canvas-shell`/`canvas-widgets`/`canvas-mcp` под
-   `cfg(windows)`/`cfg(unix)`, либо за трейтами из canvas-core (паттерн
-   `ThumbnailProvider` + `NoopThumbnailProvider`). Core и render обязаны
-   собираться и тестироваться на всех трёх ОС (CI-матрица M7).
-   Платформенные ветки не расползаются по `canvas-app`: app выбирает
-   реализацию трейта, а не ветвится по cfg на каждом вызове.
-3. Все координаты канваса — в логических пикселях (world-space); рендер — в физических
-   (`scale_factor`). DPI awareness — Per-Monitor V2. После репарентинга в десктоп
-   (M4) `window.scale_factor()` не доверять — поллинг `GetDpiForWindow` (RECIPES R10).
-4. Не блокировать рендер-поток: весь I/O, COM и тяжёлые декодеры — в worker-потоки
-   (пул тамбнейлов — 4 потока, результаты через каналы). Тяжёлый пересчёт потока
-   значений — сценарный воркер FR-064 (`canvas-scene/src/worker.rs`: double buffer
-   `Arc<RwLock<FlowSolutions>>`, wake через `EventLoopProxy<AppEvent>`; выводка O(N) —
-   на UI-треде). Правило «фолбэк + warn» на этом стыке: при отказе/таймауте (3 с)/
-   панике воркера — синхронный пересчёт на UI-треде + `tracing::warn!` (результат
-   побитово идентичен — golden-тесты `crates/canvas-scene/tests/worker_smoke.rs`); на wasm — sync-путь штатно.
-5. Раскладка (координаты, размеры, связи) — только в `.canvas`-файле. SQLite
-   (`~/.canvasdesk/cache.db`) — пересоздаваемый кэш, его удаление ничего не ломает.
-6. Автосейв `.canvas` с debounce 2 с + `.bak` предыдущей версии.
-7. LOD по zoom (SPEC §6.2): < 0.25 — прямоугольник+иконка; 0.25–0.6 — тамбнейл+имя;
-   0.6–1.5 — превью; > 1.5 — живое превью (максимум 3 одновременно, гистерезис 10%).
-   Виджеты: живой WebView2 при zoom ≥ 0.25, иначе snapshot; лимит live-инстансов 6 (LRU).
+1. `canvas-core` imports nothing from `canvas-shell`, `canvas-render`, and in
+   general does not depend on the OS or GPU. Platform logic — only behind
+   traits (`ThumbnailProvider`, `PreviewProvider`, `ShellIntegration`) so
+   that core is testable on any OS.
+2. Platform code — in `canvas-shell`/`canvas-widgets`/`canvas-mcp` under
+   `cfg(windows)`/`cfg(unix)`, or behind traits from canvas-core (the
+   `ThumbnailProvider` + `NoopThumbnailProvider` pattern). Core and render
+   must build and test on all three OSes (M7 CI matrix). Platform branches
+   must not spread across `canvas-app`: app selects the trait implementation
+   instead of branching on cfg at every call site.
+3. All canvas coordinates — logical pixels (world-space); rendering —
+   physical (`scale_factor`). DPI awareness — Per-Monitor V2. After
+   re-parenting into the desktop (M4) do not trust `window.scale_factor()` —
+   poll `GetDpiForWindow` (RECIPES R10).
+4. Do not block the render thread: all I/O, COM and heavy decoders — in
+   worker threads (thumbnail pool — 4 threads, results via channels). Heavy
+   value-flow recomputation — the FR-064 scenario worker
+   (`crates/canvas-scene/src/worker.rs`: double buffer
+   `Arc<RwLock<FlowSolutions>>`, wake via `EventLoopProxy<AppEvent>`; O(N)
+   flush — on the UI thread). The "fallback + warn" rule applies at this
+   boundary: on worker failure/timeout (3 s)/panic — synchronous
+   recomputation on the UI thread + `tracing::warn!` (result is
+   bit-identical — golden tests `crates/canvas-scene/tests/worker_smoke.rs`);
+   on wasm — the sync path is the norm.
+5. Layout (coordinates, sizes, edges) — only in the `.canvas` file. SQLite
+   (`~/.canvasdesk/cache.db`) — a recreatable cache; deleting it breaks
+   nothing.
+6. Autosave `.canvas` with a 2 s debounce + `.bak` of the previous version.
+7. LOD by zoom (SPEC §6.2): < 0.25 — rectangle+icon; 0.25–0.6 — thumbnail+name;
+   0.6–1.5 — preview; > 1.5 — live preview (max 3 at a time, 10% hysteresis).
+   Widgets: live WebView2 at zoom ≥ 0.25, otherwise a snapshot; live-instance
+   limit 6 (LRU).
 
-## Правила Win32 / shell
+## Win32 / shell rules
 
-1. Недокументированные приёмы (WorkerW, сообщения 0x052C и 0x7402) — только за
-   рантайм-детектом с фолбэком на обычное окно, по рецептам `docs/RECIPES.md`;
-   каждый — с комментарием-ссылкой на рецепт. Утверждения о поведении
-   Progman/WorkerW/DefView, не подтверждённые RECIPES или рантайм-детектом, считаются
-   непроверенными.
-2. Рецепты реализуются чисто: Lively — GPL-3.0, Seelen UI — AGPL-3.0. Копирование кода,
-   идентификаторов, структуры и комментариев запрещено; переносим только механику.
-3. Ключевые ограничения из RECIPES: 0x052C слать ТОЛЬКО если WorkerW отсутствует (R4);
-   `WS_EX_LAYERED` + `SetLayeredWindowAttributes(255)` строго до `SetParent` (R2);
-   верификация стилей после репарентинга (R3); идемпотентное скрытие иконок через
-   чтение `SHGetSetSettings` перед toggle 0x7402 (R5); НЕ использовать
-   `SPI_SETDESKWALLPAPER` на raised desktop (R9); `SHGetSetSettings` с fSet в Win10+
-   не работает — не тратить время.
-4. Enum-обёртки Win32 — по идиоме RECIPES R13 (boxed closure через LPARAM,
-   `extern "system"` трамплин, safe API наружу).
-5. Любая ошибка шага встройки в десктоп → фолбэк на обычное окно + предупреждение
-   пользователю (не только при неизвестной версии ОС).
+1. Undocumented techniques (WorkerW, messages 0x052C and 0x7402) — only with
+   runtime detection and a fallback to a normal window, per the recipes in
+   `docs/RECIPES.md`; each one carries a comment linking the recipe.
+   Claims about Progman/WorkerW/DefView behavior not confirmed by RECIPES or
+   runtime detection are considered unverified.
+2. Recipes are implemented cleanly: Lively — GPL-3.0, Seelen UI — AGPL-3.0.
+   Copying code, identifiers, structure and comments is forbidden; port
+   mechanics only.
+3. Key constraints from RECIPES: send 0x052C ONLY if WorkerW is absent (R4);
+   `WS_EX_LAYERED` + `SetLayeredWindowAttributes(255)` strictly before
+   `SetParent` (R2); verify styles after re-parenting (R3); idempotent icon
+   hiding via reading `SHGetSetSettings` before the 0x7402 toggle (R5); do
+   NOT use `SPI_SETDESKWALLPAPER` on a raised desktop (R9); `SHGetSetSettings`
+   with fSet does not work on Win10+ — do not waste time.
+4. Win32 enum wrappers — per the RECIPES R13 idiom (boxed closure via LPARAM,
+   `extern "system"` trampoline, safe API outward).
+5. Any desktop-embedding step failure → fallback to a normal window + a
+   warning to the user (not only for unknown OS versions).
 
-## Правила безопасности и виджетов (M5)
+## Security and widget rules (M5)
 
-- Виджеты — только локальные пакеты (`%APPDATA%/canvasdesk/widgets/<id>/`), ставятся
-  явным копированием пользователем. Remote URL как виджет — запрещён архитектурно.
-- Permissions из `widget.json` проверяются на КАЖДЫЙ bridge-вызов; без `network` все
-  внешние `WebResourceRequested` блокируются; навигация вне пакета запрещена;
-  `SetVirtualHostNameToFolderMapping` + CSP `default-src 'self'`.
-- Bridge — типизированный JSON-RPC поверх postMessage; все сообщения валидируются
-  serde-схемами; невалидное сообщение = drop + warn, никогда не паника.
-- Никаких сетевых вызовов в хосте — продукт локальный; сеть только внутри виджетов
-  с permission `network`.
+- Widgets — local packages only (`%APPDATA%/canvasdesk/widgets/<id>/`),
+  installed explicitly by the user. Remote URL as a widget — forbidden
+  architecturally.
+- Permissions from `widget.json` are checked on EVERY bridge call; without
+  `network` all outgoing `WebResourceRequested` are blocked; navigation
+  outside the package is forbidden; `SetVirtualHostNameToFolderMapping` +
+  CSP `default-src 'self'`.
+- Bridge — typed JSON-RPC over postMessage; all messages validated with
+  serde schemas; an invalid message = drop + warn, never a panic.
+- No network calls in the host — the product is local; the network exists
+  only inside widgets with the `network` permission.
 
-## Код-стиль и качество
+## Code style and quality
 
-- Разработка — по TDD: перед реализацией задачи сначала пишутся тесты, описывающие
-  требуемое поведение (по критериям приёмки из `docs/TASKS.md`); реализация считается
-  готовой, когда тесты зелёные. GPU/shell-код, не поддающийся юнит-тестам, выносит
-  логику в чистые функции, которые тестируются.
-- Ошибки: `thiserror` (библиотечные типы) + `anyhow` (границы приложения);
-  никаких `unwrap`/`expect` в production-путях.
-- `unsafe` — только в `canvas-shell`/`canvas-widgets`, каждый блок с SAFETY-комментарием.
-- Комментарии и документация — на русском (язык проекта). Недокументированные Win32-приёмы —
-  с ссылкой на рецепт RECIPES.
-- Каждая задача завершается одним коммитом с сообщением по conventional commits
-  (задача = сессия = коммит, не давать несколько задач сразу).
-- Новые зависимости — только с обоснованием в описании коммита/PR.
+- Development is TDD: before implementing a task, write the tests describing
+  the required behavior (per the acceptance criteria in `docs/TASKS.md`);
+  the implementation is done when the tests are green. GPU/shell code that
+  cannot be unit-tested moves its logic into pure functions that are tested.
+- Errors: `thiserror` (library types) + `anyhow` (application boundaries);
+  no `unwrap`/`expect` in production paths.
+- `unsafe` — only in `canvas-shell`/`canvas-widgets`, every block with a
+  SAFETY comment.
+- Comments stay in Russian (project language); agent-facing documentation is
+  English (see Language policy). Undocumented Win32 techniques — with a
+  reference to the RECIPES recipe.
+- Each task ends with a single commit using conventional commits message
+  style (one task = one session = one commit; do not batch several tasks).
+- New dependencies — only with justification in the commit/PR description.
 
-## Планирование работ: GitHub issues + Projects (директива 2026-10-10)
+## Work planning: GitHub issues + Projects (owner directive 2026-10-10)
 
-**Порядок любой доработки: сначала задачи — потом код; issue закрывается
-только по факту проверки.**
+**The order for any improvement: tasks first — then code; an issue is closed
+only after verification.**
 
-1. **Планирование = создание задач.** Доработка (фича, волна, инкремент)
-   начинается с high-level issue в GitHub — до первой строчки кода.
-   Работы без issue не стартуют.
-2. **High-level issue = атомарная единица доработки** (единица ценности,
-   не пачка правок). Не создавать issue на каждый промежуточный шаг:
-   косметика и подзадачи живут внутри задачи.
-3. **Sub-issues — части реализации**: волны, этапы, разбивка на параллельных
-   сабагентов (Task ID) оформляются sub-issues родительской задачи; прогресс
-   агрегируется полем Sub-issues progress на доске.
-4. **Доска.** Задачи (high-level и sub-issues) попадают на Projects #1
-   (CanvasDesk): Todo → In Progress → Done; In Progress — одна волна за раз.
-5. **Закрытие = факт проверки.** Issue/sub-issue закрывается только когда:
-   гейты зелёные (`cargo test --workspace`, clippy `-D warnings`, fmt,
-   `wasm_gate --check` / `mcp_wasm_gate.sh` — по контексту задачи), критерии
-   приёмки из тела выполнены, WASM-проверка UI — по разделу «Самопроверка
-   UI на WASM». При закрытии — комментарий-сводка: что сделано, ключевые
-   коммиты, как проверено.
-6. **Инструмент — `scripts/github_tasks.py`** (все команды идемпотентны;
-   токены: `GITHUB_TOKEN` — issues, `GITHUB_PROJECT_TOKEN` — доска, см.
-   шапку скрипта). Команда `plan` создаёт high-level задачу + sub-issues +
-   доску одной командой:
+1. **Planning = creating tasks.** Any improvement (feature, wave, increment)
+   starts with a high-level GitHub issue — before the first line of code.
+   Work without an issue does not start.
+2. **A high-level issue is the atomic unit of improvement** (a unit of
+   value, not a batch of edits). Do not create an issue for every
+   intermediate step: cosmetics and subtasks live inside the task.
+3. **Sub-issues are parts of the implementation**: waves, stages, splits
+   across parallel sub-agents (Task ID) are filed as sub-issues of the
+   parent task; progress is aggregated by the Sub-issues progress field on
+   the board.
+4. **The board.** Tasks (high-level and sub-issues) land on Projects #1
+   (CanvasDesk): Todo → In Progress → Done; In Progress — one wave at a
+   time.
+5. **Closing = verified fact.** An issue/sub-issue is closed only when: the
+   gates are green (`cargo test --workspace`, clippy `-D warnings`, fmt,
+   `wasm_gate --check` / `mcp_wasm_gate.sh` — per the task context), the
+   acceptance criteria from the body are met, and UI changes passed the WASM
+   check per the "WASM UI self-check" section. On closing — a summary
+   comment: what was done, key commits, how it was verified.
+6. **The tool — `scripts/github_tasks.py`** (all commands are idempotent;
+   tokens: `GITHUB_TOKEN` — issues, `GITHUB_PROJECT_TOKEN` — the board, see
+   the script header). The `plan` command creates a high-level task +
+   sub-issues + the board in one step:
    ```
    GITHUB_TOKEN=ghp_... python scripts/github_tasks.py plan --spec plan.json --dry-run
    ```
 
-## Учёт токенов по задачам (трейсинг стоимости разработки)
+## Per-task token accounting (development cost tracing)
 
-**Каждая выполненная задача — реализация CR/FR, исправление дефекта, написание
-документа, исследование — завершается фиксацией потраченных токенов** (правило
-владельца от 2026-10-08). Данные нужны для сквозного трейсинга стоимости
-разработки: задача → оценка → факт → калибровка будущих оценок.
+**Every completed task — a CR/FR implementation, defect fix, document,
+research — ends with recording the tokens spent** (owner rule 2026-10-08).
+The data feeds end-to-end development cost tracing: task → estimate → actual
+→ calibration of future estimates.
 
-Правила:
+Rules:
 
-1. Токены считаются **на задачу** (scope — конкретный CR/FR/дефект/документ),
-   а не на сессию целиком. Субагенты отчитываются по своим задачам так же.
-2. Запись — в worklog (репозиторный `worklog.md`, в записи соответствующей
-   задачи; системный журнал сессии — туда же, для исторических данных).
-2а. **Ротация worklog** (issue #23, 2026-10-10): `worklog.md` — только
-   текущий период (последние ~7 дней) + Journal index в шапке (одна строка
-   на запись: дата, Task ID, scope, расположение — «текущий» или имя файла
-   архива). Записи старше периода переносятся в `worklog/archive/`
-   (один файл на период: `worklog-<год-мм-dd>_<мм-dd>.md`) в начале месяца
-   или при превышении worklog'ом ~120 КБ. Перенос — без потерь (число
-   записей до/после сверяется), текст записей не редактируется; строка
-   Journal index обновляет расположение. Агент, читающий журнал, читает
-   индекс и только нужные записи; архив по умолчанию не читается.
-3. Формат строки:
-   `Tokens: in≈<N>, out≈<N>, total≈<N>, model=<модели>, scope=<CR-019|FR-100|...>`.
-4. Прямого доступа к счётчику API у агента нет — указывается **обоснованная
-   оценка** с пометкой `estimate`: по объёму прочитанного/написанного текста
-   (ориентир: ~4 символа ≈ 1 токен для смешанного RU/EN/кода) плюс накладные
-   на контекст сессии и вызовы инструментов.
-5. Оценки накапливаются в worklog как исторические данные и используются
-   для калибровки трудоёмкости и стоимости; свод по scope делает владелец
-   или отдельная задача агрегации.
+1. Tokens are counted **per task** (scope — a specific CR/FR/defect/
+   document), not per session. Sub-agents report the same way for their
+   tasks.
+2. The record goes into the worklog (the repository `worklog.md`, in the
+   corresponding task's entry; the session system journal goes there too,
+   for historical data).
+2а. **Worklog rotation** (issue #23, 2026-10-10): `worklog.md` holds only
+   the current period (~last 7 days) + the Journal index at the top (one
+   line per entry: date, Task ID, scope, location — "current" or the
+   archive file name). Entries older than the period move to
+   `worklog/archive/` (one file per period:
+   `worklog-<year-mm-dd>_<mm-dd>.md`) at the start of a month or when the
+   worklog exceeds ~120 KB. The move is lossless (entry counts verified
+   before/after), entry text is not edited; the Journal index row updates
+   its location. An agent reading the journal reads the index and only the
+   entries it needs; the archive is not read by default.
+3. Line format:
+   `Tokens: in≈<N>, out≈<N>, total≈<N>, model=<models>, scope=<CR-019|FR-100|...>`.
+4. The agent has no direct API counter access — provide a **justified
+   estimate** marked `estimate`: based on the volume of text
+   read/written (guideline: ~4 chars ≈ 1 token for mixed RU/EN/code) plus
+   session-context and tool-call overhead.
+5. Estimates accumulate in the worklog as historical data used to calibrate
+   effort and cost; the per-scope summary is made by the owner or a
+   dedicated aggregation task.
 
-## UI-кит — обязательное правило при вёрстке на Rust
+## UI kit — mandatory rule for Rust UI work
 
-**Любая вёрстка UI на Rust ведётся через существующий `canvas-ui` kit**
-(`crates/canvas-ui/src/`). Хардкод квадов/цветов/геометрии в обход кита
-запрещён — это ломает согласованность тем, переиспользование и делает
-визуальные регрессии невидимыми до ручного теста.
+**Any Rust UI work goes through the existing `canvas-ui` kit**
+(`crates/canvas-ui/src/`). Hardcoding quads/colors/geometry bypassing the
+kit is forbidden — it breaks theme consistency and reuse, and makes visual
+regressions invisible until manual testing.
 
-### Что использовать из кита
+### What to use from the kit
 
-| Нужда | Канонический путь в kit |
+| Need | Canonical kit path |
 |---|---|
-| Цвета UI-элементов | `KitPalette` (слоты `ThemeColors` v2: `control_fill`, `control_danger`, `text`, `palette_border`, `menu_fill`, …) — НИКОГДА не инлайнить `[f32;4]` литералы rgba |
-| Отступы/радиусы/зазоры | `canvas_core::tokens` (`SPACING_*`, `RADIUS_*`) — НИКОГДА не дублировать `4.0/8.0/16.0` магическими константами |
-| Размеры контролов | `kit::BUTTON_HEIGHT`, `kit::ICON_BUTTON_SIZE`, `kit::LIST_ROW_H`, `kit::TEXT_FIELD_HEIGHT`, `kit::CHIP_HEIGHT`, `kit::SWITCH_W/H` — НИКОГДА не переобъявлять `HEADER_H=30.0`, `ROW_H=26.0`, `INPUT_H=32.0` локально |
-| Раскладка (позиционирование) | `kit::constrain`, `kit::stack`, `kit::pad`, `Column`/`Row`/`Child`/`MeasuredItem`/`RowPolicy` — НИКОГДА не считать `x = panel.right() - 28.0, y = panel.y + 6.0` магическими числами |
-| Текст (шейпинг + ширина + перенос) | `TextMeasurer` (`width_of`, `wrap`, `ellipsis`) — НИКОГДА не оценивать ширину как `len() * 5.5 + 14.0` (CR-015 запрещает это явно) и не строить `Buffer::new` + `set_text` вручную в overlay-логике |
-| Кнопки / чипы / иконки / свитчи / поля | `kit::button_layout/style/size`, `kit::chip_*`, `kit::icon_button`, `kit::switch`, `kit::text_field` |
-| Списки и скролл | `kit::list_rows` + `kit::ScrollState` + `kit::scroll_bar` |
-| Попапы / модали / тултипы | `kit::dropdown_menu`, `kit::modal`, `kit::tooltip` (anchor + flip + delay) |
-| Панели / карточки | `kit::panel_rect/style`, `kit::card` |
-| Таблицы | `kit::Table` (retained) или `kit::row_guides` + `kit::paint_row` |
-| Draw-слой (квады на экран) | `Painter::rect/panel/control/label` + `PaintItem` (НЕ ручной `CardInstance { pos, size, fill, border, params, corners }`) |
+| UI element colors | `KitPalette` (`ThemeColors` v2 slots: `control_fill`, `control_danger`, `text`, `palette_border`, `menu_fill`, …) — NEVER inline `[f32;4]` rgba literals |
+| Padding/radii/gaps | `canvas_core::tokens` (`SPACING_*`, `RADIUS_*`) — NEVER duplicate `4.0/8.0/16.0` as magic constants |
+| Control sizes | `kit::BUTTON_HEIGHT`, `kit::ICON_BUTTON_SIZE`, `kit::LIST_ROW_H`, `kit::TEXT_FIELD_HEIGHT`, `kit::CHIP_HEIGHT`, `kit::SWITCH_W/H` — NEVER re-declare `HEADER_H=30.0`, `ROW_H=26.0`, `INPUT_H=32.0` locally |
+| Layout (positioning) | `kit::constrain`, `kit::stack`, `kit::pad`, `Column`/`Row`/`Child`/`MeasuredItem`/`RowPolicy` — NEVER compute `x = panel.right() - 28.0, y = panel.y + 6.0` with magic numbers |
+| Text (shaping + width + wrap) | `TextMeasurer` (`width_of`, `wrap`, `ellipsis`) — NEVER estimate width as `len() * 5.5 + 14.0` (CR-015 explicitly forbids this) and never build `Buffer::new` + `set_text` manually in overlay logic |
+| Buttons / chips / icons / switches / fields | `kit::button_layout/style/size`, `kit::chip_*`, `kit::icon_button`, `kit::switch`, `kit::text_field` |
+| Lists and scroll | `kit::list_rows` + `kit::ScrollState` + `kit::scroll_bar` |
+| Popups / modals / tooltips | `kit::dropdown_menu`, `kit::modal`, `kit::tooltip` (anchor + flip + delay) |
+| Panels / cards | `kit::panel_rect/style`, `kit::card` |
+| Tables | `kit::Table` (retained) or `kit::row_guides` + `kit::paint_row` |
+| Draw layer (quads on screen) | `Painter::rect/panel/control/label` + `PaintItem` (NOT a manual `CardInstance { pos, size, fill, border, params, corners }`) |
 
-Полный гайд — `docs/ui-kit.md`; архитектура — `docs/prd/prd-0009-ui-layering-uikit.md`,
-контракт поверхности — `docs/interface-objects/surface-registry.md`,
-токены — `crates/canvas-core/src/tokens.rs` и `docs/change-requests/fr-046-design-tokens.md`.
+Full guide — `docs/ui-kit.md`; architecture —
+`docs/prd/prd-0009-ui-layering-uikit.md`, surface contract —
+`docs/interface-objects/surface-registry.md`, tokens —
+`crates/canvas-core/src/tokens.rs` and
+`docs/change-requests/fr-046-design-tokens.md`.
 
-### Что запрещено (ловится на ревью и в линтах)
+### What is forbidden (caught in review and by lints)
 
-1. **Инлайн rgba литералы в UI-коде** — `[0.30, 0.75, 0.55, 1.0]`,
-   `Color::rgba(77, 191, 140, 255)` в overlay/panel логике. Даже
-   «единоразово» — это будущий дрейф цвета. Маршрутизируйте через
-   `KitPalette` (существующий или новый слот).
-2. **Магические числа геометрии** — `4.0, 6.0, 22.0, 28.0, 110.0` в
-   `UiRect::new(...)` и `pos: [...]`. Берите из `kit::*` констант или
+1. **Inline rgba literals in UI code** — `[0.30, 0.75, 0.55, 1.0]`,
+   `Color::rgba(77, 191, 140, 255)` in overlay/panel logic. Even a
+   "one-off" is future color drift. Route through `KitPalette` (an existing
+   or new slot).
+2. **Magic geometry numbers** — `4.0, 6.0, 22.0, 28.0, 110.0` in
+   `UiRect::new(...)` and `pos: [...]`. Take them from `kit::*` constants or
    `tokens::SPACING_*`.
-3. **Дублированные локальные константы** — `HEADER_H`, `ROW_H`,
-   `INPUT_H`, `FONT_*` в каждом `*_ui.rs`. Они обязаны либо `pub use`
-   из `kit`, либо быть новым `kit::CONST` (если значение уникально).
-4. **Ручной `Buffer::new` + `set_text` + `shape` в overlay-логике** —
-   только через `TextMeasurer` (или `Shaper` под trait boundary, FR-068 W2).
-   `set_text`+`shape_until_scroll` допустим только внутри kit/component
-   и в `canvas-render/src/text.rs` (там это сам рендер).
-5. **Эвристики ширины текста** — `len() as f32 * factor + pad`. Класс
-   дефекта CR-015: разные глифы дают разную ширину, кириллица шире
-   латиницы, эмодзи «съедают» место. Только `TextMeasurer::width_of`.
-6. **Ручной `CardInstance { pos, size, fill, border, params, corners }`**
-   в overlay-логике — маршрутизируйте через `Painter::rect/panel/control`
-   или `KitDraw` (адаптер Painter↔`Vec<CardInstance>`). `CardInstance`
-   напрямую — только в `canvas-render` (это его тип) и в адаптерах
-   `app/support.rs` (граница слоёв).
+3. **Duplicated local constants** — `HEADER_H`, `ROW_H`, `INPUT_H`, `FONT_*`
+   in every `*_ui.rs`. They must either `pub use` from `kit`, or become a new
+   `kit::CONST` (if the value is unique).
+4. **Manual `Buffer::new` + `set_text` + `shape` in overlay logic** — only
+   via `TextMeasurer` (or a `Shaper` behind a trait boundary, FR-068 W2).
+   `set_text`+`shape_until_scroll` is allowed only inside kit/components and
+   in `crates/canvas-render/src/text.rs` (that is the renderer itself).
+5. **Text width heuristics** — `len() as f32 * factor + pad`. The CR-015
+   defect class: different glyphs have different widths, Cyrillic is wider
+   than Latin, emojis consume space. Only `TextMeasurer::width_of`.
+6. **Manual `CardInstance { pos, size, fill, border, params, corners }`**
+   in overlay logic — route through `Painter::rect/panel/control` or
+   `KitDraw` (the Painter↔`Vec<CardInstance>` adapter). `CardInstance`
+   directly — only in `canvas-render` (its type) and in the adapters
+   `crates/canvas-app/src/app/support.rs` (the layer boundary).
 
-### Если в kit чего-то не хватает
+### If something is missing from the kit
 
-**Агент ОБЯЗАН предложить доработку kit, а не обходить его хардкодом.**
-Порядок:
+**The agent MUST propose a kit extension instead of working around it with
+hardcode.**
 
-1. **Идентифицировать пробел** — какой компонент/токен/слот отсутствует,
-   на каком паттерне повторяется в нескольких местах (≥ 2 файла →
-   кандидат в kit).
-2. **Предложить расширение kit** — в задаче/PR:
-   - **Новый компонент** → добавить в `crates/canvas-ui/src/component/`
-     (или расширить существующий) + экспорт через `crates/canvas-ui/src/kit.rs`. Контракт
-     F-8 PRD-0009: только слоты палитры, только шкала токенов, текст
-     только через `TextMeasurer`.
-   - **Новый цветовой слот `KitPalette`** → добавить поле в
-     `KitPalette` (`crates/canvas-ui/src/component/mod.rs`) +
-     маппинг в `ThemeColors` (`crates/canvas-render/src/theme.rs`) +
-     пресеты (`crates/canvas-render/src/theme_presets.rs`) + ключ в `REQUIRED_KEYS` (тест
-     паритета семантики).
-   - **Новый токен геометрии** → `crates/canvas-core/src/tokens.rs`
-     (`SPACING_*`, `RADIUS_*`, высоты контролов) + зеркальный JSON
-     в `design/tokens/` (тест паритета JSON↔Rust).
-   - **Новый layout-паттерн** (radio_card, chat_bubble, crumbs,
-     tree_layout, anchored_stack, footer_buttons, chip_strip,
-     two_column, backdrop, banner) → компонент в
-     `crates/canvas-ui/src/component/` + экспорт `crates/canvas-ui/src/kit.rs`.
-3. **Оформить FR-документ** (если расширение значимое) по шаблону
-   `docs/change-requests/cr-template.md`: What/Impact/Changes/Tests.
-   Малые расширения (новый слот палитры) можно в коммите-задаче без FR.
-4. **Реализовать доработку kit ПЕРВЫМ** — только после этого верстать
-   поверхность через новый kit-компонент. Не наоборот.
+Procedure:
 
-### Чек-лист ревью UI-задачи
+1. **Identify the gap** — which component/token/slot is missing, on which
+   pattern it repeats in several places (≥ 2 files → a kit candidate).
+2. **Propose the kit extension** — in the task/PR:
+   - **New component** → add to `crates/canvas-ui/src/component/`
+     (or extend an existing one) + export via `kit.rs`. The F-8 contract of
+     PRD-0009: palette slots only, token scale only, text only via
+     `TextMeasurer`.
+   - **New `KitPalette` color slot** → add the field to `KitPalette`
+     (`crates/canvas-ui/src/component/mod.rs`) + the mapping in
+     `ThemeColors` (`crates/canvas-render/src/theme.rs`) + presets
+     (`crates/canvas-render/src/theme_presets.rs`) + the key in
+     `REQUIRED_KEYS` (the semantics-parity test).
+   - **New geometry token** → `crates/canvas-core/src/tokens.rs`
+     (`SPACING_*`, `RADIUS_*`, control heights) + the mirror JSON in
+     `design/tokens/` (the JSON↔Rust parity test).
+   - **New layout pattern** (radio_card, chat_bubble, crumbs, tree_layout,
+     anchored_stack, footer_buttons, chip_strip, two_column, backdrop,
+     banner) → a component in `crates/canvas-ui/src/component/` + export
+     via `kit.rs`.
+3. **File an FR document** (if the extension is significant) using the
+   `docs/change-requests/cr-template.md` template: What/Impact/Changes/Tests.
+   Small extensions (a new palette slot) may live in the task commit without
+   an FR.
+4. **Implement the kit extension FIRST** — only then build the surface via
+   the new kit component. Never the other way around.
 
-Перед сдачей задачи, затрагивающей UI (overlay/panel/dialog/контрол),
-агент проверяет:
+### UI task review checklist
 
-- [ ] Цвета берутся из `KitPalette`, нет инлайн rgba литералов
-  (grep `\[\s*0\.[0-9]+\s*,\s*0\.[0-9]+` в изменённых строках).
-- [ ] Геометрия из `kit::*` констант и `tokens::SPACING_*`/`RADIUS_*`,
-  нет новых `const HEADER_H: f32 = 30.0` в `*_ui.rs`.
-- [ ] Раскладка через `Column`/`Row`/`stack`/`constrain`/`pad`,
-  нет ручных `x = panel.right() - MAGIC` формул.
-- [ ] Текст через `TextMeasurer`, нет `Buffer::new` в overlay-логике
-  и нет `len() * factor` эвристик ширины.
-- [ ] Квады через `Painter::rect/panel/control` или `KitDraw`,
-  нет ручных `CardInstance { ... }` литералов в overlay-логике.
-- [ ] Если добавлен новый компонент/слот/токен — он в `canvas-ui`,
-  а не в `canvas-app` (по G7: kit не зависит от рендера/ОС; рендер
-  зависит от kit, не наоборот).
-- [ ] Если что-то отсутствовало — агент явно заявил это в задаче
-  (FR или коммит-заметка), не молча обойдя хардкодом.
+Before submitting a task touching UI (overlay/panel/dialog/control), the
+agent verifies:
 
-### Исключения (acceptable hardcoding)
+- [ ] Colors come from `KitPalette`; no inline rgba literals
+  (grep `\[\s*0\.[0-9]+\s*,\s*0\.[0-9]+` in changed lines).
+- [ ] Geometry from `kit::*` constants and `tokens::SPACING_*`/`RADIUS_*`;
+  no new `const HEADER_H: f32 = 30.0` in `*_ui.rs`.
+- [ ] Layout via `Column`/`Row`/`stack`/`constrain`/`pad`; no manual
+  `x = panel.right() - MAGIC` formulas.
+- [ ] Text via `TextMeasurer`; no `Buffer::new` in overlay logic and no
+  `len() * factor` width heuristics.
+- [ ] Quads via `Painter::rect/panel/control` or `KitDraw`; no manual
+  `CardInstance { ... }` literals in overlay logic.
+- [ ] If a new component/slot/token was added — it is in `canvas-ui`, not in
+  `canvas-app` (per G7: the kit does not depend on render/OS; render depends
+  on the kit, not the other way).
+- [ ] If something was missing — the agent explicitly stated it in the task
+  (an FR or a commit note) instead of silently hardcoding around it.
 
-- **Тестовые фикстуры** — `KitPalette::default()` с `[0.0;4]` слотами
-  для проверки геометрии, `Color::rgba(...)` в тестах (`*_ui.rs::tests`,
-  `admin_ui.rs::test_palette`) — без UI-смысла, только asserts.
-- **Адаптеры слоёв** — `app/support.rs::paint_items_to_band`,
-  `app/overlays.rs::KitDraw` — граница Painter↔GPU-инстансы, `CardInstance`
-  строится здесь по праву (это и есть адаптер kit→renderer).
-- **Рендер** — `canvas-render/src/{cards.rs,renderer.rs,text.rs}` —
-  это бэкенд GPU, `CardInstance` его собственный тип; токены
-  (`tokens::EDGE_*`, `tokens::ACCENT`) уже каноничны.
-- **Diagnostic overlays** — `crates/canvas-app/src/debug_overlay.rs` — цвета слоёв по
-  дизайну «диагностические, не тема»; документировано в шапке файла.
-- **Специализированные примитивы** (polar wheel в template_ui,
-  sector SDF в `canvas-render/src/sectors.rs`) — escape-hatch через
-  `Custom(rect)` с комментарием-обоснованием (G8 grep-аудит).
+### Exceptions (acceptable hardcoding)
 
-### Ссылки
+- **Test fixtures** — `KitPalette::default()` with `[0.0;4]` slots for
+  geometry checks, `Color::rgba(...)` in tests (`*_ui.rs::tests`,
+  `admin_ui.rs::test_palette`) — no UI meaning, asserts only.
+- **Layer adapters** — `crates/canvas-app/src/app/support.rs::paint_items_to_band`,
+  `crates/canvas-app/src/app/overlays.rs::KitDraw` — the Painter↔GPU-instance
+  boundary; `CardInstance` is built here by right (this IS the
+  kit→renderer adapter).
+- **Render** — `crates/canvas-render/src/{cards.rs,renderer.rs,text.rs}` —
+  the GPU backend; `CardInstance` is its own type; tokens
+  (`tokens::EDGE_*`, `tokens::ACCENT`) are already canonical.
+- **Diagnostic overlays** — `crates/canvas-app/src/debug_overlay.rs` — layer
+  colors by design "diagnostic, not theme"; documented in the file header.
+- **Specialized primitives** (polar wheel in template_ui, sector SDF in
+  `crates/canvas-render/src/sectors.rs`) — an escape hatch via `Custom(rect)`
+  with a justification comment (the G8 grep audit).
 
-- `docs/ui-kit.md` — гайд kit (3 шага добавить поверхность, layout-примитивы, измерение текста, линты).
-- `docs/prd/prd-0009-ui-layering-uikit.md` — архитектура слоя UI/kit.
-- `docs/prd/prd-0006-design-system-tokens.md` — design-токены (FR-046).
-- `docs/change-requests/fr-046-design-tokens.md` — токены в коде.
-- `docs/change-requests/fr-051-ui-layering-uikit.md` — слой UI (U1).
-- `docs/change-requests/fr-053-ui-layering-u3-pilots.md` — layout-примитивы (U3).
+### References
+
+- `docs/ui-kit.md` — the kit guide (3 steps to add a surface, layout
+  primitives, text measurement, lints).
+- `docs/prd/prd-0009-ui-layering-uikit.md` — UI/kit layer architecture.
+- `docs/prd/prd-0006-design-system-tokens.md` — design tokens (FR-046).
+- `docs/change-requests/fr-046-design-tokens.md` — tokens in code.
+- `docs/change-requests/fr-051-ui-layering-uikit.md` — the UI layer (U1).
+- `docs/change-requests/fr-053-ui-layering-u3-pilots.md` — layout
+  primitives (U3).
 - `docs/change-requests/fr-055-ui-layering-u4-kit.md` — kit v1 (U4).
-- `docs/change-requests/fr-057-ui-kit-painter-widget-state.md` — Painter + WidgetState.
-- `docs/dev-researches/ui-hardcode-audit.md` — аудит хардкода (пробелы kit, порядок миграции).
+- `docs/change-requests/fr-057-ui-kit-painter-widget-state.md` — Painter +
+  WidgetState.
+- `docs/dev-researches/ui-hardcode-audit.md` — the hardcode audit (kit gaps,
+  migration order).
 
-## Сборка и тесты
+## Build and tests
 
-После T0 в репозитории должны работать (CI на ubuntu/windows/macos — матрица
-M7, ветка `ci-matrix`; до её активации — windows-latest в ci.yml + 3-ОС
+After T0 the repository must support (CI on ubuntu/windows/macos — the M7
+matrix; until it is activated — windows-latest in ci.yml + the 3-OS
 build-all):
 
 ```
@@ -409,85 +454,96 @@ cargo clippy --workspace -- -D warnings
 cargo fmt --check
 ```
 
-WASM-гейт (FR-036, ADR-0011): ядро (canvas-core/canvas-render/canvas-widgets)
-обязано собираться под wasm32-unknown-unknown, а canvas-core — исполняться в
-wasm-рантайме; CI-джоба `wasm-check` проверяет компиляцию на каждый пуш,
-локальный гейт — обе части. M8/W12 (wasm-port §6.1 п.4): в ступень компиляции
-включён и продуктовый web-слой `canvas-web`:
+WASM gate (FR-036, ADR-0011): the core (canvas-core/canvas-render/
+canvas-widgets) must build under wasm32-unknown-unknown, and canvas-core
+must execute in a wasm runtime; the CI job `wasm-check` checks compilation
+on every push, the local gate covers both parts. M8/W12 (wasm-port §6.1
+item 4): the product web layer `canvas-web` is included in the compilation
+stage:
 
 ```
-scripts/wasm_gate.sh          # check wasm-таргета (core/render/widgets/mcp/web) + rlib ядра + тесты canvas-core под wasip1 (wasmtime)
-scripts/wasm_gate.sh --check  # только компиляция — без wasmtime (эквивалент CI-джобы)
+scripts/wasm_gate.sh          # check the wasm target (core/render/widgets/mcp/web) + core rlib + canvas-core tests under wasip1 (wasmtime)
+scripts/wasm_gate.sh --check  # compilation only — no wasmtime (equivalent of the CI job)
 ```
 
-Web-бандл и деплой (M8/W12): `scripts/web_bundle.sh` — релизная сборка
-canvas-web (trunk 0.21.14, `[profile.release] lto="thin"`), оптимизация
-`wasm-opt -Oz` и отчёт о размере (§8.8: ≤8 МБ raw / ≤4 МБ brotli; в CI итог
-дублируется в $GITHUB_STEP_SUMMARY). Публикация на GitHub Pages (путь `/app` +
-Jekyll-сборка docs/ — как у прежнего branch-деплоя) — workflow `pages-web.yml`
-(Source: «GitHub Actions», см. README «Веб-версия»).
+Web bundle and deploy (M8/W12): `scripts/web_bundle.sh` — a release build of
+canvas-web (trunk 0.21.14, `[profile.release] lto="thin"`), `wasm-opt -Oz`
+optimization and a size report (§8.8: ≤8 MB raw / ≤4 MB brotli; in CI the
+final numbers are duplicated into $GITHUB_STEP_SUMMARY). Publishing to
+GitHub Pages (the `/app` path + the Jekyll build of docs/ — like the earlier
+branch deploy) — the `pages-web.yml` workflow (Source: "GitHub Actions", see
+README "Веб-версия").
 
-MCP-wasm-гейт (FR-037, ADR-0012): контрактный слой (canvas-scene,
-canvas-mcp, canvas-mcp-headless) собирается под wasm32-unknown-unknown,
-тесты исполняются под wasip1 в wasmtime, и драйвер проводит РЕАЛЬНУЮ
-MCP-сессию (initialize → tools/list → graph_apply oracle ±1 % →
-analyze_bottlenecks ρ-гейт → негативные ветки) с headless-сервером —
-регресс контракта ADR-0004 ловится без Windows и GUI:
-
-```
-scripts/mcp_wasm_gate.sh           # check + wasip1-тесты (scene 53 + мост 13 + headless 12) + e2e-сессия
-scripts/mcp_wasm_gate.sh --check   # только компиляция — без wasmtime
-```
-
-Инспектор-сессия (FR-037 MW5) — живая ручная проверка MCP владельцем без
-Windows, официальным инспектором `@modelcontextprotocol/inspector`
-(требует node 18+/npx, первый запуск качает пакет; в гейты/CI не входит):
+MCP-wasm gate (FR-037, ADR-0012): the contract layer (canvas-scene,
+canvas-mcp, canvas-mcp-headless) builds under wasm32-unknown-unknown, tests
+run under wasip1 in wasmtime, and the driver performs a REAL MCP session
+(initialize → tools/list → graph_apply oracle ±1 % → analyze_bottlenecks
+ρ-gate → negative branches) with the headless server — an ADR-0004 contract
+regression is caught without Windows and GUI:
 
 ```
-scripts/mcp_wasm_inspector.sh           # web UI: браузер → 127.0.0.1:6274, сервер предподключён
-scripts/mcp_wasm_inspector.sh --check   # автоприёмка инспектором-клиентом: tools/list + graph_apply oracle ±1 %
+scripts/mcp_wasm_gate.sh           # check + wasip1 tests (scene 53 + bridge 13 + headless 12) + an e2e session
+scripts/mcp_wasm_gate.sh --check   # compilation only — no wasmtime
 ```
 
-Требования к тестам:
-- Юнит-тесты для `canvas-core` обязательны (трансформации камеры round-trip, round-trip
-  `.canvas` без потерь неизвестных полей, парсинг примеров с jsoncanvas.org).
-- `canvas-shell` — интеграционные тесты там, где возможно (вотчер на tempdir и т.п.).
-- Производительность — часть приёмки: 5 000 нод на 60 fps (пан/зум), холодный старт
-  < 2 с, открытие канваса на 1 000 нод < 500 мс, память < 500 МБ (SPEC §6.3);
-  нагрузочный тест `--stress N` (T5); 10 виджетов не роняют fps ниже 60 (M5).
-- Ручная приёмка критериев milestone'ов (SPEC §10) выполняется владельцем после
-  каждого тега (v0.1–v1.1) — агент её не заменяет.
+Inspector session (FR-037 MW5) — a live manual MCP check by the owner
+without Windows, using the official `@modelcontextprotocol/inspector`
+(needs node 18+/npx; the first run downloads the package; not part of the
+gates/CI):
 
-## Самопроверка UI на WASM — обязательна перед отчётом
+```
+scripts/mcp_wasm_inspector.sh           # web UI: browser → 127.0.0.1:6274, the server is pre-connected
+scripts/mcp_wasm_inspector.sh --check   # automated acceptance by the inspector client: tools/list + graph_apply oracle ±1 %
+```
 
-Правило (директива владельца 2026-09-25): **любое изменение, затрагивающее
-UI (раскладка, ввод, панели, hit-тесты, рендер, темы), агент проверяет на
-веб-сборке САМ** — нативные юнит-тесты закрывают логику, но не подменяют
-поведенческую проверку на wasm-платформе. Порядок:
+Test requirements:
+- Unit tests for `canvas-core` are mandatory (camera transform round-trips,
+  lossless `.canvas` round-trip preserving unknown fields, parsing samples
+  from jsoncanvas.org).
+- `canvas-shell` — integration tests where possible (watcher on a tempdir
+  etc.).
+- Performance is part of acceptance: 5,000 nodes at 60 fps (pan/zoom), cold
+  start < 2 s, opening a 1,000-node canvas < 500 ms, memory < 500 MB
+  (SPEC §6.3); the `--stress N` load test (T5); 10 widgets must not drop fps
+  below 60 (M5).
+- Manual acceptance of milestone criteria (SPEC §10) is performed by the
+  owner after each tag (v0.1–v1.1) — the agent does not substitute it.
 
-1. L0 — компиляционный гейт: `scripts/wasm_gate.sh --check` (или точечный
-   `cargo check --target wasm32-unknown-unknown -p <крейт>`);
-2. нативные тесты (`cargo test`) — логика;
-3. L2 — браузерный стенд: `scripts/wasm_ui_test.sh` (сборка canvas-web без
-   trunk + Chromium/WebGPU под Xvfb + сценарий с пиксельным диффом) —
-   поведение. Сценарий/координаты — по рецепту `docs/WASM-TESTING.md` §3.
+## WASM UI self-check — mandatory before reporting
 
-Если среда не позволяет L2 (нет node/playwright/Xvfb, сборка сломана,
-диск/время) — в итоговом отчёте по задаче ОБЯЗАТЕЛЬНО: (а) явно указать,
-что WASM-проверка не выполнялась и почему; (б) приложить инструкцию для
-ручной проверки: что открыть (web-версия Pages/`trunk serve`), куда
-кликнуть, что считается успехом. Формулировка «нативные тесты зелёные»
-сама по себе UI-приёмку не закрывает.
+The rule (owner directive 2026-09-25): **any change touching UI (layout,
+input, panels, hit tests, rendering, themes) is verified by the agent
+itself on the web build** — native unit tests cover logic but do not
+substitute behavioral verification on the wasm platform. Order:
 
-## Не делать
+1. L0 — the compilation gate: `scripts/wasm_gate.sh --check` (or a targeted
+   `cargo check --target wasm32-unknown-unknown -p <crate>`);
+2. native tests (`cargo test`) — logic;
+3. L2 — the browser stand: `scripts/wasm_ui_test.sh` (canvas-web build
+   without trunk + Chromium/WebGPU under Xvfb + a scenario with a pixel
+   diff) — behavior. Scenario/coordinates — per the `docs/WASM-TESTING.md`
+   §3 recipe.
 
-- Не менять формат `.canvas` несовместимо с jsoncanvas.org без явной задачи;
-  неизвестные поля и типы нод обязаны сохраняться при round-trip.
-- Не добавлять сетевые вызовы в хост.
-- Не блокировать рендер-поток (см. выше).
-- Не слать 0x052C при существующем WorkerW; не использовать SPI_SETDESKWALLPAPER
-  на raised desktop.
-- Не заменять shell (таскбар, трей остаются Explorer).
-- Не расползаться платформенным кодом по `canvas-app` — только трейты и
-  cfg-секции платформенных крейтов (см. «Правила архитектуры» п.2); юникс-экв
-  ачивенты Win32-приёмов — только по таблице решений `docs/plans/M7-crossplatform.md` §3.2, не по памяти.
+If the environment does not allow L2 (no node/playwright/Xvfb, a broken
+build, disk/time) — the task's final report MUST: (a) explicitly state that
+the WASM check was not performed and why; (b) attach manual-verification
+instructions: what to open (the Pages web version / `trunk serve`), where
+to click, what counts as success. The phrase "native tests are green" by
+itself does not close UI acceptance.
+
+## Do not
+
+- Do not change the `.canvas` format incompatibly with jsoncanvas.org
+  without an explicit task; unknown fields and node types must survive the
+  round-trip.
+- Do not add network calls to the host.
+- Do not block the render thread (see above).
+- Do not send 0x052C when WorkerW exists; do not use SPI_SETDESKWALLPAPER on
+  a raised desktop.
+- Do not replace the shell (taskbar, tray remain Explorer's).
+- Do not spread platform code across `canvas-app` — traits and cfg-sections
+  of platform crates only (see "Architecture rules" item 2); unix
+  equivalents of Win32 techniques — only per the decision table
+  `docs/plans/M7-crossplatform.md` §3.2, not from memory.
+
+

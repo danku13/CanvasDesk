@@ -9,7 +9,7 @@ description = "LLM-слой CanvasDesk: унифицированный LlmProvid
 
 # FR-LLM-A / ADR-0016: чистый трейт-слой без зависимостей в дефолтной сборке.
 # Сетевые зависимости (ureq) и serde-деривы включаются только за feature
-# `l1-llm` (правило ADR-0011 wasm-гейт, AGENTS.md «без сети в хосте»).
+# `l1-llm` (правило ADR-0011 wasm-гейт, AGENTS.md "no network in the host").
 # Трейт и типы компилируются под wasm32-unknown-unknown без оговорок
 # (default features = []) — потребительские крейты (canvas-app/canvas-suggest)
 # подключают сеть только за явным feature-флагом.

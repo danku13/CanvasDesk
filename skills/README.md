@@ -1,62 +1,60 @@
-# Скиллы CanvasDesk MCP — пакет для ИИ-агентов
+# CanvasDesk MCP Skills — package for AI agents
 
-Пакет скиллов для ИИ-агентов (MCP-клиентов), работающих с CanvasDesk —
-визуальной системой математического моделирования. Пакет синхронен
-реестру MCP-инструментов: **43 инструмента**, соответствие проверяется
-контракт-тестом `skills_sync` в crate `canvas-mcp` (см.
+A skill package for AI agents (MCP clients) working with CanvasDesk — a
+visual mathematical modeling system. The package is synchronized with the
+MCP tool registry: **43 tools**; the match is verified by the `skills_sync`
+contract test in the `canvas-mcp` crate (see
 [UPDATE-PROTOCOL.md](UPDATE-PROTOCOL.md)).
 
-Пакет — самодостаточный: его можно скопировать целиком, выложить в
-отдельный репозиторий или распространять как каталог внутри репозитория
-CanvasDesk. Ссылки внутри скиллов — относительные (работают при
-копировании папки скилла целиком).
+The package is self-contained: it can be copied wholesale, published as a
+separate repository, or distributed as a catalog inside the CanvasDesk
+repository. Links inside skills are relative (they work when a skill folder
+is copied entirely).
 
-## Состав
+## Contents
 
-| Скилл | Назначение |
+| Skill | Purpose |
 |---|---|
-| `canvasdesk-mcp` | Подключение (транспорт, offline/reconnect), инварианты, разведка канваса, карта «задача → скилл» |
-| `canvasdesk-model-build` | Сборка модели: ноды, value-связи с адресацией портов, атомарный батч graph_apply, эталон Instagram MVP |
-| `canvasdesk-model-verify` | Проверка: flow_recalc, lineage, explain_number (текстовое объяснение), graph_validate (коды ошибок), analyze_bottlenecks |
-| `canvasdesk-whatif` | Сценарии «а что если»: подмены, дельты, apply/reset |
+| `canvasdesk-mcp` | Connection (transport, offline/reconnect), invariants, canvas exploration, the "task → skill" map |
+| `canvasdesk-model-build` | Model building: nodes, value edges with port addressing, the atomic graph_apply batch, the Instagram MVP reference |
+| `canvasdesk-model-verify` | Verification: flow_recalc, lineage, explain_number (textual explanation), graph_validate (error codes), analyze_bottlenecks |
+| `canvasdesk-whatif` | What-if scenarios: substitutions, deltas, apply/reset |
 
-Полный каталог сигнатур — `canvasdesk-mcp/references/tools.md`.
+The full signature catalog — `canvasdesk-mcp/references/tools.md`.
 
-## Установка для агента
+## Installation for an agent
 
-Скилл активируется, когда его папка лежит в каталоге скиллов агента:
+A skill activates when its folder is placed in the agent's skill directory:
 
-1. Скопируйте нужные папки (или весь `skills/`) в каталог скиллов
-   вашего агента (например `~/.claude/skills/` или эквивалент).
-2. Настройте MCP-хост на сервер CanvasDesk:
+1. Copy the needed folders (or the whole `skills/`) into your agent's skill
+   directory (e.g. `~/.claude/skills/` or the equivalent).
+2. Point the MCP host at the CanvasDesk server:
 
 ```json
 { "mcpServers": { "canvasdesk": { "command": "canvasdesk", "args": ["mcp"] } } }
 ```
 
-3. Автономный вариант: `command = "canvasdesk-mcp"` (без аргументов);
-   при недоступном приложении мост сам поднимет GUI-соседа
-   (`--no-spawn` — отключить).
+3. Standalone option: `command = "canvasdesk-mcp"` (no arguments); if the
+   application is unavailable, the bridge starts the GUI neighbor itself
+   (`--no-spawn` disables this).
 
-Скиллы можно ставить выборочно: каждый самодостаточен. Базовый
-`canvasdesk-mcp` рекомендуется всегда — остальные ссылаются на его
-инварианты.
+Skills can be installed selectively: each is self-sufficient. The base
+`canvasdesk-mcp` is always recommended — the others reference its
+invariants.
 
-## Актуализация
+## Keeping the package current
 
-MCP-инструменты CanvasDesk развиваются; скиллы — производная реестра.
-Правила и пошаговый протокол обновления —
-[UPDATE-PROTOCOL.md](UPDATE-PROTOCOL.md); история изменений —
-[CHANGELOG.md](CHANGELOG.md). Проверка синхронности:
+CanvasDesk MCP tools evolve; the skills are a derivative of the registry.
+Rules and the step-by-step update protocol —
+[UPDATE-PROTOCOL.md](UPDATE-PROTOCOL.md); change history —
+[CHANGELOG.md](CHANGELOG.md). Synchronization check:
 
 ```
 cargo test -p canvas-mcp skills
 ```
 
-## Версия
+## Version
 
-Пакет v7 — 43 инструмента; синхронизирован с реестром `TOOLS`
-(main). Версия пакета поднимается при любом изменении
-состава инструментов или семантики (см. CHANGELOG).
-
-Лицензирование — как у репозитория CanvasDesk.
+Package v7 — 43 tools; synchronized with the `TOOLS` registry (main).
+The package version is bumped on any change to the tool set or semantics
+(see CHANGELOG).

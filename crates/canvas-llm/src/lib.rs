@@ -2,7 +2,7 @@
 //!
 //! Унифицированный `LlmProvider` trait для 6 провайдеров (BYOK + Sign-in-with-
 //! ChatGPT). Feature-gated: дефолтная сборка без сети (ADR-0011 wasm-гейт,
-//! AGENTS.md «без сети в хосте»). Сетевые адаптеры (`OpenAiCompatibleProvider`,
+//! AGENTS.md "no network in the host"). Сетевые адаптеры (`OpenAiCompatibleProvider`,
 //! `AnthropicClaudeProvider`) подключаются за feature `l1-llm`.
 //!
 //! ## Состав
