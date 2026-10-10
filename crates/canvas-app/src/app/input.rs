@@ -2550,6 +2550,12 @@ impl App {
                 );
                 if let Some(i) = menu_item_at_for(menu.origin, self.cursor, items.len()) {
                     match items[i] {
+                        // FR-108 (C5, №20): вход в менеджер канвасов —
+                        // натив-вход тонкого слоя (web: дубль кнопки
+                        // «Недавние»/чипа C4 до их чистки).
+                        CanvasMenuItem::CanvasManager => {
+                            self.open_canvas_manager();
+                        }
                         CanvasMenuItem::NewGroup => {
                             let center = self.viewport_center_world();
                             let mut group = plan_group_at(&self.scene.canvas, center);
