@@ -1,62 +1,65 @@
 ---
 name: canvasdesk-model-build
-description: Сборка исполняемой математической модели на канвасе CanvasDesk через MCP — ноды, value-связи с адресацией портов (fromOutput/fromLine/toParam), атомарный батч graph_apply, вставка схем, раскладка нод (grid/smart), группировка нод. Используйте, когда нужно создать или изменить модель, связать ноды, задать параметры, расставить ноды (в т.ч. по скриншоту схемы), сгруппировать ноды. Triggers: build model, create nodes, edges, value flow, graph_apply, param_set, template_instantiate, schemes_apply, nodes_layout_apply, group_create.
+description: Building an executable mathematical model on the CanvasDesk canvas via MCP — nodes, value edges with port addressing (fromOutput/fromLine/toParam), the atomic graph_apply batch, scheme insertion, node layout (grid/smart), node grouping. Use when you need to create or modify a model, connect nodes, set parameters, arrange nodes (including from a scheme screenshot), or group nodes. Triggers: build model, create nodes, edges, value flow, graph_apply, param_set, template_instantiate, schemes_apply, nodes_layout_apply, group_create.
 version: 4
 ---
 
-# Сборка модели на CanvasDesk
+# Building a model on CanvasDesk
 
-Рецепт собирает исполняемую модель: числа вводятся руками только в
-стартовых допущениях, всё остальное вычисляется и проливается по
-value-связям. Требуется подключённый MCP-сервер CanvasDesk (см. скилл
-`canvasdesk-mcp`).
+This recipe assembles an executable model: numbers are typed in by hand only in
+the starting assumptions; everything else is computed and spilled along value
+edges. Requires a connected CanvasDesk MCP server (see the `canvasdesk-mcp` skill).
 
-**Главное правило:** если число можно вычислить из другой ноды — его
-нельзя писать руками. Оно должно пролиться по value-связи. Правка одного
-стартового допущения тогда пересчитает всю модель.
+**The main rule:** if a number can be computed from another node — it
+must not be typed in by hand. It must spill along a value edge. Editing
+one starting assumption then recalculates the whole model.
 
-## Шаг 1. Разведка: шаблоны и схемы
+## Step 1. Exploration: templates and schemes
 
-- `template_list` {} — библиотека расчётных ролей (CDN, балансировщик,
-  БД, очередь…). По каждому: params (default, min/max, unit) и outputs
-  (именованные выходы). Выпишите имена портов — они понадобятся для
-  рёбер.
-- `schemes_list` {} — галерея готовых схем. Если задача похожа на
-  «бюджет», «unit-экономику», «ёмкость сервиса» — быстрее вставить
-  готовую схему `schemes_apply` {id, x?, y?} и править её: id нод
-  ремапятся без коллизий, вставка = один undo-шаг, ответ несёт bbox
-  (для `viewport_set` {x, y}) и flow с готовыми значениями.
-- `canvas_info` {} + `nodes_list` {text: true} + `edges_list` {} — что
-  уже есть на канвасе, чтобы не дублировать и не конфликтовать.
+- `template_list` {} — the library of computational roles (CDN, load
+  balancer, DB, queue…). For each: params (default, min/max, unit) and
+  outputs (named outputs). Write down the port names — they will be
+  needed for edges.
+- `schemes_list` {} — the gallery of ready-made schemes. If the task
+  resembles «бюджет» (budget), «unit-экономика» (unit economics) or
+  «ёмкость сервиса» (service capacity) — it is faster to insert the ready
+  scheme with `schemes_apply` {id, x?, y?} and edit it: node ids are remapped
+  without collisions, the insertion = one undo step, the response carries the
+  bbox (for `viewport_set` {x, y}) and a flow with ready values.
+- `canvas_info` {} + `nodes_list` {text: true} + `edges_list` {} — what
+  is already on the canvas, so as not to duplicate or conflict.
 
-## Шаг 2. Ноды
+## Step 2. Nodes
 
-- **Стартовые допущения** — текстовая нода `node_create_note` {x, y,
-  text}: строки `имя = значение единица` становятся переменными, строки
-  с формулами (`avg_rps = dau × sess × req / 86400`) — вычисляемыми.
-  Это единственное место, где числа вводятся руками. Переменные ноды
-  становятся её именованными выходами (для fromOutput).
-- **Заголовок карточки** (FR-072) — `node_create_note` {…, title} /
-  `node_edit` {id, title}: явный заголовок живёт отдельно от текста и
-  не меняется при правках тела. Без title в шапке плейсхолдер «—»:
-  первая строка текста в шапку не протекает (волна 1); легаси-ноды
-  мигрируют при загрузке (первая проза-строка → title).
-- **Расчётные роли** — `template_instantiate` {id, x, y, params}:
-  id шаблона из `template_list`; params — {имя: число} или
-  {имя: {num, unit}}; значение вне min/max — ошибка.
-- **Файловая нода** — `node_create_file` {path, x, y}: карточка-ссылка
-  на файл (сам файл на диске не создаётся).
-- Правки: `node_update_text` {id, text} — заменить текст целиком;
-  `node_edit` {id, …} — точечная правка ТОЛЬКО переданных полей
-  (text, title, label, color, expr, x, y, width, height; null сбрасывает
-  label/color/expr/title; expr — Numi-формула, рендерится под текстом ноды).
+- **Starting assumptions** — a text node via `node_create_note` {x, y,
+  text}: lines of the form `имя = значение единица` (name = value unit)
+  become variables, lines with formulas
+  (`avg_rps = dau × sess × req / 86400`) — computed ones. This is the
+  only place where numbers are typed in by hand. The node's variables
+  become its named outputs (for fromOutput).
+- **Card heading** (FR-072) — `node_create_note` {…, title} /
+  `node_edit` {id, title}: the explicit heading lives separately from
+  the text and does not change when the body is edited. Without a title
+  the header shows the «—» placeholder: the first text line does not
+  leak into the header (wave 1); legacy nodes migrate on load (the
+  first prose line → title).
+- **Computational roles** — `template_instantiate` {id, x, y, params}:
+  the template id from `template_list`; params — {<name>: number} or
+  {<name>: {num, unit}}; a value outside min/max — an error.
+- **File node** — `node_create_file` {path, x, y}: a card linking to a
+  file (the file itself is not created on disk).
+- Edits: `node_update_text` {id, text} — replace the text in full;
+  `node_edit` {id, …} — point edits of ONLY the passed fields
+  (text, title, label, color, expr, x, y, width, height; null resets
+  label/color/expr/title; expr — a Numi formula, rendered under the
+  node's text).
 
-**Многострочный текст:** перенос в JSON — настоящий `\n`
-(`"text": "dau = 1000000\nsess = 4"`); двухсимвольный вариант
-нормализуется толерантно. Проверка: `flow_recalc` возвращает по ноде
-столько `lines`, сколько строк задумано.
+**Multiline text:** a line break in JSON is a real `\n`
+(`"text": "dau = 1000000\nsess = 4"`); the two-character variant is
+normalized tolerantly. Check: `flow_recalc` returns per node as many
+`lines` as the number of intended lines.
 
-## Шаг 3. Value-связи с адресацией портов
+## Step 3. Value edges with port addressing
 
 ```
 `edge_create` { from, to, kind: "value",
@@ -64,29 +67,31 @@ value-связям. Требуется подключённый MCP-сервер
                  toParam: "<имя параметра приёмника>" }
 ```
 
-- `kind` обязателен для потока значений: дефолт `control` — визуальная
-  связь, значение НЕ переносится.
-- Исток (прямой `edge_create` {…}): `fromOutput` — именованный выход
-  шаблона ИЛИ переменная Numi-листа текстовой ноды (имена — из
-  `template_list` / outputs в `flow_recalc`); `fromLine` — номер строки
-  текстовой ноды (0-based, живёт при сдвиге строк). Поля взаимно
-  исключительны; многолинейный исток без адресации → `W-AMBIGUOUS-SRC`.
-- Приёмник: `toParam` — параметр шаблона; проливание перекрывает
-  локальное значение (только при kind "value"). Value-ребро без
-  toParam создаёт у приёмника авто-строку «Объект.Поле».
-- Валидация имён по снапшотам шаблонов: неизвестный порт →
-  `E-PORT-UNKNOWN`; несовместимая единица → `E-UNIT`; второе ребро в
-  тот же toParam → `E-DOUBLE-INPUT`; value-цикл → `E-CYCLE`.
-- **Замена источника занятого toParam:** пара `edge_delete` {id} +
-  `edge_create` {…} — второе ребро в занятый параметр падает
-  E-DOUBLE-INPUT, поэтому удаление старого обязательно.
-- `flow_set_kind` {id, kind} — переключить тип существующей связи;
-  `edge_ports` {id, pin} — закрепить/отпустить стороны (pin: auto |
+- `kind` is required for the value flow: the default `control` is a
+  visual edge, the value is NOT carried.
+- Source (a direct `edge_create` {…}): `fromOutput` — a named output of
+  a template OR a variable of a text node's Numi sheet (the names —
+  from `template_list` / outputs in `flow_recalc`); `fromLine` — the
+  line number of a text node (0-based, survives line shifts). The
+  fields are mutually exclusive; a multiline source without addressing
+  → `W-AMBIGUOUS-SRC`.
+- Receiver: `toParam` — a template parameter; the spill overrides the
+  local value (only with kind "value"). A value edge without toParam
+  creates an auto line «Объект.Поле» (“Object.Field”) at the receiver.
+- Name validation against template snapshots: an unknown port →
+  `E-PORT-UNKNOWN`; an incompatible unit → `E-UNIT`; a second edge into
+  the same toParam → `E-DOUBLE-INPUT`; a value cycle → `E-CYCLE`.
+- **Replacing the source of an occupied toParam:** the pair
+  `edge_delete` {id} + `edge_create` {…} — a second edge into an
+  occupied parameter fails with E-DOUBLE-INPUT, so deleting the old one
+  is mandatory.
+- `flow_set_kind` {id, kind} — toggle the type of an existing edge;
+  `edge_ports` {id, pin} — pin/release the sides (pin: auto |
   from | to | both).
 
-## Шаг 4. Быстрый путь: атомарный батч graph_apply
+## Step 4. Fast path: the atomic graph_apply batch
 
-Всю сборку (ноды + параметры + рёбра) — ОДНИМ вызовом
+Do the whole build (nodes + parameters + edges) in ONE call to
 `graph_apply` {operations}:
 
 ```
@@ -97,96 +102,100 @@ value-связям. Требуется подключённый MCP-сервер
 ]}
 ```
 
-Операции (поле op):
+Operations (the op field):
 
-| op | Поля | Примечание |
+| op | Fields | Note |
 |---|---|---|
-| `node_create_note` | ref?, x, y, text?, title?, width?, height? | Numi-лист |
-| `node_create_file` | ref?, x, y, path | файл не создаётся |
-| `template_instantiate` | ref?, template, params?, x, y | вне min/max — ошибка |
-| `edge_create` | fromRef\|from, toRef\|to, kind?, fromLine?, fromOutput?, toParam?, fromSide?, toSide? | порты как у шага 3, НО `fromOutput` в батче валидируется только по выходам шаблонов: текстовый исток адресуйте `fromLine` (переменная Numi-листа в батче — `E-PORT-UNKNOWN`) |
-| `edge_delete` | id\|ref | удаление ребра (для замены источника) |
-| `param_set` | ref\|id, param, value, unit? | правит ровно одну строку «param = value unit»; параметра нет — ошибка (append НЕ выполняется) |
-| `node_move` | ref\|id, x, y | перемещение |
+| `node_create_note` | ref?, x, y, text?, title?, width?, height? | a Numi sheet |
+| `node_create_file` | ref?, x, y, path | the file is not created |
+| `template_instantiate` | ref?, template, params?, x, y | outside min/max — an error |
+| `edge_create` | fromRef\|from, toRef\|to, kind?, fromLine?, fromOutput?, toParam?, fromSide?, toSide? | ports as in step 3, BUT `fromOutput` in the batch is validated only against template outputs: address a text source with `fromLine` (a Numi sheet variable in the batch — `E-PORT-UNKNOWN`) |
+| `edge_delete` | id\|ref | edge deletion (for replacing a source) |
+| `param_set` | ref\|id, param, value, unit? | edits exactly one “param = value unit” line; no such parameter — an error (append is NOT performed) |
+| `node_move` | ref\|id, x, y | moving |
 
-- **ref** адресует ноды, созданные ранее В ЭТОМ ЖЕ батче (forward-ref →
-  `E-NOT-FOUND`; дубликат → `E-BAD-OP`).
-- **Атомарность:** ошибка любой операции → `{ok: false, op_index,
-  code, message}`, канвас байт-в-байт прежний. Успех → один undo-шаг
-  на весь батч, полный пересчёт, автосейв.
-- **Ответ успеха уже содержит `flow`** в формате `flow_recalc` —
-  второй вызов пересчёта не нужен. Сверяйте числа здесь (скилл
-  `canvasdesk-model-verify`).
-- **Лимиты:** ≤ 256 операций, ≤ 128 новых нод на вызов.
-- Коды ошибок операций: `E-BAD-OP`, `E-NOT-FOUND`, `E-PORT-UNKNOWN`,
+- **ref** addresses nodes created earlier IN THE SAME batch
+  (forward-ref → `E-NOT-FOUND`; a duplicate → `E-BAD-OP`).
+- **Atomicity:** an error in any operation → `{ok: false, op_index,
+  code, message}`, the canvas remains byte-for-byte the same. Success →
+  one undo step for the whole batch, a full recalculation, autosave.
+- **The success response already contains `flow`** in the
+  `flow_recalc` format — a second recalculation call is not needed.
+  Check the numbers here (the `canvasdesk-model-verify` skill).
+- **Limits:** ≤ 256 operations, ≤ 128 new nodes per call.
+- Operation error codes: `E-BAD-OP`, `E-NOT-FOUND`, `E-PORT-UNKNOWN`,
   `E-CYCLE`, `E-PARAM-UNKNOWN`, `E-RANGE`.
 
-## Шаг 5. Раскладка и визуальная доводка
+## Step 5. Layout and visual fine-tuning
 
-- Предпочтительный путь — `nodes_layout_apply` (FR-081): раскладка
-  ОДНИМ вызовом вместо N вызовов `node_move`:
-  - `mode:"grid"` — явный «порядок чтения» `rows`: массив рядов, каждый
-    ряд — массив id слева направо, ряды сверху вниз. Транскрибируйте
-    раскладку со скриншота схемы (или любую свою): колонки
-    выравниваются по максимальной ширине, ряды — по высоте; зазоры
-    `colGap`/`rowGap` (дефолты 80/48), точка `x`,`y` — левый-верх блока
-    (дефолт — текущий bbox перечисленных нод). Группы в `rows`
-    запрещены — раскладывайте их детей, рамки авторасширяются. Ответ:
+- The preferred path is `nodes_layout_apply` (FR-081): layout in ONE call
+  instead of N `node_move` calls:
+  - `mode:"grid"` — an explicit “reading order” `rows`: an array of
+    rows, each row — an array of ids left to right, rows top to bottom.
+    Transcribe the layout from a scheme screenshot (or any layout of
+    your own): columns are aligned by maximum width, rows by height;
+    gaps `colGap`/`rowGap` (defaults 80/48), the `x`,`y` point — the
+    top-left of the block (default — the current bbox of the listed
+    nodes). Groups in `rows` are forbidden — lay out their children,
+    the frames auto-expand. Response:
     {mode, moved, positions, bbox, groups_resized}.
     `nodes_layout_apply` {"mode":"grid","rows":[["u1","u2"],["calc1"]]} —
-    два входа в первом ряду, расчёт под ними.
-  - `mode:"smart"` — смысловая раскладка ВСЕГО канваса (FR-071):
-    кластеры по группам/рёбрам, слои слева направо, barycenter,
-    выравнивание сеткой без «прилипания»; bbox канваса сохраняется.
-  - `fit` (дефолт true) — перед раскладкой высоты клампятся к
-    контенту: сжатые ноды не ломают выравнивание.
-- `node_move` {id, x, y} — точечный сдвиг одной ноды; `node_resize`
-  {id, width, height, fit?} — размер под текст. Инвариант FR-081:
-  высота меньше контента НЕ применяется — клампится до измеренного
-  минимума (ответ node_resize несёт height_clamped/min_height);
-  `fit: true` — подогнать высоту точно под видимый контент. Текстовые
-  ноды: width ≈ 500, height 140–200 (эвристика; минимум гарантирует
-  читаемость).
-- `node_set_color` {id, color} — пресеты "1".."6" или null.
-- `node_delete` {id} — удалить ноду (связи каскадно; дети группы
-  остаются).
-- `viewport_set` {x, y, zoom?} — показать пользователю результат
-  (координаты — из bbox вставки или created-нод ответа батча).
+    two inputs in the first row, the computation below them.
+  - `mode:"smart"` — semantic layout of the WHOLE canvas (FR-071):
+    clusters by groups/edges, layers left to right, barycenter,
+    grid alignment without “snapping”; the canvas bbox is preserved.
+  - `fit` (default true) — before layout, heights are clamped to the
+    content: squashed nodes do not break the alignment.
+- `node_move` {id, x, y} — a point shift of a single node; `node_resize`
+  {id, width, height, fit?} — size to fit the text.
+  The FR-081 invariant: height smaller than the content is NOT applied
+  — it is clamped to the measured minimum (the node_resize response
+  carries height_clamped/min_height); `fit: true` — fit the height
+  exactly to the visible content. Text nodes: width ≈ 500,
+  height 140–200 (a heuristic; the minimum guarantees readability).
+- `node_set_color` {id, color} — presets "1".."6" or null.
+- `node_delete` {id} — delete a node (edges cascade; group children
+  remain).
+- `viewport_set` {x, y, zoom?} — show the result to the user
+  (coordinates — from the insertion bbox or the created nodes of the
+  batch response).
 
-## Шаг 6. Группировка нод
+## Step 6. Grouping nodes
 
-- `group_create` {nodes, label?, padding?} — обернуть перечисленные
-  ноды новой группой: рамка по общему bbox + padding (дефолт 40,
-  допустимо 0..500), дети — явный список id. Ответ: {id, label,
-  children, parent, x, y, width, height}. Один undo-шаг.
-- Семантика иерархии (FR-012 v4): если обёрнутые ноды — дети
-  существующих групп, они вычёркиваются оттуда (инварант одного
-  членства), новая группа становится ребёнком самой внутренней
-  группы-предка, а вся цепочка предков авторасширяется, чтобы вмещать
-  новую подгруппу. Группировать можно и сами группы — перечислите их
-  id в nodes.
-- В батче `graph_apply` доступна та же операция с ref-адресацией —
-  рамка собирается в одном undo-шаге с нодами:
+- `group_create` {nodes, label?, padding?} — wrap the listed nodes in a
+  new group: the frame from the common bbox + padding (default 40,
+  0..500 allowed), children — an explicit list of ids. Response:
+  {id, label, children, parent, x, y, width, height}. One undo step.
+- Hierarchy semantics (FR-012 v4): if the wrapped nodes are children of
+  existing groups, they are struck out of them (the single-membership
+  invariant), the new group becomes a child of the innermost ancestor
+  group, and the whole ancestor chain auto-expands to accommodate the
+  new subgroup. Groups themselves can be grouped too — list their ids
+  in nodes.
+- The batch `graph_apply` has the same operation with ref addressing —
+  the frame is assembled in one undo step with the nodes:
   `{"op":"group_create","ref":"pack","nodes":["a","b"],"label":"Пакет"}`.
-  Группа считается новой нодой в лимите 128.
+  A group counts as a new node toward the limit of 128.
 
-## Эталонный пример: Instagram MVP (ADR-0005)
+## Reference example: Instagram MVP (ADR-0005)
 
-Полный готовый батч (12 нод, 10 value-рёбер, один вызов) —
-[examples/instagram-mvp.json](examples/instagram-mvp.json). Ожидаемые
-значения после вставки (допуск ±1 %): avg_rps ≈ 555.6, peak_rps ≈ 1388.9,
-origin_rps ≈ 555.6, out_auth ≈ 83.3, out_feed ≈ 333.3, out_media ≈ 138.9,
-db_qps ≈ 80, replica_load ≈ 40, consume_rate ≈ 333.3.
+The complete ready batch (12 nodes, 10 value edges, one call) —
+[examples/instagram-mvp.json](examples/instagram-mvp.json). Expected
+values after insertion (tolerance ±1 %): avg_rps ≈ 555.6,
+peak_rps ≈ 1388.9, origin_rps ≈ 555.6, out_auth ≈ 83.3, out_feed ≈ 333.3,
+out_media ≈ 138.9, db_qps ≈ 80, replica_load ≈ 40, consume_rate ≈ 333.3.
 
-Проверка воспроизводимости: `param_set`/`node_edit` на
-`dau = 2000000` → один `flow_recalc` → вся цепочка удваивается без
-правки связей и формул.
+Reproducibility check: `param_set`/`node_edit` to `dau = 2000000` →
+one `flow_recalc` → the whole chain doubles without editing any edges
+or formulas.
 
-## Чек-лист готовности сборки
+## Build-readiness checklist
 
-1. Все вычислимые числа проливаются по value-связям (хардкодов нет).
-2. Ответ `graph_apply`/`flow_recalc` сошёлся с ожиданиями модели.
-3. `graph_validate` → `valid: true` (скилл `canvasdesk-model-verify`).
-4. Любое стартовое допущение меняется одним вызовом, downstream
-   пересчитывается без правки графа.
-5. Модель показана пользователю (`viewport_set` по bbox).
+1. All computable numbers spill along value edges (no hardcoding).
+2. The `graph_apply`/`flow_recalc` response matched the model's
+   expectations.
+3. `graph_validate` → `valid: true` (the `canvasdesk-model-verify`
+   skill).
+4. Any starting assumption is changed with a single call; downstream is
+   recalculated without editing the graph.
+5. The model is shown to the user (`viewport_set` to the bbox).

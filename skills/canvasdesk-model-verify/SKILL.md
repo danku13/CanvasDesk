@@ -1,21 +1,21 @@
 ---
 name: canvasdesk-model-verify
-description: Проверка чисел и корректности модели на канвасе CanvasDesk через MCP — flow_recalc (карта значений), lineage (дерево происхождения цифры), explain_number (готовое текстовое объяснение), graph_validate (коды ошибок), flow_cycle_check, analyze_bottlenecks (узкие места). Используйте после сборки или правки модели, для сверки с ожиданиями/оракулами и для ответа «почему цифра такая». Triggers: verify model, recalculate, flow, lineage, explain number, why this value, validation, bottleneck analysis, overload.
+description: Verification of the numbers and the correctness of a model on the CanvasDesk canvas via MCP — flow_recalc (the value map), lineage (the lineage tree of a number), explain_number (a ready textual explanation), graph_validate (error codes), flow_cycle_check, analyze_bottlenecks (bottlenecks). Use after building or editing a model, to check against expectations/oracles, and to answer “why is this number like this”. Triggers: verify model, recalculate, flow, lineage, explain number, why this value, validation, bottleneck analysis, overload.
 version: 3
 ---
 
-# Проверка модели: числа, происхождение, валидность
+# Model verification: numbers, lineage, validity
 
-Скилл отвечает на три вопроса: какие числа получились, откуда они
-взялись и корректна ли модель. Требуется подключённый MCP-сервер
-(скилл `canvasdesk-mcp`). Все инструменты чтения возвращают значения
-**активного what-if состояния** — ровно те, что видит пользователь на
-канвасе (MCP-видимость = UI). Чтение не мутирует канвас и не трогает
-undo-историю.
+This skill answers three questions: what numbers came out, where they
+came from, and whether the model is correct. Requires a connected
+MCP server (the `canvasdesk-mcp` skill). All reading tools return the
+values of the **active what-if state** — exactly those the user sees on
+the canvas (MCP visibility = UI). Reading does not mutate the canvas and
+does not touch the undo history.
 
-## flow_recalc — карта значений
+## flow_recalc — the value map
 
-`flow_recalc` {} пересчитывает весь граф и возвращает по каждой ноде:
+`flow_recalc` {} recalculates the whole graph and returns, for each node:
 
 ```
 { "<node_id>": {
@@ -27,102 +27,109 @@ undo-историю.
     "autoRows"?: [{ "slot": …, "edge": …, "path": "Объект.Поле", "value": … }] }}
 ```
 
-- `outputs` — именованные выходы шаблонов И переменные Numi-листов
-  текстовых нод (потребляются рёбрами fromOutput).
-- `lines` — построчные значения; сверяйте их количество с задуманным
-  числом строк (проверка многострочности).
-- `spilled` — происхождение пролитых значений: из какой ноды в какой
-  параметр.
-- `autoRows` — производные строки приёмников value-рёбер без toParam:
-  путь «Объект.Поле» и значение слота (`unmapped` — не подставлено).
-- **Сверяйте числа с ожиданиями модели здесь, а не «глазами по канвасу».**
-  Для эталонных сценариев допуск ±1 % (см. скилл
-  `canvasdesk-model-build`, пример Instagram MVP).
-- Поле `flow` в ответе `graph_apply`/`schemes_apply` — тот же формат:
-  после сборки/вставки второй вызов не нужен.
-- Цикл value-рёбер — ошибка вызова (сначала `flow_cycle_check`).
+- `outputs` — named outputs of templates AND variables of text nodes'
+  Numi sheets (consumed by edges' fromOutput).
+- `lines` — per-line values; check their count against the intended
+  number of lines (the multiline check).
+- `spilled` — the origin of spilled values: from which node into which
+  parameter.
+- `autoRows` — derived lines of receivers of value edges without
+  toParam: the «Объект.Поле» (“Object.Field”) path and the slot value
+  (`unmapped` — not substituted).
+- **Check the numbers against the model's expectations here, not “by eye
+  on the canvas”.** For reference scenarios the tolerance is ±1 % (see
+  the `canvasdesk-model-build` skill, the Instagram MVP example).
+- The `flow` field in the `graph_apply`/`schemes_apply` response — the
+  same format: after a build/insertion a second call is not needed.
+- A cycle of value edges — a call error (run `flow_cycle_check` first).
 
-## lineage — происхождение одной цифры
+## lineage — the lineage of a single number
 
-`lineage` {node_id, line} — дерево происхождения цифры (те же данные,
-что окно проверки цепочки у пользователя): `line` = null/без поля —
-итог ноды, иначе индекс строки Numi-листа.
+`lineage` {node_id, line} — the lineage tree of a number (the same data
+as the user's chain-check window): `line` = null/absent — the node's
+total, otherwise the index of the Numi sheet line.
 
-Ответ `{root, nodes: [...]}`: DFS-порядок (родитель раньше ребёнка,
-ромб разворачивается); каждый узел — kind: `calc` (вычисляемый) |
-`leaf` (константа) | `cycle` | `unmapped` | `unlinked` | `truncated`
-(бюджет 4096 узлов), value+unit или error, formula, title, label
-(терминальные: имя переменной/входа). `children[].via` — ребро
+The response `{root, nodes: [...]}`: DFS order (parent before child, a
+diamond is unfolded); each node — kind: `calc` (computed) |
+`leaf` (a constant) | `cycle` | `unmapped` | `unlinked` | `truncated`
+(a budget of 4096 nodes), value+unit or error, formula, title, label
+(terminals: the name of a variable/input). `children[].via` — the edge
 (`edge_id`, `from_node`, `to_node`, `from_line`/`from_output`/
-`to_param`) для подсветки цепочки.
+`to_param`) for highlighting the chain.
 
-Когда пользоваться: пользователь спрашивает «откуда эта цифра?» или
-число в `flow_recalc` не сходится с ожиданием — спускайтесь по дереву
-до листьев и находите расходящееся допущение. Проза как корень,
-`line` < 0, несуществующая нода — isError.
+When to use: the user asks “where does this number come from?” or a
+number in `flow_recalc` does not match the expectation — walk down the
+tree to the leaves and find the diverging assumption. Prose as the
+root, `line` < 0, a non-existent node — isError.
 
-## explain_number — объяснение цифры текстом
+## explain_number — explaining a number in text
 
-`explain_number` {node_id, line?} — линейная развёртка ТОГО ЖЕ дерева,
-что `lineage`, готовая для показа пользователю/в отчёт: каждая строка —
-узел с адресом `[node_id:строка]`, значением, формулой и каналом прихода
-(«через выход X», «через строку N», «пролито в параметр P», «локальная
-переменная листа»); заголовок — корень со значением; последняя строка —
-статистика «Всего узлов: N (листьев: M)». Терминалы текстом: «цикл»,
-«значение не подставлено», «не связано: имя», «усечено» (бюджет 4096).
+`explain_number` {node_id, line?} — a linear expansion of the SAME tree
+as `lineage`, ready to be shown to the user / put into a report: each
+line is a node with the address `[node_id:строка]`, the value, the
+formula and the arrival channel («через выход X» = “via output X”,
+«через строку N» = “via line N”, «пролито в параметр P» = “spilled into
+parameter P”, «локальная переменная листа» = “a local variable of the
+sheet”); the heading — the root with its value; the last line — the
+stats «Всего узлов: N (листьев: M)» (“Total nodes: N (leaves: M)”).
+Terminals in text: «цикл» (“cycle”), «значение не подставлено» (“value
+not substituted”), «не связано: имя» (“not linked: name”), «усечено»
+(“truncated”) (a budget of 4096).
 
-Ответ `{render: "text", text, root, nodes, truncated}`: мост отдаёт
-`text` как content text (не JSON-эхо) — можно цитировать дословно;
-`structuredContent` дублирует объект для структурированных клиентов.
-При активном what-if текст начинается преамбулой «Режим what-if» —
-уточните, базу или сценарий показываем (переключение — скилл
-`canvasdesk-whatif`).
+The response `{render: "text", text, root, nodes, truncated}`: the
+bridge returns `text` as the content text (not a JSON echo) — it can be
+quoted verbatim; `structuredContent` duplicates the object for
+structured clients. With an active what-if the text starts with the
+«Режим what-if» (“What-if mode”) preamble — clarify whether we are
+showing the base or a scenario (switching — the `canvasdesk-whatif`
+skill).
 
-Когда пользоваться: пользователь просит «объясни эту цифру» или
-«почему такая» — один вызов вместо ручной развёртки JSON `lineage`;
-для программной обработки дерева используйте `lineage`.
+When to use: the user asks to “explain this number” or “why is it like
+this” — one call instead of manually expanding the `lineage` JSON;
+for programmatic processing of the tree use `lineage`.
 
-## flow_cycle_check — DAG-инвариант
+## flow_cycle_check — the DAG invariant
 
-`flow_cycle_check` {} → `[]` (циклов нет) или список id участников
-цикла. Значения при цикле не вычисляются — проверяйте ДО сверки чисел.
+`flow_cycle_check` {} → `[]` (no cycles) or the list of ids of cycle
+participants. With a cycle the values are not computed — check BEFORE
+comparing numbers.
 
-## graph_validate — валидность модели
+## graph_validate — model validity
 
 `graph_validate` {} → `{valid, issues: [{severity, code, node_id,
-edge_id, message, fix}]}`. **Критерий готовности: `valid: true`** (нет
-issues с severity "error"). `fix` (FR-077) — рецепт починки к каждому
-коду: конкретные шаги поддерживаемыми инструментами (edge_delete,
-node_edit и др.), выполняйте его и повторяйте валидацию. Коды —
-стабильный контракт:
+edge_id, message, fix}]}`. **The readiness criterion: `valid: true`**
+(no issues with severity "error"). `fix` (FR-077) — a repair recipe for
+each code: concrete steps with supported tools (edge_delete, node_edit,
+etc.), execute it and re-run the validation. The codes are a stable
+contract:
 
-| Код | Severity | Значение | Что делать (кратко; полное — в `fix`) |
+| Code | Severity | Meaning | What to do (briefly; the full version — in `fix`) |
 |---|---|---|---|
-| `E-CYCLE` | error | цикл value-рёбер | разорвать цикл: value-связи образуют DAG |
-| `E-OVERLOAD` | error | утилизация ρ ≥ 1 — очередь растёт неограниченно | поднять мощность узла или снизить нагрузку |
-| `E-UNIT` | error | единица истока несовместима с параметром приёмника | сверить unit по `template_list` |
-| `E-PORT-UNKNOWN` | error | неизвестный fromOutput/toParam | имена портов — из манифеста шаблона |
-| `E-DOUBLE-INPUT` | error | два value-ребра в один toParam | вводить агрегат отдельной нодой |
-| `W-AMBIGUOUS-SRC` | warning | многолинейный исток без fromLine/fromOutput | адресовать исток явно |
-| `W-UNUSED-SLOT` | warning | вход $N не читается формулой приёмника | формула не ссылается на $in/$N |
+| `E-CYCLE` | error | a cycle of value edges | break the cycle: value edges form a DAG |
+| `E-OVERLOAD` | error | utilization ρ ≥ 1 — the queue grows without bound | raise the node's capacity or reduce the load |
+| `E-UNIT` | error | the source's unit is incompatible with the receiver's parameter | compare the units via `template_list` |
+| `E-PORT-UNKNOWN` | error | an unknown fromOutput/toParam | port names — from the template manifest |
+| `E-DOUBLE-INPUT` | error | two value edges into one toParam | introduce the aggregate as a separate node |
+| `W-AMBIGUOUS-SRC` | warning | a multiline source without fromLine/fromOutput | address the source explicitly |
+| `W-UNUSED-SLOT` | warning | the $N input is not read by the receiver's formula | the formula does not reference $in/$N |
 
-## analyze_bottlenecks — узкие места и очереди
+## analyze_bottlenecks — bottlenecks and queues
 
 `analyze_bottlenecks` {} → `{nodes: [{id, severity, utilization?,
-queue_length?, wait_sec?, badge}], thresholds}` — те же флаги, что
-оверлей Ctrl+B у пользователя, по АКТИВНОМУ состоянию. severity:
-`none` | `warn` | `critical` | `overload`; utilization — ρ (доля
-0..1, > 1 при перегрузке); wait_sec — среднее ожидание W в базовых
-секундах; badge — строка бейджа канваса. Пороги дефолта: ρ 0.7/0.9,
-W 100 ms/1 s, queue 1/10. Чистая функция — канвас не мутируется.
+queue_length?, wait_sec?, badge}], thresholds}` — the same flags as the
+Ctrl+B overlay at the user's, for the ACTIVE state. severity:
+`none` | `warn` | `critical` | `overload`; utilization — ρ (a share
+of 0..1, > 1 under overload); wait_sec — the average wait W in base
+seconds; badge — the canvas badge string. Default thresholds: ρ 0.7/0.9,
+W 100 ms/1 s, queue 1/10. A pure function — the canvas is not mutated.
 
-## monte_carlo_run — квантили при неопределённости
+## monte_carlo_run — quantiles under uncertainty
 
-`monte_carlo_run` {runs, params} — N ≥ 10⁴ прогонов модели с
-распределёнными параметрами (Monte Carlo / QMC) и квантили P50/P90/P99
-результатов. Отвечает на вопросы, недоступные одному прогону: «с какой
-вероятностью runway уйдёт в ноль», «какой LTV в pessimistic-сценарии» —
-глубже ±20 %-сеток what-if.
+`monte_carlo_run` {runs, params} — N ≥ 10⁴ runs of the model with
+distributed parameters (Monte Carlo / QMC) and the quantiles P50/P90/P99
+of the results. It answers questions unavailable to a single run: “with
+what probability does the runway go to zero”, “what is the LTV in the
+pessimistic scenario” — deeper than the ±20 % what-if grids.
 
 ```
 monte_carlo_run {
@@ -139,38 +146,39 @@ monte_carlo_run {
 }
 ```
 
-- Параметр — строка «param = …» Numi-листа ноды (как whatif_set_param);
-  единица придаётся формулой-потребителем («rho = load × 1 %»).
-- Ответ: `{runs, failed_runs, mode, seed, stale, duration_ms, quantiles,
+- A parameter — the “param = …” line of the node's Numi sheet (as whatif_set_param);
+  the unit is imparted by the consuming formula («rho = load × 1 %»).
+- The response: `{runs, failed_runs, mode, seed, stale, duration_ms, quantiles,
   outputs{node:{P50:{value,unit},…}}, lines{"node:line":{…}},
   named{"node:выход":{…}}, analysis{quantile, nodes, thresholds},
   severity}`.
-- `analysis` — узкие места (формат analyze_bottlenecks) на ХВОСТОВОМ
-  квантиле P90: severity эскалирует на хвосте — «докритично на медиане,
-  критично на P90».
-- Воспроизводимость first-class: тот же seed — побитово те же квантили;
-  фиксируйте seed в отчётах. Лимиты: runs ≤ 10⁶; qmc ≤ 65536; poisson
-  λ ≤ 1000. Мутирует `canvasdesk.engine` в .canvas (undo-шаг).
-- Доступен в native-сборке (wasm-цель — без qmc, FR-066 §5.8).
+- `analysis` — bottlenecks (the analyze_bottlenecks format) at the
+  TAIL quantile P90: severity escalates on the tail — “sub-critical at
+  the median, critical at P90”.
+- First-class reproducibility: the same seed — bit-for-bit the same
+  quantiles; record the seed in reports. Limits: runs ≤ 10⁶; qmc ≤ 65536;
+  poisson λ ≤ 1000. Mutates `canvasdesk.engine` in .canvas (an undo step).
+- Available in the native build (the wasm target — without qmc, FR-066 §5.8).
 
-## Порядок верификации после сборки/правки
+## Verification order after a build/edit
 
-1. `flow_cycle_check` {} — топология вычислима.
-2. `flow_recalc` {} (или поле `flow` ответа батча) — сверка с
-   ожиданиями/оракулами ±1 %.
+1. `flow_cycle_check` {} — the topology is computable.
+2. `flow_recalc` {} (or the `flow` field of the batch response) — the
+   check against expectations/oracles ±1 %.
 3. `graph_validate` {} — `valid: true`.
-4. `analyze_bottlenecks` {} — нет overload/critical, о которых
-   не знаете.
-5. Для спорной цифры — `lineage` {node_id, line} — до листа-источника;
-   для ответа пользователю — `explain_number` {node_id, line} готовым текстом.
-6. Параметры с неопределённостью — `monte_carlo_run` {runs, params}:
-   квантили P50/P90/P99 и severity на P90; seed в отчёт для
-   воспроизводимости.
+4. `analyze_bottlenecks` {} — no overload/critical that you do not know
+   about.
+5. For a disputed number — `lineage` {node_id, line} — down to the
+   source leaf; to answer the user — `explain_number` {node_id, line}
+   as ready text.
+6. Parameters with uncertainty — `monte_carlo_run` {runs, params}:
+   the quantiles P50/P90/P99 and the severity at P90; the seed goes
+   into the report for reproducibility.
 
-## Дисциплина ответов пользователю
+## Discipline of answers to the user
 
-Сообщайте числа из `flow_recalc`/`lineage`/`whatif_deltas` (активное
-состояние), а не из «базы» — иначе агент и пользователь разойдутся в
-цифрах. Если пользователь смотрит «Базу» после экспериментов — сначала
-`whatif_scenario_activate` {name: "База"} (скилл
-`canvasdesk-whatif`), затем пересчёт.
+Report the numbers from `flow_recalc`/`lineage`/`whatif_deltas` (the
+active state), not from «базы» (the base) — otherwise the agent and the
+user will diverge in numbers. If the user is looking at «База» (the base
+scenario) after experiments — first `whatif_scenario_activate` {name: "База"}
+(the `canvasdesk-whatif` skill), then a recalculation.

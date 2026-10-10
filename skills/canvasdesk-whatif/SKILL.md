@@ -1,94 +1,98 @@
 ---
 name: canvasdesk-whatif
-description: What-if анализ на CanvasDesk через MCP — сценарии «а что если» без правки файла модели: whatif_set_override, whatif_set_param, дельты whatif_deltas, сценарии (создание/активация/удаление), whatif_apply/whatif_reset. Используйте, когда нужно ответить на вопрос о чувствительности модели, не изменяя базу. Triggers: what-if, scenario, sensitivity, «а что если», deltas, override parameter.
+description: What-if analysis on CanvasDesk via MCP — “what if” scenarios without editing the model file: whatif_set_override, whatif_set_param, the deltas of whatif_deltas, scenarios (create/activate/delete), whatif_apply/whatif_reset. Use when you need to answer a question about the model's sensitivity without changing the base. Triggers: what-if, scenario, sensitivity, «а что если», deltas, override parameter.
 version: 1
 ---
 
-# What-if: сценарии «а что если»
+# What-if: “what if” scenarios
 
-Скилл отвечает на вопросы вида «а что если трафик ×2?» — подмены
-значений живут в сценарии и НЕ меняют файл модели, пока вы явно не
-примените их. Требуется подключённый MCP-сервер (скилл
-`canvasdesk-mcp`); модель должна быть собрана (скилл
-`canvasdesk-model-build`).
+This skill answers questions like “what if traffic ×2?” — value
+overrides live in a scenario and do NOT change the model file until you
+explicitly apply them. Requires a connected MCP server (the
+`canvasdesk-mcp` skill); the model must be built (the
+`canvasdesk-model-build` skill).
 
-**Правило дисциплины:** сценарий — временный инструмент ответа на
-вопрос. Постоянные допущения модели меняются `param_set`/`node_edit`
-(скилл сборки), а what-if оставляется неприменённым — файл остаётся
-байт-в-байт прежним.
+**The discipline rule:** a scenario is a temporary tool for answering a
+question. The model's permanent assumptions are changed with
+`param_set`/`node_edit` (the build skill), and the what-if is left
+unapplied — the file remains byte-for-byte the same.
 
-## Подмены
+## Overrides
 
-- `whatif_set_override` {node_id, line, expr} — подмена строки `line`
-  текста ноды (нумерация с 0; строки вида `имя = значение`): исходник
-  замещается выражением expr на время сценария. База не мутируется.
-  Режим и сценарий поднимаются автоматически (неявный «Сценарий MCP»),
-  если ничего не создано.
-- `whatif_set_param` {node_id, param, value} — sugar для шаблонных нод:
-  находит строку «param = …» в тексте ноды сам и строит подмену
-  значением. Параметра нет — ошибка.
-- Каскад: подмена стартового допущения пересчитывает весь downstream
-  (подмена сильнее toParam-проливания, проливание сильнее локального
-  значения — Р-1).
+- `whatif_set_override` {node_id, line, expr} — overrides the line
+  `line` of the node's text (0-based numbering; lines of the form
+  `имя = значение` (name = value)): the original is replaced by the
+  expr expression for the duration of the scenario. The base is not
+  mutated. The mode and scenario are raised automatically (the implicit
+  «Сценарий MCP» / “MCP Scenario”) if nothing has been created.
+- `whatif_set_param` {node_id, param, value} — sugar for template
+  nodes: it finds the “param = …” line in the node's text itself and
+  builds the override from the value. No such parameter — an error.
+- Cascade: overriding a starting assumption recalculates the entire
+  downstream (an override beats a toParam spill, a spill beats the
+  local value — Р-1).
 
-## Сценарии
+## Scenarios
 
 - `whatif_scenario_list` {} → {active, whatif_active, scenarios:
-  [{name, overrides, stale}]} — active = имя активного сценария
-  («База» = без подмен); stale — число протухших подмен (нода/строка
-  удалены или строка стала прозой; пересчёт их пропускает).
-- `whatif_scenario_create` {name} — именованный сценарий (лимит 3),
-  сразу активен; сохраняется в canvasdesk.whatif внутри .canvas —
-  один undo-шаг. Без name — имя по умолчанию.
-- `whatif_scenario_activate` {name} — переключение «База» ↔ сценарий;
-  runtime-only, файл не трогает, канвас пересчитывается подменами.
-- `whatif_scenario_delete` {name} — удалить сценарий (undo-шаг).
-- `whatif_reset` {} — сбросить подмены АКТИВНОГО сценария (runtime);
-  режим остаётся активным.
+  [{name, overrides, stale}]} — active = the name of the active
+  scenario («База» / Base = no overrides); stale — the number of
+  expired overrides (the node/line was deleted or the line became
+  prose; the recalculation skips them).
+- `whatif_scenario_create` {name} — a named scenario (limit 3),
+  active immediately; it is saved into canvasdesk.whatif inside
+  .canvas — one undo step. Without name — the default name.
+- `whatif_scenario_activate` {name} — switching «База» (Base) ↔ a
+  scenario; runtime-only, it does not touch the file, the canvas is
+  recalculated with the overrides.
+- `whatif_scenario_delete` {name} — delete a scenario (an undo step).
+- `whatif_reset` {} — reset the overrides of the ACTIVE scenario
+  (runtime); the mode stays active.
 
-## Дельты и сверка
+## Deltas and checking
 
 `whatif_deltas` {} → {active, deltas: {"node:line"|"node:value":
-{node, line?, base, whatif, delta}}} — те же пары «было → стало (+Δ)»,
-что видит пользователь на канвасе. Эталон каскада A→B→C с подменой
-`a = 5 → 20`: `{A: 5→20 (+15), B: 10→40 (+30), C: 11→41 (+30)}`.
+{node, line?, base, whatif, delta}}} — the same “was → became (+Δ)”
+pairs the user sees on the canvas. The reference cascade A→B→C with the
+override `a = 5 → 20`: `{A: 5→20 (+15), B: 10→40 (+30), C: 11→41 (+30)}`.
 
-Инструменты чтения (скилл `canvasdesk-model-verify`) показывают
-активное состояние: `flow_recalc`, `lineage`, `analyze_bottlenecks`
-учитывают подмены активного сценария. Отвечая пользователю на вопрос
-сценария, приводите числа из `whatif_deltas`/`flow_recalc` — они
-совпадают с канвасом (MCP-видимость = UI).
+The reading tools (the `canvasdesk-model-verify` skill) show the active
+state: `flow_recalc`, `lineage`, `analyze_bottlenecks` take the active
+scenario's overrides into account. When answering the user's scenario
+question, quote the numbers from `whatif_deltas`/`flow_recalc` — they
+match the canvas (MCP visibility = UI).
 
-## Применение и откат
+## Apply and rollback
 
-- `whatif_apply` {} — ЗАПИСАТЬ подмены активного сценария в
-  persisted-строки/params канваса (один undo-шаг), сценарий
-  удаляется, «База» переключается на новые значения. Только по
-  явному решению «зафиксировать».
-- Откат сценария без записи: `whatif_reset` {} (сброс подмен) или
-  `whatif_scenario_activate` {name: "База"} (вернуться к базе, подмены
-  сценария сохранены).
-- Undo (Ctrl+Z пользователя) откатывает apply/create/delete целиком.
+- `whatif_apply` {} — WRITE the active scenario's overrides into the
+  persisted lines/params of the canvas (one undo step), the scenario
+  is deleted, «База» (Base) switches to the new values. Only on an
+  explicit “commit” decision.
+- Rolling back a scenario without writing: `whatif_reset` {} (a reset
+  of the overrides) or `whatif_scenario_activate` {name: "База"}
+  (return to the base, the scenario's overrides are kept).
+- Undo (the user's Ctrl+Z) rolls back apply/create/delete in full.
 
-## Типичный сеанс
+## A typical session
 
-1. `whatif_scenario_create` {name: "Пик ×2"} (или просто первая
-   подмена — сценарий поднимется сам).
+1. `whatif_scenario_create` {name: "Пик ×2"} (or simply the first
+   override — the scenario will be raised on its own).
 2. `whatif_set_param` {node_id, param: "dau", value: "2000000"} —
-   подмена допущения.
-3. `flow_recalc` {} и/или `analyze_bottlenecks` {} — что стало
-   (сверьте с `whatif_deltas`: base → whatif (+Δ)).
-4. Ответ пользователю: дельты по точкам, узкие места при новой
-   нагрузке.
-5. По умолчанию — `whatif_scenario_activate` {name: "База"} или
-   оставить сценарий активным, ЕСЛИ пользователь сейчас смотрит его.
-   `whatif_apply` {} — только если пользователь просит зафиксировать.
+   an override of the assumption.
+3. `flow_recalc` {} and/or `analyze_bottlenecks` {} — what resulted
+   (check against `whatif_deltas`: base → whatif (+Δ)).
+4. The answer to the user: the deltas at the points of interest, the
+   bottlenecks under the new load.
+5. By default — `whatif_scenario_activate` {name: "База"}, or leave the
+   scenario active IF the user is looking at it right now.
+   `whatif_apply` {} — only if the user asks to commit.
 
-## Ограничения и ошибки
+## Limitations and errors
 
-- Лимит 3 сценария на канвас (`whatif_scenario_create` сверх — ошибка;
-  удалите лишний `whatif_scenario_delete`).
-- Подмена по несуществующей строке/ноде, line < 0, проза-строка —
-  ошибка вызова (isError).
-- Протухшие подмены (stale > 0) молча пропускаются пересчётом —
-  проверяйте `whatif_scenario_list` после структурных правок модели.
+- A limit of 3 scenarios per canvas (`whatif_scenario_create` beyond
+  that — an error; delete the extra one with `whatif_scenario_delete`).
+- An override of a non-existent line/node, line < 0, a prose line — a
+  call error (isError).
+- Expired overrides (stale > 0) are silently skipped by the
+  recalculation — check `whatif_scenario_list` after structural edits
+  to the model.
