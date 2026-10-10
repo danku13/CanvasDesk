@@ -1875,7 +1875,7 @@ impl App {
                     font(9.5),
                     PaintAlign::Left,
                 );
-                ext_y += 32.0;
+                ext_y += 32.0; // lay7:allow мир-canvas оффсет подписи calc-экстента, вне LAY7
             }
             paint_items_to_stage(
                 chrome.take_items(),

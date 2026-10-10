@@ -694,7 +694,7 @@ impl App {
                             user_style.text,
                             11.0,
                         );
-                        msg_y += bubble_h + 6.0;
+                        msg_y += bubble_h + 6.0; // lay7:allow внутренний оффсет баблов чата — консолидация draw==hit, W20
                     }
                     AgentMessage::Bot {
                         text,

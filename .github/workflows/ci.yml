@@ -82,21 +82,28 @@ jobs:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
 
-  # LAY-W12 (аудит layouts-2026-10 §5): регрессионный гейт LAY7 —
-  # быстрый bash-grep без сборки: ловит НОВЫЕ нарушения в canvas-app:
-  # 1. gap: <литерал float> в Row/Column — кроме 0.0 (нейтральный ритм)
-  #    и SPACING_*/именованных констант; collision_gap/row_gap — НЕ LAY7;
-  # 2. y += <литерал float> — ручной курсор (анти-паттерн LAY2/LAY10)
-  #    вне allowlist (kit_ui, admin_ui, overlays, stage — до волны W3,
-  #    которая мигрирует скелеты на Column-примитивы).
-  # Запуск параллельно с wasm-check/licenses/llm-proxy — гейт быстрый
-  # (awk+grep+rg, без компиляции Rust).
+  # LAY-W12→W14 (аудит layouts-2026-10 §5; ревью layouts-w1-w12-review.md
+  # §3.1 P1-2, §3.2 P2-5/P2-6): регрессионный гейт LAY7 — python3-сканер
+  # без сборки (прецедент wasm_time_audit.py). После ремонта W14:
+  # 1. полный скан каждого файла: тестовый код отсекается по mod-границам
+  #    (устранена слепая зона app.rs:156/lib.rs:122 ~35 тыс. строк);
+  # 2. расширенные паттерны: целые/отрицательные/скобочные gap-литералы
+  #    (кроме 0/0.0 — нейтральный ритм «Исключений» 11-layouts.md) и курсоры
+  #    x/y += с дробным литералом, включая смешанные `y += CONST + 6.0`;
+  # 3. исключения — только инлайн `// lay7:allow <причина>` в строке
+  #    (файловый allowlist прежнего гейта удалён);
+  # 4. negative-тест гейта --selftest — первым шагом job'ы: PR, ослабляющий
+  #    сканер, не позеленит.
+  # До волны LAY-W13 job остаётся красным на известных хитах admin_ui.rs
+  # (параллельная миграция тел админки на Column-скелет — ревью §3.1 P1-1).
   lay7-lint:
     name: lay7-lint (regression gate)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: LAY7 regression lint (gap literals + y += cursors)
+      - name: LAY7 selftest (negative-тест гейта)
+        run: bash scripts/lay7_lint.sh --selftest
+      - name: LAY7 regression lint (gap literals + x/y cursors)
         run: bash scripts/lay7_lint.sh
 
   # Релизные бинари трёх ОС — только с зелёных гейтов и только на пуш
