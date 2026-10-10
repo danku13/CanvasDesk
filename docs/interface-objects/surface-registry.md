@@ -44,7 +44,13 @@
    (z-index per-element, стабильная сортировка `take_items`) и
    `PaintItem::Transform` (rotate) — FR-074.
 
-## 3. Поверхности (U4, 22 идентификатора)
+## 3. Поверхности (U4, 29 идентификаторов)
+
+> Синхронизация LAY-W19 (2026-10-10): счётчик и таблица приведены к
+> фактическому перечню `SURFACE_IDS` (`app/ui_registry.rs`, `build_registry`).
+> Добавлены отсутствовавшие `flow_map` (FR-050 Н9-4), `autolink`
+> (PRD-0007 X4), FR-LLM-панели `agent_panel`/`ai_status` (LAY-W1, 3f3f8dd)
+> и `ai_onboarding` (LAY-W17, 44ab017).
 
 | id | Слой | Capture | Scope | Примечание |
 |---|---|---|---|---|
@@ -63,21 +69,27 @@
 | `help_menu` | Popups | Block | — | меню «?» + подменю |
 | `stage` | Modals | Block | stage | любой ключ закрывает |
 | `search` | Panels | Block | search | backdrop закрывает |
+| `flow_map` | Panels | Capture | flow_map | FR-050 Н9-4: карта проливаний; канвас под ней жив (клик мимо панели — работа с канвасом); закрытие — ✕/Esc/Ctrl+Shift+M |
 | `editor` | Widgets | Capture | editor | клики остаются в мире |
 | `explain` | Modals | Block | explain | PRD-0007 X2 |
+| `autolink` | Modals | Block | autolink | PRD-0007 X4: диалог ревью автосвязи; Esc/✕ закрывают, клик мимо — закрыть и глотнуть; панель объяснения прячется на время диалога |
 | `dialog` | Modals | Block | dialog | T21 |
 | `gallery` | Modals | Block | gallery | FR-049 |
 | `onboarding` | Modals | Block | onboarding | FR-028; W-e: разморожен (решение владельца 03.10.2026), мигрирован на ui-kit — `kit::modal`+поля клампа, скролл тела `ScrollState`, `TextMeasurer::wrap`, Painter+`WidgetState`/`button_style`, слоты цветов |
+| `ai_onboarding` | Modals | Block | ai_onboarding | PRD-0010 F-8: выбор AI-режима (Local/Cloud/Self-hosted); `DegradationPolicy::Always` явно (адаптивный кламп карточки, как DIALOG/SETTINGS); в реестре с hit-rect'ами и линтом с LAY-W17 |
 | `kit_gallery` | Modals | Block | kit_gallery | FR-055 U4: витрина кита («?» → «О интерфейсе», Q5-a); Esc/backdrop/✕ закрывают |
 | `admin_panel` | Modals | Block | admin_panel | FR-070: UI-админпанель («?» → «UI-консоль»); Esc/backdrop/✕ закрывают; сайдбар секций; свотчи токенов — live-правка |
+| `agent_panel` | Panels | Capture | — | FR-LLM-D F-4: чат-панель агента (Ctrl+I); HideBelow 600×240 в декларации (LAY-W1); клики — ранняя ветвь `agent_panel_click` (Capture без scope — esc-стек не менялся) |
+| `ai_status` | Panels | Capture | — | FR-LLM F-7.9: AI-статус (ambient-хром); HideBelow 900×131 — derive из констант панели (LAY-W1 + стыковка W2); клики — ранняя ветвь `ai_status_panel_click` |
 | `empty` | Panels | Capture | — | empty-state (AC-1.1 FR-049) |
 | `minimap` | Panels | Capture | — | рисуется проходом рендерера |
 
 Телеметрия (FR-090): «открытие поверхности» = появление id в реестре
 после пересборки кадра (`build_frame_at` → `telemetry::surface_diff`,
 событие PostHog `surface_opened {surface}`). Ambient-хром — `world`,
-`corner_buttons`, `template_strip`, `empty`, `minimap` — активен без
-действия пользователя и открытием не считается; `whatif` трекается
+`corner_buttons`, `template_strip`, `empty`, `minimap`, `ai_status`
+(LAY-W1: видима без действия пользователя, пока AI не выключен) —
+активен без действия пользователя и открытием не считается; `whatif` трекается
 только по реальной активации сессии (`scene.whatif_active`), т.к. пилюля
 входа видна на вьюпортах ≥900×600 почти всегда.
 
