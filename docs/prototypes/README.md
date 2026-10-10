@@ -16,9 +16,9 @@ changelog соответствующих PRD/FR.
 Единый интерактивный прототип — слияние всех прототипов каталога в одну
 сцену (vanilla JS + Canvas 2D, одиночный файл ~3220 строк, работает
 офлайн). Приоритет — тело ноды **Н-3 «Адаптивная»** (табличная концепция,
-[FR-069](../change-requests/fr-069-node-body-fill-stage-f.html); источник
+[FR-069](../change-requests/fr-069-node-body-fill-stage-f.md); источник
 истины — `ux-node-body-fill.html`). Канон слияния и правила переноса
-DOM→канвас — [`DESIGN_RULES.md`](DESIGN_RULES.html) §11.
+DOM→канвас — [`DESIGN_RULES.md`](DESIGN_RULES.md) §11.
 
 Что вошло и как склеено:
 
@@ -65,7 +65,7 @@ DOM→канвас — [`DESIGN_RULES.md`](DESIGN_RULES.html) §11.
 «Psychology of UX Design», Podmajersky «Strategic Writing for UX», Dooley
 «Friction», Schüll «Addiction by Design», Cababa «Closing the Loop», Duke
 «Thinking in Bets», Marsh «UX for Business»); правила —
-[`DESIGN_RULES.md`](DESIGN_RULES.html) §12. Входы: двойной клик по ноде (C1),
+[`DESIGN_RULES.md`](DESIGN_RULES.md) §12. Входы: двойной клик по ноде (C1),
 кнопки пульта «Ввод в ноде»/«Создать шаблон», «Настройки подсказок», «HUD
 подсказок». Движок выключен по умолчанию (opt-in, как в продукте до приёмки
 S5). Что демонстрируется:
@@ -166,8 +166,8 @@ Esc из фокуса в чате; консоль чистая.
 
 Интерактивный прототип «main stage + анатомия ноды» (vanilla JS + Canvas 2D,
 одиночный файл ~1330 строк, работает офлайн). Визуализирует вводные R1–R7,
-формализованные в [FR-044](../change-requests/fr-044-mainstage-fan-readability-qualified-refs.html)
-(всё внутри main stage) и [FR-045](../change-requests/fr-045-node-anatomy-data-source-unmapped-calc-trace.html)
+формализованные в [FR-044](../change-requests/fr-044-mainstage-fan-readability-qualified-refs.md)
+(всё внутри main stage) и [FR-045](../change-requests/fr-045-node-anatomy-data-source-unmapped-calc-trace.md)
 (анатомия ноды, LOD, адресация).
 
 Что демонстрирует:
@@ -203,16 +203,16 @@ Esc из фокуса в чате; консоль чистая.
   drawer «решения + открытые вопросы», тёмная/светлая темы, мутация
   «±связь» для проверки пересчёта толщины пучка.
 
-Связанные документы: [PRD-0002](../prd/prd-0002-edge-lod-main-stage.html)
-(edge LOD + main stage), [FR-042](../change-requests/fr-042-edge-lod-main-stage.html)
-(реализационная постановка main stage), [PRD-0004](../prd/prd-0004-node-anatomy-restructure.html)
+Связанные документы: [PRD-0002](../prd/prd-0002-edge-lod-main-stage.md)
+(edge LOD + main stage), [FR-042](../change-requests/fr-042-edge-lod-main-stage.md)
+(реализационная постановка main stage), [PRD-0004](../prd/prd-0004-node-anatomy-restructure.md)
 (единая анатомия ноды), FR-044/FR-045 (выше). История итераций прототипа —
 в `worklog.md` корня репозитория (записи от 2026-09-21, R1–R7).
 
 ## ux-review-dialog.html
 
 Интерактивный прототип диалога ревью автосвязи (вопросы У7/У8 из Q8
-[PRD-0007](../prd/prd-0007-calc-chain-explain.html)) — vanilla JS, одиночный
+[PRD-0007](../prd/prd-0007-calc-chain-explain.md)) — vanilla JS, одиночный
 файл, работает офлайн. Демонстрирует: группировку предложений по парам
 «исток→приёмник» с сортировкой по имени переменной (У7 — отложено владельцем на будущее,
 2026-09-22), счётчик предложений в бейдже канваса, массовые действия «Принять все»/
@@ -223,7 +223,7 @@ AC-5.2) и undo-бат (AC-5.3). Решение по У7 — отложено в
 ## ux-defense-mode.html
 
 Интерактивный прототип проверки цепочки расчёта цифры и режима защиты
-(вопрос У9 из Q8 [PRD-0007](../prd/prd-0007-calc-chain-explain.html)) —
+(вопрос У9 из Q8 [PRD-0007](../prd/prd-0007-calc-chain-explain.md)) —
 vanilla JS, одиночный файл, работает офлайн. **v4 — У9 закрыт (решение
 владельца 2026-09-22: «зачем делить экран на две стороны — канвас должен
 идти как в prototype-mainstage-anatomy.html, поверх него может открываться
@@ -252,7 +252,7 @@ mainstage-anatomy + оверлеи; попутно закрыт Q1 — пове�
 ## ux-spill-distinction.html
 
 Макет выбора начертания Р-2 и демонстрация визуализации этапа D
-[FR-050](../change-requests/fr-050-spill-visibility-ui.html) — vanilla
+[FR-050](../change-requests/fr-050-spill-visibility-ui.md) — vanilla
 JS, одиночный файл, работает офлайн. Полный сценарий прогнан в
 headless-браузере (живые mouse-события; ошибок консоли нет). Что
 демонстрирует:

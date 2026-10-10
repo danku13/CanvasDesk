@@ -9,12 +9,12 @@
 > фактическое поведение сборки, а не планы: где функционал заглушен — это указано
 > явно, с маркерами `FR-LLM-*` для поиска по коду.
 >
-> Связанные документы: [PRD-0010](prd/prd-0010-llm-integration-byok-chatgpt.html)
-> (продуктовые требования F-1…F-7), [ADR-0011](adr/adr-0011-wasm-build-gate.html)
-> (wasm-гейт сборки), [ADR-0016](adr/adr-0016-llm-layer-canvas-llm.html) (LLM-слой),
-> [WASM-TESTING.md](WASM-TESTING.html) (рецепт UI-проверки wasm),
-> [user-docs/ai-features.md](../user-docs/ai-features.html) (пользовательский гайд,
-> desktop-фокус), [BYOK.md](BYOK.html).
+> Связанные документы: [PRD-0010](prd/prd-0010-llm-integration-byok-chatgpt.md)
+> (продуктовые требования F-1…F-7), [ADR-0011](adr/adr-0011-wasm-build-gate.md)
+> (wasm-гейт сборки), [ADR-0016](adr/adr-0016-llm-layer-canvas-llm.md) (LLM-слой),
+> [WASM-TESTING.md](WASM-TESTING.md) (рецепт UI-проверки wasm),
+> [user-docs/ai-features.md](../user-docs/ai-features.md) (пользовательский гайд,
+> desktop-фокус), [BYOK.md](BYOK.md).
 
 ---
 
@@ -413,7 +413,7 @@ scripts/wasm_gate.sh --check
 2. Не ожидается: `pageerror`, panic-строки, обращения к `api.openai.com` /
    `openrouter.ai` в Network.
 3. Для UI-правок — полный L2-рецепт с пиксельными диффами:
-   [WASM-TESTING.md](WASM-TESTING.html) §3–§4.
+   [WASM-TESTING.md](WASM-TESTING.md) §3–§4.
 
 ---
 

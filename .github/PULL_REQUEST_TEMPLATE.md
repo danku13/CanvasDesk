@@ -18,4 +18,4 @@
 
 ## ✍️ CLA — обязательно / mandatory
 
-- [ ] Я прочитал(а) и принимаю [CLA.md](../blob/main/CLA.md): отправляя этот Pull Request, я автоматически предоставляю владельцу проекта права на мой вклад согласно CLA; моё авторство сохраняется. / I have read and accept [CLA.md](../blob/main/CLA.md): by opening this pull request I automatically grant the project owner the rights described in the CLA; my authorship is preserved.
+- [ ] Я прочитал(а) и принимаю [CLA.md](https://github.com/danku13/CanvasDesk/blob/main/CLA.md): отправляя этот Pull Request, я автоматически предоставляю владельцу проекта права на мой вклад согласно CLA; моё авторство сохраняется. / I have read and accept [CLA.md](https://github.com/danku13/CanvasDesk/blob/main/CLA.md): by opening this pull request I automatically grant the project owner the rights described in the CLA; my authorship is preserved.
