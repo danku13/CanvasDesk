@@ -130,6 +130,15 @@ pub use crate::component::tabs::{
 };
 pub use crate::component::tree::{tree_hit, tree_layout, TreeAction, TreeNode, TreeRow};
 
+// Wave A §5.5: архитектурные паттерны (Response, WidgetExt, NavRail, ActionRegistry, FocusTrap).
+pub use crate::action::{Action, ActionRegistry};
+pub use crate::component::nav_rail::{
+    nav_rail_activate, nav_rail_activate_by_id, nav_rail_button_style, nav_rail_hit,
+    nav_rail_layout, NavRail, NavRailItem, NavRailLayout,
+};
+pub use crate::component::{Response, WidgetExt};
+pub use crate::keyboard::FocusTrap;
+
 pub use crate::component::{
     resolve_state, state_layer_alpha, ButtonVariant, ControlSize, ControlStyle, Elevation,
     KitPalette, KitState, PanelStyle, Shape, Spacing, BUTTON_HEIGHT, BUTTON_PAD_H, BUTTON_WIDTH,

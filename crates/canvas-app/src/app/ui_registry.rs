@@ -1852,6 +1852,25 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 UiRect::new(close.x, close.y, close.w, close.h),
                 "kit-gallery-close",
             ));
+            // Wave D v1 (issue #32): TO-BE — демо-хиты из кэша раскладки кадра
+            // (тулбар/сайдбар/секции; draw==hit — та же GalleryLayout). Кэш
+            // пуст (первый кадр до отрисовки) — хитов нет, next кадр добавит.
+            if app.kit_demo.tobe {
+                if let Some(demo) = app
+                    .kit_demo_layout
+                    .as_ref()
+                    .and_then(|lay| lay.demo.as_ref())
+                {
+                    for (r, id) in &demo.demo_hits {
+                        if r.w > 0.0 && r.h > 0.0 {
+                            surface.hit_rects.push(HitRect::interactive(
+                                *r,
+                                format!("{}{}", crate::kit_demo::HIT_PREFIX, id),
+                            ));
+                        }
+                    }
+                }
+            }
         }
         // FR-070: админпанель — интерактивные зоны шапки (те же слоты, что
         // у отрисовки) + пункты сайдбара; демо-контент — декоративный.

@@ -557,6 +557,81 @@ pub mod keys {
     pub const KIT_CARD_BODY: &str = "kit.card.body";
     pub const KIT_LIST_ROW: &str = "kit.list.row";
     pub const KIT_STATE_FOCUSED: &str = "kit.state.focused";
+    /// Wave D v1 (issue #32): секции Wave C + тулбар/сайдбар/описания демо.
+    pub const KIT_SECTION_CHECKBOX: &str = "kit.section.checkbox";
+    pub const KIT_SECTION_SLIDER: &str = "kit.section.slider";
+    pub const KIT_SECTION_RADIO: &str = "kit.section.radio";
+    pub const KIT_SECTION_TABS: &str = "kit.section.tabs";
+    pub const KIT_SECTION_SEGMENTED: &str = "kit.section.segmented";
+    pub const KIT_SECTION_COMMAND_PALETTE: &str = "kit.section.command_palette";
+    pub const KIT_SECTION_TREE: &str = "kit.section.tree";
+    pub const KIT_SECTION_MODAL: &str = "kit.section.modal";
+    pub const KIT_SECTION_ACCORDION: &str = "kit.section.accordion";
+    pub const KIT_SECTION_BADGE: &str = "kit.section.badge";
+    pub const KIT_SECTION_PROGRESS: &str = "kit.section.progress";
+    pub const KIT_SECTION_SKELETON: &str = "kit.section.skeleton";
+    pub const KIT_SECTION_SNACKBAR: &str = "kit.section.snackbar";
+    pub const KIT_SECTION_POPOVER: &str = "kit.section.popover";
+    pub const KIT_DEMO_GROUP_INPUTS: &str = "kit.demo.group.inputs";
+    pub const KIT_DEMO_GROUP_NAVIGATION: &str = "kit.demo.group.navigation";
+    pub const KIT_DEMO_GROUP_CONTAINERS: &str = "kit.demo.group.containers";
+    pub const KIT_DEMO_GROUP_DATA: &str = "kit.demo.group.data";
+    pub const KIT_DEMO_GROUP_FEEDBACK: &str = "kit.demo.group.feedback";
+    pub const KIT_DEMO_MODE_ASIS: &str = "kit.demo.mode.asis";
+    pub const KIT_DEMO_MODE_TOBE: &str = "kit.demo.mode.tobe";
+    pub const KIT_DEMO_THEME_LABEL: &str = "kit.demo.theme";
+    pub const KIT_DEMO_SIZE_LABEL: &str = "kit.demo.size";
+    pub const KIT_DEMO_DENSITY_LABEL: &str = "kit.demo.density";
+    pub const KIT_DEMO_DENSITY_COMPACT: &str = "kit.demo.density.compact";
+    pub const KIT_DEMO_DENSITY_COMFORTABLE: &str = "kit.demo.density.comfortable";
+    pub const KIT_DEMO_DENSITY_SPACIOUS: &str = "kit.demo.density.spacious";
+    pub const KIT_DESC_BUTTONS: &str = "kit.desc.buttons";
+    pub const KIT_DESC_ICON_BUTTONS: &str = "kit.desc.icon_buttons";
+    pub const KIT_DESC_CHIPS: &str = "kit.desc.chips";
+    pub const KIT_DESC_TEXT_FIELD: &str = "kit.desc.text_field";
+    pub const KIT_DESC_SWITCH: &str = "kit.desc.switch";
+    pub const KIT_DESC_CHECKBOX: &str = "kit.desc.checkbox";
+    pub const KIT_DESC_SLIDER: &str = "kit.desc.slider";
+    pub const KIT_DESC_RADIO: &str = "kit.desc.radio";
+    pub const KIT_DESC_DROPDOWN: &str = "kit.desc.dropdown";
+    pub const KIT_DESC_TABS: &str = "kit.desc.tabs";
+    pub const KIT_DESC_SEGMENTED: &str = "kit.desc.segmented";
+    pub const KIT_DESC_COMMAND_PALETTE: &str = "kit.desc.command_palette";
+    pub const KIT_DESC_TREE: &str = "kit.desc.tree";
+    pub const KIT_DESC_CARD: &str = "kit.desc.card";
+    pub const KIT_DESC_MODAL: &str = "kit.desc.modal";
+    pub const KIT_DESC_ACCORDION: &str = "kit.desc.accordion";
+    pub const KIT_DESC_TABLE: &str = "kit.desc.table";
+    pub const KIT_DESC_LIST: &str = "kit.desc.list";
+    pub const KIT_DESC_BADGE: &str = "kit.desc.badge";
+    pub const KIT_DESC_PROGRESS: &str = "kit.desc.progress";
+    pub const KIT_DESC_SKELETON: &str = "kit.desc.skeleton";
+    pub const KIT_DESC_ICONS: &str = "kit.desc.icons";
+    pub const KIT_DESC_TOAST: &str = "kit.desc.toast";
+    pub const KIT_DESC_TOOLTIP: &str = "kit.desc.tooltip";
+    pub const KIT_DESC_SNACKBAR: &str = "kit.desc.snackbar";
+    pub const KIT_DESC_POPOVER: &str = "kit.desc.popover";
+    pub const KIT_DEMO_MODAL_OPEN: &str = "kit.demo.modal_open";
+    pub const KIT_DEMO_MODAL_TITLE: &str = "kit.demo.modal_title";
+    pub const KIT_DEMO_MODAL_BODY: &str = "kit.demo.modal_body";
+    pub const KIT_DEMO_SNACKBAR_SHOW: &str = "kit.demo.snackbar_show";
+    pub const KIT_DEMO_SNACKBAR_TEXT: &str = "kit.demo.snackbar_text";
+    pub const KIT_DEMO_PALETTE_OPEN: &str = "kit.demo.palette_open";
+    pub const KIT_DEMO_PALETTE_PH: &str = "kit.demo.palette_ph";
+    pub const KIT_DEMO_PALETTE_ITEM_1: &str = "kit.demo.palette_item_1";
+    pub const KIT_DEMO_PALETTE_ITEM_2: &str = "kit.demo.palette_item_2";
+    pub const KIT_DEMO_PALETTE_ITEM_3: &str = "kit.demo.palette_item_3";
+    pub const KIT_DEMO_CLICK_ME: &str = "kit.demo.click_me";
+    pub const KIT_DEMO_CLICKED: &str = "kit.demo.clicked";
+    pub const KIT_DEMO_TAB_1: &str = "kit.demo.tab_1";
+    pub const KIT_DEMO_TAB_2: &str = "kit.demo.tab_2";
+    pub const KIT_DEMO_TAB_3: &str = "kit.demo.tab_3";
+    pub const KIT_DEMO_ACCORDION_1: &str = "kit.demo.accordion_1";
+    pub const KIT_DEMO_ACCORDION_2: &str = "kit.demo.accordion_2";
+    pub const KIT_DEMO_ACCORDION_3: &str = "kit.demo.accordion_3";
+    pub const KIT_DEMO_ACCORDION_BODY: &str = "kit.demo.accordion_body";
+    pub const KIT_DEMO_TREE_ROOT: &str = "kit.demo.tree_root";
+    pub const KIT_DEMO_TREE_LEAF: &str = "kit.demo.tree_leaf";
     /// FR-062: секции layout v2 (measured/flex/wrap/grid/focus) + подписи демо.
     pub const KIT_SECTION_MEASURED: &str = "kit.section.measured";
     pub const KIT_SECTION_GROW: &str = "kit.section.grow";
@@ -1569,6 +1644,81 @@ const RU: &[(&str, &str)] = &[
     (keys::KIT_SECTION_CARD, "Карточка (Card: хедер + тело)"),
     (keys::KIT_SECTION_LIST, "Список и скролл (list_rows + ScrollState)"),
     (keys::KIT_SECTION_ICONS, "Иконки (Icon: глифы существующим шрифтом)"),
+    // --- Wave D v1 (issue #32): секции Wave C, тулбар, сайдбар, описания ---
+    (keys::KIT_SECTION_CHECKBOX, "Чек-бокс (Checkbox: 3 состояния)"),
+    (keys::KIT_SECTION_SLIDER, "Слайдер (Slider: drag/клик)"),
+    (keys::KIT_SECTION_RADIO, "Радио (RadioGroup: стрелки)"),
+    (keys::KIT_SECTION_TABS, "Вкладки (Tabs: панели)"),
+    (keys::KIT_SECTION_SEGMENTED, "Сегменты (SegmentedControl)"),
+    (keys::KIT_SECTION_COMMAND_PALETTE, "Палитра команд (CommandPalette, Cmd+K)"),
+    (keys::KIT_SECTION_TREE, "Дерево (Tree: expand/collapse)"),
+    (keys::KIT_SECTION_MODAL, "Модалка (Modal: backdrop + Esc)"),
+    (keys::KIT_SECTION_ACCORDION, "Аккордеон (Accordion: expand/collapse)"),
+    (keys::KIT_SECTION_BADGE, "Бейдж (Badge: счётчик/текст/точка)"),
+    (keys::KIT_SECTION_PROGRESS, "Прогресс (Progress: bar + spinner)"),
+    (keys::KIT_SECTION_SKELETON, "Скелетон (Skeleton: pulse)"),
+    (keys::KIT_SECTION_SNACKBAR, "Снекбар (Snackbar с действием)"),
+    (keys::KIT_SECTION_POPOVER, "Поповер (Popover со стрелкой)"),
+    (keys::KIT_DEMO_GROUP_INPUTS, "Ввод"),
+    (keys::KIT_DEMO_GROUP_NAVIGATION, "Навигация"),
+    (keys::KIT_DEMO_GROUP_CONTAINERS, "Контейнеры"),
+    (keys::KIT_DEMO_GROUP_DATA, "Данные"),
+    (keys::KIT_DEMO_GROUP_FEEDBACK, "Фидбек"),
+    (keys::KIT_DEMO_MODE_ASIS, "AS-IS"),
+    (keys::KIT_DEMO_MODE_TOBE, "TO-BE"),
+    (keys::KIT_DEMO_THEME_LABEL, "Тема: {name}"),
+    (keys::KIT_DEMO_SIZE_LABEL, "Размер: {name}"),
+    (keys::KIT_DEMO_DENSITY_LABEL, "Плотность: {name}"),
+    (keys::KIT_DEMO_DENSITY_COMPACT, "Компактно"),
+    (keys::KIT_DEMO_DENSITY_COMFORTABLE, "Обычно"),
+    (keys::KIT_DEMO_DENSITY_SPACIOUS, "Просторно"),
+    (keys::KIT_DESC_BUTTONS, "Кнопки · kit::button_style(variant, KitState) — 7 вариантов × состояния; клик активен"),
+    (keys::KIT_DESC_ICON_BUTTONS, "Икон-кнопки · kit::icon_button_style(state) — hover/press от курсора"),
+    (keys::KIT_DESC_CHIPS, "Чипы · kit::chip_style — клик переключает Selected"),
+    (keys::KIT_DESC_TEXT_FIELD, "Поле · kit::text_field — клик = фокус, ввод с клавиатуры, каретка"),
+    (keys::KIT_DESC_SWITCH, "Переключатель · kit switch layout/style — клик тоглит, клавиша Space"),
+    (keys::KIT_DESC_CHECKBOX, "Чек-бокс · component::checkbox — клик: цикл 3 состояний; Space"),
+    (keys::KIT_DESC_SLIDER, "Слайдер · component::slider — drag ручки, клик по треку, стрелки"),
+    (keys::KIT_DESC_RADIO, "Радио · component::radio_group — выбор пункта, стрелки вверх/вниз"),
+    (keys::KIT_DESC_DROPDOWN, "Dropdown · kit dropdown — якорь открывает, пункт выбирает, flip у края"),
+    (keys::KIT_DESC_TABS, "Вкладки · component::tabs — клик переключает панель, стрелки"),
+    (keys::KIT_DESC_SEGMENTED, "Сегменты · component::segmented — клик переключает сегмент"),
+    (keys::KIT_DESC_COMMAND_PALETTE, "Палитра команд · component::command_palette — Cmd+K, фильтр, Enter"),
+    (keys::KIT_DESC_TREE, "Дерево · component::tree — expand/collapse узлов, выбор строки"),
+    (keys::KIT_DESC_CARD, "Карточка · kit::Card layout — контейнер хедер+тело"),
+    (keys::KIT_DESC_MODAL, "Модалка · kit::modal — backdrop-клик и Esc закрывают, фокус-ловушка"),
+    (keys::KIT_DESC_ACCORDION, "Аккордеон · component::accordion — expand/collapse секций"),
+    (keys::KIT_DESC_TABLE, "Таблица · kit::Table — строки на Row-примитивах, зебра"),
+    (keys::KIT_DESC_LIST, "Список · kit list_rows + ScrollState — выбор строки, колесо"),
+    (keys::KIT_DESC_BADGE, "Бейдж · component::badge — счётчик/текст/точка, тоны"),
+    (keys::KIT_DESC_PROGRESS, "Прогресс · component::progress — bar + spinner"),
+    (keys::KIT_DESC_SKELETON, "Скелетон · component::skeleton — pulse-заглушки паттернов"),
+    (keys::KIT_DESC_ICONS, "Иконки · kit::Icon — глифы шрифтом, единый реестр"),
+    (keys::KIT_DESC_TOAST, "Тост · kit toast — демонстрация показа/скрытия"),
+    (keys::KIT_DESC_TOOLTIP, "Тултип · kit tooltip — задержка, flip у края"),
+    (keys::KIT_DESC_SNACKBAR, "Снекбар · component::snackbar — показ с действием «Закрыть»"),
+    (keys::KIT_DESC_POPOVER, "Поповер · component::popover — якорь + стрелка, backdrop"),
+    (keys::KIT_DEMO_MODAL_OPEN, "Открыть модалку"),
+    (keys::KIT_DEMO_MODAL_TITLE, "Демо-модалка"),
+    (keys::KIT_DEMO_MODAL_BODY, "Это демо Modal: backdrop-клик и Esc закрывают."),
+    (keys::KIT_DEMO_SNACKBAR_SHOW, "Показать снекбар"),
+    (keys::KIT_DEMO_SNACKBAR_TEXT, "Снекбар с действием"),
+    (keys::KIT_DEMO_PALETTE_OPEN, "Открыть палитру (Cmd+K)"),
+    (keys::KIT_DEMO_PALETTE_PH, "Команда…"),
+    (keys::KIT_DEMO_PALETTE_ITEM_1, "Открыть настройки"),
+    (keys::KIT_DEMO_PALETTE_ITEM_2, "Новая нода"),
+    (keys::KIT_DEMO_PALETTE_ITEM_3, "Экспорт схемы"),
+    (keys::KIT_DEMO_CLICK_ME, "Нажми"),
+    (keys::KIT_DEMO_CLICKED, "Нажато: {name}"),
+    (keys::KIT_DEMO_TAB_1, "Первая"),
+    (keys::KIT_DEMO_TAB_2, "Вторая"),
+    (keys::KIT_DEMO_TAB_3, "Третья"),
+    (keys::KIT_DEMO_ACCORDION_1, "Раздел один"),
+    (keys::KIT_DEMO_ACCORDION_2, "Раздел два"),
+    (keys::KIT_DEMO_ACCORDION_3, "Раздел три"),
+    (keys::KIT_DEMO_ACCORDION_BODY, "Содержимое раскрытой секции аккордеона."),
+    (keys::KIT_DEMO_TREE_ROOT, "Корень"),
+    (keys::KIT_DEMO_TREE_LEAF, "Лист"),
     // FR-062: секции layout v2
     (
         keys::KIT_SECTION_MEASURED,
@@ -3016,6 +3166,81 @@ const EN: &[(&str, &str)] = &[
     (keys::KIT_SECTION_CARD, "Card (header + body)"),
     (keys::KIT_SECTION_LIST, "List & scroll (list_rows + ScrollState)"),
     (keys::KIT_SECTION_ICONS, "Icons (glyphs via the existing font)"),
+    // --- Wave D v1 (issue #32): Wave C sections, toolbar, sidebar, docs ---
+    (keys::KIT_SECTION_CHECKBOX, "Checkbox (3 states)"),
+    (keys::KIT_SECTION_SLIDER, "Slider (drag/click)"),
+    (keys::KIT_SECTION_RADIO, "Radio (RadioGroup: arrows)"),
+    (keys::KIT_SECTION_TABS, "Tabs (panels)"),
+    (keys::KIT_SECTION_SEGMENTED, "Segmented control"),
+    (keys::KIT_SECTION_COMMAND_PALETTE, "Command palette (Cmd+K)"),
+    (keys::KIT_SECTION_TREE, "Tree (expand/collapse)"),
+    (keys::KIT_SECTION_MODAL, "Modal (backdrop + Esc)"),
+    (keys::KIT_SECTION_ACCORDION, "Accordion (expand/collapse)"),
+    (keys::KIT_SECTION_BADGE, "Badge (count/text/dot)"),
+    (keys::KIT_SECTION_PROGRESS, "Progress (bar + spinner)"),
+    (keys::KIT_SECTION_SKELETON, "Skeleton (pulse)"),
+    (keys::KIT_SECTION_SNACKBAR, "Snackbar with action"),
+    (keys::KIT_SECTION_POPOVER, "Popover with arrow"),
+    (keys::KIT_DEMO_GROUP_INPUTS, "Inputs"),
+    (keys::KIT_DEMO_GROUP_NAVIGATION, "Navigation"),
+    (keys::KIT_DEMO_GROUP_CONTAINERS, "Containers"),
+    (keys::KIT_DEMO_GROUP_DATA, "Data display"),
+    (keys::KIT_DEMO_GROUP_FEEDBACK, "Feedback"),
+    (keys::KIT_DEMO_MODE_ASIS, "AS-IS"),
+    (keys::KIT_DEMO_MODE_TOBE, "TO-BE"),
+    (keys::KIT_DEMO_THEME_LABEL, "Theme: {name}"),
+    (keys::KIT_DEMO_SIZE_LABEL, "Size: {name}"),
+    (keys::KIT_DEMO_DENSITY_LABEL, "Density: {name}"),
+    (keys::KIT_DEMO_DENSITY_COMPACT, "Compact"),
+    (keys::KIT_DEMO_DENSITY_COMFORTABLE, "Comfortable"),
+    (keys::KIT_DEMO_DENSITY_SPACIOUS, "Spacious"),
+    (keys::KIT_DESC_BUTTONS, "Buttons · kit::button_style(variant, KitState) — 7 variants × states; click enabled"),
+    (keys::KIT_DESC_ICON_BUTTONS, "Icon buttons · kit::icon_button_style(state) — hover/press from cursor"),
+    (keys::KIT_DESC_CHIPS, "Chips · kit::chip_style — click toggles Selected"),
+    (keys::KIT_DESC_TEXT_FIELD, "Text field · kit::text_field — click to focus, keyboard input, caret"),
+    (keys::KIT_DESC_SWITCH, "Switch · kit switch layout/style — click toggles, Space key"),
+    (keys::KIT_DESC_CHECKBOX, "Checkbox · component::checkbox — click cycles 3 states; Space"),
+    (keys::KIT_DESC_SLIDER, "Slider · component::slider — knob drag, track click, arrows"),
+    (keys::KIT_DESC_RADIO, "Radio · component::radio_group — pick an option, up/down arrows"),
+    (keys::KIT_DESC_DROPDOWN, "Dropdown · kit dropdown — anchor opens, item selects, edge flip"),
+    (keys::KIT_DESC_TABS, "Tabs · component::tabs — click switches the panel, arrows"),
+    (keys::KIT_DESC_SEGMENTED, "Segmented · component::segmented — click switches a segment"),
+    (keys::KIT_DESC_COMMAND_PALETTE, "Command palette · component::command_palette — Cmd+K, filter, Enter"),
+    (keys::KIT_DESC_TREE, "Tree · component::tree — node expand/collapse, row selection"),
+    (keys::KIT_DESC_CARD, "Card · kit::Card layout — header+body container"),
+    (keys::KIT_DESC_MODAL, "Modal · kit::modal — backdrop click and Esc close, focus trap"),
+    (keys::KIT_DESC_ACCORDION, "Accordion · component::accordion — expand/collapse sections"),
+    (keys::KIT_DESC_TABLE, "Table · kit::Table — rows on Row primitives, zebra"),
+    (keys::KIT_DESC_LIST, "List · kit list_rows + ScrollState — row selection, wheel"),
+    (keys::KIT_DESC_BADGE, "Badge · component::badge — count/text/dot, tones"),
+    (keys::KIT_DESC_PROGRESS, "Progress · component::progress — bar + spinner"),
+    (keys::KIT_DESC_SKELETON, "Skeleton · component::skeleton — pattern pulse placeholders"),
+    (keys::KIT_DESC_ICONS, "Icons · kit::Icon — font glyphs, single registry"),
+    (keys::KIT_DESC_TOAST, "Toast · kit toast — show/hide demonstration"),
+    (keys::KIT_DESC_TOOLTIP, "Tooltip · kit tooltip — delay, edge flip"),
+    (keys::KIT_DESC_SNACKBAR, "Snackbar · component::snackbar — shown with a Close action"),
+    (keys::KIT_DESC_POPOVER, "Popover · component::popover — anchor + arrow, backdrop"),
+    (keys::KIT_DEMO_MODAL_OPEN, "Open modal"),
+    (keys::KIT_DEMO_MODAL_TITLE, "Demo modal"),
+    (keys::KIT_DEMO_MODAL_BODY, "This is a Modal demo: backdrop click and Esc close it."),
+    (keys::KIT_DEMO_SNACKBAR_SHOW, "Show snackbar"),
+    (keys::KIT_DEMO_SNACKBAR_TEXT, "Snackbar with an action"),
+    (keys::KIT_DEMO_PALETTE_OPEN, "Open palette (Cmd+K)"),
+    (keys::KIT_DEMO_PALETTE_PH, "Command…"),
+    (keys::KIT_DEMO_PALETTE_ITEM_1, "Open settings"),
+    (keys::KIT_DEMO_PALETTE_ITEM_2, "New node"),
+    (keys::KIT_DEMO_PALETTE_ITEM_3, "Export scheme"),
+    (keys::KIT_DEMO_CLICK_ME, "Click me"),
+    (keys::KIT_DEMO_CLICKED, "Clicked: {name}"),
+    (keys::KIT_DEMO_TAB_1, "First"),
+    (keys::KIT_DEMO_TAB_2, "Second"),
+    (keys::KIT_DEMO_TAB_3, "Third"),
+    (keys::KIT_DEMO_ACCORDION_1, "Section one"),
+    (keys::KIT_DEMO_ACCORDION_2, "Section two"),
+    (keys::KIT_DEMO_ACCORDION_3, "Section three"),
+    (keys::KIT_DEMO_ACCORDION_BODY, "Content of the expanded accordion section."),
+    (keys::KIT_DEMO_TREE_ROOT, "Root"),
+    (keys::KIT_DEMO_TREE_LEAF, "Leaf"),
     // FR-062: layout v2 sections
     (
         keys::KIT_SECTION_MEASURED,

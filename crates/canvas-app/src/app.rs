@@ -150,6 +150,8 @@ use canvas_scene::{
     fit_template_node_height, formula_line_indices, split_formula_lines, SceneState,
 };
 
+/// Wave A §5.5.6: smart guides — линии выравнивания + distance labels при drag.
+pub mod smart_guides;
 /// FR-090: продуктовые события PostHog из Rust — мост `canvasdesk:track`
 /// (index.html, `__cdTelemetry.track`) + `surface_opened` по дифу реестра
 /// поверхностей. `pub` — вызовы из canvas-web (события экспорта).
@@ -1735,6 +1737,11 @@ pub struct App {
     /// FR-055 (этап U4 PRD-0009): витрина кита открыта (поверхность
     /// kit_gallery, Modals/Block) — пункт «?» «О интерфейсе» (Q5-a).
     pub(crate) kit_gallery_open: bool,
+    /// Wave D v1 (issue #32): демо-состояние витрины (тулбар/секции/переходы).
+    pub kit_demo: crate::kit_demo::KitDemoState,
+    /// Wave D v1: кэш раскладки витрины последнего кадра (реестр хитов и
+    /// навигация/press читают без пересчёта; обновляется в draw-пути).
+    pub(crate) kit_demo_layout: Option<crate::kit_ui::GalleryLayout>,
     /// FR-070: UI-админпанель открыта (поверхность admin_panel,
     /// Modals/Block) — пункт «?» «UI-консоль».
     pub(crate) admin_open: bool,
@@ -2115,6 +2122,8 @@ impl App {
             // FR-055 U4: витрина кита закрыта, DebugOverlay выключен
             // (в web включается параметром `?ui=debug` — url_params).
             kit_gallery_open: false,
+            kit_demo: crate::kit_demo::KitDemoState::default(),
+            kit_demo_layout: None,
             admin_open: false,
             admin_section: crate::admin_ui::AdminSection::Components,
             admin_palette_override: None,
@@ -5730,6 +5739,14 @@ impl App {
         if text.is_empty() {
             return;
         }
+        // Wave D v1: демо-поле витрины (TO-BE, фокус) — приоритет над нижними
+        // приёмниками (поверх всех модалей); web-мост дёргает ImeCommit, когда
+        // text_input_active() вернёт true из-за фокуса демо-поля.
+        if self.kit_gallery_open && self.kit_demo.tobe && self.kit_demo.text_focus {
+            self.kit_demo.text_value.push_str(text);
+            self.request_redraw();
+            return;
+        }
         // 0) текстовое поле строки настроек (модалка сверху — приоритет;
         // вставка через kit-модель в позицию каретки, замещает селекцию;
         // write-through в LlmSettings — как в клавиатурной ветке on_key).
@@ -5799,6 +5816,7 @@ impl App {
     /// поднималась и ввод в Ctrl+I чат на web/mobile терялся).
     pub fn text_input_active(&self) -> bool {
         self.settings_text_edit.is_some()
+            || (self.kit_gallery_open && self.kit_demo.tobe && self.kit_demo.text_focus)
             || self.editing.is_some()
             || self.search.is_open()
             || (self.template_panel.open && self.template_panel.focused)
@@ -9524,6 +9542,15 @@ impl App {
     /// (`settings.theme_preset`) или классическая тема (`settings.theme`).
     fn effective_palette(&self) -> ThemeColors {
         ThemeColors::from_settings(self.settings.theme, &self.settings.theme_preset)
+    }
+
+    /// Wave D v1 (issue #32, D6): открыть витрину сразу в TO-BE-режиме
+    /// (web `?ui=demo`); нативный вход — «? → О интерфейсе» без режима.
+    pub fn open_kit_demo(&mut self) {
+        self.kit_gallery_open = true;
+        self.kit_demo.tobe = true;
+        self.kit_gallery_scroll = canvas_ui::kit::ScrollState::default();
+        self.request_redraw();
     }
 
     /// FR-047: применить эффективную тему к рендеру и виджетам

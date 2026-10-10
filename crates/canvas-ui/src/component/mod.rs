@@ -26,6 +26,7 @@ pub mod footer;
 pub mod icon;
 pub mod list;
 pub mod modal;
+pub mod nav_rail;
 pub mod panel;
 pub mod panel_header;
 pub mod popover;
@@ -45,7 +46,10 @@ pub mod text_field;
 pub mod tree;
 pub mod two_column;
 
-use crate::geometry::{EdgeInsets, UiPoint, UiRect};
+use crate::geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
+// Wave A-фикс: nav_rail.rs импортирует бейдж-типы с корня компонента
+// (`crate::component::{BadgeKind, BadgeTone}`) — реэкспорт submodule.
+pub use self::badge::{BadgeKind, BadgeTone};
 
 // --- Состояния и стили ------------------------------------------------------
 
@@ -511,6 +515,136 @@ pub trait Component {
     /// Дефолт — первый содержащий rect ([`UiRect::contains`]).
     fn hit_test(&self, rects: &[UiRect], point: UiPoint) -> Option<ComponentHit> {
         ComponentHit::pick(rects, point)
+    }
+}
+
+// =============================================================================
+// Wave A (2026-10, ui-kit-deep-review §5.5): архитектурные паттерны.
+//
+// Response (egui pattern) + WidgetExt (druid pattern) — interaction-эргономика
+// для immediate-mode кита. Response возвращает каждый вызов виджета: геометрия
+// + interaction-state в одном объекте. WidgetExt — chainable модификаторы.
+// =============================================================================
+
+/// Результат вызова виджета: геометрия + interaction-state (Wave A §5.5.1).
+///
+/// egui `Response` pattern: каждый вызов `kit.button(...)` возвращает `Response`
+/// с `hovered`, `clicked`, `dragged`, `has_focus` и т.д. — consumer проверяет
+/// `if resp.clicked { ... }` сразу после отрисовки, без отдельных state-машин.
+///
+/// Chain methods ( [`WidgetExt`] ): `resp.on_hover_text("Help").on_click(|| save())`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Response {
+    /// Rect виджета (для hit-test, tooltip-anchor).
+    pub rect: UiRect,
+    /// Active KitState (из WidgetState).
+    pub state: KitState,
+    /// Hovered в этом кадре.
+    pub hovered: bool,
+    /// Clicked (press+release внутри) — true ровно один кадр.
+    pub clicked: bool,
+    /// Dragged (press inside + move > threshold).
+    pub dragged: bool,
+    /// Drag-delta (если dragged).
+    pub drag_delta: UiVec2,
+    /// Has keyboard focus.
+    pub has_focus: bool,
+    /// Focus-visible (keyboard-originated).
+    pub focus_visible: bool,
+    /// Changed (для input — значение изменилось).
+    pub changed: bool,
+}
+
+impl Default for Response {
+    fn default() -> Self {
+        Self {
+            rect: UiRect::default(),
+            state: KitState::Normal,
+            hovered: false,
+            clicked: false,
+            dragged: false,
+            drag_delta: UiVec2::new(0.0, 0.0),
+            has_focus: false,
+            focus_visible: false,
+            changed: false,
+        }
+    }
+}
+
+impl Response {
+    /// Создать Response из WidgetState + rect (удобный конструктор).
+    pub fn from_widget(rect: UiRect, ws: &crate::widget::WidgetState, clicked: bool) -> Self {
+        #[allow(deprecated)]
+        let state = ws.kit_state();
+        Self {
+            rect,
+            state,
+            hovered: matches!(state, KitState::Hovered),
+            clicked,
+            dragged: ws.is_dragged(),
+            drag_delta: UiVec2::new(0.0, 0.0),
+            has_focus: ws.is_focused(),
+            focus_visible: ws.focus_ring_visible(),
+            changed: false,
+        }
+    }
+
+    /// Chain: регистрирует tooltip для показа после TOOLTIP_DELAY_MS.
+    /// Consumer-side: tooltip-state хранит (rect, text), рисуется в overlay.
+    pub fn on_hover_text(self, _text: &str) -> Self {
+        // TODO Wave D: интеграция с tooltip-state (consumer хранит очередь).
+        // Пока — no-op, consumer рисует tooltip отдельно.
+        self
+    }
+
+    /// Chain: устанавливает disabled (no-op для уже отрисованного виджета —
+    /// для pre-draw используйте WidgetState::set_disabled).
+    pub fn disabled_if(self, _cond: bool) -> Self {
+        self
+    }
+
+    /// Chain: вызывает `f` если `clicked == true`.
+    pub fn on_click<F: FnOnce()>(self, f: F) -> Self {
+        if self.clicked {
+            f();
+        }
+        self
+    }
+}
+
+/// Chainable модификаторы для [`Response`] (Wave A §5.5.5, druid `WidgetExt`).
+///
+/// Позволяет `.on_hover_text().disabled_if().on_click()` цепочкой после
+/// вызова виджета. Аналог druid `WidgetExt` для immediate-mode.
+pub trait WidgetExt: Sized {
+    /// Регистрирует tooltip.
+    fn on_hover_text(self, text: &str) -> Self;
+    /// Устанавливает disabled (post-draw — no-op, для информации).
+    fn disabled_if(self, cond: bool) -> Self;
+    /// Вызывает `f` при click.
+    fn on_click<F: FnOnce()>(self, f: F) -> Self;
+    /// Устанавливает KitState (post-draw — для информации).
+    fn with_state(self, state: KitState) -> Self;
+    /// Устанавливает slot override (post-draw — для информации).
+    fn with_slot(self, _key: &str, _val: &str) -> Self;
+}
+
+impl WidgetExt for Response {
+    fn on_hover_text(self, text: &str) -> Self {
+        Response::on_hover_text(self, text)
+    }
+    fn disabled_if(self, cond: bool) -> Self {
+        Response::disabled_if(self, cond)
+    }
+    fn on_click<F: FnOnce()>(self, f: F) -> Self {
+        Response::on_click(self, f)
+    }
+    fn with_state(mut self, state: KitState) -> Self {
+        self.state = state;
+        self
+    }
+    fn with_slot(self, _key: &str, _val: &str) -> Self {
+        self
     }
 }
 

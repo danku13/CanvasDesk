@@ -237,6 +237,10 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     if params.ui_debug {
         app.set_debug_overlay(true);
     }
+    // Wave D v1 (issue #32 D6): ?ui=demo — витрина кита сразу в TO-BE
+    if params.ui_demo {
+        app.open_kit_demo();
+    }
     // FR-104 (C1, №31c): битая ссылка ?canvas= — фолбэк открыт, тост
     // покажется на первом кадре (web-слой передал имя через WebScene).
     if broken_link.is_some() {
