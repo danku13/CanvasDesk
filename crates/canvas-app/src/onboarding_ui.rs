@@ -683,7 +683,10 @@ pub fn point_in_card(card: [f32; 4], point: [f32; 2]) -> bool {
 
 /// Ширина карточки AI-онбординга (логические px, прототип F-8: 600px).
 pub const AI_ONB_CARD_W: f32 = 600.0;
-/// Внутренние поля карточки (прототип F-8: 26px top / 30px sides / 22px bottom).
+/// Внутренние поля карточки (прототип F-8: 26px top / 30px sides / 22px
+/// bottom) — 30/26/22 вне шкалы S1 (исключение LAY7 — «Исключения»
+/// 11-layouts.md, «Поля/зазоры 20–40 px», LAY-W16: значения заморожены
+/// прототипом F-8; S1 кончается на 24, миграция меняет компоновку карточки).
 pub const AI_ONB_PAD_X: f32 = 30.0;
 pub const AI_ONB_PAD_TOP: f32 = 26.0;
 pub const AI_ONB_PAD_BOTTOM: f32 = 22.0;

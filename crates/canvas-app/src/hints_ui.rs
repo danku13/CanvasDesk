@@ -40,7 +40,10 @@ pub const HINT_ROW_H: f32 = 24.0;
 /// инсетится на [`HINT_ROW_INSET_H`]) — токен `canvas_core::tokens::SPACING_S`
 /// (значение прежнего литерала 6).
 pub use canvas_core::tokens::SPACING_S as HINT_MARGIN;
-/// Горизонтальный инсет подсветки строки от краёв popup (прежние +4/−8).
+/// Горизонтальный инсет подсветки строки от краёв popup (прежние +4/−8) —
+/// 4 px hairline, вне шкалы S1 (исключение LAY7 — «Исключения» 11-layouts.md,
+/// «Hairline-микрозначения 2–4 px», LAY-W16: визуальный инсет подсветки,
+/// 4→6 разъезжает её с краями popup).
 pub const HINT_ROW_INSET_H: f32 = 4.0;
 /// Высота строки каретки для якоря dropdown (прежний flip «−20» =
 /// строка 16 + `DROPDOWN_GAP` 4 — числа прежней формулы дословно).

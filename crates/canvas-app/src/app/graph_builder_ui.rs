@@ -37,7 +37,9 @@ pub use canvas_graph_builder::GraphBuilderMode;
 const DIALOG_W: f32 = 560.0;
 /// Высота диалога (textarea ~120px + mode cards 3×54px + buttons).
 const DIALOG_H: f32 = 460.0;
-/// Внутренний отступ.
+/// Внутренний отступ — 16 px, вне шкалы S1 (исключение LAY7 — «Исключения»
+/// 11-layouts.md, «Пады/маргины 14–16 px», LAY-W16: пад окна генератора,
+/// 24/12 меняют устоявшуюся компоновку textarea/cards).
 const PAD: f32 = 16.0;
 /// Высота textarea (многострочный input).
 const TEXTAREA_H: f32 = 120.0;
