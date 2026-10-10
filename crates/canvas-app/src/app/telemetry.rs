@@ -251,4 +251,24 @@ mod tests {
         assert!(tracked_present(&app, &registry).contains(ui_registry::id::AGENT_PANEL));
         assert!(!tracked_present(&app, &registry).contains(ui_registry::id::AI_STATUS));
     }
+
+    /// LAY-W17: AI-онбординг — открытие пользователем (пункт «?» «Онбординг
+    /// AI» / триггер продукта) → в срезе (`surface_opened {ai_onboarding}`).
+    /// Не ambient: модаль появляется только действием пользователя (в
+    /// отличие от AI-статуса); регистрация в реестре (LAY-W17) сама вводит
+    /// её в диф — пин фиксирует, что поверхность не попала в AMBIENT_SURFACES.
+    #[test]
+    fn ai_onboarding_tracked_as_user_opened() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        let registry = ui_registry::build_registry(&app);
+        assert!(!tracked_present(&app, &registry).contains(ui_registry::id::AI_ONBOARDING));
+        app.ai_onboarding = Some(crate::onboarding_ui::AiOnboardingState::default());
+        let registry = ui_registry::build_registry(&app);
+        assert!(tracked_present(&app, &registry).contains(ui_registry::id::AI_ONBOARDING));
+        assert!(
+            !AMBIENT_SURFACES.contains(&ui_registry::id::AI_ONBOARDING),
+            "AI-онбординг — не ambient-хром"
+        );
+    }
 }
