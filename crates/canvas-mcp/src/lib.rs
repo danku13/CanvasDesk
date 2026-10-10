@@ -1527,16 +1527,21 @@ mod tests {
 
     /// Правило 3 (счётчик): README пакета несёт актуальное число
     /// инструментов native-продукта («N инструмент…» — с любым окончанием
-    /// слова; FR-066: 41 — включая native-only monte_carlo_run).
+    /// слова, либо EN-форма «N tools»; README переведён на EN в #24,
+    /// языковая политика 2026-10-10; FR-066: 41 — включая native-only
+    /// monte_carlo_run).
     #[test]
     fn skills_readme_tool_counter_is_current() {
         let readme = include_str!("../../../skills/README.md");
         let count = canonical_tool_names().len();
+        let ru = format!("{} инструмент", count);
+        let en = format!("{} tools", count);
         assert!(
-            readme.contains(&format!("{} инструмент", count)),
-            "skills/README.md не содержит актуальный счётчик «{} инструмент(ов…)» — \
+            readme.contains(&ru) || readme.contains(&en),
+            "skills/README.md не содержит актуальный счётчик «{}» / «{}» — \
              обновите пакет (skills/UPDATE-PROTOCOL.md)",
-            count
+            ru,
+            en
         );
     }
 

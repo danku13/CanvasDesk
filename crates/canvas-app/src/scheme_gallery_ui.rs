@@ -50,7 +50,7 @@ pub const INPUT_H: f32 = 34.0;
 ///
 /// M1 (FR-UI-CHIP-STRIP): мигрировано на `kit::chip_strip` — высота
 /// каноническая кита `CHIP_HEIGHT = 24` (прежний локальный литерал 28
-/// заменён на реэкспорт кита — single source of truth, AGENTS.md §4).
+/// заменён на реэкспорт кита — single source of truth, AGENTS.md §"UI kit").
 /// Визуальное следствие: полоса чипов на 4 px ниже — acceptable
 /// canonicalization (audit §6.1, I-1 FR-046 — канонизация к kit-токенам
 /// явно желаема аудит-отчётом).
@@ -339,7 +339,7 @@ pub fn layout_with(
     // `stack(inner, 24×24, End, Start)` с офсетом +4; size 24 →
     // ICON_BUTTON_SIZE 26, inset 6 (через inner+4) → SPACING_SM 8 от panel —
     // single source of truth, смещение ≈ 2px вправо/вниз — допустимо по
-    // AGENTS.md §«UI-кит»; кнопка переезжает из шапки в угол панели
+    // AGENTS.md §"UI kit"; кнопка переезжает из шапки в угол панели
     // (канонический паттерн «× в углу модали»).
     let close = canvas_ui::kit::stage_close_button(panel);
 
@@ -347,7 +347,7 @@ pub fn layout_with(
     // `kit::chip_strip`. Кит измеряет подпись (CHIP_FAMILY = SANS_FAMILY,
     // CHIP_FONT_SIZE = 12 — паритет метрик рендера), ширина чипа =
     // text_w + 2·CHIP_PAD_H (16), высота = CHIP_HEIGHT = 24, зазор =
-    // CHIP_GAP = SPACING_S — single source of truth (AGENTS.md §4).
+    // CHIP_GAP = SPACING_S — single source of truth (AGENTS.md §"UI kit").
     // squeeze=false → RowPolicy::Fit (паритет прежней ручной Row(Fit):
     // переполнение НЕ маскируется — ловится G4-линтом; прежний молчаливый
     // `break`-кламп удалён). Канонизация: высота чипа 28→24 (4px короче

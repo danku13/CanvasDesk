@@ -8,7 +8,7 @@ license.workspace = true
 description = "PRD-0010 F-3: генерация графов из текста через LLM (.byok → .canvas)"
 
 # FR-LLM-D / ADR-0016: чистый слой генерации графов без сети в дефолтной сборке
-# (правило ADR-0011 wasm-гейт, AGENTS.md «без сети в хосте»). LLM-адаптер
+# (правило ADR-0011 wasm-гейт, AGENTS.md "no network in the host"). LLM-адаптер
 # (`canvas-llm` с feature `l1-llm`) и serde-деривы подключаются только за
 # явным feature-флагом `l1-llm` — как в `canvas-llm`/`canvas-suggest`.
 # Дефолтная сборка компилируется под wasm32-unknown-unknown без оговорок.
