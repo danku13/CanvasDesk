@@ -18,7 +18,12 @@ pub struct NavRailItem {
 
 impl NavRailItem {
     pub fn new(id: impl Into<String>, icon: &'static str, label: impl Into<String>) -> Self {
-        Self { id: id.into(), icon, label: label.into(), badge: None }
+        Self {
+            id: id.into(),
+            icon,
+            label: label.into(),
+            badge: None,
+        }
     }
 
     pub fn badge(mut self, badge: BadgeKind) -> Self {
@@ -70,11 +75,20 @@ pub fn nav_rail_layout(
             UiRect::new(viewport.x + 4.0, y, rail_w - 8.0, button_h)
         })
         .collect();
-    NavRailLayout { rail: rail_rect, buttons, sidebar, active: rail.active }
+    NavRailLayout {
+        rail: rail_rect,
+        buttons,
+        sidebar,
+        active: rail.active,
+    }
 }
 
 /// Стиль кнопки nav-rail: active → accent fill; hovered → hover_fill.
-pub fn nav_rail_button_style(active: bool, state: KitState, p: &KitPalette) -> crate::component::ControlStyle {
+pub fn nav_rail_button_style(
+    active: bool,
+    state: KitState,
+    p: &KitPalette,
+) -> crate::component::ControlStyle {
     let fill = if active {
         p.accent
     } else {
@@ -160,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn nav_rail_hit() {
+    fn nav_rail_hit_resolves_items() {
         let viewport = UiRect::new(0.0, 0.0, 1280.0, 800.0);
         let rail = seed_rail();
         let lay = nav_rail_layout(viewport, &rail, 280.0, 48.0, 40.0, 8.0);
@@ -173,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn nav_rail_activate() {
+    fn nav_rail_activate_switches_active() {
         let mut rail = seed_rail();
         assert!(nav_rail_activate(&mut rail, 1));
         assert_eq!(rail.active, 1);
@@ -184,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn nav_rail_activate_by_id() {
+    fn nav_rail_activate_by_id_selects() {
         let mut rail = seed_rail();
         assert!(nav_rail_activate_by_id(&mut rail, "settings"));
         assert_eq!(rail.active, 3);
@@ -193,8 +207,8 @@ mod tests {
 
     #[test]
     fn nav_rail_item_with_badge() {
-        let item = NavRailItem::new("notifications", "🔔", "Уведомления")
-            .badge(BadgeKind::Count(3));
+        let item =
+            NavRailItem::new("notifications", "🔔", "Уведомления").badge(BadgeKind::Count(3));
         assert!(item.badge.is_some());
     }
 }

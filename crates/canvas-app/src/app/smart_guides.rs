@@ -38,7 +38,11 @@ impl DistanceLabel {
         for (i, c) in chars.iter().take(len).enumerate() {
             buf[i] = *c;
         }
-        Self { pos, text: buf, text_len: len }
+        Self {
+            pos,
+            text: buf,
+            text_len: len,
+        }
     }
 
     pub fn text_str(&self) -> String {
@@ -47,18 +51,12 @@ impl DistanceLabel {
 }
 
 /// Результат smart-guides вычисления (Wave A §5.5.6).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SmartGuides {
     /// Линии выравнивания (center/edge snap).
     pub lines: Vec<GuideLine>,
     /// Distance labels между dragged и siblings.
     pub labels: Vec<DistanceLabel>,
-}
-
-impl Default for SmartGuides {
-    fn default() -> Self {
-        Self { lines: Vec::new(), labels: Vec::new() }
-    }
 }
 
 /// Порог snap (px) — расстояние до центра/края sibling, при котором
@@ -110,9 +108,19 @@ pub fn compute_smart_guides(
         // Edge alignment (left/right/top/bottom).
         let edges = [
             (dragged.x, sibling.x, GuideOrientation::Vertical, true),
-            (dragged.right(), sibling.right(), GuideOrientation::Vertical, true),
+            (
+                dragged.right(),
+                sibling.right(),
+                GuideOrientation::Vertical,
+                true,
+            ),
             (dragged.y, sibling.y, GuideOrientation::Horizontal, false),
-            (dragged.bottom(), sibling.bottom(), GuideOrientation::Horizontal, false),
+            (
+                dragged.bottom(),
+                sibling.bottom(),
+                GuideOrientation::Horizontal,
+                false,
+            ),
         ];
         for (d_edge, s_edge, orient, is_x) in edges {
             let diff = (d_edge - s_edge).abs();
@@ -139,10 +147,7 @@ pub fn compute_smart_guides(
         }
         // Distance label (между центрами).
         if dx > threshold || dy > threshold {
-            let label_pos = UiPoint::new(
-                (dragged_cx + sib_cx) / 2.0,
-                (dragged_cy + sib_cy) / 2.0,
-            );
+            let label_pos = UiPoint::new((dragged_cx + sib_cx) / 2.0, (dragged_cy + sib_cy) / 2.0);
             let dist = ((dragged_cx - sib_cx).powi(2) + (dragged_cy - sib_cy).powi(2)).sqrt();
             let text = format!("{} px", dist.round() as i32);
             guides.labels.push(DistanceLabel::new(label_pos, &text));
@@ -162,7 +167,10 @@ mod tests {
         let sibling = UiRect::new(82.0, 200.0, 40.0, 40.0); // cx=102
         let (guides, snap) = compute_smart_guides(dragged, &[sibling], SNAP_THRESHOLD);
         // Vertical guide at x=102 (sibling center)
-        assert!(guides.lines.iter().any(|l| l.orientation == GuideOrientation::Vertical && (l.pos - 102.0).abs() < 0.01));
+        assert!(guides
+            .lines
+            .iter()
+            .any(|l| l.orientation == GuideOrientation::Vertical && (l.pos - 102.0).abs() < 0.01));
         // snap_x = 102-100 = 2
         assert!((snap.x - 2.0).abs() < 0.01);
     }
@@ -186,7 +194,13 @@ mod tests {
         let sibling = UiRect::new(12.0, 200.0, 40.0, 40.0);
         let (guides, snap) = compute_smart_guides(dragged, &[sibling], SNAP_THRESHOLD);
         // snap_x = 12-10 = 2
-        assert!((snap.x - 2.0).abs() < 0.01 || guides.lines.iter().any(|l| l.orientation == GuideOrientation::Vertical));
+        assert!(
+            (snap.x - 2.0).abs() < 0.01
+                || guides
+                    .lines
+                    .iter()
+                    .any(|l| l.orientation == GuideOrientation::Vertical)
+        );
     }
 
     #[test]
@@ -208,7 +222,10 @@ mod tests {
 
     #[test]
     fn distance_label_truncates_long_text() {
-        let label = DistanceLabel::new(UiPoint::new(0.0, 0.0), "This is a very long text that exceeds 16 chars");
+        let label = DistanceLabel::new(
+            UiPoint::new(0.0, 0.0),
+            "This is a very long text that exceeds 16 chars",
+        );
         // Truncated to 16 chars
         assert_eq!(label.text_len, 16);
     }

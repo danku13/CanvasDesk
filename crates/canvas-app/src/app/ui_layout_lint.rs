@@ -258,6 +258,22 @@ fn lint_kit_gallery_open() {
     assert_backdrop_is(&frame, ui_registry::id::KIT_GALLERY);
 }
 
+/// Wave D v1 (issue #32): demo-витрина TO-BE — каноническое состояние
+/// G4-линта: тулбар/сайдбар/секции Wave C во вьюпортах и на обоих языках;
+/// с открытыми демо-модалкой и dropdown (максимальный кадр хитов).
+#[test]
+fn lint_kit_demo_tobe() {
+    lint_state("kit_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+        app.kit_demo.dropdown_open = true;
+        app.kit_demo.modal_open = true;
+        app.kit_demo.snackbar_visible = true;
+        app.kit_demo.popover_open = true;
+        app.kit_demo.palette_open = true;
+    });
+}
+
 /// FR-070 (этап 1): админпанель — каноническое состояние G4-линта:
 /// шапка + сайдбар во вьюпортах и на обоих языках; Block-модаль.
 #[test]
