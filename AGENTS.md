@@ -37,8 +37,9 @@ Linux (X11/Wayland) и macOS — оконное приложение, платф
   Реализация — только по документу; по завершении агент обновляет статус
   («реализовано»), Changelog документа и `docs/ACCEPTANCE.md`.
 - `skills/` — пакет скиллов CanvasDesk MCP для внешних ИИ-агентов
-  (публикуемая производная реестра инструментов; 4 скилла + каталог
-  39 инструментов). **Любое изменение состава/семантики MCP-инструментов
+  (публикуемая производная реестра инструментов; актуальный счётчик
+  инструментов — только `skills/README.md`, единственный источник числа;
+  при правке руководствоваться им, не памятью). **Любое изменение состава/семантики MCP-инструментов
   (`TOOLS` в canvas-mcp, `mcp.rs` в canvas-scene) обязано обновлять
   `skills/` в том же коммите**: контракт-тест `skills_*` в canvas-mcp
   (полнота каталога, покрытие скиллами, счётчик README, call-позиции)
@@ -112,7 +113,7 @@ crates/
   canvas-preview-host/     # отдельный exe — песочница для IPreviewHandler
   canvas-widgets/          # M5: WebView2-хост, bridge, манифесты, снапшоты
   canvas-mcp/              # MCP-посредник: stdio JSON-RPC ↔ named pipe, run_stdio_with_transport (FR-037)
-  canvas-scene/            # модель сцены + mcp_dispatch (27+ инструментов) — платформенно-нейтральный, wasm (FR-037/ADR-0012)
+  canvas-scene/            # модель сцены + mcp_dispatch (каталог инструментов — реестр TOOLS в canvas-mcp; счётчик — skills/README.md) — платформенно-нейтральный, wasm (FR-037/ADR-0012)
   canvas-mcp-headless/     # headless MCP-сервер для wasmtime/wasip1 — верификация MCP-сессий без Windows (FR-037, лист-крейт)
   canvas-web/              # M8/W4 (wasm-port): web-платформенный слой — bindgen-обвязка, web-сервисы; трек B, лист в DAG (каркас)
   canvas-app/              # приложение: event loop, команды, UI-состояние, main()
