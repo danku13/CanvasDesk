@@ -53,8 +53,8 @@ pub enum KitState {
     /// Курсор над виджетом.
     Hovered,
     /// Keyboard-фокус (Tab-навигация). Рисует focus-ring по слоту `accent`
-    /// + state-layer 10%. `:focus-visible` семантика — только keyboard-origin
-    /// (mouse-click не активирует Focused, см. [`WidgetState::set_focused`]).
+    /// и state-layer 10%. `:focus-visible` семантика — только keyboard-origin:
+    /// mouse-click не активирует Focused (см. [`WidgetState::set_focused`]).
     Focused,
     /// Кнопка зажата.
     Pressed,
@@ -506,12 +506,28 @@ mod wave_t_tests {
 
     // --- AC-T1: KitState 7 values + state-layer ---
 
+    /// Stable-эквивалент `std::mem::variant_count::<KitState>()` (unstable,
+    /// issue #73662 — Wave T написал под ночным rustc; fix main): исчерпывающий
+    /// match — компилятор заставляет обновить при добавлении варианта.
+    fn kit_state_variant_count() -> usize {
+        match KitState::Normal {
+            KitState::Normal
+            | KitState::Hovered
+            | KitState::Focused
+            | KitState::Pressed
+            | KitState::Dragged
+            | KitState::Disabled
+            | KitState::Selected
+            | KitState::Error => 8,
+        }
+    }
+
     #[test]
     fn kit_state_has_8_variants_with_error() {
         // Wave T §5.1.1: 8 значений (Normal, Hovered, Focused, Pressed,
         // Dragged, Disabled, Selected, Error)
         assert_eq!(
-            std::mem::variant_count::<KitState>(),
+            kit_state_variant_count(),
             8,
             "KitState должен иметь 8 вариантов"
         );
@@ -547,10 +563,24 @@ mod wave_t_tests {
 
     // --- AC-T3: ButtonVariant 7 variants ---
 
+    /// Stable-эквивалент `std::mem::variant_count::<ButtonVariant>()`
+    /// (unstable — fix main; исчерпывающий match охраняет расширение).
+    fn button_variant_count() -> usize {
+        match ButtonVariant::Primary {
+            ButtonVariant::Primary
+            | ButtonVariant::Secondary
+            | ButtonVariant::Tertiary
+            | ButtonVariant::Ghost
+            | ButtonVariant::Text
+            | ButtonVariant::Danger
+            | ButtonVariant::Inverse => 7,
+        }
+    }
+
     #[test]
     fn button_variant_has_7_values() {
         assert_eq!(
-            std::mem::variant_count::<ButtonVariant>(),
+            button_variant_count(),
             7,
             "ButtonVariant должен иметь 7 вариантов"
         );

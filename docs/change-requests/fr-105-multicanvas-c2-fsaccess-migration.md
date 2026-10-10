@@ -55,12 +55,12 @@
 
 | Объект | Что меняется | Где в документации |
 |---|---|---|
-| canvas-web `fs_folder` (новый) | `FsAccessStore` (зеркало+очередь), пикер папки, персист dir-хэндла, старт №41c, миграция, watch, мост `StorageBridge` (web-реализация) | FR-105 |
+| canvas-web `fs_folder` (новый) | `FsAccessStore` (зеркало+очередь), пикер папки, персист dir-хэндла, старт №41c, миграция, watch; обратные вызовы — через конвейер `WebRequest`/`AppEvent` (унаследован от C1, отдельного моста нет) | FR-105 |
 | canvas-web `workspace` | Исполнитель миграции: трейт `MigrationIo` (IO-шов для нативных тестов), `MigrationDriver` (машина состояний: копирование → проверка → удаление), `MigrationReport`/`MigrationStep`, `execute_migration` | FR-105, контракт C0 (FR-103) не тронут |
 | canvas-web `web_state` | `ActiveKind::Folder`, `FOLDER_HANDLE`/`FS_STORE` (thread_local, JsValue !Send — в трейт-объекты не попадают), канал `send_event` для фоновых тасков | wasm-port §4 |
-| canvas-web `fs_access`/`opfs`/`export`/`app_spawn` | Автосейв режима папки (файл И `.bak` — в папку, R-T6; NotAllowedError → баннер), точка тихого старта в `init_scene` (минимальная, помечена `// FR-105`), экспорт активной версии из папки, инъекция моста + `?migrate=1` | FR-105 |
+| canvas-web `fs_access`/`opfs`/`export`/`app_spawn` | Автосейв режима папки (файл И `.bak` — в папку, R-T6; NotAllowedError → баннер), точка тихого старта в `init_scene` (минимальная, помечена `// FR-105`), экспорт активной версии из папки, `?migrate=1` (временный отладочный вход до C3) | FR-105 |
 | canvas-web `index.html` (JS-глю) | `dirHandlePut/dirHandleGet` (персист DIRECTORY-хэндла, ключ `"workspace"` — по образцу `handlePut/handleGet`), `dirList()` → Array<{name, ts}>, `handleMove(handle, newName)` | FR-105 |
-| canvas-app `app`/`handler`/`input`/`overlays`/`ui_registry` | AppEvent-блок `// FR-105` (StorageAccessLost/StorageReconnected/MigrateShowDialog/MigrateOpfsList/MigrateDone/MigrateFailed/ExtFileChanged), трейт `StorageBridge` + инъекция, баннер/диалог/тост-действие (render+hit+клавиатура+колесо), тост с действием живёт 8 с | FR-105 |
+| canvas-app `app`/`handler`/`input`/`overlays`/`ui_registry` | AppEvent-блок `// FR-105` (StorageAccessLost/StorageReconnected/MigrateShowDialog/MigrateOpfsList/MigrateDone/MigrateFailed/ExtFileChanged), запросы — через `WebRequest`-конвейер C1 (`pending_web_requests` + дренаж TourAwareApp), баннер/диалог/тост-действие (render+hit+клавиатура+колесо), тост с действием живёт 8 с | FR-105 |
 | canvas-app `storage_ui` (новый) | Чистые UI-модели: раскладка баннера, `MigrateState`/`MigrateLayout` (+ скролл-следование выбора), `toast_action_rect` | FR-105 |
 | canvas-core `workspace` | Чистая часть watch: `WatchSnapshot`, `snapshot_changed` (№45b/№53b) + нативные тесты (исполняются и под wasip1) | FR-103 (дополнение) |
 | canvas-ui `kit` | Фасадные реэкспорты констант баннера (`BANNER_*` — потребители не тянут внутренний путь `component::banner`) | FR-055 |
@@ -140,7 +140,7 @@ Write И Verify; ВСЕ копирования — до первого удал�
 
 - `cargo fmt --check` — OK;
 - `cargo clippy --workspace -- -D warnings` — OK;
-- `cargo test --workspace` — 2876 passed / 0 failed (в т.ч. 31 новый тест
+- `cargo test --workspace` — 2954 passed / 0 failed (в т.ч. 31 новый тест
   C2: core `snapshot_changed` ×2; web-`workspace` миграция ×7 (порядок фаз,
   частичный сбой, kept, суффиксы, машина состояний, идемпотентность
   ответов); web-`fs_folder` ×6 (старт-режим, контракт зеркала ×4,
@@ -197,6 +197,12 @@ WASM L2 (браузерный стенд) НЕ выполнялся: wasm-bindge
   реализация волны C2 (fs_folder + исполнитель миграции + баннер/диалог/
   тост-действие + watch + i18n-ключи, 30 нативных тестов); статус
   «реализовано, ожидает приёмки».
+- 2026-10-10 — финализация после прерывания сессии: ребейз на main
+  (990ed92 — C1-конвейер), замена собственного моста StorageBridge на
+  переиспользование WebRequest-конвейера C1 (унификация обратного канала),
+  fmt-дочистка дерева (вкл. волю Wave T), повторные гейты — 2954/0;
+  координатор (Super Z main): ревью задела, FR-105-сверка, работа завершена
+  от имени MC-C2.
 
 ## Источники истины (References)
 

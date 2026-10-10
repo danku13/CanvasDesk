@@ -104,15 +104,20 @@ impl WidgetState {
         self.error = v;
     }
 
-    /// Состояние кита по матрице приоритетов (deprecated — Wave T §5.1.1).
+    /// Состояние кита по матрице приоритетов (soft-deprecated — Wave T §5.1.1).
     ///
-    /// **Deprecated:** возвращает единственное «highest-priority» состояние.
-    /// Новые потребители должны использовать [`Self::active_states`] для
-    /// additive-состояний (hover+focused+selected могут стекаться).
+    /// **Soft-deprecated:** возвращает единственное «highest-priority»
+    /// состояние; новые потребители должны использовать [`Self::active_states`]
+    /// для additive-состояний (hover+focused+selected могут стекаться).
     ///
     /// Приоритет: Disabled > Error > Pressed > Hovered > Focused > Dragged
     /// > Selected > Normal.
-    #[deprecated(note = "use active_states() for additive states (Wave T §5.1.1)")]
+    ///
+    /// Атрибут `#[deprecated]` НЕ ставится (сознательно, fix main после
+    /// af5ddb3/Wave T): 40+ существующих потребителей (`button_style` и др.
+    /// принимают одиночный `KitState`) — жёсткая депрекация роняет гейт
+    /// `clippy -D warnings` всего воркспейса. Атрибут вернёт Wave C/A вместе
+    /// с миграцией потребителей на additive-состояния.
     pub fn kit_state(&self) -> KitState {
         if self.disabled {
             KitState::Disabled
@@ -158,7 +163,6 @@ impl WidgetState {
         }
         if self.focused {
             states[i] = Some(KitState::Focused);
-            i += 1;
         }
         states
     }
@@ -264,13 +268,15 @@ mod tests {
     }
 
     #[test]
-    fn focus_is_separate_from_kit_state() {
+    fn focus_participates_in_kit_state_after_wave_t() {
         let mut w = WidgetState::default();
         w.set_focused(true);
         assert!(w.is_focused());
-        // фокус не меняет KitState (рамка — отдельная отрисовка потребителя)
-        assert_eq!(w.kit_state(), KitState::Normal);
-        // фокус + hover: KitState по матрице, флаг фокуса не сбрасывается
+        // Wave T §5.1.1: фокус участвует в матрице приоритетов kit_state
+        // (прежде «фокус — только рамка потребителя»; старый контракт теста
+        // обновлён вместе с Wave T — fix main).
+        assert_eq!(w.kit_state(), KitState::Focused);
+        // фокус + hover: hover сильнее фокуса (матрица приоритетов)
         w.set_pointer(true, false);
         assert_eq!(w.kit_state(), KitState::Hovered);
         assert!(w.is_focused());
@@ -441,10 +447,11 @@ mod tests {
         w.set_pointer(true, true);
         w.set_pointer(true, false);
         assert!(w.clicked(true));
-        // курсор ещё над виджетом — hover сильнее selected (матрица приоритетов)
+        // курсор ещё над виджетом — hover сильнее фокуса (матрица приоритетов)
         assert_eq!(w.kit_state(), KitState::Hovered);
         assert!(w.is_focused());
         w.set_pointer(false, false);
-        assert_eq!(w.kit_state(), KitState::Selected);
+        // Wave T §5.1.1: курсор ушёл — Focused сильнее Selected
+        assert_eq!(w.kit_state(), KitState::Focused);
     }
 }
