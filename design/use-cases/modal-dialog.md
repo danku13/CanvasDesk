@@ -1,5 +1,12 @@
 # Модалка и диалог подтверждения (Modal / Confirm)
 
+> **Контракт поведения компонента.** Нормативный документ контура `design/`:
+> человек (владелец) читает его, чтобы понимать гарантии компонента; агент
+> приводит реализацию к контракту. Расхождение кода с контрактом — задача
+> на рефакторинг, а не правка контракта «под код». Источник истины по фактам:
+> `crates/canvas-ui/src/component/modal.rs`.
+> Актуализировано: 2026-10-10 (волны T/C/L, issue #47).
+
 ## 1. Назначение
 - **Modal-паттерн кита** — дим всего слота + центрированная панель: настройки,
   docs viewer, галерея, онбординг, диалоги.
@@ -14,30 +21,34 @@ Confirm (FR-060, measured geometry):
 | Паддинг гориз. | DIALOG_PAD_X 20 |
 | Заголовок y | 16 от верха, кегль 16 |
 | Тело y | 46, кегль 13 |
-| Кнопки | низ 16, высота DIALOG_BTN_H 30, зазор 16 |
+| Кнопки | низ 16, высота DIALOG_BTN_H 30 (= BUTTON_HEIGHT), зазор 16 |
 | Ширина | min 280, max 440 |
 | Отступ от вьюпорта | 40 |
 Settings (FR-039): MIN_W 560 / MAX_W 880 / MIN_H 400 / MAX_H 640,
-COMPACT < 1280, MOBILE < 768, nav 180, row 44, паддинг 12.
-Общий modal(): дим всего слота, панель по центру, радиус RADIUS_PANEL 10.
+COMPACT < 1280, MOBILE < 768, nav 180, row 52 (MODAL_ROW_HEIGHT), паддинг 12.
+Общий modal(): дим всего слота, панель по центру, радиус RADIUS_PANEL 10;
+min-инвариант панели приоритетен — при слоте меньше min панель прижимается
+к углу, сохраняя размер (без viewport-клампа, modal.rs).
 
 ## 3. Токены
 Панель DIALOG_FILL [0.09,0.11,0.15,0.97] (α 0.97 — канва чуть читается),
 рамка DIALOG_BORDER, primary-кнопка DIALOG_BUTTON_PRIMARY, secondary
 DIALOG_BUTTON_SECONDARY, рамка кнопок DIALOG_BUTTON_BORDER, заголовок/текст
 кнопок DIALOG_TEXT #E8ECF4, тело DIALOG_TEXT_MUTED #B6BECE. Дим фона —
-stage_dim (dark α0.6 / light α0.5).
+stage_dim (dark α0.6 / light α0.5). Кит-компонент Modal красит панель
+слотами panel_fill/panel_border (modal_style = panel_style).
 
 ## 4. Состояния
 Поверхность слоя **Modals (L5)**, capture = **Block**: перехватывает всё,
 клик мимо панели — контракт поверхности (обычно «закрыть» или «ничего»).
-Диалог поверх дока: только верхний Block обрабатывает ввод.
+Диалог поверх дока: только верхний Block обрабатывает ввод. Компонент Modal
+неинтерактивен: hit_test — панель (index 1) поверх дима (index 0, backdrop).
 
 ## 5. Взаимодействие
 - **Confirm**: primary — подтверждение (Enter), secondary — отмена (Esc).
   Порядок кнопок: primary справа. Клик по диму = отмена (Esc-семантика).
 - **Клавиатура**: Enter — primary; Esc — отмена и выход из Esc-стека;
-  Tab — фокус между кнопками (FocusRing панели).
+  Tab — фокус между кнопками (FocusRing панели, focus_order).
 - **Настройки**: навигация слева (nav 180), секции справа; Esc закрывает
   целиком; изменения применяются немедленно.
 - Открытие модалки снимает hover с канваса, драг отменяется.
@@ -50,12 +61,14 @@ stage_dim (dark α0.6 / light α0.5).
 - Диалог не «прыгает»: позиция центрируется на вьюпорт, не на курсор.
 
 ## 7. Где в коде
-`crates/canvas-ui/src/kit.rs` — modal (478–488); confirm — `crates/canvas-app/src/app.rs`
-(181–192 DIALOG_* константы, 10726+ цвета); настройки —
-`crates/canvas-app/src/settings_ui.rs` (30–76 константы); surface-декларации —
-`crates/canvas-app/src/app/ui_registry.rs`.
+`crates/canvas-ui/src/component/modal.rs` — modal (19–35), modal_style,
+focus_order (FR-062 F-17), Modal-компонент (layout [dim, panel], paint —
+только панель); confirm — `crates/canvas-app/src/app.rs` (DIALOG_*
+константы 252–270); настройки — `crates/canvas-app/src/settings_ui.rs`
+(MODAL_* 54–108; брейкпоинты SETTINGS_BP_* — `app/ui_registry.rs` 266–272);
+surface-декларации — `crates/canvas-app/src/app/ui_registry.rs`.
 
 ## 8. Что меняется при правке файла
 Габариты/паддинги → DIALOG_* / settings_ui константы. Цвета → colors.json
-dialog.* + tokens.rs (паритет). Поведение Block/дима — `../rules/05-layering.md`
-(правка через ADR, не через этот файл).
+dialog.* + tokens.rs (паритет). Поведение Block/дима —
+`../rules/05-layering.md` (правка через ADR, не через этот файл).
