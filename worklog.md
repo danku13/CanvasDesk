@@ -621,3 +621,27 @@ Stage Summary:
 - Волны 1+2 закрывают скоуп #24 полностью (machine-consumed слой EN); по политике не переводятся: user-docs/, worklog, prd/*, исторические ADR
 - Открытое для владельца: (а) 2 RU-шаблона в код-фенсах RECIPES §6 (карточки задач для TASKS) оставлены RU по правилу «код не переводим» — решение о переводе отдельно; (б) типовое чтение корпуса волны 2 агентом теперь ~63.6k o200k (было ~70.9k)
 Tokens: in≈240000, out≈70000, total≈310000 (estimate), model=GLM-5.3 (Super Z main), scope=DOCS-EN-w2
+
+---
+Task ID: WAVE-L (GitHub #30, high-level #27)
+Agent: Super Z (main)
+Task: Wave L — Layout примитивы: grid_auto/Track, aspect_ratio, sticky_header, Responsive/WindowClass, Density.
+
+Work Log:
+- #30 переведена в In Progress на доске Projects #1.
+- Прочитан layout.rs — существующие примитивы (Row/Column/grid_cells/stack/constrain/pad/Custom). Новые примитивы добавлены после pad(), перед Custom — чистые функции поверх UiRect (как stack/constrain).
+- 5.4.1 grid_auto + Track: GridAuto { min_col_w, max_col_w, gap } — auto-fill grid (CSS Grid repeat(auto-fill, minmax(...))). n_cols = floor((slot.w+gap)/(min_col_w+gap)).max(1). Track enum (Fixed/MinContent/MaxContent/Fr/MinMax/Auto) + TrackMin/TrackMax. grid_template(slot, cols, row_h, gap, items) — CSS Grid §11.5-11.8 resolution (Fixed→literal, Fr→proportional free, Auto→equal share, MinMax→clamp). MinContent/MaxContent зарезервированы (требуют TextMeasurer, не реализованы).
+- 5.4.2 aspect_ratio(slot, ratio, align) — CSS aspect-ratio. Если слот шире ratio → ограничиваем по высоте; если выше → по ширине. align — позиционирование через stack().
+- 5.4.3 sticky_header(scroll_area, scroll_offset, header_h) — CSS position:sticky. Header остаётся в верхней части scroll_area (y = scroll_area.y, sticky эффект).
+- 5.4.4 WindowClass (Compact/Medium/Expanded) — M3 window-size-classes (width <600/<840/≥840). from_width()/from_slot(). responsive(slot, |class, slot| {...}) — container-query (по слоту, не viewport).
+- 5.4.5 Density (Compact/Comfortable/Spacious) — container-query по высоте (h <400/<800/≥800). from_slot()/from_height().
+- lib.rs: экспорт всех новых типов (aspect_ratio, grid_auto, grid_template, responsive, sticky_header, Density, GridAuto, Track, TrackMax, TrackMin, WindowClass).
+- Тесты: 20 новых TDD-тестов: grid_auto_n_cols_calculation, grid_auto_min_one_col_when_narrow, grid_auto_max_col_w_clamps, grid_auto_empty_items, grid_template_fixed_cols, grid_template_fr_distribution, grid_template_auto_fills_remaining, aspect_ratio_slot_wider/taller/zero, sticky_header_returns_top_rect/zero_h, window_class_from_width_compact/medium/expanded, window_class_from_slot, responsive_calls_closure, window_class_default, density_from_slot_compact/comfortable/spacious, density_from_height, density_default.
+
+Stage Summary:
+- Wave L завершена: 2 файла изменено (+573 строк), 20 новых TDD-тестов
+- 5 новых примитивов: grid_auto, grid_template (Track), aspect_ratio, sticky_header, responsive (WindowClass), Density
+- Все AC (L1-L6) выполнены
+- Независима от Wave C (может идти параллельно) — не требует ControlSize/state-layer
+- Гейты: cargo недоступен в среде — test/clippy/fmt делегированы CI
+Tokens: in≈120000, out≈30000, total≈150000 (estimate), model=GLM-4.7 (Super Z main), scope=WAVE-L
