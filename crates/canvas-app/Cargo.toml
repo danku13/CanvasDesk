@@ -75,7 +75,7 @@ canvas-shell.workspace = true
 [features]
 # FR-079 (S3): L1-транспорт к sidecar laya-serve (ureq no-TLS, только
 # localhost). OFF по умолчанию: сетевых зависимостей в дефолтном дереве
-# нет (правило AGENTS.md «без сети в хосте»; sidecar — отдельный процесс).
+# нет (правило AGENTS.md "no network in the host"; sidecar — отдельный процесс).
 default = []
 l1-laya = ["canvas-suggest/l1-laya"]
 # FR-LLM-D / PRD-0010 F-3: L1-транспорт для генератора графов (через

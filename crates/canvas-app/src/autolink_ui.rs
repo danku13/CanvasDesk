@@ -369,7 +369,7 @@ pub fn footer_rect(win: [f32; 4]) -> [f32; 4] {
 // Visual change: gap between buttons changes `SPACING_MD` (10) →
 // `kit::GAP_CONTROLS = SPACING_SM` (8) — 2px per gap, 4px total shift of
 // the leftmost button (Reject_All). Accepted as canonicalization (parity
-// with Agent G's flowmap close-button 2-4px shift, AGENTS.md §«UI-кит»):
+// with Agent G's flowmap close-button 2-4px shift, AGENTS.md §"UI kit"):
 // aligns autolink footer with the kit's canonical `GAP_CONTROLS` value,
 // removing the local `SPACING_MD` deviation. `Create` (rightmost) is
 // flush with the previous position — Accept_All shifts +2px, Reject_All
