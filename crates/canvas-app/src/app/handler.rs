@@ -503,6 +503,17 @@ impl ApplicationHandler<AppEvent> for App {
                         wheel_texts,
                     );
                 }
+                // INT-2 (#44) P4: smart guides overlay (Wave A §5.5.6) —
+                // magenta-линии выравнивания + distance labels при drag ноды.
+                // Полоса WorldOverlay (как wheel-меню и guides FR-038 — мир-
+                // anchored линии, под панелями/попапами). Слой пуст вне drag
+                // (`smart_guides_frame = None`) — push пропускается.
+                if self.smart_guides_frame.is_some() {
+                    let (sg_instances, sg_texts) = self.smart_guides_overlay();
+                    if !sg_instances.is_empty() || !sg_texts.is_empty() {
+                        screen_bands.push(UiLayer::WorldOverlay, band_vp_clip, sg_instances, sg_texts);
+                    }
+                }
                 // FR-021: popup подсказок Numi-ввода — поверх редактора
                 {
                     // Волна 1 (п.5, H4): якорь у каретки при любом зуме/панораме —

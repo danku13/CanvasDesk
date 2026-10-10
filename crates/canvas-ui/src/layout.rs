@@ -859,26 +859,34 @@ pub fn aspect_ratio(slot: UiRect, ratio: f32, align: (HAlign, VAlign)) -> UiRect
 
 /// Sticky-блок в scroll-контейнере (Wave L §5.4.3).
 ///
-/// Аналог CSS `position: sticky`. Header «прилипает» к верху scroll-области
-/// при прокрутке: пока scroll_offset < header_h — header движется с контентом;
-/// при scroll_offset >= header_h — header «прилипает» к верху.
+/// Аналог CSS `position: sticky; top: 0`. Header находится в нормальном потоке
+/// контента (natural_y = `scroll_area.y` — верх контента), и при прокрутке
+/// движется вместе с контентом вверх, но «прилипает» к верху scroll-области,
+/// как только контент уходит выше порога. Кламп: header не может оказаться
+/// выше `scroll_area.y`.
 ///
-/// `scroll_offset` — сдвиг контента вверх (px, 0 = начало).
-/// `header_h` — высота sticky-блока.
-pub fn sticky_header(scroll_area: UiRect, _scroll_offset: f32, header_h: f32) -> UiRect {
-    // `_scroll_offset` сохранён в сигнатуре для будущей семантики sticky
-    // НЕ у верхнего края (Wave L §5.4.3 «движется с контентом до порога»);
-    // для хедера в самом верху scroll-области sticky = всегда верх
-    // (согласовано с тестом sticky_header_returns_top_rect). TODO(Wave L):
-    // дочитать семантику из §5.4.3, когда появится потребитель.
+/// Семантика `scroll_offset`:
+/// - `scroll_offset = 0` — контент в начале; header в естественной позиции
+///   (`scroll_area.y`).
+/// - `scroll_offset > 0` — контент прокручен вверх на `scroll_offset` px;
+///   natural_y = `scroll_area.y - scroll_offset` ушёл бы выше верха, sticky
+///   клампит header к `scroll_area.y` (прилип).
+/// - `scroll_offset < 0` — pull-down: контент сдвинут вниз; natural_y =
+///   `scroll_area.y - scroll_offset` > `scroll_area.y`, header движется с
+///   контентом вниз (sticky-кламп не срабатывает — уходит вниз разрешён).
+///
+/// `header_h` — высота sticky-блока; `<= 0.0` → возвращается `scroll_area`
+/// как fallback (нет хедера — нет клампа).
+pub fn sticky_header(scroll_area: UiRect, scroll_offset: f32, header_h: f32) -> UiRect {
     if header_h <= 0.0 {
         return scroll_area;
     }
-    // Sticky: header остаётся в верхней части scroll_area.
-    // При scroll_offset=0 — header в начале контента.
-    // При scroll_offset > 0 — header «прилипает» к верху scroll_area.
-    // y = scroll_area.y (всегда сверху, sticky эффект).
-    UiRect::new(scroll_area.x, scroll_area.y, scroll_area.w, header_h)
+    // Естественная позиция хедера в viewport-координатах: контент уехал вверх
+    // на scroll_offset → natural_y = scroll_area.y - scroll_offset.
+    // Sticky-кламп: header не может уйти выше верха scroll_area → y = max(...).
+    let natural_y = scroll_area.y - scroll_offset;
+    let y = natural_y.max(scroll_area.y);
+    UiRect::new(scroll_area.x, y, scroll_area.w, header_h)
 }
 
 /// Window size class (Wave L §5.4.4). Material 3 window-size-classes
@@ -2158,10 +2166,17 @@ mod tests {
     #[test]
     fn sticky_header_returns_top_rect() {
         let scroll_area = UiRect::new(10.0, 20.0, 300.0, 500.0);
-        let r = sticky_header(scroll_area, 50.0, 30.0);
-        // Sticky: header stays at top of scroll_area
+        // scroll_offset = 0: header в естественной позиции (верх контента = scroll_area.y).
+        let r = sticky_header(scroll_area, 0.0, 30.0);
         approx(r.x, 10.0);
-        approx(r.y, 20.0); // top of scroll_area
+        approx(r.y, 20.0); // scroll_area.y — natural position
+        approx(r.w, 300.0);
+        approx(r.h, 30.0);
+        // scroll_offset = 50: контент прокручен вверх — header «прилипает»
+        // к верху scroll_area (natural_y = 20 - 50 = -30 → кламп → 20).
+        let r = sticky_header(scroll_area, 50.0, 30.0);
+        approx(r.x, 10.0);
+        approx(r.y, 20.0); // scroll_area.y — sticky, не ушёл вверх с контентом
         approx(r.w, 300.0);
         approx(r.h, 30.0);
     }
@@ -2171,6 +2186,18 @@ mod tests {
         let scroll_area = UiRect::new(10.0, 20.0, 300.0, 500.0);
         let r = sticky_header(scroll_area, 0.0, 0.0);
         assert_eq!(r, scroll_area);
+    }
+
+    #[test]
+    fn sticky_header_negative_offset_pulls_down() {
+        // scroll_offset < 0 (pull-down): natural_y = scroll_area.y - scroll_offset
+        // > scroll_area.y → кламп не срабатывает, header движется с контентом вниз.
+        let scroll_area = UiRect::new(10.0, 20.0, 300.0, 500.0);
+        let r = sticky_header(scroll_area, -40.0, 30.0);
+        approx(r.x, 10.0);
+        approx(r.y, 60.0); // 20 - (-40) = 60
+        approx(r.w, 300.0);
+        approx(r.h, 30.0);
     }
 
     // --- AC-L5: WindowClass + responsive ---

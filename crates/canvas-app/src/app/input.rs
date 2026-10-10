@@ -1413,6 +1413,8 @@ impl App {
                 if let Some(renderer) = self.renderer.as_mut() {
                     renderer.clear_guides();
                 }
+                // INT-2 (#44) P4: smart-guides overlay гасится вместе с drag.
+                self.smart_guides_frame = None;
                 self.dragging = None;
             }
         }
@@ -4119,6 +4121,8 @@ impl App {
                 self.editor_dragging = false;
                 self.resizing = None;
                 self.minimap_drag = false;
+                // INT-2 (#44) P4: smart-guides overlay гасится на отпускании drag.
+                self.smart_guides_frame = None;
             }
         }
     }
@@ -4447,7 +4451,29 @@ impl App {
                 let world = self.cursor_world();
                 let delta = [world[0] - drag.grab_world[0], world[1] - drag.grab_world[1]];
                 let snap_frame = self.compute_snap_frame(&drag, delta);
-                let eff = snap_frame.as_ref().map_or(delta, |frame| frame.eff_delta);
+                let mut eff = snap_frame.as_ref().map_or(delta, |frame| frame.eff_delta);
+                // INT-2 (#44) P4: smart guides (Wave A §5.5.6, паттерн
+                // tldraw/Miro) — magenta-линии выравнивания + distance labels
+                // при drag. snap_offset применяется к eff_delta LIVE — нода
+                // видимо притягивается к центру/краю соседа в пределах
+                // SNAP_THRESHOLD (6 world px). Дополняет FR-038: тот — grid/
+                // guides release-time + collision live; smart_guides —
+                // center/edge alignment к siblings live.
+                //
+                // Release-time: apply_snap_at_release использует
+                // frame.outcome.dx/dy (grid/guides snap) — если он сработал,
+                // grid/guides snap побеждает (node прыгает к сетке/направляющей,
+                // smart-snap сбрасывается — это CORRECT behavior: пользователь
+                // явно включил snap_to_grid/guides). Если grid/guides snap НЕ
+                // сработал (corr == 0), apply_snap_at_release return false →
+                // finish_interaction_undo сохраняет текущую позицию (с
+                // smart-snap) — выравнивание сохраняется.
+                let smart_guides_pair = self.compute_smart_guides_frame(&drag, eff);
+                let smart_guides_frame = smart_guides_pair.as_ref().map(|(g, _)| g.clone());
+                if let Some((_, snap_offset)) = smart_guides_pair {
+                    eff[0] += snap_offset.x;
+                    eff[1] += snap_offset.y;
+                }
                 for (index, origin) in &drag.origins {
                     self.scene
                         .move_node(*index, origin[0] + eff[0], origin[1] + eff[1]);
@@ -4461,6 +4487,9 @@ impl App {
                 // FR-038 (п.2/8/9): предпросмотр — направляющие + ghost
                 // snapped-позиции; без снапа слой гасится
                 self.update_snap_preview(snap_frame.as_ref());
+                // INT-2 (#44) P4: сохраним кадр smart-guides для рендера
+                // оверлея (magenta lines + distance labels) — overlays.rs.
+                self.smart_guides_frame = smart_guides_frame;
                 self.request_redraw();
             } else if self.edge_drag.is_some() {
                 // Резиновая линия (T8) следует за курсором — курсор уже

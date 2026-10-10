@@ -150,6 +150,10 @@ use canvas_scene::{
     fit_template_node_height, formula_line_indices, split_formula_lines, SceneState,
 };
 
+/// INT-2 (#44) P3: ActionRegistry — единый реестр действий приложения
+/// (Wave A §5.5.3). Источник для command palette (Cmd+K), `?` cheatsheet,
+/// context menu, keyboard shortcuts (future binding через KeyboardRouter).
+pub mod actions;
 /// Wave A §5.5.6: smart guides — линии выравнивания + distance labels при drag.
 pub mod smart_guides;
 /// FR-090: продуктовые события PostHog из Rust — мост `canvasdesk:track`
@@ -1301,6 +1305,11 @@ pub struct App {
     /// Drag ноды (T7/CR-001): захваченная нода + исходные позиции всех
     /// перемещаемых (выделение или одна + дети групп).
     dragging: Option<DragState>,
+    /// INT-2 (#44) P4: smart guides — линии выравнивания + distance labels
+    /// при drag (Wave A §5.5.6, паттерн tldraw/Miro). None — drag не активен
+    /// или выравнивания нет. Заполняется в `on_cursor_moved` во время drag
+    /// (после `compute_snap_frame`), рендерится в `smart_guides_overlay`.
+    smart_guides_frame: Option<smart_guides::SmartGuides>,
     /// Пул системных тамбнейлов (T6): заказы по видимым нодам, ответы в канал.
     /// M8/W3: backend за трейтом (натив — ThumbService, web — W10); инъекция в App::new.
     thumbs: Box<dyn ThumbBackend>,
@@ -1739,6 +1748,11 @@ pub struct App {
     pub(crate) kit_gallery_open: bool,
     /// Wave D v1 (issue #32): демо-состояние витрины (тулбар/секции/переходы).
     pub kit_demo: crate::kit_demo::KitDemoState,
+    /// INT-2 (#44) P3: ActionRegistry — единый реестр действий приложения
+    /// (Wave A §5.5.3). Источник для command palette (Cmd+K), `?` cheatsheet,
+    /// context menu, keyboard shortcuts. Доступ — через
+    /// [`App::command_actions`].
+    action_registry: canvas_ui::kit::ActionRegistry,
     /// Wave D v1: кэш раскладки витрины последнего кадра (реестр хитов и
     /// навигация/press читают без пересчёта; обновляется в draw-пути).
     pub(crate) kit_demo_layout: Option<crate::kit_ui::GalleryLayout>,
@@ -2034,6 +2048,8 @@ impl App {
             selected: None,
             selected_nodes: Vec::new(),
             dragging: None,
+            // INT-2 (#44) P4: smart guides — пустой кадр до первого drag.
+            smart_guides_frame: None,
             thumbs,
             modifiers: ModifiersState::empty(),
             cursor: [0.0, 0.0],
@@ -2123,6 +2139,10 @@ impl App {
             // (в web включается параметром `?ui=debug` — url_params).
             kit_gallery_open: false,
             kit_demo: crate::kit_demo::KitDemoState::default(),
+            // INT-2 (#44) P3: реестр действий — 13 действий по 5 категориям
+            // (File/View/Navigate/Edit/Help). Источник для будущей палитры
+            // команд (Cmd+K), `?` cheatsheet, контекстного меню.
+            action_registry: actions::build_action_registry(),
             kit_demo_layout: None,
             admin_open: false,
             admin_section: crate::admin_ui::AdminSection::Components,
@@ -3915,6 +3935,57 @@ impl App {
             source,
             frame.tolerance_world,
         ));
+    }
+
+    // --- INT-2 (#44) P4: smart guides — интеграция в drag (Wave A §5.5.6) -----
+
+    /// Вычислить smart-guides кадра драга (Wave A §5.5.6, паттерн tldraw/Miro):
+    /// magenta-линии выравнивания (center/edge snap к видимым соседям) +
+    /// distance labels «N px». Возвращает None если drag пуст; snap_offset
+    /// — коррекция для live-выравнивания (0 если нет snapping-соседей).
+    ///
+    /// Геометрия: dragged = bbox по origins + уже применённая `eff_delta`
+    /// (post-collision-clamp); siblings — видимые ноды вне перемещаемого
+    /// набора (группы включены — паттерн выравнивания к контейнеру).
+    /// SNAP_THRESHOLD берётся из [`smart_guides::SNAP_THRESHOLD`] (6 world px).
+    fn compute_smart_guides_frame(
+        &self,
+        drag: &DragState,
+        eff_delta: [f32; 2],
+    ) -> Option<(smart_guides::SmartGuides, canvas_ui::geometry::UiVec2)> {
+        let bbox = drag_bbox(&self.scene.canvas, &drag.origins)?;
+        // dragged rect = bbox по origins + eff_delta (current live position).
+        let dragged = canvas_ui::geometry::UiRect::new(
+            bbox.x + eff_delta[0],
+            bbox.y + eff_delta[1],
+            bbox.w,
+            bbox.h,
+        );
+        // Siblings — видимые ноды вне перемещаемого набора. Запас на порог
+        // не нужен: compute_smart_guides внутри фильтрует по threshold.
+        let viewport = self.viewport_logical();
+        let visible_rect = self.camera.visible_world_rect(viewport);
+        let moving: Vec<usize> = drag.origins.iter().map(|(index, _)| *index).collect();
+        let visible_indices = self.scene.spatial.query_rect(visible_rect);
+        let siblings: Vec<canvas_ui::geometry::UiRect> = visible_indices
+            .iter()
+            .filter(|index| !moving.contains(index))
+            .filter_map(|index| self.scene.canvas.nodes.get(*index))
+            .map(|node| {
+                canvas_ui::geometry::UiRect::new(node.x, node.y, node.width, node.height)
+            })
+            .collect();
+        let (guides, snap_offset) =
+            smart_guides::compute_smart_guides(dragged, &siblings, smart_guides::SNAP_THRESHOLD);
+        Some((guides, snap_offset))
+    }
+
+    /// INT-2 (#44) P3: действия для command palette (Wave A §5.5.3 —
+    /// `ActionRegistry::command_actions()`). Палитра команд (Cmd+K) —
+    /// будущая волна; метод exposes реестр для любого UI-потребителя
+    /// (через `search_actions` Wave C).
+    pub(crate) fn command_actions(&self) -> Vec<canvas_ui::kit::CommandAction> {
+        self.action_registry.command_actions()
     }
 
     /// Snap-at-release (п.2/21): на отпускании drag применить snap-коррекцию

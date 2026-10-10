@@ -32,7 +32,7 @@ use canvas_ui::component::Component as _;
 use canvas_ui::geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
 // FR-062 (layout v2): примитивы measured/flex/wrap/grid — раскладка витрины
 // использует те же функции, что и потребители (живой образец).
-use canvas_ui::kit::{self, ButtonVariant, ControlStyle, KitPalette, KitState};
+use canvas_ui::kit::{self, ButtonVariant, ControlStyle, KitPalette, KitState, Response, WidgetExt};
 // FR-068 W1 (ADR-0014 §Решение п.5 P1): витрина — pilot-поверхность, раскладка
 // секций v2 идёт через [`pilot_backend`] (taffy за фичей — opt-in; на default
 // сборке backend тот же Native — геометрия байт-в-байт прежняя).
@@ -317,6 +317,18 @@ pub struct WaveCSlots {
     pub snackbar_anchor: UiRect,
     /// Поповер: якорь.
     pub popover_anchor: UiRect,
+    // --- INT-4 (#46): avatar (Wave C) + nav_rail (Wave A) ---
+    /// Avatar: слот всей секции (матрица 4×3). Клетки — в `avatar_cells`.
+    pub avatar: UiRect,
+    /// Avatar: 12 клеток матрицы (row-major: row=ControlSize Xs/Sm/Md/Lg,
+    /// col=вариант Initials/Icon/Image). Hit-цели совпадают с отрисовкой.
+    pub avatar_cells: Vec<UiRect>,
+    /// NavRail: rect rail-полосы (48px; фон под кнопками).
+    pub nav_rail_rail: UiRect,
+    /// NavRail: rect'ы кнопок (5 шт). Hit-цели совпадают с отрисовкой.
+    pub nav_rail_buttons: Vec<UiRect>,
+    /// NavRail: rect сайдбара (плейсхолдер содержимого активного пункта).
+    pub nav_rail_sidebar: UiRect,
 }
 
 /// Измеренные подписи демо-секций Wave C (заголовки уже в section_titles).
@@ -2700,6 +2712,9 @@ fn gallery_layout_impl(
 /// Высота контента секции Wave C (динамика состояний — дерево/аккордеон).
 fn wave_c_section_h(id: &str, d: &crate::kit_demo::KitDemoState) -> f32 {
     let md = canvas_ui::component::ControlSize::Md.button_h(); // 36
+    // INT-4 (#46): токены Wave T — Spacing::Sm.px() для зазоров между
+    // строками/кнопками (вместо bare литералов 8.0).
+    let gap_sm = canvas_ui::kit::Spacing::Sm.px();
     match id {
         "checkbox" | "slider" | "snackbar" | "popover" | "modal" | "command_palette" => md,
         "radio" => 3.0 * 24.0 + 2.0 * 6.0,
@@ -2723,6 +2738,15 @@ fn wave_c_section_h(id: &str, d: &crate::kit_demo::KitDemoState) -> f32 {
         "badge" => 24.0,
         "progress" => 40.0,
         "skeleton" => 3.0 * 10.0 + 2.0 * 6.0,
+        // INT-4 (#46): avatar — 4 строки размеров (Xs20/Sm26/Md32/Lg44) +
+        // 3 зазора Spacing::Sm.px() (8) + 4 px нижний пад (вне шкалы S1 —
+        // hairline-микрозначение, паттерн BUTTONS_SECTION_GAP_EXTRA).
+        "avatar" => {
+            20.0 + 26.0 + 32.0 + 44.0 + 3.0 * gap_sm + 4.0
+        }
+        // INT-4 (#46): nav_rail — 5 кнопок высотой 40 + 6 зазоров
+        // Spacing::Sm.px() (8): top-pad + 4 inter-button + bottom-pad.
+        "nav_rail" => 5.0 * 40.0 + 6.0 * gap_sm,
         _ => 0.0,
     }
 }
@@ -2974,6 +2998,92 @@ fn wave_c_consume(
                 base.slots.popover_anchor = cl.rect;
                 hits.push((cl.rect, crate::kit_demo::hit::POPOVER_ANCHOR));
             }
+            // INT-4 (#46): avatar — матрица 4×3 (row=ControlSize, col=вариант).
+            // Геометрия: row_h = size.icon_btn(), row_y накапливается с зазором
+            // Spacing::Sm.px() (8). В каждой строке 3 колонки одинаковой ширины
+            // `per` (control_w / 3 - gap). Hit-цель = весь квадрат аватара.
+            "avatar" => {
+                base.slots.avatar = slot;
+                let gap_sm = canvas_ui::kit::Spacing::Sm.px();
+                let per = ((control_w - 2.0 * gap_sm) / 3.0).max(0.0);
+                let sizes = [
+                    canvas_ui::component::ControlSize::Xs,
+                    canvas_ui::component::ControlSize::Sm,
+                    canvas_ui::component::ControlSize::Md,
+                    canvas_ui::component::ControlSize::Lg,
+                ];
+                let mut row_y = slot.y;
+                for size in sizes {
+                    let side = size.icon_btn();
+                    for col in 0..3usize {
+                        let cx = control_x + col as f32 * (per + gap_sm);
+                        // Центрируем квадрат аватара в клетке (per × row_h):
+                        // row_h = side (квадрат), x-центр — по середине клетки.
+                        let cell = UiRect::new(
+                            cx + (per - side).max(0.0) / 2.0,
+                            row_y,
+                            side,
+                            side,
+                        );
+                        let idx = base.slots.avatar_cells.len();
+                        base.slots.avatar_cells.push(cell);
+                        hits.push((cell, crate::kit_demo::hit::avatar(idx)));
+                    }
+                    row_y += side + gap_sm;
+                }
+            }
+            // INT-4 (#46): nav_rail — slim rail (48px) + sidebar (280px),
+            // 5 пунктов (Templates/Calc/Explain/Agent/Settings). Активный
+            // пункт — из demo.nav_rail_active. Hit-цели = кнопки (5 шт).
+            "nav_rail" => {
+                let gap_sm = canvas_ui::kit::Spacing::Sm.px();
+                let items = vec![
+                    canvas_ui::component::nav_rail::NavRailItem::new(
+                        "templates",
+                        "▤",
+                        tr(lang, crate::i18n::keys::KIT_DEMO_NAV_RAIL_TEMPLATES),
+                    ),
+                    canvas_ui::component::nav_rail::NavRailItem::new(
+                        "calc",
+                        "∑",
+                        tr(lang, crate::i18n::keys::KIT_DEMO_NAV_RAIL_CALC),
+                    ),
+                    canvas_ui::component::nav_rail::NavRailItem::new(
+                        "explain",
+                        "?",
+                        tr(lang, crate::i18n::keys::KIT_DEMO_NAV_RAIL_EXPLAIN),
+                    ),
+                    canvas_ui::component::nav_rail::NavRailItem::new(
+                        "agent",
+                        "✦",
+                        tr(lang, crate::i18n::keys::KIT_DEMO_NAV_RAIL_AGENT),
+                    ),
+                    canvas_ui::component::nav_rail::NavRailItem::new(
+                        "settings",
+                        "⚙",
+                        tr(lang, crate::i18n::keys::KIT_DEMO_NAV_RAIL_SETTINGS),
+                    ),
+                ];
+                let mut rail = canvas_ui::component::nav_rail::NavRail::new(items);
+                rail.active = d.nav_rail_active.min(rail.items.len().saturating_sub(1));
+                // Sidebar ограничиваем доступной шириной: rail (48) + sidebar
+                // (280) = 328 — помещается в control_w (≥ 540 на 1280×800).
+                let sidebar_w = 280.0_f32.min((control_w - 48.0).max(0.0));
+                let lay = canvas_ui::component::nav_rail::nav_rail_layout(
+                    slot,
+                    &rail,
+                    sidebar_w,
+                    48.0,
+                    40.0,
+                    gap_sm,
+                );
+                base.slots.nav_rail_rail = lay.rail;
+                base.slots.nav_rail_sidebar = lay.sidebar;
+                base.slots.nav_rail_buttons = lay.buttons.clone();
+                for (i, r) in lay.buttons.iter().enumerate() {
+                    hits.push((*r, crate::kit_demo::hit::nav_rail(i)));
+                }
+            }
             _ => {}
         }
     }
@@ -3040,6 +3150,12 @@ fn build_demo_layout(
     s.skeleton = shv(s.skeleton);
     s.snackbar_anchor = shv(s.snackbar_anchor);
     s.popover_anchor = shv(s.popover_anchor);
+    // INT-4 (#46): avatar + nav_rail — сдвиг+фильтр (паттерн slots выше).
+    s.avatar = shv(s.avatar);
+    s.avatar_cells = s.avatar_cells.into_iter().map(shv).collect();
+    s.nav_rail_rail = shv(s.nav_rail_rail);
+    s.nav_rail_buttons = s.nav_rail_buttons.into_iter().map(shv).collect();
+    s.nav_rail_sidebar = shv(s.nav_rail_sidebar);
 
     let mut hits: Vec<(UiRect, &'static str)> =
         wc.hits.into_iter().map(|(r, id)| (shv(r), id)).collect();
@@ -3176,6 +3292,30 @@ fn demo_state(pressed: Option<&str>, cursor: [f32; 2], r: &UiRect, id: &str) -> 
     } else {
         kit::KitState::Normal
     }
+}
+
+/// INT-2 (#44) P2: Response API (Wave A §5.5.1, паттерн egui) для демо-виджетов.
+///
+/// Строит [`WidgetState`] из (pressed, cursor, rect, id) → [`Response`] через
+/// [`Response::from_widget`]. `clicked = false` — ребро клика отслеживается в
+/// `App::click_kit_gallery` по hit-id (draw-функция не видит release-edge);
+/// `resp.state` заменяет `demo_state(...)` для KitState, `resp.hovered` — для
+/// hover-проверок, `resp.on_hover_text(...)` — chainable tooltip-регистрация
+/// (no-op сейчас, как `Response::on_hover_text` TODO Wave D; consumerская
+/// tooltip-state интеграция — будущая волна).
+///
+/// Миграция 3+ компонентов: chips / buttons / list rows (draw_demo_extras).
+fn demo_widget_response(
+    pressed: Option<&str>,
+    cursor: [f32; 2],
+    r: &UiRect,
+    id: &str,
+) -> Response {
+    let inside = cursor_in(r, cursor);
+    let pressed_now = pressed == Some(id) && inside;
+    let mut ws = WidgetState::default();
+    ws.set_pointer(inside, pressed_now);
+    Response::from_widget(*r, &ws, false)
 }
 
 /// Отрисовка demo-слоёв TO-BE поверх статичной витрины (draw==hit: rect'ы
@@ -3728,44 +3868,174 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             11.0,
         );
     }
+    // INT-4 (#46): Avatar — матрица 4×3 (row=ControlSize, col=вариант).
+    // Тон: Default для обычных, Primary для выбранного (avatar_selected).
+    // Wave T: Shape::Full.px() — круг (из avatar_style); Spacing::Sm.px()
+    // уже учтён в раскладке. Motion-комментарий: hover-state-layer и
+    // press-feedback используют Duration::Short2 (100 мс) + Easing::Standard
+    // (cubic-bezier(0.2, 0, 0, 1)) — канон Material 3 interaction-states.
+    if wc.avatar.w > 0.0 {
+        let sizes = [
+            canvas_ui::component::ControlSize::Xs,
+            canvas_ui::component::ControlSize::Sm,
+            canvas_ui::component::ControlSize::Md,
+            canvas_ui::component::ControlSize::Lg,
+        ];
+        // col 0 = Initials ("AB"), col 1 = Icon ("user"), col 2 = Image (0).
+        // Источник владеет String для Initials — строим свежий экземпляр на
+        // каждую клетку (clone из локальной строки i18n, не из массива).
+        let glyph_keys: [&'static str; 3] = [
+            crate::i18n::keys::KIT_DEMO_AVATAR_INITIALS,
+            crate::i18n::keys::KIT_DEMO_AVATAR_ICON,
+            crate::i18n::keys::KIT_DEMO_AVATAR_IMAGE,
+        ];
+        for (i, cell) in wc.avatar_cells.iter().enumerate() {
+            if cell.w <= 0.0 {
+                continue;
+            }
+            let row = i / 3;
+            let col = i % 3;
+            let size = sizes[row];
+            let glyph_key = glyph_keys[col];
+            let src = match col {
+                0 => canvas_ui::component::avatar::AvatarSource::Initials(label(glyph_key)),
+                1 => canvas_ui::component::avatar::AvatarSource::Icon("user"),
+                _ => canvas_ui::component::avatar::AvatarSource::Image(0),
+            };
+            let lay = canvas_ui::component::avatar::avatar_layout(*cell, src, size);
+            let selected = i == ctx.demo.avatar_selected;
+            let tone = if selected {
+                canvas_ui::kit::BadgeTone::Primary
+            } else {
+                canvas_ui::kit::BadgeTone::Default
+            };
+            let style = canvas_ui::component::avatar::avatar_style(tone, p);
+            d.control(lay.rect, &style);
+            // Содержимое: Initials → текст, Icon/Image → глиф-плейсхолдер.
+            match &lay.source {
+                canvas_ui::component::avatar::AvatarSource::Initials(s) => {
+                    d.label_center(lay.rect, s, style.text, size.button_h() * 0.45);
+                }
+                canvas_ui::component::avatar::AvatarSource::Icon(_) => {
+                    d.label_center(lay.rect, &label(glyph_key), style.text, size.button_h() * 0.5);
+                }
+                canvas_ui::component::avatar::AvatarSource::Image(_) => {
+                    d.label_center(lay.rect, &label(glyph_key), style.text, size.button_h() * 0.45);
+                }
+            }
+        }
+    }
+    // INT-4 (#46): NavRail — slim rail + sidebar. Wave T: Shape::S.px()
+    // для кнопок (через nav_rail_button_style); Spacing::Sm.px() для
+    // inter-button gap уже в раскладке. Sidebar-плейсхолдер рисуется
+    // panel_fill + Shape::M.px() (radius 10 — card/panel).
+    if wc.nav_rail_rail.w > 0.0 {
+        // Rail фон (вертикальная полоса слева).
+        d.rect(
+            wc.nav_rail_rail,
+            p.control_fill,
+            p.panel_border,
+            canvas_ui::kit::Shape::None.px(),
+        );
+        // Sidebar-плейсхолдер: правее rail — панель с подписью.
+        if wc.nav_rail_sidebar.w > 0.0 {
+            let panel_style = ControlStyle {
+                fill: p.panel_fill,
+                border: p.panel_border,
+                text: p.text,
+                radius: canvas_ui::kit::Shape::M.px(),
+                elevation: canvas_ui::kit::Elevation::None,
+            };
+            d.control(wc.nav_rail_sidebar, &panel_style);
+            d.label_left(
+                UiRect::new(
+                    wc.nav_rail_sidebar.x + canvas_ui::kit::Spacing::Sm.px(),
+                    wc.nav_rail_sidebar.y + canvas_ui::kit::Spacing::Sm.px(),
+                    wc.nav_rail_sidebar.w - 2.0 * canvas_ui::kit::Spacing::Sm.px(),
+                    16.0,
+                ),
+                &label(crate::i18n::keys::KIT_DEMO_NAV_RAIL_SIDEBAR),
+                p.text_muted,
+                11.0,
+            );
+        }
+        // Кнопки rail (5 шт): active → accent fill; hover/press от курсора.
+        // Motion-комментарий: переход active-state — Duration::Short2 (100 мс)
+        // + Easing::Standard; nav_rail_button_style возвращает ControlStyle с
+        // radius=Shape::S.px() (8) — токен Wave T.
+        let active = ctx.demo.nav_rail_active;
+        for (i, r) in wc.nav_rail_buttons.iter().enumerate() {
+            if r.w <= 0.0 {
+                continue;
+            }
+            let id = crate::kit_demo::hit::nav_rail(i);
+            let is_active = i == active;
+            let state = if is_active {
+                kit::KitState::Selected
+            } else {
+                demo_state(ctx.pressed, ctx.cursor, r, id)
+            };
+            let style = canvas_ui::component::nav_rail::nav_rail_button_style(is_active, state, p);
+            d.control(*r, &style);
+            // Иконка-глиф (Unicode) — по центру кнопки.
+            let icons = ["▤", "∑", "?", "✦", "⚙"];
+            if let Some(glyph) = icons.get(i) {
+                d.label_center(*r, glyph, style.text, 16.0);
+            }
+        }
+    }
 
     // --- Интерактивные оверрайды существующих секций (D1) ---
-    // Chips: состояние из демо (Selected) / курсора (Hovered/Pressed)
+    // Chips: состояние из демо (Selected) / курсора (Hovered/Pressed).
+    // INT-2 (#44) P2: миграция на Response API — `demo_widget_response`
+    // строит Response из WidgetState; `WidgetExt::with_state` (trait chain)
+    // переопределяет state для семантики Selected; `on_hover_text` (inherent
+    // + trait) регистрирует tooltip (no-op сейчас, как TODO Wave D).
     for (i, r) in ctx.lay.chips.iter().enumerate() {
         if r.w <= 0.0 {
             continue;
         }
         let id = crate::kit_demo::hit::chip(i);
+        let resp = demo_widget_response(ctx.pressed, ctx.cursor, r, id);
         let state = if ctx.demo.chips[i] {
-            if ctx.pressed == Some(id) && cursor_in(r, ctx.cursor) {
+            if resp.state == kit::KitState::Pressed {
                 kit::KitState::Pressed
             } else {
                 kit::KitState::Selected
             }
         } else {
-            demo_state(ctx.pressed, ctx.cursor, r, id)
+            resp.state
         };
-        let style = kit::chip_style(state, p);
+        // WidgetExt chain: переопределяем state на Response (семантика
+        // Selected — trait-only метод, не входит в inherent impl Response).
+        let resp = resp.with_state(state);
+        let style = kit::chip_style(resp.state, p);
         d.control(*r, &style);
         let Some(text_key) = STATE_LABELS.get(i) else {
             continue;
         };
         d.label_center(*r, crate::i18n::tr(ctx.lang, text_key), style.text, 12.0);
+        // Response chain: tooltip поверх hovered чипа (no-op — TODO Wave D
+        // интеграция с tooltip-state потребителя).
+        resp.on_hover_text("Chip state toggle");
     }
-    // Buttons: интерактивные состояния первого ряда матрицы
+    // Buttons: интерактивные состояния первого ряда матрицы.
+    // INT-2 (#44) P2: Response API — `resp.state` для KitState, chain
+    // `on_hover_text` регистрирует tooltip (no-op TODO Wave D).
     if let Some(row) = ctx.lay.button_rows.first() {
         for (i, r) in row.buttons.iter().enumerate() {
             if r.w <= 0.0 {
                 continue;
             }
             let id = crate::kit_demo::hit::button(i);
-            let state = demo_state(ctx.pressed, ctx.cursor, r, id);
-            let style = kit::button_style(row.variant, state, p);
+            let resp = demo_widget_response(ctx.pressed, ctx.cursor, r, id);
+            let style = kit::button_style(row.variant, resp.state, p);
             d.control(*r, &style);
             let Some(text_key) = STATE_LABELS.get(i) else {
                 continue;
             };
             d.label_center(*r, crate::i18n::tr(ctx.lang, text_key), style.text, 13.0);
+            resp.on_hover_text("Button state demo");
         }
     }
     // Switch: первое (Normal) — состояние из демо (kit::switch — слоты)
@@ -3799,17 +4069,21 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             );
         }
     }
-    // List: выделение из демо + hover
+    // List: выделение из демо + hover.
+    // INT-2 (#44) P2: Response API — `resp.state` для KitState (Selected
+    // обрабатывается отдельно как семантика строки списка), chain
+    // `on_hover_text` регистрирует tooltip (no-op TODO Wave D).
     for (idx, r) in &ctx.lay.list_rows {
         if r.w <= 0.0 {
             continue;
         }
         let selected = *idx == ctx.demo.list_sel;
         let id = crate::kit_demo::hit::list_row(*idx);
+        let resp = demo_widget_response(ctx.pressed, ctx.cursor, r, id);
         let state = if selected {
             kit::KitState::Selected
         } else {
-            demo_state(ctx.pressed, ctx.cursor, r, id)
+            resp.state
         };
         let style = kit::row_style(state, p);
         d.rect(*r, style.fill, [0.0; 4], 4.0);
@@ -3824,6 +4098,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             style.label,
             12.0,
         );
+        resp.on_hover_text("List row demo");
     }
     // Dropdown: подпись якоря = выбранное; меню при открытом + hover пунктов
     {
@@ -3879,8 +4154,21 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
     if let Some((mp, close)) = &dl.modal {
         // Backdrop поверх контента витрины
         d.rect(ctx.lay.panel, canvas_core::tokens::WHEEL_DIM, [0.0; 4], 0.0);
+        // INT-4 (#46): Wave T §5.2.3 — Elevation::Md под демо-модалкой.
+        // painter.control автоматически рисует shadow-квад ПЕРЕД fill, если
+        // elevation != None; токен Elevation::Md → (dy=4, blur=8, alpha=0.16).
+        // Motion-комментарий: enter-анимация модалки — Duration::Medium3
+        // (350 мс) + Easing::EmphasizedDecelerate (крупный вход, M3 spec);
+        // reduced-motion уважает effective_duration (canvas_ui::anim).
         let style = kit::modal_style(p);
-        d.rect(*mp, style.fill, style.border, style.radius);
+        let modal_cs = ControlStyle {
+            fill: style.fill,
+            border: style.border,
+            text: p.text_title,
+            radius: style.radius,
+            elevation: canvas_ui::kit::Elevation::Md,
+        };
+        d.control(*mp, &modal_cs);
         d.label_left(
             UiRect::new(mp.x + 16.0, mp.y + 12.0, mp.w - 56.0, 20.0),
             &label(crate::i18n::keys::KIT_DEMO_MODAL_TITLE),
@@ -5702,6 +5990,9 @@ mod tests {
             ("tree", crate::kit_demo::hit::TREE_TOGGLE),
             ("snackbar", crate::kit_demo::hit::SNACKBAR_SHOW),
             ("popover", crate::kit_demo::hit::POPOVER_ANCHOR),
+            // INT-4 (#46): новые секции end-to-end (scroll → хит в кадре).
+            ("avatar", crate::kit_demo::hit::avatar(0)),
+            ("nav_rail", crate::kit_demo::hit::nav_rail(0)),
         ] {
             let st = scroll_for(&opened, sid);
             let lay = gallery_layout_tobe(

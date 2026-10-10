@@ -572,6 +572,23 @@ pub mod keys {
     pub const KIT_SECTION_SKELETON: &str = "kit.section.skeleton";
     pub const KIT_SECTION_SNACKBAR: &str = "kit.section.snackbar";
     pub const KIT_SECTION_POPOVER: &str = "kit.section.popover";
+    /// INT-4 (#46): дополнительные секции витрины — avatar (Wave C),
+    /// nav_rail (Wave A). Не входили в Wave D v1 — закрытие demo-пробелов.
+    pub const KIT_SECTION_AVATAR: &str = "kit.section.avatar";
+    pub const KIT_SECTION_NAV_RAIL: &str = "kit.section.nav_rail";
+    pub const KIT_DESC_AVATAR: &str = "kit.desc.avatar";
+    pub const KIT_DESC_NAV_RAIL: &str = "kit.desc.nav_rail";
+    /// Подписи демо: строки матрицы аватаров (Xs/Sm/Md/Lg) + плейсхолдер
+    /// сайдбара nav_rail. Тексты короткие — без отдельных RU/EN plural-форм.
+    pub const KIT_DEMO_AVATAR_INITIALS: &str = "kit.demo.avatar_initials";
+    pub const KIT_DEMO_AVATAR_ICON: &str = "kit.demo.avatar_icon";
+    pub const KIT_DEMO_AVATAR_IMAGE: &str = "kit.demo.avatar_image";
+    pub const KIT_DEMO_NAV_RAIL_TEMPLATES: &str = "kit.demo.nav_rail_templates";
+    pub const KIT_DEMO_NAV_RAIL_CALC: &str = "kit.demo.nav_rail_calc";
+    pub const KIT_DEMO_NAV_RAIL_EXPLAIN: &str = "kit.demo.nav_rail_explain";
+    pub const KIT_DEMO_NAV_RAIL_AGENT: &str = "kit.demo.nav_rail_agent";
+    pub const KIT_DEMO_NAV_RAIL_SETTINGS: &str = "kit.demo.nav_rail_settings";
+    pub const KIT_DEMO_NAV_RAIL_SIDEBAR: &str = "kit.demo.nav_rail_sidebar";
     pub const KIT_DEMO_GROUP_INPUTS: &str = "kit.demo.group.inputs";
     pub const KIT_DEMO_GROUP_NAVIGATION: &str = "kit.demo.group.navigation";
     pub const KIT_DEMO_GROUP_CONTAINERS: &str = "kit.demo.group.containers";
@@ -1659,6 +1676,20 @@ const RU: &[(&str, &str)] = &[
     (keys::KIT_SECTION_SKELETON, "Скелетон (Skeleton: pulse)"),
     (keys::KIT_SECTION_SNACKBAR, "Снекбар (Snackbar с действием)"),
     (keys::KIT_SECTION_POPOVER, "Поповер (Popover со стрелкой)"),
+    // INT-4 (#46): avatar + nav_rail — закрытие demo-пробелов Wave D.
+    (keys::KIT_SECTION_AVATAR, "Аватар (Avatar: initials/icon/image × Xs–Lg)"),
+    (keys::KIT_SECTION_NAV_RAIL, "Nav rail (боковая навигация: rail + sidebar)"),
+    (keys::KIT_DESC_AVATAR, "Аватар · component::avatar — 3 источника × 4 ControlSize; клик выбирает"),
+    (keys::KIT_DESC_NAV_RAIL, "Nav rail · component::nav_rail — slim 48px + sidebar 280px, 5 пунктов"),
+    (keys::KIT_DEMO_AVATAR_INITIALS, "AB"),
+    (keys::KIT_DEMO_AVATAR_ICON, "👤"),
+    (keys::KIT_DEMO_AVATAR_IMAGE, "🖼"),
+    (keys::KIT_DEMO_NAV_RAIL_TEMPLATES, "Шаблоны"),
+    (keys::KIT_DEMO_NAV_RAIL_CALC, "Расчёт"),
+    (keys::KIT_DEMO_NAV_RAIL_EXPLAIN, "Объяснение"),
+    (keys::KIT_DEMO_NAV_RAIL_AGENT, "Агент"),
+    (keys::KIT_DEMO_NAV_RAIL_SETTINGS, "Настройки"),
+    (keys::KIT_DEMO_NAV_RAIL_SIDEBAR, "Sidebar — содержимое активного пункта"),
     (keys::KIT_DEMO_GROUP_INPUTS, "Ввод"),
     (keys::KIT_DEMO_GROUP_NAVIGATION, "Навигация"),
     (keys::KIT_DEMO_GROUP_CONTAINERS, "Контейнеры"),
@@ -3181,6 +3212,20 @@ const EN: &[(&str, &str)] = &[
     (keys::KIT_SECTION_SKELETON, "Skeleton (pulse)"),
     (keys::KIT_SECTION_SNACKBAR, "Snackbar with action"),
     (keys::KIT_SECTION_POPOVER, "Popover with arrow"),
+    // INT-4 (#46): avatar + nav_rail — closing demo gaps from Wave D.
+    (keys::KIT_SECTION_AVATAR, "Avatar (initials/icon/image × Xs–Lg)"),
+    (keys::KIT_SECTION_NAV_RAIL, "Nav rail (slim rail + sidebar)"),
+    (keys::KIT_DESC_AVATAR, "Avatar · component::avatar — 3 sources × 4 ControlSize; click selects"),
+    (keys::KIT_DESC_NAV_RAIL, "Nav rail · component::nav_rail — slim 48px + sidebar 280px, 5 items"),
+    (keys::KIT_DEMO_AVATAR_INITIALS, "AB"),
+    (keys::KIT_DEMO_AVATAR_ICON, "👤"),
+    (keys::KIT_DEMO_AVATAR_IMAGE, "🖼"),
+    (keys::KIT_DEMO_NAV_RAIL_TEMPLATES, "Templates"),
+    (keys::KIT_DEMO_NAV_RAIL_CALC, "Calc"),
+    (keys::KIT_DEMO_NAV_RAIL_EXPLAIN, "Explain"),
+    (keys::KIT_DEMO_NAV_RAIL_AGENT, "Agent"),
+    (keys::KIT_DEMO_NAV_RAIL_SETTINGS, "Settings"),
+    (keys::KIT_DEMO_NAV_RAIL_SIDEBAR, "Sidebar — content of the active item"),
     (keys::KIT_DEMO_GROUP_INPUTS, "Inputs"),
     (keys::KIT_DEMO_GROUP_NAVIGATION, "Navigation"),
     (keys::KIT_DEMO_GROUP_CONTAINERS, "Containers"),

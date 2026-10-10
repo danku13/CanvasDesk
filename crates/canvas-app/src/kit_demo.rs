@@ -58,6 +58,14 @@ pub mod hit {
     pub const TREE_IDS: [&str; 3] = ids!("tree", [0, 1, 2]);
     /// Пункты демо-палитры команд.
     pub const PALETTE_IDS: [&str; 3] = ids!("palette", [0, 1, 2]);
+    /// INT-4 (#46): матрица аватаров 4×3 — индекс 0..11 (Xs/Sm/Md/Lg ×
+    /// Initials/Icon/Image). Порядок: row-major — индекс = row*3 + col.
+    pub const AVATAR_IDS: [&str; 12] = ids!(
+        "avatar",
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    );
+    /// INT-4 (#46): пункты nav_rail (5 шт: Templates/Calc/Explain/Agent/Settings).
+    pub const NAV_RAIL_IDS: [&str; 5] = ids!("nav_rail", [0, 1, 2, 3, 4]);
 
     /// Взять статический id из таблицы (вне диапазона — пустой → игнор).
     fn pick(table: &[&'static str], i: usize) -> &'static str {
@@ -107,6 +115,14 @@ pub mod hit {
     pub fn palette_item(i: usize) -> &'static str {
         pick(&PALETTE_IDS, i)
     }
+    /// INT-4 (#46): аватар матрицы (индекс 0..11; row-major 4×3).
+    pub fn avatar(i: usize) -> &'static str {
+        pick(&AVATAR_IDS, i)
+    }
+    /// INT-4 (#46): пункт nav_rail (индекс 0..4).
+    pub fn nav_rail(i: usize) -> &'static str {
+        pick(&NAV_RAIL_IDS, i)
+    }
     /// Dropdown: якорь (open/close).
     pub const DROPDOWN_ANCHOR: &str = "dropdown:anchor";
     /// Переключатель секции Switch.
@@ -134,7 +150,8 @@ pub mod hit {
 
     /// Навигационные id сайдбара: `nav:<id секции>` (реестр требует
     /// статические строки — таблица выводится из реестра SECTIONS вручную).
-    pub const NAV_IDS: [&str; 26] = [
+    /// INT-4 (#46): +`nav:avatar` (DataDisplay) +`nav:nav_rail` (Navigation).
+    pub const NAV_IDS: [&str; 28] = [
         "nav:buttons",
         "nav:icon_buttons",
         "nav:chips",
@@ -148,6 +165,7 @@ pub mod hit {
         "nav:segmented",
         "nav:command_palette",
         "nav:tree",
+        "nav:nav_rail",
         "nav:card",
         "nav:modal",
         "nav:accordion",
@@ -157,6 +175,7 @@ pub mod hit {
         "nav:progress",
         "nav:skeleton",
         "nav:icons",
+        "nav:avatar",
         "nav:toast",
         "nav:tooltip",
         "nav:snackbar",
@@ -313,6 +332,13 @@ pub const SECTIONS: &[DemoSection] = &[
         title_key: keys::KIT_SECTION_TREE,
         desc_key: keys::KIT_DESC_TREE,
     },
+    // INT-4 (#46): nav_rail (Wave A) — закрытие demo-пробела Wave D.
+    DemoSection {
+        id: "nav_rail",
+        group: DemoGroup::Navigation,
+        title_key: keys::KIT_SECTION_NAV_RAIL,
+        desc_key: keys::KIT_DESC_NAV_RAIL,
+    },
     // --- Containers ---
     DemoSection {
         id: "card",
@@ -369,6 +395,13 @@ pub const SECTIONS: &[DemoSection] = &[
         title_key: keys::KIT_SECTION_ICONS,
         desc_key: keys::KIT_DESC_ICONS,
     },
+    // INT-4 (#46): avatar (Wave C) — закрытие demo-пробела Wave D.
+    DemoSection {
+        id: "avatar",
+        group: DemoGroup::DataDisplay,
+        title_key: keys::KIT_SECTION_AVATAR,
+        desc_key: keys::KIT_DESC_AVATAR,
+    },
     // --- Feedback ---
     DemoSection {
         id: "toast",
@@ -398,6 +431,9 @@ pub const SECTIONS: &[DemoSection] = &[
 
 /// Порядок секций Wave C в хвосте линейки раскладки (TO-BE) — должен
 /// совпадать с порядком потребления в `kit_ui::wave_c_consume`.
+/// INT-4 (#46): +`avatar` (Wave C) +`nav_rail` (Wave A) — добавлены в хвост,
+/// чтобы не сдвигать позиции существующих секций Wave D (golden-тесты
+/// gallery_layout_ruler_* пинят прежнюю геометрию).
 pub const WAVE_C_ORDER: &[&str] = &[
     "checkbox",
     "slider",
@@ -413,6 +449,8 @@ pub const WAVE_C_ORDER: &[&str] = &[
     "skeleton",
     "snackbar",
     "popover",
+    "nav_rail",
+    "avatar",
 ];
 
 /// Секция по id (сайдбар → раскладка/линт).
@@ -482,6 +520,12 @@ pub struct KitDemoState {
     pub palette_open: bool,
     /// Command palette: запрос (поле ввода).
     pub palette_query: String,
+    // --- INT-4 (#46): avatar (Wave C) + nav_rail (Wave A) ---
+    /// Avatar: индекс выбранного аватара в матрице 4×3 (0..11).
+    /// Клик по аватару делает его «выбранным» — тон `BadgeTone::Primary`.
+    pub avatar_selected: usize,
+    /// NavRail: индекс активного пункта (0..4; Templates/Calc/Explain/Agent/Settings).
+    pub nav_rail_active: usize,
 }
 
 impl Default for KitDemoState {
@@ -514,6 +558,8 @@ impl Default for KitDemoState {
             popover_open: false,
             palette_open: false,
             palette_query: String::new(),
+            avatar_selected: 0,
+            nav_rail_active: 0,
         }
     }
 }
@@ -624,6 +670,9 @@ pub fn apply_click(demo: &mut KitDemoState, id: &str) -> DemoEffect {
             demo.palette_query.clear();
             let _ = i;
         }
+        // --- INT-4 (#46): avatar + nav_rail ---
+        ("avatar", Some(i)) if i < 12 => demo.avatar_selected = i,
+        ("nav_rail", Some(i)) if i < 5 => demo.nav_rail_active = i,
         // Слайдер обрабатывается drag/клик-координатой (input.rs), не id.
         (hit::SLIDER, _) => {}
         _ => return DemoEffect::Ignored,
@@ -815,6 +864,49 @@ mod tests {
         apply_click(&mut d, "palette:1");
         assert!(!d.palette_open);
         assert!(d.palette_query.is_empty(), "палитра сбрасывает запрос");
+    }
+
+    #[test]
+    fn int4_avatar_and_nav_rail_sections_present() {
+        // Реестр секций включает новые компоненты (issue #46).
+        assert!(section("avatar").is_some(), "нет секции avatar");
+        assert!(section("nav_rail").is_some(), "нет секции nav_rail");
+        // Порядок Wave C: новые секции в хвосте — прежние позиции не сдвинуты.
+        assert_eq!(WAVE_C_ORDER.len(), 16);
+        assert_eq!(WAVE_C_ORDER[14], "nav_rail");
+        assert_eq!(WAVE_C_ORDER[15], "avatar");
+        // Группы: avatar → DataDisplay, nav_rail → Navigation.
+        assert_eq!(section("avatar").unwrap().group, DemoGroup::DataDisplay);
+        assert_eq!(section("nav_rail").unwrap().group, DemoGroup::Navigation);
+        // NAV_IDS покрывает новые секции (навигация сайдбара D5).
+        assert!(!hit::nav("avatar").is_empty(), "нет nav:avatar");
+        assert!(!hit::nav("nav_rail").is_empty(), "нет nav:nav_rail");
+    }
+
+    #[test]
+    fn int4_avatar_and_nav_rail_transitions() {
+        let mut d = KitDemoState::default();
+        // Avatar — выбор по индексу в матрице 4×3 (0..11)
+        apply_click(&mut d, "avatar:7");
+        assert_eq!(d.avatar_selected, 7);
+        apply_click(&mut d, "avatar:0");
+        assert_eq!(d.avatar_selected, 0);
+        // Вне диапазона — игнор (без паник)
+        assert_eq!(apply_click(&mut d, "avatar:12"), DemoEffect::Ignored);
+        assert_eq!(d.avatar_selected, 0);
+        // NavRail — выбор активного пункта (0..4)
+        apply_click(&mut d, "nav_rail:3");
+        assert_eq!(d.nav_rail_active, 3);
+        apply_click(&mut d, "nav_rail:0");
+        assert_eq!(d.nav_rail_active, 0);
+        // Вне диапазона — игнор
+        assert_eq!(apply_click(&mut d, "nav_rail:5"), DemoEffect::Ignored);
+        assert_eq!(d.nav_rail_active, 0);
+        // Хит-id таблицы совпадают с префиксами парсера
+        assert_eq!(hit::avatar(0), "avatar:0");
+        assert_eq!(hit::avatar(11), "avatar:11");
+        assert_eq!(hit::nav_rail(0), "nav_rail:0");
+        assert_eq!(hit::nav_rail(4), "nav_rail:4");
     }
 
     #[test]

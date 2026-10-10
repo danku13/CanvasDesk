@@ -949,3 +949,201 @@ fn lint_hints_open() {
         "hints НЕ в реестре (слепая зона LAY-W11); добавлен — переработать lint"
     );
 }
+
+// --- INT-1 (#43): G4-lint канонических состояний Wave C/A компонентов -------
+//
+// Wave C (issue #29) добавил 14 интерактивных компонентов (avatar — визуальный,
+// вне скоупа lint'а), Wave A (#31) — NavRail. Компоненты живут в демо-витрине
+// TO-BE (issue #32) через `app.kit_demo.<field>` состояние; канонический lint
+// покрывает каждый компонент отдельным состоянием × 3 вьюпорта × RU/EN
+// (паттерн `lint_kit_demo_tobe`):
+// * открывается `kit_gallery_open = true` + `kit_demo.tobe = true` — в кадре
+//   поверхность KIT_GALLERY (panel + theme + close);
+// * выставляется интерактивное состояние конкретного компонента — регрессия
+//   раскладки/demo-состояния поймана на всех канонических окнах/языках;
+// * `kit_demo_layout` кэш в headless-заглушке = None (первый кадр до paint) —
+//   demo_hits не пушатся (как в `lint_kit_demo_tobe`), базовый кадр линиируется.
+//
+// NavRail (Wave A) — отдельный случай: компонент canvas-ui, НЕ интегрирован в
+// kit_demo (нет секции в SECTIONS, нет hit-id); маркер-тест документирует
+// слепую зону (паттерн `lint_graph_builder_open`/`lint_hints_open`): assert
+// западает при добавлении секции и напомнит переработать lint на полный кадр.
+
+/// INT-1: Checkbox (Wave C §5.3.1) — цикл состояний Unchecked→Checked→
+/// Indeterminate. Каноническое состояние: Indeterminate (максимально
+/// отличное от default Unchecked — ловит регрессию state-диаграммы).
+#[test]
+fn lint_checkbox_demo() {
+    lint_state("checkbox_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+        app.kit_demo.checkbox = canvas_ui::component::checkbox::CheckboxState::Indeterminate;
+    });
+}
+
+/// INT-1: Slider (Wave C §5.3.2) — значение 0.0..=1.0. Каноническое состояние:
+/// 0.7 (не-default 0.35 — видимая позиция ползунка правее центра).
+#[test]
+fn lint_slider_demo() {
+    lint_state("slider_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+        app.kit_demo.slider_value = 0.7;
+    });
+}
+
+/// INT-1: RadioGroup (Wave C §5.3.3) — выбранный пункт. Каноническое состояние:
+/// последний пункт (radio_idx = 2 — максимальный индекс из RADIO_IDS[3]).
+#[test]
+fn lint_radio_demo() {
+    lint_state("radio_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+        app.kit_demo.radio_idx = 2;
+    });
+}
+
+/// INT-1: Tabs (Wave C §5.3.4) — активная вкладка. Каноническое состояние:
+/// последняя вкладка (tab_idx = 2 — TABS_IDS[3]).
+#[test]
+fn lint_tabs_demo() {
+    lint_state("tabs_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+        app.kit_demo.tab_idx = 2;
+    });
+}
+
+/// INT-1: Accordion (Wave C §5.3.5) — раскрытые секции. Каноническое состояние:
+/// все 3 заголовка раскрыты (максимальная высота контента — ловит регрессию
+/// `DEMO_ACCORDION_BODY_H` named step LAY7 + раскладки хвоста линейки).
+#[test]
+fn lint_accordion_demo() {
+    lint_state("accordion_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+        app.kit_demo.accordion_open = [true, true, true];
+    });
+}
+
+/// INT-1: Progress (Wave C §5.3.6) — неинтерактивный (визуальный индикатор).
+/// Каноническое состояние: kit_demo TO-BE открыт; progress-секция рисуется
+/// статически (нет demo-флага). Lint ловит регрессию базового кадра витрины.
+#[test]
+fn lint_progress_demo() {
+    lint_state("progress_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+    });
+}
+
+/// INT-1: Skeleton (Wave C §5.3.7) — неинтерактивный (плейсхолдер загрузки).
+/// Каноническое состояние: kit_demo TO-BE открыт; skeleton-секция статическая.
+#[test]
+fn lint_skeleton_demo() {
+    lint_state("skeleton_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+    });
+}
+
+/// INT-1: Badge (Wave C §5.3.8) — неинтерактивный (маркер/счётчик).
+/// Каноническое состояние: kit_demo TO-BE открыт; badge-секция статическая.
+#[test]
+fn lint_badge_demo() {
+    lint_state("badge_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+    });
+}
+
+/// INT-1: Popover (Wave C §5.3.9) — пузырь над якорем. Каноническое состояние:
+/// popover_open = true (раскрытый пузырь — максимальный кадр hit-rect'ов
+/// `popover:anchor`/`popover:close`).
+#[test]
+fn lint_popover_demo() {
+    lint_state("popover_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+        app.kit_demo.popover_open = true;
+    });
+}
+
+/// INT-1: Snackbar (Wave C §5.3.10) — всплывающее уведомление. Каноническое
+/// состояние: snackbar_visible = true (показан — hit-rect'ы `snackbar:close`).
+#[test]
+fn lint_snackbar_demo() {
+    lint_state("snackbar_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+        app.kit_demo.snackbar_visible = true;
+    });
+}
+
+/// INT-1: Tree (Wave C §5.3.11) — иерархия узлов. Каноническое состояние:
+/// tree_open = true (группа раскрыта), tree_sel = 1 (выбран 2-й лист —
+/// hit-rect'ы `tree_toggle` + `tree:0..2`).
+#[test]
+fn lint_tree_demo() {
+    lint_state("tree_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+        app.kit_demo.tree_open = true;
+        app.kit_demo.tree_sel = 1;
+    });
+}
+
+/// INT-1: SegmentedControl (Wave C §5.3.12) — активный сегмент. Каноническое
+/// состояние: последний сегмент (segmented_idx = 2 — SEGMENTED_IDS[3]).
+#[test]
+fn lint_segmented_demo() {
+    lint_state("segmented_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+        app.kit_demo.segmented_idx = 2;
+    });
+}
+
+/// INT-1: Command palette (Wave C §5.3.13) — демо-минивитрина внутри панели.
+/// Каноническое состояние: palette_open = true + palette_query = "search"
+/// (раскрытая палитра с запросом — hit-rect'ы `palette:close` + `palette:0..2`
+/// + поле ввода).
+#[test]
+fn lint_command_palette_demo() {
+    lint_state("command_palette_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+        app.kit_demo.palette_open = true;
+        app.kit_demo.palette_query = "search".into();
+    });
+}
+
+/// INT-1: NavRail (Wave A §5.5.4) — документированный статус «вне реестра».
+/// Компонент canvas-ui (`canvas_ui::component::nav_rail`), НЕ интегрирован в
+/// kit_demo витрину: нет секции в `SECTIONS`, нет hit-id в `kit_demo::hit`.
+/// `lint_state` — маркер канонического состояния (kit_demo TO-BE открыт);
+/// `lint_frame` проходит тривиально (как `lint_graph_builder_open`). Assert
+/// ниже западает при добавлении секции «nav_rail» в SECTIONS + интеграции в
+/// раскладку, напомнив переработать lint на полный кадр + hit-rect'ы кнопок
+/// rail (`nav_rail_layout`/`nav_rail_hit`).
+#[test]
+fn lint_nav_rail_demo() {
+    lint_state("nav_rail_demo", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+        // Каноничность состояния: kit_demo TO-BE открыт; NavRail нет в
+        // SECTIONS — слепая зона, lint проходит тривиально.
+        assert!(app.kit_demo.tobe);
+    });
+    // Верификация слепой зоны: frame НЕ содержит nav_rail поверхности
+    // (компонент Wave A не интегрирован в витрину). Когда секцию добавят —
+    // assert западает и напоминает переработать lint на полный кадр.
+    let mut app = lint_stub(Language::Ru);
+    app.kit_gallery_open = true;
+    app.kit_demo.tobe = true;
+    let frame = build_frame_at(&app, [1280.0, 800.0]);
+    assert!(
+        frame.surfaces.iter().all(|s| s.surface.as_str() != "nav_rail"),
+        "nav_rail НЕ в реестре (слепая зона INT-1); добавлен — переработать lint"
+    );
+}
