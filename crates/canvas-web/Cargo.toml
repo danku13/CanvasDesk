@@ -69,6 +69,8 @@ web-sys = { workspace = true, features = [
     "FileSystemGetFileOptions",
     "FileSystemFileHandle",
     "FileSystemHandle",
+    # FR-105 (мультиканвас C2): kind() листинга OPFS (files vs directories)
+    "FileSystemHandleKind",
     "FileSystemWritableFileStream",
     "FileSystemHandlePermissionDescriptor",
     "FileSystemPermissionMode",
@@ -93,6 +95,9 @@ web-sys = { workspace = true, features = [
     "VisualViewport",
     "Event",
     "EventTarget",
+    # FR-105 (мультиканвас C2): watch внешних изменений — visibility_state
+    # (poll lastModified на visibilitychange, №45b/№53b)
+    "VisibilityState",
     "DragEvent",
     "DataTransfer",
     "DataTransferItemList",

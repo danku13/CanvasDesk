@@ -334,6 +334,13 @@ pub(crate) async fn init_scene(params: &WebParams) -> WebScene {
             broken_link: None,
         };
     }
+    // FR-105 (мультиканвас C2, №41c — тихий выбор режима): сохранённый
+    // dir-хэндл с query-granted readwrite → старт в режиме папки; иначе
+    // тихо OPFS (браузерная матрица: Firefox/Safari всегда OPFS).
+    // requestPermission здесь НЕ вызывается (только query — без жеста).
+    if let Some(scene) = crate::fs_folder::try_folder_start(params).await {
+        return scene;
+    }
     let (root, name, broken) = match choose_canvas(params).await {
         Ok(triple) => triple,
         Err(err) => {

@@ -34,6 +34,21 @@ pub(crate) async fn export_active() {
                 }
             }
         }
+        // FR-105 (мультиканвас C2): granted-папка — последняя сохранённая
+        // версия живёт в папке (автосейв пишет туда же, см. fs_access)
+        Some(crate::web_state::ActiveKind::Folder) => {
+            let Some(dir) = crate::web_state::folder_handle() else {
+                tracing::warn!(target: "canvas_web", file = %name, "экспорт: папка не подключена");
+                return;
+            };
+            match crate::fs_folder::dir_read_text(&dir, &name).await {
+                Some(text) => text,
+                None => {
+                    tracing::warn!(target: "canvas_web", file = %name, "экспорт: файла нет в папке");
+                    return;
+                }
+            }
+        }
         _ => {
             // OPFS (или неизвестный тип — OPFS безопаснее): файл origin'а
             let Ok(root) = crate::opfs::opfs_root().await else {
@@ -90,6 +105,20 @@ pub(crate) async fn export_html_active() {
                 Ok(text) => text,
                 Err(err) => {
                     tracing::warn!(target: "canvas_web", file = %name, error = ?err, "экспорт HTML: чтение диска не удалось");
+                    return;
+                }
+            }
+        }
+        // FR-105 (мультиканвас C2): granted-папка — версия из папки
+        Some(crate::web_state::ActiveKind::Folder) => {
+            let Some(dir) = crate::web_state::folder_handle() else {
+                tracing::warn!(target: "canvas_web", file = %name, "экспорт HTML: папка не подключена");
+                return;
+            };
+            match crate::fs_folder::dir_read_text(&dir, &name).await {
+                Some(text) => text,
+                None => {
+                    tracing::warn!(target: "canvas_web", file = %name, "экспорт HTML: файла нет в папке");
                     return;
                 }
             }

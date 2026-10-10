@@ -264,6 +264,18 @@ impl ApplicationHandler<AppEvent> for App {
                         settings.dropdown_texts,
                     );
                 }
+                // FR-105 (мультиканвас C2, №44b): баннер потери доступа к
+                // granted-папке — полоса Panels сверху-по-центру (не
+                // блокирует работу: канвас под баннером жив).
+                if self.storage_banner.is_some() {
+                    let (banner_instances, banner_texts) = self.storage_banner_overlay();
+                    screen_bands.push(
+                        UiLayer::Panels,
+                        band_vp_clip,
+                        banner_instances,
+                        banner_texts,
+                    );
+                }
                 // FR-055 (этап U4): витрина кита — модаль поверх всего
                 // (Modals/Block: pick через реестр, backdrop закрывает);
                 // взаимоисключима с галереей схем/empty-state (прежняя
@@ -286,6 +298,13 @@ impl ApplicationHandler<AppEvent> for App {
                 } else if self.empty_state_visible() {
                     let (es_instances, es_texts) = self.empty_state_overlay();
                     screen_bands.push(UiLayer::Panels, band_vp_clip, es_instances, es_texts);
+                }
+                // FR-105 (мультиканвас C2, №42a/№52a): диалог миграции
+                // OPFS→granted-папка — модаль поверх канваса (затемнение
+                // рисует сам оверлей; вход — ?migrate=1 до волны C3).
+                if self.migrate.open {
+                    let (mig_instances, mig_texts) = self.migrate_dialog_overlay();
+                    screen_bands.push(UiLayer::Modals, band_vp_clip, mig_instances, mig_texts);
                 }
                 // Меню пустого канваса (T7): screen-space, константный размер
                 {
@@ -763,13 +782,22 @@ impl ApplicationHandler<AppEvent> for App {
                     screen_bands.push(UiLayer::Modals, dialog_clip, dialog_instances, dialog_texts);
                 }
                 // T21: toast — строка внизу центра, живёт 3 с (T21-A).
-                // Истечение проверяем ДО рендера (без borrow-конфликта)
+                // Истечение проверяем ДО рендера (без borrow-конфликта).
+                // FR-105 (мультиканвас C2, №45b): тост с действием
+                // («Перезагрузить») живёт дольше — TOAST_ACTION_TTL_MS —
+                // время прочитать и нажать; действие умирает вместе с тостом.
+                let toast_ttl = if self.toast_action.is_some() {
+                    crate::storage_ui::TOAST_ACTION_TTL_MS as f32 / 1000.0
+                } else {
+                    3.0
+                };
                 let toast_alive = self
                     .toast
                     .as_ref()
-                    .is_some_and(|(_, at)| at.elapsed().as_secs_f32() < 3.0);
+                    .is_some_and(|(_, at)| at.elapsed().as_secs_f32() < toast_ttl);
                 if !toast_alive {
                     self.toast = None;
+                    self.toast_action = None;
                 } else if let Some((text, _)) = &self.toast {
                     let viewport = self.viewport_logical();
                     // CR-016: при активном what-if бар занимает низ окна
@@ -795,8 +823,71 @@ impl ApplicationHandler<AppEvent> for App {
                     let mut toast_clip = canvas_ui::kit::toast_area(vp_rect, avoid);
                     // kit возвращает высоту 20.0 (высота строки текста);
                     // consumer-клип тоста — 28.0 (padding-полоса под текст
-                    // с интерлиньяжем) — сохраняем прежний визуал.
-                    toast_clip.h = 28.0;
+                    // с интерлиньяжем) — сохраняем прежний визуал. С действием
+                    // («Перезагрузить», №45b) полоса растёт до высоты кнопки
+                    // кита — scissor-клип (FR-CLIP) не режет её низ.
+                    toast_clip.h = if self.toast_action.is_some() {
+                        crate::storage_ui::TOAST_ACTION_STRIP_H
+                    } else {
+                        28.0
+                    };
+                    // FR-105 (№45b): кнопка-действия тоста («Перезагрузить»)
+                    // — справа от центрированного текста (геометрия —
+                    // storage_ui::toast_action_rect, hit-зона — поверхность
+                    // TOAST в реестре); клики мимо кнопки не глотаются.
+                    let mut toast_instances: Vec<CardInstance> = Vec::new();
+                    if self.toast_action.is_some() {
+                        let lang = self.settings.language;
+                        let label = crate::i18n::tr(lang, keys::CANVAS_EXT_RELOAD_ACTION);
+                        let mut m = crate::kit_ui::new_measurer();
+                        let mut fs = canvas_render::text::measure_font_system();
+                        let family = canvas_render::text::SANS_FAMILY;
+                        let font = crate::storage_ui::TOAST_ACTION_FONT;
+                        let size =
+                            canvas_ui::kit::button_size(label, &mut m, &mut fs, family, font);
+                        let text_w = m.width_of(&mut fs, text, family, font);
+                        let rect = crate::storage_ui::toast_action_rect(
+                            [toast_clip.x, toast_clip.y, toast_clip.w, toast_clip.h],
+                            text_w,
+                            size.x,
+                        );
+                        let cursor = self.cursor;
+                        let mut widget = WidgetState::default();
+                        widget.set_pointer(
+                            cursor[0] >= rect[0]
+                                && cursor[0] <= rect[0] + rect[2]
+                                && cursor[1] >= rect[1]
+                                && cursor[1] <= rect[1] + rect[3],
+                            false,
+                        );
+                        let style = canvas_ui::kit::button_style(
+                            canvas_ui::kit::ButtonVariant::Primary,
+                            widget.kit_state(),
+                            &self.effective_palette().kit_palette(),
+                        );
+                        let button = canvas_ui::UiRect::new(rect[0], rect[1], rect[2], rect[3]);
+                        let mut d = crate::kit_ui::KitDraw::new();
+                        d.control(button, &style);
+                        d.label_center(button, label, style.text, font);
+                        toast_instances = d.quads;
+                        // Подпись кнопки — тем же полосным пушем ниже (кит
+                        // отдаёт OwnedText; конвертация — как в overlays)
+                        for t in d.texts {
+                            screen_bands.push(
+                                UiLayer::Toasts,
+                                toast_clip,
+                                Vec::new(),
+                                vec![OwnedScreenText {
+                                    text: t.text,
+                                    origin: t.origin,
+                                    width: t.width,
+                                    font_size: t.font_size,
+                                    color: t.color,
+                                    align: t.align,
+                                }],
+                            );
+                        }
+                    }
                     // CR-015: origin — левый край области (контракт ScreenText):
                     // область [40, viewport−40] по центру окна, текст в её центре.
                     // FR-CLIP: тост — узкая полоса внизу центра, tight clip
@@ -804,12 +895,12 @@ impl ApplicationHandler<AppEvent> for App {
                     screen_bands.push(
                         UiLayer::Toasts,
                         toast_clip,
-                        Vec::new(),
+                        toast_instances,
                         vec![OwnedScreenText {
                             text: text.clone(),
                             origin: [40.0, toast_clip.y],
                             width: viewport[0] - 80.0,
-                            font_size: 14.0,
+                            font_size: crate::storage_ui::TOAST_ACTION_FONT,
                             color: token_color(canvas_core::tokens::TOAST_TEXT),
                             align: TextAlign::Center,
                         }],
@@ -1518,6 +1609,14 @@ impl ApplicationHandler<AppEvent> for App {
                 json,
                 storage,
             } => self.on_open_scene(path, json, storage),
+            // --- FR-105 (мультиканвас C2): события web-хранилища ---------
+            AppEvent::StorageAccessLost { detail } => self.on_storage_access_lost(detail),
+            AppEvent::StorageReconnected => self.on_storage_reconnected(),
+            AppEvent::MigrateShowDialog => self.open_migration_dialog(),
+            AppEvent::MigrateOpfsList(entries) => self.on_migrate_list(entries),
+            AppEvent::MigrateDone { moved } => self.on_migrate_done(moved),
+            AppEvent::MigrateFailed { moved } => self.on_migrate_failed(moved),
+            AppEvent::ExtFileChanged { name } => self.on_ext_file_changed(name),
             #[cfg(windows)]
             AppEvent::Desktop(event) => self.on_desktop_event(event),
             #[cfg(windows)]

@@ -147,8 +147,7 @@ pub fn ease(t01: f32, easing: Easing) -> f32 {
     let p123x = lerp(p12x, p23x, t);
     let p123y = lerp(p12y, p23y, t);
     let _final_x = lerp(p012x, p123x, t);
-    let final_y = lerp(p012y, p123y, t);
-    final_y
+    lerp(p012y, p123y, t)
 }
 
 // --- Существующие анимации (FR-055) -----------------------------------------
@@ -286,10 +285,7 @@ mod tests {
         assert_eq!(Easing::StandardAccelerate.bezier(), [0.3, 0.0, 1.0, 1.0]);
         assert_eq!(Easing::Emphasized.bezier(), [0.2, 0.0, 0.0, 1.0]);
         assert_eq!(Easing::EmphasizedDecelerate.bezier(), [0.05, 0.7, 0.1, 1.0]);
-        assert_eq!(
-            Easing::EmphasizedAccelerate.bezier(),
-            [0.3, 0.0, 0.8, 0.15]
-        );
+        assert_eq!(Easing::EmphasizedAccelerate.bezier(), [0.3, 0.0, 0.8, 0.15]);
     }
 
     #[test]
@@ -323,7 +319,11 @@ mod tests {
             Easing::EmphasizedAccelerate,
         ] {
             assert!(ease(0.0, e).abs() < 1e-6, "ease(0) != 0 for {:?}", e);
-            assert!((ease(1.0, e) - 1.0).abs() < 1e-6, "ease(1) != 1 for {:?}", e);
+            assert!(
+                (ease(1.0, e) - 1.0).abs() < 1e-6,
+                "ease(1) != 1 for {:?}",
+                e
+            );
         }
     }
 
@@ -335,7 +335,13 @@ mod tests {
         for i in 0..=steps {
             let t = i as f32 / steps as f32;
             let v = ease(t, Easing::Standard);
-            assert!(v >= prev - 1e-6, "not monotonic at t={}: {} < {}", t, v, prev);
+            assert!(
+                v >= prev - 1e-6,
+                "not monotonic at t={}: {} < {}",
+                t,
+                v,
+                prev
+            );
             prev = v;
         }
     }

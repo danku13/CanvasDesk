@@ -20,14 +20,16 @@
 use crate::web_state::ActiveKind;
 
 /// Имя Web Lock для канваса (чистая функция, нативные тесты):
-/// `canvasdesk.canvas.<opfs|disk>.<имя файла>` — префикс исключает
+/// `canvasdesk.canvas.<opfs|disk|folder>.<имя файла>` — префикс исключает
 /// коллизии с будущими локами приложения, скоуп — разделяет хранилища
-/// (OPFS `x.canvas` ≠ дисковый `x.canvas`).
+/// (OPFS `x.canvas` ≠ дисковый `x.canvas` ≠ папочный `x.canvas`, FR-105).
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // потребитель — imp (wasm); натив: только тесты
 pub(crate) fn lock_name_for(kind: ActiveKind, file_name: &str) -> String {
     let scope = match kind {
         ActiveKind::Opfs => "opfs",
         ActiveKind::Disk => "disk",
+        // FR-105 (C2): granted-папка — третий скоуп хранилища.
+        ActiveKind::Folder => "folder",
     };
     format!("canvasdesk.canvas.{scope}.{file_name}")
 }
