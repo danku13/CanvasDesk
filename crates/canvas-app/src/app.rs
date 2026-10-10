@@ -8934,7 +8934,11 @@ pub(crate) fn gesture_clock_ms() -> u64 {
 /// `viewport_h` — высота вьюпорта, `bottom_inset` — перекрытие низа
 /// клавиатурой (лог. px, ≥ 0).
 pub fn keyboard_shift_up(node_bottom_screen: f32, viewport_h: f32, bottom_inset: f32) -> f32 {
-    const MARGIN: f32 = 12.0;
+    // LAY-W21: зазор «низ ноды ↔ инсет клавиатуры / край вьюпорта» — пад
+    // между элементами, токен S1 `canvas_core::tokens::SPACING_LG` (значение
+    // прежнего литерала 12; паттерн W6 — именованная константа = значение
+    // токена, литерал был on-scale: только именование, I-1).
+    const MARGIN: f32 = canvas_core::tokens::SPACING_LG;
     let inset = bottom_inset.max(0.0);
     if inset <= f32::EPSILON || viewport_h <= f32::EPSILON {
         return 0.0;
