@@ -82,6 +82,7 @@ Tokens (правило учёта токенов — AGENTS.md). Записи д
 - 2026-10-10 | WAVE-T (GitHub #28, high-level #27) | Wave T — Tokens & States: KitState+Focused/Dragged/Error, 4-role pairs (ButtonVariant+3), ControlSize, Elevation, Duration/Easing, Shape, Spacing | worklog-2026-10-08_10-10.md
 - 2026-10-10 | WAVE-L (GitHub #30, high-level #27) | Wave L — Layout примитивы: grid_auto/Track, aspect_ratio, sticky_header, Responsive/WindowClass, Density | worklog-2026-10-08_10-10.md
 - 2026-10-10 | WAVE-C (GitHub #29, high-level #27) | Wave C — 15 новых компонентов (checkbox, slider, radio, tabs, command_palette, accordion, progress, skeleton, badge, popover, snackbar, avatar, tree, segmented) | worklog-2026-10-08_10-10.md
+- 2026-10-10 | MC-C4-DONE (GitHub #8, волна C4 мультиканваса; high-level #14) | Финализация C4: чип активного канваса №21c, title №28a, dirty-сигнал №29b, камера №12/№30b, онбординг №19, чистка DOM-панели №37b (FR-107) | текущий
 
 Архив: `worklog/archive/worklog-2026-10-02_10-08.md` (2026-10-02…2026-10-08, 46 записей). Ниже — записи с 2026-10-09.
 ---
@@ -122,3 +123,22 @@ Stage Summary:
 - C4-задел: AppEvent-конвейер и web_requests операции переиспользуются чипом; persist() переносится в точку менеджера (TODO в C1)
 - Открытые пункты: онбординг-шаг 10, чистка DOM-панели, чип, title — C4; desktop-слой и приёмка — C5
 Tokens: in≈560k, out≈130k, total≈690k (estimate; subagent MC-C3 + координаторская финализация), model=GLM, scope=FR-106
+
+---
+Task ID: MC-C4-DONE (GitHub #8, волна C4 мультиканваса; high-level #14; ядро волны — прерванная сессия MC-C4)
+Agent: Super Z (subagent MC-C4-DONE — финализация; worktree /home/z/my-project/canvasdesk/wt-c4, ветка wave/mc-c4)
+Task: Финализационный шаг волны C4 (FR-107): ревью+коммит незакоммиченного задела (document.title, камера web-часть, чистка DOM-панели №37b, SDK-туры), гейты, FR-107-документ + индекс, worklog-и. НЕ пушить.
+
+Work Log:
+- Ревью задела (22 файла): title_sync.rs (чистая document_title — 3 теста; wasm-обёртка в крючке web_state::set_active рядом с url_sync; ренейм активного переезжает в run_canvas_op), camera_web.rs (save/load по camera_key_for C0 + install_flush: visibilitychange→hidden + pagehide → CameraFlushRequested; стартовое восстановление App::apply_startup_camera в app_spawn, ?stress — дефолт), чистка №37b (index.html: #btn-recent/#btn-export + CSS-эллипсис удалены, <title> → «CanvasDesk»; toolbar.rs: set_recent_label и все 5 вызовов точек открытия убраны; SDK-туры RU/EN «три кнопки»→«две», шаги recent/export удалены, регресс-тест 3 шага; аудиты layout/touch_targets — эллипсис-кейсы сняты); недочётов/обрывков не найдено → коммит 0879e2a
+- Dirty-сигнал №29b проверен rg-ом: реализован в ядре волны (autosave_if_due -> Option<bool>; Some(false) → chip.save_failed + стойкий значок ⚠ + разовый тост canvas.chip.save_error_toast; Some(true) снимает; i18n RU/EN на месте; dot-индикаторов нет) — доработок не потребовалось
+- Гейты (все зелёные, фиксы не понадобились): cargo fmt --check OK; cargo clippy --workspace -- -D warnings OK; cargo test --workspace — 3081 passed / 0 failed; scripts/wasm_gate.sh --check OK; doc_lint 0 ошибок (933 ссылки)
+- FR-107-документ docs/change-requests/fr-107-multicanvas-c4-chip-title-onboarding.md по шаблону cr-template (образец fr-106): описание волны (чип №21c, title №28a, dirty №29b, камера №12/№30b, онбординг №19, чистка №37b), коммиты, гейты в §Проверка, 6 ручных дым-сценариев для владельца (Chromium ?log=debug), нумерация онбординга (9-й элемент ONBOARDING_STEPS = «шаг 10» сквозной нумерации issue) + строка в index-cr-fr.md → коммит 541fdae
+- Worklog-и: запись в журнале репозитория (эта) + append в оркестрационный /home/z/my-project/worklog.md
+- НЕ пушено, GitHub не тронут (координатор владеет issues/доской)
+
+Stage Summary:
+- Волна C4 закрыта целиком: чип активного канваса (вход в менеджер + инлайн-ренейм через конвейер C3), заголовок вкладки, камера в localStorage (перенос ключа ренеймом — готовый CanvasMoveCameraKey), финальная карточка онбординга с CTA «Создать канвас», панель из 3 кнопок; всего в волне 4 коммита (8fe51ae, 3795172, 0879e2a, 541fdae), 26+ новых тестов, i18n +9 ключей RU/EN
+- WASM L2 не выполнялся (нет wasm-bindgen CLI, 2 ядра/4 ГБ) — ручные сценарии 6 шт. в FR-107 §Проверка (чип-ренейм/коллизия/disk, title, камера после перезагрузки/ренейма, шаг онбординга, панель 3 кнопки RU/EN, dirty-значок)
+- За координатором: мерж wave/mc-c4 (+wt-c5 параллельно — пересечения i18n/canvas_manager_ui/app.rs промаркированы `// FR-107 (C4)`), приёмка CJM J4→J5→J7, закрытие issue #8
+Tokens: in≈600k, out≈160k, total≈760k (estimate; ядро волны прерванной сессии ≈in 420k/out 115k + финализация MC-C4-DONE ≈in 180k/out 45k), model=GLM (subagent MC-C4-DONE), scope=FR-107
