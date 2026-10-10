@@ -46,7 +46,10 @@ pub mod text_field;
 pub mod tree;
 pub mod two_column;
 
-use crate::geometry::{EdgeInsets, UiPoint, UiRect};
+use crate::geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
+// Wave A-фикс: nav_rail.rs импортирует бейдж-типы с корня компонента
+// (`crate::component::{BadgeKind, BadgeTone}`) — реэкспорт submodule.
+pub use self::badge::{BadgeKind, BadgeTone};
 
 // --- Состояния и стили ------------------------------------------------------
 

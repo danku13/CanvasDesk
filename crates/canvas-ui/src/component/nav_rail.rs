@@ -4,7 +4,7 @@
 //! (~280px). Decouples navigation from content — 19 поверхностей CanvasDesk
 //! за unified rail.
 
-use crate::component::{BadgeKind, BadgeTone, KitPalette, KitState, Shape};
+use crate::component::{BadgeKind, KitPalette, KitState, Shape};
 use crate::geometry::{UiPoint, UiRect};
 
 /// Элемент nav-rail (Wave A §5.5.4).
