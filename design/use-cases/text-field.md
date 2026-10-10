@@ -1,5 +1,12 @@
 # Текстовое поле (TextField)
 
+> **Контракт поведения компонента.** Нормативный документ контура `design/`:
+> человек (владелец) читает его, чтобы понимать гарантии компонента; агент
+> приводит реализацию к контракту. Расхождение кода с контрактом — задача
+> на рефакторинг, а не правка контракта «под код». Источник истины по фактам:
+> `crates/canvas-ui/src/component/text_field.rs`.
+> Актуализировано: 2026-10-10 (волны T/C/L, issue #47).
+
 ## 1. Назначение
 Однострочное поле ввода: поиск (Ctrl+F), фильтр галереи схем, фильтр палитры
 шаблонов, поля настроек, инлайн-редактирование заголовка ноды (world-слой,
@@ -9,7 +16,7 @@
 ## 2. Анатомия и размеры
 | Параметр | Значение |
 |---|---|
-| Высота | TEXT_FIELD_HEIGHT 30 (поиск: INPUT_HEIGHT 36; галерея: INPUT_H 34) |
+| Высота | TEXT_FIELD_HEIGHT 30 (поиск: INPUT_HEIGHT = kit-высота 30, LAY-W7 мигрировал прежние 36; галерея: INPUT_H 34) |
 | Мин. ширина | TEXT_FIELD_MIN_W 80 |
 | Гориз. паддинг | TEXT_FIELD_PAD_H 8 |
 | Радиус | RADIUS_CHIP 6 |
@@ -33,18 +40,19 @@ Hover-заливки у поля нет (поле идентифицируетс
     многострочных); Esc — отмена (откат к исходному значению).
   - Ctrl+B / Ctrl+I / Ctrl+H — жирный / курсив-обlique / ==highlight==
     разметка Numi (в редакторе ноды).
-  - Undo-глубина 50.
+  - Undo-глубина 100 (FR-100, UNDO_LIMIT).
 - **Фильтры**: ввод в поле поиска галереи = живой фильтр (без Enter);
   printable-символы при открытой галерее попадают в поле автоматически.
-- **Поиск**: дебаунс 200 мс, лимит результатов 16, максимум 8 видимых строк.
+- **Поиск**: дебаунс 200 мс, лимит результатов 16 (SEARCH_RESULTS_LIMIT),
+  максимум 8 видимых строк (MAX_VISIBLE_ROWS).
 
 ## 6. Граничные случаи
 - Пустой ввод + Enter — ничего не коммитится (или коммит пустого = отмена,
   по контракту поверхности).
 - Каретка и срезы — в символах Unicode (не байтах): кириллица/эмодзи не
   ломают позицию.
-- Ширина поля < текста: текст скроллится за кареткой (Clip-политика),
-  ellipsis не применяется к активному вводу.
+- Ширина поля < текста: в фокусе текст скроллится за кареткой (скролл-вслед,
+  IN3), ellipsis не применяется к активному вводу; вне фокуса — ellipsis.
 - Потеря фокуса (клик мимо, Esc-стек закрыл поверхность) — незакоммиченное
   значение откатывается.
 
@@ -53,17 +61,18 @@ Hover-заливки у поля нет (поле идентифицируетс
 (`TextFieldModel` — текст/каретка/селекция в символах + `max_chars`;
 `TextFieldAction`/`TextFieldEffect` + `apply` — клавиатурный контракт;
 `text_field()`/`text_field_masked()` — placeholder/ellipsis/скролл-вслед/
-маска; `caret_index_at_x` — клик → каретка). Фасад — `crates/canvas-ui/src/kit.rs`.
-Маппер клавиш (winit → TextFieldAction, буфер) —
-`crates/canvas-app/src/app/input.rs` (`text_field_action`, `apply_text_field_key`).
-Потребители: `search_ui.rs` (`SearchInput` — обёртка kit-модели),
-`scheme_gallery_ui.rs` (filter), `template_ui.rs` (filter), настройки
-(`App::settings_text_edit` — (строка, kit-модель), маска API-ключей),
-`explain_ui.rs` (EditField), `agent_panel.rs` (поле Ctrl+I). Рендер полей
-панелей — `app/overlays.rs::kit_field_view` (каретка 1.5 px accent,
-литералы «|» запрещены). Норматив поведения — `design/rules/09-input.md`.
-Многострочный редактор заметки — отдельная сущность (canvas-render/edit.rs,
-cosmic-text: Ctrl+B/I/H, undo 50).
+маска; `caret_index_at_x` — клик → каретка); константы TEXT_FIELD_* —
+`crates/canvas-ui/src/component/mod.rs` (445–449). Фасад —
+`crates/canvas-ui/src/kit.rs`. Маппер клавиш (winit → TextFieldAction,
+буфер) — `crates/canvas-app/src/app/input.rs` (`text_field_action`,
+`apply_text_field_key`). Потребители: `search_ui.rs` (`SearchInput` —
+обёртка kit-модели), `scheme_gallery_ui.rs` (filter), `template_ui.rs`
+(filter), настройки (`App::settings_text_edit` — (строка, kit-модель), маска
+API-ключей), `explain_ui.rs` (EditField), `agent_panel.rs` (поле Ctrl+I).
+Рендер полей панелей — `app/overlays.rs::kit_field_view` (каретка 1.5 px
+accent, литералы «|» запрещены). Норматив поведения —
+`design/rules/09-input.md`. Многострочный редактор заметки — отдельная
+сущность (canvas-render/edit.rs, cosmic-text: Ctrl+B/I/H, undo 100).
 
 ## 8. Что меняется при правке файла
 Высоты/паддинги → константы модулей + G4. Контракт клавиш → редактор

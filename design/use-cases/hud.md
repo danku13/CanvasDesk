@@ -1,5 +1,13 @@
 # HUD и отладочные оверлеи (F3 / F9)
 
+> **Контракт поведения компонента.** Нормативный документ контура `design/`:
+> человек (владелец) читает его, чтобы понимать гарантии компонента; агент
+> приводит реализацию к контракту. Расхождение кода с контрактом — задача
+> на рефакторинг, а не правка контракта «под код». Источник истины по фактам:
+> `crates/canvas-render/src/text.rs`, `crates/canvas-app/src/app.rs`,
+> `crates/canvas-app/src/debug_overlay.rs`. Актуализировано: 2026-10-10
+> (волны T/C/L, issue #47).
+
 ## 1. Назначение
 - **HUD (F3)** — одна строка диагностики производительности и сцены.
 - **DebugOverlay (F9 / `?ui=debug`)** — отладка поверхностей: слои, hit-rect'ы,
@@ -9,11 +17,11 @@
 | Параметр | Значение |
 |---|---|
 | Отступ от угла | HUD_PADDING 12 |
-| Кегль HUD | 14/18 (физ. px, не зумится) |
+| Кегль HUD | 14/18 (TYPE_HUD/TYPE_HUD_LINE, физ. px, не зумится) |
 | Цвет HUD | HUD #659CF8, тень #101012 |
 | Состав строки | fps · p95 · frame ms · visible/total нод · edges · instances · thumbnails+queue |
-| Бейджи | 10/12 (что-if индикатор при скрытом баре) |
-| Слой | HUD — поверх мира (рисуется в Debug-банде L8 вместе с overlay) |
+| Бейджи | 10/12 (what-if индикатор при скрытом баре — v1, не пересматривалось) |
+| Слой | рисуется текст-проходом рендера последним (поверх мира и оверлеев); DebugOverlay — Debug-банда L8 |
 
 ## 3. Токены
 hud color + hud_shadow (state-токены). DebugOverlay — служебная раскраска
@@ -31,14 +39,16 @@ hud color + hud_shadow (state-токены). DebugOverlay — служебная
 ## 6. Граничные случаи
 - Текст поверх светлой темы: тень #101012 сохраняет читаемость (4.5:1 к
   любому фону — правило HUD).
-- Что-if бар скрыт (окно < 900×600): индикатор режима показывается бейджем
-  в HUD.
+- What-if бар скрыт (окно < 900×600): индикатор режима бейджем в HUD —
+  v1, не пересматривалось.
 - Данные HUD не считаются, если HUD скрыт (нулевая цена).
 
 ## 7. Где в коде
-`crates/canvas-render/src/text.rs` (HUD_COLOR/тень/PADDING — 134–140, 254–257;
-сборка строки — canvas-app app.rs 8195–8225), DebugOverlay — canvas-ui +
-app (PRD-0009 F-10), хоткеи — HOTKEYS (lib.rs, F1-оверлей).
+`crates/canvas-render/src/text.rs` (HUD_PADDING 421, рендер строки 4436–4465;
+цвета/кегли — `crates/canvas-core/src/tokens.rs`: HUD 72, HUD_SHADOW 136,
+TYPE_HUD 311), сборка строки — `crates/canvas-app/src/app.rs` (hud_text 7437),
+DebugOverlay — `crates/canvas-app/src/debug_overlay.rs` + canvas-ui
+(PRD-0009 F-10), хоткеи — HOTKEYS (lib.rs, F1-оверлей).
 
 ## 8. Что меняется при правке файла
 Состав строки → app.rs. Цвета/кегль → tokens (state.hud, typography.hud_*).

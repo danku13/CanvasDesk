@@ -56,9 +56,20 @@ Three contours, three file types:
 
 **Use cases** (`use-cases/`) — one file per component:
 
-- Kit elements: `use-cases/button.md`, `use-cases/chip-badge.md`, `use-cases/text-field.md`,
-  `use-cases/switch.md`, `use-cases/dropdown.md`, `use-cases/tooltip.md`, `use-cases/toast.md`, `use-cases/modal-dialog.md`,
-  `use-cases/scrollbar.md`, `use-cases/icon.md`.
+- Kit elements (45 docs total, one per component; Wave C and audit-wave
+  components added 2026-10-10, issue #47): `use-cases/button.md`,
+  `use-cases/chip-badge.md` (Chip / Badge), `use-cases/chip-strip.md`,
+  `use-cases/text-field.md`, `use-cases/switch.md`, `use-cases/checkbox.md`,
+  `use-cases/radio.md`, `use-cases/radio-card.md`, `use-cases/segmented.md`,
+  `use-cases/slider.md`, `use-cases/dropdown.md`, `use-cases/popover.md`,
+  `use-cases/tooltip.md`, `use-cases/toast.md`, `use-cases/snackbar.md`,
+  `use-cases/modal-dialog.md`, `use-cases/scrollbar.md`, `use-cases/icon.md`,
+  `use-cases/avatar.md`, `use-cases/progress.md`, `use-cases/skeleton.md`,
+  `use-cases/tabs.md`, `use-cases/accordion.md`, `use-cases/tree.md`,
+  `use-cases/command-palette.md`, `use-cases/banner.md`,
+  `use-cases/chat-bubble.md`, `use-cases/footer.md`, `use-cases/crumbs.md`,
+  `use-cases/two-column.md`, `use-cases/list.md`, `use-cases/row.md`,
+  `use-cases/table.md`, `use-cases/panel.md`, `use-cases/panel-header.md`.
 - Canvas: `use-cases/card.md` (node card), `use-cases/edge.md` (edges), `use-cases/minimap.md`,
   `use-cases/wheel-menu.md`.
 - Surfaces: `use-cases/context-menu.md`, `use-cases/search-panel.md`, `use-cases/template-palette.md`,
@@ -67,6 +78,12 @@ Three contours, three file types:
 Every use case follows a single structure: Purpose → Anatomy and dimensions →
 Tokens → States → Interaction (mouse/keyboard) → Edge cases →
 Where it is in the code → What changes when the file is edited.
+
+Every use case opens with a contract header: the document is normative, the
+human (owner) reads it to understand the component's guarantees, the agent
+implements the contract in code — a code↔contract divergence is a refactoring
+task, not a contract edit. K1.1 note: a component appears in the K1 registry
+(`rules/10-components.md`) in the same wave as in code.
 
 The rules↔kit conformance audit: `rules-audit-2026-10.md`
 (the 00–09 → implementation matrix, rule gaps, the prioritized W1–W4 backlog).

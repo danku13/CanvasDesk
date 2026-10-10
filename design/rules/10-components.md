@@ -29,17 +29,32 @@ S3 heights) and the T2 font sizes. A new state = a new slot (П4), not a formula
 | Table | `table.rs` | retained orchestration of Row: a shared measurement → guides → window → per-row style → thumb | per-row KitState | TABLE_ZEBRA_RUN_MIN 4, paint_scrollbar |
 | Banner | `banner.rs` | an Info/Warning/Error strip: a border slot, text, an action button | button — ST1; text disabled_text | BANNER_TINT_ALPHA 0.10 (an alpha-tint of the kind slot) |
 | ChatBubble | `chat_bubble.rs` | a Normal/Error/Success message + tool-call lines | background/border — an alpha-tint of the kind slot (0.08/0.38) | CHAT_LINE_H, pad SPACING_SM |
-| RadioCard | `radio_card.rs` | a 12×12 indicator + label + desc; a selected ring | Normal/Hovered/Disabled + selected | RADIO_LABEL_LINE_H ≈ 17, tint accent α0.10 |
+| RadioCard | `radio_card.rs` | a 12×12 indicator + label + desc; a selected ring | Normal/Hovered/Disabled + selected | RADIO_LABEL_LINE_H 16, tint accent α0.10 |
 | Crumbs | `crumbs.rs` | a row of crumb chips, overflow take_while from the right edge | last-visible — Selected | CRUMB_H, CRUMB_FONT_SIZE 11 |
 | Footer | `footer.rs` | a 3-button right footer (Cancel/OK…) | buttons — ST1 | BUTTON_WIDTH 100 (reference-default; the measured width — footer_buttons_measured) |
 | TwoColumn | `two_column.rs` | [sidebar | content]: a fixed column + filling content (left/right) | containers | — |
 | Icon | `icon.rs` | IconKind → Vec<PaintItem> (data, not glyphs) | tint by a slot | the 18×18 slot; geometry — the former magic numbers (v2 unification) |
+| Accordion | `accordion.rs` | a header (chevron strip ▶/▼) + a collapsible content below | header — ST1; expanded = layout, not a KitState | header_h — a call param (tests 32), chevron_w 24 |
+| Avatar | `avatar.rs` | a square `size.icon_btn()` centered in the slot; sources Initials/Icon/Image | no own states; the consumer wrapper carries the state layer (8/10%, `state_layer_alpha`) | ControlSize Xs 20 / Sm 26 (ICON_BUTTON_SIZE) / Md 32 / Lg 44 (MIN_TOUCH_TARGET) |
+| Badge | `badge.rs` | Dot 8×8; Count/Text pill h 16, w = text + 8, a top-right anchor | tone → slot: Default/Primary/Success/Warning/Danger/Info | DOT 8, pill h 16, w = text + 8, Shape::Full |
+| Checkbox | `checkbox.rs` | a box (side = `chip_h()`) + a ✓/− glyph + a label to the right | 3 states (Unchecked/Checked/Indeterminate) × ST1 | ControlSize Xs 20 / Sm 24 / Md 28 / Lg 32, label_gap 8 (Spacing::Sm) |
+| CommandPalette | `command_palette.rs` | a top-center window min(560, viewport.w−80), offset 60: input + result rows | input — the TextField contract; a result row — ST1, the selected cursor | window 560 / offset 60, input_h — param (tests 40), row_h — param (tests 32) |
+| Popover | `popover.rs` | content by the consumer's `content_size` + an arrow; flips Below/Above at the edge | open/closed — SurfaceRegistry (L3, Block capture); content controls — ST1 | gap 12 = arrow 8 + gap 4 |
+| Progress | `progress.rs` | Linear: a track (track_h = max(button_h·0.2, 2)) + a fill; LinearIndeterminate: a 40% fill by phase; Circular: Ø 2·radius | no interaction states (display) | periods: LinearIndeterminate 1500 ms, Spinner 1000 ms (deterministic phase, M3) |
+| Radio | `radio.rs` | a circle (side = `chip_h()`) + a label to the right (measured, ellipsis) | a RadioGroup { options, selected } × ST1 | ControlSize Xs 20 / Sm 24 / Md 28 / Lg 32 |
+| Segmented | `segmented.rs` | a pill container + N equal segments (seg_w = slot.w/N), the active fill | the container — ST1 (Hovered/Pressed → hover_fill) | seg_w = slot.w / N |
+| Skeleton | `skeleton.rs` | TextLines/Card/Table rect patterns (TextLines: the last line 70%) | display-only pulse α [0.04, 0.12] | pulse period 1500 ms (deterministic phase, M3) |
+| Slider | `slider.rs` | a track (h = button_h·0.4, min 4) + a fill + a knob (side = button_h·0.6) | value × ST1 (Hovered/Pressed → hover_fill, Disabled) | track min 4, knob Sm 18 |
+| Snackbar | `snackbar.rs` | message + an optional action — a single pill bottom-center | lifecycle push → expire (tick retain); ST1 on the action | ttl 3000 ms (TOAST_TTL_MS), offset 24 (SPACING_XL) |
+| Tabs | `tabs.rs` | a bar + N equal tabs; an Underline indicator (tab_w×0.6, h 2) or a Pill (inset 4) | the active index — a flag, not KitState::Selected (persistent, orthogonal to hover) × ST1 | bar_h — a call param (tests 36), indicator 0.6/h 2, Pill inset 4 |
+| Tree | `tree.rs` | node rows: chevron 16, icon 20, gaps 4 | the selected cursor × ST1; keyboard resolver declared (tree_key) — a refactor task | chevron 16, icon 20, gap 4 |
 
 Rules:
 
 - **K1.1** A new kit component must appear in this table in the same wave as
   in code (the FR-058/FR-068 lesson: 11 components broke away from the rules —
-  see audit §2-B1).
+  see audit §2-B1). Restored in sync 2026-10-10 (issue #47): the 14 Wave C
+  components are in the table.
 - **K1.2** Component choice: a list of rows — List; table guides — Row/Table;
   an exclusive choice — RadioCard; a status strip — Banner; an agent message —
   ChatBubble. Do not breed parallel solutions.
