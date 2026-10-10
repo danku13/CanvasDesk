@@ -95,6 +95,9 @@ pub mod keys {
     pub const ROW_BOTTLENECK: &str = "settings.row.bottleneck";
     pub const ROW_FOCUS_MODE: &str = "settings.row.focus_mode";
     pub const ROW_HUD_ON_START: &str = "settings.row.hud_on_start";
+    /// Wave M (issue #51): адаптивные модали 80% (β) — тумблер таба «Общие».
+    pub const ROW_MODALS_ADAPTIVE: &str = "settings.row.modals_adaptive";
+    pub const DESC_MODALS_ADAPTIVE: &str = "settings.desc.modals_adaptive";
     pub const ROW_LANGUAGE: &str = "settings.row.language";
     /// FR-047: тема-пресет (таб «Внешний вид»).
     pub const ROW_THEME_PRESET: &str = "settings.row.theme_preset";
@@ -1311,6 +1314,11 @@ const RU: &[(&str, &str)] = &[
         "Hover/выделение ноды подсвечивает связи и соседей, остальное притемняется.",
     ),
     (keys::ROW_HUD_ON_START, "HUD при старте"),
+    (keys::ROW_MODALS_ADAPTIVE, "Адаптивные модали (β)"),
+    (
+        keys::DESC_MODALS_ADAPTIVE,
+        "Окна модалей — 80% от вьюпорта; узкие окна (≤767) — мобильная одноколоночная вёрстка. Экспериментальная функция Wave M.",
+    ),
     (
         keys::DESC_HUD_ON_START,
         "Показывать HUD (fps/p95, F3) сразу при запуске.",
@@ -2844,6 +2852,11 @@ const EN: &[(&str, &str)] = &[
         "Hovering or selecting a node highlights its edges and neighbours, the rest dims.",
     ),
     (keys::ROW_HUD_ON_START, "HUD at startup"),
+    (keys::ROW_MODALS_ADAPTIVE, "Adaptive modals (β)"),
+    (
+        keys::DESC_MODALS_ADAPTIVE,
+        "Modal windows take 80% of the viewport; narrow windows (≤767) use mobile single-column layout. Wave M experimental feature.",
+    ),
     (
         keys::DESC_HUD_ON_START,
         "Show the HUD (fps/p95, F3) right at startup.",
@@ -4412,6 +4425,7 @@ mod tests {
             keys::ROW_BOTTLENECK,
             keys::ROW_FOCUS_MODE,
             keys::ROW_HUD_ON_START,
+            keys::ROW_MODALS_ADAPTIVE,
             keys::ROW_LANGUAGE,
             keys::ROW_SNAP_ENABLED,
             keys::ROW_SNAP_GRID,

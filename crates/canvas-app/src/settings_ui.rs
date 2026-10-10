@@ -135,6 +135,10 @@ pub enum SettingsRow {
     EdgeAggregation,
     /// HUD (F3) включён при старте.
     HudOnStart,
+    /// Wave M (issue #51): адаптивные модали 80% (β) — окна модалей 80%
+    /// вьюпорта, ≤767 — mobile-style (kit::modal_rect_flex). Тумблер в
+    /// табе «Общие»; демо-фаза Wave M (M4), после приёмки — дефолт (M5).
+    ModalsAdaptive,
     /// FR-040: язык интерфейса (русский/English).
     Language,
     /// FR-047 (PRD-0006 D4/F-8): тема-пресет (Nord, Dracula, Catppuccin,
@@ -258,7 +262,7 @@ pub enum SettingsRow {
 /// Плоский список всех строк настроек (инвариант полноты: union строк
 /// табов == этот список без дублей). Тема — вне списка (карточки,
 /// отдельное поле `settings.theme`).
-pub const SETTINGS_ROWS: [SettingsRow; 57] = [
+pub const SETTINGS_ROWS: [SettingsRow; 58] = [
     SettingsRow::ButtonCorner,
     SettingsRow::Grid,
     SettingsRow::GridStyle,
@@ -277,6 +281,7 @@ pub const SETTINGS_ROWS: [SettingsRow; 57] = [
     SettingsRow::FocusMode,
     SettingsRow::EdgeAggregation,
     SettingsRow::HudOnStart,
+    SettingsRow::ModalsAdaptive,
     SettingsRow::ThemePreset,
     SettingsRow::Language,
     SettingsRow::ExplainDepthLimit,
@@ -348,7 +353,11 @@ pub const SETTINGS_TABS: [SettingsTab; 9] = [
         title_key: keys::TAB_GENERAL,
         icon: "◎",
         theme_cards: false,
-        rows: &[SettingsRow::ButtonCorner, SettingsRow::HudOnStart],
+        rows: &[
+            SettingsRow::ButtonCorner,
+            SettingsRow::HudOnStart,
+            SettingsRow::ModalsAdaptive,
+        ],
     },
     SettingsTab {
         title_key: keys::TAB_CANVAS,
@@ -501,6 +510,7 @@ pub fn row_label_key(row: SettingsRow) -> &'static str {
         SettingsRow::FocusMode => keys::ROW_FOCUS_MODE,
         SettingsRow::EdgeAggregation => keys::ROW_EDGE_AGGREGATION,
         SettingsRow::HudOnStart => keys::ROW_HUD_ON_START,
+        SettingsRow::ModalsAdaptive => keys::ROW_MODALS_ADAPTIVE,
         SettingsRow::ThemePreset => keys::ROW_THEME_PRESET,
         SettingsRow::Language => keys::ROW_LANGUAGE,
         SettingsRow::SnapEnabled => keys::ROW_SNAP_ENABLED,
@@ -595,6 +605,7 @@ pub fn row_desc_key(row: SettingsRow) -> &'static str {
         SettingsRow::Role => keys::DESC_ROLE,
         SettingsRow::TelemetryCounter => keys::DESC_TELEMETRY_COUNTER,
         SettingsRow::TelemetryAnalytics => keys::DESC_TELEMETRY_ANALYTICS,
+        SettingsRow::ModalsAdaptive => keys::DESC_MODALS_ADAPTIVE,
         SettingsRow::TplCatBackend
         | SettingsRow::TplCatNetwork
         | SettingsRow::TplCatUnitEconomics
@@ -707,6 +718,7 @@ pub fn row_kind(row: SettingsRow) -> RowKind {
         | SettingsRow::FocusMode
         | SettingsRow::EdgeAggregation
         | SettingsRow::HudOnStart
+        | SettingsRow::ModalsAdaptive
         | SettingsRow::ExplainCoverage
         | SettingsRow::AutolinkEnabled
         | SettingsRow::SuggestEnabled
@@ -842,7 +854,9 @@ pub fn dropdown_value(row: SettingsRow, settings: &Settings) -> Option<String> {
         | SettingsRow::TelemetryAnalytics
         | SettingsRow::DragPushRebase
         // FR-LLM-B: тумблер AI-телеметрии — состояние по pill-ручке
-        | SettingsRow::AiTelemetry => None,
+        | SettingsRow::AiTelemetry
+        // Wave M (issue #51): тумблер адаптивных модалей — по pill-ручке
+        | SettingsRow::ModalsAdaptive => None,
         // FR-LLM-OAUTH-APP: строка «Вход ChatGPT» — статус показывает бейдж,
         // dropdown-кнопки нет.
         | SettingsRow::AiOAuth
@@ -1097,7 +1111,9 @@ pub fn dropdown_options(row: SettingsRow, settings: &Settings) -> Vec<(String, b
         | SettingsRow::TelemetryAnalytics
         | SettingsRow::DragPushRebase
         // FR-LLM-B: тумблер телеметрии AI — dropdown не открывает (Toggle)
-        | SettingsRow::AiTelemetry => Vec::new(),
+        | SettingsRow::AiTelemetry
+        // Wave M (issue #51): тумблер адаптивных модалей (Toggle)
+        | SettingsRow::ModalsAdaptive => Vec::new(),
         // FR-LLM-OAUTH-APP: строка «Вход ChatGPT» — меню не открывает
         // (RowKind::Button; клик по кнопке — apply_button_row).
         | SettingsRow::AiOAuth
@@ -1364,7 +1380,9 @@ pub fn apply_dropdown_value(settings: &mut Settings, row: SettingsRow, index: us
         | SettingsRow::TelemetryCounter
         | SettingsRow::TelemetryAnalytics
         // FR-LLM-B: тумблер телеметрии AI — apply_toggle_row (App), не dropdown
-        | SettingsRow::AiTelemetry => {}
+        | SettingsRow::AiTelemetry
+        // Wave M (issue #51): адаптивные модали — apply_toggle_row (App)
+        | SettingsRow::ModalsAdaptive => {}
         // FR-LLM-OAUTH-APP: строка «Вход ChatGPT» — apply_button_row (App),
         // не dropdown; no-op здесь.
         | SettingsRow::AiOAuth
@@ -2479,10 +2497,14 @@ mod tests {
             assert!(seen.contains(&row), "строка вне табов: {row:?}");
         }
         assert_eq!(seen.len(), SETTINGS_ROWS.len());
-        // Распределение v1 (FR-039 §1)
+        // Распределение v1 (FR-039 §1); Wave M (#51): ModalsAdaptive — «Общие»
         assert_eq!(
             SETTINGS_TABS[0].rows,
-            &[SettingsRow::ButtonCorner, SettingsRow::HudOnStart]
+            &[
+                SettingsRow::ButtonCorner,
+                SettingsRow::HudOnStart,
+                SettingsRow::ModalsAdaptive
+            ]
         );
         assert_eq!(
             SETTINGS_TABS[1].rows,
@@ -2691,6 +2713,11 @@ mod tests {
                 SettingsRow::HudOnStart => {
                     assert_eq!(row_kind(row), RowKind::Toggle);
                     let _ = defaults.hud_on_start;
+                }
+                // Wave M (issue #51): флаг адаптивных модалей — bool-поле
+                SettingsRow::ModalsAdaptive => {
+                    assert_eq!(row_kind(row), RowKind::Toggle);
+                    let _ = defaults.modals_adaptive;
                 }
                 // FR-038: тумблеры магнитной раскладки — булевы поля Settings
                 SettingsRow::SnapEnabled => {
@@ -3398,10 +3425,10 @@ mod tests {
     #[test]
     fn modal_layout_structure_and_hit_tests() {
         let viewport = [1600.0, 900.0];
-        // Таб 0 (Общие): 2 строки, карточек нет
+        // Таб 0 (Общие): 3 строки (Wave M #51: + ModalsAdaptive), карточек нет
         let layout = modal_layout(0, viewport);
         assert_eq!(layout.nav_items.len(), SETTINGS_TABS.len());
-        assert_eq!(layout.rows.len(), 2);
+        assert_eq!(layout.rows.len(), 3);
         assert!(layout
             .rows
             .iter()

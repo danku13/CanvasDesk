@@ -409,6 +409,13 @@ pub struct Settings {
     /// подсвечивает её связи и соседей, остальное притемняется.
     /// Старые конфиги без поля грузятся как false (serde default).
     pub focus_mode: bool,
+    /// Wave M (issue #51): адаптивные модали 80% (β) — окна 12 модалей
+    /// берутся из kit::modal_rect_flex (80% вьюпорта; ≤767 — mobile-style
+    /// full-bleed, см. design/modals-audit-2026-10.md). Флаг OFF — прежние
+    /// размеры/ветки рендера. Демо-фаза: после приёмки M4 дефолт станет
+    /// true (M5, отдельное решение владельца). Старые конфиги без поля —
+    /// false (serde default).
+    pub modals_adaptive: bool,
     /// Зона захвата портов ноды для старта drag связи (CR-003): в экранных
     /// px. Больше зона — не нужно целиться при протягивании связей. Дефолт —
     /// первый пресет; значения клампятся в `[PORT_ZONE_MIN, PORT_ZONE_MAX]`.
@@ -655,6 +662,7 @@ impl Default for Settings {
             // FR-047: пресет не выбран — классическая тема `theme`.
             theme_preset: String::new(),
             focus_mode: false,
+            modals_adaptive: false,
             port_zone_px: PORT_ZONE_PRESETS[0],
             // Ревизия FR-025 (2026-09-16): палитра примарно свёрнута.
             template_palette_open: false,
@@ -1060,6 +1068,7 @@ mod tests {
             edges_avoid_nodes: false,
             hud_on_start: true,
             focus_mode: true,
+            modals_adaptive: false,
             port_zone_px: 28.0,
             template_palette_open: false,
             line_ports: true,
@@ -1445,6 +1454,7 @@ platt_b = -0.814
         assert_eq!(settings.theme, Theme::Dark);
         assert!(settings.edges_avoid_nodes, "дефолт — огибать ноды");
         assert!(!settings.hud_on_start);
+        assert!(!settings.modals_adaptive, "Wave M: дефолт флага — off");
         assert!(warn.is_none());
     }
 
@@ -1580,6 +1590,7 @@ platt_b = -0.814
         assert!(text.contains("theme"), "{text}");
         assert!(text.contains("edges_avoid_nodes"), "{text}");
         assert!(text.contains("hud_on_start"), "{text}");
+        assert!(text.contains("modals_adaptive"), "{text}");
         assert!(text.contains("port_zone_px"), "{text}");
         assert!(text.contains("line_ports"), "{text}");
         assert!(text.contains("onboarding_done"), "{text}");
