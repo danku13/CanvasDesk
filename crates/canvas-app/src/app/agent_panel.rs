@@ -379,6 +379,194 @@ fn to_xywh(r: UiRect) -> [f32; 4] {
     [r.x, r.y, r.w, r.h]
 }
 
+/// Кегль текста баблов журнала — единый для wrap-замера (геометрия) и
+/// рендера (FR-053: метрики раскладки = метрики рендера). LAY-W20: общая
+/// константа единого прохода журнала ([`agent_log_walk`]) и draw-рендера.
+const BUBBLE_FONT: f32 = 11.0;
+
+/// LAY-W20: rect полосы журнала сообщений из rect'а панели — единый для
+/// draw (`agent_panel_overlay`) и hit (`agent_panel_hit`). Прежде формула
+/// дублировалась в обеих сторонах (hit — со своей ручной версией).
+fn agent_log_rect(panel: [f32; 4]) -> UiRect {
+    let log_y = panel[1] + HEAD_H + CTX_H;
+    let log_h = panel[3] - HEAD_H - CTX_H - EST_H - INPUT_H - QUICK_H - GAP;
+    UiRect::new(panel[0] + PAD, log_y, panel[2] - PAD * 2.0, log_h)
+}
+
+/// LAY-W20 (P3 draw≠hit, аудит layouts-w1-w12 §3.2 P2-8): геометрия одного
+/// сообщения журнала — результат единого прохода [`agent_log_walk`]. Draw
+/// рендерит по проходу, hit резолвит кнопки Accept/Reject по нему же: одна
+/// формула на обе стороны (LAY1.2 «ввод = тому, что видно»), ноль ручных
+/// дублей.
+enum AgentMsgGeom<'a> {
+    /// Бабл пользователя: фон и внутренний rect текста (bubble − 2·8 px).
+    User {
+        bubble: UiRect,
+        text: UiRect,
+        label: &'a str,
+    },
+    /// Бабл бота: kit-раскладка [`canvas_ui::kit::chat_bubble`] + стиль +
+    /// кнопки preview (accept, reject) — `None`, если не рисуются
+    /// (`preview` отсутствует или kind ≠ Normal).
+    Bot {
+        cb: canvas_ui::kit::ChatBubbleLayout,
+        style: canvas_ui::kit::ChatBubbleStyle,
+        preview: Option<(UiRect, UiRect)>,
+        tool_calls: &'a [ToolCallDisplay],
+        text: &'a str,
+    },
+}
+
+/// LAY-W20: ЕДИНЫЙ проход журнала сообщений — расчёт геометрии баблов из
+/// модели (`AgentMessage`) для draw И hit. Замена текста тем же кеглем, что
+/// рендер (FR-053), высоты — kit-канонические метрики chat_bubble
+/// (CHAT_HEADER_H/CHAT_LINE_H/CHAT_TOOL_CALL_H + SPACING_S/SM), кнопки
+/// Accept/Reject — от последней tool_call-строки (или text_area) внутри
+/// бабла, как в draw. Условие переполнения журнала (`msg_y > низ лога` —
+/// break ПОСЛЕ обработки сообщения) — дословно прежний цикл draw: сообщение,
+/// начавшееся в пределах полосы, рисуется и учитывается hit'ом.
+///
+/// `preview_visible` — рисуются ли кнопки (`self.agent_panel.preview.is_some()`);
+/// hit передаёт `true` под тем же условием (единое решение обеих сторон).
+///
+/// Контракт «вложенный лок FontSystem запрещён» (app.rs): draw вызывает
+/// проход со своим замером кадра; hit — из обработчика ввода (вне
+/// рендер-лока), коротким скоупом.
+fn agent_log_walk<'a>(
+    messages: &'a [AgentMessage],
+    preview_visible: bool,
+    log_rect: UiRect,
+    kit: &canvas_ui::kit::KitPalette,
+    measurer: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> Vec<AgentMsgGeom<'a>> {
+    let mut out: Vec<AgentMsgGeom> = Vec::new();
+    let mut msg_y = log_rect.y + 8.0;
+    for msg in messages {
+        match msg {
+            AgentMessage::User(text) => {
+                // CR-015 fix (Task Q1): реальный шейпинг через TextMeasurer
+                // (вместо эвристик `text.len()*6.0`); семейство/кегль — те же,
+                // что у рендера (FR-053). +16 = 2·SPACING_SM (пад бабла).
+                let max_bubble_w = log_rect.w - 16.0;
+                let text_w =
+                    measurer.width_of(fs, text, canvas_render::text::SANS_FAMILY, BUBBLE_FONT);
+                let bubble_w = max_bubble_w.min(text_w + 16.0);
+                let bubble_x = log_rect.x + log_rect.w - 8.0 - bubble_w;
+                let user_lines = measurer.wrap(
+                    fs,
+                    text,
+                    canvas_render::text::SANS_FAMILY,
+                    BUBBLE_FONT,
+                    bubble_w - 16.0,
+                );
+                // 16.0 = исторический line-h user-баблов (кегль 11), preserved.
+                let bubble_h = 28.0_f32.max(user_lines.len() as f32 * 16.0 + 12.0);
+                let bubble = UiRect::new(bubble_x, msg_y, bubble_w, bubble_h);
+                let text_rect =
+                    UiRect::new(bubble_x + 8.0, msg_y + 4.0, bubble_w - 16.0, bubble_h - 8.0);
+                out.push(AgentMsgGeom::User {
+                    bubble,
+                    text: text_rect,
+                    label: text,
+                });
+                msg_y += bubble_h + canvas_core::tokens::SPACING_S;
+            }
+            AgentMessage::Bot {
+                text,
+                kind,
+                tool_calls,
+            } => {
+                let bubble_w = log_rect.w - 16.0;
+                let max_text_w = bubble_w - 16.0; // = kit text_area.w
+                let bot_lines = measurer.wrap(
+                    fs,
+                    text,
+                    canvas_render::text::SANS_FAMILY,
+                    BUBBLE_FONT,
+                    max_text_w,
+                );
+                let n_lines = bot_lines.len().max(1);
+                let has_preview = preview_visible && *kind == AgentMsgKind::Normal;
+                // bubble_h из kit-канонических метрик (Q2, Task Q): pad_half +
+                // header + text + (gap+tool_calls)? + (gap+preview_btn)? + pad_half.
+                let pad_half = canvas_core::tokens::SPACING_SM * 0.5; // 4
+                let header_h = canvas_ui::kit::CHAT_HEADER_H; // 12
+                let text_h = (n_lines as f32) * canvas_ui::kit::CHAT_LINE_H; // n_lines·14
+                let mut bubble_h = pad_half + header_h + text_h;
+                if !tool_calls.is_empty() {
+                    bubble_h += canvas_core::tokens::SPACING_S
+                        + (tool_calls.len() as f32) * canvas_ui::kit::CHAT_TOOL_CALL_H;
+                }
+                if has_preview {
+                    bubble_h += canvas_core::tokens::SPACING_S + PREVIEW_BTN_H;
+                }
+                bubble_h += pad_half; // bottom pad
+                let kind_kit = match kind {
+                    AgentMsgKind::Normal => canvas_ui::kit::ChatBubbleKind::Normal,
+                    AgentMsgKind::Error => canvas_ui::kit::ChatBubbleKind::Error,
+                    AgentMsgKind::Success => canvas_ui::kit::ChatBubbleKind::Success,
+                };
+                let bubble_slot = UiRect::new(log_rect.x + 8.0, msg_y, bubble_w, bubble_h);
+                let (cb, style) = canvas_ui::kit::chat_bubble(
+                    bubble_slot,
+                    n_lines,
+                    tool_calls.len(),
+                    kind_kit,
+                    kit,
+                    true, // header = true («AI Агент» подпись над text)
+                );
+                let bubble_bottom = cb.rect.bottom();
+                // Кнопки Accept/Reject — из cb_layout: ниже последней
+                // tool_call-строки (или text_area) с зазором SPACING_S
+                // (kit canonical). ЕДИНСТВЕННАЯ формула кнопок (draw == hit).
+                let preview = if has_preview {
+                    let buttons_y = if let Some(last_tc) = cb.tool_call_rows.last() {
+                        last_tc.bottom() + canvas_core::tokens::SPACING_S
+                    } else {
+                        cb.text_area.bottom() + canvas_core::tokens::SPACING_S
+                    };
+                    let btn_w = (cb.rect.w - 8.0) / 2.0;
+                    // Зазор пары — 8.0 (исторический, preserved бит-в-бит).
+                    Some((
+                        UiRect::new(
+                            cb.rect.x + canvas_core::tokens::SPACING_SM,
+                            buttons_y,
+                            btn_w,
+                            PREVIEW_BTN_H,
+                        ),
+                        UiRect::new(
+                            cb.rect.x + canvas_core::tokens::SPACING_SM + btn_w + 8.0,
+                            buttons_y,
+                            btn_w,
+                            PREVIEW_BTN_H,
+                        ),
+                    ))
+                } else {
+                    None
+                };
+                out.push(AgentMsgGeom::Bot {
+                    cb,
+                    style,
+                    preview,
+                    tool_calls,
+                    text,
+                });
+                // Advance msg_y past bubble + gap (SPACING_SM = 8 px —
+                // исторический зазор между сообщениями, preserved).
+                msg_y = bubble_bottom + canvas_core::tokens::SPACING_SM;
+            }
+        }
+        // Защита от переполнения журнала (последние N сообщений) — как в
+        // прежнем цикле draw: break ПОСЛЕ обработки (сообщение, начавшееся
+        // в пределах полосы, нарисовано и доступно hit'у).
+        if msg_y > log_rect.bottom() {
+            break;
+        }
+    }
+    out
+}
+
 impl App {
     /// FR-LLM-D / PRD-0010 F-4: render agent panel overlay.
     /// Возвращает (quads, texts, icons) для screen_bands/icon_instances.
@@ -582,9 +770,8 @@ impl App {
         }
 
         // === Журнал сообщений (скроллится; здесь — простая простыня) ======
-        let log_y = ctx_y + CTX_H;
-        let log_h = panel_h - HEAD_H - CTX_H - EST_H - INPUT_H - QUICK_H - GAP;
-        let log_rect = UiRect::new(panel_x + PAD, log_y, panel_w - PAD * 2.0, log_h);
+        // LAY-W20: rect полосы — из единого [`agent_log_rect`] (draw == hit).
+        let log_rect = agent_log_rect(panel);
         // Фон журнала (слегка тоньше основной панели — визуальное разделение).
         d.rect(
             log_rect,
@@ -597,8 +784,6 @@ impl App {
             [0.0; 4],
             canvas_core::tokens::RADIUS_PANEL,
         );
-        // Empty state — подсказка пользователю что делать.
-        let mut msg_y = log_y + 8.0;
         // CR-015 fix (Task Q1+Q2): TextMeasurer для реального шейпинга текста
         // bubble (вместо эвристик `text.len() as f32 * 6.0` / `text.len() /
         // 32.0` / `text.len() / 48` — те ломаются на Cyrillic/emoji: byte_count
@@ -609,8 +794,6 @@ impl App {
         // запрещён» (app.rs:209): `agent_panel_overlay` не вызывается внутри
         // другого FontSystem-лока (handler.rs —顶层 render path, без
         // шейпинг-локов рядом).
-        let bubble_family = sans_family; // «Noto Sans Display»
-        let bubble_size = 11.0; // bubble text font_size (matches d.label_left)
         if self.agent_panel.messages.is_empty() {
             // UR-005: подсказка переносится по реальной ширине (TextMeasurer).
             // Прежде — одна строка `label_left` с молчаливой обрезкой справа
@@ -621,51 +804,48 @@ impl App {
                         и спросит Accept/Reject. Деструктивные операции — только \
                         с подтверждением.";
             let hint_area_w = log_rect.w - 16.0;
-            let hint_lines = measurer.wrap(&mut fs, hint, bubble_family, bubble_size, hint_area_w);
+            let hint_lines = measurer.wrap(
+                &mut fs,
+                hint,
+                sans_family,
+                BUBBLE_FONT,
+                hint_area_w,
+            );
             let line_h = 15.0; // bubble_size 11 · 1.35 → 15 (ритм лога)
-            let mut line_y = msg_y;
+            let mut line_y = log_rect.y + 8.0;
             for line in &hint_lines {
                 d.label_left(
                     UiRect::new(log_rect.x + 8.0, line_y, hint_area_w, line_h),
                     line,
                     kit_palette.text_muted,
-                    bubble_size,
+                    BUBBLE_FONT,
                 );
                 line_y += line_h;
             }
         } else {
-            // Каждое сообщение — user (справа) / bot (слева) / error.
-            for msg in &self.agent_panel.messages {
-                match msg {
-                    AgentMessage::User(text) => {
+            // LAY-W20 (P3 draw≠hit, аудит layouts-w1-w12 §3.2 P2-8): единый
+            // проход журнала [`agent_log_walk`] — геометрия всех баблов и
+            // кнопок Accept/Reject считается ОДИН раз из модели сообщений.
+            // Draw рендерит по проходу, hit (`agent_panel_hit`) резолвит по
+            // нему же — вторая ручная формула кнопок от низа лога удалена
+            // (TODO FR-LLM-D закрыт: «точная геометрия — через макет
+            // сообщений» теперь выполняется буквально, одной функцией).
+            let walk = agent_log_walk(
+                &self.agent_panel.messages,
+                self.agent_panel.preview.is_some(),
+                log_rect,
+                &kit_palette,
+                &mut measurer,
+                &mut fs,
+            );
+            for g in &walk {
+                match g {
+                    AgentMsgGeom::User {
+                        bubble,
+                        text: text_rect,
+                        label,
+                    } => {
                         // User bubble — выравнивание справа, акцентный фон.
-                        // CR-015 fix (Task Q1): real glyph shaping via
-                        // TextMeasurer (was `text.len() as f32 * 6.0` and
-                        // `(text.len() as f32 / 32.0).ceil()` heuristics —
-                        // break on Cyrillic/emoji: byte_count ≠ glyph_count,
-                        // multi-byte UTF-8 over-estimates width and line
-                        // count). Семейство/кегль — те же, что у `d.label_left`
-                        // bubble text (FR-053: метрики раскладки = метрики
-                        // рендера, cosmic-text шейпинг).
-                        let max_bubble_w = log_rect.w - 16.0;
-                        let text_w = measurer.width_of(&mut fs, text, bubble_family, bubble_size);
-                        // +16 = 2·SPACING_SM (внутренний пад bubble).
-                        let bubble_w = max_bubble_w.min(text_w + 16.0);
-                        let bubble_x = log_rect.x + log_rect.w - 8.0 - bubble_w;
-                        // Wrap по реальной ширине строки внутри bubble
-                        // (bubble_w − 2·pad = bubble_w − 16). 16.0 = line-h
-                        // для кегля 11 (font_size · SCREEN_LINE_FACTOR 1.3 ≈
-                        // 14.3 → 14, но исторический user-bubble line-h был 16;
-                        // preserved чтобы не менять вертикальный ритм
-                        // user-bubble'ов, не использующих kit).
-                        let user_lines = measurer.wrap(
-                            &mut fs,
-                            text,
-                            bubble_family,
-                            bubble_size,
-                            bubble_w - 16.0,
-                        );
-                        let bubble_h = 28.0_f32.max(user_lines.len() as f32 * 16.0 + 12.0);
                         let user_style = canvas_ui::kit::control_style_of(
                             [
                                 kit_palette.accent[0],
@@ -682,100 +862,34 @@ impl App {
                             kit_palette.text,
                             canvas_core::tokens::RADIUS_PANEL,
                         );
-                        let bubble_rect = UiRect::new(bubble_x, msg_y, bubble_w, bubble_h);
-                        d.control(bubble_rect, &user_style);
-                        d.label_left(
-                            UiRect::new(
-                                bubble_x + 8.0,
-                                msg_y + 4.0,
-                                bubble_w - 16.0,
-                                bubble_h - 8.0,
-                            ),
-                            text,
-                            user_style.text,
-                            11.0,
-                        );
-                        msg_y += bubble_h + 6.0; // lay7:allow внутренний оффсет баблов чата — консолидация draw==hit, W20
+                        d.control(*bubble, &user_style);
+                        d.label_left(*text_rect, label, user_style.text, BUBBLE_FONT);
                     }
-                    AgentMessage::Bot {
-                        text,
-                        kind,
+                    AgentMsgGeom::Bot {
+                        cb,
+                        style,
+                        preview,
                         tool_calls,
+                        text,
                     } => {
-                        // Bot bubble — слева, нейтральный фон.
-                        let bubble_w = log_rect.w - 16.0;
-                        // CR-015 fix (Task Q2): real n_lines via
-                        // TextMeasurer.wrap (was `(text.len() / 48).max(1)`
-                        // heuristic — byte_count / 48 ≈ glyph-agnostic line
-                        // count; breaks on Cyrillic/emoji: multi-byte UTF-8
-                        // over-counts lines for short unicode text). Wrap to
-                        // kit's text_area.w (= bubble_w − 2·SPACING_SM).
-                        let max_text_w = bubble_w - 16.0; // = kit text_area.w
-                        let bot_lines =
-                            measurer.wrap(&mut fs, text, bubble_family, bubble_size, max_text_w);
-                        let n_lines = bot_lines.len().max(1);
-                        // Accept/Reject buttons если есть preview.
-                        let has_preview =
-                            self.agent_panel.preview.is_some() && *kind == AgentMsgKind::Normal;
-                        // Q2 (Task Q): bubble_h считается из kit-канонических
-                        // метрик (CHAT_HEADER_H/CHAT_LINE_H/CHAT_TOOL_CALL_H +
-                        // SPACING_S/SPACING_SM), не из магических 24/14. Было:
-                        // `24 + n_lines*14 + tool_calls*14 + (preview? 26+8)`.
-                        // Стало: pad_half + header + text + (gap+tool_calls)?
-                        // + (gap+preview_btn)? + pad_half. Визуальный delta
-                        // без preview: -4..+2 px (tighter bubble — меньше
-                        // пустого пространства); с preview: -6 px.
-                        let pad_half = canvas_core::tokens::SPACING_SM * 0.5; // 4
-                        let header_h = canvas_ui::kit::CHAT_HEADER_H; // 12
-                        let text_h = (n_lines as f32) * canvas_ui::kit::CHAT_LINE_H; // n_lines·14
-                        let mut bubble_h = pad_half + header_h + text_h;
-                        if !tool_calls.is_empty() {
-                            bubble_h += canvas_core::tokens::SPACING_S
-                                + (tool_calls.len() as f32) * canvas_ui::kit::CHAT_TOOL_CALL_H;
-                        }
-                        if has_preview {
-                            bubble_h += canvas_core::tokens::SPACING_S + PREVIEW_BTN_H;
-                        }
-                        bubble_h += pad_half; // bottom pad
-                                              // Q2 (Task Q): migrate bubble geometry to kit::chat_bubble
-                                              // layout (was style-only — `_cb_layout` discarded,
-                                              // geometry hand-rolled). Kit extended с `header: bool`
-                                              // param + `ChatBubbleLayout.header_area: Option<UiRect>`
-                                              // (crates/canvas-ui/src/component/chat_bubble.rs) —
-                                              // header_area занимает верх bubble (подпись отправителя
-                                              // «AI Агент»), text_area начинается ниже header'а.
-                                              // Теперь ИСПОЛЬЗУЕМ layout: `cb_layout.rect` для фона,
-                                              // `cb_layout.header_area` для «AI Агент» header,
-                                              // `cb_layout.text_area` для text body,
-                                              // `cb_layout.tool_call_rows[i]` для tool_call строк.
-                        let kind_kit = match kind {
-                            AgentMsgKind::Normal => canvas_ui::kit::ChatBubbleKind::Normal,
-                            AgentMsgKind::Error => canvas_ui::kit::ChatBubbleKind::Error,
-                            AgentMsgKind::Success => canvas_ui::kit::ChatBubbleKind::Success,
-                        };
-                        let bubble_slot = UiRect::new(log_rect.x + 8.0, msg_y, bubble_w, bubble_h);
-                        let (cb_layout, cb_style) = canvas_ui::kit::chat_bubble(
-                            bubble_slot,
-                            n_lines,
-                            tool_calls.len(),
-                            kind_kit,
-                            &kit_palette,
-                            true, // header = true («AI Агент» подпись над text)
-                        );
+                        // Q2 (Task Q): геометрия бабла — kit::chat_bubble
+                        // layout: `cb.rect` для фона, `cb.header_area` для
+                        // «AI Агент» header, `cb.text_area` для text body,
+                        // `cb.tool_call_rows[i]` для tool_call строк.
                         let bot_style = canvas_ui::kit::control_style_of(
-                            cb_style.fill,
-                            cb_style.border,
-                            cb_style.text_color,
-                            cb_style.radius,
+                            style.fill,
+                            style.border,
+                            style.text_color,
+                            style.radius,
                         );
                         // Bubble background — kit layout.rect (весь слот).
-                        d.control(cb_layout.rect, &bot_style);
+                        d.control(cb.rect, &bot_style);
                         // «AI Агент» header — kit layout.header_area.
-                        if let Some(header_area) = &cb_layout.header_area {
+                        if let Some(header_area) = &cb.header_area {
                             d.label_left(*header_area, "AI Агент", kit_palette.text_muted, 9.0);
                         }
                         // Text body — kit layout.text_area.
-                        d.label_left(cb_layout.text_area, text, cb_style.text_color, 11.0);
+                        d.label_left(cb.text_area, text, style.text_color, BUBBLE_FONT);
                         // tool_calls — моноширинные строки, по kit
                         // layout.tool_call_rows[i] rect'ам.
                         for (i, tc) in tool_calls.iter().enumerate() {
@@ -791,7 +905,7 @@ impl App {
                                 ToolCallStatus::Error => danger_color,
                                 ToolCallStatus::Pending => kit_palette.text_muted,
                             };
-                            let tc_rect = cb_layout.tool_call_rows[i];
+                            let tc_rect = cb.tool_call_rows[i];
                             d.label_left(
                                 tc_rect,
                                 &format!("{} {}  {}", status_glyph, tc.tool_name, tc.args_summary),
@@ -806,28 +920,10 @@ impl App {
                                 10.0,
                             );
                         }
-                        // Accept/Reject кнопки — если есть preview. Позиция:
-                        // ниже последнего tool_call_row (или text_area, если
-                        // tool_calls нет) с зазором SPACING_S (kit canonical).
-                        if has_preview {
-                            let buttons_y = if let Some(last_tc) = cb_layout.tool_call_rows.last() {
-                                last_tc.bottom() + canvas_core::tokens::SPACING_S
-                            } else {
-                                cb_layout.text_area.bottom() + canvas_core::tokens::SPACING_S
-                            };
-                            let btn_w = (cb_layout.rect.w - 8.0) / 2.0;
-                            let accept_rect = UiRect::new(
-                                cb_layout.rect.x + canvas_core::tokens::SPACING_SM,
-                                buttons_y,
-                                btn_w,
-                                PREVIEW_BTN_H,
-                            );
-                            let reject_rect = UiRect::new(
-                                cb_layout.rect.x + canvas_core::tokens::SPACING_SM + btn_w + 8.0,
-                                buttons_y,
-                                btn_w,
-                                PREVIEW_BTN_H,
-                            );
+                        // Accept/Reject кнопки — rect'ы из прохода (та же
+                        // формула, что резолвит hit). Позиция: ниже последнего
+                        // tool_call_row (или text_area) с зазором SPACING_S.
+                        if let Some((accept_rect, reject_rect)) = preview {
                             // Accept — Success-вариант button_style.
                             let accept_style = canvas_ui::kit::button_style(
                                 canvas_ui::kit::ButtonVariant::Primary,
@@ -841,8 +937,8 @@ impl App {
                                 },
                                 &kit_palette,
                             );
-                            d.control(accept_rect, &accept_style);
-                            d.label_center(accept_rect, "Accept", accept_style.text, 11.0);
+                            d.control(*accept_rect, &accept_style);
+                            d.label_center(*accept_rect, "Accept", accept_style.text, 11.0);
                             // Reject — Secondary-вариант.
                             let reject_style = canvas_ui::kit::button_style(
                                 canvas_ui::kit::ButtonVariant::Secondary,
@@ -856,17 +952,10 @@ impl App {
                                 },
                                 &kit_palette,
                             );
-                            d.control(reject_rect, &reject_style);
-                            d.label_center(reject_rect, "Reject", reject_style.text, 11.0);
+                            d.control(*reject_rect, &reject_style);
+                            d.label_center(*reject_rect, "Reject", reject_style.text, 11.0);
                         }
-                        // Advance msg_y past bubble + gap (SPACING_SM = 8 px —
-                        // исторический зазор между сообщениями, preserved).
-                        msg_y = cb_layout.rect.bottom() + canvas_core::tokens::SPACING_SM;
                     }
-                }
-                // Защита от переполнения журнала (последние N сообщений).
-                if msg_y > log_y + log_h {
-                    break;
                 }
             }
         }
@@ -1658,34 +1747,55 @@ impl App {
         ) {
             return Some(AgentPanelHit::QuickAction(i));
         }
-        // Accept/Reject кнопки (если есть preview в последнем сообщении).
-        let log_y = panel[1] + HEAD_H + CTX_H;
-        let log_h = panel[3] - HEAD_H - CTX_H - EST_H - INPUT_H - QUICK_H - GAP;
+        // Accept/Reject кнопки — если есть preview.
+        // LAY-W20 (P3 draw≠hit, аудит §3.2 P2-8): rect'ы кнопок — из ЕДИНОГО
+        // прохода журнала [`agent_log_walk`] (тот же расчёт cb_layout, что у
+        // draw; «канон» — draw). Прежняя вторая ручная формула от низа лога
+        // (`log_y + log_h − PREVIEW_BTN_H − 16.0`, blame 4b318cc) давала зону
+        // в сотнях px от нарисованных кнопок — удалена. TODO FR-LLM-D закрыт:
+        // «точная геометрия — через макет сообщений» выполняется буквально —
+        // та же функция `agent_log_walk`, что рендерит кадр.
         if self.agent_panel.preview.is_some() {
-            // Грубая проверка — кнопки где-то в нижней половине лога.
-            // FR-LLM-D-TODO: точная геометрия — через макет сообщений.
-            let btn_y = log_y + log_h - PREVIEW_BTN_H - 16.0;
-            let btn_w = (panel[2] - PAD * 2.0 - 8.0) / 2.0;
-            let accept_rect = [panel[0] + PAD + 16.0, btn_y, btn_w, PREVIEW_BTN_H];
-            let reject_rect = [
-                panel[0] + PAD + 16.0 + btn_w + 8.0,
-                btn_y,
-                btn_w,
-                PREVIEW_BTN_H,
-            ];
-            // FR-097: тач-цель Accept/Reject (PREVIEW_BTN_H=26) ≥ 44 (кламп
-            // в панель). LAY-W15 (P2-1): пара кнопок — резолюция «ближайший
-            // центр» (паритет ⏸/⚙; при узкой панели coarse-расширения
-            // соседей перекрываются). На precise — first-match.
-            let preview_pair = [accept_rect, reject_rect];
-            if let Some(i) =
-                crate::touch_targets::touch_hit_sibling_xywh(preview_pair, panel, point)
-            {
-                return Some(if i == 0 {
-                    AgentPanelHit::Accept
-                } else {
-                    AgentPanelHit::Reject
-                });
+            // Замер — тем же кеглем, что draw (FR-053); короткий скоуп,
+            // контракт «вложенный лок FontSystem запрещён» не нарушен:
+            // hit вызывается из обработчика ввода, вне рендер-лока.
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let walk = agent_log_walk(
+                &self.agent_panel.messages,
+                true,
+                agent_log_rect(panel),
+                &self.effective_palette().kit_palette(),
+                &mut m,
+                &mut fs,
+            );
+            // Пары кнопок резолвятся в порядке отрисовки (сверху вниз):
+            // клик по ЛЮБОЙ нарисованной паре — Accept/Reject (draw рисует
+            // пару у каждого Normal-бабла при активном preview; прежде hit
+            // знал только одну фантомную пару у низа лога).
+            for g in &walk {
+                if let AgentMsgGeom::Bot {
+                    preview: Some((accept, reject)),
+                    ..
+                } = g
+                {
+                    // FR-097: тач-цель Accept/Reject (PREVIEW_BTN_H=26) ≥ 44
+                    // (кламп в панель). LAY-W15 (P2-1): пара кнопок —
+                    // sibling-резолюция «ближайший центр» (паритет ⏸/⚙; при
+                    // узкой панели coarse-расширения соседей перекрываются).
+                    // На precise — first-match. Резолюция поверх rect'ов из
+                    // прохода — заменён только ИСТОЧНИК rect'ов.
+                    let preview_pair = [to_xywh(*accept), to_xywh(*reject)];
+                    if let Some(i) =
+                        crate::touch_targets::touch_hit_sibling_xywh(preview_pair, panel, point)
+                    {
+                        return Some(if i == 0 {
+                            AgentPanelHit::Accept
+                        } else {
+                            AgentPanelHit::Reject
+                        });
+                    }
+                }
             }
         }
         // Клик мимо активных элементов (тело панели) — глотаем ввод.
