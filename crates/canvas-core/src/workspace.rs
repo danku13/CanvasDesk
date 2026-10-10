@@ -275,6 +275,67 @@ pub fn camera_key_for(file_name: &str) -> String {
     format!("canvasdesk.camera.{file_name}")
 }
 
+// ============================================================================
+// FR-107 (мультиканвас C4): сериализация камеры канваса (№12/№30b)
+// ============================================================================
+
+/// Снимок камеры канваса (№12/№30b): центр viewport в world-координатах
+/// и зум. Живёт в ядре (canvas-render не виден веб-слою напрямую, а
+/// зависимость направлена core ← render — снимок собирает потребитель,
+/// владеющий камерой). Хранение — localStorage по ключу
+/// [`camera_key_for`]; перенос при ренейме активного — `CanvasMoveCameraKey`
+/// (C3, значение переносится как есть).
+///
+/// Формат строки — «x;y;zoom» (разделитель `;`, координаты и зум —
+/// f32 с округлением: центр до 2 знаков, зум до 3): компактность
+/// важнее точности — визуально неотличимо, а round-trip стабилен.
+/// Битые строки (не 3 части, не-числа, NaN/±inf) — `decode_camera`
+/// возвращает `None` → потребитель молча берёт дефолтную камеру.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CameraSnapshot {
+    /// Мировая точка в центре viewport.
+    pub center: [f32; 2],
+    /// Зум (валидация диапазона — сторона камеры: `Camera::set_zoom`
+    /// клампит при применении).
+    pub zoom: f32,
+}
+
+/// Закодировать снимок камеры: «x;y;zoom» с округлением (центр — 2
+/// знака, зум — 3; половинное округление не критично — восстановление
+/// визуально неотличимо). Не-числа кодируются как «0» — битые снимки не
+/// появляются в хранилище.
+pub fn encode_camera(snapshot: &CameraSnapshot) -> String {
+    let f = |v: f32| if v.is_finite() { v } else { 0.0 };
+    format!(
+        "{:.2};{:.2};{:.3}",
+        f(snapshot.center[0]),
+        f(snapshot.center[1]),
+        f(snapshot.zoom)
+    )
+}
+
+/// Разобрать строку камеры (обратный ход [`encode_camera`]): строго 3
+/// части по `;`, каждая — конечное f32; иначе `None` (битая/чужая строка
+/// → дефолтная камера, без паники). Пробелы вокруг частей допустимы
+/// (ручная правка localStorage не ломает загрузку).
+pub fn decode_camera(raw: &str) -> Option<CameraSnapshot> {
+    let mut parts = raw.split(';');
+    let mut next = || -> Option<f32> {
+        let value = parts.next()?.trim().parse::<f32>().ok()?;
+        value.is_finite().then_some(value)
+    };
+    let x = next()?;
+    let y = next()?;
+    let zoom = next()?;
+    if parts.next().is_some() {
+        return None; // ровно 3 части — хвост лишний
+    }
+    Some(CameraSnapshot {
+        center: [x, y],
+        zoom,
+    })
+}
+
 /// План миграции OPFS → папка (№42a): чистая функция над двумя листингами;
 /// исполнение (копирование + удаление оригиналов, №52a) — волна C2.
 ///
@@ -561,6 +622,84 @@ mod tests {
         );
         assert_eq!(camera_key_for("a b.canvas"), "canvasdesk.camera.a b.canvas");
         assert_ne!(camera_key_for("x.canvas"), camera_key_for("y.canvas"));
+    }
+
+    // --- FR-107 (C4): сериализация камеры (№12/№30b) ------------------------
+
+    #[test]
+    fn camera_snapshot_roundtrip() {
+        let snapshot = CameraSnapshot {
+            center: [-1234.5678, 42.0],
+            zoom: 0.75,
+        };
+        let encoded = encode_camera(&snapshot);
+        assert_eq!(
+            encoded, "-1234.57;42.00;0.750",
+            "формат x;y;zoom с округлением"
+        );
+        assert_eq!(
+            decode_camera(&encoded),
+            Some(CameraSnapshot {
+                center: [-1234.57, 42.0],
+                zoom: 0.75,
+            }),
+            "round-trip восстанавливает округлённые значения"
+        );
+        // Дефолтная камера (0;0;1) — валидный снимок
+        assert_eq!(
+            decode_camera(&encode_camera(&CameraSnapshot {
+                center: [0.0, 0.0],
+                zoom: 1.0
+            })),
+            Some(CameraSnapshot {
+                center: [0.0, 0.0],
+                zoom: 1.0
+            })
+        );
+    }
+
+    #[test]
+    fn camera_decode_broken_strings_fall_to_none() {
+        // Не 3 части
+        assert_eq!(decode_camera(""), None);
+        assert_eq!(decode_camera("1;2"), None);
+        assert_eq!(decode_camera("1;2;3;4"), None);
+        // Не-числа
+        assert_eq!(decode_camera("a;b;c"), None);
+        assert_eq!(decode_camera("1;b;3"), None);
+        // NaN/inf — не конечные
+        assert_eq!(decode_camera("NaN;0;1"), None);
+        assert_eq!(decode_camera("0;inf;1"), None);
+        assert_eq!(decode_camera("0;0;-inf"), None);
+        // Пробелы вокруг частей — допустимы (ручная правка хранилища)
+        assert_eq!(
+            decode_camera(" 10.5 ; -20.25 ; 1.0 "),
+            Some(CameraSnapshot {
+                center: [10.5, -20.25],
+                zoom: 1.0
+            })
+        );
+    }
+
+    #[test]
+    fn camera_encode_sanitizes_non_finite() {
+        // Битые значения не попадают в хранилище: NaN/inf → 0
+        assert_eq!(
+            encode_camera(&CameraSnapshot {
+                center: [f32::NAN, f32::INFINITY],
+                zoom: f32::NEG_INFINITY
+            }),
+            "0.00;0.00;0.000"
+        );
+        // Отрицательный зум кодируется как есть — кламп на применении
+        // (`Camera::set_zoom` — сторона камеры)
+        assert_eq!(
+            encode_camera(&CameraSnapshot {
+                center: [0.0, 0.0],
+                zoom: -2.5
+            }),
+            "0.00;0.00;-2.500"
+        );
     }
 
     // --- план миграции (№42a) -------------------------------------------------

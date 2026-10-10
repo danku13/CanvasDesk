@@ -242,6 +242,17 @@ impl ApplicationHandler<AppEvent> for App {
                 let band_vp = self.viewport_logical();
                 let band_vp_clip = canvas_ui::UiRect::new(0.0, 0.0, band_vp[0], band_vp[1]);
                 {
+                    // FR-107 (мультиканвас C4, №21c): чип активного канваса —
+                    // ambient-хром верхней ЛЕВОЙ зоны. Полоса Panels, первая
+                    // в полосе (VISUAL_ORDER — самый низкий ранг): любые
+                    // панели/модали поверх. Клип — свой rect (мал).
+                    let (chip_instances, chip_texts, chip_icons) = self.canvas_chip_overlay();
+                    if !chip_instances.is_empty() || !chip_texts.is_empty() {
+                        let chip_clip = canvas_ui::UiRect::new(0.0, 0.0, band_vp[0], band_vp[1]);
+                        screen_bands.push(UiLayer::Panels, chip_clip, chip_instances, chip_texts);
+                    }
+                    // FR-ICONS: иконка списка чипа (SVG-атлас; пусто для Glyph).
+                    self.icon_instances.extend(chip_icons);
                     // FR-CLIP: settings_overlay возвращает основную полосу
                     // (кнопки + модалка + строки) И отдельную полосу
                     // выпадающего меню (popup над модалкой, клип = menu rect).
@@ -1677,11 +1688,31 @@ impl ApplicationHandler<AppEvent> for App {
             AppEvent::CanvasOpDone { op, error } => self.on_canvas_op_done(op, &error),
             // Web Locks (№14b/№35a): канвас занят другой вкладкой — модал
             AppEvent::CanvasLockBusy { name } => self.on_canvas_lock_busy(name),
+            // --- FR-107 (мультиканвас C4): чип/камера (issue #8) ---------
+            AppEvent::CanvasCameraRestored { snapshot } => self.on_canvas_camera_restored(snapshot),
+            AppEvent::CanvasActiveKind { disk } => self.on_canvas_active_kind(disk),
+            AppEvent::CameraFlushRequested => self.on_camera_flush(),
         }
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        self.scene.autosave_if_due();
+        // FR-107 (C4, №29b): результат автосейва — стойкий сигнал на чипе:
+        // ошибка ставит значок + разовый тост (значок НЕ исчезает сам);
+        // успех снимает. None — сейв не был назначен (правок нет); ошибка
+        // при уже стоящем значке — без повтора тоста.
+        match self.scene.autosave_if_due() {
+            Some(true) => {
+                if self.canvas_chip.save_failed {
+                    self.canvas_chip.save_failed = false;
+                    self.request_redraw();
+                }
+            }
+            Some(false) if !self.canvas_chip.save_failed => {
+                self.canvas_chip.save_failed = true;
+                self.show_toast(self.tr(keys::CANVAS_CHIP_SAVE_ERROR_TOAST));
+            }
+            _ => {}
+        }
         // FR-079 (S3): тик дебаунса suggest (паттерн autolink 700 мс —
         // здесь 300 мс): покой после триггера C1 → контекст + гейты +
         // задание воркеру (wasm — sync-lex). Пока идёт правка, цикл держат

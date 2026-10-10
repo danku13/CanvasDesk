@@ -938,7 +938,6 @@ pub(crate) async fn pick_folder_and_migrate(
         .await
         .unwrap_or_else(empty_canvas_text);
     let (_, json, storage) = activate_folder(dir, &active_dst, Some(json)).await;
-    crate::toolbar::set_recent_label(&active_dst);
     let _ = proxy.send_event(canvas_app::app::AppEvent::OpenScene {
         path: std::path::PathBuf::from(&active_dst),
         json,

@@ -53,7 +53,8 @@ def get_progress(page: Page) -> str:
 # ── tests ─────────────────────────────────────────────────────────
 
 def test_toolbar_tour_full_flow(page: Page):
-    """cd-toolbar-tour: 5 steps, click through, complete signal fires."""
+    """cd-toolbar-tour: 3 steps (FR-107 №37b: recent/export ушли — менеджер),
+    click through, complete signal fires."""
     completed = []
 
     page.expose_binding("tour_complete_signal", lambda src, sig: completed.append(sig))
@@ -73,19 +74,17 @@ def test_toolbar_tour_full_flow(page: Page):
         )
     """)
     wait_for_tooltip(page, "Панель хранилища")
-    assert get_progress(page) == "1 / 5"
+    assert get_progress(page) == "1 / 3"
 
-    # Next through all 5 steps.
+    # Next through all 3 steps.
     expected_titles = [
         "Панель хранилища",
         "Открыть с диска",
-        "Недавние",
-        "Экспорт .canvas",
         "Готово",
     ]
     for i, title in enumerate(expected_titles):
         wait_for_tooltip(page, title)
-        assert get_progress(page) == f"{i + 1} / 5", \
+        assert get_progress(page) == f"{i + 1} / 3", \
             f"step {i + 1}: progress wrong"
         click_primary(page)
 

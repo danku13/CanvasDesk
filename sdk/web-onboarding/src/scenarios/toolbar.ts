@@ -1,8 +1,10 @@
 /**
  * @file web-onboarding/src/scenarios/toolbar.ts
- * @summary Walkthrough of the W6 storage toolbar (#btn-open / #btn-recent /
- * #btn-export). Smallest scenario — used as a smoke test for the engine
- * and a quick "what is this button?" overlay for end users.
+ * @summary Walkthrough of the W6 storage toolbar (#btn-open /
+ * #btn-export-html). Smallest scenario — used as a smoke test for the
+ * engine and a quick "what is this button?" overlay for end users.
+ * FR-107 (C4, №37b): #btn-recent / #btn-export left the toolbar (covered
+ * by the canvas manager — entry via the active-canvas chip №21c).
  */
 import type { TourScenario } from "../types";
 
@@ -19,7 +21,7 @@ export const toolbarTourScenario: TourScenario = {
       id: "intro",
       title: "Панель хранилища",
       body:
-        "В верхнем правом углу — три кнопки для работы с .canvas-файлами. " +
+        "В верхнем правом углу — две кнопки для работы с .canvas-файлами. " +
         "Пройдёмся по каждой.",
       side: "bottom",
       anchor: { kind: "selector", selector: "#w6-toolbar" },
@@ -36,29 +38,11 @@ export const toolbarTourScenario: TourScenario = {
       primaryLabel: "Понятно",
     },
     {
-      id: "recent",
-      title: "Недавние",
-      body:
-        "Кнопка показывает последний открывавшийся канвас. " +
-        "Полное имя — в title-тултипе, ширина ограничена, чтобы панель " +
-        "никогда не уходила за край экрана.",
-      side: "bottom",
-      anchor: { kind: "selector", selector: "#btn-recent" },
-    },
-    {
-      id: "export",
-      title: "Экспорт .canvas",
-      body:
-        "Скачивает последнюю сохранённую версию канваса. Удобно для бэкапа " +
-        "или если автосейв в файл недоступен (например, в браузере без " +
-        "File System Access API).",
-      side: "bottom",
-      anchor: { kind: "selector", selector: "#btn-export" },
-    },
-    {
       id: "done",
       title: "Готово",
-      body: "Канвас всегда сохраняется автоматически — эти кнопки для ручного контроля.",
+      body:
+        "Канвас всегда сохраняется автоматически. Список канвасов, создание " +
+        "и переименование — чип активного канваса в левом верхнем углу.",
       side: "center",
     },
   ],
