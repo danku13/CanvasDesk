@@ -25,7 +25,7 @@ export const toolbarTourScenario: TourScenario = {
     {
       id: "intro", title: "Storage Toolbar",
       body:
-        "Top-right corner — three buttons for managing .canvas files. " +
+        "Top-right corner — two buttons for managing .canvas files. " +
         "We'll walk through each.",
       side: "bottom", anchor: { kind: "selector", selector: "#w6-toolbar" },
     },
@@ -38,24 +38,10 @@ export const toolbarTourScenario: TourScenario = {
       advanceOnClick: "#btn-open", primaryLabel: "Got it",
     },
     {
-      id: "recent", title: "Recent",
-      body:
-        "Button shows the most recently opened canvas. Full name is in " +
-        "the title tooltip; width is bounded so the panel never extends " +
-        "off-screen.",
-      side: "bottom", anchor: { kind: "selector", selector: "#btn-recent" },
-    },
-    {
-      id: "export", title: "Export .canvas",
-      body:
-        "Downloads the last saved version of the canvas. Useful for " +
-        "backup or if file-system access is unavailable (e.g., browser " +
-        "without File System Access API).",
-      side: "bottom", anchor: { kind: "selector", selector: "#btn-export" },
-    },
-    {
       id: "done", title: "Done",
-      body: "The canvas always saves automatically — these buttons are for manual control.",
+      body:
+        "The canvas always saves automatically. The canvas list, creation " +
+        "and renaming live in the active-canvas chip in the top-left corner.",
       side: "center",
     },
   ],
@@ -82,8 +68,8 @@ export const firstRunInlineScenario: TourScenario = {
     {
       id: "locate-toolbar", title: "Storage Toolbar",
       body:
-        "Top-right corner — buttons for managing .canvas files. Open, " +
-        "recent, export. Canvas auto-saves to the selected file.",
+        "Top-right corner — buttons for managing .canvas files: open from " +
+        "disk, export HTML. Canvas auto-saves to the selected file.",
       side: "bottom", anchor: { kind: "selector", selector: "#w6-toolbar" },
     },
     {

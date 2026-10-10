@@ -193,7 +193,7 @@ window.__canvasdeskTour.signal("canvas:note-created", { id: "n_1" });
 
 | Идентификатор          | Сценарий                         | Скоуп                                              |
 |------------------------|----------------------------------|----------------------------------------------------|
-| `cd-toolbar-tour`      | Тур по панели хранилища (W6)     | `#btn-open`, `#btn-recent`, `#btn-export`          |
+| `cd-toolbar-tour`      | Тур по панели хранилища (W6)     | `#w6-toolbar`, `#btn-open` (FR-107 №37b: recent/export ушли — менеджер) |
 | `cd-first-run-inline`  | Интерактивный первый запуск      | Канвас целиком, `waitFor(signal)` для note-created |
 | `cd-palette-tour`      | Палитра шаблонов (FR-018)        | Ctrl+P, колесо категорий, Shift+клик               |
 | `cd-calculations-tour` | Numi-формулы (FR-013/014/015)    | Переменные, единицы, value-flow, what-if, MC       |

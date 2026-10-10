@@ -2182,15 +2182,18 @@ impl SceneState {
         self.dirty_since = Some(Instant::now());
     }
 
-    /// Сохранить, если правки висят дольше debounce (SPEC §9). Возвращает true при записи.
-    pub fn autosave_if_due(&mut self) -> bool {
+    /// Сохранить, если правки висят дольше debounce (SPEC §9). Возвращает
+    /// `None`, если сейв не был назначен; `Some(true/false)` — результат
+    /// записи (FR-107 C4, №29b: потребитель показывает стойкий сигнал
+    /// ошибки сохранения на чипе активного канваса).
+    pub fn autosave_if_due(&mut self) -> Option<bool> {
         let due = self
             .dirty_since
             .is_some_and(|since| since.elapsed() >= AUTOSAVE_DEBOUNCE);
         if !due {
-            return false;
+            return None;
         }
-        self.save_now()
+        Some(self.save_now())
     }
 
     pub fn save_now(&mut self) -> bool {

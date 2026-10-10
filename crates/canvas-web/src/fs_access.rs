@@ -366,7 +366,6 @@ pub(crate) async fn open_from_disk(
     crate::web_state::set_active(file_name.clone(), crate::web_state::ActiveKind::Disk);
     crate::recent::store_disk_handle(&file_name, &handle_value).await;
     crate::recent::record_recent(&file_name).await;
-    crate::toolbar::set_recent_label(&file_name);
     tracing::info!(target: "canvas_web", file = %file_name, "канвас открыт с диска (автосейв включён)");
     let _ = proxy.send_event(canvas_app::app::AppEvent::OpenScene {
         path,
@@ -397,7 +396,6 @@ pub(crate) async fn reopen_recent(
                 storage.seed_mirror(&path, &json);
                 crate::web_state::set_disk_handle(handle);
                 crate::web_state::set_active(file_name.clone(), crate::web_state::ActiveKind::Disk);
-                crate::toolbar::set_recent_label(&file_name);
                 tracing::info!(target: "canvas_web", file = %file_name, "недавний канвас переоткрыт с диска");
                 let _ = proxy.send_event(canvas_app::app::AppEvent::OpenScene {
                     path,
@@ -414,7 +412,6 @@ pub(crate) async fn reopen_recent(
             if let Some(storage) = crate::web_state::opfs_storage() {
                 storage.seed_mirror(Path::new(&name), &json);
                 crate::web_state::set_active(name.clone(), crate::web_state::ActiveKind::Opfs);
-                crate::toolbar::set_recent_label(&name);
                 tracing::info!(target: "canvas_web", file = %name, "недавний канвас переоткрыт из OPFS");
                 let _ = proxy.send_event(canvas_app::app::AppEvent::OpenScene {
                     path: PathBuf::from(&name),

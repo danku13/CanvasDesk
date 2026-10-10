@@ -70,54 +70,92 @@ pub fn step_body_key(step: usize, role: &str) -> &'static str {
 /// `action_key` («Попробовать» на шаге «Шаблоны нод») удалена — шаг ведёт
 /// «Далее» до финала; финальный шаг предлагает выбор двумя полноширинными
 /// CTA ([`OnboardingButton::FinalGallery`] / [`OnboardingButton::FinalEmpty`]).
+/// CTA-действие шага карусели (FR-107 C4, №19 — минимальная механика:
+/// шаг помимо title/body может нести кнопку-действие; карусель НЕ
+/// переписывается — флаг у шага + отрисовка одной полноширинной кнопки
+/// в зоне финальных опций `option_zone`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CtaAction {
+    /// №19: «Создать канвас» — открыть менеджер канвасов (в нём свои
+    /// CTA создания); тур завершается.
+    CreateCanvas,
+}
+
 pub struct OnboardingStep {
     /// Ключ заголовка (таблица [`crate::i18n`] — FR-040).
     pub title_key: &'static str,
     /// Ключ тела (полная фраза, перенос на стороне [`body_lines`]).
     pub body_key: &'static str,
+    /// FR-107 (C4, №19): CTA-кнопка шага (None у всех, кроме финальной
+    /// карточки мультиканваса).
+    pub cta: Option<CtaAction>,
 }
 
 /// Шаги тура (FR-028, скоуп владельца — база + расчёты + шаблоны; NN/g:
 /// 8±2 шага, «один шаг = одна мысль», выход виден всегда). Порядок
-/// стабилен; последний шаг — финал с выбором «шаблонная схема / самому».
+/// стабилен; предпоследний шаг — финал FR-028 с выбором «шаблонная
+/// схема / самому» (CR-031, индекс — [`CHOICE_STEP`]), последний —
+/// карточка мультиканваса №19 (FR-107 C4, CTA «Создать канвас»).
 /// CR-031: шаг «UI-консоль» выведен из тура (владельческий инструмент —
 /// остался в меню «?») — не перегружаем новичка служебным экраном.
-pub const ONBOARDING_STEPS: [OnboardingStep; 8] = [
+pub const ONBOARDING_STEPS: [OnboardingStep; 9] = [
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP1_TITLE,
         // CR-031/S3: базовый ключ тела шага 1 — универсальное value; при
         // показе заменяется по роли ([`welcome_body_key`] в [`step_body_key`]).
         body_key: keys::ONBOARDING_VALUE_DEFAULT,
+        cta: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP2_TITLE,
         body_key: keys::ONBOARDING_STEP2_BODY,
+        cta: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP3_TITLE,
         body_key: keys::ONBOARDING_STEP3_BODY,
+        cta: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP4_TITLE,
         body_key: keys::ONBOARDING_STEP4_BODY,
+        cta: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP5_TITLE,
         body_key: keys::ONBOARDING_STEP5_BODY,
+        cta: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP6_TITLE,
         body_key: keys::ONBOARDING_STEP6_BODY,
+        cta: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP7_TITLE,
         body_key: keys::ONBOARDING_STEP7_BODY,
+        cta: None,
     },
     OnboardingStep {
         title_key: keys::ONBOARDING_STEP8_TITLE,
         body_key: keys::ONBOARDING_STEP8_BODY,
+        cta: None,
+    },
+    // FR-107 (C4, №19): финальная карточка «одна работа — один канвас» —
+    // модель C: не сваливайте всё в один канвас; CTA «Создать канвас»
+    // открывает менеджер (в нём свои CTA создания).
+    OnboardingStep {
+        title_key: keys::ONBOARDING_STEP9_TITLE,
+        body_key: keys::ONBOARDING_STEP9_BODY,
+        cta: Some(CtaAction::CreateCanvas),
     },
 ];
+
+/// FR-107 (C4): индекс карточки-финала FR-028 (выбор «шаблонная схема /
+/// самому», CR-031). После добавления карточки мультиканваса №19 она
+/// перестала быть последней — спец-ветки CTA-опций/подписей переключены
+/// с `is_last()` на этот индекс.
+pub const CHOICE_STEP: usize = 7;
 
 /// Состояние тура: индекс текущего шага (кламп `0..len-1` — инвариант
 /// карусели). `None` в `App` — тура нет.
@@ -162,6 +200,25 @@ impl OnboardingState {
     /// Последний шаг (подпись кнопки меняется на «Готово»).
     pub fn is_last(&self) -> bool {
         self.step + 1 >= ONBOARDING_STEPS.len()
+    }
+
+    /// FR-107 (C4): карточка-финал FR-028 «шаблонная схема / самому»
+    /// (CR-031, индекс [`CHOICE_STEP`]) — две полноширинные CTA-опции,
+    /// «Далее» не рисуется.
+    pub fn is_choice(&self) -> bool {
+        self.step == CHOICE_STEP
+    }
+
+    /// FR-107 (C4, №19): CTA шага (None у всех, кроме карточки
+    /// мультиканваса).
+    pub fn cta(&self) -> Option<CtaAction> {
+        ONBOARDING_STEPS.get(self.step).and_then(|step| step.cta)
+    }
+
+    /// FR-107 (C4): резервируется ли зона полноширинных CTA над футером
+    /// (финал FR-028 — две опции; карточка мультиканваса №19 — своя).
+    pub fn has_cta_zone(&self) -> bool {
+        self.is_choice() || self.cta().is_some()
     }
 
     /// Ключ подписи правой кнопки: «Далее» / «Готово» на последнем шаге
@@ -323,6 +380,9 @@ pub enum OnboardingButton {
     FinalGallery,
     /// CR-031: финальный CTA «Начать самому» — тур завершён, чистый холст.
     FinalEmpty,
+    /// FR-107 (C4, №19): CTA финальной карточки мультиканваса — «Создать
+    /// канвас» (открыть менеджер; тур завершён).
+    Cta,
 }
 
 /// Высота полноширинной CTA-опции финального шага (база ×1).
@@ -448,11 +508,11 @@ pub fn illustration_rect(card: [f32; 4]) -> Option<[f32; 4]> {
 /// раскладки ([`card_layout`]), колеса ввода и отрисовки (видимые строки).
 /// CR-031: на финальном шаге снизу резервируется зона CTA-опций
 /// ([`option_zone`]) — опции всегда видимы, тело скроллится выше.
-pub fn body_area(card: [f32; 4], final_step: bool) -> [f32; 4] {
+pub fn body_area(card: [f32; 4], reserve_cta: bool) -> [f32; 4] {
     let k = card_scale(card[2]);
     let col = text_column(card);
     let mut h = (col[3] - body_top_offset(k) - pad(k) - footer_h(k)).max(0.0);
-    if final_step {
+    if reserve_cta {
         h = (h - option_zone(k)).max(0.0);
     }
     [
@@ -506,10 +566,11 @@ pub fn card_layout(
     let k = card_scale(w);
     let lines = body_lines(step, w, language, role, m, fs);
     let body_h = lines.len() as f32 * body_line_h(k);
-    // CR-031: финальный шаг несёт две полноширинные CTA-опции — зона
-    // резервируется в желаемой высоте карточки.
-    let final_step = step + 1 >= ONBOARDING_STEPS.len();
-    let options_h = if final_step { option_zone(k) } else { 0.0 };
+    // CR-031/FR-107 (C4): шаг с полноширинными CTA (финал FR-028 или
+    // карточка мультиканваса №19) — зона опций резервируется в желаемой
+    // высоте карточки.
+    let reserve_cta = step_has_cta_zone(step);
+    let options_h = if reserve_cta { option_zone(k) } else { 0.0 };
     let desired_h = body_top_offset(k) + body_h + pad(k) + footer_h(k) + options_h;
     // Кламп высоты к слоту: desired пре-клампнут, поэтому min-инвариант
     // модали (приоритетен — parity FR-060) не конфликтует с клампом FR-028.
@@ -519,7 +580,7 @@ pub fn card_layout(
     let card = [panel.x, panel.y, panel.w, panel.h];
     // Скролл тела: при клампе высоты viewport_h < content_h — строки
     // прокручиваются (колесо ввода; видимые строки — `kit::list_rows`).
-    let body = body_area(card, final_step);
+    let body = body_area(card, reserve_cta);
     scroll.content_h = lines.len() as f32 * body_line_h(k);
     scroll.viewport_h = body[3];
     scroll.clamp();
@@ -608,7 +669,23 @@ pub fn button_rect(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
         // ([`option_rects`]; в футере их нет)
         OnboardingButton::FinalGallery => option_rects(card)[0],
         OnboardingButton::FinalEmpty => option_rects(card)[1],
+        // FR-107 (C4, №19): CTA карточки мультиканваса — одна
+        // полноширинная кнопка в той же зоне опций.
+        OnboardingButton::Cta => cta_rect(card),
     }
+}
+
+/// FR-107 (C4, №19): полноширинный rect CTA финальной карточки
+/// мультиканваса — верхний слот зоны опций (кнопка одна, высота — как у
+/// опций финала FR-028).
+pub fn cta_rect(card: [f32; 4]) -> [f32; 4] {
+    option_rects(card)[0]
+}
+
+/// FR-107 (C4): зона полноширинных CTA у шага (финал FR-028 или карточка
+/// с собственным CTA №19) — раскладка резервирует её в высоте карточки.
+pub fn step_has_cta_zone(step: usize) -> bool {
+    step == CHOICE_STEP || ONBOARDING_STEPS.get(step).is_some_and(|s| s.cta.is_some())
 }
 
 /// Hit-test кнопки карточки. «Назад» на первом шаге отсутствует (None),
@@ -642,8 +719,9 @@ pub fn button_at(
             && point[1] >= rect[1]
             && point[1] <= rect[1] + rect[3]
     };
-    // CR-031: финальный шаг — CTA-опции вместо «Далее»
-    if state.is_last() {
+    // CR-031: финал FR-028 — две CTA-опции вместо «Далее» (FR-107 C4:
+    // спец-ветка больше не следует из is_last — см. CHOICE_STEP).
+    if state.is_choice() {
         let [gallery, empty] = option_rects(card);
         if hit(gallery) {
             return Some(OnboardingButton::FinalGallery);
@@ -651,8 +729,17 @@ pub fn button_at(
         if hit(empty) {
             return Some(OnboardingButton::FinalEmpty);
         }
-    } else if hit(button_rect(card, OnboardingButton::Next)) {
-        return Some(OnboardingButton::Next);
+    } else {
+        // FR-107 (C4, №19): CTA карточки мультиканваса — в зоне опций.
+        if state.cta().is_some() && hit(cta_rect(card)) {
+            return Some(OnboardingButton::Cta);
+        }
+        // «Далее»/«Готово»: не рисуется только на финале FR-028
+        // (карточка мультиканваса несёт «Готово» — путь завершения
+        // без создания канваса).
+        if hit(button_rect(card, OnboardingButton::Next)) {
+            return Some(OnboardingButton::Next);
+        }
     }
     if hit(button_rect(card, OnboardingButton::Skip)) {
         return Some(OnboardingButton::Skip);
@@ -1179,11 +1266,11 @@ mod tests {
     fn stress_240x180_footer_visible_and_body_reachable() {
         let viewport = [240.0, 180.0];
         for step in 0..ONBOARDING_STEPS.len() {
-            let final_step = step + 1 == ONBOARDING_STEPS.len();
+            let reserve_cta = step_has_cta_zone(step);
             let lay = layout(viewport, step, Language::Ru);
             let card = lay.card;
             // Футер (кнопки) прибит к низу карточки и НЕ входит в скролл-зону
-            let body = body_area(card, final_step);
+            let body = body_area(card, reserve_cta);
             let footer_top = card[1] + card[3] - ONBOARDING_FOOTER_H;
             assert!(
                 body[1] + body[3] <= footer_top + 0.01,
@@ -1223,10 +1310,13 @@ mod tests {
                     "хвост контента не влез после прокрутки до конца"
                 );
             }
-            // Кнопки кликабельны (hit-тест работает при клампе); на финале
-            // CTA — опция «Открыть шаблонную схему»
-            let (cta_rect, cta) = if final_step {
+            // Кнопки кликабельны (hit-тест работает при клампе); на шаге
+            // с CTA-зоной — опция «Открыть шаблонную схему» (финал FR-028)
+            // или CTA мультиканваса №19, иначе — «Далее»
+            let (cta_rect, cta) = if step == CHOICE_STEP {
                 (option_rects(card)[0], OnboardingButton::FinalGallery)
+            } else if step + 1 == ONBOARDING_STEPS.len() {
+                (cta_rect(card), OnboardingButton::Cta)
             } else {
                 (next, OnboardingButton::Next)
             };
@@ -1350,29 +1440,95 @@ mod tests {
         // Мимо карточки — не в карточке
         assert!(!point_in_card(card, [10.0, 10.0]));
 
-        // CR-031: финальный шаг — CTA-опции вместо «Далее»
-        let last = OnboardingState {
-            step: ONBOARDING_STEPS.len() - 1,
-        };
-        let card = layout(viewport, last.step, Language::Ru).card;
-        // Rect «Далее» — от финальной карточки (высота карточки зависит от
+        // CR-031/FR-107 (C4): финал FR-028 (шаг CHOICE_STEP) — CTA-опции
+        // вместо «Далее»; карточка мультиканваса №19 — последний шаг.
+        let choice = OnboardingState { step: CHOICE_STEP };
+        let card = layout(viewport, choice.step, Language::Ru).card;
+        // Rect «Далее» — от карточки выбора (высота карточки зависит от
         // шага — карточка центрируется, rect со шага 0 сюда не годится)
         let next = button_rect(card, OnboardingButton::Next);
         let [gallery, empty] = option_rects(card);
         assert_eq!(
-            button_at(card, &last, [gallery[0] + 5.0, gallery[1] + 10.0]),
+            button_at(card, &choice, [gallery[0] + 5.0, gallery[1] + 10.0]),
             Some(OnboardingButton::FinalGallery),
-            "CTA «Открыть шаблонную схему» достижим на финале"
+            "CTA «Открыть шаблонную схему» достижим на финале FR-028"
         );
         assert_eq!(
-            button_at(card, &last, [empty[0] + 5.0, empty[1] + 10.0]),
+            button_at(card, &choice, [empty[0] + 5.0, empty[1] + 10.0]),
             Some(OnboardingButton::FinalEmpty),
-            "CTA «Начать самому» достижим на финале"
+            "CTA «Начать самому» достижим на финале FR-028"
+        );
+        assert_eq!(
+            button_at(card, &choice, [next[0] + 5.0, next[1] + 10.0]),
+            None,
+            "«Далее» на финале FR-028 отсутствует"
+        );
+
+        // FR-107 (C4, №19): последний шаг — карточка мультиканваса: свой
+        // CTA «Создать канвас» + «Готово» (путь завершения без создания).
+        let last = OnboardingState {
+            step: ONBOARDING_STEPS.len() - 1,
+        };
+        let card = layout(viewport, last.step, Language::Ru).card;
+        let cta = cta_rect(card);
+        let next = button_rect(card, OnboardingButton::Next);
+        assert_eq!(
+            button_at(card, &last, [cta[0] + 5.0, cta[1] + 10.0]),
+            Some(OnboardingButton::Cta),
+            "CTA «Создать канвас» достижим на последнем шаге"
         );
         assert_eq!(
             button_at(card, &last, [next[0] + 5.0, next[1] + 10.0]),
-            None,
-            "«Далее» на финальном шаге отсутствует"
+            Some(OnboardingButton::Next),
+            "«Готово» на последнем шаге присутствует (завершение без CTA)"
+        );
+    }
+
+    // --- FR-107 (C4, №19): карточка мультиканваса — порядок/флаги/CTA -------
+
+    #[test]
+    fn multicanvas_step_is_final_with_cta() {
+        assert_eq!(ONBOARDING_STEPS.len(), 9, "9 карточек (было 8)");
+        // Порядок: финал FR-028 — предпоследний, мультиканвас — последний.
+        assert_eq!(CHOICE_STEP, 7);
+        let choice = OnboardingState { step: CHOICE_STEP };
+        assert!(choice.is_choice());
+        assert!(!choice.is_last(), "финал FR-028 больше не последний");
+        let last = OnboardingState {
+            step: ONBOARDING_STEPS.len() - 1,
+        };
+        assert!(last.is_last());
+        assert!(!last.is_choice());
+        // CTA — только у карточки мультиканваса
+        assert!(ONBOARDING_STEPS[ONBOARDING_STEPS.len() - 1].cta.is_some());
+        assert_eq!(last.cta(), Some(CtaAction::CreateCanvas));
+        assert_eq!(choice.cta(), None);
+        for (index, step) in ONBOARDING_STEPS.iter().enumerate() {
+            if index + 1 < ONBOARDING_STEPS.len() {
+                assert_eq!(step.cta, None, "CTA только у финальной карточки");
+            }
+        }
+        // Зона опций: финал FR-028 и карточка мультиканваса; середина — нет
+        assert!(step_has_cta_zone(CHOICE_STEP));
+        assert!(step_has_cta_zone(ONBOARDING_STEPS.len() - 1));
+        assert!(!step_has_cta_zone(0));
+        assert!(!step_has_cta_zone(3));
+        assert!(choice.has_cta_zone() && last.has_cta_zone());
+    }
+
+    #[test]
+    fn carousel_reaches_multicanvas_through_next() {
+        // Полный проход «Далее» доходит до карточки мультиканваса
+        let mut state = OnboardingState::default();
+        for _ in 1..ONBOARDING_STEPS.len() {
+            assert!(state.next());
+        }
+        assert!(state.is_last());
+        assert_eq!(state.cta(), Some(CtaAction::CreateCanvas));
+        // Подпись последней кнопки — «Готово» (завершение без CTA)
+        assert_eq!(
+            crate::i18n::tr(Language::Ru, state.next_label_key()),
+            "Готово"
         );
     }
 
