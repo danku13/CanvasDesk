@@ -32,6 +32,12 @@ pub mod widgets_web;
 // нейтрален (трейт/ошибка/тест-двойник); реализации OpfsStore/FsAccessStore
 // — волны C1/C2.
 pub mod workspace;
+// FR-104 (мультиканвас C1): OpfsStore над OPFS (зеркало + JS-глю), Web
+// Locks (№14b) и URL-синк ?canvas= (№17a) — чистые части тестируются
+// нативно, I/O-обёртки — wasm.
+pub mod opfs_store;
+pub mod url_sync;
+pub mod web_locks;
 
 // Чисто web-модули: JS-рунтайм обязателен (spawn_local/web-sys-вызовы),
 // нативная компиляция rlib их не включает.
@@ -52,10 +58,14 @@ pub mod js_glue;
 pub mod llm_web;
 #[cfg(target_arch = "wasm32")]
 pub mod toolbar;
+// FR-104 (мультиканвас C1): обработчик WebRequest-ов App — обратный канал
+// конвейера хранилища канвасов (CanvasList/CanvasOp/CanvasFallback).
 #[cfg(target_arch = "wasm32")]
 pub mod touch_platform;
 #[cfg(target_arch = "wasm32")]
 pub mod tour_aware_app;
+#[cfg(target_arch = "wasm32")]
+pub mod web_requests;
 
 use wasm_bindgen::prelude::*;
 
