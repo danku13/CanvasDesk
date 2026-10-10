@@ -75,6 +75,7 @@ Tokens (правило учёта токенов — AGENTS.md). Записи д
 - 2026-10-10 | DOCS-EN-w1 (issues #17+#18–#25; сессия web-a6dbb853) | Реализация backlog'а документации: битые ссылки+линт, факты AGENTS.md, ротация worklog, полные пути, prd-0006, разгрузка индексов, CLAUDE.md, волна 1 перевода EN | текущий
 - 2026-10-10 | MC-C1 (GitHub #5, волна C1 мультиканваса; high-level #14) | Волна C1 на контрактах C0: OpfsStore над OPFS + JS-глю, AppEvent-конвейер + обратный канал App→web, Web Locks №14b + модал №35a, URL-синк №17a, битая ссылка №31c, активный сценарий №32c, persist() R-T3 | текущий
 - 2026-10-10 | DOCS-EN-w2 (issue #24; сессия web-a6dbb853) | Волна 2 перевода агентского контура EN: SPEC/TASKS/RECIPES/ui-kit/WASM-TESTING/активный index-cr-fr/skills-скоупы; 12 файлов 1:1, корпус 70863->63640 o200k | текущий
+- 2026-10-10 | DOCS-EN-w3 (issue #33; сессия web-a6dbb853) | Волна 3 агентского слоя: docs/agent/ (MAP, routes.yaml, брифы, глоссарий, 6 workflow-навыков, eval-скелет), разгрузка AGENTS.md 8280→4860 o200k, doc_lint+бэктик-пути+бюджеты, контракт-тест правила 5–6, дрейф счётчика CONTEXT/SPEC | текущий
 
 Архив: `worklog/archive/worklog-2026-10-02_10-08.md` (2026-10-02…2026-10-08, 46 записей). Ниже — записи с 2026-10-09.
 
@@ -645,3 +646,22 @@ Stage Summary:
 - Независима от Wave C (может идти параллельно) — не требует ControlSize/state-layer
 - Гейты: cargo недоступен в среде — test/clippy/fmt делегированы CI
 Tokens: in≈120000, out≈30000, total≈150000 (estimate), model=GLM-4.7 (Super Z main), scope=WAVE-L
+Task ID: DOCS-EN-w3 (issue #33; сессия web-a6dbb853)
+Agent: Super Z (main)
+Task: Волна 3 — агентский навигационный слой по плану v2.1 (этапы 1-хвост, 4, 5, 6, 8-скелет, 10): docs/agent/, декомпозиция AGENTS.md в workflow-навыки, расширение doc_lint и контракт-теста
+
+Work Log:
+- docs/agent/ создан (EN): MAP.md (задача → документы → гейты, источники истины, весовые классы), routes.yaml (12 маршрутов: тип задачи → load → gates), BRIEF-TEMPLATE.md (поля + обоснование), glossary.md (термины workflow-слоя; домен — CONTEXT.md, перевод — translation-guide, дублирование исключено), briefs/ (README + принятый бриф translate-one-doc.md из волн 1–2), skills/ (README-индекс + 6 навыков: docs-links 90, worklog-rotate 89, issue-workflow 98, ui-kit-review 102, shell-win32 93, wasm-test 102 строки)
+- 6 навыков написаны 2 параллельными агентами (Task ID 4-a/4-b) из секций AGENTS.md 1:1; самопроверка doc_lint; исправлена глубина относительных ссылок (4 ап-сегмента из docs/agent/skills/<name>/)
+- AGENTS.md разгружен: 8 секций сжаты до указателей (Documentation 1000→~370, Mandatory question 315→~95, Win32 342→~95, Security M5 167→~75, Work planning 453→~185, Token accounting 479→~150, UI kit 2400→~175, WASM self-check 300→~110) + новая секция Agent navigation layer; итог 8280→4860 токенов o200k (−41%, приёмка этапа 6 ≤6k перевыполнена); заголовки секций сохранены (внешние ссылки на них живы)
+- doc_lint.py: + проверка бэктик-путей (2 позитивных класса: A — путь от корневого каталога; B — голое имя крейта = дефект класса #20 с подсказкой; контекстно-относительные/внешние/рантайм-пути не шумят), + бюджетный гейт (5 бюджетов в символах с калибровкой o200k в комментариях: AGENTS.md 23500, worklog 120000, SPEC 62000, index-cr-fr 39000, MAP 6000); жёсткий path-чек — только агентский контур (15 файлов + docs/agent/ + skills/)
+- Починены реальные находки path-чека: SPEC ×3, ui-kit ×6 (canvas-ui/tests/* → crates/..., admin.html → admin.md), product-roadmap ×1, index-cr-fr ×2 (fr-067 crates/-префикс; fr-043 плановый путь → плейсхолдер), cr-template (пример переноса актуализирован на текущее состояние)
+- Контракт-тест lib.rs (этап 4): правило 5 — AGENTS/CONTEXT без зашитых счётчиков инструментов (39–43 в обеих формах); правило 6 — маркеры навигации в AGENTS.md (MAP/routes/skills/skills-README) + CONTEXT→skills/README.md; предикаты верифицированы Python-портом (cargo в среде нет — первый прогон CI); попутно устранён дрейф: CONTEXT.md «42 tools on native: 41+MC; wasm 41» → без числа + указатель на skills/README.md; SPEC дерево «41 инструмент» → «счётчик только в skills/README.md»
+- docs/agent/evals/README.md: скелет этапа 8 — 10 задач E01–E10 из реальных дефектов (#18, дрейф счётчика, #23, #24, skills_sync, hardcode-аудит, R4/R9, ADR-0006 оракул, WASM-директива, issue-директива), протокол paired crossover/базлайны по моделям; прогоны — в живой среде владельца
+- Гейты: doc_lint 930 ссылок + 2517 бэктик-путей + 5 бюджетов, 0 ошибок; правила 5–6 PASS; call-position паттерн в новых навыках — 0 вхождений
+
+Stage Summary:
+- Агентский контур получил навигационный слой: маршрутизация (routes.yaml) + карта (MAP.md) + навыки on-demand + брифы + глоссарий + eval-скелет; корень AGENTS.md 4.9k токенов (было 8.3k)
+- Бюджетный гейт защищает от повторного разрастания входных точек (этап 10)
+- Для владельца: (а) прогоны eval-набора E01–E10 в живом ZCode/Kimi Code — этап 8; (б) перевод design/rules/ (~20k символов, normative для UI-волн) — кандидат волны 4; (в) первый зелёный cargo-прогон правил 5–6 — CI
+Tokens: in≈285000, out≈72000, total≈357000 (estimate), model=GLM-5.3 (Super Z main), scope=DOCS-EN-w3
