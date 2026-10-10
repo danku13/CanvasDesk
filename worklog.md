@@ -519,3 +519,27 @@ Stage Summary:
 - Механика инцидента: статус «✅» в аудите поставлен по непроверенному сообщению параллельной сессии о хэше, которого никогда не было в origin — системный урок ревью воспроизведён
 - Следующий шаг (предложение владельцу): LAY-W13/W14 отдельными агентами — возрождение W3a (оракул 135 тегов уже в main) и ремонт гейта (полный скан, расширение паттернов, --selftest)
 Tokens: in≈82000, out≈11000, total≈93000, model=GLM, scope=LAY-VERIFY
+
+---
+Task ID: DOCS-EN-w1 (issues #17+#18–#25; сессия web-a6dbb853)
+Agent: Super Z (main)
+Task: Реализация backlog'а документации (issue #17): P1 битые ссылки/факты AGENTS.md/ротация worklog, P2 полные пути/prd-0006/разгрузка индексов, P3 CLAUDE.md, волна 1 перевода агентского контура на EN (языковая политика владельца 2026-10-10)
+
+Work Log:
+- #18: 65 html->md правок (docs/index.md 32, prd/README 12, prototypes/README 11, WASM-AI-FEATURES 7, llm-waves 3, PR-шаблон CLA->absolute); user-docs не тронуты (FR-031); scripts/doc_lint.py (897 ссылок, 0 ошибок) + CI-джоба docs-lint; правило именования ссылок в AGENTS.md
+- #19: AGENTS.md — «4 скилла + каталог 39 инструментов» и «27+» убраны, счётчик только skills/README.md (single source of truth, контракт-тест)
+- #23: ротация worklog 433->119 КБ (~107k->~30k токенов): архив worklog/archive/worklog-2026-10-02_10-08.md (46 записей 1:1), Journal index 64 записи, гейт 64=18+46; правило п.2а в AGENTS.md
+- #20: 61 полный путь в AGENTS.md/ui-kit.md/prd-0009 + разорванный переносом M7-crossplatform
+- #21: prd-0006-design-system-tokens (2 файла) + 118 путей design/ в 30 файлах (crates-префиксы 39, app/*->src/app/* 9, ../ 22, голые имена 47); contrast-скрипты «вне репо» — решение зафиксировано
+- #22: index-cr-fr.md 195->35 КБ (29 активных/97 архив, гейт 126=29+97); ACCEPTANCE.md 209->62 КБ (методика §1-12 + индекс 36 волн; волны -> ACCEPTANCE-archive.md 1:1)
+- #25: CLAUDE.md-стаб -> AGENTS.md (обычный файл, 8 строк)
+- #24 волна 1: AGENTS.md EN (548 строк, секция Language policy), CONTEXT.md EN, skills/README.md EN; контракт-тест счётчика принимает «43 tools»; docs/translation-guide.md (терминология + правила волн); цитаты секций в коде обновлены; user-docs/worklog/prd/исторические ADR — не переводятся (политика)
+- Замер M1 (tiktoken) волна 1: o200k 11527->10005 (1.15x), cl100k 14754->10037 (1.47x)
+- Гейты: doc_lint 889 ссылок 0 ошибок после каждого этапа; cargo недоступен в среде — skills-тест верифицирован строковой проверкой, полный прогон — CI на PR
+- Блокер: редактирование issues недоступно (fine-grained PAT без Issues:write, classic PAT scope=project) — тела ревизии (#17+#18–#25 под политику) готовы в scripts/update_issues.py, применить при выдаче права
+
+Stage Summary:
+- 8 коммитов в ветке docs/agents-2026-10-10: a3ab134(#18) e1cd516(#19) c5ef33b(#23) a641483(#20) 5dfc1b9(#21) fbc9321(#22) 1836113(#25) ce67805(#24-w1); PR в main
+- Типовое чтение индексов агентом: index-cr-fr ~9k токенов (было ~49k), ACCEPTANCE ~15k (было ~52k), worklog ~30k (было ~107k)
+- Открыто: wave 2 перевода (SPEC/TASKS/RECIPES/ui-kit/WASM-TESTING/активный index-cr-fr/skills-скоупы); обновление issues после выдачи Issues:write
+Tokens: in≈210000, out≈60000, total≈270000 (estimate), model=GLM-5.3 (Super Z main), scope=DOCS-EN-w1
