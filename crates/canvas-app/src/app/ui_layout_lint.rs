@@ -14,6 +14,18 @@
 //! pick), а не предмет этого линта. Состояния строятся на headless-заглушке
 //! App (без окна/GPU — паттерн тестов `ui_registry`).
 //!
+//! **Ограничение G4 (LAY-W17, решение владельца): coarse-rect'ы — вне скоупа.**
+//! Реестр публикует hit-rect'ы из чистых layout-функций в ЛОГИЧЕСКИХ px
+//! без coarse-расширения — те же зоны, что у точного указателя. Тач-44
+//! (LAY8.3/FR-097: центрированное расширение до 44 лог. px на coarse,
+//! `touch_targets::expand_xywh`) и резолюция coarse-пересечений
+//! («ближайший центр», W15) — отдельная система ввода со своим гейтом;
+//! включать их в кадр G4 значило бы дублировать состояние
+//! `pointer_coarse()` в реестре и линтовать зоны, которых на десктопе
+//! нет. Пересечения coarse-расширенных зон соседних целей (палитра-
+//! строки, ⏸/⚙ — P2-1 ревью) отслеживает волна W15/touch_targets, этот
+//! линт их не видит и не обязан.
+//!
 //! Исполняется `cargo test --workspace` → CI (линты F-11 в CI — §13 U5).
 #![cfg(test)]
 
@@ -271,6 +283,174 @@ fn lint_onboarding_open() {
     assert_backdrop_is(&frame, ui_registry::id::ONBOARDING);
 }
 
+// --- LAY-W17 (ревью §3.4/§4): дозакрытие слепых зон G4 ---------------------
+//
+// Дешёвые канон-состояния поверхностей, чьи hit-rect'ы уже были в
+// fill_hit_rects, но канон-состояния не было (wheel/choice_menu/dialog) +
+// новая регистрация ai_onboarding (была вне реестра целиком).
+
+/// LAY-W17: wheel-меню шаблонов — донат-меню (WorldOverlay/Block, extent+12
+/// вокруг `menu.screen`). Каноническое состояние: центр вьюпорта, категория
+/// не выбрана (только кольца категорий — геометрия wheel_geometry с клампом
+/// центра в окно).
+#[test]
+fn lint_wheel_open() {
+    lint_state("wheel", |app, vp| {
+        app.wheel_menu = Some(crate::template_ui::WheelMenu {
+            screen: [vp[0] / 2.0, vp[1] / 2.0],
+            world: [0.0, 0.0],
+            category: None,
+        });
+    });
+    // Не вакуумно: hit-rect доната в кадре (extent категорий реестра + 12).
+    let mut app = lint_stub(Language::Ru);
+    app.wheel_menu = Some(crate::template_ui::WheelMenu {
+        screen: [640.0, 400.0],
+        world: [0.0, 0.0],
+        category: None,
+    });
+    let frame = build_frame_at(&app, [1280.0, 800.0]);
+    let surface = frame
+        .surfaces
+        .iter()
+        .find(|s| s.surface.as_str() == ui_registry::id::WHEEL)
+        .expect("wheel в кадре");
+    assert!(
+        surface.hit_rects.iter().any(|h| h.element == "wheel-donut"),
+        "hit-rect доната wheel под линтом"
+    );
+}
+
+/// LAY-W17: меню выбора (Popups/Block, transient над контекстным меню) —
+/// hit-rect панели (пункты + заголовок) под линтом; backdrop-контракт.
+#[test]
+fn lint_choice_menu_open() {
+    lint_state("choice_menu", |app, _vp| {
+        app.choice_menu = Some(crate::app::ChoiceMenu {
+            origin: [300.0, 200.0],
+            title_key: crate::i18n::keys::MENU_PICK_PARAM_TITLE,
+            items: vec![crate::app::ChoiceItem {
+                label: "rps".to_owned(),
+                action: crate::app::ChoiceAction::Param {
+                    from_node: "a".to_owned(),
+                    from_side: canvas_core::Side::Right,
+                    from_line: None,
+                    to_node: "b".to_owned(),
+                    param: "rps".to_owned(),
+                },
+            }],
+            hovered: None,
+        });
+    });
+    let mut app = lint_stub(Language::Ru);
+    app.choice_menu = Some(crate::app::ChoiceMenu {
+        origin: [300.0, 200.0],
+        title_key: crate::i18n::keys::MENU_PICK_PARAM_TITLE,
+        items: vec![crate::app::ChoiceItem {
+            label: "rps".to_owned(),
+            action: crate::app::ChoiceAction::Param {
+                from_node: "a".to_owned(),
+                from_side: canvas_core::Side::Right,
+                from_line: None,
+                to_node: "b".to_owned(),
+                param: "rps".to_owned(),
+            },
+        }],
+        hovered: None,
+    });
+    let frame = build_frame_at(&app, [1280.0, 800.0]);
+    let surface = frame
+        .surfaces
+        .iter()
+        .find(|s| s.surface.as_str() == ui_registry::id::CHOICE_MENU)
+        .expect("choice_menu в кадре");
+    assert!(
+        surface.hit_rects.iter().any(|h| h.element == "choice-menu"),
+        "hit-rect панели выбора под линтом"
+    );
+    assert_backdrop_is(&frame, ui_registry::id::CHOICE_MENU);
+}
+
+/// LAY-W17: модальный диалог Да/Нет (Modals/Block) — hit-rect окна диалога
+/// (`app.dialog_rect`) под линтом на всех канонических вьюпортах/языках;
+/// backdrop-контракт (угол экрана — Backdrop диалога). `test_viewport` —
+/// `dialog_rect` читает `viewport_logical()` (единственный rect-источник
+/// без явного вьюпорта; паттерн `lint_palette_selected`).
+#[test]
+fn lint_dialog_open() {
+    lint_state("dialog", |app, vp| {
+        app.test_viewport = Some(vp);
+        app.dialog = Some(AppDialog::WhatIfReset {
+            scenarios: 2,
+            overrides: 3,
+        });
+    });
+    let mut app = lint_stub(Language::Ru);
+    app.test_viewport = Some([1280.0, 800.0]);
+    app.dialog = Some(AppDialog::WhatIfReset {
+        scenarios: 2,
+        overrides: 3,
+    });
+    let frame = build_frame_at(&app, [1280.0, 800.0]);
+    let surface = frame
+        .surfaces
+        .iter()
+        .find(|s| s.surface.as_str() == ui_registry::id::DIALOG)
+        .expect("dialog в кадре");
+    assert!(
+        surface.hit_rects.iter().any(|h| h.element == "dialog"),
+        "hit-rect окна диалога под линтом"
+    );
+    assert_backdrop_is(&frame, ui_registry::id::DIALOG);
+}
+
+/// LAY-W17: AI-онбординг (FR-LLM-B, F-8) — каноническое состояние G4.
+/// Поверхность зарегистрирована в реестре (Modals/Block/Always — ревью §3.4:
+/// была главной слепой зоной); hit-rect'ы карточки и 3 радио-карточек +
+/// кнопок из [`onboarding_ui::ai_onboarding_layout`] во всех вьюпортах/
+/// языках; backdrop-контракт (Block: угол экрана — Backdrop, модаль не
+/// закрывается кликом мимо — контракт тур-онбординга).
+#[test]
+fn lint_ai_onboarding_open() {
+    lint_state("ai_onboarding", |app, _vp| {
+        app.ai_onboarding = Some(crate::onboarding_ui::AiOnboardingState::default());
+    });
+    // Не вакуумно: карточка + 3 радио-карточки + 2 кнопки = 6 rect'ов.
+    let mut app = lint_stub(Language::Ru);
+    app.ai_onboarding = Some(crate::onboarding_ui::AiOnboardingState::default());
+    let frame = build_frame_at(&app, [1280.0, 800.0]);
+    let surface = frame
+        .surfaces
+        .iter()
+        .find(|s| s.surface.as_str() == ui_registry::id::AI_ONBOARDING)
+        .expect("ai_onboarding в кадре 1280×800");
+    assert_eq!(
+        surface.hit_rects.len(),
+        6,
+        "карточка + режимы ×3 + privacy + continue"
+    );
+    let mut app = lint_stub(Language::Ru);
+    // Раскрытый блок privacy — карточка выше (AI_ONB_PRIV_H 180): геометрия
+    // кнопок/режимов не меняется (блок добавляется ниже кнопок) — линт-пин
+    // второй формы поверхности.
+    app.ai_onboarding = Some(crate::onboarding_ui::AiOnboardingState {
+        selected: Some(crate::onboarding_ui::AiOnboardingChoice::Cloud),
+        privacy_open: true,
+    });
+    let frame = build_frame_at(&app, [800.0, 560.0]);
+    let surface = frame
+        .surfaces
+        .iter()
+        .find(|s| s.surface.as_str() == ui_registry::id::AI_ONBOARDING)
+        .expect("ai_onboarding в кадре 800×560 (privacy_open)");
+    assert!(surface
+        .hit_rects
+        .iter()
+        .any(|h| h.element == "ai-onb-continue"));
+    // Block-модаль: угол экрана — её backdrop.
+    assert_backdrop_is(&frame, ui_registry::id::AI_ONBOARDING);
+}
+
 #[test]
 fn lint_stage_open() {
     lint_state("stage", |app, _vp| {
@@ -488,23 +668,28 @@ fn lint_ai_status_open() {
         .all(|s| s.surface.as_str() != ui_registry::id::AI_STATUS));
 }
 
-// --- LAY-W11: канонические состояния слепых зон линта ----------------------
+// --- LAY-W11/W17: канонические состояния слепых зон линта ------------------
 //
 // Аудит ui-kit (§5 LAY-W11) выявил 4 поверхности без канонических состояний
-// G4-линта: graph_builder, flow_map, calc-панель, hints. Ниже — lint-тесты
-// для каждой. Класс покрытия разный (см. комментарии у каждого теста):
+// G4-линта: graph_builder, flow_map, calc-панель, hints. Класс покрытия
+// (см. комментарии у каждого теста):
 // * flow_map — полный lint: поверхность в реестре (id::FLOW_MAP),
 //   hit-rect'ы панели/«✕»/строк в кадре;
-// * calc_panel — best-effort lint: панель рисуется ВНУТРИ поверхности STAGE
-//   (строки панели НЕ в кадре реестра — клики через `click_main_stage` +
-//   `stage_frame_ctx`), но нетривиальный пучок+формула детерминируют
-//   инварианты ОКНА stage на реальном кадре;
-// * graph_builder, hints — слепые зоны: оверлеи рисуются через `screen_bands`
-//   в handler.rs (Modals/Popups), НЕ в реестре `build_registry` — hit-rect'ы
-//   в кадре ОТСУТСТВУЮТ. Lint-тесты — маркеры канонического состояния (нулевые
-//   пересечения других поверхностей при открытом оверлее); регрессия
-//   «поверхность добавлена в реестер, но рендер/hit расходятся» будет поймана
-//   `lint_frame` автоматически.
+// * calc_panel — LAY-W17 закрыл слепую зону: строки панели в кадре
+//   (поверхность STAGE публикует calc-var-row-N/calc-formula-row-N после
+//   регресс-аудита click_main_stage — окно и строки под линтом);
+// * graph_builder, hints — LAY-W17, документированный статус «вне
+//   реестра» (решение по фактическому коду): оверлеи рисуются через
+//   `screen_bands` в handler.rs (Modals/Popups), клики graph_builder —
+//   ранней ветвью `graph_builder_click` ДО pick (input.rs, паттерн
+//   транзиентных AI-поверхностей: suggest-карточки/status/agent-панель),
+//   hints — keyboard-only (мышь проваливается в канвас намеренно).
+//   Регистрация в реестре создала бы вторую, всегда мёртвую pick-ветку
+//   поверх ранней и меняла бы hover-глушение absorbs — без выгоды для
+//   ввода; канон-состояния ниже — маркеры (нулевые пересечения других
+//   поверхностей при открытом оверлее). Assert'ы «поверхности НЕТ в
+//   кадре» западают при регистрации и напомнят переработать линт на
+//   полный кадр + hit-rect'ы.
 
 /// LAY-W11: карта проливаний — полный G4-lint. Поверхность в реестре
 /// (`id::FLOW_MAP`, `build_registry` при `flow_map_open`), hit-rect'ы
@@ -538,16 +723,22 @@ fn lint_flow_map_open() {
     );
 }
 
-/// LAY-W11: main stage с реальным пучком ≥ 2 рёбер и формулой в приёмнике —
+/// LAY-W17: main stage с реальным пучком ≥ 2 рёбер и формулой в приёмнике —
 /// панель «Как считается» строится (`calc_panel_ui::layout` → `Some`).
 ///
-/// Слепая зона: hit-rect'ы СТРОК панели (`var_rows`, `formula_rows`) НЕ в
-/// кадре реестра — клики по ним идут через `click_main_stage` →
-/// `stage_frame_ctx` (canvas-цепочка, не surface-реестр). В кадре
-/// `id::STAGE` лежит только rect ОКНА stage. Lint детерминирует инварианты
-/// ОКНА stage на нетривиальном срезе (2 ноды + 2 ребра + формула): регрессия
-/// `main_stage_rect`/`build_frame_at` будет поймана, геометрия строк панели
-/// — отдельная задача (покрыта модельными тестами `calc_panel_ui::layout`).
+/// LAY-W17 закрыл слепую зону: hit-rect'ы СТРОК панели (`var_rows`,
+/// `formula_rows`) публикуются поверхностью STAGE (`calc-var-row-N` /
+/// `calc-formula-row-N`, модельные индексы). Регресс-аудит click_main_stage
+/// (см. комментарий в fill_hit_rects): pick внутри окна stage и прежде был
+/// Element{STAGE} → click_main_stage игнорирует имя элемента и пере-хит-
+/// тестит той же stage_frame_ctx; колесо — ранний return до pick. Скролл-
+/// зависимость видимых строк покрыта сигнатурой кэша кадра
+/// (`stage_calc_vars_offset`/`stage_calc_formulas_offset`).
+///
+/// В кадре STAGE: rect ОКНА + строки панели. Lint детерминирует инварианты
+/// окна и строк на нетривиальном срезе (2 ноды + 2 ребра + формула):
+/// регрессия `main_stage_rect`/`build_frame_at`/`calc_panel_ui::layout`
+/// будет поймана.
 ///
 /// Фикстура: 2 ноды (Исток с выходами users/conv, Отчёт с формулой
 /// `x = Исток.users * Исток.conv`), 2 value-ребра src→dst (пучок веса 2 —
@@ -617,20 +808,47 @@ fn lint_calc_panel_open() {
         stage.hit_rects.iter().any(|h| h.element == "stage"),
         "STAGE: hit-rect окна stage есть"
     );
+    // LAY-W17: слепая зона «строки мимо кадра» закрыта — строки панели в
+    // кадре (2 переменных + 1 формула фикстуры), внутри окна stage.
+    let var_rows = stage
+        .hit_rects
+        .iter()
+        .filter(|h| h.element.starts_with("calc-var-row-"))
+        .count();
+    let formula_rows = stage
+        .hit_rects
+        .iter()
+        .filter(|h| h.element.starts_with("calc-formula-row-"))
+        .count();
+    assert_eq!(var_rows, 2, "строки переменных (users, conv) в кадре");
+    assert_eq!(formula_rows, 1, "строка формулы (x = …) в кадре");
+    let r = main_stage_rect(vp);
+    for hit in stage
+        .hit_rects
+        .iter()
+        .filter(|h| h.element.starts_with("calc-"))
+    {
+        assert!(
+            hit.rect.x >= r.x
+                && hit.rect.y >= r.y
+                && hit.rect.right() <= r.x + r.w
+                && hit.rect.bottom() <= r.y + r.h,
+            "строка {} вне окна stage",
+            hit.element
+        );
+    }
 }
 
-/// LAY-W11: graph_builder dialog — слепая зона. Оверлей рисуется через
-/// `screen_bands` (`handler.rs:347-350`, слой Modals — затемнение + карточка
-/// диалога `graph_builder_overlay`), НЕ в реестре `build_registry`.
-/// Hit-тест — отдельный путь `graph_builder_hit`/`graph_builder_click`
-/// (`input.rs:3152`, canvas-цепочка). В кадре `build_frame_at` НЕТ
-/// `graph_builder` поверхности → `lint_frame` тривиально зелёный.
-///
-/// Тест — маркер канонического состояния: фиксирует, что открытие диалога
-/// не ломает инварианты ДРУГИХ поверхностей (corner_buttons/empty в кадре
-/// остаются без пересечений и в вьюпорте). Регрессия «диалог зарегистрирован
-/// в реестре, но рендер/hit разошлись» будет поймана автоматически —
-/// `lint_frame` увидит новую поверхность и проверит её hit-rect'ы.
+/// LAY-W11: graph_builder dialog — документированный статус «вне реестра»
+/// (LAY-W17). Оверлей рисуется через `screen_bands` (`handler.rs:347-350`,
+/// слой Modals — затемнение + карточка диалога `graph_builder_overlay`), НЕ
+/// в реестре `build_registry`. Hit-тест — отдельный путь
+/// `graph_builder_hit`/`graph_builder_click` (`input.rs:3152`, РАННЯЯ ветвь
+/// до pick, паттерн транзиентных AI-поверхностей). Решение LAY-W17:
+/// регистрация в реестре не делается — ранняя ветвь перехватывает клики до
+/// pick (регистрация дала бы всегда мёртвую pick-ветку и поменяла бы
+/// hover-глушение absorbs); assert ниже западает при регистрации и
+/// напомнит переработать lint на полный кадр + backdrop-контракт.
 #[test]
 fn lint_graph_builder_open() {
     lint_state("graph_builder", |app, _vp| {
@@ -659,19 +877,16 @@ fn lint_graph_builder_open() {
     );
 }
 
-/// LAY-W11: hints popup — слепая зона. Popup рисуется через `screen_bands`
-/// (`handler.rs:453-454`, слой Popups — `hints_overlay`), НЕ в реестре
-/// `build_registry`. Hit-тест — только клавиатурная навигация
-/// (`input.rs:524`: ArrowUp/Down/Enter/Tab/Escape); мышь через popup НЕ
-/// перехватывается (клики проваливаются в canvas-цепочку). В кадре
-/// `build_frame_at` НЕТ `hints` поверхности → `lint_frame` тривиально зелёный.
-///
-/// Тест — маркер канонического состояния: фиксирует, что открытие popup
-/// (с элементами + якорем у каретки) не ломает инварианты других поверхностей.
-/// Якорь — центр вьюпорта (в headless-заглушке нет EditingSession —
-/// `sync_hints_anchor` остаётся no-op; якорь выставлен явно для полноты
-/// состояния). Регрессия «popup зарегистрирован в реестре» поймает
-/// расхождения рендер/hit автоматически.
+/// LAY-W11: hints popup — документированный статус «вне реестра» (LAY-W17).
+/// Popup рисуется через `screen_bands` (`handler.rs:453-454`, слой Popups —
+/// `hints_overlay`), НЕ в реестре `build_registry`. Hit-тест — только
+/// клавиатурная навигация (`input.rs:524`: ArrowUp/Down/Enter/Tab/Escape);
+/// мышь через popup НЕ перехватывается (клики проваливаются в
+/// canvas-цепочку — намеренно, транзиент у каретки). Регистрация в реестре
+/// не делается (LAY-W17): Capture-поверхность у каретки перехватила бы
+/// клики мира, которых popup сегодня не глотает; assert ниже западает при
+/// регистрации и напомнит переработать lint на полный кадр + hit-rect'ы
+/// строк.
 #[test]
 fn lint_hints_open() {
     lint_state("hints", |app, vp| {
