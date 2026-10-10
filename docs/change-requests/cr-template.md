@@ -88,7 +88,7 @@
 - `docs/interface-objects/edge.md` §4 (`Выделение связи`), §5 (`Состояния связи`), §7 (`Точки входа`).
 - `docs/interface-objects/minimap.md` §4 (`Навигация`), §6 (`Состояния миникарты`), §8 (`Точки входа`).
 - `docs/interface-objects/search.md` §4 (`Взаимодействия`), §6 (`Точки входа` — «Постоянное выделение`»).
-- `docs/interface-objects/selection-defect.md` (этот документ) — обновлять `История изменений`.
+- `docs/change-requests/cr-001-selection-multi.md` (этот документ после переноса) — обновлять `История изменений`.
 
 ## Проверка
 - `Shift` + клик на ноду → нода выделена (подсветка рамки); повторный `Shift` + клик → снятие выделения.
@@ -101,7 +101,7 @@
 - `2026-09-13` — агент: создан документ (`CR-001`), статус `выявлено`, добавлен анализ (`main.rs` строки), требования (`HashSet`, `Shift`, `drag`-рамка, `delete_all`), точки входа, проверка.
 
 ## Источники истины
-- `docs/interface-objects/selection-defect.md` (этот файл) — полный анализ с ссылками на `main.rs` (строки `190`, `3182`, `192`, `1031`, `2339`).
+- `docs/change-requests/cr-001-selection-multi.md` (этот файл) — полный анализ с ссылками на `main.rs` (строки `190`, `3182`, `192`, `1031`, `2339`).
 - `docs/interface-objects/node.md` — `§4` (взаимодействия с нодой), `§5` (состояния), `§6` (точки входа), `§9` (известный дефект).
 - `docs/interface-objects/edge.md` — `§4` (взаимодействия со связью), `§5` (состояния), `§7` (точки входа).
 - `docs/interface-objects/minimap.md` — `§4` (взаимодействия), `§6` (состояния), `§8` (точки входа).
@@ -126,18 +126,18 @@
 
 ---
 
-## Пример переноса (из `selection-defect.md` в `change-requests/`)
+## Пример переноса (выполнен: документ переехал в `docs/change-requests/`)
 
-Текущий документ (`docs/interface-objects/selection-defect.md`) — это `CR` (`CR-001`). Перенос:
+Документ-пример (`CR-001`) изначально лежал в `docs/interface-objects/`; выполнен перенос:
 
 ```bash
 mkdir -p docs/change-requests
-mv docs/interface-objects/selection-defect.md docs/change-requests/cr-001-selection-multi.md
+mv docs/interface-objects/<имя>.md docs/change-requests/<тип>-<номер>-<название>.md
 ```
 
 После переноса — обновить:
-- `docs/change-requests/cr-001-selection-multi.md`: `Источники истины` (`docs/interface-objects/selection-defect.md` → `docs/change-requests/cr-001-selection-multi.md`); `Точки входа` (добавить ссылку на `docs/interface-objects/node.md` §9 — «Известный дефект»).
-- `docs/interface-objects/node.md`: `§9` (`Известный дефект`) — ссылка на `docs/change-requests/cr-001-selection-multi.md` вместо `docs/interface-objects/selection-defect.md`.
+- `docs/change-requests/cr-001-selection-multi.md`: `Источники истины` старый путь в `docs/interface-objects/` → новый путь `docs/change-requests/cr-001-selection-multi.md`; `Точки входа` (добавить ссылку на `docs/interface-objects/node.md` §9 — «Известный дефект»).
+- `docs/interface-objects/node.md`: `§9` (`Известный дефект`) — ссылка на `docs/change-requests/cr-001-selection-multi.md` вместо старого пути в `docs/interface-objects/`.
 - `README.md` (если упоминается дефект или `CR`): добавить ссылку или обновить статус (`выявлено` → `в анализе` или `в работе`).
 - `docs/change-requests/` — добавить этот документ (`cr-template.md` или `cr-fr-template.md`) как шаблон для будущих `CR` и `FR`.
 

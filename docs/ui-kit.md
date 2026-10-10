@@ -151,7 +151,7 @@ did NOT change (`fs` — still an argument of the methods, the owner of the font
   — not a lint state: the canonical states do not combine the features; the real
   collisions (the hotkeys × the palette band, the settings modal × the band)
   were found and eliminated at U5 — see the PRD-0009 history.
-- **G4+ at the crate level (FR-068 W0, `canvas-ui/tests/g4_lint.rs`, run by `cargo test -p canvas-ui`)**:
+- **G4+ at the crate level (FR-068 W0, `crates/canvas-ui/tests/g4_lint.rs`, run by `cargo test -p canvas-ui`)**:
   5 canonical scenes (main canvas + whatif bar, palette dropdown, explain modal,
   search overlay, settings panel) × 3 windows × RU/EN = 30 runs: every visible
   element intersects its parent (the root — the viewport), the elements L4+ (Popups and
@@ -159,15 +159,15 @@ did NOT change (`fs` — still an argument of the methods, the owner of the font
   (`overlaps_within_layer`), the hit-rects are inside the viewport. The widths are real
   (TextMeasurer), so the language affects the geometry. The number of runs is locked
   by the test `lint_covers_30_scenarios` (30).
-- **The Painter.items snapshot tests (FR-068 W0, `canvas-ui/tests/snapshot.rs`)**:
+- **The Painter.items snapshot tests (FR-068 W0, `crates/canvas-ui/tests/snapshot.rs`)**:
   60 goldens — 10 kit components (Panel/Button/IconButton/Dropdown/Chip/Toast/
   Tooltip/Modal/TextField/Switch) × Normal/Hovered/Disabled × RU/EN;
   `Painter.items()` → a normalized dump (the rounding to a whole ui px,
   the sorting by `(x,y,w,h,type)`, the colors outside the dump — theme slots). The goldens —
-  `canvas-ui/tests/snapshot/*.txt`; the comparison is exact string equality; a change —
+  `crates/canvas-ui/tests/snapshot/*.txt`; the comparison is exact string equality; a change —
   a deliberate PR with a diff (§9 Contract-9 of FR-068). Regeneration:
   `CANVAS_UI_UPDATE_SNAPSHOTS=1 cargo test -p canvas-ui --test snapshot`.
-- **The HTML5 demo-goldens (FR-068 W1+W2, `canvas-ui/tests/html5_demos.rs`)**:
+- **The HTML5 demo-goldens (FR-068 W1+W2, `crates/canvas-ui/tests/html5_demos.rs`)**:
   the canonical list of 15 reference web layouts (ADR-0015 §Decision item 4)
   — `SceneNode` scenes, a dump of the rects of all the nodes in DFS pre-order. 10 W1
   (the mdn/css-tricks top-10: sticky-header, sidebar-overflow,
@@ -178,7 +178,7 @@ did NOT change (`fs` — still an argument of the methods, the owner of the font
   W4: a single golden),
   `13_cd_kit_gallery_tab_focus`, `14_cd_search_overlay_viewport_clip`,
   `15_cd_fr061_tabular_body_grid`. The dual-backend run (W2): default Goldens —
-  `canvas-ui/tests/html5_demos/*.txt`; regeneration
+  `crates/canvas-ui/tests/html5_demos/*.txt`; regeneration
   `CANVAS_UI_UPDATE_HTML5=1 cargo test -p canvas-ui --test html5_demos`.
   A change of a golden — a deliberate PR with a diff.
 - **The layout backends (FR-068 W1→W4, ADR-0014→ADR-0015)**: `trait
@@ -219,12 +219,12 @@ did NOT change (`fs` — still an argument of the methods, the owner of the font
   The perf gate — `crates/canvas-ui/tests/perf_flex.rs` (below).
 - **Perf-taffy** — removed in W4 together with taffy (the historical median
   264.8 μs — in the W1 worklog).
-- **Perf baseline (FR-068 W0, `canvas-ui/tests/perf_baseline.rs`, `#[ignore]`)**:
+- **Perf baseline (FR-068 W0, `crates/canvas-ui/tests/perf_baseline.rs`, `#[ignore]`)**:
   the reflow of a synthetic graph of 1000 nodes (Fit/flex/Wrap/SqueezeTail/grid_cells)
   — the median of 200 iterations, the gate < 1 ms (§Contract-8 of FR-068), a regression > 20%
   against `tests/perf_baseline.txt` — fail. The baseline is machine-dependent (a reference dev machine);
   the update — `CANVAS_UI_UPDATE_PERF=1 cargo test -p canvas-ui --test perf_baseline -- --ignored`.
-- **Perf-flex (FR-068 W2, `canvas-ui/tests/perf_flex.rs`, `#[ignore]`)**:
+- **Perf-flex (FR-068 W2, `crates/canvas-ui/tests/perf_flex.rs`, `#[ignore]`)**:
   the same synthetic graph of 1000 nodes (Fit/Wrap/SqueezeTail/grid —
   SqueezeTail deliberately: Flex implements the policy verbatim, §Contract-4),
   but all the calls — through the EXPLICIT `FlexLayoutEngine`
@@ -387,7 +387,7 @@ The model — `crates/canvas-app/src/admin_ui.rs` (the pure layouts + the draw a
 over the Painter/KitDraw), the integration — the pattern of the FR-055 gallery (the registry, Esc/
 backdrop/wheel, the G4 lint state `admin_panel`). The live overriding —
 `App::admin_palette_override` (the reset by the button “Reset”/by a change of the theme; the saving
-into the config — v2). The documentation — `user-docs/admin.html`, the step 9 of the onboarding.
+into the config — v2). The documentation — `user-docs/admin.md`, the step 9 of the onboarding.
 
 ## 9. The status of the kit
 
