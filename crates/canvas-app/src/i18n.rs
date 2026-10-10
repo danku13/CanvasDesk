@@ -710,6 +710,13 @@ pub mod keys {
     /// «Попробовать» на шаге «Шаблоны нод» — тот ведёт «Далее» до финала).
     pub const ONBOARDING_FINAL_OPEN: &str = "onboarding.final.open";
     pub const ONBOARDING_FINAL_EMPTY: &str = "onboarding.final.empty";
+    // --- FR-107 (мультиканвас C4, №19): финальная карточка «одна работа —
+    // один канвас» (9-й элемент ONBOARDING_STEPS; сквозная нумерация
+    // issue — «шаг 10», см. FR-107 §Нумерация) ---
+    pub const ONBOARDING_STEP9_TITLE: &str = "onboarding.step9.title";
+    pub const ONBOARDING_STEP9_BODY: &str = "onboarding.step9.body";
+    /// CTA финальной карточки — «Создать канвас» → менеджер (№19).
+    pub const ONBOARDING_MULTICANVAS_CTA: &str = "onboarding.multicanvas_cta";
 
     // --- Меню «?» и просмотрщик документации (FR-027/031) ---
     pub const HELP_DOCS: &str = "help.docs";
@@ -1105,6 +1112,15 @@ pub mod keys {
     pub const CANVAS_MANAGER_BADGE_FOLDER: &str = "canvas.manager.badge_folder";
     /// Бейдж источника записи: индивидуальный файл с диска.
     pub const CANVAS_MANAGER_BADGE_DISK: &str = "canvas.manager.badge_disk";
+    // --- FR-107 (мультиканвас C4, issue #8): чип активного канваса (№21c/№29b) ---
+    /// Тултип зоны иконки чипа — вход в менеджер (№21c/№37b).
+    pub const CANVAS_CHIP_MANAGER_HINT: &str = "canvas.chip.manager_hint";
+    /// Тултип имени чипа в дисковом режиме (ренейм не поддерживается).
+    pub const CANVAS_CHIP_DISK_HINT: &str = "canvas.chip.disk_hint";
+    /// Тултип стойкого значка ошибки сохранения (№29b).
+    pub const CANVAS_CHIP_SAVE_ERROR_HINT: &str = "canvas.chip.save_error_hint";
+    /// Тост ошибки сохранения активного канваса (№29b — разовый, значок чипа стойкий).
+    pub const CANVAS_CHIP_SAVE_ERROR_TOAST: &str = "canvas.chip.save_error_toast";
 }
 
 /// Русская таблица (эталон — порядок и полнота проверяются тестом).
@@ -1813,6 +1829,13 @@ const RU: &[(&str, &str)] = &[
     // CR-031: финальные CTA-опции последнего шага тура
     (keys::ONBOARDING_FINAL_OPEN, "Открыть шаблонную схему"),
     (keys::ONBOARDING_FINAL_EMPTY, "Начать самому"),
+    // FR-107 (C4, №19): финальная карточка мультиканваса + CTA
+    (keys::ONBOARDING_STEP9_TITLE, "Одна работа — один канвас"),
+    (
+        keys::ONBOARDING_STEP9_BODY,
+        "Не сваливайте всё в один файл: новая работа — новый канвас. Так проще возвращаться к задачам, ничего не теряется, а список канвасов всегда под рукой — иконка списка в левом верхнем углу.",
+    ),
+    (keys::ONBOARDING_MULTICANVAS_CTA, "Создать канвас"),
     // --- Меню «?» и документация ---
     (keys::HELP_DOCS, "Документация ▸"),
     (keys::HELP_ONBOARDING, "Пройти онбординг"),
@@ -2529,6 +2552,17 @@ const RU: &[(&str, &str)] = &[
     (keys::CANVAS_MANAGER_BADGE_BROWSER, "браузерное"),
     (keys::CANVAS_MANAGER_BADGE_FOLDER, "папка"),
     (keys::CANVAS_MANAGER_BADGE_DISK, "диск"),
+    // FR-107 (C4): чип активного канваса (№21c/№29b)
+    (keys::CANVAS_CHIP_MANAGER_HINT, "Все канвасы — список, создание, переименование"),
+    (
+        keys::CANVAS_CHIP_DISK_HINT,
+        "Канвас открыт с диска — имя меняется файлом на диске",
+    ),
+    (keys::CANVAS_CHIP_SAVE_ERROR_HINT, "Последнее сохранение не удалось"),
+    (
+        keys::CANVAS_CHIP_SAVE_ERROR_TOAST,
+        "Не удалось сохранить канвас — правки под угрозой",
+    ),
 ];
 
 /// Английская таблица — полный перевод каждого ключа (инвариант полноты).
@@ -3230,6 +3264,13 @@ const EN: &[(&str, &str)] = &[
     // CR-031: финальные CTA-опции последнего шага тура
     (keys::ONBOARDING_FINAL_OPEN, "Open a template scheme"),
     (keys::ONBOARDING_FINAL_EMPTY, "Start from scratch"),
+    // FR-107 (C4, №19): финальная карточка мультиканваса + CTA
+    (keys::ONBOARDING_STEP9_TITLE, "One task — one canvas"),
+    (
+        keys::ONBOARDING_STEP9_BODY,
+        "Don't pile everything into one file: a new task is a new canvas. It's easier to come back to your work, nothing gets lost, and the canvas list is always at hand — the list icon in the top-left corner.",
+    ),
+    (keys::ONBOARDING_MULTICANVAS_CTA, "Create a canvas"),
     // --- Help menu and docs viewer ---
     (keys::HELP_DOCS, "Documentation ▸"),
     (keys::HELP_ONBOARDING, "Run onboarding"),
@@ -3853,6 +3894,20 @@ const EN: &[(&str, &str)] = &[
     (keys::CANVAS_MANAGER_BADGE_BROWSER, "browser"),
     (keys::CANVAS_MANAGER_BADGE_FOLDER, "folder"),
     (keys::CANVAS_MANAGER_BADGE_DISK, "disk"),
+    // FR-107 (C4): чип активного канваса (№21c/№29b)
+    (
+        keys::CANVAS_CHIP_MANAGER_HINT,
+        "All canvases — list, create, rename",
+    ),
+    (
+        keys::CANVAS_CHIP_DISK_HINT,
+        "Canvas opened from disk — its name lives in the file on disk",
+    ),
+    (keys::CANVAS_CHIP_SAVE_ERROR_HINT, "Last save failed"),
+    (
+        keys::CANVAS_CHIP_SAVE_ERROR_TOAST,
+        "Failed to save the canvas — changes are at risk",
+    ),
 ];
 
 /// Поиск по таблице (линейный — таблицы статические, чтение раз в кадр).

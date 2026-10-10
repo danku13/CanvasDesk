@@ -280,7 +280,7 @@ pub fn camera_key_for(file_name: &str) -> String {
 // ============================================================================
 
 /// Снимок камеры канваса (№12/№30b): центр viewport в world-координатах
-/// + зум. Живёт в ядре (canvas-render не виден веб-слою напрямую, а
+/// и зум. Живёт в ядре (canvas-render не виден веб-слою напрямую, а
 /// зависимость направлена core ← render — снимок собирает потребитель,
 /// владеющий камерой). Хранение — localStorage по ключу
 /// [`camera_key_for`]; перенос при ренейме активного — `CanvasMoveCameraKey`
@@ -633,7 +633,10 @@ mod tests {
             zoom: 0.75,
         };
         let encoded = encode_camera(&snapshot);
-        assert_eq!(encoded, "-1234.57;42.00;0.750", "формат x;y;zoom с округлением");
+        assert_eq!(
+            encoded, "-1234.57;42.00;0.750",
+            "формат x;y;zoom с округлением"
+        );
         assert_eq!(
             decode_camera(&encoded),
             Some(CameraSnapshot {
