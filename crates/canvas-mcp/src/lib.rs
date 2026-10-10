@@ -1582,9 +1582,16 @@ mod tests {
         let context = include_str!("../../../CONTEXT.md");
         for text in [agents, context] {
             for stale in [
-                "39 инструмент", "39 tools", "40 инструмент", "40 tools",
-                "41 инструмент", "41 tools", "42 инструмент", "42 tools",
-                "43 инструмент", "43 tools",
+                "39 инструмент",
+                "39 tools",
+                "40 инструмент",
+                "40 tools",
+                "41 инструмент",
+                "41 tools",
+                "42 инструмент",
+                "42 tools",
+                "43 инструмент",
+                "43 tools",
             ] {
                 assert!(
                     !text.contains(stale),

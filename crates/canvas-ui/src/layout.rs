@@ -829,9 +829,7 @@ pub fn grid_template(
         .map(|(i, item)| {
             let col = i % n_cols;
             let row = i / n_cols;
-            let x = slot.x
-                + widths[..col].iter().sum::<f32>()
-                + col as f32 * gap;
+            let x = slot.x + widths[..col].iter().sum::<f32>() + col as f32 * gap;
             let y = slot.y + row as f32 * (row_h + gap);
             UiRect::new(x, y, widths[col], item.y.max(row_h))
         })
@@ -867,7 +865,12 @@ pub fn aspect_ratio(slot: UiRect, ratio: f32, align: (HAlign, VAlign)) -> UiRect
 ///
 /// `scroll_offset` — сдвиг контента вверх (px, 0 = начало).
 /// `header_h` — высота sticky-блока.
-pub fn sticky_header(scroll_area: UiRect, scroll_offset: f32, header_h: f32) -> UiRect {
+pub fn sticky_header(scroll_area: UiRect, _scroll_offset: f32, header_h: f32) -> UiRect {
+    // `_scroll_offset` сохранён в сигнатуре для будущей семантики sticky
+    // НЕ у верхнего края (Wave L §5.4.3 «движется с контентом до порога»);
+    // для хедера в самом верху scroll-области sticky = всегда верх
+    // (согласовано с тестом sticky_header_returns_top_rect). TODO(Wave L):
+    // дочитать семантику из §5.4.3, когда появится потребитель.
     if header_h <= 0.0 {
         return scroll_area;
     }
@@ -2016,7 +2019,11 @@ mod tests {
     fn grid_auto_n_cols_calculation() {
         // slot.w=800, min_col_w=200, gap=12 → n_cols = floor((800+12)/(200+12)) = floor(3.83) = 3
         let slot = UiRect::new(0.0, 0.0, 800.0, 600.0);
-        let opts = GridAuto { min_col_w: 200.0, max_col_w: None, gap: 12.0 };
+        let opts = GridAuto {
+            min_col_w: 200.0,
+            max_col_w: None,
+            gap: 12.0,
+        };
         let items = vec![UiVec2::new(0.0, 100.0); 6];
         let rects = grid_auto(slot, &items, &opts);
         assert_eq!(rects.len(), 6);
@@ -2026,7 +2033,7 @@ mod tests {
         approx(rects[0].w, expected_col_w);
         approx(rects[1].x, expected_col_w + 12.0); // col 1 start
         approx(rects[2].x, 2.0 * (expected_col_w + 12.0)); // col 2 start
-        // Row 2
+                                                           // Row 2
         approx(rects[3].y, 100.0 + 12.0); // row 1 start
     }
 
@@ -2034,7 +2041,11 @@ mod tests {
     fn grid_auto_min_one_col_when_narrow() {
         // slot.w=150, min_col_w=200 → n_cols = floor((150+12)/(200+12)) = floor(0.76) = 0 → max(1) = 1
         let slot = UiRect::new(0.0, 0.0, 150.0, 400.0);
-        let opts = GridAuto { min_col_w: 200.0, max_col_w: None, gap: 12.0 };
+        let opts = GridAuto {
+            min_col_w: 200.0,
+            max_col_w: None,
+            gap: 12.0,
+        };
         let items = vec![UiVec2::new(0.0, 100.0); 3];
         let rects = grid_auto(slot, &items, &opts);
         assert_eq!(rects.len(), 3);
@@ -2046,7 +2057,11 @@ mod tests {
     #[test]
     fn grid_auto_max_col_w_clamps() {
         let slot = UiRect::new(0.0, 0.0, 800.0, 600.0);
-        let opts = GridAuto { min_col_w: 100.0, max_col_w: Some(150.0), gap: 8.0 };
+        let opts = GridAuto {
+            min_col_w: 100.0,
+            max_col_w: Some(150.0),
+            gap: 8.0,
+        };
         let items = vec![UiVec2::new(0.0, 80.0)];
         let rects = grid_auto(slot, &items, &opts);
         // n_cols = floor((800+8)/(100+8)) = floor(7.48) = 7
@@ -2067,7 +2082,11 @@ mod tests {
     #[test]
     fn grid_template_fixed_cols() {
         let slot = UiRect::new(0.0, 0.0, 400.0, 300.0);
-        let cols = [Track::Fixed(100.0), Track::Fixed(100.0), Track::Fixed(100.0)];
+        let cols = [
+            Track::Fixed(100.0),
+            Track::Fixed(100.0),
+            Track::Fixed(100.0),
+        ];
         let items = vec![UiVec2::new(0.0, 50.0); 6];
         let rects = grid_template(slot, &cols, 50.0, 10.0, &items);
         assert_eq!(rects.len(), 6);
