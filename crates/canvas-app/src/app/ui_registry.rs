@@ -111,6 +111,11 @@ pub mod id {
     /// FR-105: диалог миграции OPFS→папка (L5, Block — Esc/«Отмена»/«✕»
     /// закрывают, клик мимо панели — тоже; №42a/№52a).
     pub const MIGRATE: &str = "migrate";
+    /// FR-106 (C3, issue #7): менеджер канвасов — оверлей (список/поиск/
+    /// сортировка/группы, создание, ренейм №9, удаление №15a, строка
+    /// хранилища №51a). Модаль Modals/Block; вход — кнопка «Недавние»
+    /// DOM-панели web (до чипа №21c волны C4).
+    pub const CANVAS_MANAGER: &str = "canvas_manager";
     /// FR-105: тост с действием «Перезагрузить» (L7, Capture — интерактивна
     /// только кнопка; клик мимо проваливается в канвас, №45b).
     pub const TOAST: &str = "toast";
@@ -148,6 +153,10 @@ pub enum KeyOwner {
     /// (кнопка «Переехать»)/стрелки/Space (галочка) — в диалоге, прочие
     /// глотаются (паттерн галереи схем).
     Migrate,
+    /// FR-106 (мультиканвас C3): менеджер канвасов — модаль; Esc/↑/↓/Enter/
+    /// F2 (ренейм №9) + ввод в фильтр/буфер ренейма, прочие глотаются
+    /// (паттерн галереи схем).
+    CanvasManager,
 }
 
 /// Владелец-обработчик поверхности (FR-054, Q4-a): `Some` — у поверхности
@@ -173,6 +182,8 @@ pub fn owner_of(surface: &str) -> Option<KeyOwner> {
         id::TEMPLATE_PANEL => Some(KeyOwner::TemplatePanel),
         // FR-105 (C2): диалог миграции — модаль (Esc/Enter/стрелки/Space)
         id::MIGRATE => Some(KeyOwner::Migrate),
+        // FR-106 (C3): менеджер канвасов — модаль (Esc/стрелки/Enter/F2/фильтр)
+        id::CANVAS_MANAGER => Some(KeyOwner::CanvasManager),
         _ => None,
     }
 }
@@ -444,6 +455,17 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
                 .with_scope(id::MIGRATE),
         );
     }
+    // FR-106 (C3, issue #7): менеджер канвасов — Modals/Block (Esc/
+    // backdrop закрывают, клик по телу панели глотается — модаль жива).
+    // Деградация — Always (как у диалога миграции: панель клампится к
+    // вьюпорту, список скроллится — прятать целиком нет причин).
+    if app.canvas_manager.open {
+        reg.add(
+            SurfaceDecl::new(id::CANVAS_MANAGER, UiLayer::Modals, CapturePolicy::Block)
+                .with_scope(id::CANVAS_MANAGER)
+                .with_degradation(DegradationPolicy::Always),
+        );
+    }
     // FR-105 (C2, №45b): тост с действием «Перезагрузить» — Toasts/Capture:
     // интерактивна ТОЛЬКО кнопка (hit-rect ниже); клик мимо — в канвас,
     // прежняя пассивность строки тоста сохранена.
@@ -591,6 +613,10 @@ const VISUAL_ORDER: &[&str] = &[
     id::CHOICE_MENU,
     id::HELP_MENU,
     id::DOCS,
+    // FR-106 (C3): менеджер канвасов — ПОД галереей-пикером (№38a:
+    // «Из шаблона…» открывает галерею поверх менеджера; список — снизу
+    // вверх, поэтому менеджер раньше галереи)
+    id::CANVAS_MANAGER,
     id::GALLERY,
     id::KIT_GALLERY,
     id::ADMIN,
@@ -750,6 +776,8 @@ pub mod ui_frame_flags {
     pub const MIGRATE_OPEN: u64 = 1 << 36;
     /// FR-105 (C2, №45b): тост с действием активен (`app.toast_action`).
     pub const TOAST_ACTION_ACTIVE: u64 = 1 << 37;
+    /// FR-106 (C3): менеджер канвасов открыт (`app.canvas_manager.open`).
+    pub const CANVAS_MANAGER_OPEN: u64 = 1 << 38;
 }
 
 /// FR-PERF-A: Сигнатура инвалидации кэша UI-кадра — всё, что влияет на
@@ -784,7 +812,10 @@ pub mod ui_frame_flags {
 /// * `wheel_template_count` — число шаблонов выбранной категории wheel-меню
 ///   (WHEEL extent зависит от count; `wheel_menu.category` меняется кликом
 ///   без смены флага `WHEEL_OPEN`).
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// FR-106 (C3): `Copy` снят — `manager_filter: String` (фильтр меняет
+/// состав hit-строк менеджера; строка не Copy, сравнение — PartialEq).
+#[derive(Debug, Clone, PartialEq)]
 pub struct UiFrameSig {
     /// Логический viewport (w, h) — влияет на все layout-функции.
     pub viewport: [f32; 2],
@@ -850,6 +881,13 @@ pub struct UiFrameSig {
     /// галочек (упаковка: selected<<40 | checked<<24 | len; hit-строки и
     /// стили зависят от них).
     pub migrate_pack: u64,
+    /// FR-106 (C3): фильтр менеджера канвасов — состав hit-строк зависит
+    /// от него (какие канвасы в списке), сравнение строк — дёшево.
+    pub manager_filter: String,
+    /// FR-106 (C3): упаковка состояния менеджера: selected<<48 |
+    /// scroll_top<<32 | entries.len()<<16 | editing<<3 | sort<<2 |
+    /// storage (0 — браузерное+FS, 1 — браузерное без FS, 2 — папка).
+    pub manager_pack: u64,
 }
 
 /// FR-PERF-A: Простой нечётный миксер хэша (FNV-1a вариант) для примитивов.
@@ -1027,6 +1065,10 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
     if app.toast_action.is_some() {
         flags |= ui_frame_flags::TOAST_ACTION_ACTIVE;
     }
+    // FR-106 (C3): менеджер канвасов открыт — состав кадра меняется.
+    if app.canvas_manager.open {
+        flags |= ui_frame_flags::CANVAS_MANAGER_OPEN;
+    }
     // Hover-раскрытия и скроллы отдельных панелей — влияют на hit-rect'ы
     // внутри поверхности (не на состав кадра).
     let (template_hover_open, template_hover_scroll) = match &app.template_hover {
@@ -1079,6 +1121,25 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
         migrate_pack: ((app.migrate.selected as u64) << 40)
             | ((app.migrate.checked.iter().filter(|c| **c).count() as u64) << 24)
             | (app.migrate.entries.len() as u64),
+        // FR-106 (C3): состояние менеджера (фильтр меняет состав hit-строк;
+        // скролл/выбор/редактирование/сортировка/режим — геометрию и стили)
+        manager_filter: app.canvas_manager.filter.clone(),
+        manager_pack: {
+            let storage = match app.canvas_manager.storage {
+                crate::canvas_manager_ui::StorageRowMode::Browser { fs_available: true } => 0u64,
+                crate::canvas_manager_ui::StorageRowMode::Browser {
+                    fs_available: false,
+                } => 1,
+                crate::canvas_manager_ui::StorageRowMode::Folder => 2,
+            };
+            ((app.canvas_manager.selected as u64) << 48)
+                | ((app.canvas_manager.scroll_top as u64) << 32)
+                | ((app.canvas_manager.entries.len() as u64) << 16)
+                | (u64::from(app.canvas_manager.editing.is_some()) << 3)
+                | (u64::from(app.canvas_manager.sort == canvas_core::workspace::SortMode::Name)
+                    << 2)
+                | storage
+        },
     }
 }
 
@@ -1567,13 +1628,93 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 .hit_rects
                 .push(HitRect::interactive(rect(lay.cancel), "migrate-cancel"));
         }
+        // FR-106 (C3): менеджер канвасов — тело панели (базовая pick-зона,
+        // глотает клик — модаль жива), строки/зоны имён, кнопки, строка
+        // хранилища (№51a). Порядок: тело первой, затем строки, зоны имён
+        // ПОСЛЕ строк (реверс-обход pick'а — имя выигрывает у строки) и
+        // кнопки последними.
+        id::CANVAS_MANAGER => {
+            let lay = app.manager_layout_current(viewport);
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(lay.panel), "manager-panel"));
+            for row in &lay.rows {
+                if let Some(entry) = row.entry {
+                    surface.hit_rects.push(HitRect::interactive(
+                        rect(row.row),
+                        format!("manager-row-{entry}"),
+                    ));
+                }
+            }
+            for row in &lay.rows {
+                if let Some(entry) = row.entry {
+                    surface.hit_rects.push(HitRect::interactive(
+                        rect(row.name),
+                        format!("manager-row-{entry}-name"),
+                    ));
+                }
+            }
+            if lay.has_entries {
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(rect(lay.create), "manager-create"));
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(rect(lay.template), "manager-template"));
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(rect(lay.import), "manager-import"));
+                surface.hit_rects.push(HitRect::interactive(
+                    rect(lay.duplicate),
+                    "manager-duplicate",
+                ));
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(rect(lay.rename), "manager-rename"));
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(rect(lay.delete), "manager-delete"));
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(rect(lay.export), "manager-export"));
+            }
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(lay.sort_chip), "manager-sort"));
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(lay.close), "manager-close"));
+            if lay.storage_move[2] > 0.0 {
+                surface.hit_rects.push(HitRect::interactive(
+                    rect(lay.storage_move),
+                    "manager-storage-move",
+                ));
+            }
+            if let Some(empty) = &lay.empty {
+                surface.hit_rects.push(HitRect::interactive(
+                    rect(empty.create),
+                    "manager-empty-create",
+                ));
+                surface.hit_rects.push(HitRect::interactive(
+                    rect(empty.open_disk),
+                    "manager-empty-disk",
+                ));
+            }
+        }
         // FR-105 (C2, №45b): тост с действием — ТОЛЬКО кнопка
         // «Перезагрузить» (геометрия — storage_ui::toast_action_rect от
         // toast-области с whatif-avoid, как у отрисовки).
         id::TOAST => {
             if let Some((text, _)) = &app.toast {
                 let lang = app.settings.language;
-                let label = crate::i18n::tr(lang, keys::CANVAS_EXT_RELOAD_ACTION);
+                // FR-106 (C3, №15a): подпись кнопки зависит от действия —
+                // «Перезагрузить» (№45b) или «Отменить» (мягкое удаление).
+                let label = match &app.toast_action {
+                    Some(crate::app::ToastAction::UndoDelete(_)) => {
+                        crate::i18n::tr(lang, keys::CANVAS_MANAGER_UNDO)
+                    }
+                    _ => crate::i18n::tr(lang, keys::CANVAS_EXT_RELOAD_ACTION),
+                };
                 let mut m = canvas_ui::measure::TextMeasurer::new();
                 let mut fs = canvas_render::text::measure_font_system();
                 let family = canvas_render::text::SANS_FAMILY;
@@ -1600,9 +1741,15 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                     text_w,
                     action_w,
                 );
+                // FR-106 (C3, №15a): элемент кнопки зависит от действия
+                // («Перезагрузить» №45b / «Отменить» мягкого удаления).
+                let element = match &app.toast_action {
+                    Some(crate::app::ToastAction::UndoDelete(_)) => "toast-undo",
+                    _ => "toast-reload",
+                };
                 surface
                     .hit_rects
-                    .push(HitRect::interactive(rect(r), "toast-reload"));
+                    .push(HitRect::interactive(rect(r), element));
             }
         }
         // FR-055 (этап U4): витрина кита — интерактивные зоны шапки (одни

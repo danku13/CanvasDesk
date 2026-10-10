@@ -375,9 +375,12 @@ pub(crate) async fn open_from_disk(
     });
 }
 
-/// Reopen из недавних (жест кнопки «Недавние»): дисковый хэндл →
-/// requestPermission → диск; иначе OPFS-копия; ничего — warn.
+/// Reopen из недавних (жест кнопки «Недавние» — до FR-106): дисковый
+/// хэндл → requestPermission → диск; иначе OPFS-копия; ничего — warn.
+/// FR-106 (C3): вход из тулбара ушёл в менеджер канвасов (кнопка
+/// «Канвасы»); функция остаётся для чипа/менеджера disk-строк волны C4.
 #[cfg(target_arch = "wasm32")]
+#[allow(dead_code)] // FR-106: потребитель — C4 (чип №21c/disk-записи менеджера)
 pub(crate) async fn reopen_recent(
     proxy: winit::event_loop::EventLoopProxy<canvas_app::app::AppEvent>,
 ) {

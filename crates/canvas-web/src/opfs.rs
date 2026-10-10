@@ -320,9 +320,9 @@ pub(crate) struct WebScene {
 /// (`pending_broken_link` → первый кадр).
 /// Отказ OPFS целиком — `MemStorage` (страница открывается всегда).
 /// `?stress` — сразу в память: нагрузочная сцена не пишет OPFS/recent.
-/// FR-104 (R-T3): здесь же — `navigator.storage.persist()` (защита OPFS от
-/// eviction до переезда на диск; TODO: C3 перенесёт вызов в точку первого
-/// открытия менеджера канвасов — осознанный жест вместо автозапуска).
+/// FR-104 (R-T3): persist() вызывался здесь при старте; с FR-106 (C3)
+/// вызов живёт в точке первого открытия менеджера канвасов
+/// (жест пользователя вместо автозапуска).
 #[cfg(target_arch = "wasm32")]
 pub(crate) async fn init_scene(params: &WebParams) -> WebScene {
     if params.stress.is_some() {
@@ -358,10 +358,9 @@ pub(crate) async fn init_scene(params: &WebParams) -> WebScene {
             };
         }
     };
-    // FR-104 (R-T3): persist() — до первой записи (eviction не должен
-    // съесть только что созданный канвас); отказ — тихий warn (жест не
-    // блокирует старт, повтор — в точке менеджера C3).
-    crate::opfs_store::request_storage_persist();
+    // FR-104 (R-T3 → FR-106): persist() переехал в точку первого открытия
+    // менеджера канвасов (жест пользователя вместо автозапуска; повторные
+    // вызовы дёшевы и идемпотентны со стороны браузера).
     let storage = Arc::new(OpfsStorage::new());
     match read_opfs_text(&root, &name).await {
         Ok(Some(text)) => match Canvas::from_str(&text) {

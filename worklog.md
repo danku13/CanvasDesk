@@ -77,6 +77,7 @@ Tokens (правило учёта токенов — AGENTS.md). Записи д
 - 2026-10-10 | DOCS-EN-w2 (issue #24; сессия web-a6dbb853) | Волна 2 перевода агентского контура EN: SPEC/TASKS/RECIPES/ui-kit/WASM-TESTING/активный index-cr-fr/skills-скоупы; 12 файлов 1:1, корпус 70863->63640 o200k | текущий
 - 2026-10-10 | DOCS-EN-w3 (issue #33; сессия web-a6dbb853) | Волна 3 агентского слоя: docs/agent/ (MAP, routes.yaml, брифы, глоссарий, 6 workflow-навыков, eval-скелет), разгрузка AGENTS.md 8280→4860 o200k, doc_lint+бэктик-пути+бюджеты, контракт-тест правила 5–6, дрейф счётчика CONTEXT/SPEC | текущий
 - 2026-10-10 | MC-C2 (GitHub #6, волна C2 мультиканваса; high-level #14) | Волна C2: FsAccessStore над granted-папкой (№41c тихий старт, R-T6 rename с .bak), миграция OPFS→папка №42a/№52a (копирование до удаления), баннер №44b, watch внешних изменений №45b/№53b | текущий
+- 2026-10-10 | MC-C3 (GitHub #7, волна C3 мультиканваса; high-level #14) | Оверлей-менеджер канвасов: список/поиск/группы №43a, создание×4, ренейм №9, удаление+undo №15a/№22c, строка хранилища №51a, drop-коллизия №26b | текущий
 
 Архив: `worklog/archive/worklog-2026-10-02_10-08.md` (2026-10-02…2026-10-08, 46 записей). Ниже — записи с 2026-10-09.
 
@@ -689,3 +690,24 @@ Stage Summary:
 - Открытые пункты: строка «Переехать на диск…» в менеджере и вызов миграции из UI — C3; persist() — у C1; ручной дым — за владельцем
 Tokens: in≈520k, out≈120k, total≈640k (estimate; subagent MC-C2 + координаторская финализация), model=GLM, scope=FR-105
 
+
+---
+Task ID: MC-C3 (GitHub #7, волна C3 мультиканваса; high-level #14)
+Agent: Super Z (subagent MC-C3 + координатор main при финализации; worktree wt-c3/ветка wave/mc-c3)
+Task: Волна C3: оверлей-менеджер канвасов — список/поиск/сортировка/группы (№43a), 4 источника создания, инлайн-ренейм (№9), мягкое удаление с undo (№15a), пустое состояние (№23a), строка хранилища (№51a), drop-коллизия (№26b).
+
+Work Log:
+- Сессия агента прерывалась (контекст) — незакоммиченный задел (~16 файлов + canvas_manager_ui.rs 50 КБ); финализация (wasm-фиксы, гейты, FR-106, worklog) — координатор от имени MC-C3
+- canvas_manager_ui.rs (новый, ~1050 строк): CanvasManagerState (open/filter/selected/scroll/entries/editing) по паттерну scheme_gallery; rows — поиск по display_name регистронезависимо + SortMode + группы №43a с заголовками (фильтр в группах тоже); move_selection пропускает заголовки, scroll_to_reveal/wheel_scroll; инлайн-ренейм №9 (begin_rename/insert/backspace/cancel/take_edit); StorageRowMode №51a (browser+кнопка / folder / unsupported — Firefox/Safari без кнопки); manager_layout/row_at/name_at (draw==hit); empty_card №23a; format_ts; DOUBLE_CLICK_MS-детект (строка — открыть №49, имя — ренейм) — 15 тестов
+- app-интеграция: AppEvent-блок // FR-106 (CanvasManagerOpen — кнопка «Недавние» тулбара до чипа C4, №37b; CanvasSavedAsCopy №26b; undo-удаления), клавиатура оверлея (Esc/Esc-ренейм/Enter/F2/↑↓/PgUp/PgDn/ввод), manager_after_open (шаблон №38a: создать → галерея-пикер set_pending_scheme поверх), после удаления активного №22c/№40b — менеджер открыт + новый «Canvas N» под ним; +8 i18n-ключей RU/EN (тосты удаления/коллизий/ошибок, Экспорт, бейджи browser/folder/disk)
+- web_requests.rs: операции менеджера — открытие из workspace (OPFS/папка), дубликат №27a (полный .canvas: сценарии/заморозки/extra; copy_name с i18n-суффиксом; сразу активен), импорт файла (пикер, санитизация, №26b авто-суффикс), undo удаления (.bak→файл без переключения сцены), перенос ключа камеры localStorage при ренейме активного (№12/№30b, формат C0 camera_key_for), remove_recent при удалении (№15a)
+- drop_files.rs: DOM-drop с коллизией — было create:true (тихая перезапись) → collision_suffix + тост «создана копия» (№26b)
+- Координаторские фиксы сессии: manager_last_click std::time::Instant → canvas_core::time::Instant (W1-аудит); 3 ошибки владения wasm-only (E0382 name/sanitized, E0521 remove_recent future, E0308) — видны только под wasm32-таргетом (натив проходит), подчёркнуто в FR-106 §Проверка; unused import
+- Гейты (финальное состояние): fmt --check OK; clippy --workspace -D warnings OK; cargo test --workspace 3001 passed / 0 failed (22 новых: canvas_manager_ui×15, app×5, web_requests×2); wasm_gate.sh --check OK
+- WASM L2 не гонялся (нет wasm-bindgen CLI, 2 ядра/4 ГБ) — ручные сценарии 8 шт. в FR-106 §Проверка (вкл. тёмная/светлая, RU/EN)
+
+Stage Summary:
+- C3 закрыта целиком: полный цикл управления канвасами в UI (создать/открыть/переименовать/дублировать/удалить+undo/импорт/экспорт); вход — кнопка «Недавние» (C4 заменит на двухзонный чип №21c + document.title №28a)
+- C4-задел: AppEvent-конвейер и web_requests операции переиспользуются чипом; persist() переносится в точку менеджера (TODO в C1)
+- Открытые пункты: онбординг-шаг 10, чистка DOM-панели, чип, title — C4; desktop-слой и приёмка — C5
+Tokens: in≈560k, out≈130k, total≈690k (estimate; subagent MC-C3 + координаторская финализация), model=GLM, scope=FR-106
