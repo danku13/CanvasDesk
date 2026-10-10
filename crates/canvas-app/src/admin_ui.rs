@@ -19,7 +19,7 @@
 use canvas_core::Language;
 use canvas_ui::geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
 use canvas_ui::kit::{self, ButtonVariant, KitPalette, KitState};
-use canvas_ui::layout::{HAlign, VAlign};
+use canvas_ui::layout::{pilot_backend, Column, HAlign, MeasuredItem, Row, VAlign};
 use canvas_ui::measure::TextMeasurer;
 
 /// Семейство шрифта подписей (тот же SANS, что у рендера и витрины).
@@ -332,6 +332,60 @@ pub fn wrap_text(
     m.wrap(fs, text, FONT_FAMILY, size, max_w)
 }
 
+// === LAY-W13 (возрождение W3a): Column-скелет тел админки ===================
+//
+// Вертикальные линейки тел демо-секций — один `Column { gap: 0 }` из блоков
+// [`MeasuredItem::Fixed`] через [`pilot_backend`] (NativeBackend —
+// арифметика прежнего курсора `y +=` байт-в-байт, LAY9.1; образец — W3b,
+// `kit_ui::gallery_layout`; аудит layouts-2026-10 §3.2 → §5 LAY-W3).
+// Высота блока = прежний шаг курсора (числовые значения перенесены как
+// есть — канонизация W6/W7 не менялась). Зазор — ХВОСТ блока, а не
+// `MeasuredItem::Spacer`: в Column распорка занимает нулевую высоту
+// (док-контракт canvas-ui, урок W3b) — линейка бы схлопнулась.
+//
+// Слот линейки — контент-координаты тела (y от 0): скелет строится от
+// нуля, как прежний курсор; единый сдвиг на `demo.y − offset` (скролл,
+// контракт FR-059) — при потреблении блоков. Полная высота тела — низ
+// последнего блока линейки. Горизонтальные ряды чипов — `Row { gap }`
+// measured (тот же `TextMeasurer`; ширина чипа `width_of + 2·CHIP_PAD_H` —
+// бит-в-бит прежнему `chip_size`, поэтому прежний курсор `cx += w + gap`
+// заменён без дрейфа). Золотой тест
+// `admin_bodies_golden_column_skeleton` (135 тегов, допуск 0.005 px)
+// пинит геометрию — дрейф 0.
+
+/// Блок линейки тела: фиксированный [`MeasuredItem::Fixed`] (высота —
+/// прежний шаг курсора; ширина номинальная — потребители читают y).
+fn block(w: f32, h: f32) -> MeasuredItem<'static> {
+    MeasuredItem::Fixed { w, h }
+}
+
+/// Линейка тела (LAY-W13): `Column { gap: 0 }` из блоков в
+/// контент-координатах тела — см. модульный док «Column-скелет тел
+/// админки» выше. Возвращает rect'ы блоков (параллельно `items`).
+fn body_ruler(
+    demo: UiRect,
+    items: &[MeasuredItem<'_>],
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> std::vec::IntoIter<UiRect> {
+    Column {
+        gap: 0.0,
+        ..Column::default()
+    }
+    .lay_out_measured_with(
+        pilot_backend(),
+        // Слот — контент-координаты (y от 0), как прежний курсор; сдвиг на
+        // `demo.y − offset` — при потреблении (скролл-контракт FR-059).
+        UiRect::new(demo.x, 0.0, demo.w, demo.h),
+        items,
+        m,
+        fs,
+        FONT_FAMILY,
+        LABEL_SIZE,
+    )
+    .into_iter()
+}
+
 // === FR-070 этап 2: секция «Компоненты» — полная матрица состояний =========
 
 /// Подписи состояний матрицы (5 из ST1 + Focused; Error — TextField).
@@ -467,20 +521,96 @@ pub fn components_body(
     let mut lay = ComponentsLayout::default();
     let content_x = demo.x + 8.0;
     let content_w = (demo.w - 16.0).max(0.0);
-    // Координаты в КОНТЕНТЕ демо-зоны (y от 0), сдвиг на offset в конце.
-    let mut y = 0.0f32;
+    // Координаты в КОНТЕНТЕ демо-зоны (y от 0), сдвиг на offset при
+    // потреблении блоков линейки.
     let top = demo.y;
     let fully = |ry: f32, rh: f32| ry >= top && ry + rh <= demo.bottom();
 
-    let matrix_y = y;
-    y += MATRIX_HEADER_H + 6.0;
     let control_x = content_x + VARIANT_LABEL_W + canvas_core::tokens::SPACING_SM;
     let cells_w = (content_x + content_w - control_x).max(0.0);
     let per = ((cells_w - 5.0 * kit::GAP_CONTROLS) / 6.0).max(0.0);
 
+    // === LAY-W13: вертикальная линейка тела — Column-скелет примитивов
+    // (см. модульный док «Column-скелет тел админки»): высота блока =
+    // прежний шаг курсора `y +=`; зазор — хвост блока. Вычисляемые высоты
+    // (меню dropdown, окно списка, строки таблицы) — до раскладки линейки
+    // (те же выражения, что у демо-блоков ниже).
+    let menu_h = 3.0 * 26.0 + 8.0;
+    let list_area_h = 3.0 * kit::LIST_ROW_H + 2.0 * kit::LIST_ROW_GAP;
+    let table_row_h = kit::LIST_ROW_H;
+    let mut items: Vec<MeasuredItem> = Vec::with_capacity(28);
+    // Матрица состояний: заголовки колонок (+ хвост 6).
+    items.push(block(content_w, MATRIX_HEADER_H + 6.0));
+    // Ряды кнопок: 4 варианта (шаг 8 — после каждого ряда).
+    for _ in 0..4 {
+        items.push(block(content_w, kit::BUTTON_HEIGHT + 8.0));
+    }
+    // Хвост после рядов кнопок.
+    items.push(block(content_w, 6.0));
+    // Икон-кнопки.
+    items.push(block(content_w, kit::ICON_BUTTON_SIZE + 10.0));
+    // Чипы.
+    items.push(block(content_w, kit::CHIP_HEIGHT + 12.0));
+    // Поля: 4 демо × (заголовок 16 + поле с хвостом 6).
+    for _ in 0..4 {
+        items.push(block(content_w, 16.0));
+        items.push(block(content_w, kit::TEXT_FIELD_HEIGHT + 6.0));
+    }
+    // Хвост после полей.
+    items.push(block(content_w, 6.0));
+    // Переключатели.
+    items.push(block(content_w, kit::BUTTON_HEIGHT + 4.0));
+    // Dropdown: заголовок + якоря/меню.
+    items.push(block(content_w, 16.0));
+    items.push(block(
+        content_w,
+        kit::BUTTON_HEIGHT + kit::DROPDOWN_GAP + menu_h + 10.0,
+    ));
+    // Tooltip.
+    items.push(block(content_w, 16.0));
+    items.push(block(content_w, 26.0 + 12.0));
+    // Toast.
+    items.push(block(content_w, 16.0));
+    items.push(block(content_w, 24.0 + 12.0));
+    // Список + бегунок.
+    items.push(block(content_w, 16.0));
+    items.push(block(content_w, list_area_h + 12.0));
+    // Строки таблицы.
+    items.push(block(content_w, 16.0));
+    items.push(block(content_w, 3.0 * (table_row_h + 2.0) + 12.0));
+
+    let mut ruler = body_ruler(demo, &items, m, fs);
+    let matrix = ruler.next().unwrap_or_default();
+    let button_slots: Vec<UiRect> = (0..4).map(|_| ruler.next().unwrap_or_default()).collect();
+    let _after_buttons = ruler.next().unwrap_or_default(); // хвост 6
+    let icons = ruler.next().unwrap_or_default();
+    let chips = ruler.next().unwrap_or_default();
+    let field_slots: Vec<(UiRect, UiRect)> = (0..4)
+        .map(|_| {
+            let head = ruler.next().unwrap_or_default();
+            let field = ruler.next().unwrap_or_default();
+            (head, field)
+        })
+        .collect();
+    let _after_fields = ruler.next().unwrap_or_default(); // хвост 6
+    let switches = ruler.next().unwrap_or_default();
+    let dd_head = ruler.next().unwrap_or_default();
+    let dd = ruler.next().unwrap_or_default();
+    let tip_head = ruler.next().unwrap_or_default();
+    let tip = ruler.next().unwrap_or_default();
+    let toast_head = ruler.next().unwrap_or_default();
+    let toast = ruler.next().unwrap_or_default();
+    let list_head = ruler.next().unwrap_or_default();
+    let list = ruler.next().unwrap_or_default();
+    let rows_head = ruler.next().unwrap_or_default();
+    let rows = ruler.next().unwrap_or_default();
+    // Полная высота тела — низ последнего блока линейки (скролл-контракт
+    // FR-059; накопление Column тождественно прежнему курсору).
+    let body_h = rows.bottom();
+
     // Заголовки колонок (6 состояний)
     for (i, key) in STATE_MATRIX_LABELS.iter().enumerate() {
-        let hy = demo.y + matrix_y - offset;
+        let hy = demo.y + matrix.y - offset;
         if fully(hy, MATRIX_HEADER_H) {
             lay.headers.push((
                 UiPoint::new(control_x + i as f32 * (per + kit::GAP_CONTROLS), hy),
@@ -499,8 +629,8 @@ pub fn components_body(
         (ButtonVariant::Ghost, crate::i18n::keys::KIT_BTN_GHOST),
         (ButtonVariant::Danger, crate::i18n::keys::KIT_BTN_DANGER),
     ];
-    for (variant, label_key) in variants {
-        let slot_y = demo.y + y - offset;
+    for ((variant, label_key), slot) in variants.into_iter().zip(button_slots) {
+        let slot_y = demo.y + slot.y - offset;
         let mut cells = Vec::with_capacity(6);
         for (i, matrix_state) in STATE_MATRIX
             .iter()
@@ -536,12 +666,10 @@ pub fn components_body(
                 cells,
             });
         }
-        y += kit::BUTTON_HEIGHT + 8.0;
     }
-    y += 6.0;
 
     // Икон-кнопки: 5 состояний ST1 (Focused — не применим к икон-кнопкам v1)
-    let icons_y = demo.y + y - offset;
+    let icons_y = demo.y + icons.y - offset;
     for (i, st) in STATE_MATRIX.iter().copied().enumerate() {
         let rect = UiRect::new(
             control_x + i as f32 * (kit::ICON_BUTTON_SIZE + kit::GAP_CONTROLS),
@@ -557,54 +685,66 @@ pub fn components_body(
             });
         }
     }
-    y += kit::ICON_BUTTON_SIZE + 10.0;
 
-    // Чипы: 6 состояний (измеренные ширины)
-    let chips_y = demo.y + y - offset;
-    let mut cx = control_x;
-    for i in 0..6 {
+    // Чипы: 6 состояний — Row { gap } measured (LAY-W13: прежний курсор
+    // `cx += w + gap` → примитив Row; замер тот же TextMeasurer — ширина
+    // чипа `width_of + 2·CHIP_PAD_H` бит-в-бит прежнему `chip_size`).
+    let chips_y = demo.y + chips.y - offset;
+    let chip_items: Vec<MeasuredItem> = (0..6)
+        .map(|i| MeasuredItem::Text {
+            text: crate::i18n::tr(lang, STATE_MATRIX_LABELS[i]),
+            max_w: Some(per * 1.5),
+            min_w: 0.0,
+            pad_x: kit::CHIP_PAD_H * 2.0,
+            h: Some(kit::CHIP_HEIGHT),
+        })
+        .collect();
+    let chip_rects = Row {
+        gap: kit::GAP_CONTROLS,
+        ..Row::default()
+    }
+    .lay_out_measured_with(
+        pilot_backend(),
+        UiRect::new(control_x, chips_y, cells_w, kit::CHIP_HEIGHT),
+        &chip_items,
+        m,
+        fs,
+        FONT_FAMILY,
+        LABEL_SIZE,
+    );
+    for (i, rect) in chip_rects.iter().enumerate() {
         let focused = i == 5;
         let st = if focused {
             KitState::Normal
         } else {
             STATE_MATRIX[i]
         };
-        let label = crate::i18n::tr(lang, STATE_MATRIX_LABELS[i]);
-        let cl = kit::chip_layout(
-            UiPoint::new(cx, chips_y),
-            label,
-            per * 1.5,
-            m,
-            fs,
-            FONT_FAMILY,
-            LABEL_SIZE,
-        );
-        if fully(cl.rect.y, cl.rect.h) {
+        if fully(rect.y, rect.h) {
             lay.chip_cells.push(StateCell {
                 state: st,
                 focused,
-                rect: cl.rect,
+                rect: *rect,
             });
         }
-        cx += cl.rect.w + kit::GAP_CONTROLS;
     }
-    y += kit::CHIP_HEIGHT + 12.0;
 
     // Поля: Normal / Focused / Error / Disabled
     let field_w = (cells_w - 2.0 * kit::GAP_CONTROLS).min(320.0);
-    for demo_kind in [
+    for (demo_kind, (head, field)) in [
         FieldDemo::Normal,
         FieldDemo::Focused,
         FieldDemo::Error,
         FieldDemo::Disabled,
-    ] {
-        let ty = demo.y + y - offset;
+    ]
+    .into_iter()
+    .zip(field_slots)
+    {
+        let ty = demo.y + head.y - offset;
         if fully(ty, 14.0) {
             lay.headers
                 .push((UiPoint::new(content_x, ty), demo_kind.label_key()));
         }
-        y += 16.0;
-        let fy = demo.y + y - offset;
+        let fy = demo.y + field.y - offset;
         let slot = UiRect::new(content_x, fy, field_w, kit::TEXT_FIELD_HEIGHT);
         let model = match demo_kind {
             FieldDemo::Normal => kit::TextFieldModel {
@@ -644,12 +784,10 @@ pub fn components_body(
         if fully(fl.rect.y, fl.rect.h) {
             lay.fields.push((demo_kind, fl));
         }
-        y += kit::TEXT_FIELD_HEIGHT + 6.0;
     }
-    y += 6.0;
 
     // Переключатели: on/off × Normal/Hover/Disabled + Pressed/в фокусе
-    let sw_y = demo.y + y - offset;
+    let sw_y = demo.y + switches.y - offset;
     let sw_states = [
         (true, KitState::Normal, false),
         (false, KitState::Normal, false),
@@ -669,32 +807,29 @@ pub fn components_body(
             lay.switches.push((on, st, rect, focused));
         }
     }
-    y += kit::BUTTON_HEIGHT + 4.0;
 
     // === Пересборка поверхностей (волна 2): хвост матрицы состояний ===
     // Popup-контролы, строки списка и строки таблицы — состояния, которые
     // кит стилизует, но базовая матрица не показывала (аудит инвентаря).
 
     // Dropdown: закрытый (якорь) / открытый (якорь + меню + пункты).
-    let dd_y = demo.y + y - offset;
+    let dd_y = demo.y + dd_head.y - offset;
     if fully(dd_y, 14.0) {
         lay.headers.push((
             UiPoint::new(content_x, dd_y),
             crate::i18n::keys::ADMIN_MATRIX_DROPDOWN,
         ));
     }
-    y += 16.0;
-    let closed_anchor = UiRect::new(control_x, demo.y + y - offset, 170.0, kit::BUTTON_HEIGHT);
+    let closed_anchor = UiRect::new(control_x, demo.y + dd.y - offset, 170.0, kit::BUTTON_HEIGHT);
     if fully(closed_anchor.y, closed_anchor.h) {
         lay.dropdown_closed = Some(closed_anchor);
     }
     let open_anchor = UiRect::new(
         control_x + 186.0,
-        demo.y + y - offset,
+        demo.y + dd.y - offset,
         170.0,
         kit::BUTTON_HEIGHT,
     );
-    let menu_h = 3.0 * 26.0 + 8.0;
     // Вьюпорт меню — демо-зона (flip/клампы от неё; якорь в середине зоны —
     // меню открывается вниз без flip).
     let dd = kit::dropdown_menu(open_anchor, demo, UiVec2::new(190.0, menu_h));
@@ -724,20 +859,18 @@ pub fn components_body(
             labels: dd_labels,
         });
     }
-    y += kit::BUTTON_HEIGHT + kit::DROPDOWN_GAP + menu_h + 10.0;
 
     // Tooltip: якорь-чип + пузырь (delay пройден — показан).
-    let tip_y = demo.y + y - offset;
+    let tip_y = demo.y + tip_head.y - offset;
     if fully(tip_y, 14.0) {
         lay.headers.push((
             UiPoint::new(content_x, tip_y),
             crate::i18n::keys::ADMIN_MATRIX_TOOLTIP,
         ));
     }
-    y += 16.0;
     let tip_anchor_label = crate::i18n::tr(lang, crate::i18n::keys::KIT_TOOLTIP_ANCHOR);
     let tip_anchor = kit::chip_layout(
-        UiPoint::new(control_x, demo.y + y - offset),
+        UiPoint::new(control_x, demo.y + tip.y - offset),
         tip_anchor_label,
         140.0,
         m,
@@ -761,38 +894,34 @@ pub fn components_body(
                 .unwrap_or(UiRect::new(0.0, 0.0, 0.0, 0.0)),
         ));
     }
-    y += 26.0 + 12.0;
 
     // Toast: хром тоста (panel_fill + accent-рамка) — статическая демо-строка.
-    let toast_y = demo.y + y - offset;
+    let toast_y = demo.y + toast_head.y - offset;
     if fully(toast_y, 14.0) {
         lay.headers.push((
             UiPoint::new(content_x, toast_y),
             crate::i18n::keys::ADMIN_MATRIX_TOAST,
         ));
     }
-    y += 16.0;
-    let toast_rect = UiRect::new(control_x, demo.y + y - offset, 260.0, 24.0);
+    let toast_rect = UiRect::new(control_x, demo.y + toast.y - offset, 260.0, 24.0);
     if fully(toast_rect.y, toast_rect.h) {
         lay.toast = Some(toast_rect);
     }
-    y += 24.0 + 12.0;
 
     // Строки списка: Normal / Hovered / Selected + бегунок скролла
     // (kit::scroll_bar — контент 8 строк в окне 3).
-    let list_y = demo.y + y - offset;
+    let list_y = demo.y + list_head.y - offset;
     if fully(list_y, 14.0) {
         lay.headers.push((
             UiPoint::new(content_x, list_y),
             crate::i18n::keys::ADMIN_MATRIX_LIST,
         ));
     }
-    y += 16.0;
     let list_area = UiRect::new(
         control_x,
-        demo.y + y - offset,
+        demo.y + list.y - offset,
         (cells_w * 0.6).max(160.0),
-        3.0 * kit::LIST_ROW_H + 2.0 * kit::LIST_ROW_GAP,
+        list_area_h,
     );
     for (i, st) in [KitState::Normal, KitState::Hovered, KitState::Selected]
         .into_iter()
@@ -825,18 +954,16 @@ pub fn components_body(
             p,
         );
     }
-    y += list_area.h + 12.0;
 
     // Строки таблицы: зебра (fill слотом hover_fill) / фокус (рамка accent
     // поверх строки) / выбор (Selected) — источник геометрии Table (M4).
-    let rows_y = demo.y + y - offset;
+    let rows_y = demo.y + rows_head.y - offset;
     if fully(rows_y, 14.0) {
         lay.headers.push((
             UiPoint::new(content_x, rows_y),
             crate::i18n::keys::ADMIN_MATRIX_ROWS,
         ));
     }
-    y += 16.0;
     {
         let row_specs: [(kit::RowMarker, &str, &str, &str, &str); 3] = [
             (
@@ -861,7 +988,7 @@ pub fn components_body(
                 crate::i18n::tr(lang, crate::i18n::keys::KIT_ROW_BADGE),
             ),
         ];
-        let row_h = kit::LIST_ROW_H;
+        let row_h = table_row_h;
         let mut table = kit::Table::new(kit::TableProps {
             size: LABEL_SIZE,
             family: FONT_FAMILY,
@@ -901,7 +1028,7 @@ pub fn components_body(
             for (i, (marker, label, value, unit, badge)) in row_specs.into_iter().enumerate() {
                 let slot = UiRect::new(
                     control_x,
-                    demo.y + y - offset + i as f32 * (row_h + 2.0),
+                    demo.y + rows.y - offset + i as f32 * (row_h + 2.0),
                     cells_w,
                     row_h,
                 );
@@ -930,10 +1057,9 @@ pub fn components_body(
                 });
             }
         }
-        y += 3.0 * (row_h + 2.0) + 12.0;
     }
 
-    lay.h = y;
+    lay.h = body_h;
     lay
 }
 
@@ -1303,22 +1429,9 @@ pub fn fill_body(
     let top = demo.y;
     let fully = |ry: f32, rh: f32| ry >= top && ry + rh <= demo.bottom();
 
-    let mut y = 0.0f32;
     let control_x = content_x + VARIANT_LABEL_W + canvas_core::tokens::SPACING_SM;
     let cells_w = (content_x + content_w - control_x).max(0.0);
     let per = ((cells_w - 2.0 * FILL_CELL_GAP) / 3.0).max(0.0);
-
-    // Заголовки колонок (3 уровня)
-    let header_y = demo.y + y - offset;
-    for (i, level) in FILL_LEVELS.iter().copied().enumerate() {
-        if fully(header_y, MATRIX_HEADER_H) {
-            lay.headers.push((
-                UiPoint::new(control_x + i as f32 * (per + FILL_CELL_GAP), header_y),
-                level.label_key(),
-            ));
-        }
-    }
-    y += MATRIX_HEADER_H + 6.0;
 
     // Контейнеры: (ключ названия, высота ряда)
     let row_specs: [(&'static str, f32); 9] = [
@@ -1345,8 +1458,40 @@ pub fn fill_body(
         (crate::i18n::keys::ADMIN_ROW_WHEEL, FILL_CELL_H + 6.0),
     ];
 
-    for (title_key, row_h) in row_specs {
-        let slot_y = demo.y + y - offset;
+    // === LAY-W13: вертикальная линейка тела — Column-скелет примитивов
+    // (см. модульный док «Column-скелет тел админки»): блок заголовка
+    // (шаг MATRIX_HEADER_H + 6) + блок на ряд контейнера (высота —
+    // прежний шаг курсора `y += row_h`).
+    let mut items: Vec<MeasuredItem> = Vec::with_capacity(1 + row_specs.len());
+    items.push(block(content_w, MATRIX_HEADER_H + 6.0));
+    for (_, row_h) in &row_specs {
+        items.push(block(content_w, *row_h));
+    }
+    let mut ruler = body_ruler(demo, &items, m, fs);
+    let fill_header = ruler.next().unwrap_or_default();
+    let row_slots: Vec<UiRect> = (0..row_specs.len())
+        .map(|_| ruler.next().unwrap_or_default())
+        .collect();
+    // Полная высота тела — низ последнего блока линейки (скролл-контракт
+    // FR-059; накопление Column тождественно прежнему курсору).
+    let body_h = row_slots
+        .last()
+        .map(|r| r.bottom())
+        .unwrap_or(MATRIX_HEADER_H + 6.0);
+
+    // Заголовки колонок (3 уровня)
+    let header_y = demo.y + fill_header.y - offset;
+    for (i, level) in FILL_LEVELS.iter().copied().enumerate() {
+        if fully(header_y, MATRIX_HEADER_H) {
+            lay.headers.push((
+                UiPoint::new(control_x + i as f32 * (per + FILL_CELL_GAP), header_y),
+                level.label_key(),
+            ));
+        }
+    }
+
+    for ((title_key, row_h), slot) in row_specs.into_iter().zip(row_slots) {
+        let slot_y = demo.y + slot.y - offset;
         let mut cells = Vec::with_capacity(3);
         for (i, level) in FILL_LEVELS.iter().copied().enumerate() {
             let rect = UiRect::new(
@@ -1366,7 +1511,6 @@ pub fn fill_body(
                 cells,
             });
         }
-        y += row_h;
     }
 
     // Предвычисление измеряемых демо (в тех же слотах, что в lay.rows —
@@ -1426,23 +1570,38 @@ pub fn fill_body(
         lay.field_lays.push((level, fl));
     }
 
-    // Чипы: пустое (нет) / 2 / 5 — метрики единиц измерения (без i18n)
+    // Чипы: пустое (нет) / 2 / 5 — метрики единиц измерения (без i18n) —
+    // Row { gap } measured (LAY-W13: прежний курсор `cx += w + gap` →
+    // примитив Row; ширина чипа бит-в-бит прежнему `chip_size`).
     let chip_labels: [&str; 5] = ["rps", "ms", "$/mo", "MB/s", "%"];
     for (level, count) in [(FillLevel::Medium, 2usize), (FillLevel::Full, 5usize)] {
         let rect = cell_rect(crate::i18n::keys::ADMIN_ROW_CHIPS, level);
-        let mut cx = rect.x;
-        for label in chip_labels.iter().take(count) {
-            let cl = kit::chip_layout(
-                UiPoint::new(cx, rect.y),
-                label,
-                rect.w,
-                m,
-                fs,
-                FONT_FAMILY,
-                12.0,
-            );
-            lay.chip_lays.push((level, cl.rect));
-            cx += cl.rect.w + kit::GAP_CONTROLS;
+        let chip_items: Vec<MeasuredItem> = chip_labels
+            .iter()
+            .take(count)
+            .map(|label| MeasuredItem::Text {
+                text: label,
+                max_w: Some(rect.w),
+                min_w: 0.0,
+                pad_x: kit::CHIP_PAD_H * 2.0,
+                h: Some(kit::CHIP_HEIGHT),
+            })
+            .collect();
+        let chip_rects = Row {
+            gap: kit::GAP_CONTROLS,
+            ..Row::default()
+        }
+        .lay_out_measured_with(
+            pilot_backend(),
+            UiRect::new(rect.x, rect.y, rect.w, kit::CHIP_HEIGHT),
+            &chip_items,
+            m,
+            fs,
+            FONT_FAMILY,
+            12.0,
+        );
+        for r in chip_rects {
+            lay.chip_lays.push((level, r));
         }
     }
 
@@ -1600,7 +1759,7 @@ pub fn fill_body(
         }
     }
 
-    lay.h = y;
+    lay.h = body_h;
     lay
 }
 
@@ -2154,10 +2313,46 @@ pub fn canvas_body(
     let content_x = demo.x + 8.0;
     let top = demo.y - offset;
     let fully = |ry: f32, rh: f32| ry >= top && ry + rh <= demo.bottom();
-    let mut y = 0.0f32;
+
+    // === LAY-W13: вертикальная линейка тела — Column-скелет примитивов
+    // (см. модульный док «Column-скелет тел админки»): высота блока =
+    // прежний шаг курсора `y +=`; межгрупповые хвосты 8 — отдельные блоки
+    // (высота карточки — до раскладки линейки, то же выражение).
+    let header_h = canvas_core::tokens::CARD_HEADER_HEIGHT;
+    let card_h = header_h + NODE_TABLE_ROWS as f32 * kit::LIST_ROW_H + 8.0;
+    let mut items: Vec<MeasuredItem> = Vec::with_capacity(13);
+    // Карточки нод (шаг NODE_DEMO_H + 8).
+    for _ in 0..4 {
+        items.push(block(demo.w, NODE_DEMO_H + 8.0));
+    }
+    items.push(block(demo.w, 8.0)); // хвост после карточек
+                                    // Рёбра: контент 20, шаг 28.
+    for _ in 0..4 {
+        items.push(block(demo.w, 28.0));
+    }
+    items.push(block(demo.w, 8.0)); // хвост после рёбер
+                                    // Порты: контент 40, шаг 48.
+    for _ in 0..3 {
+        items.push(block(demo.w, 48.0));
+    }
+    items.push(block(demo.w, 8.0)); // хвост после портов
+                                    // Карточка ноды с табличным телом.
+    items.push(block(demo.w, card_h + 8.0));
+
+    let mut ruler = body_ruler(demo, &items, m, fs);
+    let node_slots: Vec<UiRect> = (0..4).map(|_| ruler.next().unwrap_or_default()).collect();
+    let _after_nodes = ruler.next().unwrap_or_default(); // хвост 8
+    let edge_slots: Vec<UiRect> = (0..4).map(|_| ruler.next().unwrap_or_default()).collect();
+    let _after_edges = ruler.next().unwrap_or_default(); // хвост 8
+    let port_slots: Vec<UiRect> = (0..3).map(|_| ruler.next().unwrap_or_default()).collect();
+    let _after_ports = ruler.next().unwrap_or_default(); // хвост 8
+    let table_slot = ruler.next().unwrap_or_default();
+    // Полная высота тела — низ последнего блока линейки (скролл-контракт
+    // FR-059; накопление Column тождественно прежнему курсору).
+    let body_h = table_slot.bottom();
 
     // Карточка ноды: обычная / selected / broken / в группе (ST4)
-    for (key, border, fill) in [
+    for ((key, border, fill), slot) in [
         (
             crate::i18n::keys::ADMIN_NODE_NORMAL,
             p.control_border,
@@ -2179,15 +2374,16 @@ pub fn canvas_body(
                 1.0,
             ],
         ),
-    ] {
-        let sy = demo.y + y - offset;
+    ]
+    .into_iter()
+    .zip(node_slots)
+    {
+        let sy = demo.y + slot.y - offset;
         let rect = UiRect::new(content_x, sy, NODE_DEMO_W, NODE_DEMO_H);
         if fully(rect.y, rect.h) {
             lay.node_demos.push((key, rect, border, fill));
         }
-        y += NODE_DEMO_H + 8.0;
     }
-    y += 8.0;
 
     // Рёбра: default / flow / draft / dimmed (α floor 0.35 — ST4)
     let dimmed = [
@@ -2197,7 +2393,7 @@ pub fn canvas_body(
         0.35,
     ];
     let edge_w = (demo.w - 16.0 - VARIANT_LABEL_W).max(60.0);
-    for (key, color) in [
+    for ((key, color), slot) in [
         (
             crate::i18n::keys::ADMIN_EDGE_DEFAULT,
             canvas_core::tokens::EDGE_DEFAULT,
@@ -2211,18 +2407,19 @@ pub fn canvas_body(
             canvas_core::tokens::EDGE_DRAFT,
         ),
         (crate::i18n::keys::ADMIN_EDGE_DIMMED, dimmed),
-    ] {
-        let sy = demo.y + y - offset;
+    ]
+    .into_iter()
+    .zip(edge_slots)
+    {
+        let sy = demo.y + slot.y - offset;
         let rect = UiRect::new(content_x + VARIANT_LABEL_W, sy, edge_w, 20.0);
         if fully(rect.y, rect.h) {
             lay.edge_demos.push((key, rect, color));
         }
-        y += 28.0;
     }
-    y += 8.0;
 
     // Порты: idle (точка 10) / hover (26) / active draft (ST4)
-    for (key, size, color) in [
+    for ((key, size, color), slot) in [
         (
             crate::i18n::keys::ADMIN_PORT_IDLE,
             10.0,
@@ -2238,24 +2435,28 @@ pub fn canvas_body(
             26.0,
             canvas_core::tokens::EDGE_DRAFT,
         ),
-    ] {
-        let sy = demo.y + y - offset;
+    ]
+    .into_iter()
+    .zip(port_slots)
+    {
+        let sy = demo.y + slot.y - offset;
         let rect = UiRect::new(content_x + VARIANT_LABEL_W, sy, 40.0, 40.0);
         if fully(rect.y, rect.h) {
             lay.port_demos.push((key, rect, size, color));
         }
-        y += 48.0;
     }
-    y += 8.0;
 
     // === Пересборка поверхностей (волна 2): карточка ноды с табличным
     // телом (FR-061) — хедер + 3 строки kit-Row на общих направляющих
     // (Dot/цена, Dot/кол-во + зебра, Glyph ƒ/итого + бейдж) — зеркало
     // текущего рендера шаблонных нод (row_guides/row_layout кита). ===
     {
-        let header_h = canvas_core::tokens::CARD_HEADER_HEIGHT;
-        let card_h = header_h + NODE_TABLE_ROWS as f32 * kit::LIST_ROW_H + 8.0;
-        let card = UiRect::new(content_x, demo.y + y - offset, NODE_TABLE_CARD_W, card_h);
+        let card = UiRect::new(
+            content_x,
+            demo.y + table_slot.y - offset,
+            NODE_TABLE_CARD_W,
+            card_h,
+        );
         if fully(card.y, card.h) {
             let header = UiRect::new(card.x, card.y, card.w, header_h);
             let specs: [(kit::RowMarker, &str, &str, &str, &str); NODE_TABLE_ROWS] = [
@@ -2339,10 +2540,9 @@ pub fn canvas_body(
             };
             lay.node_table = Some(NodeTableDemo { card, header, rows });
         }
-        y += card_h + 8.0;
     }
 
-    lay.h = y;
+    lay.h = body_h;
     lay
 }
 
@@ -2607,45 +2807,12 @@ pub fn tokens_body(
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> TokensLayout {
-    let _ = (p, lang, m, fs);
+    let _ = lang; // подписи групп/строк — при отрисовке (draw_tokens)
     let mut lay = TokensLayout::default();
     let content_x = demo.x + 8.0;
     let top = demo.y - offset;
     let fully = |ry: f32, rh: f32| ry >= top && ry + rh <= demo.bottom();
     let row_h = 22.0;
-    let mut y = 0.0f32;
-
-    let push_group =
-        |lay: &mut TokensLayout, y: &mut f32, title_key: &'static str, rows: Vec<TokenRow>| {
-            let ty = demo.y + *y - offset;
-            let mut g = TokenGroup {
-                title_key,
-                rows: Vec::new(),
-            };
-            if fully(ty, MATRIX_HEADER_H) {
-                g.rows.push(TokenRow {
-                    slot_index: None,
-                    name: "",
-                    value: String::new(),
-                    rect: UiRect::new(content_x, ty, 0.0, MATRIX_HEADER_H),
-                    swatch: None,
-                });
-            }
-            *y += MATRIX_HEADER_H + 4.0;
-            for mut row in rows {
-                let ry = demo.y + *y - offset;
-                row.rect = UiRect::new(content_x, ry, demo.w - 16.0, row_h);
-                row.swatch = row
-                    .slot_index
-                    .map(|_| UiRect::new(content_x, ry + 3.0, 16.0, 16.0));
-                if fully(row.rect.y, row_h) {
-                    g.rows.push(row);
-                }
-                *y += row_h;
-            }
-            *y += 10.0;
-            lay.groups.push(g);
-        };
 
     // Группа 1: слоты палитры (live-правка)
     let slot_rows: Vec<TokenRow> = PALETTE_SLOTS
@@ -2659,12 +2826,6 @@ pub fn tokens_body(
             swatch: None,
         })
         .collect();
-    push_group(
-        &mut lay,
-        &mut y,
-        crate::i18n::keys::ADMIN_TOK_GROUP_SLOTS,
-        slot_rows,
-    );
 
     // Группа 2: размеры (read-only) — spacing/radius/card из design/tokens
     let dims: Vec<(&'static str, String)> = vec![
@@ -2706,12 +2867,6 @@ pub fn tokens_body(
             swatch: None,
         })
         .collect();
-    push_group(
-        &mut lay,
-        &mut y,
-        crate::i18n::keys::ADMIN_TOK_GROUP_DIMS,
-        dim_rows,
-    );
 
     // Группа 3: типографика (read-only)
     let typo: Vec<(&'static str, String)> = vec![
@@ -2733,12 +2888,6 @@ pub fn tokens_body(
             swatch: None,
         })
         .collect();
-    push_group(
-        &mut lay,
-        &mut y,
-        crate::i18n::keys::ADMIN_TOK_GROUP_TYPE,
-        typo_rows,
-    );
 
     // Группа 4: движение (read-only, мс)
     let motion: Vec<(&'static str, String)> = vec![
@@ -2757,14 +2906,65 @@ pub fn tokens_body(
             swatch: None,
         })
         .collect();
-    push_group(
-        &mut lay,
-        &mut y,
-        crate::i18n::keys::ADMIN_TOK_GROUP_MOTION,
-        motion_rows,
-    );
 
-    lay.h = y;
+    // Группы в порядке сайдбара (данные — без геометрии; раскладка ниже).
+    let groups: [(&'static str, Vec<TokenRow>); 4] = [
+        (crate::i18n::keys::ADMIN_TOK_GROUP_SLOTS, slot_rows),
+        (crate::i18n::keys::ADMIN_TOK_GROUP_DIMS, dim_rows),
+        (crate::i18n::keys::ADMIN_TOK_GROUP_TYPE, typo_rows),
+        (crate::i18n::keys::ADMIN_TOK_GROUP_MOTION, motion_rows),
+    ];
+
+    // === LAY-W13: вертикальная линейка тела — Column-скелет примитивов
+    // (см. модульный док «Column-скелет тел админки»): на группу — блок
+    // заголовка (шаг MATRIX_HEADER_H + 4), блоки строк (row_h) и хвостовой
+    // зазор 10 — прежние шаги курсора push_group.
+    let mut items: Vec<MeasuredItem> = Vec::new();
+    for (_, rows) in &groups {
+        items.push(block(demo.w, MATRIX_HEADER_H + 4.0));
+        for _ in rows.iter() {
+            items.push(block(demo.w, row_h));
+        }
+        items.push(block(demo.w, 10.0));
+    }
+    let mut ruler = body_ruler(demo, &items, m, fs);
+
+    let mut body_h = 0.0f32;
+    for (title_key, rows) in groups {
+        let title = ruler.next().unwrap_or_default();
+        let ty = demo.y + title.y - offset;
+        let mut g = TokenGroup {
+            title_key,
+            rows: Vec::new(),
+        };
+        if fully(ty, MATRIX_HEADER_H) {
+            g.rows.push(TokenRow {
+                slot_index: None,
+                name: "",
+                value: String::new(),
+                rect: UiRect::new(content_x, ty, 0.0, MATRIX_HEADER_H),
+                swatch: None,
+            });
+        }
+        for mut row in rows {
+            let rr = ruler.next().unwrap_or_default();
+            let ry = demo.y + rr.y - offset;
+            row.rect = UiRect::new(content_x, ry, demo.w - 16.0, row_h);
+            row.swatch = row
+                .slot_index
+                .map(|_| UiRect::new(content_x, ry + 3.0, 16.0, 16.0));
+            if fully(row.rect.y, row_h) {
+                g.rows.push(row);
+            }
+        }
+        let tail = ruler.next().unwrap_or_default(); // хвостовой зазор группы
+        body_h = tail.bottom();
+        lay.groups.push(g);
+    }
+
+    // Полная высота тела — низ последнего блока линейки (скролл-контракт
+    // FR-059; накопление Column тождественно прежнему курсору).
+    lay.h = body_h;
     lay
 }
 
