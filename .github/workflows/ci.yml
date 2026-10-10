@@ -106,6 +106,20 @@ jobs:
       - name: LAY7 regression lint (gap literals + x/y cursors)
         run: bash scripts/lay7_lint.sh
 
+  # Issue #18 (аудит доков 2026-10-10): гейт целостности документации.
+  # scripts/doc_lint.py — python3-сканер без сборки (прецедент
+  # wasm_time_audit.py): битые *.md-ссылки, *.html-ссылки на несобранные
+  # md-источники вне user-docs/ (FR-031 — html-ссылки user-docs валидны
+  # при существовании md-источника). Запрещает регрессию «*.html-ссылки
+  # на md-источники» на каждый пуш/PR.
+  docs-lint:
+    name: docs-lint (link integrity)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Документация — целостность ссылок
+        run: python3 scripts/doc_lint.py
+
   # Релизные бинари трёх ОС — только с зелёных гейтов и только на пуш
   # (PR-ы не тратят минуты на загрузку артефактов). Это же — обходной
   # путь при локальной ошибке линковки LNK1104 (docs/ENVIRONMENT.md §8).
