@@ -45,6 +45,19 @@ pub(crate) async fn recent_top() -> Option<String> {
     recent_top_of(&recent_list().await)
 }
 
+/// FR-106 (C3, №15a): убрать имя из недавних (мягкое удаление канваса —
+/// запись не должна переживать свой файл; глю `recentRemove`, IndexedDB).
+/// Fire-and-forget — как `record_recent`.
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn remove_recent(name: &str) {
+    if crate::js_glue::call("recentRemove", &[name.into()])
+        .await
+        .is_none()
+    {
+        tracing::debug!(target: "canvas_web", name, "JS-глю недавних недоступен (IndexedDB-удаление пропущено)");
+    }
+}
+
 /// Разбор ответа глю: Array<{name: string, ts: number}> → Vec<(String, f64)>.
 /// Чужие/битые элементы молча пропускаются (IndexedDB-данные сторонних
 /// версий не должны ронять старт).

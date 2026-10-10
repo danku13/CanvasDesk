@@ -340,8 +340,9 @@ pub(crate) async fn workspace_entries() -> Vec<CanvasEntry> {
 /// (`navigator.storage.persist()`) — защита OPFS от eviction браузера
 /// до переезда на диск (№51a). Fire-and-forget: результат (grant/refuse)
 /// — в лог; повторный вызов дешёв и идемпотентен со стороны браузера.
-/// TODO(FR-104): C3 перенесёт вызов в точку первого открытия менеджера
-/// канвасов — сейчас менеджера нет, вызов живёт на старте (init_scene).
+/// FR-106 (C3): вызов живёт в точке первого открытия менеджера канвасов
+/// (`WebRequest::CanvasPersist` — жест кнопки «Канвасы» вместо автозапуска
+/// на старте, осознанное решение FR-104 §Открытые вопросы).
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn request_storage_persist() {
     let Some(window) = web_sys::window() else {

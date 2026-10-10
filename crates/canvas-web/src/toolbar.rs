@@ -1,12 +1,18 @@
 //! M8/W6 (wasm-port §4.2): DOM-панель хранилища web-сборки (зеркало
 //! файловых жестов нативной обвязки: «Открыть…»/недавние). Канвас —
 //! GPU-UI winit, файловые действия браузера живут в DOM: пикер
-//! (`showOpenFilePicker`), reopen недавних (requestPermission — жест),
-//! экспорт (download-blob) — всё требует `window`/жеста, поэтому кнопки.
+//! (`showOpenFilePicker`), менеджер канвасов, экспорт (download-blob) —
+//! всё требует `window`/жеста, поэтому кнопки.
 //!
 //! Кнопки — статичная разметка index.html (W12 дорисует стиль); Rust
-//! вешает листенеры и держит подпись «Недавние: <имя>» в синкре с
+//! вешает листенеры и держит подпись «Канвасы: <имя>» в синкре с
 //! web_state (set_recent_label из каждой точки открытия).
+//!
+//! FR-106 (мультиканвас C3, issue #7): кнопка «Недавние» (reopen
+//! последнего) становится входом в менеджер канвасов — до двухзонного
+//! чипа активного канваса №21c (волна C4 заменит вход; решение №37b:
+//! «Недавние» уходит, его работу забирает менеджер). Клик шлёт
+//! `AppEvent::CanvasManagerOpen` — оверлей открывается в App.
 
 use wasm_bindgen::prelude::Closure;
 use wasm_bindgen::JsCast;
@@ -31,11 +37,12 @@ pub(crate) fn install(proxy: EventLoopProxy<AppEvent>) {
             crate::fs_access::open_from_disk(proxy).await;
         });
     });
+    // FR-106 (C3, issue #7): «Канвасы» — вход в менеджер канвасов (до чипа
+    // №21c волны C4). Reopen последнего недавнего уходит вместе с кнопкой
+    // «Недавние» (решение №37b): менеджер покрывает сценарий выбором из
+    // списка + Enter (disk-хэндлы — «Открыть с диска…» остаётся рядом).
     bind(&document, "btn-recent", move || {
-        let proxy = recent_proxy.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            crate::fs_access::reopen_recent(proxy).await;
-        });
+        let _ = recent_proxy.send_event(AppEvent::CanvasManagerOpen);
     });
     bind(&document, "btn-export", || {
         wasm_bindgen_futures::spawn_local(async move {
@@ -89,8 +96,8 @@ fn bind(document: &web_sys::Document, id: &str, mut handler: impl FnMut() + 'sta
     closure.forget(); // singleton-панель: живёт до выгрузки страницы
 }
 
-/// Обновить подпись «Недавние» под имя активного канваса (синхронизация
-/// DOM ↔ web_state; ошибки молча — декоративный элемент).
+/// Обновить подпись кнопки «Канвасы» под имя активного канваса
+/// (синхронизация DOM ↔ web_state; ошибки молча — декоративный элемент).
 /// CR-014: CSS панели эллипсирует длинное имя (`max-width` + `overflow:
 /// hidden`), поэтому ПОЛНОЕ имя дублируется в `title` кнопки — тултип
 /// показывает его при наведении, эллипсис ничего не прячет безвозвратно.
@@ -104,10 +111,9 @@ pub(crate) fn set_recent_label(name: &str) {
     if let Some(element) = document.get_element_by_id("btn-recent") {
         element
             .unchecked_ref::<web_sys::Node>()
-            .set_text_content(Some(&format!("Недавние: {name}")));
-        if let Err(err) = element.set_attribute("title", &format!("Переоткрыть: {name}"))
-        {
-            tracing::warn!(target: "canvas_web", ?err, "тултип кнопки «Недавние» не обновлён");
+            .set_text_content(Some(name));
+        if let Err(err) = element.set_attribute("title", &format!("Канвасы: {name}")) {
+            tracing::warn!(target: "canvas_web", ?err, "тултип кнопки «Канвасы» не обновлён");
         }
     }
 }
