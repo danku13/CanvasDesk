@@ -272,6 +272,7 @@ impl AgentPanelLayout {
         // `finish_line`) — сдвиг полос до 0.5 px, несовместимый с нулевым
         // сдвигом LAY-W4 (golden-тесты). Семантики Fit/grow у обоих
         // backend'ов совпадают (пинено юнит-тестами canvas-ui/layout.rs).
+        // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
         let backend = pilot_backend();
 
         // Скелет: пять полос от слота панели. Ширина полос — вся панель;

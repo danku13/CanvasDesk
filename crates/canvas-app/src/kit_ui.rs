@@ -847,6 +847,7 @@ pub fn gallery_layout(
         ..Column::default()
     }
     .lay_out_measured_with(
+        // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
         pilot_backend(),
         sections_viewport,
         &ruler_items,
@@ -869,6 +870,7 @@ pub fn gallery_layout(
         ..Column::default()
     }
     .lay_out_measured_with(
+        // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
         pilot_backend(),
         ruler.next().unwrap_or_default(),
         &[
@@ -1303,6 +1305,7 @@ pub fn gallery_layout(
             ..Row::default()
         }
         .lay_out_measured_with(
+            // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
             pilot_backend(),
             UiRect::new(control_x, measured_y, control_w, kit::CHIP_HEIGHT),
             &[
@@ -1345,6 +1348,7 @@ pub fn gallery_layout(
         ..Row::default()
     }
     .lay_out_with(
+        // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
         pilot_backend(),
         UiRect::new(control_x, grow_y, control_w, kit::BUTTON_HEIGHT),
         &[
@@ -1394,6 +1398,7 @@ pub fn gallery_layout(
             ..Row::default()
         }
         .lay_out_measured_with(
+            // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
             pilot_backend(),
             UiRect::new(control_x, wrap_y, control_w, wrap_slot_h),
             &items,
@@ -1416,6 +1421,7 @@ pub fn gallery_layout(
     let grid_y = ruler.next().unwrap_or_default().y;
     let grid_col_w = ((control_w - 3.0 * kit::GAP_CONTROLS) / 4.0).max(0.0);
     let grid_cells: Vec<UiRect> = grid_cells_with(
+        // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
         pilot_backend(),
         UiRect::new(control_x, grid_y, control_w, grid_slot_h),
         &[grid_col_w; 4],
@@ -1481,6 +1487,7 @@ pub fn gallery_layout(
             palette: *p,
         });
     let panel_rects = panel_comp.layout(
+        // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
         pilot_backend(),
         UiRect::new(
             control_x,
@@ -1513,6 +1520,7 @@ pub fn gallery_layout(
         ..Row::default()
     }
     .lay_out_measured_with(
+        // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
         pilot_backend(),
         squeeze_slot,
         &(0..GALLERY_SQUEEZE_BOXES)
@@ -1540,6 +1548,7 @@ pub fn gallery_layout(
         ..Column::default()
     }
     .lay_out_measured_with(
+        // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
         pilot_backend(),
         UiRect::new(
             control_x,
@@ -1582,6 +1591,7 @@ pub fn gallery_layout(
             ..Row::default()
         }
         .lay_out_measured_with(
+            // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
             pilot_backend(),
             UiRect::new(control_x, align_between_y, control_w, kit::CHIP_HEIGHT),
             &items,
@@ -1605,6 +1615,7 @@ pub fn gallery_layout(
         ..canvas_ui::layout::Column::default()
     }
     .lay_out_measured_with(
+        // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
         pilot_backend(),
         UiRect::new(control_x, align_column_y, control_w, align_column_block_h),
         &[
@@ -1662,6 +1673,7 @@ pub fn gallery_layout(
             ..Row::default()
         }
         .lay_out_with(
+            // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
             pilot_backend(),
             UiRect::new(control_x, constrain_y, control_w, GALLERY_LAYOUT_BLOCK_H),
             &blocks,
@@ -1688,6 +1700,7 @@ pub fn gallery_layout(
             ..Row::default()
         }
         .lay_out_with(
+            // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
             pilot_backend(),
             UiRect::new(control_x, pad_y, control_w, GALLERY_LAYOUT_CELL_H),
             &[
@@ -1719,6 +1732,7 @@ pub fn gallery_layout(
             ..Row::default()
         }
         .lay_out_with(
+            // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
             pilot_backend(),
             UiRect::new(control_x, stack_y, control_w, GALLERY_LAYOUT_CELL_H),
             &[
@@ -1746,6 +1760,7 @@ pub fn gallery_layout(
         ..Column::default()
     }
     .lay_out_measured_with(
+        // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
         pilot_backend(),
         UiRect::new(
             control_x,
@@ -1784,6 +1799,7 @@ pub fn gallery_layout(
                 ..Row::default()
             }
             .lay_out_measured_with(
+                // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
                 pilot_backend(),
                 UiRect::new(control_x, row.y, control_w, GALLERY_GAP_BLOCK_H),
                 &[

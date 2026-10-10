@@ -14,6 +14,9 @@
 //!   рестайл FR-022 2026-09-16 по скриншоту пользователя);
 //! - иконки — квад-иконки (как в палитре действий, без SVG/resvg) —
 //!   геометрия в [`crate::cards`-пайплайне]; здесь — [`icon_key`].
+//!
+//! Исключения раскладки: см. `design/rules/11-layouts.md`, раздел
+//! «Исключения» (строка «Wheel-меню — полярная геометрия»: LAY2/LAY5.1).
 
 use canvas_core::templates::{TemplateManifest, TemplateRegistry};
 use canvas_core::time::Instant;
