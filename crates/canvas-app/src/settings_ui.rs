@@ -87,8 +87,15 @@ pub const MODAL_PADDING: f32 = canvas_core::tokens::SPACING_LG;
 pub const MODAL_ROW_HEIGHT: f32 = 52.0;
 /// Высота карточки темы (таб «Внешний вид»).
 pub const MODAL_THEME_CARD_H: f32 = 56.0;
-/// Зазор между карточками темы и следующей секцией.
+/// Зазор между карточками темы и следующей секцией — 14 px, вне шкалы S1
+/// (исключение LAY7 — «Исключения» 11-layouts.md, «Пады/маргины 14–16 px»,
+/// LAY-W16: до 24 — удвоение воздуха модалки, до 12 — сжатие устоявшейся
+/// плотности; кандидата миграции нет).
 pub const MODAL_THEME_GAP: f32 = 14.0;
+/// Зазор заголовок/контент модалки — 4 px hairline, вне шкалы S1 (исключение
+/// LAY7 — «Исключения» 11-layouts.md, «Hairline-микрозначения 2–4 px»,
+/// LAY-W16; прежний inline-литерал `Fixed { h: 4.0 }`, значение бит-в-бит).
+pub const MODAL_TITLE_CONTENT_GAP: f32 = 4.0;
 /// Высота строки-подсказки внизу левой колонки.
 pub const MODAL_HINT_HEIGHT: f32 = 24.0;
 // W-c: метрики тумблера — kit (`canvas_ui::kit::SWITCH_W`/`SWITCH_H`/
@@ -2070,11 +2077,14 @@ pub fn modal_layout_with(
         w: 0.0,
         h: MODAL_TITLE_HEIGHT,
     });
-    // Зазор заголовок/контент (вне spacing-scale): вертикальный зазор —
-    // именно Fixed{w: 0, h} (Spacer в колонке места не занимает — main-ось
-    // колонки высота, см. тест оракула
+    // Зазор заголовок/контент ([`MODAL_TITLE_CONTENT_GAP`], вне spacing-scale):
+    // вертикальный зазор — именно Fixed{w: 0, h} (Spacer в колонке места не
+    // занимает — main-ось колонки высота, см. тест оракула
     // measured_column_matches_manual_fixed_oracle).
-    panel_flow.push(MeasuredItem::Fixed { w: 0.0, h: 4.0 });
+    panel_flow.push(MeasuredItem::Fixed {
+        w: 0.0,
+        h: MODAL_TITLE_CONTENT_GAP,
+    });
     let content_index = panel_flow.len();
     panel_flow.push(MeasuredItem::Fixed {
         w: content_w,

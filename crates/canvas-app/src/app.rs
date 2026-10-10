@@ -244,18 +244,27 @@ const PAN_PX_PER_LINE: f32 = 40.0;
 // в строке (app::tooltip), фиксированный клип 380 px больше не нужен.
 
 // FR-060: измеренная геометрия диалога подтверждения — пады/кегли
-// прежней раскладки дословно (см. [`App::dialog_measured_in`])
+// прежней раскладки дословно (см. [`App::dialog_measured_in`]).
+// Off-scale пады/маргины (20/16/40) — исключение LAY7: «Исключения»
+// 11-layouts.md, «Пады/маргины 14–16 px» (BTN_GAP 16) и «Поля/зазоры
+// 20–40 px» (PAD_X 20, VIEWPORT_MARGIN 40), LAY-W16 — геометрия диалога
+// пинена тестами, миграция меняет устоявшуюся модалку без выигрыша.
 const DIALOG_PAD_X: f32 = 20.0;
 const DIALOG_TITLE_Y: f32 = 16.0;
 const DIALOG_BODY_Y: f32 = 46.0;
 const DIALOG_BTN_BOTTOM: f32 = 16.0;
 const DIALOG_BTN_H: f32 = kit::BUTTON_HEIGHT;
+// Зазор между кнопками — 16 px, вне S1 (исключение LAY7 — «Исключения»
+// 11-layouts.md, «Пады/маргины 14–16 px», LAY-W16; пин теста кнопок).
 const DIALOG_BTN_GAP: f32 = 16.0;
 const DIALOG_TITLE_FS: f32 = 16.0;
 const DIALOG_BODY_FS: f32 = 13.0;
 const DIALOG_BTN_FS: f32 = 14.0;
 const DIALOG_MIN_W: f32 = 280.0;
 const DIALOG_MAX_W: f32 = 440.0;
+// Поля диалога от краёв вьюпорта — 40 px, вне S1 (исключение LAY7 —
+// «Исключения» 11-layouts.md, «Поля/зазоры 20–40 px», LAY-W16: S1 кончается
+// на 24; кламп диалога к вьюпорту при узком окне).
 const DIALOG_VIEWPORT_MARGIN: f32 = 40.0;
 
 /// FR-050 Н2 (этап C): высота строки заголовка меню выбора (screen-space,

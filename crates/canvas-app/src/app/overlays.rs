@@ -4504,6 +4504,15 @@ impl App {
                 ("", ""),
                 ("", ""),
             ];
+            // LAY-W16 (хвост §3.7): шаги строк privacy-блока — метрики текста
+            // прежней раскладки AI-онбординга (интерлиньяж/высота строки,
+            // НЕ зазоры LAY7): кегль 11.5 → шаг 14, body 11 px (2 строки
+            // переноса) → шаг 30. Высота блока пинена раскладкой
+            // (`AI_ONB_PRIV_H`, onboarding_ui.rs). Off-scale 14/30 —
+            // «Исключения» design/rules/11-layouts.md («Метрики элементов,
+            // не зазоры», LAY-W16).
+            const AI_ONB_PRIV_TITLE_STEP: f32 = 14.0;
+            const AI_ONB_PRIV_BODY_STEP: f32 = 30.0;
             let mut py = pb[1] + 8.0;
             for (idx, (title_key, body_key)) in paras.iter().enumerate() {
                 if title_key.is_empty() {
@@ -4517,7 +4526,7 @@ impl App {
                     color: palette.title,
                     align: TextAlign::Left,
                 });
-                py += 14.0; // lay7:allow off-scale 14.0 — кандидат W16 (хвост §3.7)
+                py += AI_ONB_PRIV_TITLE_STEP;
                 if !body_key.is_empty() {
                     texts.push(OwnedScreenText {
                         text: self.tr(body_key).to_owned(),
@@ -4527,7 +4536,7 @@ impl App {
                         color: palette.icon,
                         align: TextAlign::Left,
                     });
-                    py += 30.0; // lay7:allow off-scale 30.0 — кандидат W16 (хвост §3.7)
+                    py += AI_ONB_PRIV_BODY_STEP;
                 }
                 let _ = idx;
             }

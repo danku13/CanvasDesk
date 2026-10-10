@@ -216,7 +216,9 @@ pub const PANEL_PAD: f32 = canvas_core::tokens::SPACING_MD;
 pub const VARS_COL_W: f32 = 360.0;
 /// Минимальная ширина колонки «Расчёт».
 pub const FORMULAS_COL_MIN_W: f32 = 240.0;
-/// Отступ панели от нижней подсказки stage.
+/// Отступ панели от нижней подсказки stage — 34 px, вне шкалы S1 (исключение
+/// LAY7 — «Исключения» 11-layouts.md, «Поля/зазоры 20–40 px», LAY-W16:
+/// 24 прижмёт панель к подсказке, 40 — оторвёт; пинено тестом низа панели).
 pub const PANEL_BOTTOM_GAP: f32 = 34.0;
 /// Кап высоты панели (доля высоты stage) — выше поднимается зона пилюль.
 pub const PANEL_MAX_H_FRACTION: f32 = 0.45;
