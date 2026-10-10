@@ -77,32 +77,39 @@ pub fn button_layout(
 /// текст — слот по состоянию (disabled — свой слот). Никакой арифметики
 /// над цветами: только выбор слота.
 pub fn button_style(variant: ButtonVariant, state: KitState, p: &KitPalette) -> ControlStyle {
+    // Wave T §5.1.3: + Tertiary, Text, Inverse variants.
     let base_fill = match variant {
         ButtonVariant::Primary => p.control_primary,
         ButtonVariant::Danger => p.control_danger,
-        ButtonVariant::Secondary | ButtonVariant::Ghost => p.control_fill,
+        ButtonVariant::Secondary | ButtonVariant::Ghost | ButtonVariant::Tertiary => p.control_fill,
+        // Text — прозрачный контейнер (M3 text button).
+        ButtonVariant::Text => [0.0, 0.0, 0.0, 0.0],
+        // Inverse — на цветном фоне; используем accent как «inverse» fill.
+        ButtonVariant::Inverse => p.accent,
     };
     let fill = match state {
-        KitState::Normal | KitState::Selected => base_fill,
+        KitState::Normal | KitState::Selected | KitState::Focused | KitState::Dragged | KitState::Error => base_fill,
         KitState::Hovered => match variant {
-            ButtonVariant::Primary => p.primary_hover_fill,
-            ButtonVariant::Secondary | ButtonVariant::Ghost | ButtonVariant::Danger => p.hover_fill,
+            ButtonVariant::Primary | ButtonVariant::Inverse => p.primary_hover_fill,
+            ButtonVariant::Secondary | ButtonVariant::Ghost | ButtonVariant::Tertiary
+            | ButtonVariant::Text | ButtonVariant::Danger => p.hover_fill,
         },
         KitState::Pressed => match variant {
-            ButtonVariant::Primary => p.primary_hover_fill,
+            ButtonVariant::Primary | ButtonVariant::Inverse => p.primary_hover_fill,
             _ => p.hover_fill,
         },
         KitState::Disabled => base_fill,
     };
     let border = match (variant, state) {
-        (ButtonVariant::Ghost, KitState::Hovered | KitState::Pressed) => p.accent,
-        (ButtonVariant::Ghost, _) => [0.0, 0.0, 0.0, 0.0],
+        (ButtonVariant::Ghost | ButtonVariant::Text, KitState::Hovered | KitState::Pressed) => p.accent,
+        (ButtonVariant::Ghost | ButtonVariant::Text, _) => [0.0, 0.0, 0.0, 0.0],
         _ => p.control_border,
     };
     let text = match state {
         KitState::Disabled => p.disabled_text,
         _ => match variant {
-            ButtonVariant::Ghost => p.text,
+            ButtonVariant::Ghost | ButtonVariant::Text => p.text,
+            ButtonVariant::Inverse => p.text_title,
             _ => p.text_title,
         },
     };
@@ -111,6 +118,7 @@ pub fn button_style(variant: ButtonVariant, state: KitState, p: &KitPalette) -> 
         border,
         text,
         radius: canvas_core::tokens::RADIUS_CHIP,
+        elevation: super::Elevation::None,
     }
 }
 
@@ -196,6 +204,7 @@ pub fn chip_style(state: KitState, p: &KitPalette) -> ControlStyle {
             _ => p.text,
         },
         radius: canvas_core::tokens::RADIUS_CHIP,
+        elevation: super::Elevation::None,
     }
 }
 
@@ -257,6 +266,7 @@ pub fn switch(slot: UiRect, on: bool, state: KitState, p: &KitPalette) -> Switch
         border: p.control_border,
         text: p.text, // не используется у Switch (без подписи)
         radius: canvas_core::tokens::RADIUS_PILL,
+        elevation: super::Elevation::None,
     };
     // Бегунок: text_title (white/light); disabled — приглушён.
     let knob_fill = match state {

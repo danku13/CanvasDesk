@@ -2807,6 +2807,7 @@ mod tests {
             border: [0.4, 0.4, 0.4, 1.0],
             text: [0.9, 0.9, 0.9, 1.0],
             radius: 6.0,
+            elevation: canvas_ui::component::Elevation::None,
         };
         let area_c = UiRect::new(10.0, 20.0, 120.0, 30.0);
         let area_l = UiRect::new(4.0, 8.0, 80.0, 16.0);

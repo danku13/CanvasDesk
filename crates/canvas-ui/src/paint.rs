@@ -158,8 +158,38 @@ impl Painter {
         });
     }
 
-    /// Стиль контрола (заливка + рамка из [`ControlStyle`]).
+    /// Wave T §5.2.3: shadow-квад под `rect` (рисовать ПЕРЕД основным fill).
+    ///
+    /// Elevation определяет (offset_y, blur, alpha) shadow. Цвет shadow —
+    /// `color` (consumer передаёт слот, обычно чёрный/тёмный). При
+    /// `Elevation::None` — no-op (0 alpha).
+    pub fn shadow(&mut self, rect: UiRect, elev: crate::component::Elevation, color: [f32; 4]) {
+        let (dy, blur, alpha) = elev.shadow();
+        if alpha <= 0.0 {
+            return;
+        }
+        let shadow_rect = UiRect::new(
+            rect.x - blur,
+            rect.y - blur + dy,
+            rect.w + blur * 2.0,
+            rect.h + blur * 2.0,
+        );
+        self.items.push(PaintItem::Rect {
+            rect: shadow_rect,
+            fill: [color[0], color[1], color[2], alpha],
+            border: [0.0; 4],
+            radius: rect.w.min(rect.h) * 0.5, // приблизительно скругление shadow
+        });
+    }
+
+    /// Стиль контрола (заливка + рамка из [`ControlStyle`]). Wave T §5.2.3:
+    /// если `s.elevation != None` — рисует shadow ПЕРЕД контролом.
     pub fn control(&mut self, r: UiRect, s: &ControlStyle) {
+        if s.elevation != crate::component::Elevation::None {
+            // shadow цвет — dark (consumer передаёт через палитру, но для
+            // convenience — берём s.border как приближение shadow-color).
+            self.shadow(r, s.elevation, [0.0, 0.0, 0.0, 1.0]);
+        }
         self.rect(r, s.fill, s.border, s.radius);
     }
 
@@ -279,6 +309,7 @@ mod tests {
             border: BORDER,
             text: TEXT,
             radius: 6.0,
+            elevation: crate::component::Elevation::None,
         }
     }
 
