@@ -1619,6 +1619,12 @@ impl App {
     /// Accept-Reject дотягиваются до 44 лог. px центрированно, с клампом в
     /// `panel` — расширенная зона не выходит за панель и не перекрывает
     /// канвас. На точном указателе — rect без изменений (десктоп прежний).
+    ///
+    /// LAY-W15 (P2-1): однородные группы (тройка quick-пилюль; пара
+    /// Accept/Reject) резолвятся «ближайшим центром» — coarse-тап в
+    /// нарисованную кнопку не уходит соседке, чьё расширение наезжает.
+    /// Порядок слоёв (✕ → input → send → quick → preview) не меняется —
+    /// first-match между разнородными стадиями сохранён.
     pub(crate) fn agent_panel_hit(&self, point: [f32; 2]) -> Option<AgentPanelHit> {
         use crate::touch_targets::touch_hit_xywh;
         let panel = self.agent_panel_rect()?;
@@ -1640,10 +1646,16 @@ impl App {
             return Some(AgentPanelHit::Send);
         }
         // Quick actions (3 preset).
-        for (i, q) in lay.quick.iter().enumerate() {
-            if point_in_rect(touch_hit_xywh(to_xywh(*q), panel), point) {
-                return Some(AgentPanelHit::QuickAction(i));
-            }
+        // LAY-W15 (P2-1): тройка пилюль — однородная sibling-группа,
+        // резолюция «ближайший центр» (паритет ⏸/⚙ AI-статуса): coarse-тап
+        // в нарисованную пилюлю не уходит соседке; на точном указателе зоны
+        // не пересекаются — бит-в-бит first-match (LAY1.2).
+        if let Some(i) = crate::touch_targets::touch_hit_sibling_xywh(
+            lay.quick.iter().map(|q| to_xywh(*q)),
+            panel,
+            point,
+        ) {
+            return Some(AgentPanelHit::QuickAction(i));
         }
         // Accept/Reject кнопки (если есть preview в последнем сообщении).
         let log_y = panel[1] + HEAD_H + CTX_H;
@@ -1661,12 +1673,18 @@ impl App {
                 PREVIEW_BTN_H,
             ];
             // FR-097: тач-цель Accept/Reject (PREVIEW_BTN_H=26) ≥ 44 (кламп
-            // в панель)
-            if point_in_rect(touch_hit_xywh(accept_rect, panel), point) {
-                return Some(AgentPanelHit::Accept);
-            }
-            if point_in_rect(touch_hit_xywh(reject_rect, panel), point) {
-                return Some(AgentPanelHit::Reject);
+            // в панель). LAY-W15 (P2-1): пара кнопок — резолюция «ближайший
+            // центр» (паритет ⏸/⚙; при узкой панели coarse-расширения
+            // соседей перекрываются). На precise — first-match.
+            let preview_pair = [accept_rect, reject_rect];
+            if let Some(i) =
+                crate::touch_targets::touch_hit_sibling_xywh(preview_pair, panel, point)
+            {
+                return Some(if i == 0 {
+                    AgentPanelHit::Accept
+                } else {
+                    AgentPanelHit::Reject
+                });
             }
         }
         // Клик мимо активных элементов (тело панели) — глотаем ввод.
@@ -2153,6 +2171,83 @@ mod tests {
         assert!(
             !point_in_rect(touch_hit_xywh(q, panel_tall), below_q),
             "precise: клик 5 px ниже quick-пилюли проходит мимо"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(was);
+    }
+
+    /// LAY-W15 (P2-1): тройка quick-пилюль — sibling-резолюция «ближайший
+    /// центр»: тап в 2 px внутри нарисованной пилюли 1 — QuickAction(1) на
+    /// coarse И на precise (зоны пилюль вплотную с зазором GAP, десктоп
+    /// бит-в-бит прежний). Геометрия — из [`AgentPanelLayout::build`]
+    /// (draw == hit, UR-005; ширины пилюль — от ширины панели, не шрифта).
+    #[test]
+    fn lay_w15_quick_pills_coarse_nearest_center() {
+        use crate::touch_targets::touch_hit_sibling_xywh;
+        let panel = [1100.0, 0.0, 388.0, 900.0];
+        let lay = AgentPanelLayout::build(UiRect::new(panel[0], panel[1], panel[2], panel[3]));
+        let p0 = to_xywh(lay.quick[0]);
+        let p1 = to_xywh(lay.quick[1]);
+        // Предпосылка однородности: пилюли в одной полосе, зазор GAP.
+        assert_eq!(p0[1], p1[1]);
+        assert_eq!(p0[3], p1[3]);
+        assert!((p1[0] - (p0[0] + p0[2] + GAP)).abs() < 1e-3);
+
+        // Тап в 2 px внутри нарисованной пилюли 1.
+        let pt = [p1[0] + 2.0, p1[1] + p1[3] / 2.0];
+        assert!(point_in_rect(p1, pt) && !point_in_rect(p0, pt));
+
+        let was = canvas_core::web_bridge::pointer_coarse();
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        assert_eq!(
+            touch_hit_sibling_xywh(lay.quick.iter().map(|q| to_xywh(*q)), panel, pt),
+            Some(1),
+            "coarse: тап в 2 px внутри нарисованной пилюли 1 — пилюля 1 (LAY1.2)"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(false);
+        assert_eq!(
+            touch_hit_sibling_xywh(lay.quick.iter().map(|q| to_xywh(*q)), panel, pt),
+            Some(1),
+            "precise: тап в нарисованную пилюлю 1 — пилюля 1"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(was);
+    }
+
+    /// LAY-W15 (P2-1): пара Accept/Reject — sibling-резолюция «ближайший
+    /// центр» (паритет ⏸/⚙ AI-статуса): тап в 2 px внутри нарисованного
+    /// Reject — Reject на coarse и на precise. Та же арифметика rect'ов,
+    /// что в `agent_panel_hit` (panel/PAD/16.0/8.0 — без `App`/GPU).
+    #[test]
+    fn lay_w15_accept_reject_coarse_nearest_center() {
+        use crate::touch_targets::touch_hit_sibling_xywh;
+        let panel = [1100.0, 0.0, 388.0, 900.0];
+        let log_y = panel[1] + HEAD_H + CTX_H;
+        let log_h = panel[3] - HEAD_H - CTX_H - EST_H - INPUT_H - QUICK_H - GAP;
+        let btn_y = log_y + log_h - PREVIEW_BTN_H - 16.0;
+        let btn_w = (panel[2] - PAD * 2.0 - 8.0) / 2.0;
+        let accept = [panel[0] + PAD + 16.0, btn_y, btn_w, PREVIEW_BTN_H];
+        let reject = [
+            panel[0] + PAD + 16.0 + btn_w + 8.0,
+            btn_y,
+            btn_w,
+            PREVIEW_BTN_H,
+        ];
+
+        // Тап в 2 px внутри нарисованного Reject.
+        let pt = [reject[0] + 2.0, btn_y + PREVIEW_BTN_H / 2.0];
+        assert!(point_in_rect(reject, pt) && !point_in_rect(accept, pt));
+
+        let was = canvas_core::web_bridge::pointer_coarse();
+        canvas_core::web_bridge::set_pointer_coarse(true);
+        assert_eq!(
+            touch_hit_sibling_xywh([accept, reject], panel, pt),
+            Some(1),
+            "coarse: тап в 2 px внутри нарисованного Reject — Reject (LAY1.2)"
+        );
+        canvas_core::web_bridge::set_pointer_coarse(false);
+        assert_eq!(
+            touch_hit_sibling_xywh([accept, reject], panel, pt),
+            Some(1),
+            "precise: тап в нарисованный Reject — Reject"
         );
         canvas_core::web_bridge::set_pointer_coarse(was);
     }
