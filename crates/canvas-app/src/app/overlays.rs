@@ -2311,15 +2311,22 @@ impl App {
                 GuideOrientation::Vertical => {
                     // Вертикальная линия на world x = line.pos, y в [range[0], range[1]].
                     let screen_x = self.camera.world_to_screen([line.pos, 0.0], viewport)[0];
-                    let screen_y_start = self.camera.world_to_screen([0.0, line.range[0]], viewport)[1];
-                    let screen_y_end = self.camera.world_to_screen([0.0, line.range[1]], viewport)[1];
+                    let screen_y_start =
+                        self.camera.world_to_screen([0.0, line.range[0]], viewport)[1];
+                    let screen_y_end =
+                        self.camera.world_to_screen([0.0, line.range[1]], viewport)[1];
                     let (y0, y1) = if screen_y_start <= screen_y_end {
                         (screen_y_start, screen_y_end)
                     } else {
                         (screen_y_end, screen_y_start)
                     };
                     instances.push(band_rect_quad_pub(
-                        [screen_x - LINE_THICKNESS_PX * 0.5, y0, LINE_THICKNESS_PX, (y1 - y0).max(1.0)],
+                        [
+                            screen_x - LINE_THICKNESS_PX * 0.5,
+                            y0,
+                            LINE_THICKNESS_PX,
+                            (y1 - y0).max(1.0),
+                        ],
                         MAGENTA,
                         [0.0; 4],
                         0.0,
@@ -2327,15 +2334,22 @@ impl App {
                 }
                 GuideOrientation::Horizontal => {
                     let screen_y = self.camera.world_to_screen([0.0, line.pos], viewport)[1];
-                    let screen_x_start = self.camera.world_to_screen([line.range[0], 0.0], viewport)[0];
-                    let screen_x_end = self.camera.world_to_screen([line.range[1], 0.0], viewport)[0];
+                    let screen_x_start =
+                        self.camera.world_to_screen([line.range[0], 0.0], viewport)[0];
+                    let screen_x_end =
+                        self.camera.world_to_screen([line.range[1], 0.0], viewport)[0];
                     let (x0, x1) = if screen_x_start <= screen_x_end {
                         (screen_x_start, screen_x_end)
                     } else {
                         (screen_x_end, screen_x_start)
                     };
                     instances.push(band_rect_quad_pub(
-                        [x0, screen_y - LINE_THICKNESS_PX * 0.5, (x1 - x0).max(1.0), LINE_THICKNESS_PX],
+                        [
+                            x0,
+                            screen_y - LINE_THICKNESS_PX * 0.5,
+                            (x1 - x0).max(1.0),
+                            LINE_THICKNESS_PX,
+                        ],
                         MAGENTA,
                         [0.0; 4],
                         0.0,
@@ -2348,7 +2362,9 @@ impl App {
         // рендера); OwnedScreenText.font_size — в лог. px, рендер сам множит
         // на scale_factor. Ширина — бюджет строки «NNN px» (3 цифры + « px»).
         for label in &frame.labels {
-            let screen = self.camera.world_to_screen([label.pos.x, label.pos.y], viewport);
+            let screen = self
+                .camera
+                .world_to_screen([label.pos.x, label.pos.y], viewport);
             texts.push(OwnedScreenText {
                 text: label.text_str(),
                 origin: [screen[0] - LABEL_WIDTH * 0.5, screen[1]],

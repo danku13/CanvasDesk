@@ -52,7 +52,10 @@ pub use crate::component::dropdown::{
 pub use crate::component::footer::{footer_buttons_measured, split_footer_buttons, FooterGroup};
 pub use crate::component::icon::{icon_composition, IconKind};
 pub use crate::component::list::{list_rows, scroll_bar, ScrollState};
-pub use crate::component::modal::{focus_order, modal, modal_style, ModalLayout};
+pub use crate::component::modal::{
+    focus_order, layout_tier, modal, modal_rect_flex, modal_style, LayoutTier, ModalLayout,
+    MODAL_RATIO_DEFAULT,
+};
 pub use crate::component::panel::{
     backdrop, card, control_style_of, panel_content, panel_rect, panel_style, panel_style_of,
     CardLayout,

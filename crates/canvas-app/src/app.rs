@@ -1751,7 +1751,10 @@ pub struct App {
     /// INT-2 (#44) P3: ActionRegistry — единый реестр действий приложения
     /// (Wave A §5.5.3). Источник для command palette (Cmd+K), `?` cheatsheet,
     /// context menu, keyboard shortcuts. Доступ — через
-    /// [`App::command_actions`].
+    /// [`App::command_actions`]. Wiring — будущая волна палитры команд
+    /// (INT-2 заложил API впрок; до неё поле только пишется в конструкторе,
+    /// не читается — разрешено явно, гейт clippy -D warnings).
+    #[allow(dead_code)]
     action_registry: canvas_ui::kit::ActionRegistry,
     /// Wave D v1: кэш раскладки витрины последнего кадра (реестр хитов и
     /// навигация/press читают без пересчёта; обновляется в draw-пути).
@@ -3971,9 +3974,7 @@ impl App {
             .iter()
             .filter(|index| !moving.contains(index))
             .filter_map(|index| self.scene.canvas.nodes.get(*index))
-            .map(|node| {
-                canvas_ui::geometry::UiRect::new(node.x, node.y, node.width, node.height)
-            })
+            .map(|node| canvas_ui::geometry::UiRect::new(node.x, node.y, node.width, node.height))
             .collect();
         let (guides, snap_offset) =
             smart_guides::compute_smart_guides(dragged, &siblings, smart_guides::SNAP_THRESHOLD);
@@ -3983,7 +3984,9 @@ impl App {
     /// INT-2 (#44) P3: действия для command palette (Wave A §5.5.3 —
     /// `ActionRegistry::command_actions()`). Палитра команд (Cmd+K) —
     /// будущая волна; метод exposes реестр для любого UI-потребителя
-    /// (через `search_actions` Wave C).
+    /// (через `search_actions` Wave C). До той волны потребителей нет —
+    /// разрешено явно (гейт clippy -D warnings).
+    #[allow(dead_code)]
     pub(crate) fn command_actions(&self) -> Vec<canvas_ui::kit::CommandAction> {
         self.action_registry.command_actions()
     }
