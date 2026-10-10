@@ -1,64 +1,64 @@
-# WASM-тестирование UI — рецепт быстрой настройки
+# WASM UI testing — a quick-setup recipe
 
-Рецепт самопроверки UI на веб-сборке агентом без Windows и GUI (правило в
-`AGENTS.md` → «Самопроверка UI на WASM»). Цель — новая сессия воспроизводит
-стенд за ~10 минут по готовым командам, а не переоткрывает путь заново.
-Прецедент: фикс 52027bc «панели закрываются при клике на себя» проверен
-на wasm-сборке кликами в браузере с пиксельными диффами (worklog 2026-09-25).
+A recipe for the agent's UI self-check on the web build, without Windows or a GUI (the rule in
+`AGENTS.md` → "WASM UI self-check"). The goal is for a new session to reproduce the bench in
+~10 minutes from ready-made commands instead of re-discovering the path from scratch.
+Precedent: fix 52027bc «панели закрываются при клике на себя» ("panels close when clicked on
+themselves") was verified on a wasm build by browser clicks with pixel diffs (worklog 2026-09-25).
 
 ---
 
-## 1. Уровни проверки — от дешёвого к полному
+## 1. Verification levels — from cheap to full
 
-| Уровень | Что даёт | Когда достаточен |
+| Level | What it gives | When it suffices |
 |---|---|---|
-| **L0** — компиляция под wasm32-unknown-unknown | ловит 90 % регрессов (cfg, фичи, типы web-sys/wgpu) | почти всегда для правок ядра/крейтов |
-| **L1** — юнит-тесты ядра/моста в wasmtime (wasm32-wasip1) | исполнение чистой логики в wasm-рантайме | правки canvas-core / canvas-mcp |
-| **L2** — браузерный стенд: Chromium + WebGPU (SwiftShader) под Xvfb | ПОЛНОЦЕННАЯ UI-проверка: клики, клавиатура, пиксельные диффы | **обязателен для UI-изменений** (раскладка, ввод, панели, hit-тесты, рендер) |
-| **L3** — `trunk serve` / `scripts/web_bundle.sh --release` / CI (`wasm-check`, `pages-web`) | эталонный пайплайн, размер бандла | предрелизная приёмка |
+| **L0** — compilation for wasm32-unknown-unknown | catches 90% of regressions (cfg, features, web-sys/wgpu types) | almost always for core/crate edits |
+| **L1** — unit tests of the core/bridge in wasmtime (wasm32-wasip1) | execution of pure logic in a wasm runtime | edits to canvas-core / canvas-mcp |
+| **L2** — a browser bench: Chromium + WebGPU (SwiftShader) under Xvfb | FULL-FLEDGED UI verification: clicks, keyboard, pixel diffs | **mandatory for UI changes** (layout, input, panels, hit tests, rendering) |
+| **L3** — `trunk serve` / `scripts/web_bundle.sh --release` / CI (`wasm-check`, `pages-web`) | the reference pipeline, the bundle size | pre-release acceptance |
 
-Нативные юнит-тесты (cargo test) не отменяются — они закрывают логику; L2
-закрывает поведение на web-платформе, где вход (pointer/keyboard), координаты
-и композитинг работают иначе, чем в winit.
+Native unit tests (cargo test) are not canceled — they cover the logic; L2
+covers the behavior on the web platform, where input (pointer/keyboard), coordinates,
+and compositing work differently than in winit.
 
-## 2. Среда агента (проверено 2026-09-25)
+## 2. The agent environment (verified 2026-09-25)
 
-**Предустановлено:**
+**Preinstalled:**
 
-| Инструмент | Где | Зачем |
+| Tool | Where | Why |
 |---|---|---|
-| rust stable + `~/.cargo/bin` | PATH добавить `$HOME/.cargo/bin` | сборка |
-| таргет `wasm32-unknown-unknown` | rustup | L0/L2 |
-| `wasm-bindgen-cli` **0.2.127** | `~/.cargo/bin/wasm-bindgen` | L2 (версия = крейт в Cargo.lock) |
-| node 24 + модуль playwright | `/home/z/.npm-global/lib/node_modules/` | L2-сценарии (npm-плейврайт, `createRequire` от этого корня) |
-| python3-playwright | pip | альтернатива для сценариев (`scripts/web_smoke.py`) |
-| Chromium 1243 (+ headless shell) | `~/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome` | браузер |
-| Xvfb | система | виртуальный дисплей (headed-рендер); обёртка `xvfb-run` в среде не работает — нет `xauth` |
-| python3 + PIL + numpy | pip | пиксельный дифф (`scripts/wasm_ui_diff.py`) |
+| rust stable + `~/.cargo/bin` | add `$HOME/.cargo/bin` to PATH | building |
+| the `wasm32-unknown-unknown` target | rustup | L0/L2 |
+| `wasm-bindgen-cli` **0.2.127** | `~/.cargo/bin/wasm-bindgen` | L2 (the version = the crate in Cargo.lock) |
+| node 24 + the playwright module | `/home/z/.npm-global/lib/node_modules/` | L2 scenarios (npm playwright, `createRequire` from this root) |
+| python3-playwright | pip | an alternative for scenarios (`scripts/web_smoke.py`) |
+| Chromium 1243 (+ headless shell) | `~/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome` | the browser |
+| Xvfb | system | a virtual display (headed rendering); the `xvfb-run` wrapper does not work in this environment — no `xauth` |
+| python3 + PIL + numpy | pip | the pixel diff (`scripts/wasm_ui_diff.py`) |
 
-**Отсутствует (ставить по необходимости):**
+**Missing (install as needed):**
 
 - `wasmtime` (L1): `curl https://wasmtime.dev/install.sh -sSf | bash`
-  (бинарь в `~/.local/bin` — добавить в PATH) + `rustup target add wasm32-wasip1`;
-  затем `scripts/wasm_gate.sh` / `scripts/mcp_wasm_gate.sh` без `--check`.
-- `trunk` (L3): в этой среде не ставился — prebuilt-ассеты release'ов GitHub
-  отдают 404 (как в `pages-web.yml` для wasm-bindgen); `cargo install trunk
-  --locked` собирается из исходников (~5–10 мин). Не блокер: ручная сборка
-  ниже даёт идентичный результат (тот же bindgen-шаг, что у trunk).
+  (the binary lands in `~/.local/bin` — add it to PATH) + `rustup target add wasm32-wasip1`;
+  then `scripts/wasm_gate.sh` / `scripts/mcp_wasm_gate.sh` without `--check`.
+- `trunk` (L3): not installed in this environment — the prebuilt assets of GitHub releases
+  return 404 (as in `pages-web.yml` for wasm-bindgen); `cargo install trunk --locked`
+  builds from sources (~5–10 min). Not a blocker: the manual build below gives an identical
+  result (the same bindgen step as trunk).
 
-**Особенности среды (важно):**
+**Environment quirks (important):**
 
-- Фоновые процессы НЕ выживают между bash-вызовами → http-сервер запускается
-  из самого сценария (ребёнок) и гасится в конце; либо всё в одном вызове.
-- Dev-wasm весит ~34 МБ → загрузка страницы до 90 с, первый кадр ждать ~7 с.
-- Диск песочницы мал → для полного `wasm_gate.sh` чистить
-  `target/wasm32-unknown-unknown/incremental` (прецедент FR-057/059).
+- Background processes do NOT survive between bash calls → the http server is started
+  by the scenario itself (a child) and shut down at the end; or everything in a single call.
+- The dev wasm weighs ~34 MB → page load up to 90 s, wait ~7 s for the first frame.
+- The sandbox disk is small → for a full `wasm_gate.sh` clean
+  `target/wasm32-unknown-unknown/incremental` (precedent FR-057/059).
 
-## 3. Уровень L2 — пошагово
+## 3. Level L2 — step by step
 
-### Шаг 1. Собрать стенд
+### Step 1. Build the bench
 
-`trunk` не нужен — bindgen вручную (эквивалент rust-пайплайна trunk):
+`trunk` is not needed — bindgen by hand (the equivalent of trunk's rust pipeline):
 
 ```bash
 cd <корень репо> && export PATH="$HOME/.cargo/bin:$PATH"
@@ -79,13 +79,13 @@ if "canvas_web.js" not in html:
 PY
 ```
 
-Всё это делает одна команда: **`scripts/wasm_ui_test.sh`** (повторный запуск —
-`scripts/wasm_ui_test.sh --no-build`, переиспользует `target/dist`).
+One command does all of this: **`scripts/wasm_ui_test.sh`** (a re-run is
+`scripts/wasm_ui_test.sh --no-build`, which reuses `target/dist`).
 
-### Шаг 2. Запустить сценарий
+### Step 2. Run the scenario
 
-Сценарий сам поднимает `http.server` на стенде и гасит его; Xvfb поднимает
-скрипт-обёртка:
+The scenario itself brings up `http.server` on the bench and shuts it down; Xvfb is brought up
+by the wrapper script:
 
 ```bash
 # Пример — тест панели «О интерфейсе» (координаты калибруются по скриншоту):
@@ -93,79 +93,79 @@ ITEM="1035,117" BODY="1078,708" LABEL=about scripts/wasm_ui_test.sh --no-build
 # (скрипт сам поднимает Xvfb и гасит его по выходу; дисплеи 90–99)
 ```
 
-Что происходит внутри (`scripts/wasm_ui_scenario.mjs`):
+What happens inside (`scripts/wasm_ui_scenario.mjs`):
 
-1. Chromium (playwright, **headed**) под Xvfb, который поднимает сам
-   `wasm_ui_test.sh` (xvfb-run в среде ломается — нет xauth; Xvfb вручную
-   на свободном дисплее 90–99).
-2. Флаги (критичны, см. §4): `--enable-unsafe-webgpu --enable-features=Vulkan
+1. Chromium (playwright, **headed**) under Xvfb, which `wasm_ui_test.sh` itself
+   brings up (xvfb-run breaks in this environment — no xauth; Xvfb manually
+   on a free display 90–99).
+2. The flags (critical, see §4): `--enable-unsafe-webgpu --enable-features=Vulkan
    --use-vulkan=swiftshader --use-webgpu-adapter=swiftshader --no-sandbox`.
-3. Загрузка → ждём `body > canvas` (winit создаёт канвас при `create_window`)
-   + 7 с на первый кадр.
-4. Шаги сценария по env-параметрам: `SKIP` (пропустить онбординг),
-   `HELP` («?»), `ITEM` (пункт меню), `BODY` (точка ТЕЛА панели — паддинг вне
-   интерактивных rect'ов), `BACKDROP` (фон вне панели). Каждый клик —
-   скриншот.
-5. Пиксельные диффы (`scripts/wasm_ui_diff.py`, PIL): до/после клика по телу
-   (~0 — панель осталась) и до/после клика по фону (сотни тысяч px — панель
-   закрылась). Оракул — количество изменённых пикселей, не картинка.
+3. Load → wait for `body > canvas` (winit creates the canvas at `create_window`)
+   + 7 s for the first frame.
+4. Scenario steps driven by env parameters: `SKIP` (skip onboarding),
+   `HELP` ("?"), `ITEM` (a menu item), `BODY` (a point on the panel BODY — padding outside
+   the interactive rects), `BACKDROP` (the background outside the panel). Every click is
+   a screenshot.
+5. Pixel diffs (`scripts/wasm_ui_diff.py`, PIL): before/after the body click
+   (~0 — the panel stayed) and before/after the backdrop click (hundreds of thousands
+   of px — the panel closed). The oracle is the count of changed pixels, not the picture.
 
-### Шаг 3. Прочитать оракулы
+### Step 3. Read the oracles
 
-- Консоль браузера: `[render] renderer инициализирован backend=BrowserWebGpu`
-  — рендер жив; строка `[canvas-web compat] лимиты не распознаны…` — норма
-  (шим `index.html` против `maxInterStageShaderComponents`).
-- `pageerror` не ожидается; любые panic-строки — регресс.
-- Диффы скриншотов — как в шаге 2; дифф ~3–4 тыс. px от «залипшего» hover
-  кнопки — косметика доставки кадров (кадр не перерисовался по mouse-move),
-  к логике отношения не имеет (прецедент в worklog).
+- The browser console: `[render] renderer инициализирован backend=BrowserWebGpu`
+  — the renderer is alive; the line `[canvas-web compat] лимиты не распознаны…` is normal
+  (the `index.html` shim against `maxInterStageShaderComponents`).
+- `pageerror` is not expected; any panic lines are a regression.
+- Screenshot diffs — as in step 2; a diff of ~3–4 thousand px from a "stuck" button hover
+  is frame-delivery cosmetics (the frame was not redrawn on mouse-move), it has nothing
+  to do with the logic (precedent in the worklog).
 
-## 4. Грабли (все проверены на практике)
+## 4. Pitfalls (all verified in practice)
 
-1. **Headless Chromium НЕ композитит WebGPU-канвас в captureScreenshot** —
-   контрольный clear-кадр невидим. Только headed-браузер под Xvfb (живой
-   композитор). Это главная ловушка уровня L2.
-2. **Без SwiftShader-флагов** `request_adapter` → None («GPU-адаптер не
-   найден»). Причём у свежих Chromium запрос целиком отклоняется из-за
-   лимита `maxInterStageShaderComponents` (удалён из спеки) — шим в
-   `index.html` его снимает; без него падение маскируется под «нет GPU».
-3. **Версия `wasm-bindgen` CLI обязана совпадать с крейтом в `Cargo.lock`**
-   (сейчас 0.2.127) — иначе JS-глю не совместим с wasm-модулем. Проверка:
+1. **Headless Chromium does NOT composite the WebGPU canvas in captureScreenshot** —
+   the reference clear frame is invisible. Only a headed browser under Xvfb (a live
+   compositor). This is the main L2-level trap.
+2. **Without the SwiftShader flags** `request_adapter` → None ("no GPU adapter
+   found"). Moreover, in recent Chromium the request is rejected outright because of the
+   `maxInterStageShaderComponents` limit (removed from the spec) — the shim in
+   `index.html` removes it; without it the failure masquerades as "no GPU".
+3. **The `wasm-bindgen` CLI version must match the crate in `Cargo.lock`**
+   (currently 0.2.127) — otherwise the JS glue is incompatible with the wasm module. Check:
    `wasm-bindgen --version` vs `rg 'name = "wasm-bindgen"' -A1 Cargo.lock`.
-4. **Координаты кликов** — CSS-px вьюпорта (1280×800 = окно канваса);
-   DOM-тулбар (верх-право, `#w6-toolbar`) перекрывает верх канваса — кнопка
-   «?» кликается по нижней части. Пункты GPU-меню — только по канвасным
-   координатам, калибруются по скриншоту шага.
-5. **Hover-артефакты в диффе**: курсор ставится в целевую точку ДО
-   контрольного кадра (+400 мс), иначе дифф ловит смену hover, а не событие.
-6. **Загрузка**: `waitUntil: 'load'` мало — ждать селектор `body > canvas`
-   (timeout 90 с) + паузу на первый кадр; dev-сборка тяжёлая.
-7. **Сервер стенда** — только внутри процесса сценария (см. §2, фоновые
-   процессы); порт по умолчанию 8081.
+4. **Click coordinates** — CSS px of the viewport (1280×800 = the canvas window);
+   the DOM toolbar (top-right, `#w6-toolbar`) overlaps the top of the canvas — the "?"
+   button is clicked on its lower part. GPU-menu items — only by canvas coordinates,
+   calibrated from the step's screenshot.
+5. **Hover artifacts in the diff**: the cursor is placed at the target point BEFORE
+   the reference frame (+400 ms), otherwise the diff catches the hover change, not the event.
+6. **Loading**: `waitUntil: 'load'` is not enough — wait for the `body > canvas`
+   selector (timeout 90 s) + a pause for the first frame; the dev build is heavy.
+7. **The bench server** — only inside the scenario process (see §2, background
+   processes); the default port is 8081.
 
-## 5. Что проверено этим рецептом (хронология)
+## 5. What this recipe has verified (chronology)
 
-- 2026-09-25: фикс 52027bc — UI-консоль и «О интерфейсе» не закрываются по
-  клику на своё тело, закрываются по фону (backdrop-контракт), Esc жив.
-  Скриншоты и диффы — в worklog репо; сценарии-предки текущего
-  `wasm_ui_scenario.mjs` — `wasm_probe*.mjs` (сессия агента).
-- 2026-09-25 (тот же день): сам рецепт закоммичен и проверен целиком
+- 2026-09-25: fix 52027bc — the UI console and the «О интерфейсе» ("About") panel do not close on
+  a click on their own body; they close on the background (the backdrop contract), Esc alive.
+  Screenshots and diffs are in the repo worklog; the ancestor scenarios of the current
+  `wasm_ui_scenario.mjs` are `wasm_probe*.mjs` (an agent session).
+- 2026-09-25 (the same day): the recipe itself was committed and verified end to end
   (`ITEM="1035,117" BODY="1078,708" LABEL=about scripts/wasm_ui_test.sh`):
-  стенд собрался, `backend=BrowserWebGpu`, клик по телу — 3 697 px
-  (hover-косметика, панель осталась), клик по фону — 552 616 px (панель
-  закрылась). Из прогона выловлены две грабли и вписаны выше: xvfb-run без
-  xauth (Xvfb вручную) и http.server-ребёнок, держащий event loop node
-  (явный `kill` в finally + watchdog).
-- 2026-10-08 (FR-100, UR-001-02): клавиатурный смоук web расширен chord'ами
-  редактора — секция 2b `scripts/web_smoke.py`. Тракт: dblclick → заметка →
-  `Control+Backspace` (word-delete, winit-web доставляет chord редактору —
-  шим FR-095 гасит default браузера `preventDefault`) → `Control+a`
-  (select-all, браузерный select-all подавлен) → замена текста → Enter →
-  оракул — поиск замены в модели (лог `поиск завершён rows≥1`) + отсутствие
-  `pageerror`. Сценарий добавлен, прогон в этой среде не выполнялся —
-  ручная web-приёмка владельцем (macOS-браузер: те же chord'ы через Cmd).
+  the bench built, `backend=BrowserWebGpu`, the body click — 3,697 px
+  (hover cosmetics, the panel stayed), the backdrop click — 552,616 px (the panel
+  closed). Two pitfalls were caught in the run and written up above: xvfb-run without
+  xauth (Xvfb manually) and the http.server child holding the node event loop
+  (an explicit `kill` in finally + a watchdog).
+- 2026-10-08 (FR-100, UR-001-02): the web keyboard smoke was extended with the editor's
+  chords — section 2b of `scripts/web_smoke.py`. The path: dblclick → a note →
+  `Control+Backspace` (word-delete; winit-web delivers the chord to the editor —
+  the FR-095 shim suppresses the browser default `preventDefault`) → `Control+a`
+  (select-all, the browser select-all suppressed) → replacing the text → Enter →
+  the oracle is finding the replacement in the model (the log `поиск завершён rows≥1`)
+  + the absence of `pageerror`. The scenario was added; the run was not executed in this
+  environment — manual web acceptance by the owner (a macOS browser: the same chords via Cmd).
 
-## 6. Шпаргалка
+## 6. Cheat sheet
 
 ```bash
 # L0 — всегда
@@ -183,7 +183,7 @@ scripts/wasm_ui_test.sh --no-build           # повторно, без пере
 scripts/web_bundle.sh --dist _site/app       # как в CI pages-web
 ```
 
-Когда L2 недоступен (среда без node/playwright/Xvfb) — правило из
-`AGENTS.md`: явно доложить «WASM-проверка не выполнялась, причина» и дать
-владельцу ручную инструкцию (что открыть, куда кликнуть, что считается
-успехом).
+When L2 is unavailable (an environment without node/playwright/Xvfb) — the rule from
+`AGENTS.md`: explicitly report «WASM-проверка не выполнялась, причина» ("the WASM check
+was not performed, reason") and give the owner a manual instruction (what to open,
+where to click, what counts as success).

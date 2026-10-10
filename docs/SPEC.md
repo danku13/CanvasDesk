@@ -1,83 +1,85 @@
-# CanvasDesk — спецификация проекта
+# CanvasDesk — project specification
 
-Рабочее название: **CanvasDesk**. **Визуальная система математического
-моделирования** (ADR-0007): бесконечный зумируемый канвас, на котором
-исполняемые математические модели строятся из расчётных нод (Numi-листы,
-шаблоны), значения проливаются по value-связям, доменная математика
-встроена в ядро, а ИИ-агент собирает и проверяет модели через MCP. Носитель
-модели — файловый канвас поверх реальной файловой системы и (в режиме M4)
-вместо стандартного рабочего стола.
+Working title: **CanvasDesk**. **A visual mathematical modeling system**
+(ADR-0007): an infinitely zoomable canvas on which executable mathematical
+models are built from computational nodes (Numi sheets, templates), values
+spill along value edges, domain mathematics is built into the core, and an
+AI agent assembles and verifies models via MCP. The model's carrier is a
+file canvas over the real file system and (in M4 mode) instead of the
+standard desktop.
 
-> Этот документ описывает инфраструктурную спецификацию (носитель).
-> Расчётное ядро (Numi, поток значений, шаблоны, доменные единицы) —
-> волна FR-013…FR-029 (индекс — `docs/change-requests/index-cr-fr.md`),
-> решения — `docs/adr/` (начать с ADR-0007, затем ADR-0002…ADR-0006).
+> This document describes the infrastructure specification (the carrier).
+> The computational core (Numi, value flow, templates, domain units) —
+> the FR-013…FR-029 wave (index — `docs/change-requests/index-cr-fr.md`),
+> decisions — `docs/adr/` (start with ADR-0007, then ADR-0002…ADR-0006).
 
 ---
 
-## 1. Объём
+## 1. Scope
 
-**В объёме:**
-- M1 — ядро канваса: камера (пан/зум), файловые карточки, системные тамбнейлы, сохранение в JSON Canvas
-- M2 — текстовые заметки, связи (edges) между нодами, drag-drop из Explorer, вотчер файловой системы
-- M3 — живые превью (изображения, PDF, текст/код, Office через preview handlers), миникарта, поиск
-- M4 — режим встройки в рабочий стол (WorkerW): канвас за иконками, скрытие системных иконок, перехват контекстного меню
-- M5 — движок расширений: виджеты как JS/HTML-микрофронтенды на канвасе (WebView2, манифест, bridge, sandbox)
-- Волна моделирования (FR-013…FR-029) — Numi-движок в заметках, поток значений
-  по value-рёбрам (DAG), доменные единицы и queueing-функции, библиотека
-  шаблонов (45), палитра/wheel-UI, построчные выходы, юнит-экономика,
-  онбординг и встроенная документация. Спецификация по FR — в самих
-  документах; архитектурные решения — `docs/adr/` (ADR-0002…ADR-0007);
-  состав и приёмка концепции композиции — CR-013
-- M7 — кроссплатформенность: Windows 10/11, Linux (X11/Wayland), macOS — сборка,
-  гейты CI и платформенные реализации (тамбнейлы, drag-drop, MCP) по плану
+**In scope:**
+- M1 — canvas core: camera (pan/zoom), file cards, system thumbnails, saving to JSON Canvas
+- M2 — text notes, edges between nodes, drag-drop from Explorer, file system watcher
+- M3 — live previews (images, PDF, text/code, Office via preview handlers), minimap, search
+- M4 — desktop embedding mode (WorkerW): the canvas behind the icons, hiding system icons, context menu interception
+- M5 — extension engine: widgets as JS/HTML micro-frontends on the canvas (WebView2, manifest, bridge, sandbox)
+- The modeling wave (FR-013…FR-029) — the Numi engine in notes, value flow
+  over value edges (DAG), domain units and queueing functions, the template
+  library (45), the palette/wheel UI, per-line outputs, unit economics,
+  onboarding and built-in documentation. FR specifications live in the FR
+  documents themselves; architectural decisions — `docs/adr/` (ADR-0002…ADR-0007);
+  the make-up and acceptance of the composition concept — CR-013
+- M7 — cross-platform: Windows 10/11, Linux (X11/Wayland), macOS — builds,
+  CI gates and platform implementations (thumbnails, drag-drop, MCP) per the plan
   `docs/plans/M7-crossplatform.md`
 
-**Вне объёма (осознанно):**
-- Замена shell (таскбар, трей остаются Explorer)
-- Desktop-режим (встройка в рабочий стол) вне Windows — юникс-эквиваленты
-  (layer-shell и т.п.) отложены до после v1.2; оконный режим — на всех ОС
-- Живые виджеты на Linux/macOS до завершения M5 (T21/T22): вне Windows
-  виджет-нода рендерится снапшотом/плейсхолдером
-- Облачная синхронизация, мультипользовательский режим
-- Редактирование содержимого документов внутри канваса
-- Публичный каталог/маркет виджетов, облачные виджеты, удалённая загрузка JS — виджеты только локальные пакеты, устанавливаемые пользователем явно
+**Deliberately out of scope:**
+- Replacing the shell (taskbar and tray stay Explorer)
+- Desktop mode (embedding into the desktop) outside Windows — Unix
+  equivalents (layer-shell etc.) are postponed until after v1.2; windowed
+  mode — on all OSes
+- Live widgets on Linux/macOS until M5 (T21/T22) is complete: outside
+  Windows a widget node renders as a snapshot/placeholder
+- Cloud sync, multi-user mode
+- Editing document content inside the canvas
+- A public widget catalog/marketplace, cloud widgets, remote JS download —
+  widgets are local-only packages installed explicitly by the user
 
-## 2. Пользовательские сценарии
+## 2. User scenarios
 
-1. Пользователь перетаскивает папку проекта на канвас → файлы раскладываются сеткой, видны тамбнейлы
-2. Пользователь группирует документы проекта в пространстве, соединяет связями, добавляет заметки-контексты
-3. Приближает карточку PDF → карточка превращается в читаемое превью первой страницы
-4. В режиме M4: загрузка ПК → вместо стандартного десктопа открыт последний канвас; двойной клик по файлу открывает его в ассоциированном приложении
-5. Файл переименован в Explorer → карточка обновилась; файл удалён → карточка помечена «broken link», не исчезает молча
-6. Пользователь ставит на канвас виджет (часы, календарь, собственный дашборд из Vite-билда): виджет живёт как нода — двигается, связывается рёбрами, при приближении становится интерактивным, при отдалении превращается в статичный снапшот
+1. The user drags a project folder onto the canvas → files are laid out in a grid, thumbnails are visible
+2. The user groups the project's documents in space, connects them with edges, adds context notes
+3. Zooms into a PDF card → the card becomes a readable preview of the first page
+4. In M4 mode: PC boot → the last canvas opens instead of the standard desktop; double-clicking a file opens it in the associated application
+5. A file is renamed in Explorer → the card updates; a file is deleted → the card is marked "broken link", it does not silently disappear
+6. The user places a widget on the canvas (a clock, a calendar, a custom dashboard from a Vite build): the widget lives as a node — it moves, connects with edges, becomes interactive when zoomed in, turns into a static snapshot when zoomed out
 
-## 3. Технологический стек
+## 3. Technology stack
 
-| Слой | Решение | Почему |
+| Layer | Choice | Why |
 |---|---|---|
-| Язык | Rust stable (1.80+), edition 2021 | — |
-| Окно/ввод | `winit` 0.30 | Кроссплатформенная основа, тачпад-жесты |
-| GPU-рендер | `wgpu` 22+ | DX12/Vulkan бэкенды, батчинг, будущая портируемость |
-| Текст | `glyphon` (поверх `cosmic-text`) | Нативная интеграция с wgpu, шейпинг, эмодзи |
-| Пространственный индекс | `rstar` (R-tree) | Hit-testing, viewport culling на 5–10 тыс. нод |
-| Формат канваса | JSON Canvas spec 1.0 (`serde_json`) | Совместимость с Obsidian, human-readable |
-| Статистика (L2, ADR-0008) | `statrs` 0.17 + `rand`/`rand_chacha`/`rand_distr` — за cargo-фичей `stats` в `canvas-core` (FR-063) | Распределения, квантили, доверительные интервалы, детерминированный RNG (ChaCha8, сид `FNV-1a(content) ⊕ scenario_seed`); B2B-сборка без фичи — zero-dep |
-| Метаданные/кэш | `rusqlite` (bundled) | Тамбнейлы-кэш, индекс поиска, сессии |
-| Файловый вотчер | `notify` 6+ | Три бэкенда одним API: ReadDirectoryChangesW (Win), inotify (Linux), FSEvents (macOS); различия нормализуются в canvas-shell |
-| Win32/COM | `windows-rs` (features: Win32_UI_Shell, Win32_Graphics_Dwm, System_Com) | Тамбнейлы, preview handlers, WorkerW — Windows-слой |
-| Тамбнейлы | `IShellItemImageFactory::GetImage` | Системный кэш, совпадает с Explorer |
-| PDF | `pdfium-render` (бинарь pdfium, BSD-лицензия) | Быстрый рендер страниц в битмап |
-| Изображения | `image` | Декод в RGBA → GPU-текстура |
-| Preview handlers | `IPreviewHandler` в out-of-process хосте | Изоляция падающих COM-компонентов |
-| Виджеты (M5) | WebView2 Evergreen + `webview2-com` | Живые HTML/JS-ноды; снапшоты через `ICoreWebView2::CapturePreview` |
-| Мост виджетов | `postMessage` JSON-RPC (`serde_json`) | Узкий типизированный host API с permissions, без eval |
-| Сериализация конфига | `serde` + `toml` | — |
-| Логирование | `tracing` + `tracing-subscriber` | Диагностика на машинах пользователей |
-| WASM-таргеты (FR-036, ADR-0011) | `wasm32-unknown-unknown` (продуктовый, план M8) + `wasm32-wasip1` (служебный тестовый, wasmtime) | Ядро и MCP-слой (core/render/widgets/mcp/scene/headless, FR-037) обязаны собираться и исполняться под wasm: гейты `scripts/wasm_gate.sh` + `scripts/mcp_wasm_gate.sh`, CI `wasm-check` |
-| Упаковка | `cargo-wix` → MSI, Authenticode-подпись | M4 требует доверия системы |
+| Language | Rust stable (1.80+), edition 2021 | — |
+| Window/input | `winit` 0.30 | Cross-platform foundation, touchpad gestures |
+| GPU render | `wgpu` 22+ | DX12/Vulkan backends, batching, future portability |
+| Text | `glyphon` (over `cosmic-text`) | Native wgpu integration, shaping, emoji |
+| Spatial index | `rstar` (R-tree) | Hit-testing, viewport culling at 5–10 thousand nodes |
+| Canvas format | JSON Canvas spec 1.0 (`serde_json`) | Obsidian compatibility, human-readable |
+| Statistics (L2, ADR-0008) | `statrs` 0.17 + `rand`/`rand_chacha`/`rand_distr` — behind the cargo feature `stats` in `canvas-core` (FR-063) | Distributions, quantiles, confidence intervals, deterministic RNG (ChaCha8, seed `FNV-1a(content) ⊕ scenario_seed`); a B2B build without the feature — zero-dep |
+| Metadata/cache | `rusqlite` (bundled) | Thumbnail cache, search index, sessions |
+| File watcher | `notify` 6+ | Three backends behind one API: ReadDirectoryChangesW (Win), inotify (Linux), FSEvents (macOS); differences are normalized in canvas-shell |
+| Win32/COM | `windows-rs` (features: Win32_UI_Shell, Win32_Graphics_Dwm, System_Com) | Thumbnails, preview handlers, WorkerW — the Windows layer |
+| Thumbnails | `IShellItemImageFactory::GetImage` | System cache, matches Explorer |
+| PDF | `pdfium-render` (pdfium binary, BSD license) | Fast page rendering to bitmap |
+| Images | `image` | Decode to RGBA → GPU texture |
+| Preview handlers | `IPreviewHandler` in an out-of-process host | Isolation of crashing COM components |
+| Widgets (M5) | WebView2 Evergreen + `webview2-com` | Live HTML/JS nodes; snapshots via `ICoreWebView2::CapturePreview` |
+| Widget bridge | `postMessage` JSON-RPC (`serde_json`) | A narrow typed host API with permissions, no eval |
+| Config serialization | `serde` + `toml` | — |
+| Logging | `tracing` + `tracing-subscriber` | Diagnostics on user machines |
+| WASM targets (FR-036, ADR-0011) | `wasm32-unknown-unknown` (product, plan M8) + `wasm32-wasip1` (service test target, wasmtime) | The core and the MCP layer (core/render/widgets/mcp/scene/headless, FR-037) must build and run under wasm: gates `scripts/wasm_gate.sh` + `scripts/mcp_wasm_gate.sh`, CI `wasm-check` |
+| Packaging | `cargo-wix` → MSI, Authenticode signing | M4 requires system trust |
 
-## 4. Структура workspace
+## 4. Workspace structure
 
 ```
 canvasdesk/
@@ -99,11 +101,11 @@ canvasdesk/
 └── AGENTS.md                # инструкции для агента
 ```
 
-Правило границ: `canvas-core` не импортирует ничего из `canvas-shell` и `canvas-render`. Вся платформенная логика — за трейтами (`ThumbnailProvider`, `PreviewProvider`, `ShellIntegration`), чтобы core тестировался на любой ОС.
+Boundary rule: `canvas-core` imports nothing from `canvas-shell` and `canvas-render`. All platform logic sits behind traits (`ThumbnailProvider`, `PreviewProvider`, `ShellIntegration`), so that core is testable on any OS.
 
-## 5. Модель данных
+## 5. Data model
 
-### 5.1. Файл канваса — `*.canvas` (JSON Canvas 1.0)
+### 5.1. The canvas file — `*.canvas` (JSON Canvas 1.0)
 
 ```json
 {
@@ -124,52 +126,52 @@ canvasdesk/
 }
 ```
 
-Расширения поверх spec (хранить в нодах, игнорируемые другими приложениями — в поле `canvasdesk` или по конвенции spec):
-- `file` допускает абсолютные пути Windows (spec описывает пути внутри vault; отклонение документируем)
-- `previewState`: `thumbnail | live | none` — последний уровень детализации ноды
-- `brokenLink: true` — файл недоступен, карточка сохраняется с серой рамкой
-- `type: "widget"` + объект `canvasdesk: { widgetId, props }` — виджет-нода (M5, §7.6); приложения, не знающие тип, пропускают такую ноду, файл остаётся валидным
-- `canvasdesk: { expr }` на text-ноде — Numi-формула calc-ноды (FR-013); результат вычисляется приложением и в файл не пишется (инвариант 4)
-- `canvasdesk: { flow: { kind: "value" | "control" } }` на связи — тип потока (FR-014). `value` — ребро переносит значение источника в `$in`/`$1..$N` формулы downstream; отсутствие поля и `control` — визуальная связь (дефолт, обратная совместимость). Граф value-рёбер — DAG: циклы блокируются при создании (диалог с фолбэком на control в UI, isError в MCP). Результаты пересчёта (live, propagator `canvas-core/src/flow.rs`) в файл не пишутся
-- `fromLine: <uint>` на связи — построчный исток (FR-025): value-ребро переносит значение формульной строки `fromLine` Numi-листа источника (а не значение ноды целиком). Отсутствие поля — значение ноды (текущее поведение; старые файлы без изменений); битые значения (`-1`, дробные) читаются как отсутствие. Создаётся drag от построчного порта (фича-флаг `line_ports` в настройках, дефолт выкл); перепривязка from-конца сбрасывает поле
-- `fromOutput: "<имя>"` на связи — именованный исток (FR-029): value-ребро переносит значение именованного выхода источника (шаблонная нода — секция `outputs` манифеста/снимка; текстовая — переменная Numi-листа, адресация живёт при сдвиге строк). Взаимно исключается с `fromLine` (проверяется MCP; приоритет модели — `fromLine`)
-- `toParam: "<имя>"` на связи — проливание в параметр (FR-029): value-ребро подставляет значение в `$<имя>` шаблонной ноды-приёмника, ПЕРЕКРЫВАЯ локальное значение параметра («проливание сильнее дефолта»), без правки формулы. Рёбра с `toParam` не занимают позиционные слоты `$1..$N`; несколько рёбер в один параметр — побеждает последнее по `canvas.edges` (предупреждение в `flow_recalc`; строгая диагностика — FR-032 `graph_validate`)
-- `canvasdesk: { pin_ports: ["from", "to"] }` на связи — закреплённые концы подключения (CR-008). Конец без пина подключается к порту кратчайшего пути (`best_sides`, пересчёт при перетаскивании нод и автораскладке — в файл не пишется); закреплённый — следует сохранённым `fromSide`/`toSide`. Массив может содержать один или оба конца; пустой/отсутствующий — оба конца авто. Снятие последнего пина удаляет поле (чистый round-trip)
-- `canvasdesk: { template }` на text-ноде — снимок ссылки на шаблон (FR-018): `{ id, version, expr, params: { имя: { num, unit? } }, icon, color, outputs? }` — `outputs` (FR-029, схема манифеста 1.1): `[{ name, unit?, line | expr }]`, именованные выходы для адресации рёбрами `fromOutput`; ключ пишется только при непустой секции (round-trip старых файлов). `expr` — Numi-формула с `$param`-ссылками (результат — в футере карточки и в потоке FR-014, в файл не пишется); `icon`/`color` — снапшоты роли/категории (рендер шапки без реестра). Текст ноды — Numi-лист присваиваний параметров; правка текста синхронизирует `params`. Поле переживает round-trip (снимок, не ссылка на реестр)
-- MCP-чтение и валидация графа (FR-032) — runtime, в файл не пишется: `edges_list`/`edge_get` отдают каноническую схему ребра `{id, from, to, kind, fromLine?, fromOutput?, toParam?, fromSide, toSide}` (адресация портов FR-029); `graph_validate` — отчёт `{valid, issues: [{severity, code, node_id, edge_id, message}]}` из чистой функции `canvas-core/src/validate.rs`. Коды — стабильный контракт для рецепта агента: `E-CYCLE` (цикл value-рёбер), `E-OVERLOAD` (ρ ≥ 1), `W-AMBIGUOUS-SRC` (многолинейный исток без адресации строки/выхода), `W-UNUSED-SLOT` (позиционный вход `$N` не читается формулой), `E-UNIT`/`E-PORT-UNKNOWN`/`E-DOUBLE-INPUT` (контракт портов FR-029 — реализованы при влитии CP1)
-- `canvasdesk: { whatif: { scenarios: [{ name, overrides: [{ node, line, expr }] }] } }` в `Canvas.extra` (FR-017, CP6) — персистентные what-if сценарии (лимит 3): построчные подмены `(id ноды, индекс строки текста) → новый исходник`. Подмены активного сценария — runtime-only: propagator считает по виртуальному исходнику (`canvas-core/src/flow.rs`, `whatif_virtual_text`), `.canvas` без Apply не мутируется; `whatif_apply` пишет подмены в строки/params и удаляет сценарий (один undo-шаг). Протухшие подмены (нода/строка удалены, строка стала прозой) тихо пропускаются пересчётом и помечаются в списке overrides; пустой список сценариев удаляет поле (round-trip старых файлов чистый)
-- **Фиксация (PRD-0007/FR-048, G6): формат `.canvas` НЕ расширяется** — дерево происхождения цифры (`LineageTree`), окно проверки цепочки, подсветка, чипы-крошки, режим защиты, сессионный кэш, индикатор покрытия — вычисляемые/runtime-данные, в файл не пишутся; what-if сценарии из дерева сериализуются существующим `canvasdesk.whatif` (см. выше). Round-trip Obsidian остаётся чистым
+Extensions on top of the spec (stored in nodes, ignored by other applications — in the `canvasdesk` field or per spec convention):
+- `file` allows absolute Windows paths (the spec describes paths inside a vault; we document the deviation)
+- `previewState`: `thumbnail | live | none` — the node's last level of detail
+- `brokenLink: true` — the file is unavailable, the card is kept with a gray border
+- `type: "widget"` + the `canvasdesk: { widgetId, props }` object — a widget node (M5, §7.6); applications that do not know the type skip such a node, the file stays valid
+- `canvasdesk: { expr }` on a text node — the Numi formula of a calc node (FR-013); the result is computed by the application and is not written to the file (invariant 4)
+- `canvasdesk: { flow: { kind: "value" | "control" } }` on an edge — the flow type (FR-014). `value` — the edge carries the source's value into `$in`/`$1..$N` of the downstream formula; the field's absence and `control` — a visual edge (the default, backward compatibility). The value-edge graph is a DAG: cycles are blocked at creation (a dialog with a fallback to control in the UI, isError in MCP). Recalc results (live, the propagator `canvas-core/src/flow.rs`) are not written to the file
+- `fromLine: <uint>` on an edge — a per-line source (FR-025): the value edge carries the value of formula line `fromLine` of the source's Numi sheet (not the node's total value). Field absence — the node's value (current behavior; old files unchanged); broken values (`-1`, fractional) are read as absence. Created by a drag from a per-line port (the `line_ports` feature flag in settings, default off); rebinding the from-end clears the field
+- `fromOutput: "<имя>"` on an edge — a named source (FR-029): the value edge carries the value of the source's named output (a template node — the `outputs` section of the manifest/snapshot; a text node — a variable of the Numi sheet, addressing survives line shifts). Mutually exclusive with `fromLine` (checked by MCP; the model priority — `fromLine`)
+- `toParam: "<имя>"` on an edge — a spill into a parameter (FR-029): the value edge substitutes its value into `$<имя>` of the sink template node, OVERRIDING the parameter's local value ("the spill beats the default"), without editing the formula. Edges with `toParam` do not occupy the positional slots `$1..$N`; several edges into one parameter — the last one in `canvas.edges` wins (a warning in `flow_recalc`; strict diagnostics — FR-032 `graph_validate`)
+- `canvasdesk: { pin_ports: ["from", "to"] }` on an edge — pinned connection ends (CR-008). An unpinned end connects to the shortest-path port (`best_sides`, recomputed when nodes are dragged and on auto-layout — not written to the file); a pinned one follows the saved `fromSide`/`toSide`. The array may contain one or both ends; empty/absent — both ends auto. Removing the last pin deletes the field (a clean round-trip)
+- `canvasdesk: { template }` on a text node — a snapshot of the template reference (FR-018): `{ id, version, expr, params: { имя: { num, unit? } }, icon, color, outputs? }` — `outputs` (FR-029, manifest schema 1.1): `[{ name, unit?, line | expr }]`, named outputs addressable by `fromOutput` edges; the key is written only when the section is non-empty (round-trip of old files). `expr` — a Numi formula with `$param` references (the result goes to the card footer and the FR-014 flow, not to the file); `icon`/`color` — snapshots of the role/category (header rendering without the registry). The node text is a Numi sheet of parameter assignments; editing the text syncs `params`. The field survives round-trips (a snapshot, not a registry reference)
+- MCP graph reading and validation (FR-032) — runtime, not written to the file: `edges_list`/`edge_get` return the canonical edge schema `{id, from, to, kind, fromLine?, fromOutput?, toParam?, fromSide, toSide}` (FR-029 port addressing); `graph_validate` — a report `{valid, issues: [{severity, code, node_id, edge_id, message}]}` from the pure function `canvas-core/src/validate.rs`. The codes are a stable contract for the agent recipe: `E-CYCLE` (a value-edge cycle), `E-OVERLOAD` (ρ ≥ 1), `W-AMBIGUOUS-SRC` (a multi-line source without line/output addressing), `W-UNUSED-SLOT` (a positional input `$N` not read by the formula), `E-UNIT`/`E-PORT-UNKNOWN`/`E-DOUBLE-INPUT` (the FR-029 port contract — implemented at the CP1 merge)
+- `canvasdesk: { whatif: { scenarios: [{ name, overrides: [{ node, line, expr }] }] } }` in `Canvas.extra` (FR-017, CP6) — persistent what-if scenarios (limit 3): per-line substitutions `(id ноды, индекс строки текста) → новый исходник`. The active scenario's substitutions are runtime-only: the propagator computes against the virtual source (`canvas-core/src/flow.rs`, `whatif_virtual_text`), `.canvas` is not mutated without Apply; `whatif_apply` writes the substitutions into lines/params and deletes the scenario (one undo step). Stale substitutions (node/line deleted, line became prose) are silently skipped by the recalc and marked in the overrides list; an empty scenario list deletes the field (a clean round-trip of old files)
+- **Freeze (PRD-0007/FR-048, G6): the `.canvas` format is NOT extended** — the number's lineage tree (`LineageTree`), the chain verification window, highlighting, breadcrumb chips, the protection mode, the session cache, the coverage indicator — computed/runtime data, not written to the file; what-if scenarios from the tree are serialized by the existing `canvasdesk.whatif` (see above). The Obsidian round-trip stays clean
 
 ### 5.2. SQLite (`~/.canvasdesk/cache.db`)
 
-- `thumb_cache(file_path, mtime, size_class, blob_hash)` — инвалидируется по mtime
-- `search_index(file_path, display_name, extracted_text_fts5)` — FTS5 для Ctrl+F
-- `sessions(canvas_path, camera_x, camera_y, zoom, opened_at)` — восстановление вида
+- `thumb_cache(file_path, mtime, size_class, blob_hash)` — invalidated by mtime
+- `search_index(file_path, display_name, extracted_text_fts5)` — FTS5 for Ctrl+F
+- `sessions(canvas_path, camera_x, camera_y, zoom, opened_at)` — view restoration
 
-### 5.3. Правило источника истины
+### 5.3. Single source of truth rule
 
-Раскладка (координаты, размеры, связи) — только в `.canvas`-файле. SQLite — пересоздаваемый кэш, его удаление ничего не ломает.
+Layout (coordinates, sizes, edges) — only in the `.canvas` file. SQLite is a recreatable cache; deleting it breaks nothing.
 
-**Ассеты схем (`assets/canvas-schemes/*/scheme.json`, FR-049):** built-in
-библиотека шаблонов готовых схем — манифест метаданных (id
-`com.canvasdesk.scheme.*`, двуязычные name/description/category, версия) +
-граф `content.nodes[]`/`content.edges[]` в подмножестве JSON Canvas (типы
-`text`/`group`, `label` групп — стандартное поле-заголовок, цвет — только
-пресеты `1..6`, value-рёбра `flowKind: "value"` с адресацией FR-025/FR-029:
-`fromLine` — 0-based строка-исток, `fromOutput` — именованный выход
-присваивания, поля взаимоисключимы; `toParam` — проливание значения в
-`$параметр` приёмника). Формат `.canvas` не расширяется: инстансер
-(`canvas-scene::scheme_apply`) ремапит id и переносит поля адресации в
-стандартные рёбра канваса; валидатор реестра (`canvas-core::schemes`) —
-лимиты ≤ 200 нод / ≤ 400 рёбер, обязательные поля, адресация только у
-value-рёбер, `fromLine XOR fromOutput`. Контент схем — по инвариантам
-PRD-0008 §7.2.1 (описания нод, пучки main stage, множественные связи,
-автотесты `scheme_apply`). Схемы компилируются в бинарник (`include_dir`,
-wasm-гейт ADR-0011), в файл канваса метаданные схем не пишутся.
+**Scheme assets (`assets/canvas-schemes/*/scheme.json`, FR-049):** the built-in
+template library of ready-made schemes — a metadata manifest (id
+`com.canvasdesk.scheme.*`, bilingual name/description/category, version) +
+a graph `content.nodes[]`/`content.edges[]` in a subset of JSON Canvas (types
+`text`/`group`, the group `label` — the standard header field, color — the
+presets `1..6` only, value edges `flowKind: "value"` with FR-025/FR-029 addressing:
+`fromLine` — a 0-based source line, `fromOutput` — a named output of an
+assignment, the fields are mutually exclusive; `toParam` — spilling a value into
+the sink's `$параметр`). The `.canvas` format is not extended: the instancer
+(`canvas-scene::scheme_apply`) remaps ids and moves the addressing fields into
+standard canvas edges; the registry validator (`canvas-core::schemes`) —
+limits ≤ 200 nodes / ≤ 400 edges, mandatory fields, addressing on value
+edges only, `fromLine XOR fromOutput`. Scheme content follows the invariants of
+PRD-0008 §7.2.1 (node descriptions, main stage bundles, multiple edges,
+`scheme_apply` autotests). Schemes are compiled into the binary (`include_dir`,
+wasm gate ADR-0011); scheme metadata is not written to the canvas file.
 
-## 6. Архитектура рендера
+## 6. Render architecture
 
-### 6.1. Кадр
+### 6.1. Frame
 
 ```
 input → camera update → world-space culling (rstar query по viewport)
@@ -177,131 +179,131 @@ input → camera update → world-space culling (rstar query по viewport)
 → один render pass → minimap pass (offscreen → corner quad)
 ```
 
-### 6.2. Уровни детализации (LOD)
+### 6.2. Levels of detail (LOD)
 
-| Zoom | Содержимое файловой карточки |
+| Zoom | Content of a file card |
 |---|---|
-| < 0.25 | Цветной прямоугольник + иконка типа файла |
-| 0.25–0.6 | + системный тамбнейл + имя файла |
-| 0.6–1.5 | + превью содержимого (картинка, первая страница PDF, первые N строк текста) |
-| > 1.5 | Живое превью с прокруткой (только для нод под курсором/в фокусе, максимум 3 одновременно) |
+| < 0.25 | A colored rectangle + the file type icon |
+| 0.25–0.6 | + system thumbnail + file name |
+| 0.6–1.5 | + content preview (image, first PDF page, first N lines of text) |
+| > 1.5 | A live preview with scrolling (only for nodes under the cursor/in focus, at most 3 at a time) |
 
-Живые превью — дорогие (текстуры 1024²+), их количество жёстко ограничено; при отдалении текстура освобождается, остаётся тамбнейл.
+Live previews are expensive (1024²+ textures), their count is hard-limited; when zooming out the texture is freed, the thumbnail remains.
 
-Виджеты (M5) — отдельная LOD-стратегия: zoom < 0.25 или вне viewport → snapshot-текстура; видим и zoom ≥ 0.25 → живой WebView2, лимит живых инстансов по §7.6.
+Widgets (M5) — a separate LOD strategy: zoom < 0.25 or outside the viewport → a snapshot texture; visible and zoom ≥ 0.25 → a live WebView2, the live instance limit per §7.6.
 
-**Структурная агрегация связей (FR-042)** — LOD, независимый от зума: связи одной упорядоченной пары нод (N ≥ 2) рисуются одной агрегированной линией с непрерывной толщиной по весу (`d = clamp(1.8 + (N−1)·0.9, 1.8, 8.0)`) и бейджем кратности `×N`; одиночные связи — прежний вид. Детализация пучка — модальный режим «main stage» (§8). Отключается настройкой «Агрегация связей».
+**Structural edge aggregation (FR-042)** — a zoom-independent LOD: edges of one ordered node pair (N ≥ 2) are drawn as a single aggregated line with continuous thickness by weight (`d = clamp(1.8 + (N−1)·0.9, 1.8, 8.0)`) and a multiplicity badge `×N`; single edges — the previous look. Bundle detail — the modal "main stage" mode (§8). Disabled by the "Edge aggregation" setting.
 
-### 6.3. Производительность — целевые метрики
+### 6.3. Performance — target metrics
 
-- 60 fps при панорамировании/зуме на сцене из 5 000 нод (GPU уровня GTX 1050 / Iris Xe)
-- Холодный старт до первого кадра < 2 с
-- Открытие канваса на 1 000 нод < 500 мс (тамбнейлы — асинхронно, карточки появляются сразу)
-- Память < 500 МБ на 5 000 нод без живых превью
-- Построение lineage-дерева (PRD-0007/FR-048, F-2): чистая сборка ≤ 100 мс на
-  1 000 нод / 3 000 рёбер (бюджет `LINEAGE_MAX_NODES` = 4096 узлов,
-  итеративный обход); в UI — асинхронно (натив — фоновый поток, G5),
-  переоткрытие из сессионного кэша ≤ 1 с (G1); индикатор покрытия цепочками
-  (F-12, opt-in) — пересчёт по ревизии модели, не на кадр
-- Пересчёт потока (FR-014/FR-064): полный `propagate_with_lines` ≤ 10 мс на
-  1 000 нод. Натив — тяжёлые прогоны (baseline + активный what-if) на
-  воркер-треде с double buffer `Arc<RwLock<FlowSolutions>>`; на UI-треде —
-  выводка O(N) (`expr_results`/`analyze`/`bundles`/diff); live-инвариант:
-  правка → результат в пределах 1–2 кадров (wake `AppEvent::FlowReady`).
-  Деградация = sync-пересчёт на UI-треде + `warn` (отказ/таймаут 3 с/паника
-  воркера; на wasm — штатный sync-путь). Детерминизм: воркер-путь даёт
-  побитово те же числа, что sync (golden-тесты `worker_smoke.rs`).
-- Пересчёт DAG `flow::propagate_with_lines_data` (FR-013/014/029): однопоточный
-  flatten-путь ≤ 10 мс на 1 000 нод (эталоны ADR-0005/0006 ≤45 нод — менее
-  10 мс); параллельный путь (фича `parallel`, `rayon` `par_iter` по ярусам
-  `topo_levels` FR-065) — выигрыш на тяжёлых режимах (сценарные пакеты FR-017
-  v2 сетки 20+ прогонов, Monte Carlo FR-066 10⁴×1000 нод), не на одиночном
-  reval. Критерий архдока §9 M4: ≥2× на 1 000 нод / 4 ядра. Побитово
-  идентичен однопоточному (контракт §5.7.3 collect-then-reduce).
-- MC/QMC-движок (FR-066, фича `qmc`, `flow::propagate_monte_carlo`): 10⁴
-  прогонов эталона ADR-0006 №5 (unit economics, ~45 нод) — **< 1 с / 4 ядра**
-  (чанки 256/задача, rayon; гейт-тест `mc_perf_10k_etalon5_under_budget`,
-  canvas-core). Сид-воспроизводимость first-class: тот же `McConfig.seed` →
-  побитово те же квантили P50/P90/P99 (гейт-тест
+- 60 fps while panning/zooming on a scene of 5 000 nodes (a GTX 1050 / Iris Xe-class GPU)
+- Cold start to the first frame < 2 s
+- Opening a 1 000-node canvas < 500 ms (thumbnails — asynchronously, cards appear immediately)
+- Memory < 500 MB at 5 000 nodes without live previews
+- Lineage tree construction (PRD-0007/FR-048, F-2): pure assembly ≤ 100 ms for
+  1 000 nodes / 3 000 edges (budget `LINEAGE_MAX_NODES` = 4096 nodes,
+  iterative traversal); in the UI — asynchronously (native — a background thread, G5),
+  reopening from the session cache ≤ 1 s (G1); the chain coverage
+  indicator (F-12, opt-in) — recomputed per model revision, not per frame
+- Value flow recalc (FR-014/FR-064): the full `propagate_with_lines` ≤ 10 ms per
+  1 000 nodes. Native — heavy runs (baseline + the active what-if) on a
+  worker thread with a double buffer `Arc<RwLock<FlowSolutions>>`; on the UI thread —
+  an O(N) output pass (`expr_results`/`analyze`/`bundles`/diff); the live invariant:
+  edit → result within 1–2 frames (wake `AppEvent::FlowReady`).
+  Degradation = a sync recalc on the UI thread + `warn` (refusal/3 s timeout/worker
+  panic; on wasm — the normal sync path). Determinism: the worker path yields
+  bitwise-identical numbers to sync (golden tests `worker_smoke.rs`).
+- DAG recalc `flow::propagate_with_lines_data` (FR-013/014/029): the single-threaded
+  flatten path ≤ 10 ms per 1 000 nodes (the ADR-0005/0006 reference models are ≤45 nodes — under
+  10 ms); the parallel path (the `parallel` feature, `rayon` `par_iter` over the tiers of
+  `topo_levels` FR-065) — a win on heavy modes (FR-017 scenario batches of the v2 grid with 20+ runs,
+  Monte Carlo FR-066 10⁴×1000 nodes), not on a single
+  reval. The ADR criterion (§9 M4): ≥2× per 1 000 nodes / 4 cores. Bitwise
+  identical to the single-threaded path (the §5.7.3 collect-then-reduce contract).
+- MC/QMC engine (FR-066, the `qmc` feature, `flow::propagate_monte_carlo`): 10⁴
+  runs of the ADR-0006 reference model №5 (unit economics, ~45 nodes) — **< 1 s / 4 cores**
+  (chunks of 256 per task, rayon; the gate test `mc_perf_10k_etalon5_under_budget`,
+  canvas-core). Seed reproducibility is first-class: the same `McConfig.seed` →
+  bitwise-identical P50/P90/P99 quantiles (the gate test
   `mc_seed_reproducibility_is_bitwise`).
 
-### 6.4. Текстуры
+### 6.4. Textures
 
-Атлас менеджер: тамбнейлы укладываются в атласы 2048² (LRU-вытеснение), превью — отдельные текстуры. Формат RGBA8, mipmaps не нужны (LOD дискретный).
+Atlas manager: thumbnails are packed into 2048² atlases (LRU eviction), previews — separate textures. RGBA8 format, no mipmaps needed (the LOD is discrete).
 
 ### 6.5. DPI
 
-Манифест приложения — **Per-Monitor V2** DPI awareness. Все координаты канваса в логических пикселях (world-space), рендер — в физических (`scale_factor` из winit); при переносе окна между мониторами с разным масштабом — пересоздание surface и пересчёт размеров текста. Не полагаться на системное DPI-виртуальное масштабирование (bitmap-stretch) — текст будет мыльным.
+The application manifest — **Per-Monitor V2** DPI awareness. All canvas coordinates are in logical pixels (world-space), rendering — in physical ones (`scale_factor` from winit); when the window moves between monitors with different scales — the surface is recreated and text sizes are recomputed. Do not rely on the system's DPI-virtual scaling (bitmap-stretch) — the text will be blurry.
 
-### 6.6. Палитра и design-токены (PRD-0006, FR-046)
+### 6.6. Palette and design tokens (PRD-0006, FR-046)
 
-Единая точка правды визуальных характеристик — трёхслойная система design-токенов:
+The single source of truth for visual characteristics — a three-layer design token system:
 
-1. **Примитивы** — `design/tokens/{colors,dimensions,motion}.json` (структура в духе W3C Design Tokens, `$type`/`$value`/`$desc` с координатами источника). Зеркало — платформенно-нейтральный `canvas_core::tokens` (данные, wasm-совместимо); расхождение JSON↔Rust ловится паритет-тестами (FR-046 I-5).
-2. **Семантика** — `canvas_render::theme::ThemeColors`: слоты палитры (фон/сетка/карточки/меню/текст/GFM/группы/направляющие FR-038 + v2: `accent`, `selection_fill`, `highlight`, `whatif_fill`, `whatif_badge`, `error`, `hud`); обе палитры (`dark()`/`light()`) собираются из примитивов. Контраст гарантируется машиной `contrast.rs` + тестами (CR-007); известные исключения задокументированы и имеют регрессионные границы.
-3. **Потребители** — акцентное семейство (выделение/рёбра/draft/хром виджетов/drop-ghost/select-рамка/группы) — алиасы примитива `ACCENT` (единый источник, G4); минимапа/wheel/диалоги/тосты — значения из токенов; метрики карточек (`HEADER_HEIGHT`, `CORNER_RADIUS`) и типографика — алиасы `dimensions.json` (стык PRD-0004 F-1).
+1. **Primitives** — `design/tokens/{colors,dimensions,motion}.json` (a structure in the spirit of W3C Design Tokens, `$type`/`$value`/`$desc` with source coordinates). The mirror — the platform-neutral `canvas_core::tokens` (data, wasm-compatible); a JSON↔Rust divergence is caught by parity tests (FR-046 I-5).
+2. **Semantics** — `canvas_render::theme::ThemeColors`: palette slots (background/grid/cards/menus/text/GFM/groups/guides FR-038 + v2: `accent`, `selection_fill`, `highlight`, `whatif_fill`, `whatif_badge`, `error`, `hud`); both palettes (`dark()`/`light()`) are assembled from the primitives. Contrast is guaranteed by the `contrast.rs` machine + tests (CR-007); the known exceptions are documented and have regression boundaries.
+3. **Consumers** — the accent family (selection/edges/draft/widget chrome/drop-ghost/selection frame/groups) — aliases of the `ACCENT` primitive (a single source, G4); minimap/wheel/dialogs/toasts — values from the tokens; card metrics (`HEADER_HEIGHT`, `CORNER_RADIUS`) and typography — aliases of `dimensions.json` (the PRD-0004 F-1 seam).
 
-Правило потока: цвет приходит в шейдер только из инстанса/юниформа, заполненного из `ThemeColors`/токенов; литерал в билдере = дефект — ловится `scripts/token_lint.sh` (hex вне токенов/Win32-доменов/тестов/дата-контрактов = ошибка). Данные-домены с собственными hex-контрактами (манифесты шаблонов FR-018 — `templates::DEFAULT_TEMPLATE_COLOR`) вне рендер-палитры. Темы-пресеты — данные `design/tokens/themes/*.json` (37 семантических слотов `ThemeColors` — включая `stage_dim` FR-042) + реестр `canvas_core::theme_presets` (валидация набора ключей, кэш `OnceLock`); выбор — `Settings.theme_preset`, эффективная палитра — `ThemeColors::from_settings(theme, preset)` (FR-047, этап D4 PRD-0006: Nord, Dracula, Catppuccin Mocha/Latte, Solarized Light, Tokyo Night, Gruvbox Dark; контраст каждого пресета закреплён тестами G3). Пользовательские палитры и импорт тем VSCode/Obsidian — дорожная карта PRD-0006 §13 (V2).
+Flow rule: color reaches the shader only from an instance/uniform filled from `ThemeColors`/tokens; a literal in a builder = a defect — caught by `scripts/token_lint.sh` (a hex outside tokens/Win32 domains/tests/data contracts = an error). Data domains with their own hex contracts (template manifests FR-018 — `templates::DEFAULT_TEMPLATE_COLOR`) are outside the render palette. Theme presets — data in `design/tokens/themes/*.json` (37 semantic slots of `ThemeColors` — including `stage_dim` FR-042) + the `canvas_core::theme_presets` registry (key-set validation, a `OnceLock` cache); the selection — `Settings.theme_preset`, the effective palette — `ThemeColors::from_settings(theme, preset)` (FR-047, stage D4 of PRD-0006: Nord, Dracula, Catppuccin Mocha/Latte, Solarized Light, Tokyo Night, Gruvbox Dark; the contrast of each preset is pinned by G3 tests). Custom palettes and VSCode/Obsidian theme import — the PRD-0006 §13 roadmap (V2).
 
-## 7. Shell-интеграция (crate `canvas-shell`)
+## 7. Shell integration (crate `canvas-shell`)
 
-### 7.1. Тамбнейлы
+### 7.1. Thumbnails
 
-`IShellItemImageFactory::GetImage(SIIGBF_BIGGERSIZEOK | SIIGBF_THUMBNAILONLY)` → HBITMAP → RGBA → атлас. Запросы — в пуле потоков (4), результаты — через канал в рендер-поток. Приоритет очереди: видимые ноды → ближайшие к viewport.
+`IShellItemImageFactory::GetImage(SIIGBF_BIGGERSIZEOK | SIIGBF_THUMBNAILONLY)` → HBITMAP → RGBA → atlas. Requests go to a thread pool (4), results come back through a channel to the render thread. Queue priority: visible nodes → the closest to the viewport.
 
 ### 7.2. Preview handlers (M3)
 
-Отдельный процесс `canvas-preview-host.exe`:
-1. Родитель передаёт путь файла и размер по named pipe
-2. Хост резолвит `IPreviewHandler` по CLSID из реестра, рендерит в offscreen-окно, копирует битмап, возвращает пиксели
-3. Таймаут 3 с → kill процесса, фолбэк на тамбнейл
-4. Крэш хоста не влияет на канвас; хост перезапускается на следующий запрос
+A separate process `canvas-preview-host.exe`:
+1. The parent passes the file path and size over a named pipe
+2. The host resolves the `IPreviewHandler` by CLSID from the registry, renders into an offscreen window, copies the bitmap, returns the pixels
+3. A 3 s timeout → kill the process, fall back to the thumbnail
+4. A host crash does not affect the canvas; the host is restarted on the next request
 
-### 7.3. Drag-drop из Explorer (M2)
+### 7.3. Drag-drop from Explorer (M2)
 
-`IDropTarget` на окне: принимаем `CF_HDROP` и `FileGroupDescriptor`. Drop папки → рекурсивный обход (глубина 1), авто-раскладка сеткой с шагом по размеру карточки, начиная от точки дропа.
+`IDropTarget` on the window: we accept `CF_HDROP` and `FileGroupDescriptor`. Dropping a folder → a recursive walk (depth 1), auto-layout in a grid with a step based on the card size, starting from the drop point.
 
-### 7.4. Режим десктопа (M4)
+### 7.4. Desktop mode (M4)
 
-**Иерархия окон десктопа различается по версиям — это ключевая развилка реализации:**
+**The desktop window hierarchy differs between versions — this is the key implementation fork:**
 
-- **Win10 / Win11 ≤ 23H2 (классическая схема):** шлём `Progman` сообщение `0x052C` → Explorer порождает top-level `WorkerW` позади `SHELLDLL_DefView`; наше окно делаем дочерним к этому `WorkerW` через `SetParent`.
-- **Win11 24H2 / 25H2 (build ≥ 26100, включая целевую 26200):** Explorer изменил рендеринг фона ради HDR-обоев. `Progman` создаётся с `WS_EX_NOREDIRECTIONBITMAP`, `SHELLDLL_DefView` — `WS_EX_LAYERED` дочернее окно `Progman`, а `WorkerW` — дочернее окно `Progman` по Z-order **ниже** DefView. Сообщение `0x052C` больше не отделяет DefView в собственный top-level `WorkerW`. Рабочая стратегия: наше окно — **`WS_EX_LAYERED` дочернее окно `Progman` с Z-order между DefView (сверху) и WorkerW (снизу)**, выравнивание через серию `SetWindowPos` (`SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE`). DefView почти полностью прозрачен и рисует поверх нас только иконки и текст.
+- **Win10 / Win11 ≤ 23H2 (the classic scheme):** we send `Progman` the `0x052C` message → Explorer spawns a top-level `WorkerW` behind `SHELLDLL_DefView`; we make our window a child of that `WorkerW` via `SetParent`.
+- **Win11 24H2 / 25H2 (build ≥ 26100, including the target 26200):** Explorer changed the background rendering for the sake of HDR wallpapers. `Progman` is created with `WS_EX_NOREDIRECTIONBITMAP`, `SHELLDLL_DefView` is a `WS_EX_LAYERED` child window of `Progman`, and `WorkerW` is a child window of `Progman` **below** DefView in Z-order. The `0x052C` message no longer separates DefView into its own top-level `WorkerW`. The working strategy: our window is a **`WS_EX_LAYERED` child of `Progman` with a Z-order between DefView (top) and WorkerW (bottom)**, aligned via a series of `SetWindowPos` calls (`SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOMOVE`). DefView is almost fully transparent and draws only the icons and text on top of us.
 
-**Порядок встройки:**
+**The embedding sequence:**
 
-1. Определить стратегию по фактической иерархии окон (детект, не гадание по номеру сборки)
-2. Классическая схема: `SendMessageTimeout(0x052C)` → найти top-level `WorkerW` (перебором `EnumWindows`, у которого `SHELLDLL_DefView` — сосед) → `SetParent(наше_окно, workerw)`
-3. Схема 24H2+: создать наше окно дочерним к `Progman` со стилем `WS_EX_LAYERED`, выставить Z-order: `DefView` → наше окно → `WorkerW`
-4. Окно: на весь виртуальный экран (multi-monitor через `EnumDisplayMonitors`), без рамки, `WS_EX_NOACTIVATE` до первого клика
-5. Скрытие системных иконок: `SHELLDLL_DefView` + `WM_COMMAND 0x7402` (toggle) — сохраняем исходное состояние, восстанавливаем при выходе
-6. Контекстное меню десктопа: перехват `WM_RBUTTONUP` на нашем окне → своё меню (Открыть канвас / Новый файл / Показать иконки / Выход)
-7. Двойной клик по файловой ноде → `ShellExecuteEx` с `SEE_MASK_INVOKEIDLIST` (поведение «как в Explorer»)
+1. Determine the strategy from the actual window hierarchy (detection, not guessing by build number)
+2. The classic scheme: `SendMessageTimeout(0x052C)` → find the top-level `WorkerW` (by enumerating `EnumWindows`, the one whose neighbor is `SHELLDLL_DefView`) → `SetParent(наше_окно, workerw)`
+3. The 24H2+ scheme: create our window as a child of `Progman` with the `WS_EX_LAYERED` style, set the Z-order: `DefView` → our window → `WorkerW`
+4. The window: spanning the whole virtual screen (multi-monitor via `EnumDisplayMonitors`), borderless, `WS_EX_NOACTIVATE` until the first click
+5. Hiding the system icons: `SHELLDLL_DefView` + `WM_COMMAND 0x7402` (toggle) — we save the original state and restore it on exit
+6. The desktop context menu: intercepting `WM_RBUTTONUP` on our window → our own menu (Open canvas / New file / Show icons / Exit)
+7. A double-click on a file node → `ShellExecuteEx` with `SEE_MASK_INVOKEIDLIST` (the "like in Explorer" behavior)
 
-**Таблица стратегий (версионный гейт):**
+**The strategy table (the version gate):**
 
-| Версия | Build | Стратегия встройки | Статус |
+| Version | Build | Embedding strategy | Status |
 |---|---|---|---|
-| Windows 11 25H2 | 26200 (dev-машина: 26200.9168) | Схема 24H2+ (layered child of Progman) | **Основная цель разработки** |
-| Windows 11 24H2 | 26100 | Схема 24H2+ | Обязательная проверка |
-| Windows 11 23H2 | 22631 | Классическая (top-level WorkerW) | Проверка на VM |
-| Windows 10 22H2 | 19045 | Классическая | Проверка на VM |
-| Неизвестная / новее | — | Рантайм-детект иерархии (есть ли top-level WorkerW с DefView-соседом) → выбор схемы; при неудаче → оконный режим с предупреждением | Фолбэк |
+| Windows 11 25H2 | 26200 (dev machine: 26200.9168) | The 24H2+ scheme (layered child of Progman) | **Основная цель разработки** |
+| Windows 11 24H2 | 26100 | The 24H2+ scheme | Обязательная проверка |
+| Windows 11 23H2 | 22631 | The classic one (top-level WorkerW) | Проверка на VM |
+| Windows 10 22H2 | 19045 | The classic one | Проверка на VM |
+| Unknown / newer | — | Runtime detection of the hierarchy (is there a top-level WorkerW with a DefView neighbor) → scheme selection; on failure → windowed mode with a warning | Фолбэк |
 
-Каждая стратегия — отдельный модуль за общим трейтом `DesktopEmbedder`. Референс-реализации для изучения перед кодингом: Lively Wallpaper (C#, поддерживает 24H2+), Seelen UI (Rust) — ссылки в §11. **Детальный разбор обоих проектов и готовые рецепты R1–R17 — в `docs/RECIPES.md`, обязателен к прочтению перед реализацией этого раздела и §7.4-связанных задач.**
+Each strategy is a separate module behind the common `DesktopEmbedder` trait. Reference implementations to study before coding: Lively Wallpaper (C#, supports 24H2+), Seelen UI (Rust) — links in §11. **A detailed breakdown of both projects and the ready recipes R1–R17 are in `docs/RECIPES.md`, mandatory reading before implementing this section and the §7.4-related tasks.**
 
-### 7.5. Файловый вотчер (M2)
+### 7.5. File watcher (M2)
 
-`notify` с `RecursiveMode::NonRecursive` на каждую директорию, из которой есть ноды. Debounce 300 мс. События:
-- `Modify` → инвалидировать тамбнейл-кэш, обновить карточку
-- `Rename` → если путь совпал с нодой — обновить `file` в модели (и в `.canvas`)
-- `Remove` → `brokenLink: true`, карточка серая, связи сохраняются
+`notify` with `RecursiveMode::NonRecursive` on every directory that has nodes. A 300 ms debounce. Events:
+- `Modify` → invalidate the thumbnail cache, update the card
+- `Rename` → if the path matches a node — update `file` in the model (and in `.canvas`)
+- `Remove` → `brokenLink: true`, the card goes gray, edges are preserved
 
-### 7.6. Движок виджетов (M5)
+### 7.6. Widget engine (M5)
 
-**Концепция.** Виджет — самодостаточный микрофронтенд: папка с манифестом `widget.json` и статическими файлами (HTML/JS/CSS — билд любого фреймворка: React, Svelte, vanilla). Канвас — хост-оркестратор: размещает виджет как ноду, управляет жизненным циклом, изолирует. Пользователь может положить на канвас любой JS/HTML-объект — от часов до собственного микроприложения (дашборд воронки, панель контактов, мини-трекер).
+**Concept.** A widget is a self-contained micro-frontend: a folder with a `widget.json` manifest and static files (HTML/JS/CSS — the build of any framework: React, Svelte, vanilla). The canvas is the host orchestrator: it places the widget as a node, manages the life cycle, isolates it. The user can put any JS/HTML object on the canvas — from a clock to their own micro-app (a funnel dashboard, a contacts panel, a mini-tracker).
 
-**Манифест `widget.json`:**
+**The `widget.json` manifest:**
 
 ```json
 {
@@ -314,419 +316,417 @@ input → camera update → world-space culling (rstar query по viewport)
 }
 ```
 
-**Рендер.** WebView2 (Evergreen Runtime):
+**Render.** WebView2 (Evergreen Runtime):
 
-- На живой виджет — один WebView2 в дочернем HWND, позиционируемом точно над rect ноды; синхронизация с камерой — `SetWindowPos(SWP_ASYNCWINDOWPOS)` каждый кадр (дёшево), скругление углов — region на HWND
-- **Airspace-ограничение:** HWND WebView2 рисуется поверх wgpu-канваса → оверлеи канваса (миникарта, панель поиска, контекстные меню) не должны перекрывать живые виджеты либо выводятся отдельными layered-окнами. Задокументированное архитектурное ограничение
-- **LOD:** zoom < 0.25 или нода вне viewport → WebView2 скрывается и приостанавливается, вместо него snapshot-текстура (`CapturePreview` по событию изменения или раз в 5 с для анимированных); zoom ≥ 0.25 и видим → живой инстанс
-- **Лимит живых инстансов** (по умолчанию 6, настраивается): LRU — давно не видимые переводятся в snapshot. Один user-data-folder на приложение → общие browser-процессы рантайма
+- A live widget gets one WebView2 in a child HWND positioned exactly over the node's rect; camera sync — `SetWindowPos(SWP_ASYNCWINDOWPOS)` every frame (cheap), corner rounding — a region on the HWND
+- **The airspace constraint:** the WebView2 HWND draws over the wgpu canvas → canvas overlays (minimap, search panel, context menus) must not overlap live widgets or are drawn as separate layered windows. A documented architectural limitation
+- **LOD:** zoom < 0.25 or the node outside the viewport → the WebView2 is hidden and suspended, a snapshot texture instead (`CapturePreview` on a change event or every 5 s for animated ones); zoom ≥ 0.25 and visible → a live instance
+- **The live instance limit** (6 by default, configurable): LRU — long-unseen ones are moved to a snapshot. One user-data-folder per application → shared runtime browser processes
 
-**Мост (bridge).** Двусторонний JSON-RPC поверх `postMessage`/`WebMessageReceived`, типизированный (`serde`):
+**The bridge.** Two-way JSON-RPC over `postMessage`/`WebMessageReceived`, typed (`serde`):
 
 - host → widget: `init { nodeId, props, theme, zoom }`, `propsChanged`, `visibility { visible }`, `themeChanged`
-- widget → host: `ready`, `resize { w, h }`, `setProps { ... }` (persist в `.canvas`), `openFile { path }` (perm `shell:open`), `readDir { path }` (perm `fs:read`, только allowlist-директории), `toast { text }`
-- Каждый вызов проверяется против `permissions` манифеста; схемы сообщений валидируются десериализацией — невалидное сообщение = drop + warn, не паника
+- widget → host: `ready`, `resize { w, h }`, `setProps { ... }` (persisted to `.canvas`), `openFile { path }` (perm `shell:open`), `readDir { path }` (perm `fs:read`, allowlist directories only), `toast { text }`
+- Every call is checked against the manifest's `permissions`; the message schemas are validated by deserialization — an invalid message = drop + warn, not a panic
 
-**Безопасность.**
+**Security.**
 
-- Виджеты — только локальные пакеты в `%APPDATA%/canvasdesk/widgets/<id>/`, установка = явное копирование папки пользователем (drag папки на канвас → предложение установить)
-- Содержимое через `SetVirtualHostNameToFolderMapping` (виртуальный origin), навигация наружу пакета запрещена; CSP по умолчанию `default-src 'self'`
-- permission `network` — opt-in: без неё все внешние `WebResourceRequested` блокируются
-- Виджет по URL (remote JS) — **запрещён архитектурно**, только локальные bundle
+- Widgets are local-only packages in `%APPDATA%/canvasdesk/widgets/<id>/`; installation = the user explicitly copying the folder (dragging a folder onto the canvas → an offer to install)
+- Content is served via `SetVirtualHostNameToFolderMapping` (a virtual origin), navigation outside the package is forbidden; the default CSP is `default-src 'self'`
+- The `network` permission is opt-in: without it all external `WebResourceRequested` are blocked
+- A widget by URL (remote JS) is **architecturally forbidden** — local bundles only
 
-**Данные.** `props` и геометрия — в ноде `.canvas` (§5.1), переживают экспорт в Obsidian как неизвестный тип. Объёмное состояние виджета — в SQLite `widget_state(node_id, key, value)`.
+**Data.** `props` and geometry — in the `.canvas` node (§5.1), they survive an export to Obsidian as an unknown type. Bulky widget state — in SQLite `widget_state(node_id, key, value)`.
 
-**Ввод.** Клик внутри виджета — фокус WebView2 (клавиатура/мышь уходят виджету); перемещение ноды — drag за рамку/заголовок, который рисует канвас поверх (полоса 24px); Esc — возврат фокуса канвасу. Рёбра к виджет-нодам работают как к обычным.
+**Input.** A click inside a widget — focus goes to WebView2 (keyboard/mouse go to the widget); moving a node — dragging by the border/header, which the canvas draws on top (a 24px strip); Esc — focus returns to the canvas. Edges to widget nodes work as to ordinary ones.
 
-**Встроенные виджеты.** В `assets/widgets/` поставляются: часы/дата, календарь, заметки-стикеры. Они же — референсы для SDK (T22).
+**Built-in widgets.** Shipped in `assets/widgets/`: clock/date, calendar, sticky notes. They also serve as the SDK references (T22).
 
-**Уточнения v1.1 (волна M5, детальный план — `docs/plans/M5-widgets.md`).**
-Зафиксированные продуктовые и технические решения, закрывающие развилки этого раздела:
+**v1.1 clarifications (the M5 wave, the detailed plan — `docs/plans/M5-widgets.md`).**
+Fixed product and technical decisions closing the forks of this section:
 
-- **Зум контента — `ICoreWebView2Controller::ZoomFactor`** (кламп 0.25–5.0):
-  CSS-viewport виджета равен мировому размеру области контента, контент
-  масштабируется зумом канваса без reflow; при зуме > 5 контент клампится.
-- **Хром ноды:** заголовок 28 world-px + инсет рамки 8 world-px — канвасные;
-  WebView занимает внутреннюю область (уточнение «полосы 24px»).
-- **Добавление на канвас:** ПКМ-меню канваса «Виджеты ▸» (установленные +
-  встроенные); drag папки — путь установки (см. ниже).
-- **Установка/обновление/удаление:** drag папки с валидным `widget.json` →
-  in-canvas диалог Да/Нет (список permissions) → копирование пакета и нода в
-  точке дропа; повторный drag новой версии → диалог обновления (файлы
-  заменяются, ноды/props сохраняются); удаление пакета — через подменю
-  «Виджеты ▸ <имя> ▸ Удалить пакет», ноды становятся «битыми».
-- **Пакеты живут в `%USERPROFILE%\.canvasdesk\widgets\<id>\`** (единый корень
-  данных приложения с `cache.db`; отклонение от «%APPDATA%/canvasdesk» выше —
-  задокументировано). user-data-folder WebView2 — `~/.canvasdesk/webview2/`.
-  Встроенные пакеты вшиты в бинарник и материализуются при старте (tombstone
-  `widgets/.deleted/<id>` уважает ручное удаление до выхода новой версии).
-- **`fs:read`-allowlist:** директории файловых нод текущего канваса + папка
-  `.canvas`-файла (набор вотчера T10).
-- **Airspace-политика:** при перекрытии live-виджета оверлеем канваса
-  (миникарта, поиск, хоткеи, настройки, меню, диалоги, рамка выделения,
-  протягивание ребра) виджет временно прячется, рисуется snapshot.
-- **Тема:** `init`/`themeChanged` шлют `{ dark: bool, accent: "#hex" }` из темы
-  приложения.
-- **Bridge дополнен** методами `stateGet`/`stateSet` (доступ к
-  `widget_state` SQLite, см. «Данные»); `canvas:read` зарезервировано.
-- **MCP (v1.1):** инструменты `widget_list`, `widget_add`, `widget_set_props`.
-- Снапшот: кламп 512×512, refresh 5 с только для видимых snapshot-виджетов
-  при zoom ≥ 0.25 (за лимитом live); отдельные текстуры (не атлас), LRU-кэп 16.
+- **Content zoom — `ICoreWebView2Controller::ZoomFactor`** (clamped 0.25–5.0):
+  the widget's CSS viewport equals the world size of the content area, the content
+  scales with the canvas zoom without reflow; at zoom > 5 the content is clamped.
+- **Node chrome:** a 28 world-px header + an 8 world-px border inset — canvas-side;
+  the WebView occupies the inner area (a refinement of the "24px strip").
+- **Adding to the canvas:** the canvas RMB menu "Widgets ▸" (installed +
+  built-in); dragging a folder — the installation path (see below).
+- **Installation/update/removal:** dragging a folder with a valid `widget.json` →
+  an in-canvas Yes/No dialog (the permissions list) → copying the package and a node at
+  the drop point; dragging a new version again → an update dialog (files
+  are replaced, nodes/props are preserved); removing a package — via the submenu
+  "Widgets ▸ <name> ▸ Remove package", the nodes become "broken".
+- **Packages live in `%USERPROFILE%\.canvasdesk\widgets\<id>\`** (a single application
+  data root together with `cache.db`; the deviation from "%APPDATA%/canvasdesk" above is documented). The WebView2 user-data-folder — `~/.canvasdesk/webview2/`.
+  Built-in packages are baked into the binary and materialized at startup (the tombstone
+  `widgets/.deleted/<id>` respects manual removal until a new version ships).
+- **The `fs:read` allowlist:** the directories of the current canvas's file nodes + the folder
+  of the `.canvas` file (the T10 watcher set).
+- **The airspace policy:** when a live widget is overlapped by a canvas overlay
+  (minimap, search, hotkeys, settings, menus, dialogs, the selection frame,
+  edge dragging) the widget is temporarily hidden, a snapshot is drawn.
+- **Theme:** `init`/`themeChanged` send `{ dark: bool, accent: "#hex" }` from the theme
+  of the application.
+- **The bridge is extended** with the `stateGet`/`stateSet` methods (access to
+  the `widget_state` SQLite table, see "Data"); `canvas:read` is reserved.
+- **MCP (v1.1):** the `widget_list`, `widget_add`, `widget_set_props` tools.
+- Snapshot: clamped to 512×512, a 5 s refresh only for visible snapshot widgets
+  at zoom ≥ 0.25 (beyond the live limit); separate textures (not the atlas), an LRU cap of 16.
 
-## 8. Ввод
+## 8. Input
 
-| Действие | Жест |
+| Action | Gesture |
 |---|---|
-| Панорамирование | Средняя кнопка / Space+drag / двухпальцевый скролл тачпада |
-| Зум | Ctrl+колесо (к курсору), pinch |
-| Выделение | ЛКМ drag — рамка; Shift — добавить |
-| Перемещение нод | drag ЛКМ |
-| Связь | drag от порта ноды (появляются при наведении) |
-| Контекстное меню ноды | ПКМ |
-| Поиск | Ctrl+F |
-| Обзор (fit to content) | Ctrl+0; миникарта — клик/драг viewport-прямоугольника |
-| Двойной клик по файлу | Открыть в ассоциированном приложении |
-| Настройки (FR-039) | Кнопка ⚙ / `Ctrl+,` — центрированная модалка над затемнением; левая навигация по 4 разделам, строки «лейбл + описание + контрол»: булевы — pill-тумблеры, многозначные — dropdown-кнопки (меню с клампом к окну, ширина контрола); клик по затемнению закрывает; размер адаптивный с потолками (FR-026-инварианты переносятся) |
-| What-if режим (FR-017) | `Ctrl+Shift+I` / пилюля «What-if» / меню канваса; двойной клик по строке расчёта в режиме — подмена; Esc — выход |
-| Меню помощи и документация | Кнопка «?» (кластер ⚙/тема): «Документация ▸» — 7 разделов во встроенном просмотрщике (правый док: колесо — прокрутка, внутренние ссылки — переход, × / Esc / клик вне — закрыть); «Пройти онбординг» (FR-031/FR-028) |
-| Онбординг | Первый запуск — тур-карусель (8 шагов); «Пропустить»/Esc — отложить до следующего запуска (после 3 подряд — авто-показ молчит); повтор тура — «?» → «Пройти онбординг»; полный проход («Готово») выключает авто-показ навсегда (FR-028) |
-| Язык интерфейса (FR-040) | Настройки → «Внешний вид» → dropdown «Язык» («русский»/«English», названия — в собственной локали); применяется на лету, сохраняется в конфиге (`language`, serde default `ru`); все UI-тексты — ключи таблицы `i18n` (RU/EN), fallback — RU |
-| Ввод внутри виджета (M5) | Клик по виджету — фокус виджету; Esc — возврат фокуса канвасу |
-| Перемещение виджета (M5) | drag за заголовок/рамку ноды |
-| **Main stage (FR-042)** | Клик/ПКМ/двойной клик по агрегированной линии пучка — модальная детализация (rect ≤ 70% вьюпорта: обе ноды + все рёбра пучка веером, подписи `fromLine`/`fromOutput`/`toParam` + значения); клик внутри — выделение ребра живой связи; выход — `Esc` или клик по затемнённому фону; пан/зум/drag/правка внутри глушены; открытие любого оверлея закрывает stage; выключатель — настройка «Агрегация связей» (FR-039, раздел «Связи и порты») |
-| **Проверка цепочки цифры (FR-048, PRD-0007)** | Hover-«?» у полосы результата/построчного ряда или клик по цифре — плавающее окно проверки поверх полноэкранного канваса (паттерн main stage): дерево происхождения, чипы-крошки навигации, what-if из дерева, режим защиты (тумблер в шапке: ×1.5, пошаговое раскрытие — Space/клик/кнопки); Esc — двухступенчатый выход (защита → окно → закрытие), ✕/клик по фону — закрытие; клик по подсвеченной ноде канваса — подсветка узла дерева (У2); модальности — реестр §6.5 PRD-0007 (F-10): stage ↔ панель взаимоисключительны, what-if бар сосуществует, диалог автосвязи/настройки — поверх; индикатор «Цепочки: N%» — opt-in настройка (F-12) |
+| Panning | Middle button / Space+drag / two-finger touchpad scroll |
+| Zoom | Ctrl+wheel (toward the cursor), pinch |
+| Selection | LMB drag — a frame; Shift — add |
+| Moving nodes | LMB drag |
+| Edge | drag from the node's port (ports appear on hover) |
+| Node context menu | RMB |
+| Search | Ctrl+F |
+| Overview (fit to content) | Ctrl+0; the minimap — click/drag of the viewport rectangle |
+| Double-click on a file | Open in the associated application |
+| Settings (FR-039) | The ⚙ button / `Ctrl+,` — a centered modal over a dimmed backdrop; left navigation over 4 sections, rows of "label + description + control": booleans — pill toggles, multi-valued — dropdown buttons (a menu clamped to the window, the control's width); clicking the dimmed backdrop closes; adaptive size with ceilings (the FR-026 invariants carry over) |
+| What-if mode (FR-017) | `Ctrl+Shift+I` / the "What-if" pill / the canvas menu; in the mode, a double-click on a calc line — a substitution; Esc — exit |
+| Help menu and documentation | The "?" button (the ⚙/theme cluster): "Documentation ▸" — 7 sections in the built-in viewer (a right dock: the wheel — scrolling, internal links — navigation, × / Esc / a click outside — close); "Take the onboarding" (FR-031/FR-028) |
+| Onboarding | First launch — a tour carousel (8 steps); "Skip"/Esc — postponed until the next launch (after 3 in a row the auto-show goes silent); repeating the tour — "?" → "Take the onboarding"; a full pass ("Done") turns the auto-show off forever (FR-028) |
+| Interface language (FR-040) | Settings → "Appearance" → the "Language" dropdown ("русский"/"English", the names — in their own locale); applied on the fly, saved to the config (`language`, serde default `ru`); all UI texts — keys of the `i18n` table (RU/EN), fallback — RU |
+| Input inside a widget (M5) | Clicking a widget — focus goes to the widget; Esc — focus returns to the canvas |
+| Moving a widget (M5) | drag by the node's header/border |
+| **Main stage (FR-042)** | Click/RMB/double-click on a bundle's aggregated line — a modal detail (a rect ≤ 70% of the viewport: both nodes + all the bundle's edges fanned out, the `fromLine`/`fromOutput`/`toParam` labels + values); a click inside — selecting the edge of the live connection; exit — `Esc` or a click on the dimmed background; pan/zoom/drag/edit inside are muted; opening any overlay closes the stage; the switch — the "Edge aggregation" setting (FR-039, the "Edges and ports" section) |
+| **Number chain verification (FR-048, PRD-0007)** | A hover-"?" next to the result bar/per-line row, or clicking a number — a floating verification window over the full-screen canvas (the main stage pattern): the lineage tree, the breadcrumb navigation chips, what-if from the tree, the protection mode (a toggle in the header: ×1.5, step-by-step reveal — Space/click/buttons); Esc — a two-stage exit (protection → window → close), ✕/a click on the background — close; clicking a highlighted canvas node — highlights the tree node (У2); modality — the PRD-0007 §6.5 registry (F-10): the stage ↔ the panel are mutually exclusive, the what-if bar coexists, the auto-edge/settings dialogs — on top; the "Chains: N%" indicator — an opt-in setting (F-12) |
 
-## 9. Риски и допущения
+## 9. Risks and assumptions
 
-| Риск | Митигация |
+| Risk | Mitigation |
 |---|---|
-| WorkerW ломается апдейтом Windows | Версионный гейт + фолбэк в оконный режим; канвас-файл не зависит от режима отображения |
-| Крэш стороннего preview handler | Out-of-process хост с таймаутом и перезапуском |
-| Антивирусный false positive (shell hooks) | Authenticode-подпись с M4, отправка в whitelisting до релиза |
-| Производительность на больших сценах | LOD + culling + атласы; нагрузочный тест 5k нод — часть CI |
-| Потеря данных канваса | Автосейв с debounce 2 с + `.bak` предыдущей версии; JSON human-readable |
-| Конфликт хоткеев с Explorer в M4 | Окно не перехватывает клавиатуру без явного фокуса (клик по канвасу) |
-| WebView2 Runtime отсутствует на машине | Evergreen bootstrapper в MSI (T19); без рантайма — виджеты недоступны с понятной ошибкой, канвас работает |
-| Вредоносный виджет | Только локальные пакеты, permissions в манифесте, запрет remote JS и навигации, `network` opt-in (§7.6) |
-| Деградация fps от множества WebView2 | Лимит живых инстансов + snapshot LOD (§7.6); нагрузочный тест 10 виджетов — часть приёмки M5 |
-| Airspace: WebView2 поверх wgpu-канваса | Задокументированное ограничение (§7.6): оверлеи не перекрывают виджеты или выносятся в layered-окна |
+| WorkerW breaks on a Windows update | The version gate + a fallback to windowed mode; the canvas file does not depend on the display mode |
+| A third-party preview handler crashes | An out-of-process host with a timeout and a restart |
+| An antivirus false positive (shell hooks) | Authenticode signing from M4, submission for whitelisting before release |
+| Performance on large scenes | LOD + culling + atlases; the 5k-node load test is part of CI |
+| Canvas data loss | Autosave with a 2 s debounce + `.bak` of the previous version; JSON is human-readable |
+| Hotkey conflicts with Explorer in M4 | The window does not intercept the keyboard without explicit focus (a click on the canvas) |
+| WebView2 Runtime missing on the machine | The Evergreen bootstrapper in the MSI (T19); without the runtime — widgets are unavailable with a clear error, the canvas works |
+| A malicious widget | Local-only packages, permissions in the manifest, remote JS and navigation forbidden, `network` opt-in (§7.6) |
+| fps degradation from many WebView2s | The live instance limit + the snapshot LOD (§7.6); the 10-widget load test is part of the M5 acceptance |
+| Airspace: WebView2 over the wgpu canvas | A documented limitation (§7.6): overlays do not cover widgets or are moved into layered windows |
 
-## 10. Критерии готовности релизов
+## 10. Release readiness criteria
 
-- **M1 done:** канвас открывает/сохраняет `.canvas`, 5 000 файловых карточек с тамбнейлами на 60 fps, файл открывается в Obsidian без ошибок
-- **M2 done:** заметки редактируются инлайн, связи рисуются и сохраняются, drop папки из Explorer раскладывает файлы, переименование файла в Explorer обновляет карточку за < 1 с
-- **M3 done:** PDF/изображения/текст показывают живое превью на zoom > 0.6, docx — через preview host, миникарта навигационна, поиск находит по имени и тексту (FTS5)
-- **M4 done:** флаг `--desktop` встраивает канвас за иконками, иконки скрываются и восстанавливаются при выходе, пережит перезапуск Explorer, аварийное завершение не оставляет десктоп без иконок
-- **M5 done:** виджет из локальной папки ставится на канвас, живой при zoom ≥ 0.25, snapshot на дальнем zoom, props переживают перезапуск, bridge-вызовы без permission блокируются, 10 виджетов на сцене не роняют fps ниже 60 за счёт лимита live-инстансов
+- **M1 done:** the canvas opens/saves `.canvas`, 5 000 file cards with thumbnails at 60 fps, the file opens in Obsidian without errors
+- **M2 done:** notes are edited inline, edges are drawn and saved, dropping a folder from Explorer lays out the files, renaming a file in Explorer updates the card in < 1 s
+- **M3 done:** PDF/images/text show a live preview at zoom > 0.6, docx — via the preview host, the minimap is navigable, search finds by name and text (FTS5)
+- **M4 done:** the `--desktop` flag embeds the canvas behind the icons, the icons are hidden and restored on exit, an Explorer restart is survived, a crash does not leave the desktop without icons
+- **M5 done:** a widget from a local folder is installed on the canvas, live at zoom ≥ 0.25, a snapshot at far zoom, props survive a restart, bridge calls without permission are blocked, 10 widgets on the scene do not drop fps below 60 thanks to the live instance limit
 
-## 11. Документация для агента
+## 11. Documentation for the agent
 
-Обязательный чтение-лист перед кодингом соответствующего модуля. Агент обязан сверяться с этими источниками, а не с собственной памятью — API меняются, а недокументированные приёмы различаются по версиям ОС.
+The mandatory reading list before coding the corresponding module. The agent must check these sources rather than rely on its own memory — APIs change, and undocumented techniques differ between OS versions.
 
-### 11.1. Целевая платформа
+### 11.1. Target platform
 
-- Windows 11 release information (версии и номера сборок — для версионного гейта §7.4): https://learn.microsoft.com/en-us/windows/release-health/windows11-release-information
-- Windows 11 25H2 update history (изменения по KB на целевой сборке 26200.x): https://support.microsoft.com/en-us/servicing/os/windows-11/2025/07/windows-11-version-25h2-update-history
+- Windows 11 release information (versions and build numbers — for the version gate §7.4): https://learn.microsoft.com/en-us/windows/release-health/windows11-release-information
+- Windows 11 25H2 update history (the KB-by-KB changes on the target build 26200.x): https://support.microsoft.com/en-us/servicing/os/windows-11/2025/07/windows-11-version-25h2-update-history
 
-### 11.2. Форматы данных
+### 11.2. Data formats
 
-- JSON Canvas spec 1.0 (источник истины по формату `.canvas`, §5.1): https://jsoncanvas.org/spec/1.0/
-- SQLite FTS5 (поисковый индекс, §5.2): https://www.sqlite.org/fts5.html
+- JSON Canvas spec 1.0 (the source of truth on the `.canvas` format, §5.1): https://jsoncanvas.org/spec/1.0/
+- SQLite FTS5 (the search index, §5.2): https://www.sqlite.org/fts5.html
 
-### 11.3. Rust-экосистема (docs.rs — читать под зафиксированные в Cargo.toml версии)
+### 11.3. Rust ecosystem (docs.rs — read against the versions pinned in Cargo.toml)
 
-- winit (окно, ввод, `ApplicationHandler` — event loop 0.30 отличается от 0.29): https://docs.rs/winit/latest/winit/
-- wgpu (рендер): https://docs.rs/wgpu/latest/wgpu/ + учебник: https://sotrh.github.io/learn-wgpu/
-- glyphon (текст поверх wgpu): https://docs.rs/glyphon/latest/glyphon/
-- cosmic-text (шейпинг, layout): https://docs.rs/cosmic-text/latest/cosmic_text/
+- winit (window, input, `ApplicationHandler` — the 0.30 event loop differs from 0.29): https://docs.rs/winit/latest/winit/
+- wgpu (render): https://docs.rs/wgpu/latest/wgpu/ + a tutorial: https://sotrh.github.io/learn-wgpu/
+- glyphon (text over wgpu): https://docs.rs/glyphon/latest/glyphon/
+- cosmic-text (shaping, layout): https://docs.rs/cosmic-text/latest/cosmic_text/
 - rstar (R-tree, §6.1): https://docs.rs/rstar/latest/rstar/
-- notify (файловый вотчер, §7.5): https://docs.rs/notify/latest/notify/
+- notify (the file watcher, §7.5): https://docs.rs/notify/latest/notify/
 - rusqlite (§5.2): https://docs.rs/rusqlite/latest/rusqlite/
-- serde / serde_json (round-trip без потерь, §5.1): https://docs.rs/serde_json/latest/serde_json/
-- image (декод изображений): https://docs.rs/image/latest/image/
-- pdfium-render (PDF-превью, §6.2): https://docs.rs/pdfium-render/latest/pdfium_render/
-- thiserror / anyhow (ошибки): https://docs.rs/thiserror/latest/thiserror/ · https://docs.rs/anyhow/latest/anyhow/
-- tracing (логирование): https://docs.rs/tracing/latest/tracing/
+- serde / serde_json (a lossless round-trip, §5.1): https://docs.rs/serde_json/latest/serde_json/
+- image (image decoding): https://docs.rs/image/latest/image/
+- pdfium-render (PDF previews, §6.2): https://docs.rs/pdfium-render/latest/pdfium_render/
+- thiserror / anyhow (errors): https://docs.rs/thiserror/latest/thiserror/ · https://docs.rs/anyhow/latest/anyhow/
+- tracing (logging): https://docs.rs/tracing/latest/tracing/
 - cargo-wix (MSI): https://github.com/volks73/cargo-wix
 
 ### 11.4. Win32 / Shell (Microsoft Learn)
 
-- windows-rs (API-метаданные и биндинги): https://github.com/microsoft/windows-rs · справочник: https://microsoft.github.io/windows-docs-rs/doc/windows/
-- IShellItemImageFactory (тамбнейлы, §7.1): https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-ishellitemimagefactory
-- IPreviewHandler и хостинг (§7.2): https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-ipreviewhandler · https://learn.microsoft.com/en-us/windows/win32/shell/preview-handlers
+- windows-rs (API metadata and bindings): https://github.com/microsoft/windows-rs · reference: https://microsoft.github.io/windows-docs-rs/doc/windows/
+- IShellItemImageFactory (thumbnails, §7.1): https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-ishellitemimagefactory
+- IPreviewHandler and hosting (§7.2): https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-ipreviewhandler · https://learn.microsoft.com/en-us/windows/win32/shell/preview-handlers
 - OLE Drag and Drop / IDropTarget (§7.3): https://learn.microsoft.com/en-us/windows/win32/com/drag-and-drop · https://learn.microsoft.com/en-us/windows/win32/api/oleidl/nn-oleidl-idroptarget · CF_HDROP: https://learn.microsoft.com/en-us/windows/win32/shell/clipboard
 - ShellExecuteEx (§7.4): https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexw
-- ReadDirectoryChangesW (что делает notify под капотом, §7.5): https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw
+- ReadDirectoryChangesW (what notify does under the hood, §7.5): https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-readdirectorychangesw
 - EnumDisplayMonitors / multi-monitor (§7.4): https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumdisplaymonitors
 - High DPI / Per-Monitor V2 (§6.5): https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows
-- Регистрация ассоциации `.canvas` / ProgID (M4): https://learn.microsoft.com/en-us/windows/win32/shell/fa-progids
-- WebView2 (M5): обзор возможностей — https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/overview-features-capabilities · Get started Win32 — https://learn.microsoft.com/en-us/microsoft-edge/webview2/get-started/win32 · `ICoreWebView2` (postMessage, CapturePreview, WebResourceRequested) — https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2 · `SetVirtualHostNameToFolderMapping` — https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_3#setvirtualhostnametofoldermapping
-- webview2-com (Rust-биндинги WebView2): https://docs.rs/webview2-com/latest/webview2_com/ · https://github.com/wravery/webview2-rs
-- Evergreen Runtime bootstrapper (дистрибуция, T19): https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution
+- `.canvas` association / ProgID registration (M4): https://learn.microsoft.com/en-us/windows/win32/shell/fa-progids
+- WebView2 (M5): the feature overview — https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/overview-features-capabilities · Get started Win32 — https://learn.microsoft.com/en-us/microsoft-edge/webview2/get-started/win32 · `ICoreWebView2` (postMessage, CapturePreview, WebResourceRequested) — https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2 · `SetVirtualHostNameToFolderMapping` — https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_3#setvirtualhostnametofoldermapping
+- webview2-com (Rust bindings for WebView2): https://docs.rs/webview2-com/latest/webview2_com/ · https://github.com/wravery/webview2-rs
+- Evergreen Runtime bootstrapper (distribution, T19): https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution
 
-### 11.5. Встройка в десктоп (§7.4) — недокументированная зона
+### 11.5. Desktop embedding (§7.4) — undocumented territory
 
-Официальной документации нет. Источники, по которым построена таблица стратегий §7.4:
+There is no official documentation. The sources behind the §7.4 strategy table:
 
-- Классическая техника (≤ 23H2): «Draw Behind Desktop Icons in Windows», CodeProject: https://www.codeproject.com/Articles/856020/Draw-Behind-Desktop-Icons-in-Windows-plus
-- Изменение иерархии в 24H2+ (Progman с `WS_EX_NOREDIRECTIONBITMAP`, DefView как layered child, WorkerW как child ниже DefView — разбор и рабочий код Z-order): https://learn.microsoft.com/en-us/answers/questions/1386630/doubts-about-the-window-of-program-manager · https://stackoverflow.com/questions/79763352/setting-a-window-as-wallpaper
-- Референс-реализации, которые уже решают эту задачу на 24H2+/25H2 — изучить код до написания своего:
-  - Lively Wallpaper (C#, активно поддерживает 24H2+): https://github.com/rocksdanister/lively
-  - Seelen UI (Rust — заодно референс по windows-rs в проде): https://github.com/eythaann/Seelen-UI
+- The classic technique (≤ 23H2): "Draw Behind Desktop Icons in Windows", CodeProject: https://www.codeproject.com/Articles/856020/Draw-Behind-Desktop-Icons-in-Windows-plus
+- The hierarchy change in 24H2+ (Progman with `WS_EX_NOREDIRECTIONBITMAP`, DefView as a layered child, WorkerW as a child below DefView — a breakdown and working Z-order code): https://learn.microsoft.com/en-us/answers/questions/1386630/doubts-about-the-window-of-program-manager · https://stackoverflow.com/questions/79763352/setting-a-window-as-wallpaper
+- Reference implementations that already solve this task on 24H2+/25H2 — study the code before writing your own:
+  - Lively Wallpaper (C#, actively supports 24H2+): https://github.com/rocksdanister/lively
+  - Seelen UI (Rust — also a reference for windows-rs in production): https://github.com/eythaann/Seelen-UI
 
-Правило для агента: любое утверждение о поведении Progman/WorkerW/DefView, не подтверждённое этими источниками или собственным рантайм-детектом, считается непроверенным и реализуется только за фолбэком.
+The rule for the agent: any claim about the Progman/WorkerW/DefView behavior not confirmed by these sources or by our own runtime detection is considered unverified and is implemented only behind a fallback.
 
-## 12. Post-Release Documentation Requirement (обязательно)
+## 12. Post-Release Documentation Requirement (mandatory)
 
-После каждого релиза агент ОБЯЗАН создать запись в девлоге —
-`docs/devlog/` (одна волна/эпик = один файл; например `M5-widgets.md`):
+After every release the agent is OBLIGED to create a devlog entry —
+`docs/devlog/` (one wave/epic = one file; for example `M5-widgets.md`):
 
-1. Формат: дата, версия/тег, тип (micro | feature)
-2. Обязательные поля:
-   - **Проблема** — что не работало / чего не было
-   - **Решение** — что сделали, 2–4 предложения, без жаргона стека
-   - **Почему так, а не иначе** — альтернативы, компромисс
-   - **Что было сложного / неожиданного** — для storytelling
-   - **Метрика/результат**, если применимо (оценка, если факт неизвестен)
+1. Format: date, version/tag, type (micro | feature)
+2. Mandatory fields:
+   - **Problem** — what did not work / what was missing
+   - **Solution** — what was done, 2–4 sentences, no stack jargon
+   - **Why this way and not another** — alternatives, the compromise
+   - **What was hard / unexpected** — for storytelling
+   - **Metric/result**, if applicable (an estimate if the fact is unknown)
 
-**Триггер «full article»** (не micro-note):
-- закрыт epic/milestone из `docs/plans/product-roadmap.md` (волны 0/A/B/V/S)
-  или волн T0–T22/M1–M7,
-- ИЛИ добавлена фича, которая меняет user-facing поведение.
+**The "full article" trigger** (not a micro-note):
+- an epic/milestone from `docs/plans/product-roadmap.md` (the 0/A/B/V/S waves)
+  or the T0–T22/M1–M7 waves is closed,
+- OR a feature that changes user-facing behavior is added.
 
-В этом случае агент готовит черновик статьи 800–1200 слов:
-контекст задачи → путь решения → грабли → результат → что дальше.
+In that case the agent prepares an 800–1200 word article draft:
+task context → the solution path → pitfalls → result → what's next.
 
-## 13. MCP-инструменты канваса
+## 13. Canvas MCP tools
 
-Каталог инструментов — `crates/canvas-mcp/src/lib.rs` (константа `TOOLS`,
-канонический источник; `tools/list` отдаёт те же схемы автоматически).
-Раздел фиксирует контракты, критичные для агентной сборки (ADR-0004:
-MCP — единственный канал; CR-013: волна A).
+The tool catalog — `crates/canvas-mcp/src/lib.rs` (the `TOOLS` constant,
+the canonical source; `tools/list` serves the same schemas automatically).
+This section pins the contracts critical for agent-side assembly (ADR-0004:
+MCP — the only channel; CR-013: wave A).
 
-**Инвариант «MCP-видимость = UI» (запрос 2026-09-22 «подтянуть MCP под
-обновления»):** инструменты чтения значений (`flow_recalc`,
-`analyze_bottlenecks`, `lineage`, поле `flow` у `graph_apply`/
-`schemes_apply`) отдают АКТИВНОЕ what-if состояние — те же числа/флаги,
-что видит пользователь на канвасе (каскад Р-1 FR-050: what-if перекрывает
-проливание перекрывает локальные). Пересчёт всегда СВЕЖИЙ (ленивые
-мутации `node_edit` с text — CR-012 — не искажают отчёт), ревизию модели
-и undo-историю чтение не трогает. Авто-строки FR-050 Р-4 (`autoRows`) —
-в ответах `flow_recalc`/`graph_apply`/`schemes_apply`: слот, ребро-источник,
-путь «Объект.Поле», значение активного сценария или `unmapped`.
+**The "MCP visibility = UI" invariant (the 2026-09-22 request "align MCP with the updates" / «подтянуть MCP под обновления»):** the value-reading tools (`flow_recalc`,
+`analyze_bottlenecks`, `lineage`, the `flow` field of `graph_apply`/
+`schemes_apply`) return the ACTIVE what-if state — the same numbers/flags
+the user sees on the canvas (the FR-050 cascade Р-1: what-if overrides
+spill overrides local). The recalc is always FRESH (the lazy
+`node_edit` mutations with text — CR-012 — do not distort the report); the reading
+touches neither the model revision nor the undo history. The FR-050 Р-4 auto-rows (`autoRows`) —
+in the `flow_recalc`/`graph_apply`/`schemes_apply` responses: slot, source edge,
+the "Object.Field" path, the active scenario's value, or `unmapped`.
 
-Канонический порядок вызовов для агентной сборки модели (разведка → ноды →
-value-связи → пересчёт → батч → валидация) зафиксирован в рецепте
-`user-docs/agent-recipe.md` (R5/CP4, CR-013). Коды ошибок `graph_validate`
-и операций `graph_apply` — стабильный контракт рецепта: менять их только
-вместе с рецептом.
+The canonical call order for agent-side model assembly (reconnaissance → nodes →
+value edges → recalc → batch → validation) is fixed in the recipe
+`user-docs/agent-recipe.md` (R5/CP4, CR-013). The error codes of `graph_validate`
+and the `graph_apply` operations are a stable contract of the recipe: change them only
+together with the recipe.
 
-**Пакет скиллов `skills/` (запрос владельца 2026-09-22):** публикуемая
-производная реестра инструментов для внешних ИИ-агентов — 4 скилла
-(`canvasdesk-mcp` подключение/разведка, `canvasdesk-model-build` сборка,
-`canvasdesk-model-verify` проверка, `canvasdesk-whatif` сценарии) +
-полный каталог `canvasdesk-mcp/references/tools.md` + эталонный пример
-Instagram MVP (ADR-0005) в `canvasdesk-model-build/examples/`.
-Инвариант синхронности «скиллы = реестр» закреплён контракт-тестами
-`skills_*` в canvas-mcp (`include_str!` пакета): (1) каталог описывает
-каждый инструмент `TOOLS`; (2) каждый инструмент упомянут хотя бы в
-одном SKILL.md; (3) счётчик инструментов в `skills/README.md` актуален;
-(4) маркдаун-call-позиции `` `имя` {…} `` — только имена реестра или
-операции `graph_apply`. Изменение MCP-инструментов обновляет `skills/`
-в том же коммите — протокол `skills/UPDATE-PROTOCOL.md` (история —
+**The `skills/` skill package (the owner's 2026-09-22 request):** a published
+derivative of the tool registry for external AI agents — 4 skills
+(`canvasdesk-mcp` connection/reconnaissance, `canvasdesk-model-build` assembly,
+`canvasdesk-model-verify` verification, `canvasdesk-whatif` scenarios) +
+the full catalog `canvasdesk-mcp/references/tools.md` + the reference example
+Instagram MVP (ADR-0005) in `canvasdesk-model-build/examples/`.
+The "skills = registry" sync invariant is pinned by the contract tests
+`skills_*` in canvas-mcp (`include_str!` of the package): (1) the catalog describes
+every tool of `TOOLS`; (2) every tool is mentioned in at least
+one SKILL.md; (3) the tool counter in `skills/README.md` is up to date;
+(4) the markdown-call positions `` `имя` {…} `` — registry names or
+`graph_apply` operations only. Changing the MCP tools updates `skills/`
+in the same commit — the protocol `skills/UPDATE-PROTOCOL.md` (history —
 `skills/CHANGELOG.md`).
 
-### Headless-верификация MCP (FR-037, ADR-0012)
+### Headless MCP verification (FR-037, ADR-0012)
 
-Слой инструментов (`canvas-scene`), протокольный мост (`canvas-mcp`) и
-headless-сервер (`canvas-mcp-headless`) верифицируются в wasm-рантайме:
-компиляция под `wasm32-unknown-unknown` (CI `wasm-check`), исполнение
-тестов под `wasm32-wasip1` в wasmtime и полная MCP-сессия с реальным
-клиентом (initialize → tools/list → tools/call → oracle-гейты эталонов
-CP1/CP3/CP5 → негативные ветки) — гейт `scripts/mcp_wasm_gate.sh`, без
-Windows и GUI. Живые ручные сессии владельца — официальным инспектором
+The tool layer (`canvas-scene`), the protocol bridge (`canvas-mcp`) and
+the headless server (`canvas-mcp-headless`) are verified in the wasm runtime:
+compilation for `wasm32-unknown-unknown` (CI `wasm-check`), execution of
+the tests under `wasm32-wasip1` in wasmtime, and a full MCP session with a real
+client (initialize → tools/list → tools/call → the oracle gates of the reference models
+CP1/CP3/CP5 → negative branches) — the gate `scripts/mcp_wasm_gate.sh`, without
+Windows and GUI. The owner's live manual sessions — with the official inspector
 `@modelcontextprotocol/inspector`: `scripts/mcp_wasm_inspector.sh`
-(web UI; `--check` — автоприёмка oracle ±1 %; node/npx — вне гейтов, MW5).
-`HeadlessSession` — серверная сторона будущего
-WebSocket-моста (волна 2 плана M8).
+(web UI; `--check` — automated oracle acceptance at ±1 %; node/npx — outside the gates, MW5).
+`HeadlessSession` — the server side of the future
+WebSocket bridge (wave 2 of the M8 plan).
 
-### graph_apply (FR-033) — атомарная батч-композиция
+### graph_apply (FR-033) — atomic batch composition
 
-Схема вызова: `graph_apply { operations: [Op; 1..=256] }`. `Op` — объект
-с тегом `op`:
+Call schema: `graph_apply { operations: [Op; 1..=256] }`. `Op` — an object
+tagged with `op`:
 
-| op | Поля | Примечание |
+| op | Fields | Note |
 |---|---|---|
-| `node_create_note` | `ref?, x, y, text?, width?, height?` | строки «= …» — формулы (FR-013) |
-| `node_create_file` | `ref?, x, y, path, width?, height?` | файл на диске не создаётся |
-| `template_instantiate` | `ref?, template, params?, x, y` | `params` — `{имя: число \| {num, unit}}`; вне min/max — ошибка |
-| `edge_create` | `fromRef\|from, toRef\|to, kind?, fromLine?, fromOutput?, toParam?, fromSide?, toSide?` | `kind`: `"value"\|"control"` (дефолт control); порты — контракт FR-029; `fromLine`/`fromOutput` взаимно исключительны; имена портов валидируются по снапшотам шаблонов |
-| `param_set` | `ref\|id, param, value, unit?` | правит ровно одну строку «param = value unit» (текст + снапшот шаблона); параметра нет — ошибка (без append) |
+| `node_create_note` | `ref?, x, y, text?, width?, height?` | lines "= …" are formulas (FR-013) |
+| `node_create_file` | `ref?, x, y, path, width?, height?` | the file is not created on disk |
+| `template_instantiate` | `ref?, template, params?, x, y` | `params` — `{имя: число \| {num, unit}}`; outside min/max — an error |
+| `edge_create` | `fromRef\|from, toRef\|to, kind?, fromLine?, fromOutput?, toParam?, fromSide?, toSide?` | `kind`: `"value"\|"control"` (the default is control); ports — the FR-029 contract; `fromLine`/`fromOutput` are mutually exclusive; port names are validated against the template snapshots |
+| `param_set` | `ref\|id, param, value, unit?` | edits exactly one line "param = value unit" (the text + the template snapshot); no such parameter — an error (no append) |
 | `node_move` | `ref\|id, x, y` | |
 
-**Лимиты:** ≤ 256 операций, ≤ 128 новых нод на батч (защита live-бюджета
-SPEC §6.3). Превышение — ошибка уровня вызова (isError).
+**Limits:** ≤ 256 operations, ≤ 128 new nodes per batch (protecting the live budget
+of SPEC §6.3). Exceeding them — a call-level error (isError).
 
-**Транзакционная семантика:** операции применяются к клону канваса;
-ошибка ЛЮБОЙ операции → `{ok: false, op_index, code, message}` и канвас
-байт-в-байт прежний (клон отброшен); успех → канвас заменяется, ровно
-**один** undo-шаг на весь батч (Ctrl+Z откатывает сборку целиком),
-полный пересчёт потока, автосейв.
+**Transactional semantics:** the operations are applied to a clone of the canvas;
+an error in ANY operation → `{ok: false, op_index, code, message}` and the canvas
+stays byte-for-byte the same (the clone is discarded); success → the canvas is replaced, exactly
+**one** undo step for the whole batch (Ctrl+Z reverts the entire assembly),
+a full value flow recalc, autosave.
 
-**Ответ (успех):** `{ok: true, created: [{op_index, ref?, node_id?, edge_id?}],
+**Response (success):** `{ok: true, created: [{op_index, ref?, node_id?, edge_id?}],
 report: [{op_index, op, id}], flow: {node_id: {value, unit, outputs?,
-lines?, autoRows?, error?}}}` — `flow` в формате flow_recalc v2
-(FR-029): значения АКТИВНОГО сценария + именованные выходы +
-построчные значения + авто-строки (FR-050 Р-4); второй вызов
-flow_recalc не нужен.
+lines?, autoRows?, error?}}}` — `flow` in the flow_recalc v2 format
+(FR-029): the values of the ACTIVE scenario + named outputs +
+per-line values + auto-rows (FR-050 Р-4); a second call of
+flow_recalc is not needed.
 
-**Коды ошибок операций:** `E-BAD-OP` (форма/поля), `E-NOT-FOUND`
-(ref/id/шаблон), `E-PORT-UNKNOWN` (неизвестный параметр/выход),
-`E-CYCLE` (value-цикл, участники в message), `E-PARAM-UNKNOWN`
-(нет строки параметра), `E-RANGE` (вне min/max). Нумерация
-`op_index` — с 0; ref-ы живут только внутри батча (адресуют ноды,
-созданные ранее в том же вызове).
+**Operation error codes:** `E-BAD-OP` (shape/fields), `E-NOT-FOUND`
+(ref/id/template), `E-PORT-UNKNOWN` (an unknown parameter/output),
+`E-CYCLE` (a value cycle, the participants in message), `E-PARAM-UNKNOWN`
+(no parameter line), `E-RANGE` (outside min/max). The numbering of
+`op_index` starts at 0; refs live only inside the batch (they address nodes
+created earlier in the same call).
 
-### whatif_* (FR-017, CP6) — сценарии «а что если»
+### whatif_* (FR-017, CP6) — "what if" scenarios
 
-Девять инструментов поверх активного канваса. Подмены — runtime-only:
-канвас без `whatif_apply` не мутируется (инвариант 2).
+Nine tools over the active canvas. Substitutions are runtime-only:
+the canvas is not mutated without `whatif_apply` (invariant 2).
 
-| Инструмент | Семантика |
+| Tool | Semantics |
 |---|---|
-| `whatif_set_override {node_id, line, expr}` | построчная подмена активного сценария; режим/сценарий поднимаются автоматически (неявный «Сценарий MCP»); `expr` нормализуется (литеральный `\n` → переводы строк) |
-| `whatif_set_param {node_id, param, value}` | sugar: находит строку `param = …` и строит подмену |
-| `whatif_scenario_list` | сценарии с числом подмен и маркерами протухших |
-| `whatif_scenario_create {name}` | новый сценарий (лимит 3), сразу активен; мутация `canvasdesk.whatif` — один undo-шаг |
-| `whatif_scenario_delete {name}` | удаление (undo-шаг) |
-| `whatif_scenario_activate {name}` | переключение База ↔ сценарий; runtime-only, файл не трогает |
-| `whatif_deltas` | дельты активного сценария — те же пары «было → стало», что видны на канвасе (инвариант 6) |
-| `whatif_apply` | записать подмены в persisted-строки/params и удалить сценарий; один undo-шаг |
-| `whatif_reset` | сброс подмен активного сценария (runtime) |
+| `whatif_set_override {node_id, line, expr}` | a per-line substitution of the active scenario; the mode/scenario are raised automatically (the implicit "MCP Scenario"); `expr` is normalized (a literal `\n` → line breaks) |
+| `whatif_set_param {node_id, param, value}` | sugar: finds the line `param = …` and builds the substitution |
+| `whatif_scenario_list` | the scenarios with substitution counts and stale markers |
+| `whatif_scenario_create {name}` | a new scenario (limit 3), active immediately; the `canvasdesk.whatif` mutation is one undo step |
+| `whatif_scenario_delete {name}` | deletion (an undo step) |
+| `whatif_scenario_activate {name}` | switching Base ↔ scenario; runtime-only, the file is untouched |
+| `whatif_deltas` | the deltas of the active scenario — the same "was → now" pairs as seen on the canvas (invariant 6) |
+| `whatif_apply` | write the substitutions into the persisted lines/params and delete the scenario; one undo step |
+| `whatif_reset` | resetting the substitutions of the active scenario (runtime) |
 
-### schemes_list / schemes_apply (PRD-0008, Q5 v2) — галерея схем агенту
+### schemes_list / schemes_apply (PRD-0008, Q5 v2) — the scheme gallery for the agent
 
-Те же пакеты, что видит пользователь в галерее (Ctrl+T) — инвариант
-«MCP-видимость = UI»: агент может показать демо-канвас одной вставкой.
+The same packages the user sees in the gallery (Ctrl+T) — the invariant
+"MCP visibility = UI": the agent can show a demo canvas with a single insertion.
 
-| Инструмент | Семантика |
+| Tool | Semantics |
 |---|---|
-| `schemes_list {}` | массив пакетов: `{id, name, name_en, category, category_ru/en, version, description/description_en, nodes, edges}` — RU-первично, как в UI; массив приходит в text-контенте (FR-034) |
-| `schemes_apply {id, x?, y?}` | вставка схемы в текущий канвас — как «Открыть» в галерее: ремап id без коллизий (note-N/group-N/edge-N), центрирование в (x, y) или центр viewport; один undo-шаг, полный пересчёт, what-if сценарии не трогаются. Ответ `{applied, name, nodes[], edges[] (контракт edges_list), bbox [4], flow}` — flow как у flow_recalc (активное состояние + autoRows); неизвестный id — isError без undo-шага |
+| `schemes_list {}` | the array of packages: `{id, name, name_en, category, category_ru/en, version, description/description_en, nodes, edges}` — RU-first, as in the UI; the array arrives in text content (FR-034) |
+| `schemes_apply {id, x?, y?}` | inserting a scheme into the current canvas — like "Open" in the gallery: an id remap without collisions (note-N/group-N/edge-N), centering at (x, y) or the viewport center; one undo step, a full recalc, what-if scenarios are untouched. The response `{applied, name, nodes[], edges[] (контракт edges_list), bbox [4], flow}` — flow as in flow_recalc (the active state + autoRows); an unknown id — isError without an undo step |
 
-### lineage (PRD-0007 X2, FR-048) — дерево происхождения цифры
+### lineage (PRD-0007 X2, FR-048) — the number's lineage tree
 
-Схема вызова: `lineage {node_id, line?}` — `line` null/без поля = итог
-ноды (полоса D), иначе индекс строки Numi-листа (FR-025). Та же модель,
-что окно проверки цепочки (инвариант F-5 PRD-0007: один источник);
-значения — активного what-if состояния, цикл потока — топология без
-значений (AC-2.4), бюджет 4096 узлов — свёртка `truncated`.
+Call schema: `lineage {node_id, line?}` — `line` null/absent = the node's total
+(the D bar), otherwise the index of a Numi sheet line (FR-025). The same model
+as the chain verification window (the PRD-0007 F-5 invariant: a single source);
+the values are of the active what-if state, a flow cycle — topology without
+values (AC-2.4), the 4096-node budget — a `truncated` collapse.
 
-**Ответ:** `{root: {node_id, line}, nodes: [{node_id, line, kind
+**Response:** `{root: {node_id, line}, nodes: [{node_id, line, kind
 (calc|leaf|cycle|unmapped|unlinked|truncated), value+unit | error,
 formula?, title, label?, children: [{child (индекс в nodes), via?}]}]` —
-DFS-порядок (родитель раньше ребёнка, ромб разворачивается без
-дедупликации); `via` = `{edge_id, from_node, to_node, from_line?,
-from_output?, to_param?}` — ребро для подсветки цепочки на канвасе
-(F-4/AC-3.1). Негативные ветки: нода не найдена / line < 0 / проза
-как корень — isError.
+DFS order (parent before child, a diamond is expanded without
+deduplication); `via` = `{edge_id, from_node, to_node, from_line?,
+from_output?, to_param?}` — the edge for highlighting the chain on the canvas
+(F-4/AC-3.1). Negative branches: the node is not found / line < 0 / prose
+as the root — isError.
 
-### analyze_bottlenecks (FR-016) — узкие места и риск очередей
+### analyze_bottlenecks (FR-016) — bottlenecks and queueing risk
 
-Схема вызова: `analyze_bottlenecks {}` (без параметров — активный канвас).
-Чтение: пересчёт свежий и АКТИВНОГО what-if состояния (как `flow_recalc`),
-канвас и undo не затрагиваются.
+Call schema: `analyze_bottlenecks {}` (no parameters — the active canvas).
+Reading: the recalc is fresh and of the ACTIVE what-if state (as `flow_recalc`);
+the canvas and undo are not touched.
 
-**Ответ:** `{nodes: [{id, severity, utilization?, queue_length?, wait_sec?,
-badge}], thresholds}` — те же флаги, что видит пользователь на канвасе
-(инвариант 4 FR-016: `badge` — строка бейджа канваса, например
+**Response:** `{nodes: [{id, severity, utilization?, queue_length?, wait_sec?,
+badge}], thresholds}` — the same flags the user sees on the canvas
+(the FR-016 invariant 4: `badge` — the canvas badge string, for example
 `"OVERLOAD 223% · W: 1.2 s"`). `severity` — `none|warn|critical|overload`;
-`utilization` — ρ (доля 0..1, > 1 при перегрузке); `wait_sec` — W в базовых
-секундах; `thresholds` — пороги дефолта (0.7/0.9, 100 ms/1 s, 1/10).
+`utilization` — ρ (a share of 0..1, > 1 under overload); `wait_sec` — W in base
+seconds; `thresholds` — the default thresholds (0.7/0.9, 100 ms/1 s, 1/10).
 
-**Детекция (анализатор `canvas-core/src/analyze.rs`):** значение ноды —
-ошибка `Overload{ρ}` → `overload` (ρ из ошибки); именованный выход
-`utilization` шаблона (13 queue-манифестов) или Percent-значение → пороги
-0.7/0.9; Time-значение (W) → 100 ms/1 s; именованные выходы
-`queue_length`/`wait_time` — точки расширения манифестов. Порядок —
-`canvas.nodes` (детерминизм).
+**Detection (the `canvas-core/src/analyze.rs` analyzer):** a node value that is
+an `Overload{ρ}` error → `overload` (ρ from the error); a named output
+`utilization` of a template (13 queue manifests) or a Percent value → the thresholds
+0.7/0.9; a Time value (W) → 100 ms/1 s; the named outputs
+`queue_length`/`wait_time` — the manifests' extension points. The order —
+`canvas.nodes` (determinism).
 
-### monte_carlo_run (FR-066) — Monte Carlo/QMC и квантили P50/P90/P99
+### monte_carlo_run (FR-066) — Monte Carlo/QMC and the P50/P90/P99 quantiles
 
-Схема вызова: `monte_carlo_run {runs, params, mode?, seed?, quantiles?}`.
-**Native-only** (фича `qmc` канвас-сцены: stats+parallel+sobol_burley;
-wasm-сборка инструмент не отдаёт, §5.8 FR-066; сборка без фичи —
-`tools/list` не объявляет, вызов — isError).
+Call schema: `monte_carlo_run {runs, params, mode?, seed?, quantiles?}`.
+**Native-only** (the canvas-scene feature `qmc`: stats+parallel+sobol_burley;
+a wasm build does not serve the tool, §5.8 of FR-066; a build without the feature —
+`tools/list` does not declare it, a call — isError).
 
-- `runs` — целое 1..=10⁶ (эталонная норма FR-066 — 10⁴); `mode` —
-  `"qmc"` (дефолт: Owen-scrambled Sobol → inverse-CDF `statrs`, меньшая
-  дисперсия при том же N; лимит длины 2¹⁶ = 65536) | `"mc"` (ChaCha8);
-  `seed` — u64 (дефолт 0; **тот же seed → побитово те же квантили** —
-  воспроизводимость first-class, сида §5.7.2: `hash(content) ⊕
-  scenario_seed ⊕ run_idx` с FNV-смешиванием); `quantiles` — доли 0..1,
-  дефолт `[0.5, 0.9, 0.99]` (P10 — «runway»-кейс: `[0.1, …]`).
+- `runs` — an integer 1..=10⁶ (the FR-066 reference norm — 10⁴); `mode` —
+  `"qmc"` (the default: Owen-scrambled Sobol → inverse-CDF `statrs`, a lower
+  variance at the same N; the length limit 2¹⁶ = 65536) | `"mc"` (ChaCha8);
+  `seed` — u64 (the default 0; **the same seed → bitwise-identical quantiles** —
+  reproducibility is first-class, the seed of §5.7.2: `hash(content) ⊕
+  scenario_seed ⊕ run_idx` with FNV mixing); `quantiles` — shares of 0..1,
+  the default `[0.5, 0.9, 0.99]` (P10 — the "runway" case: `[0.1, …]`).
 - `params` — `{"node_id:param": {"dist": "normal"|"lognormal"|"exp"|
-  "poisson", …}}`: normal/lognormal — `{mean, sd}` в натуральном
-  пространстве, exp/poisson — `{lambda}` (λ Пуассона ≤ 1000 — бюджет
-  inverse-CDF). Параметр — строка «param = …» Numi-листа ноды (подменяется
-  на каждый прогон, паттерн `whatif_set_param`); единица придаётся
-  формулой-потребителем (Numi-семантика FR-050 Н5: `rho = load × 1 %`).
-- **Ответ:** `{runs, failed_runs, mode, seed, stale, duration_ms,
+  "poisson", …}}`: normal/lognormal — `{mean, sd}` in the natural
+  space, exp/poisson — `{lambda}` (a Poisson λ ≤ 1000 — the budget of
+  inverse-CDF). A parameter is a line "param = …" of the node's Numi sheet (substituted
+  on every run, the `whatif_set_param` pattern); the unit is conferred
+  by the consuming formula (the Numi semantics FR-050 Н5: `rho = load × 1 %`).
+- **Response:** `{runs, failed_runs, mode, seed, stale, duration_ms,
   quantiles, outputs{node:{P50:{value,unit},…}}, lines{"node:line":{…}},
   named{"node:выход":{…}}, analysis{quantile, nodes, thresholds},
-  severity}` — квантили итогов нод, построчных и именованных выходов
+  severity}` — the quantiles of node totals, per-line and named outputs
   (collect-then-reduce §5.7.3, builtin `percentile`).
-- `analysis` — узкие места (формат `analyze_bottlenecks`) на ХВОСТОВОМ
-  квантиле (P90): синтетический `FlowSolutions` → `analyze::analyze`
-  **без правок анализатора** (§5.5) — severity эскалирует на хвосте
-  («докритично на медиане, критично на P90»).
-- Мутация: engine-метаданные `canvas.extra["canvasdesk"]["engine"] =
-  {version: "M5.0", seed, stats, parallel, qmc}` (raw JSON, паттерн
-  `whatif.rs`; §5.7.4) — undo-шаг + автосейв при фактическом изменении;
-  рассинхрон версии → `stale: true`.
-- Ошибки вызова: цикл потока; параметры не из листа ноды (строгая
-  валидация ДО прогонов); невалидные dist/quantiles/режим (см. тест
+- `analysis` — the bottlenecks (the `analyze_bottlenecks` format) at the TAIL
+  quantile (P90): a synthetic `FlowSolutions` → `analyze::analyze`
+  **without analyzer modifications** (§5.5) — severity escalates on the tail
+  ("sub-critical at the median, critical at P90").
+- Mutation: the engine metadata `canvas.extra["canvasdesk"]["engine"] =
+  {version: "M5.0", seed, stats, parallel, qmc}` (raw JSON, the
+  `whatif.rs` pattern; §5.7.4) — an undo step + autosave on an actual change;
+  a version desync → `stale: true`.
+- Call errors: a flow cycle; parameters not from the node's sheet (strict
+  validation BEFORE the runs); invalid dist/quantiles/mode (see the test
   `mcp_fr066_monte_carlo_run_strict_validation`).
 
-### Транспорт stdio (FR-034, ADR-0009)
+### stdio transport (FR-034, ADR-0009)
 
-Мост `canvasdesk-mcp` / `canvasdesk mcp` — самостоятельный MCP-сервер:
-handshake не зависит от состояния GUI-приложения.
+The bridge `canvasdesk-mcp` / `canvasdesk mcp` is a standalone MCP server:
+the handshake does not depend on the state of the GUI application.
 
-- **Версии протокола:** клиентская версия эхом, если поддерживается
-  (`2025-06-18`, `2025-03-26`, `2024-11-05`); неизвестная → `2024-11-05`.
-- **Batch-запросы:** JSON-RPC массив обрабатывается поэлементно; пустой
-  массив → один ответ `-32600`; батч из уведомлений → тишина.
-- **Результат tools/call:** `content[0].text` — чистый JSON результата,
-  `structuredContent` — тот же объект (spec 2025-06-18); isError-результат
-  приложения проходит насквозь.
-- **Offline-режим:** pipe недоступен → `initialize` успешен, `tools/call`
-  → isError «CanvasDesk не запущен…»; процесс моста живёт до закрытия
-  stdio (никаких exit-кодов на недоступность приложения).
-- **Reconnect:** перед каждым входным пакетом при мёртвом транспорте —
-  короткая попытка подключения к pipe (500 мс, без автоспавна); приложение,
-  поднявшееся позже моста, подхватывается без перезапуска MCP-сессии.
-- **Толерантные заглушки:** `resources/list`, `prompts/list`,
-  `resources/templates/list` → пустые списки; `logging/setLevel` → `{}`;
-  `notifications/cancelled` → игнор.
-- Фрейминг — newline-delimited JSON (без Content-Length); таймаут ответа
-  приложения — 30 с → isError.
+- **Protocol versions:** the client version is echoed if supported
+  (`2025-06-18`, `2025-03-26`, `2024-11-05`); an unknown one → `2024-11-05`.
+- **Batch requests:** a JSON-RPC array is processed element by element; an empty
+  array → one response `-32600`; a batch of notifications → silence.
+- **The tools/call result:** `content[0].text` — the clean JSON of the result,
+  `structuredContent` — the same object (spec 2025-06-18); an isError result
+  of the application passes through.
+- **Offline mode:** the pipe is unavailable → `initialize` succeeds, `tools/call`
+  → isError "CanvasDesk is not running…" («CanvasDesk не запущен…»); the bridge process lives
+  until stdio is closed (no exit codes for the application being unavailable).
+- **Reconnect:** before every incoming packet, with a dead transport —
+  a short connection attempt to the pipe (500 ms, no auto-spawn); an application
+  that came up later than the bridge is picked up without restarting the MCP session.
+- **Tolerant stubs:** `resources/list`, `prompts/list`,
+  `resources/templates/list` → empty lists; `logging/setLevel` → `{}`;
+  `notifications/cancelled` → ignored.
+- Framing — newline-delimited JSON (no Content-Length); the response timeout
+  of the application — 30 s → isError.
 
-### Чистота stdout (FR-035, ADR-0010)
+### stdout purity (FR-035, ADR-0010)
 
-stdout процесса моста — **только** newline-delimited JSON-RPC; ни логи,
-ни ANSI-последовательности, ни вывод дочерних процессов не имеют права
-появляться в протокольном канале (нарушение ловится клиентом как
+The stdout of the bridge process is **only** newline-delimited JSON-RPC; neither logs,
+nor ANSI sequences, nor the output of child processes have the right
+to appear in the protocol channel (a violation is caught by the client as
 `Invalid JSON`).
 
-- **Изоляция автоспавна:** сервис поднимается с
-  `stdin/stdout/stderr = Stdio::null()` — наследование хэндлов моста
-  исключено по построению (прежде GUI-логи tracing с ANSI попадали в
-  JSON-RPC-поток).
-- **Ориентация автоспавна:** единый бинарь `canvasdesk` спавнит сам себя
-  (GUI-режим без аргументов); автономный `canvasdesk-mcp` ищет GUI-бинарь
-  `canvasdesk.exe` в своём каталоге; соседа нет — offline-режим
-  (ADR-0009), рекурсивный спавн исключён.
-- **Диагностика — в stderr:** собственные сообщения моста и логи
-  GUI (`tracing_subscriber::fmt().with_writer(io::stderr)`) идут в
-  stderr; ANSI в логах GUI — только когда stderr — живой терминал.
+- **Auto-spawn isolation:** the service is raised with
+  `stdin/stdout/stderr = Stdio::null()` — the inheritance of the bridge's handles
+  is excluded by construction (previously GUI tracing logs with ANSI ended up in the
+  JSON-RPC stream).
+- **Auto-spawn orientation:** the single `canvasdesk` binary spawns itself
+  (GUI mode without arguments); the standalone `canvasdesk-mcp` looks for the GUI binary
+  `canvasdesk.exe` in its own directory; no neighbor — offline mode
+  (ADR-0009), recursive spawning is excluded.
+- **Diagnostics — to stderr:** the bridge's own messages and the GUI logs
+  (`tracing_subscriber::fmt().with_writer(io::stderr)`) go to
+  stderr; ANSI in the GUI logs — only when stderr is a live terminal.
