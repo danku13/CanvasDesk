@@ -1,0 +1,125 @@
+# CanvasDesk agent routing (plan v2.1 stage 6, issue #33).
+#
+# Maps a task type -> what the agent loads (workflow skills / briefs) ->
+# mandatory gates before reporting done.
+#
+# Conventions:
+# - "load" lists files relative to the repository root; load them in order.
+# - "gates" are commands that must exit 0 (or be explicitly reported as
+#   not-run with a reason) before a task is reported complete.
+# - MCP package skills (skills/canvasdesk-*/) are the derivative of the tool
+#   registry; workflow skills (docs/agent/skills/) decompose AGENTS.md.
+# - This file is routing only: content lives in the files it points to
+#   (one fact — one owner).
+version: 1
+
+entry_points:
+  always:
+    - AGENTS.md
+    - docs/agent/MAP.md
+  on_demand:
+    briefs: docs/agent/briefs/
+    glossary: docs/agent/glossary.md
+
+routes:
+  - task_type: docs-edit
+    description: Editing/creating repository markdown documentation
+    load:
+      - docs/agent/skills/docs-links/SKILL.md
+    gates:
+      - python3 scripts/doc_lint.py
+
+  - task_type: docs-translation
+    description: Translating one agent-contour document RU->EN (wave work)
+    load:
+      - docs/translation-guide.md
+      - docs/agent/briefs/translate-one-doc.md
+      - docs/agent/skills/docs-links/SKILL.md
+    gates:
+      - python3 scripts/doc_lint.py
+      - structure 1:1 self-check (headings, fences, tables, IDs vs git HEAD)
+
+  - task_type: mcp-change
+    description: Changing the MCP tool registry or tool semantics
+    load:
+      - skills/UPDATE-PROTOCOL.md
+      - skills/canvasdesk-mcp/SKILL.md
+    gates:
+      - cargo test -p canvas-mcp skills
+      - cargo test --workspace
+      - scripts/wasm_gate.sh --check
+      - scripts/mcp_wasm_gate.sh --check
+
+  - task_type: model-build
+    description: Assembling a model on the canvas via MCP (external agent)
+    load:
+      - skills/canvasdesk-model-build/SKILL.md
+    gates:
+      - ADR-0005 reference oracle +-1%
+
+  - task_type: model-verify
+    description: Verifying a model (flow, lineage, bottlenecks, validation)
+    load:
+      - skills/canvasdesk-model-verify/SKILL.md
+    gates:
+      - flow_recalc green; graph_validate 0 errors (or explained warnings)
+
+  - task_type: whatif
+    description: What-if scenarios (substitutions, deltas, apply/reset)
+    load:
+      - skills/canvasdesk-whatif/SKILL.md
+    gates:
+      - scenario apply/reset contract respected (no direct formula edits)
+
+  - task_type: ui-rust
+    description: Any Rust UI work (overlay/panel/dialog/control/rendering)
+    load:
+      - docs/agent/skills/ui-kit-review/SKILL.md
+      - docs/ui-kit.md
+    gates:
+      - kit review checklist (skill) 100% checked
+      - WASM UI self-check per docs/agent/skills/wasm-test/SKILL.md
+      - cargo clippy --workspace -- -D warnings
+
+  - task_type: shell-win32
+    description: Windows shell integration (WorkerW, thumbnails, preview, drag-drop)
+    load:
+      - docs/agent/skills/shell-win32/SKILL.md
+      - docs/RECIPES.md (the recipes the task touches)
+    gates:
+      - runtime detection + fallback implemented for undocumented techniques
+      - cargo test --workspace
+
+  - task_type: wasm-verify
+    description: Verifying UI changes on the wasm platform (mandatory for UI)
+    load:
+      - docs/agent/skills/wasm-test/SKILL.md
+      - docs/WASM-TESTING.md
+    gates:
+      - scripts/wasm_gate.sh --check
+      - L2 browser stand per docs/WASM-TESTING.md (or explicit skip + manual
+        verification instructions in the final report)
+
+  - task_type: issue-workflow
+    description: Planning/tracking work via GitHub issues + Projects
+    load:
+      - docs/agent/skills/issue-workflow/SKILL.md
+    gates:
+      - issue exists before code; closing comment with verification facts
+
+  - task_type: worklog-rotate
+    description: Worklog rotation, Journal index, token accounting entries
+    load:
+      - docs/agent/skills/worklog-rotate/SKILL.md
+    gates:
+      - lossless move (entry counts verified before/after)
+      - doc_lint green; budgets respected (doc_lint gate)
+
+  - task_type: adr-decision
+    description: Recording an architecture decision
+    load:
+      - docs/adr/adr-template.md
+      - docs/adr/README.md
+    gates:
+      - ADR file created BEFORE implementation begins
+      - status stays "Proposed" unless the owner explicitly accepts
