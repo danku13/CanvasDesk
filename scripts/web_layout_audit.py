@@ -7,8 +7,7 @@ CR-014 «never-off-screen») и не наезжают на зоны GPU-пане
 
   1. Горизонтальное переполнение документа (scrollWidth > innerWidth) — FAIL.
   2. Канвас занимает окно целиком (100vw/100dvh) — FAIL при расхождении.
-  3. Тулбар целиком в экране (x ≥ 0, right ≤ vw, bottom ≤ vh) — и на старте,
-     и с длинной подписью «Недавние: <имя файла>» — FAIL при выезде.
+  3. Тулбар целиком в экране (x ≥ 0, right ≤ vw, bottom ≤ vh).
   4. Зона тулбара не пересекает зону миникарты (право-низ, 220×140 + 16) — FAIL.
   5. Зона тулбара не пересекает зону панели поиска (топ-центр, 460px):
      vw < 1200 — FAIL (тулбар обязан быть в левом нижнем углу); vw ≥ 1200 —
@@ -76,7 +75,7 @@ MEASURE_JS = """
   if (tb) {
     const r = tb.getBoundingClientRect();
     out.toolbar = {x: r.x, y: r.y, w: r.width, h: r.height, right: r.right, bottom: r.bottom};
-    for (const id of ['btn-open', 'btn-recent', 'btn-export']) {
+    for (const id of ['btn-open', 'btn-export-html']) {
       const b = document.getElementById(id);
       if (b) {
         const br = b.getBoundingClientRect();
@@ -88,8 +87,8 @@ MEASURE_JS = """
 }
 """
 
-# Длинное имя файла: воспроизводит подпись set_recent_label (toolbar.rs)
-LONG_NAME = "Недавние: godovoj-finansovyj-model-Q4-verificacija-final.canvas"
+# FR-107 (C4, №37b): длинная подпись «Недавние: <имя>» ушла вместе с
+# кнопкой — все подписи тулбара короткие, эллипсис-кейс неактуален.
 
 
 async def measure(page):
@@ -130,17 +129,10 @@ async def main():
             await page.goto(BASE, wait_until="load")
             await page.wait_for_timeout(2500)  # boot wasm + init GPU
             m1 = await measure(page)
-
-            # Деф.4: длинная подпись «Недавние» (эллипсис + never-off-screen)
-            await page.evaluate(
-                "(t) => document.getElementById('btn-recent').textContent = t", LONG_NAME
-            )
-            await page.wait_for_timeout(150)
-            m2 = await measure(page)
             await page.close()
 
             print(f"\n=== {label} ({w}x{h}) ===")
-            for tag, m in (("старт", m1), ("длинное имя", m2)):
+            for tag, m in (("старт", m1),):
                 ovf = m["scrollW"] - m["vw"]
                 tb = m["toolbar"]
                 btn_open = m["buttons"].get("btn-open")

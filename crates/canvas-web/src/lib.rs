@@ -42,9 +42,14 @@ pub mod workspace;
 pub mod opfs_store;
 pub mod url_sync;
 pub mod web_locks;
+// FR-107 (мультиканвас C4): document.title = «Имя — CanvasDesk» (№28a) —
+// чистая часть тестируется нативно, wasm-обёртка тонкая (паттерн url_sync).
+pub mod title_sync;
 
 // Чисто web-модули: JS-рунтайм обязателен (spawn_local/web-sys-вызовы),
 // нативная компиляция rlib их не включает.
+#[cfg(target_arch = "wasm32")]
+pub mod camera_web;
 #[cfg(target_arch = "wasm32")]
 pub mod drop_files;
 #[cfg(target_arch = "wasm32")]

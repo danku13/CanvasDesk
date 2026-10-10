@@ -7,8 +7,9 @@
 //!
 //! Потребители: `opfs` (инициализация), `fs_access` (открытие с диска),
 //! `drop_files` (импорт копии), `export` (экспорт активной версии),
-//! `web_locks`/`url_sync` (FR-104: единая точка смены активного канваса
-//! — `set_active` захватывает Web Lock и синкает `?canvas=`),
+//! `web_locks`/`url_sync`/`title_sync` (FR-104/FR-107: единая точка
+//! смены активного канваса — `set_active` захватывает Web Lock, синкает
+//! `?canvas=` и заголовок вкладки),
 //! FR-105 (C2): `fs_folder` (granted-папка, миграция, watch).
 
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // потребители — opfs/fs_access/drop/export (wasm); натив: только тесты
@@ -96,6 +97,11 @@ pub(crate) fn set_active(name: impl Into<String>, kind: ActiveKind) {
         // диск — убирает параметр (дисковый файл по ?canvas= не открыть).
         #[cfg(target_arch = "wasm32")]
         crate::url_sync::sync_active(kind, &name);
+        // FR-107 (C4, №28a): заголовок вкладки — «Имя — CanvasDesk»
+        // (тот же хук, что URL-синк; нет имени — не бывает: set_active
+        // всегда с именем, дефолт — до первого открытия).
+        #[cfg(target_arch = "wasm32")]
+        crate::title_sync::sync(Some(&name));
     }
     ACTIVE.with(|cell| *cell.borrow_mut() = Some(active));
 }

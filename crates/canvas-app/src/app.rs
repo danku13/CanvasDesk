@@ -6652,6 +6652,19 @@ impl App {
         self.request_redraw();
     }
 
+    /// FR-107 (C4, №12/№30b): стартовое восстановление камеры активного
+    /// канваса — web-старт строит сцену напрямую (минуя `on_open_scene`),
+    /// поэтому снимок из localStorage web-слой применяет здесь
+    /// (`spawn_desk_web`); обработчик — тот же, что у ответа
+    /// `CanvasCameraRestored`. Натив — не зовётся (очередь
+    /// WebRequest-ов дренажируется только web-обёрткой).
+    pub fn apply_startup_camera(
+        &mut self,
+        snapshot: Option<canvas_core::workspace::CameraSnapshot>,
+    ) {
+        self.on_canvas_camera_restored(snapshot);
+    }
+
     /// Режим активного канваса от web-слоя (№21c): Disk — чип «только
     /// просмотр» (ренейм не поддерживается), ренейм-буфер гасится.
     fn on_canvas_active_kind(&mut self, disk: bool) {
