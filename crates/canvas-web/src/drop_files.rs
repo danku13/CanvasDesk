@@ -273,7 +273,6 @@ pub(crate) async fn import_to_opfs(proxy: &EventLoopProxy<AppEvent>, raw_name: &
     storage.seed_mirror(std::path::Path::new(&name), &json);
     crate::web_state::set_active(name.clone(), crate::web_state::ActiveKind::Opfs);
     crate::recent::record_recent(&name).await;
-    crate::toolbar::set_recent_label(&name);
     tracing::info!(target: "canvas_web", file = %name, "канвас импортирован копией в OPFS");
     let _ = proxy.send_event(AppEvent::OpenScene {
         path: std::path::PathBuf::from(name.clone()),

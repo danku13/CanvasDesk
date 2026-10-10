@@ -48,6 +48,17 @@
 //! - `CanvasRestoreBak` — undo мягкого удаления №15a (`.bak` → файл);
 //! - `CanvasMoveCameraKey` — перенос ключа камеры при ренейме активного
 //!   №30b (localStorage, формат C0 `canvasdesk.camera.<имя>`).
+//!
+//! FR-107 (мультиканвас C4, issue #8): чип/камера/title — тот же конвейер:
+//! - `CanvasCameraSave` — снимок камеры активного канваса в localStorage
+//!   (№12/№30b): уход с канваса и выгрузка/скрытие страницы;
+//! - `CanvasCameraLoad` — чтение камеры при открытии → ответ
+//!   `CanvasCameraRestored` (нет ключа — `None`: тихий дефолт);
+//! - `CanvasActiveKind` — режим активного для чипа №21c (Disk — «только
+//!   просмотр») → ответ `CanvasActiveKind`;
+//! - ренейм АКТИВНОГО — web-зеркало переезжает на новое имя в той же
+//!   точке (`set_active`: Web Locks + `?canvas=` + document.title №28a
+//!   + недавние №15a).
 
 #![cfg(target_arch = "wasm32")]
 
@@ -121,6 +132,19 @@ pub(crate) fn handle(request: WebRequest, proxy: &EventLoopProxy<AppEvent>) {
             }
             WebRequest::CanvasMoveCameraKey { old, new } => {
                 move_camera_key(&old, &new);
+            }
+            // --- FR-107 (C4, issue #8): чип/камера (№12/№30b/№21c) --------
+            WebRequest::CanvasCameraSave { name, snapshot } => {
+                crate::camera_web::save(&name, &snapshot);
+            }
+            WebRequest::CanvasCameraLoad { name } => {
+                let snapshot = crate::camera_web::load(&name);
+                let _ = proxy.send_event(AppEvent::CanvasCameraRestored { snapshot });
+            }
+            WebRequest::CanvasActiveKind => {
+                let disk =
+                    crate::web_state::active_kind() == Some(crate::web_state::ActiveKind::Disk);
+                let _ = proxy.send_event(AppEvent::CanvasActiveKind { disk });
             }
         }
     });
@@ -270,7 +294,6 @@ async fn open_workspace_canvas(name: &str, proxy: &EventLoopProxy<AppEvent>) {
     };
     crate::web_state::set_active(name.to_owned(), kind);
     crate::recent::record_recent(name).await;
-    crate::toolbar::set_recent_label(name);
     tracing::info!(target: "canvas_web", file = name, "менеджер: канвас открыт");
     let _ = proxy.send_event(AppEvent::OpenScene {
         path: PathBuf::from(name),
@@ -467,7 +490,25 @@ fn run_canvas_op(op: &CanvasOp) -> Option<String> {
     };
     // №15a: удалённый канвас уходит из недавних (fire-and-forget, как
     // record_recent — IndexedDB-запись не блокирует ответ).
+    // FR-107 (C4, №28a): ренейм АКТИВНОГО — web-зеркало переезжает на новое
+    // имя в той же точке: set_active переводит Web Lock, `?canvas=` и
+    // заголовок вкладки (ренейм входит в крючок смены активного №28a),
+    // недавние — старая запись не переживает имя (№15a-паттерн).
     if result.is_ok() {
+        if let CanvasOp::Rename { old, new } = op {
+            let kind = crate::web_state::active_kind();
+            if kind.is_some()
+                && crate::web_state::active_name()
+                    .is_some_and(|active| active.eq_ignore_ascii_case(old))
+            {
+                crate::web_state::set_active(new.clone(), kind.expect("проверено выше"));
+                let (old, new) = (old.clone(), new.clone());
+                wasm_bindgen_futures::spawn_local(async move {
+                    crate::recent::remove_recent(&old).await;
+                    crate::recent::record_recent(&new).await;
+                });
+            }
+        }
         if let CanvasOp::Delete { name } = op {
             let name = name.clone();
             wasm_bindgen_futures::spawn_local(async move {
@@ -523,7 +564,6 @@ async fn open_fallback(avoid: &str, proxy: &EventLoopProxy<AppEvent>) {
     storage.seed_mirror(Path::new(&name), &json);
     crate::web_state::set_active(name.clone(), crate::web_state::ActiveKind::Opfs);
     crate::recent::record_recent(&name).await;
-    crate::toolbar::set_recent_label(&name);
     tracing::info!(target: "canvas_web", file = %name, avoid, "фолбэк: открыт другой канвас");
     let _ = proxy.send_event(AppEvent::OpenScene {
         path: PathBuf::from(&name),

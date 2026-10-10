@@ -102,7 +102,6 @@ def main() -> int:
             page = ctx.new_page()
             rows += audit(page, url, [
                 "#w6-toolbar #btn-tour", "#w6-toolbar #btn-open",
-                "#w6-toolbar #btn-recent", "#w6-toolbar #btn-export",
                 "#w6-toolbar #btn-export-html",
                 "#author-bar a:nth-of-type(1)", "#author-bar a:nth-of-type(5)",
                 "#lang-picker-overlay button[data-lang='ru']",
@@ -110,20 +109,6 @@ def main() -> int:
                 "#lang-picker-overlay #role-skip",
                 "#lang-picker-overlay .consent label",
             ])
-
-            # Эллипсис #btn-recent жив после min-width: 44 (кап 240px из CR-014).
-            long_name = "godovoj-finansovyj-model-Q4-verificacija-final.canvas"
-            recent = page.evaluate(
-                """(name) => {
-                  const b = document.getElementById('btn-recent');
-                  b.textContent = 'Недавние: ' + name;
-                  const r = b.getBoundingClientRect();
-                  return [Math.round(r.width * 10) / 10, Math.round(r.height * 10) / 10];
-                }""",
-                long_name,
-            )
-            rows.append({"sel": "#btn-recent (длинное имя, эллипсис)", "visual": recent,
-                         "hit": recent, "cap": max(recent[0], 0)})
 
             # 2) «Об авторе»: overlay показан вручную (WASM нет — шим сам откроет).
             rows += audit(page, url, [
@@ -165,13 +150,9 @@ def main() -> int:
             failed += 1
             continue
         ok = r["hit"][0] >= MIN and r["hit"][1] >= MIN
-        # спец-строка эллипсиса: проверяем и кап 240px из CR-014
-        if "эллипсис" in r["sel"]:
-            ok = ok and r["hit"][0] <= 240.5
         failed += 0 if ok else 1
-        extra = " (и ≤240px кап)" if "эллипсис" in r["sel"] else ""
         print(f"{r['sel']:52} {r['visual'][0]:>6}x{r['visual'][1]:<7} "
-              f"{r['hit'][0]:>6}x{r['hit'][1]:<7}  {'PASS' if ok else 'FAIL <44'}{extra}")
+              f"{r['hit'][0]:>6}x{r['hit'][1]:<7}  {'PASS' if ok else 'FAIL <44'}")
 
     print(f"\nИТОГ: {'ЧИСТО — все цели ≥44×44' if failed == 0 else f'{failed} ЦЕЛИ НИЖЕ 44px'}")
     return 1 if failed else 0

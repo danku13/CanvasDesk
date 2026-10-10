@@ -99,8 +99,7 @@
       <div id="w6-toolbar">
         <button id="btn-tour" title="Открыть выбор тура">Тур</button>
         <button id="btn-open" title="Открыть .canvas с диска">Открыть с диска…</button>
-        <button id="btn-recent" title="Переоткрыть последний канвас">Недавние</button>
-        <button id="btn-export" title="Скачать последнюю сохранённую версию">Экспорт .canvas</button>
+        <button id="btn-export-html" title="Скачать самодостаточный HTML">Экспорт HTML</button>
       </div>
 
       <h2>Запуск сценариев</h2>
@@ -158,7 +157,7 @@
         var scenarios = [
           { s: CanvasDeskTour.scenarios.toolbarTourScenario,
             title: "Тур по панели хранилища",
-            desc: "5 шагов, anchor: #w6-toolbar / #btn-open / #btn-recent / #btn-export" },
+            desc: "3 шага, anchor: #w6-toolbar / #btn-open (FR-107 №37b: recent/export ушли — менеджер)" },
           { s: CanvasDeskTour.scenarios.firstRunInlineScenario,
             title: "Первый запуск (интерактив)",
             desc: "8 шагов, passive+waitFor(signal: canvas:note-created). Шаг 3 ждёт." },

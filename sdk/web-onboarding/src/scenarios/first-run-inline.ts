@@ -43,8 +43,8 @@ export const firstRunInlineScenario: TourScenario = {
       id: "locate-toolbar",
       title: "Панель хранилища",
       body:
-        "В правом верхнем углу — кнопки для работы с .canvas-файлами. " +
-        "Открыть, недавние, экспорт. Канвас автосохраняется в выбранный файл.",
+        "В правом верхнем углу — кнопки для работы с .canvas-файлами: " +
+        "открыть с диска, экспорт HTML. Канвас автосохраняется в выбранный файл.",
       side: "bottom",
       anchor: { kind: "selector", selector: "#w6-toolbar" },
     },

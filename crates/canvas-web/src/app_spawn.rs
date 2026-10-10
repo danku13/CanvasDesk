@@ -159,6 +159,10 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     // FR-105 (C2, №45b/№53b): watch внешних изменений granted-папки —
     // poll lastModified на focus/visibilitychange (DOM-листенеры).
     crate::fs_folder::install_watch(proxy.clone());
+    // FR-107 (C4, №12/№30b): флеш камеры при выгрузке/скрытии страницы
+    // (visibilitychange→hidden + pagehide → CameraFlushRequested → App
+    // отвечает CanvasCameraSave; запись — синхронный localStorage).
+    crate::camera_web::install_flush(proxy.clone());
     // M5 (T20-F): события host'а виджетов (WidgetEvent) — тем же паттерном,
     // что у сервисов W3; W11: Tick из setInterval (widgets_web) тоже идёт
     // сюда и будит цикл как на нативе.
@@ -252,6 +256,22 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     if params.migrate {
         tracing::info!(target: "canvas_web", "?migrate=1 — отладочный вход в диалог миграции");
         app.open_migration_dialog();
+    }
+    // FR-107 (C4, №12/№30b): камера стартового канваса — восстановить из
+    // localStorage (старт строит сцену напрямую, без on_open_scene;
+    // применение — тот же обработчик, что у ответа CanvasCameraRestored;
+    // нагрузочный ?stress — сцена синтетическая, камера дефолт).
+    if params.stress.is_none() {
+        if let Some(name) = crate::web_state::active_name() {
+            let snapshot = crate::camera_web::load(&name);
+            tracing::debug!(
+                target: "canvas_web",
+                file = %name,
+                restored = snapshot.is_some(),
+                "камера стартового канваса (FR-107 №12)"
+            );
+            app.apply_startup_camera(snapshot);
+        }
     }
     // W11: тик LOD/refresh — setInterval 1 с (зеркало widget-tick-потока)
     crate::widgets_web::web::install_tick(widget_sender);

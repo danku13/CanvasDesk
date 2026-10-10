@@ -2673,8 +2673,9 @@ fn save_now_goes_through_injected_storage() {
     assert_eq!(storage.len(), 1, "хранилище получило файл");
     let loaded = storage.load(&path).expect("файл читается из хранилища");
     assert!(loaded.nodes.is_empty(), "roundtrip пустой сцены");
-    // Повторный сейв: dirty_since сброшен — autosave_if_due не пишет.
-    assert!(!scene.autosave_if_due(), "не dirty — записи нет");
+    // Повторный сейв: dirty_since сброшен — autosave_if_due не пишет
+    // (FR-107 C4: None — сейв не был назначен).
+    assert!(scene.autosave_if_due().is_none(), "не dirty — записи нет");
 }
 
 /// CR-016: автоимя сценария (пустое имя) — первый свободный номер, а не
