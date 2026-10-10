@@ -1,112 +1,113 @@
-# 03 — Отступы, радиусы, высоты
+# 03 — Spacing, radii, heights
 
-> Шкалы: `design/tokens/dimensions.json` ↔ `canvas_core::tokens`
-> (SPACING_*/RADIUS_*). Потребители обязаны брать значения из шкалы;
-> литералы в модулях поверхностей запрещены (аудит G5/G8).
+> Scales: `design/tokens/dimensions.json` ↔ `canvas_core::tokens`
+> (SPACING_*/RADIUS_*). Consumers must take values from the scale;
+> literals in surface modules are forbidden (G5/G8 audit).
 
-## S1. Шкала отступов
+## S1. Spacing scale
 
-| Токен | Значение | Типовое применение |
+| Token | Value | Typical use |
 |---|---|---|
-| SPACING_S | 6 | зазор чипов в баре, зазор строк, LIST_ROW_GAP |
-| SPACING_SM | 8 | внутренние поля таблиц сравнения, зазор контролов (GAP_CONTROLS) |
-| SPACING_MD | 10 | паддинг баров/панелей (BAR_PADDING), поля empty-кнопок |
-| SPACING_LG | 12 | внешние отступы панелей (PANEL_PAD, BAR_MARGIN, карточные поля TITLE_PADDING/BODY_PADDING) |
-| SPACING_XL | 24 | воздух больших поверхностей (панель галереи ↔ вьюпорт) |
+| SPACING_S | 6 | chip gap in a bar, row gap, LIST_ROW_GAP |
+| SPACING_SM | 8 | inner padding of comparison tables, control gap (GAP_CONTROLS) |
+| SPACING_MD | 10 | bar/panel padding (BAR_PADDING), empty-button padding |
+| SPACING_LG | 12 | outer margins of panels (PANEL_PAD, BAR_MARGIN), card TITLE_PADDING/BODY_PADDING |
+| SPACING_XL | 24 | breathing room of large surfaces (gallery panel ↔ viewport) |
 
-Правило выбора: внутренние зазоры — S/SM, паддинг контейнеров — MD/LG,
-внешние поля от краёв вьюпорта — LG/XL. Полшага (7, 9, 11) запрещён.
+Selection rule: inner gaps — S/SM, container padding — MD/LG,
+outer margins from the viewport edges — LG/XL. Half-steps (7, 9, 11) are
+forbidden.
 
-## S2. Шкала радиусов
+## S2. Radius scale
 
-| Токен | Значение | Применение |
+| Token | Value | Use |
 |---|---|---|
-| RADIUS_CHIP | 6 | чипы, кнопки, empty/фильтр-кнопки галереи |
-| RADIUS_CARD | 10 | карточки нод (CORNER_RADIUS; FR-075: 8→10 prototype-unified — правка 2026-09 прошла мимо этой папки, аудит 2026-10-09 синхронизировал) |
-| RADIUS_PANEL | 10 | панели (галерея, модалки, docs) |
-| RADIUS_PILL | 12 | пилюли: чипы категорий, свитч-трек, пилюли бейджей |
+| RADIUS_CHIP | 6 | chips, buttons, gallery empty/filter buttons |
+| RADIUS_CARD | 10 | node cards (CORNER_RADIUS; FR-075: 8→10 prototype-unified — the 2026-09 edit bypassed this folder, the 2026-10-09 audit synced it) |
+| RADIUS_PANEL | 10 | panels (gallery, modals, docs) |
+| RADIUS_PILL | 12 | pills: category chips, switch track, badge pills |
 
-Новый радиус вне шкалы запрещён; «почти пилюля» (10.5) не существует.
-Отдельное значение вне шкалы — рамка минимапы 8 (`minimap.rs`, свой
-use-case `../use-cases/minimap.md`); унификация с RADIUS_CARD — решение
-владельца через правку этого файла (I-1).
+A new radius outside the scale is forbidden; an "almost pill" (10.5) does not
+exist. The one separate off-scale value is the minimap border, 8 (`minimap.rs`,
+its own use case `../use-cases/minimap.md`); unifying it with RADIUS_CARD is
+an owner decision via an edit of this file (I-1).
 
-## S3. Фиксированные высоты компонентов (кит v1/v2)
+## S3. Fixed component heights (kit v1/v2)
 
-| Компонент | Константа | Значение |
+| Component | Constant | Value |
 |---|---|---|
-| Кнопка | BUTTON_HEIGHT | 30 (гориз. паддинг 12) |
-| Иконка-кнопка | ICON_BUTTON_SIZE | 26 |
-| Чип | CHIP_HEIGHT | 24 (гориз. паддинг 8) |
-| Текстовое поле | TEXT_FIELD_HEIGHT | 30 (мин. ширина 80, паддинг 8) |
-| Строка списка | LIST_ROW_H | 26 (зазор 6) |
-| Свитч | SWITCH_W × SWITCH_H | 36 × 20 (кноб-пад 2) |
-| Скроллбар | SCROLLBAR_WIDTH | 4 (кноб ≥ 20) |
-| Хедер карточки ноды | HEADER_HEIGHT | 34 (FR-023: 28 → 34 под кегль 16+14 %) |
-| Кнопка empty-state | EMPTY_BTN_H | 34 |
-| Тултип | offset (14, 18) | задержка 500 мс, ширина-клип 380 |
-| Шапка панели S/M/L | PANEL_HEADER_H_S/M/L | 30 / 38 / 44 (tokens.dimensions.json panel_header; аудит 2026-10-09: внесены в правило — до этого жили только в токенах) |
+| Button | BUTTON_HEIGHT | 30 (horizontal padding 12) |
+| Icon button | ICON_BUTTON_SIZE | 26 |
+| Chip | CHIP_HEIGHT | 24 (horizontal padding 8) |
+| Text field | TEXT_FIELD_HEIGHT | 30 (min width 80, padding 8) |
+| List row | LIST_ROW_H | 26 (gap 6) |
+| Switch | SWITCH_W × SWITCH_H | 36 × 20 (knob pad 2) |
+| Scrollbar | SCROLLBAR_WIDTH | 4 (knob ≥ 20) |
+| Node card header | HEADER_HEIGHT | 34 (FR-023: 28 → 34 for the 16+14 % type size) |
+| Empty-state button | EMPTY_BTN_H | 34 |
+| Tooltip | offset (14, 18) | 500 ms delay, clip width 380 |
+| Panel header S/M/L | PANEL_HEADER_H_S/M/L | 30 / 38 / 44 (tokens.dimensions.json panel_header; 2026-10-09 audit: added to the rule — before that they lived only in tokens) |
 
-Живые отклонения от S/M/L (TODO W-d в коде, миграция — волна W1 аудита):
-scheme_gallery 40→38, autolink 58→44. До миграции значение в коде
-приоритетно (I-1), после — константы удаляются. (Строка «explain 56→44»
-закрыта LAY-W7, 04de817: `explain_ui::HEADER_H = PANEL_HEADER_H_L`;
-синхронизировано LAY-W19.)
+Live deviations from S/M/L (TODO W-d in code; migration — audit wave W1):
+scheme_gallery 40→38, autolink 58→44. Until the migration the value in code
+takes priority (I-1); after it the constants are removed. (The "explain 56→44"
+line was closed by LAY-W7, 04de817: `explain_ui::HEADER_H = PANEL_HEADER_H_L`;
+synced by LAY-W19.)
 
-S3-производные высоты — контейнеры полос панелей, значения вне шкалы S3
-как самостоятельные компоненты (LAY-W7, 04de817: арифметика производной
-задокументирована в коде, значения запинены `lay_w7_heights_are_canonical_s3`;
-строки внесены в правило LAY-W19):
+S3-derived heights — panel-strip containers, values outside the S3 scale
+as standalone components (LAY-W7, 04de817: the derivative arithmetic is
+documented in code, the values are pinned `lay_w7_heights_are_canonical_s3`;
+the rows were added to the rule by LAY-W19):
 
-| Компонент | Константа | Значение | Обоснование (S3-производная) |
+| Component | Constant | Value | Rationale (S3-derived) |
 |---|---|---|---|
-| Полоса контекст-чипов агента | `agent_panel` CTX_H | 32 | chip-row container: чипы CHIP_HEIGHT 24 центрируются в 32-px полосе |
-| Полоса ввода агента | `agent_panel` INPUT_H | 44 | контейнер строки ввода = MIN_TOUCH_TARGET 44 (LAY8.3); поле внутри — TEXT_FIELD_HEIGHT 30 |
-| Полоса quick-actions агента | `agent_panel` QUICK_H | 36 | chip-row container: пилюли CHIP_HEIGHT 24 в 36-px полосе |
-| Пилюля веера calc (2 строки) | `calc_panel_ui` PILL_H_TWO_LINE | 34 | 2 строки × TITLE_LINE_H 17 + 2×пад (число совпадает с CARD_HEADER_HEIGHT, семантика — пилюля веера, не шапка) |
-| Пилюля веера calc (1 строка) | `calc_panel_ui` PILL_H_ONE_LINE | 20 | 1 строка × TITLE_LINE_H 17 + 2×пад (число совпадает с SWITCH_H, семантика — пилюля, не свитч) |
+| Agent context-chip strip | `agent_panel` CTX_H | 32 | chip-row container: CHIP_HEIGHT 24 chips centered in the 32-px strip |
+| Agent input strip | `agent_panel` INPUT_H | 44 | input-row container = MIN_TOUCH_TARGET 44 (LAY8.3); the field inside is TEXT_FIELD_HEIGHT 30 |
+| Agent quick-actions strip | `agent_panel` QUICK_H | 36 | chip-row container: CHIP_HEIGHT 24 pills in the 36-px strip |
+| Calc fan pill (2 lines) | `calc_panel_ui` PILL_H_TWO_LINE | 34 | 2 lines × TITLE_LINE_H 17 + 2×pad (the number matches CARD_HEADER_HEIGHT, the semantics is a fan pill, not a header) |
+| Calc fan pill (1 line) | `calc_panel_ui` PILL_H_ONE_LINE | 20 | 1 line × TITLE_LINE_H 17 + 2×pad (the number matches SWITCH_H, the semantics is a pill, not a switch) |
 
-Новая «S3-производная» высота заводится правкой этой таблицы в коммите
-с кодом (I-1 — аналогично «Исключениям» LAY7 в `11-layouts.md`).
+A new "S3-derived" height is introduced by editing this table in the commit
+with the code (I-1 — analogous to the LAY7 "Exceptions" in `11-layouts.md`).
 
-Правило: высоты — константы кита, не параметры вызова. Новый компонент
-наследует ближайшую высоту из этой таблицы.
+Rule: heights are kit constants, not call parameters. A new component
+inherits the closest height from this table.
 
-## S4. Зазоры поверхностей
+## S4. Surface gaps
 
-| Пара | Значение |
+| Pair | Value |
 |---|---|
-| Дропдаун ↔ якорь | DROPDOWN_GAP 4 |
-| Пилюля what-if enter ↔ низ | 44 (всплытие над баром +26) |
-| Тост-зона ↔ низ вьюпорта | 44 |
-| Угловой кластер ⚙/тема/? | SETTINGS_BUTTON 36, MARGIN 12, GAP 8 |
-| Миникарта ↔ край | MARGIN 16 |
-| Поиск/палитра ↔ край | 12 |
-| Клик-зона порта | 10 (пресеты 10/14/20/28/40, кламп [10,40]) |
-| Точность хита ребра | EDGE_HIT_TOLERANCE 6 (или полтолщины + 2) |
-| Ресайз-ручка карточки | 16 |
+| Dropdown ↔ anchor | DROPDOWN_GAP 4 |
+| What-if enter pill ↔ bottom | 44 (floats +26 above the bar) |
+| Toast zone ↔ viewport bottom | 44 |
+| Corner cluster ⚙/theme/? | SETTINGS_BUTTON 36, MARGIN 12, GAP 8 |
+| Minimap ↔ edge | MARGIN 16 |
+| Search/palette ↔ edge | 12 |
+| Port click zone | 10 (presets 10/14/20/28/40, clamp [10,40]) |
+| Edge hit tolerance | EDGE_HIT_TOLERANCE 6 (or half the stroke width + 2) |
+| Card resize handle | 16 |
 
-Off-scale микрозначения, замороженные прототипами, — перечень в
-`11-layouts.md` §LAY7 «Исключения» (палитра команд: 5/5/3/2).
+Off-scale micro-values frozen by the prototypes are listed in
+`11-layouts.md` §LAY7 "Exceptions" (command palette: 5/5/3/2).
 
-## S5. Сетка канваса и прилипание
+## S5. Canvas grid and snapping
 
-Минорная сетка 20, мажорная 100 (GridDensity::Medium); суб-сетка (minor/2)
-при zoom > 1.5, крупная (major) при zoom < 0.5; допуск прилипания 8 screen px.
-Коллизия/упаковка выключена по умолчанию.
+Minor grid 20, major 100 (GridDensity::Medium); a sub-grid (minor/2)
+at zoom > 1.5, the large one (major) at zoom < 0.5; snap tolerance 8 screen px.
+Collision/packing are off by default.
 
-## S6. Плотности (контроль переполнения)
+## S6. Densities (overflow control)
 
-> Норматив политик переполнения и адаптивности — `11-layouts.md`
-> (LAY3 политики, LAY4 flex-факторы, LAY8 вьюпорты/деградация); здесь —
-> сводка значений.
+> The normative source for the overflow and adaptivity policies is `11-layouts.md`
+> (LAY3 policies, LAY4 flex factors, LAY8 viewports/degradation); here —
+> a summary of values.
 
-- `Fit`-переполнение ряда НЕ маскируется — его ловит линт G4 на трёх
-  референсных вьюпортах (1280×800 / 1024×640 / 800×560).
-- Узкий слот деградирует именованно: `RowPolicy::SqueezeTail` (хвост сжимается
-  до нуля, не пикается) — замена молчаливым `take()`.
-- Wrap-упаковка: высота строки = max детей, gap по обеим осям; число видимых
-  строк определяет высота слота.
-- Тело ноды: зазор колонок 8 (узловой токен table.node_guide_gap), китовый
-  guide_gap 6; зебра включается при прогоне ≥ 4 строк; кламп описания —
-  2 строки («⋯ целиком ▾»).
+- Row `Fit` overflow is NOT masked — the G4 lint catches it on the three
+  reference viewports (1280×800 / 1024×640 / 800×560).
+- A narrow slot degrades by name: `RowPolicy::SqueezeTail` (the tail is squeezed
+  to zero, not dropped) — a replacement for a silent `take()`.
+- Wrap packing: row height = max of the children, gap on both axes; the slot
+  height determines the number of visible rows.
+- Node body: column gap 8 (node token table.node_guide_gap), kit
+  guide_gap 6; zebra striping turns on at a run of ≥ 4 rows; the description
+  clamp is 2 lines («⋯ целиком ▾» ("⋯ full ▾")).

@@ -1,107 +1,107 @@
-# 01 — Цвета
+# 01 — Colors
 
-> Слой примитивов: `design/tokens/colors.json` ↔ `canvas_core::tokens`.
-> Семантика: `crates/canvas-render/src/theme.rs` (ThemeColors, 36+ слотов).
-> Формат: sRGB, f32-массивы 0..1 RGBA либо u8-байты RGB.
+> Primitive layer: `design/tokens/colors.json` ↔ `canvas_core::tokens`.
+> Semantics: `crates/canvas-render/src/theme.rs` (ThemeColors, 36+ slots).
+> Format: sRGB, f32 arrays 0..1 RGBA or u8 RGB bytes.
 
-## C1. Единственный акцент
+## C1. The single accent
 
-`accent = [0.396, 0.612, 0.969, 1.0]` (#65A0F7) — единый источник всей
-акцентной семьи. Акцентным цветом помечается всё «выбранное/активное/
-тянущееся»: рамка выделения карточки, рамка фокуса, черновая связь, хром
-виджета при hover, drop-зоны, выделение текста, группы.
+`accent = [0.396, 0.612, 0.969, 1.0]` (#65A0F7) — the single source of the whole
+accent family. Everything "selected/active/being-stretched" is marked with the accent
+color: the card selection border, the focus border, the draft edge, widget
+chrome on hover, drop zones, text selection, groups.
 
-| Производная | Значение | Где |
+| Derivative | Value | Where |
 |---|---|---|
-| Рамка выделения/фокуса | accent α1.0 | cards.rs SELECTION_BORDER/FOCUS_EDGE |
-| Черновая (резиновая) связь | accent α0.70 | EDGE_DRAFT |
-| Хром виджета при hover | accent α0.10 | WIDGET_CHROME_HOVER_FILL |
-| Drop-заливка/рамка/зона | accent α0.10/0.70/0.50 | DROP_GHOST_* |
-| Выделение текста | accent α0.35 | selection_fill |
-| Группы (fill/border) | dark: α0.08/0.40 · light: α0.10/0.50 | group_fill/group_border |
+| Selection/focus border | accent α1.0 | cards.rs SELECTION_BORDER/FOCUS_EDGE |
+| Draft (rubber-band) edge | accent α0.70 | EDGE_DRAFT |
+| Widget chrome on hover | accent α0.10 | WIDGET_CHROME_HOVER_FILL |
+| Drop fill/border/zone | accent α0.10/0.70/0.50 | DROP_GHOST_* |
+| Text selection | accent α0.35 | selection_fill |
+| Groups (fill/border) | dark: α0.08/0.40 · light: α0.10/0.50 | group_fill/group_border |
 
-Правило: не заводить «второй синий». Нужен оттенок — производная акцента
-через альфа-ступень, зафиксированная в таблице выше.
+Rule: do not introduce a "second blue". A shade is needed — a derivative of the accent
+through an alpha step fixed in the table above.
 
-## C2. Альфа-ступени
+## C2. Alpha steps
 
-Разрешённый набор прозрачностей (opacity_steps): **0.08, 0.10, 0.22, 0.30,
+The allowed set of transparencies (opacity_steps): **0.08, 0.10, 0.22, 0.30,
 0.35, 0.38, 0.40, 0.50, 0.55, 0.60, 0.65, 0.70, 0.85, 0.90, 0.92, 0.95, 0.97**.
-Новая альфа = правка ступеней + кода, не локальное `a: 0.37`. Ступени —
-фиксация реально используемого набора, а не свободная палитра
-(аудит 2026-10-09: 0.38 внесена как реально используемая — рамки
-chat-bubble, источник agent_panel.rs).
+A new alpha = an edit of the steps + code, not a local `a: 0.37`. The steps are
+a record of the set actually in use, not a free palette
+(the 2026-10-09 audit: 0.38 was entered as actually used — chat-bubble
+borders, source agent_panel.rs).
 
-## C3. Семантические состояния (не темы)
+## C3. Semantic states (not themes)
 
-Цвета состояний едины для тёмной/светлой темы, если явно не указано обратное:
+State colors are the same for the dark/light theme unless explicitly stated otherwise:
 
-| Семантика | Токен | Значение | Применение |
+| Semantics | Token | Value | Usage |
 |---|---|---|---|
-| Ошибка | `error` | #E55C5C | строка результата с ошибкой, danger-кнопка |
-| Битая ссылка | `state.broken` | #737373 | рамка карточки с битым портом |
-| Подсветка ==текст== | `state.highlight` | [0.85,0.75,0.30,0.30] | заливка выделенного текста |
-| What-if строка | `whatif_fill` | [0.30,0.55,0.95,0.22] | фон сравниваемых строк |
-| What-if чип | `whatif_chip` / `chip_dim` | [0.30,0.55,0.95,1] / #242A33 | активный/приглушённый чип |
-| Дельта-бейдж | `whatif_badge` | #DFA63E | дельты сценария |
-| HUD | `hud` | #659CF8 (+ тень #101012) | F3-оверлей |
-| Пульс результата | `pulse_result` | #FFD959 (альфа анимируется) | рамка карточки с свежим результатом |
-| Explain-лист | `explain_leaf` | #9FD6FF dark / #1C6EA8 light | дерево расчёта |
-| Успех | `control_success` | derived (theme.rs, FR-070) | бейджи done/completed, chat-bubble Success |
-| Предупреждение | `control_warning` | derived (theme.rs, FR-070) | paused, low-quota, Banner::Warning |
+| Error | `error` | #E55C5C | a result line with an error, the danger button |
+| Broken link | `state.broken` | #737373 | the border of a card with a broken port |
+| `==текст==` highlight | `state.highlight` | [0.85,0.75,0.30,0.30] | the fill of highlighted text |
+| What-if line | `whatif_fill` | [0.30,0.55,0.95,0.22] | the background of compared lines |
+| What-if chip | `whatif_chip` / `chip_dim` | [0.30,0.55,0.95,1] / #242A33 | the active/muted chip |
+| Delta badge | `whatif_badge` | #DFA63E | scenario deltas |
+| HUD | `hud` | #659CF8 (+ shadow #101012) | the F3 overlay |
+| Result pulse | `pulse_result` | #FFD959 (alpha animated) | the border of a card with a fresh result |
+| Explain sheet | `explain_leaf` | #9FD6FF dark / #1C6EA8 light | the calculation tree |
+| Success | `control_success` | derived (theme.rs, FR-070) | done/completed badges, chat-bubble Success |
+| Warning | `control_warning` | derived (theme.rs, FR-070) | paused, low-quota, Banner::Warning |
 
-## C4. Рёбра
+## C4. Edges
 
-| Тип | Цвет | Смысл |
+| Type | Color | Meaning |
 |---|---|---|
-| `edge.default` | [0.52,0.58,0.66,1] | нейтральная связь |
-| `edge.flow` | [0.13,0.66,0.55,1] (teal) | value-связь (проливание значений) |
-| `edge.draft` | accent α0.70 | резиновая линия при протягивании |
-| Amber (severity[0]) | dark [0.961,0.651,0.137] | unmapped-связь, предупреждение |
+| `edge.default` | [0.52,0.58,0.66,1] | a neutral edge |
+| `edge.flow` | [0.13,0.66,0.55,1] (teal) | a value edge (value spill) |
+| `edge.draft` | accent α0.70 | the rubber-band line while dragging |
+| Amber (severity[0]) | dark [0.961,0.651,0.137] | an unmapped edge, a warning |
 
-Приоритет перекраски ребра: focus (accent) > broken/amber > flow (teal) >
-default; не-фокусные рёбра затемняются до floor α0.35 (см. 06-motion, focus_fade).
+Edge recolor priority: focus (accent) > broken/amber > flow (teal) >
+default; non-focused edges darken to the floor α0.35 (see 06-motion, focus_fade).
 
-## C5. Диалоги и тосты
+## C5. Dialogs and toasts
 
-Панель диалога: fill [0.09,0.11,0.15,0.97], рамка [0.23,0.51,0.96,1] (акцент-
-родственный синий), кнопка primary [0.16,0.32,0.60,1], secondary
-[0.20,0.23,0.29,1], рамка кнопок [0.35,0.40,0.50,1], текст #E8ECF4,
-вторичный текст #B6BECE. Тост: текст #F0E6C2 (тёплая бумага) на тёмном
-статичном фоне. Эти цвета — слоты, не литералы; светлая тема берёт их из
+Dialog panel: fill [0.09,0.11,0.15,0.97], border [0.23,0.51,0.96,1] (a blue
+related to the accent), primary button [0.16,0.32,0.60,1], secondary
+[0.20,0.23,0.29,1], button borders [0.35,0.40,0.50,1], text #E8ECF4,
+secondary text #B6BECE. Toast: text #F0E6C2 (warm paper) on a dark
+static background. These colors are slots, not literals; the light theme takes them from
 ThemeColors.
 
-## C6. Wheel-меню
+## C6. Wheel menu
 
-Дим-диск поверх мира [0,0,0,0.35]; сектор категории [0.17,0.18,0.22,0.92];
-сектор шаблона [0.20,0.22,0.27,0.92]; hover/активный хаб [0.18,0.29,0.48,0.95];
-рамка [0.22,0.24,0.30,0.90]. Прозрачности 0.90–0.95 — обязательны: под меню
-виден канвас.
+Dim disk over the world [0,0,0,0.35]; category sector [0.17,0.18,0.22,0.92];
+template sector [0.20,0.22,0.27,0.92]; hover/active hub [0.18,0.29,0.48,0.95];
+border [0.22,0.24,0.30,0.90]. Transparencies 0.90–0.95 are mandatory: the canvas
+is visible under the menu.
 
-## C7. Слоты состояний контролов
+## C7. Control state slots
 
-hover/selected/disabled — слоты ThemeColors (не вычисления на месте):
+hover/selected/disabled — ThemeColors slots (not on-the-spot computations):
 
-| Слот | Dark | Light |
+| Slot | Dark | Light |
 |---|---|---|
 | control_hover_fill | [0.183,0.183,0.229,0.97] | [1,1,1,0.97] |
-| control_selected_fill | = hover (сегодня неразличимы; дифференциация — v2) | = hover |
-| control_primary_hover_fill | [0.248,0.456,0.84,1] (обе темы) | ← |
-| control_disabled_text | #8A909C (обе темы) | ← |
+| control_selected_fill | = hover (indistinguishable today; differentiation — v2) | = hover |
+| control_primary_hover_fill | [0.248,0.456,0.84,1] (both themes) | ← |
+| control_disabled_text | #8A909C (both themes) | ← |
 
-Правило: hover-заливка строки/кнопки берётся слотом; формула
-`c·1.3 + 0.04` осталась в истории — в коде её писать запрещено.
+Rule: the hover fill of a row/button is taken as a slot; the formula
+`c·1.3 + 0.04` remains in history — writing it in code is forbidden.
 
-## C8. Запрещённые приёмы
+## C8. Forbidden practices
 
-- Цветовой литерал в билдере компонента/поверхности (G1) — дефект
-  (тест-фикстуры `#[cfg(test)]` — не билдеры, исключены из G1).
-- Цветовая арифметика в `canvas-ui` (осветление/затемнение на месте,
-  rgb-подмена/умножения).
-- Исключение — alpha-tint слота: `canvas_ui::paint::tint(slot, α)` заменяет
-  ТОЛЬКО альфа-канал слота константой из C2 (banner α0.10, chat-bubble
-  α0.08/0.38, radio-card α0.10). rgb не трогается — новых цветов не
-  порождается (аудит 2026-10-09: паттерн легализован, до этого был
-  серой зоной П4).
-- Новая альфа вне C2; новый «акцентный» цвет вне акцента.
-- Цвет до шейдера иначе, чем через экземпляр ThemeColors/KitPalette.
+- A color literal in a component/surface builder (G1) — a defect
+  (test fixtures `#[cfg(test)]` are not builders, excluded from G1).
+- Color arithmetic in `canvas-ui` (lightening/darkening on the spot,
+  rgb substitution/multiplications).
+- Exception — the alpha-tint of a slot: `canvas_ui::paint::tint(slot, α)` replaces
+  ONLY the alpha channel of the slot with a constant from C2 (banner α0.10, chat-bubble
+  α0.08/0.38, radio-card α0.10). rgb is not touched — no new colors are
+  produced (the 2026-10-09 audit: the pattern was legitimized; before that it was
+  a gray zone of П4).
+- A new alpha outside C2; a new "accent" color outside the accent.
+- Color reaches the shader in no way other than through a ThemeColors/KitPalette instance.
