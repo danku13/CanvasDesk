@@ -88,11 +88,18 @@ pub fn button_style(variant: ButtonVariant, state: KitState, p: &KitPalette) -> 
         ButtonVariant::Inverse => p.accent,
     };
     let fill = match state {
-        KitState::Normal | KitState::Selected | KitState::Focused | KitState::Dragged | KitState::Error => base_fill,
+        KitState::Normal
+        | KitState::Selected
+        | KitState::Focused
+        | KitState::Dragged
+        | KitState::Error => base_fill,
         KitState::Hovered => match variant {
             ButtonVariant::Primary | ButtonVariant::Inverse => p.primary_hover_fill,
-            ButtonVariant::Secondary | ButtonVariant::Ghost | ButtonVariant::Tertiary
-            | ButtonVariant::Text | ButtonVariant::Danger => p.hover_fill,
+            ButtonVariant::Secondary
+            | ButtonVariant::Ghost
+            | ButtonVariant::Tertiary
+            | ButtonVariant::Text
+            | ButtonVariant::Danger => p.hover_fill,
         },
         KitState::Pressed => match variant {
             ButtonVariant::Primary | ButtonVariant::Inverse => p.primary_hover_fill,
@@ -101,7 +108,9 @@ pub fn button_style(variant: ButtonVariant, state: KitState, p: &KitPalette) -> 
         KitState::Disabled => base_fill,
     };
     let border = match (variant, state) {
-        (ButtonVariant::Ghost | ButtonVariant::Text, KitState::Hovered | KitState::Pressed) => p.accent,
+        (ButtonVariant::Ghost | ButtonVariant::Text, KitState::Hovered | KitState::Pressed) => {
+            p.accent
+        }
         (ButtonVariant::Ghost | ButtonVariant::Text, _) => [0.0, 0.0, 0.0, 0.0],
         _ => p.control_border,
     };

@@ -521,6 +521,11 @@ pub mod keys {
     pub const KIT_BTN_SECONDARY: &str = "kit.button.secondary";
     pub const KIT_BTN_GHOST: &str = "kit.button.ghost";
     pub const KIT_BTN_DANGER: &str = "kit.button.danger";
+    /// Fix main (Wave T af5ddb3 +3 варианта ButtonVariant): заголовки рядов
+    /// витрины для новых вариантов (пока не в `button_rows` — exhaustiveness).
+    pub const KIT_BTN_TERTIARY: &str = "kit.button.tertiary";
+    pub const KIT_BTN_TEXT: &str = "kit.button.text";
+    pub const KIT_BTN_INVERSE: &str = "kit.button.inverse";
     /// Dropdown-демо витрины.
     pub const KIT_DROPDOWN_ANCHOR: &str = "kit.dropdown.anchor";
     pub const KIT_DROPDOWN_ITEM: &str = "kit.dropdown.item";
@@ -1493,6 +1498,9 @@ const RU: &[(&str, &str)] = &[
     (keys::KIT_BTN_SECONDARY, "Вторичная"),
     (keys::KIT_BTN_GHOST, "Призрачная"),
     (keys::KIT_BTN_DANGER, "Опасная"),
+    (keys::KIT_BTN_TERTIARY, "Третичная"),
+    (keys::KIT_BTN_TEXT, "Текстовая"),
+    (keys::KIT_BTN_INVERSE, "Инверсная"),
     (keys::KIT_DROPDOWN_ANCHOR, "Выпадающий список"),
     (keys::KIT_DROPDOWN_ITEM, "Пункт списка"),
     (keys::KIT_TOAST_BODY, "Тост: внизу по центру, 3 с (T21-A)"),
@@ -2888,6 +2896,9 @@ const EN: &[(&str, &str)] = &[
     (keys::KIT_BTN_SECONDARY, "Secondary"),
     (keys::KIT_BTN_GHOST, "Ghost"),
     (keys::KIT_BTN_DANGER, "Danger"),
+    (keys::KIT_BTN_TERTIARY, "Tertiary"),
+    (keys::KIT_BTN_TEXT, "Text"),
+    (keys::KIT_BTN_INVERSE, "Inverse"),
     (keys::KIT_DROPDOWN_ANCHOR, "Dropdown"),
     (keys::KIT_DROPDOWN_ITEM, "List item"),
     (keys::KIT_TOAST_BODY, "Toast: bottom center, 3 s (T21-A)"),

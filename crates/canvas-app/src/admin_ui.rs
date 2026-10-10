@@ -1099,7 +1099,7 @@ pub(crate) fn draw_components(
             let text = if cell.focused {
                 label(STATE_MATRIX_LABELS[5])
             } else {
-                label(STATE_MATRIX_LABELS[STATE_INDEX[cell.state as usize]])
+                label(STATE_MATRIX_LABELS[state_matrix_label_index(cell.state)])
             };
             d.label_center(cell.rect, &text, style.text, LABEL_SIZE);
             if cell.focused {
@@ -1125,7 +1125,7 @@ pub(crate) fn draw_components(
         let text = if cell.focused {
             label(STATE_MATRIX_LABELS[5])
         } else {
-            label(STATE_MATRIX_LABELS[STATE_INDEX[cell.state as usize]])
+            label(STATE_MATRIX_LABELS[state_matrix_label_index(cell.state)])
         };
         d.label_center(cell.rect, &text, style.text, 12.0);
         if cell.focused {
@@ -1313,10 +1313,26 @@ const STATE_MATRIX: [KitState; 5] = [
     KitState::Disabled,
 ];
 
-/// Маппинг KitState (порядок объявления: Normal/Hovered/Pressed/Disabled/
-/// Selected) → индекс колонки матрицы (Normal/Hover/Selected/Pressed/
-/// Disabled) — для подписи ячейки по состоянию.
-const STATE_INDEX: [usize; 5] = [0, 1, 3, 4, 2];
+/// Маппинг KitState → индекс колонки матрицы (Normal/Hover/Selected/
+/// Pressed/Disabled; Focused — 5-я колонка рядом) для подписи ячейки по
+/// состоянию.
+/// Fix main (Wave T af5ddb3): KitState вырос 5→8 и ПЕРЕУПОРЯДОЧИЛСЯ
+/// (Focused/Dragged между старыми вариантами — `as usize`-индексация
+/// константы уехала в панику). Исчерпывающий match компилируется на
+/// любом порядке и охраняет расширение; новые Wave T-состояния матрицей
+/// не демонстрируются (Dragged/Error — вне ST1, Error показан TextField) —
+/// безопасный фолбэк на колонку Normal.
+fn state_matrix_label_index(state: KitState) -> usize {
+    match state {
+        KitState::Normal => 0,
+        KitState::Hovered => 1,
+        KitState::Selected => 2,
+        KitState::Pressed => 3,
+        KitState::Disabled => 4,
+        KitState::Focused => 5,
+        KitState::Dragged | KitState::Error => 0,
+    }
+}
 
 // === FR-070 этап 2: секция «Наполнение» — empty/medium/full ================
 

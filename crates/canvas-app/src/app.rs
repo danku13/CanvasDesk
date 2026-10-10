@@ -493,7 +493,7 @@ pub enum AppEvent {
     /// баннер, режим папки жив.
     StorageReconnected,
     /// Открыть диалог миграции OPFS→папка (№42a): App запросит листинг
-    /// OPFS у моста (`StorageBridge::request_migration_list`).
+    /// OPFS обратным каналом (WebRequest::MigrateList).
     MigrateShowDialog,
     /// Листинг OPFS для чекбокс-листа диалога приехал.
     MigrateOpfsList(Vec<canvas_core::workspace::CanvasEntry>),
@@ -517,6 +517,9 @@ pub enum AppEvent {
 /// (FR-028 v2). Ответы приезжают обратно через `AppEvent` по
 /// `EventLoopProxy` (web_state::event_proxy). Документировано в FR-104
 /// §Обратный канал.
+/// FR-105 (C2): тот же канал — для действий хранилища рабочего
+/// пространства (баннер №44b / миграция №42a / перезагрузка №45b);
+/// отдельный мост НЕ заводится — конвейер один.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WebRequest {
     /// Обновить список канвасов (зеркало OpfsStore ← opfsList) — ответ
@@ -533,6 +536,28 @@ pub enum WebRequest {
     /// занятости). Источник — «Выбрать другой» модала Web Locks (№35a;
     /// TODO: C3 заменит на менеджер канвасов).
     CanvasFallback { avoid: String },
+    // --- FR-105 (мультиканвас C2): действия хранилища (issue #6) --------
+    /// «Переподключить» (№44b): requestPermission в жесте клика — успех
+    /// приедет [`AppEvent::StorageReconnected`] (баннер снимется).
+    StorageReconnect,
+    /// «Переключиться в браузерное» (№44b): активный канвас `name` с
+    /// текущим содержимым `json` (несохранённые правки не теряем) сеется
+    /// в OPFS, режим — OPFS.
+    StorageSwitchBrowser { name: String, json: String },
+    /// Листинг OPFS для чекбокс-листа диалога миграции (№42a) — ответ
+    /// [`AppEvent::MigrateOpfsList`].
+    MigrateList,
+    /// Пикер папки + исполнение миграции выбранных (№42a/№52a; пикер
+    /// требует жеста — кнопка «Переехать…» диалога).
+    MigrateRun { selected: Vec<String> },
+    /// Перезагрузить активный канвас после внешнего изменения (№45b):
+    /// `local_json` — несохранённые правки (None — правок не было),
+    /// уходят сперва в `.bak` («правки — в .bak»), сцена переоткрывается
+    /// текстом из папки ([`AppEvent::OpenScene`]).
+    StorageReloadExternal {
+        name: String,
+        local_json: Option<String>,
+    },
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -551,7 +576,7 @@ struct DropPreview {
 pub(crate) enum ToastAction {
     /// Перезагрузить активный канвас после внешнего изменения (№45b):
     /// локальные правки — сперва в `.bak`, сцена переоткрывается текстом
-    /// из папки (мост `StorageBridge::reload_after_external`).
+    /// из папки (WebRequest::StorageReloadExternal).
     ReloadExternal,
 }
 
@@ -1130,33 +1155,12 @@ pub trait WebOAuthBridge: Send + Sync {
     fn sign_out(&self) -> Result<(), String>;
 }
 
-// --- FR-105 (мультиканвас C2): мост web-хранилища ---------------------------
-
-/// Мост к платформенным операциям granted-папки (инъекция canvas-web при
-/// старте web-сборки через [`App::set_storage_bridge`]; натив — `None`,
-/// поверхности C2 на нативе не открываются — события web-only).
-/// Действия кнопок баннера №44b, диалога миграции №42a и тоста №45b
-/// уходят сюда: асинхронные FS-операции живут в web-слое, App владеет
-/// только UI-состоянием.
-pub trait StorageBridge: Send + Sync {
-    /// «Переподключить папку…» (жест клика): requestPermission; успех —
-    /// AppEvent::StorageReconnected (баннер снимется), отказ — баннер
-    /// остаётся (лог).
-    fn reconnect_folder(&self);
-    /// «Переключиться в браузерное» (№44b): активный канвас `name` с
-    /// текущим содержимым `json` сеется в OPFS, режим — OPFS.
-    fn switch_to_browser(&self, name: &str, json: &str);
-    /// Листинг OPFS для чекбокс-листа диалога миграции (ответ —
-    /// AppEvent::MigrateOpfsList).
-    fn request_migration_list(&self);
-    /// Пикер папки + исполнение миграции выбранных (№42a/№52a; пикер
-    /// требует жеста — кнопка «Переехать…» диалога).
-    fn run_migration(&self, selected: &[String]);
-    /// Перезагрузить активный канвас после внешнего изменения (№45b):
-    /// `local_json` — несохранённые правки (None — правок не было),
-    /// уходят сперва в `.bak` («правки — в .bak»).
-    fn reload_after_external(&self, name: &str, local_json: Option<&str>);
-}
+// --- FR-105 (мультиканвас C2): действия хранилища идут обратным каналом ----
+// Баннер №44b / диалог миграции №42a / перезагрузка №45b НЕ заводят
+// отдельного моста: те же [`WebRequest`]-ы + дренаж TourAwareApp, что и у
+// конвейера C1 (FR-104 §Обратный канал) — асинхронные FS-операции
+// исполняет web-слой (`web_requests::handle`), App владеет только
+// UI-состоянием.
 
 /// W2 п.8: контекст отложенного suggest-ранжирования (wasm): lex-ответ уже
 /// на экране, LLM mm-ранжирование приедет через executor — fusion по
@@ -1519,9 +1523,6 @@ pub struct App {
     /// Toast-строка (T21-A: bridge-toast, ошибки установки): живёт 3 с.
     toast: Option<(String, Instant)>,
     // --- FR-105 (мультиканвас C2): хранилище рабочего пространства ------
-    /// Мост к операциям granted-папки (инъекция canvas-web; натив — None,
-    /// поверхности C2 на нативе не открываются — события web-only).
-    storage_bridge: Option<std::sync::Arc<dyn StorageBridge>>,
     /// Баннер потери доступа к папке (№44b): Some(detail) — показан.
     storage_banner: Option<String>,
     /// Диалог миграции OPFS→папка (№42a/№52a).
@@ -2060,7 +2061,6 @@ impl App {
             dialog: None,
             toast: None,
             // FR-105 (мультиканвас C2): хранилище рабочего пространства
-            storage_bridge: None,
             storage_banner: None,
             migrate: crate::storage_ui::MigrateState::default(),
             toast_action: None,
@@ -9730,14 +9730,12 @@ impl App {
         self.request_redraw();
     }
 
-    /// Кнопка «Переподключить» баннера (№44b): мост дергает
-    /// requestPermission В ЖЕСТЕ клика; успех придёт StorageReconnected.
+    /// Кнопка «Переподключить» баннера (№44b): запрос уходит обратным
+    /// каналом (WebRequest) — web-слой дёрнет requestPermission В ЖЕСТЕ
+    /// клика (дренаж TourAwareApp после события); успех придёт
+    /// StorageReconnected.
     fn click_storage_reconnect(&mut self) {
-        if let Some(bridge) = self.storage_bridge.clone() {
-            bridge.reconnect_folder();
-        } else {
-            tracing::debug!(target: "app", "мост хранилища не инъектирован (натив?)");
-        }
+        self.pending_web_requests.push(WebRequest::StorageReconnect);
     }
 
     /// Кнопка «Переключиться в браузерное» баннера (№44b): активный канвас
@@ -9746,23 +9744,19 @@ impl App {
     fn click_storage_switch_browser(&mut self) {
         let name = self.active_canvas_name();
         let json = self.scene.canvas.to_json().unwrap_or_default();
-        if let Some(bridge) = self.storage_bridge.clone() {
-            bridge.switch_to_browser(&name, &json);
-        } else {
-            tracing::debug!(target: "app", "мост хранилища не инъектирован (натив?)");
-        }
+        self.pending_web_requests
+            .push(WebRequest::StorageSwitchBrowser { name, json });
         self.storage_banner = None;
         self.request_redraw();
     }
 
     /// №42a: открыть диалог миграции (строка менеджера — волна C3; до
-    /// неё — отладочный вход `?migrate=1`). Листинг OPFS запросит мост.
+    /// неё — отладочный вход `?migrate=1`). Листинг OPFS уедет обратным
+    /// каналом (WebRequest::MigrateList → MigrateOpfsList).
     pub fn open_migration_dialog(&mut self) {
         let active = self.active_canvas_name();
         self.migrate.open_with(&active);
-        if let Some(bridge) = self.storage_bridge.clone() {
-            bridge.request_migration_list();
-        }
+        self.pending_web_requests.push(WebRequest::MigrateList);
         self.request_redraw();
     }
 
@@ -9802,7 +9796,8 @@ impl App {
     }
 
     /// Кнопка «Перезагрузить» тоста (№45b): локальная версия сперва в
-    /// `.bak` («правки — в .bak»), сцена переоткрывается текстом из папки.
+    /// `.bak` («правки — в .bak»), сцена переоткрывается текстом из папки
+    /// (WebRequest → OpenScene из web-слоя).
     fn click_toast_reload_external(&mut self) {
         let name = self.active_canvas_name();
         let local_json = if self.scene.dirty_since.is_some() {
@@ -9810,11 +9805,8 @@ impl App {
         } else {
             None
         };
-        if let Some(bridge) = self.storage_bridge.clone() {
-            bridge.reload_after_external(&name, local_json.as_deref());
-        } else {
-            tracing::debug!(target: "app", "мост хранилища не инъектирован (натив?)");
-        }
+        self.pending_web_requests
+            .push(WebRequest::StorageReloadExternal { name, local_json });
         self.toast = None;
         self.toast_action = None;
         self.request_redraw();
@@ -9891,11 +9883,8 @@ impl App {
     fn run_migration_from_dialog(&mut self) {
         if self.migrate.any_checked() {
             let selected = self.migrate.selected_names();
-            if let Some(bridge) = self.storage_bridge.clone() {
-                bridge.run_migration(&selected);
-            } else {
-                tracing::debug!(target: "app", "мост хранилища не инъектирован (натив?)");
-            }
+            self.pending_web_requests
+                .push(WebRequest::MigrateRun { selected });
         }
     }
 
@@ -10058,13 +10047,6 @@ impl App {
     #[cfg(feature = "l1-llm")]
     pub fn set_web_oauth_bridge(&mut self, bridge: std::sync::Arc<dyn WebOAuthBridge>) {
         self.web_oauth_bridge = Some(bridge);
-    }
-
-    /// FR-105 (мультиканвас C2): инъекция web-моста хранилища (баннер
-    /// №44b / миграция №42a / перезагрузка №45b). Один раз при старте
-    /// web-сборки; до инъекции действия кнопок честно логируются.
-    pub fn set_storage_bridge(&mut self, bridge: std::sync::Arc<dyn StorageBridge>) {
-        self.storage_bridge = Some(bridge);
     }
 
     /// W3 (canvas-web): инъекция wasm-шва executor'а (spawn_local) +

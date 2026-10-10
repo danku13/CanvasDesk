@@ -244,15 +244,11 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     if let Some(name) = crate::web_locks::take_pending_busy() {
         app.set_pending_canvas_lock(Some(name));
     }
-    // FR-105 (мультиканвас C2): мост к granted-папке (баннер №44b /
-    // миграция №42a / перезагрузка №45b) — web-реализация поверх
-    // fs_folder; натив — мост не инъектируется (поверхности web-only).
-    app.set_storage_bridge(Arc::new(crate::fs_folder::WebStorageBridge::new(
-        proxy.clone(),
-    )));
     // FR-105 (C2, №42a): ?migrate=1 — ОТЛАДОЧНЫЙ вход в диалог миграции
     // OPFS→папка (временный до волны C3 — менеджер канвасов откроет его
-    // строкой «Переехать на диск…»; удалить в C3).
+    // строкой «Переехать на диск…»; удалить в C3). Действия диалога/баннера
+    // уходят обратным каналом WebRequest (конвейер FR-104) — отдельного
+    // моста не нужно, листинг приедет MigrateOpfsList-ом.
     if params.migrate {
         tracing::info!(target: "canvas_web", "?migrate=1 — отладочный вход в диалог миграции");
         app.open_migration_dialog();

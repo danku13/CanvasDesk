@@ -670,6 +670,9 @@ pub(crate) async fn try_folder_start(
                 storage,
                 opfs: None,
                 canvas,
+                // Битой ссылки в режиме папки не бывает: имя выбиралось из
+                // существующих (?canvas= проверяется чтением файла ниже).
+                broken_link: None,
             })
         }
         StartMode::Opfs => {
@@ -786,9 +789,10 @@ async fn opfs_listing() -> Vec<(String, u64)> {
     out
 }
 
-/// Листинг OPFS как `CanvasEntry` (источник плана миграции).
+/// Листинг OPFS как `CanvasEntry` (источник плана миграции; обработчик
+/// `WebRequest::MigrateList` → `AppEvent::MigrateOpfsList`).
 #[cfg(target_arch = "wasm32")]
-async fn opfs_entries() -> Vec<CanvasEntry> {
+pub(crate) async fn opfs_entries() -> Vec<CanvasEntry> {
     opfs_listing()
         .await
         .into_iter()
@@ -818,10 +822,10 @@ async fn opfs_remove(root: &web_sys::FileSystemDirectoryHandle, name: &str) -> b
 }
 
 /// Пикер папки + исполнение миграции выбранных канвасов (№42a/№52a).
-/// Вызывается мостом `StorageBridge` из App ПО ЖЕСТУ клика кнопки
-/// «Переехать» диалога (пикер требует жеста). `selected` — выбранные
-/// имена файлов; активный канвас обязателен (договор-место диалога),
-/// здесь — страховочный дедуп + добавка.
+/// Вызывается обработчиком WebRequest::MigrateRun из App ПО ЖЕСТУ клика
+/// кнопки «Переехать» диалога (пикер требует жеста). `selected` —
+/// выбранные имена файлов; активный канвас обязателен (договор-место
+/// диалога), здесь — страховочный дедуп + добавка.
 #[cfg(target_arch = "wasm32")]
 pub(crate) async fn pick_folder_and_migrate(
     proxy: winit::event_loop::EventLoopProxy<canvas_app::app::AppEvent>,
@@ -955,72 +959,12 @@ async fn send_migrate_failed(
 }
 
 // ============================================================================
-// wasm: мост App → granted-папка (инъекция app_spawn, FR-105)
+// wasm: обработчики WebRequest-ов хранилища (конвейер FR-104, web_requests)
 // ============================================================================
-
-/// Мост [`canvas_app::app::StorageBridge`] для web-сборки: действия кнопок
-/// баннера №44b / диалога миграции №42a / тоста №45b уходят сюда из App
-/// (UI-состояние — у App, async-FS — в web-слое). Ответы приходят событиями
-/// через `EventLoopProxy` (`StorageReconnected`/`MigrateOpfsList`/
-/// `OpenScene`/`MigrateDone`/`MigrateFailed`) — конвейер C1 (FR-104).
-#[cfg(target_arch = "wasm32")]
-pub(crate) struct WebStorageBridge {
-    proxy: winit::event_loop::EventLoopProxy<canvas_app::app::AppEvent>,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl WebStorageBridge {
-    /// Создаётся в `app_spawn` ПОСЛЕ построения event loop (прокси —
-    /// единственный канал назад; см. `web_state::set_event_proxy`).
-    pub(crate) fn new(proxy: winit::event_loop::EventLoopProxy<canvas_app::app::AppEvent>) -> Self {
-        Self { proxy }
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-impl canvas_app::app::StorageBridge for WebStorageBridge {
-    fn reconnect_folder(&self) {
-        let proxy = self.proxy.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            if reconnect_flow().await {
-                let _ = proxy.send_event(canvas_app::app::AppEvent::StorageReconnected);
-            }
-        });
-    }
-
-    fn switch_to_browser(&self, name: &str, json: &str) {
-        let name = name.to_owned();
-        let json = json.to_owned();
-        wasm_bindgen_futures::spawn_local(async move {
-            switch_to_browser(&name, &json).await;
-        });
-    }
-
-    fn request_migration_list(&self) {
-        let proxy = self.proxy.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            let entries = opfs_entries().await;
-            let _ = proxy.send_event(canvas_app::app::AppEvent::MigrateOpfsList(entries));
-        });
-    }
-
-    fn run_migration(&self, selected: &[String]) {
-        let proxy = self.proxy.clone();
-        let selected = selected.to_vec();
-        wasm_bindgen_futures::spawn_local(async move {
-            pick_folder_and_migrate(proxy, selected).await;
-        });
-    }
-
-    fn reload_after_external(&self, name: &str, local_json: Option<&str>) {
-        let proxy = self.proxy.clone();
-        let name = name.to_owned();
-        let local_json = local_json.map(str::to_owned);
-        wasm_bindgen_futures::spawn_local(async move {
-            reload_after_external(proxy, &name, local_json.as_deref()).await;
-        });
-    }
-}
+// Действия баннера №44b / диалога миграции №42a / тоста №45b приезжают из
+// App обратным каналом (WebRequest) и исполняются здесь (см.
+// `web_requests::handle`): ответы — AppEvent-ами через прокси — тот же
+// конвейер, что у конвейера канвасов C1.
 
 // ============================================================================
 // wasm: watch внешних изменений (№45b/№53b) — poll lastModified

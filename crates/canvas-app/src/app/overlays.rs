@@ -1350,6 +1350,12 @@ impl App {
                 canvas_ui::kit::ButtonVariant::Secondary => crate::i18n::keys::KIT_BTN_SECONDARY,
                 canvas_ui::kit::ButtonVariant::Ghost => crate::i18n::keys::KIT_BTN_GHOST,
                 canvas_ui::kit::ButtonVariant::Danger => crate::i18n::keys::KIT_BTN_DANGER,
+                // Fix main (Wave T af5ddb3 расширил ButtonVariant 4→7):
+                // exhaustiveness витрины — ряды новых вариантов добавит
+                // потребительская волна кита (Wave C/A), ключи готовы.
+                canvas_ui::kit::ButtonVariant::Tertiary => crate::i18n::keys::KIT_BTN_TERTIARY,
+                canvas_ui::kit::ButtonVariant::Text => crate::i18n::keys::KIT_BTN_TEXT,
+                canvas_ui::kit::ButtonVariant::Inverse => crate::i18n::keys::KIT_BTN_INVERSE,
             };
             let title = label(title_key);
             d.label_left(
