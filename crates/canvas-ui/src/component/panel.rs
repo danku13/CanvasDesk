@@ -61,6 +61,7 @@ pub fn control_style_of(
         border,
         text,
         radius,
+        elevation: super::Elevation::None,
     }
 }
 

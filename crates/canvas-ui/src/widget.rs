@@ -8,9 +8,17 @@
 //! логика одна — миграции FR-059/FR-060 её переиспользуют вместо дублей.
 //!
 //! Приоритет состояний (детерминированная матрица):
-//! **Disabled > Pressed > Hovered > Selected > Normal**.
-//! Фокус в `KitState` не входит — рисуется отдельно (фокус-рамка по слоту
-//! `accent`); [`WidgetState::is_focused`] — флаг потребителю.
+//! **Disabled > Pressed > Hovered > Focused > Dragged > Selected > Normal > Error**.
+//!
+//! Wave T (2026-10, ui-kit-deep-review §5.1.1-5.1.2): состояния **additive**
+//! — [`WidgetState::active_states`] возвращает все активные одновременно
+//! (hover+focused+selected могут стекаться). Deprecated [`WidgetState::kit_state`]
+//! возвращает «highest-priority» единственное состояние для backwards-compat.
+//!
+//! Wave T §5.1.2: `key-focus` ≠ mouse-focus — [`WidgetState::set_focused`]
+//! принимает `visible` флаг: keyboard-origin (Tab) → `focus_visible=true`
+//! (рисует focus-ring); mouse-click → `focus_visible=false` (не рисует).
+//! Семантика CSS `:focus-visible`.
 //!
 //! Ребро клика: `set_pointer(inside=true, pressed_now=true)` заряжает press
 //! («press был внутри»), [`WidgetState::clicked`] на release возвращает
@@ -34,6 +42,14 @@ pub struct WidgetState {
     disabled: bool,
     /// В фокусе (Tab-навигация `keyboard::FocusRing` — рисует потребитель).
     focused: bool,
+    /// Keyboard-originated focus (`:focus-visible` семантика, Wave T §5.1.2).
+    /// true — фокус пришёл через Tab/Shift+Tab (рисуем focus-ring);
+    /// false — фокус пришёл через mouse-click (НЕ рисуем ring).
+    focus_visible: bool,
+    /// Drag-операция в процессе (Wave T §5.1.1). Set by consumer during drag.
+    dragged: bool,
+    /// Error-состояние (невалидное значение, Wave T §5.1.1).
+    error: bool,
     /// Press начался внутри (до release/`clicked`) — ребро клика.
     press_armed: bool,
 }
@@ -59,20 +75,57 @@ impl WidgetState {
         self.disabled = v;
     }
 
-    /// Фокус (Tab-навигация; на `KitState` не влияет — рамка отдельная).
+    /// Фокус (Tab-навигация; на `KitState` влияет через Focused state-layer).
+    ///
+    /// Wave T §5.1.2: `visible` — keyboard-origin (true) vs mouse-origin (false).
+    /// Только keyboard-origin рисует focus-ring (см. [`Self::focus_ring_visible`]).
+    /// Семантика CSS `:focus-visible`.
     pub fn set_focused(&mut self, v: bool) {
         self.focused = v;
+        // backwards-compat: без visible-флага — считаем keyboard (как раньше).
+        self.focus_visible = v;
     }
 
-    /// Состояние кита по матрице приоритетов
-    /// Disabled > Pressed > Hovered > Selected > Normal.
+    /// Wave T §5.1.2: установить фокус с явным `visible` флагом.
+    /// `visible=true` — keyboard-origin (Tab), рисует focus-ring.
+    /// `visible=false` — mouse-origin, НЕ рисует ring (`:focus-visible`).
+    pub fn set_focused_visible(&mut self, focused: bool, visible: bool) {
+        self.focused = focused;
+        self.focus_visible = focused && visible;
+    }
+
+    /// Wave T §5.1.1: drag-операция в процессе.
+    pub fn set_dragged(&mut self, v: bool) {
+        self.dragged = v;
+    }
+
+    /// Wave T §5.1.1: error-состояние (невалидное значение).
+    pub fn set_error(&mut self, v: bool) {
+        self.error = v;
+    }
+
+    /// Состояние кита по матрице приоритетов (deprecated — Wave T §5.1.1).
+    ///
+    /// **Deprecated:** возвращает единственное «highest-priority» состояние.
+    /// Новые потребители должны использовать [`Self::active_states`] для
+    /// additive-состояний (hover+focused+selected могут стекаться).
+    ///
+    /// Приоритет: Disabled > Error > Pressed > Hovered > Focused > Dragged
+    /// > Selected > Normal.
+    #[deprecated(note = "use active_states() for additive states (Wave T §5.1.1)")]
     pub fn kit_state(&self) -> KitState {
         if self.disabled {
             KitState::Disabled
+        } else if self.error {
+            KitState::Error
         } else if self.pressed {
             KitState::Pressed
         } else if self.inside {
             KitState::Hovered
+        } else if self.focused {
+            KitState::Focused
+        } else if self.dragged {
+            KitState::Dragged
         } else if self.selected {
             KitState::Selected
         } else {
@@ -80,9 +133,55 @@ impl WidgetState {
         }
     }
 
-    /// Виджет в фокусе (фокус-рамка по слоту `accent` — рисует потребитель).
+    /// Wave T §5.1.1: все активные состояния (additive — могут стекаться).
+    ///
+    /// Возвращает до 4 состояний одновременно: например `[Hovered, Focused,
+    /// Selected]` если курсор над выбранным сфокусированным виджетом.
+    /// Disabled приоритетен — если disabled, другие не возвращаются.
+    pub fn active_states(&self) -> [Option<KitState>; 4] {
+        if self.disabled {
+            return [Some(KitState::Disabled), None, None, None];
+        }
+        let mut states: [Option<KitState>; 4] = [None, None, None, None];
+        let mut i = 0;
+        if self.error {
+            states[i] = Some(KitState::Error);
+            i += 1;
+        }
+        if self.pressed {
+            states[i] = Some(KitState::Pressed);
+            i += 1;
+        }
+        if self.inside {
+            states[i] = Some(KitState::Hovered);
+            i += 1;
+        }
+        if self.focused {
+            states[i] = Some(KitState::Focused);
+            i += 1;
+        }
+        states
+    }
+
+    /// Виджет в фокусе (флаг для backwards-compat).
     pub fn is_focused(&self) -> bool {
         self.focused
+    }
+
+    /// Wave T §5.1.2: рисовать ли focus-ring (только keyboard-origin focus).
+    /// `:focus-visible` семантика — mouse-click не активирует.
+    pub fn focus_ring_visible(&self) -> bool {
+        self.focus_visible && !self.disabled
+    }
+
+    /// Wave T §5.1.1: drag в процессе.
+    pub fn is_dragged(&self) -> bool {
+        self.dragged
+    }
+
+    /// Wave T §5.1.1: error-состояние.
+    pub fn is_error(&self) -> bool {
+        self.error
     }
 
     /// Ребро клика: press был внутри, release внутри. Вызывать на release
@@ -106,6 +205,7 @@ mod tests {
     fn default_is_normal() {
         assert_eq!(WidgetState::default().kit_state(), KitState::Normal);
         assert!(!WidgetState::default().is_focused());
+        assert!(!WidgetState::default().focus_ring_visible());
     }
 
     #[test]
@@ -176,6 +276,107 @@ mod tests {
         assert!(w.is_focused());
         w.set_focused(false);
         assert!(!w.is_focused());
+    }
+
+    // --- Wave T §5.1.1: Focused/Dragged/Error states ---
+
+    #[test]
+    fn focused_state_in_kit_state() {
+        let mut w = WidgetState::default();
+        w.set_focused(true);
+        // set_focused (backwards-compat) устанавливает focus_visible=true
+        assert!(w.focus_ring_visible());
+        // kit_state (deprecated) возвращает Focused
+        assert_eq!(w.kit_state(), KitState::Focused);
+    }
+
+    #[test]
+    fn dragged_state() {
+        let mut w = WidgetState::default();
+        w.set_dragged(true);
+        assert!(w.is_dragged());
+        assert_eq!(w.kit_state(), KitState::Dragged);
+    }
+
+    #[test]
+    fn error_state() {
+        let mut w = WidgetState::default();
+        w.set_error(true);
+        assert!(w.is_error());
+        assert_eq!(w.kit_state(), KitState::Error);
+    }
+
+    #[test]
+    fn disabled_beats_error() {
+        let mut w = WidgetState::default();
+        w.set_error(true);
+        w.set_disabled(true);
+        assert_eq!(w.kit_state(), KitState::Disabled);
+    }
+
+    // --- Wave T §5.1.1: active_states (additive) ---
+
+    #[test]
+    fn active_states_default_empty() {
+        let w = WidgetState::default();
+        let states = w.active_states();
+        assert!(states.iter().all(|s| s.is_none()));
+    }
+
+    #[test]
+    fn active_states_hover_and_focused_stack() {
+        let mut w = WidgetState::default();
+        w.set_focused(true);
+        w.set_pointer(true, false); // hover
+        let states = w.active_states();
+        assert!(states.contains(&Some(KitState::Hovered)));
+        assert!(states.contains(&Some(KitState::Focused)));
+    }
+
+    #[test]
+    fn active_states_disabled_is_exclusive() {
+        let mut w = WidgetState::default();
+        w.set_focused(true);
+        w.set_pointer(true, true); // hover + press
+        w.set_selected(true);
+        w.set_disabled(true);
+        let states = w.active_states();
+        assert_eq!(states[0], Some(KitState::Disabled));
+        assert!(states[1].is_none());
+    }
+
+    // --- Wave T §5.1.2: key-focus ≠ mouse-focus ---
+
+    #[test]
+    fn key_focus_visible_true_for_keyboard() {
+        let mut w = WidgetState::default();
+        w.set_focused_visible(true, true); // keyboard-origin
+        assert!(w.is_focused());
+        assert!(w.focus_ring_visible()); // ring виден
+    }
+
+    #[test]
+    fn key_focus_visible_false_for_mouse() {
+        let mut w = WidgetState::default();
+        w.set_focused_visible(true, false); // mouse-origin
+        assert!(w.is_focused());
+        assert!(!w.focus_ring_visible()); // ring НЕ виден (:focus-visible)
+    }
+
+    #[test]
+    fn key_focus_visible_false_when_not_focused() {
+        let mut w = WidgetState::default();
+        w.set_focused_visible(false, true);
+        assert!(!w.is_focused());
+        assert!(!w.focus_ring_visible());
+    }
+
+    #[test]
+    fn key_focus_visible_false_when_disabled() {
+        let mut w = WidgetState::default();
+        w.set_focused_visible(true, true);
+        w.set_disabled(true);
+        assert!(!w.focus_ring_visible()); // disabled — ring не рисуем
     }
 
     // --- Ребро клика (press→release внутри/снаружи)
