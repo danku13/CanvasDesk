@@ -648,14 +648,14 @@ pub enum Track {
     /// Fractional — доля свободного места (1fr = 100% свободного).
     Fr(f32),
     /// MinMax — clamp между min и max треками.
-    MinMax(TrackMin, TrackMax),
+    MinMax(GridTrackMin, GridTrackMax),
     /// Auto — fill-available (занимает остаток слота).
     Auto,
 }
 
-/// Min-ограничение для [`Track::MinMax`].
+/// Min-ограничение для [`Track::MinMax`] (grid-вариант; сцена — `scene::TrackMin`).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TrackMin {
+pub enum GridTrackMin {
     /// Фиксированный минимум в px.
     Fixed(f32),
     /// Min-content (зарезервирован).
@@ -664,9 +664,9 @@ pub enum TrackMin {
     Auto,
 }
 
-/// Max-ограничение для [`Track::MinMax`].
+/// Max-ограничение для [`Track::MinMax`] (grid-вариант; сцена — `scene::TrackMax`).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TrackMax {
+pub enum GridTrackMax {
     /// Фиксированный максимум в px.
     Fixed(f32),
     /// Max-content (зарезервирован).
@@ -778,18 +778,18 @@ pub fn grid_template(
             }
             Track::MinMax(min, max) => {
                 let min_w = match min {
-                    TrackMin::Fixed(w) => *w,
-                    TrackMin::MinContent => 0.0,
-                    TrackMin::Auto => 0.0,
+                    GridTrackMin::Fixed(w) => *w,
+                    GridTrackMin::MinContent => 0.0,
+                    GridTrackMin::Auto => 0.0,
                 };
                 let max_w = match max {
-                    TrackMax::Fixed(w) => *w,
-                    TrackMax::MaxContent => f32::INFINITY,
-                    TrackMax::Fr(k) => {
+                    GridTrackMax::Fixed(w) => *w,
+                    GridTrackMax::MaxContent => f32::INFINITY,
+                    GridTrackMax::Fr(k) => {
                         sum_fr += *k;
                         continue; // разрешим позже как Fr
                     }
-                    TrackMax::Auto => f32::INFINITY,
+                    GridTrackMax::Auto => f32::INFINITY,
                 };
                 widths[i] = min_w.max(0.0).min(max_w);
                 sum_fixed += widths[i];
@@ -805,7 +805,7 @@ pub fn grid_template(
         for (i, track) in cols.iter().enumerate() {
             let fr = match track {
                 Track::Fr(k) => *k,
-                Track::MinMax(_, TrackMax::Fr(k)) => *k,
+                Track::MinMax(_, GridTrackMax::Fr(k)) => *k,
                 _ => 0.0,
             };
             if fr > 0.0 {
