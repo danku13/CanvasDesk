@@ -66,8 +66,9 @@ mathematical modeling system (ADR-0007): computation-core terms are primary.
   clients) calls over the MCP protocol to operate the canvas: reading/editing
   nodes, groups (group_create), edges, value flow, templates, the atomic
   `graph_apply` batch, validation with fix recipes, what-if, bottleneck
-  analysis, Monte Carlo (42 tools on native: 41 + the native-only
-  `monte_carlo_run`; on wasm — 41, T24 + FR-033 + FR-016/FR-017/FR-066/
-  FR-077 + FR-012 v4 MCP parity).
+  analysis, Monte Carlo. The count differs by platform (native adds the
+  native-only `monte_carlo_run`); the current counter lives only in
+  `skills/README.md` — the single source, verified by the `skills_*` contract
+  test (T24 + FR-033 + FR-016/FR-017/FR-066/FR-077 + FR-012 v4 MCP parity).
 - **The `canvasdesk` channel** — a Windows named pipe between the canvas-mcp
   process and a running canvas-app (on Linux/macOS — a UDS, the M7 plan).

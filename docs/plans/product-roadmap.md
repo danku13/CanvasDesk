@@ -273,7 +273,7 @@ reestr.digital.gov.ru. Трек **никогда не блокирует** во�
   (ревью текста владельцем + свежий чат стороннего агента собирает эталон №5
   по рецепту без подсказок, `graph_validate` → `valid: true`) — открыт.
 - `2026-09-18` (4) — реализован **CP5** (FR-016, волна B1): анализатор
-  узких мест `canvas-core/src/analyze.rs` (чистая функция над
+  узких мест `crates/canvas-core/src/analyze.rs` (чистая функция над
   FlowSolutions; ρ — из ошибки Overload, named-выходов `utilization`
   13 queue-шаблонов и Percent-значений; W — Time-значения; пороги
   0.7/0.9, 100 ms/1 s, 1/10 в `AnalysisConfig`), оверлей канваса
