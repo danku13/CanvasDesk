@@ -1294,6 +1294,104 @@
           handlePut: (name, handle) =>
             tx("handles", "readwrite", (s) => s.put(handle, name)),
           handleGet: (name) => tx("handles", "readonly", (s) => s.get(name)),
+          /* FR-104 (мультиканвас C1): OPFS-примитивы менеджера канвасов.
+             Async-итератор entries() и нестандартный fileHandle.move()
+             компактнее в JS; семантика (белый список .canvas, скрытие
+             .bak, валидация имён) — в Rust (canvas_web::opfs_store).
+             opfsList — ВСЕ файлы корня {name, ts=lastModified}
+             (фильтрация — Rust); opfsRename — move(newName) с фолбэком
+             read→write→removeEntry, .bak-близнец едет с файлом;
+             opfsDelete — мягкое удаление: текст → <name>.bak (замещая
+             прежний), затем removeEntry. Ответы мутаций: "ok" |
+             "notfound" | "error:<текст>" (Rust маппит в WorkspaceError). */
+          opfsList: async function () {
+            const root = await navigator.storage.getDirectory();
+            const out = [];
+            for await (const [name, handle] of root.entries()) {
+              if (handle.kind === "file") {
+                try {
+                  const file = await handle.getFile();
+                  out.push({ name: name, ts: file.lastModified });
+                } catch (e) { /* битый хэндл не роняет листинг */ }
+              }
+            }
+            return out;
+          },
+          opfsRename: async function (oldName, newName) {
+            const root = await navigator.storage.getDirectory();
+            /* Перенос одного файла; false — источника нет. move(newName) —
+               нестандартный Chromium API (same-dir rename), фолбэк —
+               копирование текстом + removeEntry (Firefox/старые сборки). */
+            const moveOne = async (from, to) => {
+              let handle;
+              try { handle = await root.getFileHandle(from); }
+              catch (e) { return false; }
+              try {
+                if (handle.move) { await handle.move(to); return true; }
+              } catch (e) { /* fall through: read→write→remove */ }
+              const file = await handle.getFile();
+              const text = await file.text();
+              const target = await root.getFileHandle(to, { create: true });
+              const stream = await target.createWritable();
+              await stream.write(text);
+              await stream.close();
+              await root.removeEntry(from);
+              return true;
+            };
+            if (!(await moveOne(oldName, newName))) return "notfound";
+            await moveOne(oldName + ".bak", newName + ".bak"); /* близнец */
+            return "ok";
+          },
+          opfsDelete: async function (name) {
+            const root = await navigator.storage.getDirectory();
+            let handle;
+            try { handle = await root.getFileHandle(name); }
+            catch (e) { return "notfound"; }
+            const file = await handle.getFile();
+            const text = await file.text();
+            /* Мягкое удаление (№15a): содержимое — в .bak, замещая прежний */
+            const bak = await root.getFileHandle(name + ".bak", { create: true });
+            const stream = await bak.createWritable();
+            await stream.write(text);
+            await stream.close();
+            await root.removeEntry(name);
+            return "ok";
+          },
+          /* FR-104 (№14b/№35a): Web Locks — детект «канвас уже открыт в
+             другой вкладке». ifAvailable: занят → "busy" (Rust покажет
+             модал); лок удерживается до переключения канваса (callback
+             возвращает промис, чей резолвер хранится) или выгрузки
+             страницы. Запросы сериализуются цепочкой: быстрые
+             переключения не должны течь локами (предыдущий отпускается
+             перед новым). "unsupported" — нет navigator.locks
+             (Safari/Firefox — детекта нет, прежний last-write-wins). */
+          locksAcquire: (function () {
+            var held = null; /* резолвер промиса удержания текущего лока */
+            var chain = Promise.resolve();
+            function releaseHeld() {
+              if (held) { try { held(); } catch (e) {} held = null; }
+            }
+            return function (name) {
+              var result = chain.then(function () {
+                return new Promise(function (resolve) {
+                  var locks = (navigator && navigator.locks) || null;
+                  if (!locks || !locks.request) { resolve("unsupported"); return; }
+                  releaseHeld(); /* предыдущий канвас — отпустить */
+                  var done = false;
+                  var settle = function (v) { if (!done) { done = true; resolve(v); } };
+                  locks
+                    .request(name, { ifAvailable: true }, function (lock) {
+                      if (!lock) { settle("busy"); return Promise.resolve(); }
+                      settle("held");
+                      return new Promise(function (release) { held = release; });
+                    })
+                    .catch(function () { settle("unsupported"); });
+                });
+              });
+              chain = result.catch(function () {});
+              return result;
+            };
+          })(),
           /* FR-028 v2: read current language from localStorage
              canvasdesk.config (TOML `language = "ru"` or `"en"`).
              Tour engine (canvasdesk-tour.js) and dropdown picker use

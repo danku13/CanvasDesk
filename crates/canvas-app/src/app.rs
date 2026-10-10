@@ -452,6 +452,54 @@ pub enum AppEvent {
         alt: bool,
         meta: bool,
     },
+    // --- FR-104 (мультиканвас C1): конвейер хранилища канвасов (web-слой) ---
+    /// Запрос листинга хранилища канвасов: web-слой обновит зеркало
+    /// OpfsStore и ответит [`AppEvent::CanvasList`]. Обратный канал —
+    /// [`WebRequest`] (паттерн tour-сигналов, дренаж обёрткой TourAwareApp;
+    /// архитектура — FR-104 §Обратный канал).
+    RequestCanvasList,
+    /// Ответ web-слоя: свежий листинг канвасов (порядок хранилища,
+    /// `.bak` скрыты белым списком `.canvas`; сортировка — сторона UI,
+    /// `workspace::sorted_entries`). Потребитель — менеджер C3.
+    CanvasList(Vec<canvas_core::workspace::CanvasEntry>),
+    /// Результат асинхронной операции хранилища (create/rename/delete):
+    /// `error = Some(человекочитаемый текст)` — платформенный отказ,
+    /// None — успех. Payload для тостов менеджера (волна C3; в C1 —
+    /// лог).
+    CanvasOpDone {
+        op: canvas_core::workspace::CanvasOp,
+        error: Option<String>,
+    },
+    /// Web Locks (№14b): активный канвас уже открыт в другой вкладке —
+    /// показать модал (AppDialog::CanvasTabBusy, №35a). Имя — имя файла
+    /// с расширением.
+    CanvasLockBusy { name: String },
+}
+
+/// FR-104 (мультиканвас C1): запрос App к платформенному web-слою —
+/// обратный канал. App платформенно-нейтрален и не может звать canvas-web
+/// (зависимость направлена в другую сторону); запросы складываются в
+/// очередь (`pending_web_requests`) и дренажируются обёрткой TourAwareApp
+/// после каждого события цикла — тот же механизм, что у tour-сигналов
+/// (FR-028 v2). Ответы приезжают обратно через `AppEvent` по
+/// `EventLoopProxy` (web_state::event_proxy). Документировано в FR-104
+/// §Обратный канал.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebRequest {
+    /// Обновить список канвасов (зеркало OpfsStore ← opfsList) — ответ
+    /// [`AppEvent::CanvasList`].
+    CanvasList,
+    /// Выполнить операцию хранилища канвасов (create/rename/delete) —
+    /// ответ [`AppEvent::CanvasOpDone`] (валидация синхронна, мутация
+    /// уходит фоном внутри OpfsStore; ошибка — человекочитаемый текст
+    /// `WorkspaceError::to_string`). Потребитель — менеджер C3.
+    CanvasOp(canvas_core::workspace::CanvasOp),
+    /// Переключиться на канвас-фолбэк (№31c): верхний существующий недавний
+    /// ≠ `avoid`, иначе свежее автоимя «Canvas N» (default.canvas может
+    /// быть сам занят — иначе модал зациклится; см. FR-104 §Фолбэк
+    /// занятости). Источник — «Выбрать другой» модала Web Locks (№35a;
+    /// TODO: C3 заменит на менеджер канвасов).
+    CanvasFallback { avoid: String },
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -533,6 +581,15 @@ enum AppDialog {
         /// Число подмен удаляемого сценария (для тела диалога).
         overrides: usize,
     },
+    /// FR-104 (C1, №14b/№35a): Web Locks — канвас уже открыт в другой
+    /// вкладке. «Всё равно открыть» (confirm) — продолжить БЕЗ лока:
+    /// last-write-wins между вкладками (документировано в FR-104);
+    /// «Выбрать другой» (cancel) — фолбэк битой ссылки (№31c; TODO: C3
+    /// заменит на менеджер канвасов).
+    CanvasTabBusy {
+        /// Имя файла канваса (с расширением) — тело модала.
+        name: String,
+    },
 }
 
 impl AppDialog {
@@ -558,6 +615,12 @@ impl AppDialog {
             AppDialog::WhatIfDeleteScenario { .. } => [
                 (i18n::tr(language, keys::DIALOG_WHATIF_DELETE_YES), true),
                 (i18n::tr(language, keys::DIALOG_CANCEL), false),
+            ],
+            // FR-104 (C1, №35a): Web Locks-модал — «Всё равно открыть»
+            // (confirm) / «Выбрать другой» (cancel).
+            AppDialog::CanvasTabBusy { .. } => [
+                (i18n::tr(language, keys::CANVAS_TAB_OPEN_ANYWAY), true),
+                (i18n::tr(language, keys::CANVAS_TAB_CHOOSE_OTHER), false),
             ],
             _ => [
                 (i18n::tr(language, keys::DIALOG_YES), true),
@@ -618,6 +681,12 @@ impl AppDialog {
                 keys::DIALOG_WHATIF_DELETE_TITLE,
                 &[("{name}", name.as_str())],
             ),
+            // FR-104 (C1, №35a): заголовок модала Web Locks. Ключ C0
+            // (canvas.tab.already_open) не несёт подстановки {name} — имя
+            // канваса показывает тело диалога.
+            AppDialog::CanvasTabBusy { .. } => {
+                i18n::tr(language, keys::CANVAS_TAB_ALREADY_OPEN).to_owned()
+            }
         }
     }
 
@@ -672,6 +741,11 @@ impl AppDialog {
                 keys::DIALOG_WHATIF_DELETE_BODY,
                 &[("{count}", overrides.to_string().as_str())],
             ),
+            // FR-104 (C1, №35a): тело модала — имя канваса (заголовок ключа
+            // C0 без {name}); пользователь видит, КАКОЙ канвас занят.
+            AppDialog::CanvasTabBusy { name } => {
+                canvas_core::workspace::display_name(name).to_owned()
+            }
         }
     }
 }
@@ -1500,6 +1574,23 @@ pub struct App {
     /// на первом кадре (камера центрируется на ноде, нода выделяется);
     /// неизвестный id — мягкий отказ (тост).
     pub pending_focus: Option<String>,
+    /// FR-104 (C1, №31c): отложенный тост битой ссылки `?canvas=` — имя
+    /// канваса, который не нашёлся в хранилище (web-слой уже открыл
+    /// фолбэк). Показывается на первом кадре (паттерн ?focus).
+    pub pending_broken_link: Option<String>,
+    /// FR-104 (C1, №14b/№35a): занятость Web Locks, найденная на старте
+    /// (до построения event loop) — модал «уже открыт в другой вкладке»
+    /// на первом кадре (паттерн ?focus; поздняя занятость приходит
+    /// событием `AppEvent::CanvasLockBusy`).
+    pub pending_canvas_lock: Option<String>,
+    /// FR-104 (C1): последний листинг канвасов от web-слоя
+    /// ([`AppEvent::CanvasList`]) — источник менеджера C3 (пустой до
+    /// первого запроса).
+    pub canvas_entries: Vec<canvas_core::workspace::CanvasEntry>,
+    /// FR-104 (C1): очередь запросов к web-слою ([`WebRequest`]) — обратный
+    /// канал, дренажируется обёрткой TourAwareApp после каждого события
+    /// (паттерн tour-сигналов).
+    pending_web_requests: Vec<WebRequest>,
     /// FR-025: drag карточки шаблона из палитры в точку канваса (нажатие
     /// на строку; отпускание решает — клик: в центр viewport, drag: в
     /// точку курсора с ghost-превью).
@@ -1825,6 +1916,10 @@ impl App {
             empty_state_dismissed: false,
             pending_scheme: None,
             pending_focus: None,
+            pending_broken_link: None,
+            pending_canvas_lock: None,
+            canvas_entries: Vec::new(),
+            pending_web_requests: Vec::new(),
             settings,
             config_path,
             settings_open: false,
@@ -1990,6 +2085,16 @@ impl App {
         // только у нод, у которых мера изменилась с появлением описания).
         app.sync_template_descs();
         app.scene.refit_after_template_descs();
+        // FR-104 (C1, №36b): восстановленный при загрузке what-if сценарий —
+        // тост «Активен сценарий "X"» (показ с первого кадра; None — тихо
+        // «База»). TODO (№36b): решение без финального понимания — FR-104.
+        if let Some(name) = app.scene.take_restored_scenario() {
+            let text = app.trf(
+                keys::CANVAS_SWITCH_SCENARIO_TOAST,
+                &[("{name}", name.as_str())],
+            );
+            app.show_toast(text);
+        }
         // FR-LLM-OAUTH-APP: стартовая синхронизация персистентных флагов
         // ChatGPT-входа с фактическим содержимым token store (файл мог быть
         // удалён вручную / токены есть, а флага нет) — идемпотентно.
@@ -2818,6 +2923,9 @@ impl App {
                                 &mut self.scene.canvas,
                                 &self.scene.scenarios,
                             );
+                            // FR-104 (C1, №32c): автосозданный сценарий
+                            // сразу активен — ключ пишется тем же шагом.
+                            self.write_whatif_active();
                             if self.scene.canvas != snapshot {
                                 self.scene.push_undo(snapshot);
                                 self.scene.mark_dirty();
@@ -3026,6 +3134,34 @@ impl App {
         self.scene.whatif_active = true;
         self.scene.recompute_flow();
         self.request_redraw();
+    }
+
+    /// FR-104 (C1, №32c): переключение активного сценария пользователем
+    /// (чипы нижнего бара) — персистентная запись имени в
+    /// `canvasdesk.whatif.active` ОДНИМ undo-шагом (паттерн правок
+    /// сценариев), затем runtime-активация (`whatif_activate`).
+    /// Инвариант: файл без активного сценария — round-trip байт-в-байт.
+    fn switch_whatif_scenario(&mut self, index: Option<usize>) {
+        let snapshot = self.scene.canvas.clone();
+        self.scene.whatif_activate(index);
+        self.write_whatif_active();
+        if self.scene.canvas != snapshot {
+            self.scene.push_undo(snapshot);
+            self.scene.mark_dirty();
+        }
+    }
+
+    /// FR-104 (C1, №32c): записать в `.canvas` имя ТЕКУЩЕГО активного
+    /// сценария (None — «База»: ключ удаляется, файл чистый). Вызывается
+    /// ВНУТРИ undo-шага правок сценариев — между snapshot и push_undo
+    /// на месте вызова; открытым остаётся TODO (№36b, FR-104): выход из
+    /// режима (Esc) и MCP-активации — runtime-only, ключ не трогают.
+    fn write_whatif_active(&mut self) {
+        let name = self
+            .scene
+            .active_scenario
+            .and_then(|i| self.scene.scenarios.get(i).map(|s| s.name.clone()));
+        canvas_core::whatif::active_to_canvas(&mut self.scene.canvas, name.as_deref());
     }
 
     /// Выход из режима (Esc / ✕): подмены НЕ теряются — они в персистентных
@@ -5807,6 +5943,90 @@ impl App {
         self.pending_focus = id;
     }
 
+    /// FR-104 (C1, №31c): отложенный тост битой ссылки `?canvas=` — имя
+    /// канваса, которого нет в хранилище (web-слой уже открыл фолбэк).
+    /// Сеттер зеркалит [`set_pending_scheme`]/[`set_pending_focus`].
+    pub fn set_pending_broken_link(&mut self, name: Option<String>) {
+        self.pending_broken_link = name;
+    }
+
+    /// FR-104 (C1, №14b/№35a): отложенный модал Web Locks (занятость,
+    /// найденная на старте — до построения event loop). Сеттер зеркалит
+    /// [`set_pending_broken_link`].
+    pub fn set_pending_canvas_lock(&mut self, name: Option<String>) {
+        self.pending_canvas_lock = name;
+    }
+
+    /// FR-104 (C1): запросить листинг канвасов у web-слоя ([`WebRequest::CanvasList`]
+    /// → [`AppEvent::CanvasList`]). Пробуждает цикл — обёртка TourAwareApp
+    /// дренажирует запрос сразу после события.
+    pub fn request_canvas_list(&mut self) {
+        self.pending_web_requests.push(WebRequest::CanvasList);
+        self.request_redraw();
+    }
+
+    /// FR-104 (C1): выполнить операцию хранилища канвасов
+    /// ([`WebRequest::CanvasOp`] → `OpfsStore` → [`AppEvent::CanvasOpDone`]).
+    /// Потребитель — менеджер C3 (создание/ренейм/удаление из UI); ответ —
+    /// один бросок события на операцию.
+    pub fn request_canvas_op(&mut self, op: canvas_core::workspace::CanvasOp) {
+        self.pending_web_requests.push(WebRequest::CanvasOp(op));
+        self.request_redraw();
+    }
+
+    /// FR-104 (C1): дренаж очереди запросов к web-слою (обратный канал;
+    /// зовёт обёртка TourAwareApp после каждого события — паттерн
+    /// [`Self::drain_tour_signals`]).
+    pub fn drain_web_requests(&mut self) -> Vec<WebRequest> {
+        std::mem::take(&mut self.pending_web_requests)
+    }
+
+    /// FR-104 (C1): листинг канвасов от web-слоя — сохранить (потребитель —
+    /// менеджер C3) и перерисовать.
+    fn on_canvas_list(&mut self, entries: Vec<canvas_core::workspace::CanvasEntry>) {
+        tracing::debug!(
+            target: "canvas_app",
+            count = entries.len(),
+            "листинг канвасов обновлён (FR-104)"
+        );
+        self.canvas_entries = entries;
+        self.request_redraw();
+    }
+
+    /// FR-104 (C1): результат асинхронной операции хранилища. В C1 —
+    /// только диагностика: тосты операций — волна C3 (i18n-ключи операций
+    /// не входят в каркас C0).
+    fn on_canvas_op_done(&mut self, op: canvas_core::workspace::CanvasOp, error: &Option<String>) {
+        match error {
+            Some(err) => {
+                tracing::warn!(target: "canvas_app", op = ?op, %err, "операция хранилища канвасов не удалась")
+            }
+            None => {
+                tracing::info!(target: "canvas_app", op = ?op, "операция хранилища канвасов выполнена")
+            }
+        }
+        self.request_redraw();
+    }
+
+    /// FR-104 (C1, №14b/№35a): активный канвас занят другой вкладкой —
+    /// показать модал Web Locks.
+    fn on_canvas_lock_busy(&mut self, name: String) {
+        self.dialog = Some(AppDialog::CanvasTabBusy { name });
+        self.request_redraw();
+    }
+
+    /// FR-104 (C1, №35a→№31c): «Выбрать другой» модала Web Locks —
+    /// переключиться на канвас-фолбэк (верхний существующий недавний ≠
+    /// занятому, иначе свежее автоимя «Canvas N»). TODO(FR-104): C3
+    /// заменит на менеджер канвасов.
+    fn on_canvas_fallback(&mut self, avoid: &str) {
+        tracing::info!(target: "canvas_app", avoid, "запрос канваса-фолбэка (Web Locks «Выбрать другой»)");
+        self.pending_web_requests.push(WebRequest::CanvasFallback {
+            avoid: avoid.to_owned(),
+        });
+        self.request_redraw();
+    }
+
     /// FR-055 (этап U4, F-10): включить/выключить DebugOverlay извне
     /// (web-старт с `?ui=debug`; натив — тогл F9 в on_key).
     pub fn set_debug_overlay(&mut self, on: bool) {
@@ -7026,6 +7246,11 @@ impl App {
             None => SceneState::with_storage(canvas, path, Arc::clone(&self.scene.storage)),
         };
         self.scene = next;
+        // FR-104 (C1, №36b): восстановленный what-if сценарий новой сцены —
+        // тост «Активен сценарий "X"» (имя забираем сразу, показ — в хвосте,
+        // чтобы он перекрыл тост открытия: имя канваса видит чип C4, а
+        // сценарий — нет).
+        let restored_scenario = self.scene.take_restored_scenario();
         // Сброс переходного UI: всё, что ссылалось на ноды/геометрию старой
         // сцены. Панели-оверлеи (настройки/хоткеи/помощь/доки/онбординг)
         // сознательно НЕ трогаем — они про приложение, не про сцену.
@@ -7059,6 +7284,13 @@ impl App {
         }
         self.camera = Camera::default();
         self.show_toast(self.trf(keys::TOAST_CANVAS_OPENED, &[("{name}", &opened)]));
+        if let Some(name) = restored_scenario {
+            let text = self.trf(
+                keys::CANVAS_SWITCH_SCENARIO_TOAST,
+                &[("{name}", name.as_str())],
+            );
+            self.show_toast(text);
+        }
         self.request_redraw();
     }
 
@@ -8626,6 +8858,9 @@ impl App {
                         &mut self.scene.canvas,
                         &self.scene.scenarios,
                     );
+                    // FR-104 (C1, №32c): автосозданный сценарий сразу
+                    // активен — ключ пишется тем же шагом.
+                    self.write_whatif_active();
                     if self.scene.canvas != snapshot {
                         self.scene.push_undo(snapshot);
                         self.scene.mark_dirty();
@@ -10002,6 +10237,12 @@ impl App {
         if matches!(self.dialog, Some(AppDialog::AutolinkRollback { .. })) {
             self.autolink_batch = None;
             self.focus_edges.clear();
+        }
+        // FR-104 (C1, №35a): «Выбрать другой» модала Web Locks — уйти на
+        // канвас-фолбэк (№31c). TODO(FR-104): C3 заменит на менеджер.
+        if let Some(AppDialog::CanvasTabBusy { name }) = self.dialog.take() {
+            self.on_canvas_fallback(&name);
+            return;
         }
         self.dialog = None;
         self.request_redraw();
@@ -13157,6 +13398,262 @@ mod tests {
             .load(&PathBuf::from("disk.canvas"))
             .expect("сохранение ушло в подменённое хранилище");
         assert_eq!(saved.nodes.len(), 1);
+    }
+
+    // --- FR-104 (C1): конвейер мультиканваса + what-if активный сценарий ---
+
+    /// JSON канваса с what-if сценарием и (опционально) активным ключом
+    /// (canvasdesk — поле верхнего уровня: `Canvas.extra` — serde flatten).
+    fn whatif_canvas_json(active: Option<&str>) -> String {
+        let mut whatif = serde_json::json!({
+            "scenarios": [
+                {"name": "Рост ×2", "overrides": []},
+                {"name": "Пессимизм", "overrides": []},
+            ],
+        });
+        if let Some(name) = active {
+            whatif["active"] = serde_json::json!(name);
+        }
+        let canvas = serde_json::json!({
+            "nodes": [],
+            "canvasdesk": {"whatif": whatif},
+        });
+        canvas.to_string()
+    }
+
+    /// FR-104 (C1, №32c/№36b): открытие канваса с активным сценарием —
+    /// сценарий восстановлен (режим + индекс), тост «Активен сценарий "X"».
+    #[test]
+    fn open_scene_restores_active_scenario_with_toast() {
+        let (mut app, _old) = stub_app_on_storage(
+            "target/tmp/fr104-scenario.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        app.on_open_scene(
+            PathBuf::from("target/tmp/fr104-open.canvas"),
+            whatif_canvas_json(Some("Пессимизм")),
+            None,
+        );
+        assert!(app.scene.whatif_active, "режим восстановлен");
+        assert_eq!(
+            app.scene.active_scenario,
+            Some(1),
+            "второй сценарий активен"
+        );
+        assert!(
+            app.toast
+                .as_ref()
+                .is_some_and(|(text, _)| text.contains("Пессимизм")),
+            "тост №36b с именем сценария"
+        );
+    }
+
+    /// FR-104 (C1, №32c): протухший активный ключ — тихая «База»
+    /// (режим выключен, тоста сценария нет — остаётся тост открытия).
+    #[test]
+    fn open_scene_stale_active_is_quiet_base() {
+        let (mut app, _old) = stub_app_on_storage(
+            "target/tmp/fr104-stale.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        app.on_open_scene(
+            PathBuf::from("target/tmp/fr104-stale-open.canvas"),
+            whatif_canvas_json(Some("удалённый сценарий")),
+            None,
+        );
+        assert!(!app.scene.whatif_active, "протухший — тихая «База»");
+        assert_eq!(app.scene.active_scenario, None);
+        assert!(
+            !app.toast
+                .as_ref()
+                .is_some_and(|(text, _)| text.contains("Активен сценарий")),
+            "тоста сценария нет"
+        );
+    }
+
+    /// FR-104 (C1, №32c): переключение чипа сценария — ключ
+    /// `canvasdesk.whatif.active` пишется одним undo-шагом; возврат на
+    /// «Базу» удаляет ключ (round-trip чистый).
+    #[test]
+    fn whatif_chip_switch_persists_active_key() {
+        let (mut app, _old) = stub_app_on_storage(
+            "target/tmp/fr104-chip.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        app.on_open_scene(
+            PathBuf::from("target/tmp/fr104-chip-open.canvas"),
+            whatif_canvas_json(None),
+            None,
+        );
+        assert_eq!(app.scene.active_scenario, None);
+        assert!(
+            canvas_core::whatif::active_from_canvas(&app.scene.canvas).is_none(),
+            "изначально ключа нет"
+        );
+
+        // Чип «Рост ×2» — ключ появился, undo-шаг записан
+        app.switch_whatif_scenario(Some(0));
+        assert_eq!(app.scene.active_scenario, Some(0));
+        assert_eq!(
+            canvas_core::whatif::active_from_canvas(&app.scene.canvas).as_deref(),
+            Some("Рост ×2"),
+            "№32c: активный сценарий в .canvas"
+        );
+        assert_eq!(app.scene.undo_stack.len(), 1, "один undo-шаг");
+
+        // Чип «База» — ключ удалён (round-trip чистый)
+        app.switch_whatif_scenario(None);
+        assert!(canvas_core::whatif::active_from_canvas(&app.scene.canvas).is_none());
+        assert_eq!(app.scene.undo_stack.len(), 2, "второй шаг");
+
+        // Двойной undo возвращает исходный файл — ключа снова нет
+        for _ in 0..2 {
+            if let Some(snapshot) = app.scene.take_undo() {
+                app.scene.canvas = snapshot;
+            }
+        }
+        app.scene.scenarios = canvas_core::whatif::scenarios_from_canvas(&app.scene.canvas);
+        assert_eq!(
+            canvas_core::whatif::active_from_canvas(&app.scene.canvas),
+            None,
+            "после undo файл вернулся к исходному виду без ключа"
+        );
+    }
+
+    /// FR-104 (C1): листинг от web-слоя сохраняется для менеджера C3;
+    /// запрос листинга уходит в очередь обратного канала и дренажится
+    /// один раз.
+    #[test]
+    fn canvas_list_request_and_answer_roundtrip() {
+        let (mut app, _old) = stub_app_on_storage(
+            "target/tmp/fr104-list.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        assert!(app.canvas_entries.is_empty(), "до запроса — пусто");
+
+        app.request_canvas_list();
+        let drained = app.drain_web_requests();
+        assert_eq!(drained, vec![WebRequest::CanvasList], "запрос уехал");
+        assert!(app.drain_web_requests().is_empty(), "дренаж одноразовый");
+
+        // Ответ web-слоя — записи сохранены (сортировка — сторона UI C3)
+        let entries = vec![
+            canvas_core::workspace::CanvasEntry {
+                name: "b.canvas".into(),
+                ts: 2,
+                kind: canvas_core::workspace::EntryKind::Opfs,
+                repo: None,
+            },
+            canvas_core::workspace::CanvasEntry {
+                name: "a.canvas".into(),
+                ts: 1,
+                kind: canvas_core::workspace::EntryKind::Opfs,
+                repo: None,
+            },
+        ];
+        app.on_canvas_list(entries);
+        assert_eq!(app.canvas_entries.len(), 2);
+        assert_eq!(app.canvas_entries[0].name, "b.canvas");
+    }
+
+    /// FR-104 (C1, №35a): Web Locks-модал — «Всё равно открыть» продолжает
+    /// без запросов; «Выбрать другой» уходит в обратный канал фолбэка.
+    #[test]
+    fn canvas_tab_busy_dialog_actions() {
+        let (mut app, _old) = stub_app_on_storage(
+            "target/tmp/fr104-locks.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        // Занятость: событие web-слоя открывает модал
+        app.on_canvas_lock_busy("занятый.canvas".to_owned());
+        assert!(matches!(app.dialog, Some(AppDialog::CanvasTabBusy { .. })));
+        // Тело модала — имя канваса без расширения (ключ C0 без {name})
+        let body = app
+            .dialog
+            .as_ref()
+            .map(|dialog| dialog.body(Language::default()))
+            .unwrap_or_default();
+        assert_eq!(body, "занятый");
+
+        // «Всё равно открыть» (confirm): лок не удерживается, запросов нет
+        app.confirm_dialog();
+        assert!(app.dialog.is_none());
+        assert!(
+            app.drain_web_requests().is_empty(),
+            "«Всё равно открыть» не порождает запросов"
+        );
+
+        // «Выбрать другой» (cancel): запрос канваса-фолбэка (№31c)
+        app.on_canvas_lock_busy("занятый.canvas".to_owned());
+        app.cancel_dialog();
+        assert!(app.dialog.is_none(), "модал закрыт");
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![WebRequest::CanvasFallback {
+                avoid: "занятый.canvas".to_owned()
+            }],
+            "«Выбрать другой» → фолбэк №31c"
+        );
+    }
+
+    /// FR-104 (C1): операции хранилища уходят в обратный канал
+    /// (create/rename/delete), результат приезжает CanvasOpDone —
+    /// успех тихо логируется, отказ виден в payload (тосты — C3).
+    #[test]
+    fn canvas_op_request_and_done_payloads() {
+        let (mut app, _old) = stub_app_on_storage(
+            "target/tmp/fr104-op.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        // Запрос операции — дренаж один раз, payload без потерь
+        app.request_canvas_op(canvas_core::workspace::CanvasOp::Create {
+            name: "новый.canvas".into(),
+        });
+        app.request_canvas_op(canvas_core::workspace::CanvasOp::Rename {
+            old: "a.canvas".into(),
+            new: "b.canvas".into(),
+        });
+        assert_eq!(
+            app.drain_web_requests(),
+            vec![
+                WebRequest::CanvasOp(canvas_core::workspace::CanvasOp::Create {
+                    name: "новый.canvas".into()
+                }),
+                WebRequest::CanvasOp(canvas_core::workspace::CanvasOp::Rename {
+                    old: "a.canvas".into(),
+                    new: "b.canvas".into()
+                }),
+            ],
+            "операции уезжают в порядке постановки"
+        );
+        // Ответ web-слоя: отказ — текст ошибки в payload (диагностика)
+        app.on_canvas_op_done(
+            canvas_core::workspace::CanvasOp::Delete {
+                name: "ghost.canvas".into(),
+            },
+            &Some("канвас не найден: ghost.canvas".into()),
+        );
+        assert!(app.dialog.is_none(), "операция не открывает диалогов");
+    }
+
+    /// FR-104 (C1, №14b): pending-флаг стартовой занятости Web Locks —
+    /// сеттер зеркалит pending_broken_link; потребление — модал.
+    #[test]
+    fn pending_canvas_lock_sets_busy_modal() {
+        let (mut app, _old) = stub_app_on_storage(
+            "target/tmp/fr104-pending-lock.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        assert!(app.pending_canvas_lock.is_none());
+        app.set_pending_canvas_lock(Some("занятый.canvas".to_owned()));
+        assert_eq!(app.pending_canvas_lock.as_deref(), Some("занятый.canvas"));
+        // Потребление (первый кадр — handler) открывает модал №35a
+        let name = app.pending_canvas_lock.take().expect("флаг стоит");
+        app.on_canvas_lock_busy(name);
+        assert!(matches!(
+            app.dialog,
+            Some(AppDialog::CanvasTabBusy { name }) if name == "занятый.canvas"
+        ));
     }
 
     // --- FR-038 (T-038.5): batch-операции выравнивания (п.16-17) ------------

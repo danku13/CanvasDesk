@@ -22,19 +22,25 @@
 
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::window::WindowId;
 
 use canvas_app::app::{App, AppEvent};
 
 /// Wrapper вокруг `App`, эмитящий tour-сигналы после каждого event'а.
+/// FR-104 (C1): он же дренажирует обратный канал App → web-слой
+/// (`WebRequest`-ы — конвейер хранилища канвасов) и владеет прокси
+/// для ответов web-слоя (AppEvent-ы).
 pub(crate) struct TourAwareApp {
     inner: App,
+    /// FR-104 (C1): прокси для WebRequest-ответов web-слоя (App
+    /// платформенно-нейтрален и не может владеть им напрямую).
+    proxy: EventLoopProxy<AppEvent>,
 }
 
 impl TourAwareApp {
-    pub(crate) fn new(app: App) -> Self {
-        Self { inner: app }
+    pub(crate) fn new(app: App, proxy: EventLoopProxy<AppEvent>) -> Self {
+        Self { inner: app, proxy }
     }
 
     /// Дренировать pending tour-сигналы и эмитить каждый в JS-bus.
@@ -54,6 +60,13 @@ impl TourAwareApp {
         let signals = self.inner.drain_tour_signals();
         for name in signals {
             crate::tour_signal::emit(&name);
+        }
+        // FR-104 (C1): обратный канал App → web-слой — запросы конвейера
+        // хранилища канвасов (CanvasList/CanvasOp/CanvasFallback);
+        // обработчик — fire-and-forget, ответы приедут AppEvent-ами по
+        // этому же прокси (документация — web_requests.rs / FR-104).
+        for request in self.inner.drain_web_requests() {
+            crate::web_requests::handle(request, &self.proxy);
         }
     }
 }

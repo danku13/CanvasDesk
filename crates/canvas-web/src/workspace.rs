@@ -246,7 +246,9 @@ impl WorkspaceStore for MemWorkspaceStore {
 }
 
 /// Пустой канвас как текст (сеяние `create`): сериализация `Canvas::default`.
-fn empty_canvas_text() -> String {
+/// FR-104 (C1): `pub(crate)` — сеяние свежих канвасов переиспользует
+/// OpfsStore (`create`) и фолбэк Web Locks (`web_requests`).
+pub(crate) fn empty_canvas_text() -> String {
     Canvas::default()
         .to_json()
         .unwrap_or_else(|_| "{}".to_owned())

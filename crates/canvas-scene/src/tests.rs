@@ -7,6 +7,7 @@
 //! значения 0/0/1) и пути импортов. Исполняются нативно и под
 //! wasm32-wasip1 (wasmtime, RUST_TEST_THREADS=1) — гейт FR-037.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use canvas_core::analyze;
@@ -2699,6 +2700,88 @@ fn whatif_autoname_picks_first_free_slot() {
     scene.whatif_delete_scenario(index);
     let again = scene.whatif_create_scenario("").expect("повторное автоимя");
     assert_eq!(scene.scenarios[again].name, "Сценарий 1");
+}
+
+// --- FR-104 (C1, №32c/№36b): восстановление активного сценария при загрузке ---
+
+/// Сборка канваса с what-if сценарием и (опционально) активным ключом.
+fn canvas_with_active(name: &str, scenarios: &[&str]) -> Canvas {
+    let mut canvas = mcp_scene().canvas;
+    let list: Vec<canvas_core::whatif::Scenario> = scenarios
+        .iter()
+        .map(|s| canvas_core::whatif::Scenario {
+            name: (*s).to_owned(),
+            line_exprs: HashMap::new(),
+        })
+        .collect();
+    canvas_core::whatif::scenarios_to_canvas(&mut canvas, &list);
+    if !name.is_empty() {
+        canvas_core::whatif::active_to_canvas(&mut canvas, Some(name));
+    }
+    canvas
+}
+
+/// FR-104 (C1, №32c): загрузка канваса с сохранённым активным сценарием —
+/// сценарий восстанавливается (индекс + режим: подмены входят в первый
+/// пересчёт), имя отдаётся один раз для тоста (№36b).
+#[test]
+fn with_storage_restores_active_scenario_and_flags_mode() {
+    let canvas = canvas_with_active("Рост ×2", &["Рост ×2", "Пессимизм"]);
+    let mut scene = crate::SceneState::with_storage(
+        canvas,
+        PathBuf::from("mem://fr104-active.canvas"),
+        std::sync::Arc::new(canvas_core::MemStorage::new()),
+    );
+    assert_eq!(
+        scene.active_scenario,
+        Some(0),
+        "сохранённый сценарий активен"
+    );
+    assert!(scene.whatif_active, "режим включён — подмены применяются");
+    assert_eq!(
+        scene.take_restored_scenario().as_deref(),
+        Some("Рост ×2"),
+        "имя для тоста №36b"
+    );
+    assert_eq!(
+        scene.take_restored_scenario(),
+        None,
+        "повторное потребление — None (идемпотентно)"
+    );
+}
+
+/// FR-104 (C1, №32c): протухший ключ (сценарий удалён/переименован) —
+/// тихая «База»: режим выключен, индекса нет, тоста нет.
+#[test]
+fn with_storage_stale_active_degrades_to_base() {
+    let canvas = canvas_with_active("удалённый", &["Рост ×2"]);
+    let mut scene = crate::SceneState::with_storage(
+        canvas,
+        PathBuf::from("mem://fr104-stale.canvas"),
+        std::sync::Arc::new(canvas_core::MemStorage::new()),
+    );
+    assert_eq!(scene.active_scenario, None);
+    assert!(!scene.whatif_active, "протухший — тихая «База»");
+    assert_eq!(scene.take_restored_scenario(), None, "тоста нет");
+}
+
+/// FR-104 (C1, №32c): канвас без активного ключа — прежнее поведение:
+/// режим выключен, сценарии загружены, round-trip файла чист.
+#[test]
+fn with_storage_without_active_keeps_base_behavior() {
+    let canvas = canvas_with_active("", &["Рост ×2"]);
+    let json = canvas.to_json().expect("сериализация");
+    let scene = crate::SceneState::with_storage(
+        canvas,
+        PathBuf::from("mem://fr104-none.canvas"),
+        std::sync::Arc::new(canvas_core::MemStorage::new()),
+    );
+    assert_eq!(scene.active_scenario, None);
+    assert!(!scene.whatif_active);
+    assert_eq!(scene.scenarios.len(), 1, "сценарии загружены");
+    // Инвариант: файл без активного сценария — round-trip байт-в-байт
+    let round = scene.canvas.to_json().expect("повторная сериализация");
+    assert_eq!(json, round, "round-trip байт-в-байт");
 }
 
 /// Полный сброс what-if (UI-кнопка «Сброс», CJM-фикс): все сценарии с
