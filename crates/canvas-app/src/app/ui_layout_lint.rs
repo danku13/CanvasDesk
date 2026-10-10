@@ -1150,3 +1150,151 @@ fn lint_nav_rail_demo() {
         "nav_rail НЕ в реестре (слепая зона INT-1); добавлен — переработать lint"
     );
 }
+
+// --- Wave M (issue #51, M2): lint_modals_adaptive --------------------------
+//
+// Флаг `settings.modals_adaptive` (β) включён — канон-состояния модалей
+// на адаптивной лестнице вьюпортов. На M2 рендер-пути модалей флаг ещё не
+// читают (перевод — M3-партии B/C/D, issue #52–54): линт фиксирует каркас,
+// на который лягут флаг-ветки, и НЕ допускает регрессий текущих путей на
+// новых вьюпортах. Каждая M3-партия расширяет покрытие своих поверхностей.
+
+/// Адаптивные вьюпорты Wave M: Expanded-канон (1280×800) + низкий desktop
+/// (800×560). Compact-край 375×667 — отдельная ветка ниже: kit_gallery
+/// (min 560) и admin_panel (min 760) на 375 сегодня дают min-инвариант
+/// шире вьюпорта (деградация F1/панель-контракта, design/
+/// modals-audit-2026-10.md §4) — их 375-ветка включается партией M3-b,
+/// когда под флагом они перейдут на full-bleed Compact.
+const ADAPTIVE_VIEWPORTS: [[f32; 2]; 2] = [[1280.0, 800.0], [800.0, 560.0]];
+
+/// Compact-край (mobile-style, full-bleed) для модалей, деградирующих
+/// корректно уже сейчас (кламп/Fullscreen-sheet-ветка).
+const ADAPTIVE_COMPACT_VIEWPORT: [f32; 2] = [375.0, 667.0];
+
+/// `lint_state` на адаптивной лестнице с включённым флагом Wave M.
+fn lint_state_adaptive(tag: &str, prepare: impl Fn(&mut App, [f32; 2])) {
+    for (lang, lang_tag) in [(Language::Ru, "RU"), (Language::En, "EN")] {
+        for vp in ADAPTIVE_VIEWPORTS {
+            let mut app = lint_stub(lang);
+            app.settings.modals_adaptive = true;
+            prepare(&mut app, vp);
+            let frame = build_frame_at(&app, vp);
+            lint_frame(&frame, vp, &format!("adaptive/{tag}/{lang_tag}/{vp:?}"));
+        }
+    }
+}
+
+#[test]
+fn lint_modals_adaptive() {
+    lint_state_adaptive("settings", |app, _vp| {
+        app.settings_open = true;
+    });
+    lint_state_adaptive("gallery", |app, _vp| {
+        app.scheme_gallery.open();
+    });
+    lint_state_adaptive("kit_gallery", |app, _vp| {
+        app.kit_gallery_open = true;
+    });
+    lint_state_adaptive("kit_demo_tobe", |app, _vp| {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+        app.kit_demo.dropdown_open = true;
+        app.kit_demo.modal_open = true;
+        app.kit_demo.snackbar_visible = true;
+        app.kit_demo.popover_open = true;
+        app.kit_demo.palette_open = true;
+    });
+    lint_state_adaptive("admin_panel", |app, _vp| {
+        app.admin_open = true;
+    });
+    lint_state_adaptive("onboarding", |app, _vp| {
+        app.onboarding = Some(crate::onboarding_ui::OnboardingState::default());
+    });
+    lint_state_adaptive("ai_onboarding", |app, _vp| {
+        app.ai_onboarding = Some(crate::onboarding_ui::AiOnboardingState::default());
+    });
+    lint_state_adaptive("dialog", |app, vp| {
+        app.test_viewport = Some(vp);
+        app.dialog = Some(AppDialog::WhatIfReset {
+            scenarios: 2,
+            overrides: 3,
+        });
+    });
+
+    // Compact-край 375×667: модали, уже деградирующие корректно, держат
+    // full-bleed-ветку мобильной лестницы (settings — Mobile <768, остальные
+    // клампятся к вьюпорту).
+    fn open_settings(app: &mut App, _vp: [f32; 2]) {
+        app.settings_open = true;
+    }
+    fn open_gallery(app: &mut App, _vp: [f32; 2]) {
+        app.scheme_gallery.open();
+    }
+    fn open_onboarding(app: &mut App, _vp: [f32; 2]) {
+        app.onboarding = Some(crate::onboarding_ui::OnboardingState::default());
+    }
+    fn open_ai_onboarding(app: &mut App, _vp: [f32; 2]) {
+        app.ai_onboarding = Some(crate::onboarding_ui::AiOnboardingState::default());
+    }
+    fn open_dialog(app: &mut App, vp: [f32; 2]) {
+        app.test_viewport = Some(vp);
+        app.dialog = Some(AppDialog::WhatIfReset {
+            scenarios: 2,
+            overrides: 3,
+        });
+    }
+    for (tag, open, surface_id) in [
+        (
+            "settings",
+            open_settings as fn(&mut App, [f32; 2]),
+            ui_registry::id::SETTINGS,
+        ),
+        ("gallery", open_gallery, ui_registry::id::GALLERY),
+        ("onboarding", open_onboarding, ui_registry::id::ONBOARDING),
+        (
+            "ai_onboarding",
+            open_ai_onboarding,
+            ui_registry::id::AI_ONBOARDING,
+        ),
+        ("dialog", open_dialog, ui_registry::id::DIALOG),
+    ] {
+        for lang in [Language::Ru, Language::En] {
+            let mut app = lint_stub(lang);
+            app.settings.modals_adaptive = true;
+            open(&mut app, ADAPTIVE_COMPACT_VIEWPORT);
+            let frame = build_frame_at(&app, ADAPTIVE_COMPACT_VIEWPORT);
+            // РЕДУЦИРОВАННЫЙ ассерт (отличие от lint_frame): без глобального
+            // overlaps_within_layer. Нижнее ПОЛОТНО на 375 сегодня даёт
+            // пересечение empty:empty-card × template_strip:template-strip
+            // (idle-кадр без модалей — проверено пробой); это вне скоупа
+            // Wave M (не модали, pre-existing деградация узких окон, G4
+            // исторически линтит ≥800) — глобальный overlap-ассерт на
+            // Compact-крае включается ремонтом полотна, не этой волной.
+            // Для модалей проверяем: интерактивные rect'ы в вьюпорте.
+            for surface in &frame.surfaces {
+                for hit in &surface.hit_rects {
+                    if !hit.interactive {
+                        continue;
+                    }
+                    let r = hit.rect;
+                    assert!(
+                        r.x >= -0.01
+                            && r.y >= -0.01
+                            && r.right() <= ADAPTIVE_COMPACT_VIEWPORT[0] + 0.01
+                            && r.bottom() <= ADAPTIVE_COMPACT_VIEWPORT[1] + 0.01,
+                        "adaptive/{tag}/{lang:?}/[375.0, 667.0]: hit-rect {}:{} вне вьюпорта: {:?}",
+                        surface.surface.as_str(),
+                        hit.element,
+                        (r.x, r.y, r.right(), r.bottom())
+                    );
+                }
+            }
+        }
+        // Block-модаль накрывает экран и на Compact-крае (full-bleed).
+        let mut app = lint_stub(Language::Ru);
+        app.settings.modals_adaptive = true;
+        open(&mut app, ADAPTIVE_COMPACT_VIEWPORT);
+        let frame = build_frame_at(&app, ADAPTIVE_COMPACT_VIEWPORT);
+        assert_backdrop_is(&frame, surface_id);
+    }
+}

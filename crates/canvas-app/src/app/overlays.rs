@@ -5266,6 +5266,12 @@ impl App {
                 // Мгновенная обратная связь: HUD переключается сразу
                 self.hud_visible = self.settings.hud_on_start;
             }
+            // Wave M (issue #51): адаптивные модали (β). Флаг читается
+            // рендером модалей на кадре (M3-партии, kit::modal_rect_flex) —
+            // мгновенная перерисовка не нужна, персист — общим хвостом настроек.
+            SettingsRow::ModalsAdaptive => {
+                self.settings.modals_adaptive = !self.settings.modals_adaptive;
+            }
             // FR-089: согласия телеметрии — флаг меняется, персист общим
             // хвостом (save_settings → persist_settings_web синхронизирует
             // canvasdesk.consent и эмитит canvasdesk:consent-changed для
@@ -5998,6 +6004,8 @@ impl App {
                         // FR-079 (S3): мастер-тумблер подсказок
                         SettingsRow::SuggestEnabled => self.settings.suggest.enabled,
                         SettingsRow::HudOnStart => self.settings.hud_on_start,
+                        // Wave M (issue #51): адаптивные модали (β)
+                        SettingsRow::ModalsAdaptive => self.settings.modals_adaptive,
                         // FR-073: тумблеры расталкивания
                         SettingsRow::DragPushEnabled => self.settings.drag_push_enabled,
                         SettingsRow::DragPushPredictive => self.settings.drag_push_predictive,
