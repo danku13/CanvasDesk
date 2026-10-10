@@ -97,8 +97,12 @@ pub const PANEL_WIDTH: f32 = 340.0;
 /// паттерн Miro Template picker) — токен `canvas_core::tokens::SPACING_LG`
 /// (значение прежнего литерала 12).
 pub use canvas_core::tokens::SPACING_LG as PANEL_MARGIN;
-/// Отступ от верхнего и нижнего края окна (панель — во всю высоту).
-pub const PANEL_TOP_MARGIN: f32 = 12.0;
+/// Отступ от верхнего и нижнего края окна (панель — во всю высоту) —
+/// токен S1 `canvas_core::tokens::SPACING_LG` (значение прежнего литерала
+/// 12; LAY-W21: хвост on-scale литералов ревью §3.3 — паттерн W6 «именованная
+/// константа = значение токена», как `AI_ONB_VIEWPORT_MARGIN`; `pub const`,
+/// а не `pub use`, чтобы fmt-реордер группы use не таскал соседние блоки).
+pub const PANEL_TOP_MARGIN: f32 = canvas_core::tokens::SPACING_LG;
 /// Высота шапки панели («Шаблоны» + счётчик).
 // FR-046 W-d аудит §4: токен-источник `PANEL_HEADER_H_S` (30 — small
 // вариант шкалы высот шапок панелей). Прежний локальный литерал 30.0
