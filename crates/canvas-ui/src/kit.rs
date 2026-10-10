@@ -89,6 +89,47 @@ pub use crate::component::text_field::{
     TextFieldLayout, TextFieldModel,
 };
 pub use crate::component::two_column::{two_column, two_column_right, TwoColumnLayout};
+
+// Wave C §5.3: новые компоненты (2026-10).
+pub use crate::component::accordion::{
+    accordion_hit, accordion_layout, accordion_style, AccordionLayout,
+};
+pub use crate::component::avatar::{avatar_layout, avatar_style, AvatarLayout, AvatarSource};
+pub use crate::component::badge::{badge_layout, badge_style, BadgeKind, BadgeLayout, BadgeTone};
+pub use crate::component::checkbox::{
+    checkbox_glyph, checkbox_hit, checkbox_layout, checkbox_style, CheckboxLayout, CheckboxState,
+};
+pub use crate::component::command_palette::{
+    command_palette_hit, command_palette_layout, search_actions, CommandAction, CommandCategory,
+    CommandPaletteKey, CommandPaletteLayout,
+};
+pub use crate::component::popover::{popover, PopoverLayout};
+pub use crate::component::progress::{
+    progress_layout, progress_phase, progress_style, ProgressKind, ProgressLayout,
+};
+pub use crate::component::radio::{
+    radio_group_key, radio_group_layout, radio_hit, radio_style, RadioGroup, RadioKey,
+    RadioLayout, RadioOrientation,
+};
+pub use crate::component::segmented::{
+    segmented_hit, segmented_key, segmented_layout, segmented_style, SegmentedKey, SegmentedLayout,
+};
+pub use crate::component::skeleton::{skeleton_alpha, skeleton_layout, SkeletonLayout, SkeletonPattern};
+pub use crate::component::slider::{
+    slider_hit, slider_key, slider_layout, slider_style, SliderHit, SliderKey, SliderLayout,
+    SliderOpts,
+};
+pub use crate::component::snackbar::{
+    snackbar_layout, snackbar_style, Snackbar, SnackbarLayout, SnackbarQueue,
+};
+pub use crate::component::tabs::{
+    tab_style, tabs_hit, tabs_key, tabs_layout, TabKey, TabLayout, TabStyle, TabStyleResult,
+    TabsLayout,
+};
+pub use crate::component::tree::{
+    tree_hit, tree_layout, TreeAction, TreeNode, TreeRow,
+};
+
 pub use crate::component::{
     resolve_state, state_layer_alpha, ButtonVariant, ControlSize, ControlStyle, Elevation,
     KitPalette, KitState, PanelStyle, Shape, Spacing, BUTTON_HEIGHT, BUTTON_PAD_H, BUTTON_WIDTH,

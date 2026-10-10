@@ -11,10 +11,15 @@
 //! НЕ вводится: профиль W2 — reflow 1000 узлов на `FlexLayoutEngine`
 //! ~0.26 мс < 1 мс порога (KISS; порог §Гейты W2/§Контракт-8).
 
+pub mod accordion;
+pub mod avatar;
+pub mod badge;
 pub mod banner;
 pub mod button;
 pub mod chat_bubble;
+pub mod checkbox;
 pub mod chip;
+pub mod command_palette;
 pub mod crumbs;
 pub mod dropdown;
 pub mod footer;
@@ -23,12 +28,21 @@ pub mod list;
 pub mod modal;
 pub mod panel;
 pub mod panel_header;
+pub mod popover;
+pub mod progress;
+pub mod radio;
 pub mod radio_card;
 pub mod row;
+pub mod segmented;
+pub mod skeleton;
+pub mod slider;
+pub mod snackbar;
 pub mod table;
+pub mod tabs;
 #[cfg(test)]
 pub mod test_support;
 pub mod text_field;
+pub mod tree;
 pub mod two_column;
 
 use crate::geometry::{EdgeInsets, UiPoint, UiRect};
