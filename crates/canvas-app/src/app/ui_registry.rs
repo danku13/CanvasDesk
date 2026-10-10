@@ -201,6 +201,19 @@ pub(crate) const AI_STATUS_DEGRADATION: DegradationPolicy = DegradationPolicy::H
         + ai_status_panel::AI_STATUS_MARGIN,
 };
 
+/// **What-if** (PRD-0010 F-11c): порог 900×600 — ЕДИНСТВЕННОЕ место
+/// объявления (LAY-W21: раньше литералы жили инлайном в декларации ниже и
+/// ДУБЛИРОВАЛИСЬ в [`whatif_pill_visible`] — ревью §3.3). Деградация
+/// применяется к обеим формам поверхности: бар скрывается HideBelow-политикой
+/// кадра (`UiFrame::from_registry`), пилюля входа — гейтом
+/// [`whatif_pill_visible`] над ЭТОЙ же константой (паттерн
+/// [`AGENT_PANEL_DEGRADATION`] / [`AI_STATUS_DEGRADATION`]; именованного
+/// источника в `whatif_ui` нет — брейкпоинт всегда жил в реестре).
+pub(crate) const WHATIF_DEGRADATION: DegradationPolicy = DegradationPolicy::HideBelow {
+    min_width: 900.0,
+    min_height: 600.0,
+};
+
 /// LAY8.2: гейт показа агент-панели для draw/hit-тел — та же политика
 /// HideBelow, что в декларации реестра (единственный источник решения;
 /// inline-сравнения 600px из тел отрисовки удалены — LAY-W1).
@@ -264,14 +277,13 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
         ));
     }
     // 3. What-if (Esc — предпоследний; HideBelow — деградация F-11c).
+    //    LAY-W21: политика — WHATIF_DEGRADATION (единственный источник
+    //    900×600; раньше инлайн-литералы, дублировавшиеся гейтом пилюли).
     if app.scene.whatif_active || whatif_pill_visible(app) {
         reg.add(
             SurfaceDecl::new(id::WHATIF, UiLayer::Panels, CapturePolicy::Capture)
                 .with_scope(id::WHATIF)
-                .with_degradation(DegradationPolicy::HideBelow {
-                    min_width: 900.0,
-                    min_height: 600.0,
-                }),
+                .with_degradation(WHATIF_DEGRADATION),
         );
     }
     // 4. Панель хоткеев (Esc закрывает; клик по панели глотается).
@@ -500,9 +512,13 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
 
 /// Пилюля входа в what-if видна на вьюпортах ≥ hide-порога (те же условия,
 /// что у бара — деградация применяется к обеим формам поверхности).
+/// LAY-W21: условие — из политики [`WHATIF_DEGRADATION`] декларации
+/// (единственный источник 900×600; раньше литералы дублировались здесь —
+/// ревью §3.3); `hidden_at` — строгий `<`, поведение бит-в-бит прежнему
+/// `w >= 900 && h >= 600`.
 fn whatif_pill_visible(app: &App) -> bool {
     let [w, h] = app.viewport_logical();
-    w >= 900.0 && h >= 600.0
+    !WHATIF_DEGRADATION.hidden_at(w, h)
 }
 
 /// Ранг визуального порядка внутри кадра (bottom→top глобально; pick и
@@ -2161,6 +2177,15 @@ mod tests {
             .expect("whatif в реестре");
         assert!(decl.degradation.hidden_at(800.0, 560.0));
         assert!(!decl.degradation.hidden_at(1280.0, 800.0));
+        // LAY-W21: границы политики — строгий `<` (паттерн пинов 599/239/
+        // 130-131 панелей): ровно на пороге видима, на 1 меньше — скрыта
+        // (эта же политика — гейт whatif_pill_visible).
+        assert!(decl.degradation.hidden_at(899.0, 600.0), "< 900 — скрыта");
+        assert!(decl.degradation.hidden_at(900.0, 599.0), "< 600 — скрыта");
+        assert!(
+            !decl.degradation.hidden_at(900.0, 600.0),
+            "ровно порог — видима"
+        );
     }
 
     /// LAY8.2 (аудит LAY-W5): брейкпоинты модалки настроек объявлены В
