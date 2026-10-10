@@ -702,7 +702,11 @@ pub const AI_ONB_STEP_H: f32 = 18.0;
 pub const AI_ONB_TITLE_H: f32 = 26.0;
 pub const AI_ONB_SUB_H: f32 = 38.0;
 pub const AI_ONB_MODE_H: f32 = 64.0;
-pub const AI_ONB_MODE_GAP: f32 = 8.0;
+/// Зазор между карточками режимов (3 карточки, шаг = `AI_ONB_MODE_H` +
+/// зазор) — токен S1 `canvas_core::tokens::SPACING_SM` (значение прежнего
+/// литерала 8; LAY-W21: хвост on-scale литералов ревью §3.3 — паттерн W6;
+/// семантика — именно зазор между блоками, не метрика элемента).
+pub const AI_ONB_MODE_GAP: f32 = canvas_core::tokens::SPACING_SM;
 pub const AI_ONB_ACTIONS_H: f32 = 36.0;
 pub const AI_ONB_PRIV_H: f32 = 180.0;
 /// Поля клампа карточки к вьюпорту (паттерн ONBOARDING_VIEWPORT_MARGIN).
