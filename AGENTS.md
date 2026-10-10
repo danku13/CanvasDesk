@@ -31,8 +31,8 @@ Linux (X11/Wayland) и macOS — оконное приложение, платф
   «один шаблон = один расчёт», портов значений и MCP-композиции — здесь.
   ADR пишется ДО реализации решения; `Статус: принято` — только по прямому
   запросу владельца (ADR-0001, п. 2 правил).
-- `docs/change-requests/` — FR/CR-документы по шаблону `cr-template.md` (индекс —
-  `index-cr-fr.md`). Расчётная волна (моделирование) — FR-013…FR-029, CR-013:
+- `docs/change-requests/` — FR/CR-документы по шаблону `docs/change-requests/cr-template.md` (индекс —
+  `docs/change-requests/index-cr-fr.md`). Расчётная волна (моделирование) — FR-013…FR-029, CR-013:
   эталоны приёмки — ADR-0005 (Instagram MVP) и ADR-0006 (каталог №1–№5).
   Реализация — только по документу; по завершении агент обновляет статус
   («реализовано»), Changelog документа и `docs/ACCEPTANCE.md`.
@@ -40,7 +40,7 @@ Linux (X11/Wayland) и macOS — оконное приложение, платф
   (публикуемая производная реестра инструментов; актуальный счётчик
   инструментов — только `skills/README.md`, единственный источник числа;
   при правке руководствоваться им, не памятью). **Любое изменение состава/семантики MCP-инструментов
-  (`TOOLS` в canvas-mcp, `mcp.rs` в canvas-scene) обязано обновлять
+  (`TOOLS` в canvas-mcp, `crates/canvas-scene/src/mcp.rs` в canvas-scene) обязано обновлять
   `skills/` в том же коммите**: контракт-тест `skills_*` в canvas-mcp
   (полнота каталога, покрытие скиллами, счётчик README, call-позиции)
   валит CI при рассинхроне. Протокол — `skills/UPDATE-PROTOCOL.md`.
@@ -85,7 +85,7 @@ web-путями. Гейт: `python3 scripts/doc_lint.py` (CI-джоба `docs-l
 2. **Пользовательская документация** (`user-docs/`, 7 страниц; вшита в бинарь
    просмотрщиком FR-031 — `include_str!`, источник `crates/canvas-app/src/docs_ui.rs`):
    не устарели ли формулировки (поведение, хоткеи, названия объектов)?
-   Обновить затронутые страницы + таблицы `user-docs/README.md` и `index.md`;
+   Обновить затронутые страницы + таблицы `user-docs/README.md` и `user-docs/index.md`;
    ссылки между страницами — только относительные `*.html` (линк-чек в тестах
    `docs_ui` валит CI на битых). Горячие клавиши держать в синкре со списком
    `HOTKEYS` (`crates/canvas-app/src/lib.rs`, F1-оверлей) и `user-docs/hotkeys.md`.
@@ -142,7 +142,7 @@ docs/                      # SPEC.md, TASKS.md, RECIPES.md, adr/, change-request
    `Arc<RwLock<FlowSolutions>>`, wake через `EventLoopProxy<AppEvent>`; выводка O(N) —
    на UI-треде). Правило «фолбэк + warn» на этом стыке: при отказе/таймауте (3 с)/
    панике воркера — синхронный пересчёт на UI-треде + `tracing::warn!` (результат
-   побитово идентичен — golden-тесты `worker_smoke.rs`); на wasm — sync-путь штатно.
+   побитово идентичен — golden-тесты `crates/canvas-scene/tests/worker_smoke.rs`); на wasm — sync-путь штатно.
 5. Раскладка (координаты, размеры, связи) — только в `.canvas`-файле. SQLite
    (`~/.canvasdesk/cache.db`) — пересоздаваемый кэш, его удаление ничего не ломает.
 6. Автосейв `.canvas` с debounce 2 с + `.bak` предыдущей версии.
@@ -321,13 +321,13 @@ docs/                      # SPEC.md, TASKS.md, RECIPES.md, adr/, change-request
    кандидат в kit).
 2. **Предложить расширение kit** — в задаче/PR:
    - **Новый компонент** → добавить в `crates/canvas-ui/src/component/`
-     (или расширить существующий) + экспорт через `kit.rs`. Контракт
+     (или расширить существующий) + экспорт через `crates/canvas-ui/src/kit.rs`. Контракт
      F-8 PRD-0009: только слоты палитры, только шкала токенов, текст
      только через `TextMeasurer`.
    - **Новый цветовой слот `KitPalette`** → добавить поле в
      `KitPalette` (`crates/canvas-ui/src/component/mod.rs`) +
      маппинг в `ThemeColors` (`crates/canvas-render/src/theme.rs`) +
-     пресеты (`theme_presets.rs`) + ключ в `REQUIRED_KEYS` (тест
+     пресеты (`crates/canvas-render/src/theme_presets.rs`) + ключ в `REQUIRED_KEYS` (тест
      паритета семантики).
    - **Новый токен геометрии** → `crates/canvas-core/src/tokens.rs`
      (`SPACING_*`, `RADIUS_*`, высоты контролов) + зеркальный JSON
@@ -335,7 +335,7 @@ docs/                      # SPEC.md, TASKS.md, RECIPES.md, adr/, change-request
    - **Новый layout-паттерн** (radio_card, chat_bubble, crumbs,
      tree_layout, anchored_stack, footer_buttons, chip_strip,
      two_column, backdrop, banner) → компонент в
-     `crates/canvas-ui/src/component/` + экспорт `kit.rs`.
+     `crates/canvas-ui/src/component/` + экспорт `crates/canvas-ui/src/kit.rs`.
 3. **Оформить FR-документ** (если расширение значимое) по шаблону
    `docs/change-requests/cr-template.md`: What/Impact/Changes/Tests.
    Малые расширения (новый слот палитры) можно в коммите-задаче без FR.
@@ -374,7 +374,7 @@ docs/                      # SPEC.md, TASKS.md, RECIPES.md, adr/, change-request
 - **Рендер** — `canvas-render/src/{cards.rs,renderer.rs,text.rs}` —
   это бэкенд GPU, `CardInstance` его собственный тип; токены
   (`tokens::EDGE_*`, `tokens::ACCENT`) уже каноничны.
-- **Diagnostic overlays** — `debug_overlay.rs` — цвета слоёв по
+- **Diagnostic overlays** — `crates/canvas-app/src/debug_overlay.rs` — цвета слоёв по
   дизайну «диагностические, не тема»; документировано в шапке файла.
 - **Специализированные примитивы** (polar wheel в template_ui,
   sector SDF в `canvas-render/src/sectors.rs`) — escape-hatch через
@@ -486,5 +486,4 @@ UI (раскладка, ввод, панели, hit-тесты, рендер, т
 - Не заменять shell (таскбар, трей остаются Explorer).
 - Не расползаться платформенным кодом по `canvas-app` — только трейты и
   cfg-секции платформенных крейтов (см. «Правила архитектуры» п.2); юникс-экв
-  ачивенты Win32-приёмов — только по таблице решений `docs/plans/
-  M7-crossplatform.md` §3.2, не по памяти.
+  ачивенты Win32-приёмов — только по таблице решений `docs/plans/M7-crossplatform.md` §3.2, не по памяти.

@@ -32,7 +32,7 @@
    `click_<surface>`); клавиатура: при необходимости arm в `owner_of` +
    `route_owner_key`; Esc: arm в `dispatch_esc`.
 
-Отрисовка — своя overlay-функция в `app.rs`, квады/тексты кладутся в полосу
+Отрисовка — своя overlay-функция в `crates/canvas-app/src/app.rs`, квады/тексты кладутся в полосу
 своего слоя (`ScreenBands::push`). Порядок pick и draw выводится из реестра —
 ручные z-списки запрещены.
 
@@ -218,7 +218,7 @@ trait-границей `Shaper` (`shape` + `font_system`) — единствен
   FR-074: `Auto` (контент span-1 ячеек + §11.8 stretch) и
   `minmax(min, max)` (`TrackMin`/`TrackMax`, `max: Fill` — fr с полом;
   §11.5–11.8 в порядке taffy, parity 10/10 бит-в-бит ДО вырезания taffy).
-  Perf-гейт — `perf_flex.rs` (ниже).
+  Perf-гейт — `crates/canvas-ui/tests/perf_flex.rs` (ниже).
 - **Perf-taffy** — удалён в W4 вместе с taffy (историческая медиана
   264.8 μs — в worklog W1).
 - **Perf baseline (FR-068 W0, `canvas-ui/tests/perf_baseline.rs`, `#[ignore]`)**:
@@ -271,7 +271,7 @@ trait-границей `Shaper` (`shape` + `font_system`) — единствен
 
 ### 7.1 Painter и WidgetState (FR-057, волна 2)
 
-Draw-слой и машина состояний виджета переехали из потребителя (`kit_ui.rs`)
+Draw-слой и машина состояний виджета переехали из потребителя (`crates/canvas-app/src/kit_ui.rs`)
 в крейт `canvas-ui` — миграции FR-058/059/060 кодируют против них, а не
 копируют адаптер:
 
@@ -286,13 +286,13 @@ Draw-слой и машина состояний виджета переехал
   **Disabled > Pressed > Hovered > Selected > Normal** + ребро клика
   `clicked()` («press был внутри, release внутри»; press по disabled и press
   вне виджета клик не дают). `cursor_state`/`dropdown_item_state` в
-  `kit_ui.rs` — deprecated-делегаты на `WidgetState` (потребители мигрируют
+  `crates/canvas-app/src/kit_ui.rs` — deprecated-делегаты на `WidgetState` (потребители мигрируют
   в FR-059/060);
 - **`canvas_ui::keyboard::FocusRing`** — Tab-порядок focus-rect'ов скоупа
   (`next`/`prev` по кольцу, `current`, `clear`): `KeyboardRouter` ведёт
   скоупы ПОВЕРХНОСТЕЙ, `FocusRing` — фокус контента внутри поверхности
   (рамка по слоту `accent` — решение потребителя). Существующие сигнатуры
-  `keyboard.rs` не менялись (только добавление).
+  `crates/canvas-ui/src/keyboard.rs` не менялись (только добавление).
 
 ```rust
 let mut p = Painter::new();
@@ -446,7 +446,7 @@ backdrop/колесо, G4-линт-состояние `admin_panel`). Live-пе�
 (`type Props`; `props()`; `layout(backend, slot) -> Vec<UiRect>`;
 `paint(painter, rects)`; `hit_test(rects, point) -> Option<ComponentHit>`
 — дефолт: первый rect по `UiRect::contains`). Реализация перенесена из
-`kit.rs` (теперь тонкий фасад-реэкспорт — публичное API кита 1:1,
+`crates/canvas-ui/src/kit.rs` (теперь тонкий фасад-реэкспорт — публичное API кита 1:1,
 потребители не переписываются, §Контракт-1 PRD-0009 V-5):
 
 | Модуль | Компонент | State | Примечания |
@@ -465,7 +465,7 @@ backdrop/колесо, G4-линт-состояние `admin_panel`). Live-пе�
   `TextMeasurer`/`FontSystem` retained (раз на компонент).
 - **Миграция потребителей** — staged (каталог
   `docs/plans/fr-068-w3-consumer-migration.md`): пилот W3.1 — what-if бар
-  (`whatif_ui.rs`) переведён на measured-API (`MeasuredItem` ×
+  (`crates/canvas-app/src/whatif_ui.rs`) переведён на measured-API (`MeasuredItem` ×
   `Row::lay_out_measured`, бит-в-бит); W3.2 (2026-09-25) — settings_ui,
   scheme_gallery_ui, template_ui, search_ui → measured-семейство
   (в т.ч. НОВЫЙ `Column::lay_out_measured/_with` — вертикальный
