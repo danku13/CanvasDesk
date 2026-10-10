@@ -1172,6 +1172,8 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
                     fs_available: false,
                 } => 1,
                 crate::canvas_manager_ui::StorageRowMode::Folder => 2,
+                // FR-108 (C5): натив — файлы на диске (недавние из конфига).
+                crate::canvas_manager_ui::StorageRowMode::Files => 3,
             };
             ((app.canvas_manager.selected as u64) << 48)
                 | ((app.canvas_manager.scroll_top as u64) << 32)
@@ -1705,25 +1707,33 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 surface
                     .hit_rects
                     .push(HitRect::interactive(rect(lay.create), "manager-create"));
-                surface
-                    .hit_rects
-                    .push(HitRect::interactive(rect(lay.template), "manager-template"));
+                // FR-108 (C5): натив — «Из шаблона…» скрыт (rect 0×0 —
+                // тонкий слой); слот import жив («Открыть…»).
+                if lay.template[2] > 0.0 {
+                    surface
+                        .hit_rects
+                        .push(HitRect::interactive(rect(lay.template), "manager-template"));
+                }
                 surface
                     .hit_rects
                     .push(HitRect::interactive(rect(lay.import), "manager-import"));
-                surface.hit_rects.push(HitRect::interactive(
-                    rect(lay.duplicate),
-                    "manager-duplicate",
-                ));
-                surface
-                    .hit_rects
-                    .push(HitRect::interactive(rect(lay.rename), "manager-rename"));
-                surface
-                    .hit_rects
-                    .push(HitRect::interactive(rect(lay.delete), "manager-delete"));
-                surface
-                    .hit_rects
-                    .push(HitRect::interactive(rect(lay.export), "manager-export"));
+                // FR-108 (C5): натив — ряд кнопок строки скрыт (ренейм/
+                // удаление/дубликат/экспорт — файлами владеет ОС).
+                if lay.duplicate[2] > 0.0 {
+                    surface.hit_rects.push(HitRect::interactive(
+                        rect(lay.duplicate),
+                        "manager-duplicate",
+                    ));
+                    surface
+                        .hit_rects
+                        .push(HitRect::interactive(rect(lay.rename), "manager-rename"));
+                    surface
+                        .hit_rects
+                        .push(HitRect::interactive(rect(lay.delete), "manager-delete"));
+                    surface
+                        .hit_rects
+                        .push(HitRect::interactive(rect(lay.export), "manager-export"));
+                }
             }
             surface
                 .hit_rects

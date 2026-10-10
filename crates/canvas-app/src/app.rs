@@ -1791,6 +1791,12 @@ pub struct App {
     /// канал, дренажируется обёрткой TourAwareApp после каждого события
     /// (паттерн tour-сигналов).
     pending_web_requests: Vec<WebRequest>,
+    /// FR-108 (C5, №20): недавние натива — абсолютные пути к открытым
+    /// `.canvas`-файлам, параллельные `canvas_entries` (индекс → путь:
+    /// строка менеджера N открывает native_recent_paths[N]). Зеркало
+    /// `settings.recent` после decay; web не использует (недавние web —
+    /// IndexedDB, FR-104).
+    native_recent_paths: Vec<PathBuf>,
     /// FR-025: drag карточки шаблона из палитры в точку канваса (нажатие
     /// на строку; отпускание решает — клик: в центр viewport, drag: в
     /// точку курсора с ghost-превью).
@@ -2121,13 +2127,23 @@ impl App {
             canvas_entries: Vec::new(),
             // FR-106 (C3): менеджер канвасов (оверлей) + двойной клик +
             // отложенное действие после открытия созданного (№38a).
-            canvas_manager: canvas_manager_ui::CanvasManagerState::default(),
+            // FR-108 (C5): native-флаг — платформа сборки (web — конвейер
+            // FR-104/105/106 workspace-хранилищ; натив — недавние из конфига).
+            canvas_manager: canvas_manager_ui::CanvasManagerState {
+                native: cfg!(not(target_arch = "wasm32")),
+                ..Default::default()
+            },
             manager_last_click: None,
             manager_after_open: None,
-            // FR-107 (C4): чип активного канваса (№21c/№29b)
+            // FR-107 (C4): чип активного канваса (№21c/№29b).
+            // Merge-фикс MC-C4+C5: ренейм чипа гейтится в клике ещё и
+            // натив-флагом (на нативе файлы — ОС, №20); флаг web disk-режима
+            // остаётся web-событием (CanvasActiveKind).
             canvas_chip: canvas_chip_ui::CanvasChipState::default(),
             active_canvas_disk: false,
             pending_web_requests: Vec::new(),
+            // FR-108 (C5): недавние натива — пусты до первого обновления.
+            native_recent_paths: Vec::new(),
             settings,
             config_path,
             settings_open: false,
@@ -6301,8 +6317,9 @@ impl App {
     // --- FR-106 (мультиканвас C3, issue #7): менеджер канвасов (оверлей) ---
 
     /// Открыть менеджер (событие `CanvasManagerOpen` — кнопка «Недавние»
-    /// DOM-панели web до волны C4; чип №21c заменит вход). Запрашивает
-    /// листинг (`CanvasList` → режим хранилища приедет `StorageMode`) и
+    /// DOM-панели web до волны C4; чип №21c заменит вход; натив — пункт
+    /// контекстного меню канваса, FR-108). Запрашивает листинг
+    /// (`CanvasList` → режим хранилища приедет `StorageMode`) и
     /// `navigator.storage.persist()` (R-T3 — TODO из FR-104: вызов
     /// переезжает из init_scene в точку первого открытия менеджера).
     pub fn open_canvas_manager(&mut self) {
@@ -6311,6 +6328,16 @@ impl App {
         // отменяется (потеря фокуса = отмена, №21c).
         self.canvas_chip.cancel_edit();
         self.canvas_manager.open();
+        // FR-108 (C5): натив — тонкий слой: источник строк — недавние файлы
+        // из config.toml (декей несуществующих), режим хранилища Files;
+        // WebRequest-конвейер web-слоя НЕ дергается (дренажирует только
+        // TourAwareApp — нативной обёртки нет, запросы бы гнили в очереди).
+        if self.canvas_manager.native {
+            self.canvas_manager.storage = canvas_manager_ui::StorageRowMode::Files;
+            self.refresh_native_recent();
+            self.request_redraw();
+            return;
+        }
         self.canvas_manager.entries = self.canvas_entries.clone();
         self.canvas_manager.clamp();
         self.request_canvas_list();
@@ -6352,9 +6379,15 @@ impl App {
         self.request_redraw();
     }
 
-    /// Создать пустой канвас (№6/№39c): автоимя «Canvas N» → CanvasOp::Create
-    /// → активировать (открытие — ветка Create в `on_canvas_op_done`).
+    /// Создать пустой канвас (№6/№39c): web — автоимя «Canvas N» →
+    /// CanvasOp::Create → активировать (открытие — ветка Create в
+    /// `on_canvas_op_done`); натив (№34a, FR-108) — сразу save-диалог
+    /// «куда сохранить» → пустой файл → открыть.
     fn manager_create_empty(&mut self) {
+        if self.canvas_manager.native {
+            self.native_create_canvas();
+            return;
+        }
         let name = canvas_core::workspace::auto_name(&self.canvas_entries);
         self.manager_after_open = None;
         self.request_canvas_op(canvas_core::workspace::CanvasOp::Create { name });
@@ -6389,6 +6422,8 @@ impl App {
     /// Открыть выбранный канвас (Enter/двойной клик): активный — просто
     /// закрыть оверлей; иначе web-слой читает текст и открывает
     /// (`OpenScene` — тихая потеря undo №11, уже семантика открытия).
+    /// Натив (FR-108): файл читается с диска напрямую
+    /// (`native_recent_paths` параллелен строкам) — тот же `on_open_scene`.
     fn manager_open_selected(&mut self) {
         let Some(index) = self.canvas_manager.selected_entry() else {
             return;
@@ -6398,6 +6433,13 @@ impl App {
         };
         if entry.name.eq_ignore_ascii_case(&self.active_canvas_name()) {
             self.close_canvas_manager();
+            return;
+        }
+        if self.canvas_manager.native {
+            let path = self.native_recent_paths.get(index).cloned();
+            if let Some(path) = path {
+                self.open_native_canvas_file(&path);
+            }
             return;
         }
         let name = entry.name.clone();
@@ -6516,9 +6558,11 @@ impl App {
     fn click_canvas_chip(&mut self, element: &str) {
         match element {
             "chip-name" => {
-                if self.active_canvas_disk {
+                if self.active_canvas_disk || self.canvas_manager.native {
                     // №21c: ренейм дискового файла менеджером не
                     // поддерживается — честная деградация (тултип + тост).
+                    // Merge-фикс MC-C4+C5: натив — тот же случай (файлы —
+                    // ОС, №20; web-очередь без дренажа на нативе).
                     self.show_toast(self.tr(keys::CANVAS_CHIP_DISK_HINT));
                 } else {
                     let name = self.chip_display_name();
@@ -6619,9 +6663,12 @@ impl App {
 
     /// Сохранить камеру канваса `name` (№12/№30b): уход с канваса и
     /// выгрузка страницы (`CameraFlushRequested`). На нативе — тихий
-    /// no-op (очередь дренажируется только web-обёрткой TourAwareApp).
+    /// no-op (очередь дренажируется только web-обёрткой TourAwareApp;
+    /// merge-фикс MC-C4+C5: guard задокументирован во FR-107, но не
+    /// реализован в волне C4 — поймано натив-тестом C5
+    /// `manager_native_recent_files_as_entries`).
     fn save_camera_of(&mut self, name: &str) {
-        if name.is_empty() {
+        if self.canvas_manager.native || name.is_empty() {
             return;
         }
         let snapshot = self.camera_snapshot();
@@ -6683,6 +6730,169 @@ impl App {
         self.save_camera_of(&name);
     }
 
+    // --- FR-108 (мультиканвас C5, issue #9): тонкий нативный слой ---------
+    // Недавние файлы в config.toml (№20) + «Открыть…»/«Создать» через
+    // нативные файловые диалоги (№34a, canvas-shell dialogs). Обратный
+    // канал web-слоя не нужен: диалоги модальны и синхронны в UI-потоке
+    // (паттерн TrackPopupMenu menu.rs), файлов все I/O локальны и быстры
+    // — EventLoopProxy-воркеров не появляется (обоснование — FR-108
+    // §События).
+
+    /// Записать открытый файл в недавние (натив): absolutize → push/decay
+    /// (чистые функции canvas-core) → сохранение config.toml сразу после
+    /// мутации → обновление зеркал менеджера. На web — no-op (недавние
+    /// web-слоя — IndexedDB, FR-104). Вызывается из `on_open_scene` (все
+    /// пути смены сцены) и main.rs (CLI-путь/default.canvas на старте).
+    pub fn record_recent_canvas(&mut self, path: &Path) {
+        if !self.canvas_manager.native {
+            return; // web: недавние пишет web-слой (record_recent, FR-104)
+        }
+        let absolute = absolute_canvas_path(path);
+        let pushed = canvas_core::recent_files::push_recent(&self.settings.recent, &absolute);
+        // Decay: протухшие (файла нет) чистятся; только что открытый
+        // переживает decay безусловно (default.canvas первой сессии может
+        // ещё не существовать до первого автосейва — №20: «обновление
+        // списка» не должно выкидывать текущий файл).
+        self.settings.recent = canvas_core::recent_files::decay_missing(&pushed, |p| {
+            p == absolute || Path::new(p).exists()
+        });
+        // Сохранение конфига — сразу после мутации (деградация — warn:
+        // read-only каталог не роняет приложение).
+        self.persist_settings();
+        self.refresh_native_recent();
+    }
+
+    /// Перестроить нативные зеркала менеджера: `settings.recent` →
+    /// `canvas_entries` (записи для строк) + `native_recent_paths`
+    /// (параллельные пути открытия). Существующие файлы только (декей уже
+    /// отработал в записи; здесь — честная проверка для UI).
+    fn refresh_native_recent(&mut self) {
+        let mut entries = Vec::new();
+        let mut paths = Vec::new();
+        for path in &self.settings.recent {
+            let Ok(meta) = std::fs::metadata(path) else {
+                continue; // файла нет — строки не будет
+            };
+            let name = canvas_core::recent_files::file_name_of(path);
+            if name.is_empty() {
+                continue;
+            }
+            // ts — mtime файла (сортировка «по дате изменения» честная);
+            // отказ метрики времени — 0 (строка внизу сортировки).
+            let ts = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            entries.push(canvas_core::workspace::CanvasEntry {
+                name,
+                ts,
+                kind: canvas_core::workspace::EntryKind::Disk,
+                repo: None,
+            });
+            paths.push(PathBuf::from(path));
+        }
+        self.canvas_entries = entries.clone();
+        self.native_recent_paths = paths;
+        if self.canvas_manager.open {
+            self.canvas_manager.set_entries(entries);
+        }
+    }
+
+    /// «Открыть…» (№20): нативный файловый диалог (Windows — IFileOpenDialog;
+    /// Linux-дев — заглушка + warn внутри dialogs; web сюда не доходит —
+    /// свой пикер через WebRequest). Модальный показ в UI-потоке.
+    fn native_open_canvas_dialog(&mut self) {
+        // wasm: ветка недостижима (native=false; web-пикер — WebRequest),
+        // canvas-shell в дереве зависимостей wasm-сборки отсутствует.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let raw = self.dialog_parent_hwnd();
+            if let Some(path) = canvas_shell::desktop::dialogs::open_canvas_dialog(raw) {
+                self.open_native_canvas_file(&path);
+            }
+        }
+    }
+
+    /// «Создать» (№34a): нативный save-диалог (дефолтное имя — auto_name
+    /// из контрактов C0 №39c, дефолтное расширение .canvas, системное
+    /// подтверждение перезаписи) → пустой канвас пишется по выбранному
+    /// пути (с `.bak` прежней версии — семантика SPEC §9) → открывается.
+    fn native_create_canvas(&mut self) {
+        // wasm: недостижимо (native=false), см. native_open_canvas_dialog.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Дефолтное имя — «Canvas N» (первый свободный среди недавних);
+            // диалог допишет расширение при вводе без него.
+            let default = canvas_core::workspace::auto_name(&self.canvas_entries);
+            let raw = self.dialog_parent_hwnd();
+            let Some(path) = canvas_shell::desktop::dialogs::save_canvas_dialog(
+                raw,
+                canvas_core::recent_files::display_name_of(&default).as_str(),
+            ) else {
+                return; // отмена пользователя / платформа без диалога (warn внутри)
+            };
+            // Safety-net расширения поверх SetDefaultExtension диалога.
+            let path =
+                path.with_file_name(canvas_shell::desktop::dialogs::ensure_canvas_extension(
+                    &path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                ));
+            let canvas = Canvas::default();
+            match canvas.to_json() {
+                Ok(json) => {
+                    // Перезапись существующего — с .bak прежней версии
+                    // (SPEC §9); отказ ФС — тост-деградация, не паника.
+                    if let Err(err) = canvas.save_with_backup(&path) {
+                        tracing::warn!(%err, "не удалось создать файл канваса (№34a)");
+                        self.show_toast(self.trf(
+                            keys::CANVAS_NATIVE_CREATE_FAILED_TOAST,
+                            &[("{err}", &err.to_string())],
+                        ));
+                        return;
+                    }
+                    self.on_open_scene(path, json, None);
+                }
+                Err(err) => {
+                    tracing::warn!(%err, "сериализация пустого канваса не удалась");
+                }
+            }
+        }
+    }
+
+    /// Чтение файла диска → `on_open_scene` (нативный аналог web-механики
+    /// `CanvasOpen`: текст читает платформенный слой, App подменяет сцену;
+    /// недавние запишет сам `on_open_scene`).
+    fn open_native_canvas_file(&mut self, path: &Path) {
+        match std::fs::read_to_string(path) {
+            Ok(json) => self.on_open_scene(path.to_path_buf(), json, None),
+            Err(err) => {
+                tracing::warn!(%err, path = %path.display(), "не удалось прочитать файл канваса");
+                self.show_toast(
+                    self.trf(keys::TOAST_CANVAS_NOT_OPEN, &[("{err}", &err.to_string())]),
+                );
+            }
+        }
+    }
+
+    /// Родительское окно файловых диалогов (raw HWND; 0 — нет окна/не
+    /// Windows). Конвертацию в типизированный HWND делает canvas-shell
+    /// (идиома dragdrop::install — свою зависимость windows в canvas-app
+    /// не тащим).
+    fn dialog_parent_hwnd(&self) -> isize {
+        #[cfg(windows)]
+        {
+            self.window_hwnd().unwrap_or(0)
+        }
+        #[cfg(not(windows))]
+        {
+            0
+        }
+    }
+
     /// Клавиатура менеджера (№9): Esc/↑/↓/Enter/F2 + ввод в фильтр/буфер
     /// ренейма. Esc в ренейме — отмена ренейма, НЕ закрытие оверлея.
     fn on_canvas_manager_key(&mut self, key: &Key<winit::keyboard::SmolStr>) {
@@ -6704,10 +6914,14 @@ impl App {
             return;
         }
         // 2) Обычный режим: навигация/действия/фильтр.
+        // FR-108 (натив): F2-ренейма нет (тонкий слой — файлами владеет
+        // ОС, инлайн-ренейм web-хранилища неприменим); кнопка глотается.
         match key {
             Key::Named(NamedKey::Escape) => self.close_canvas_manager(),
             Key::Named(NamedKey::Enter) => self.manager_open_selected(),
-            Key::Named(NamedKey::F2) => self.manager_begin_rename_selected(),
+            Key::Named(NamedKey::F2) if !self.canvas_manager.native => {
+                self.manager_begin_rename_selected()
+            }
             Key::Named(NamedKey::ArrowUp) => {
                 let rows = self.canvas_manager.rows();
                 self.canvas_manager.selected =
@@ -6767,8 +6981,15 @@ impl App {
                 });
                 self.manager_last_click = Some((index, now));
                 if is_double {
-                    if name_zone {
+                    if name_zone && !self.canvas_manager.native {
+                        // Ренейм №9 — web-хранилище; натив — тонкий слой
+                        // (файлами владеет ОС, FR-108 §Ограничения):
+                        // двойной клик по имени = выбор, без инлайн-ренейма.
                         self.canvas_manager.begin_rename(index);
+                    } else if name_zone {
+                        // FR-108 (натив): зона имени глотается — как клик
+                        // по строке (двойной клик по строке ниже НЕ
+                        // срабатывает: пользователь целился в имя).
                     } else {
                         // Двойной клик по строке: активный — закрыть, иначе открыть.
                         let active = self.active_canvas_name();
@@ -6778,6 +6999,13 @@ impl App {
                             .is_some_and(|e| e.name.eq_ignore_ascii_case(&active))
                         {
                             self.close_canvas_manager();
+                        } else if self.canvas_manager.native {
+                            // FR-108 (C5): натив — файл читается напрямую
+                            // (путь параллелен строке менеджера).
+                            let path = self.native_recent_paths.get(index).cloned();
+                            if let Some(path) = path {
+                                self.open_native_canvas_file(&path);
+                            }
                         } else if let Some(entry) = self.canvas_entries.get(index) {
                             let name = entry.name.clone();
                             self.pending_web_requests
@@ -6806,10 +7034,22 @@ impl App {
             "manager-create" | "manager-empty-create" => self.manager_create_empty(),
             "manager-template" => self.manager_create_from_template(),
             "manager-import" => {
-                self.pending_web_requests.push(WebRequest::CanvasImport);
+                // FR-108 (C5): натив — слот занят «Открыть…» (файловый
+                // диалог); web — «Импорт файла…» (пикер web-слоя).
+                if self.canvas_manager.native {
+                    self.native_open_canvas_dialog();
+                } else {
+                    self.pending_web_requests.push(WebRequest::CanvasImport);
+                }
             }
             "manager-empty-disk" => {
-                self.pending_web_requests.push(WebRequest::CanvasOpenDisk);
+                // FR-108 (C5): натив — то же «Открыть…»; web — пикер
+                // fs_access («Открыть файл с диска…» — диск-хэндл).
+                if self.canvas_manager.native {
+                    self.native_open_canvas_dialog();
+                } else {
+                    self.pending_web_requests.push(WebRequest::CanvasOpenDisk);
+                }
             }
             "manager-duplicate" => self.manager_duplicate(),
             "manager-rename" => self.manager_begin_rename_selected(),
@@ -6853,6 +7093,8 @@ impl App {
         let storage_key = match self.canvas_manager.storage {
             canvas_manager_ui::StorageRowMode::Folder => keys::CANVAS_STORAGE_FOLDER,
             canvas_manager_ui::StorageRowMode::Browser { .. } => keys::CANVAS_STORAGE_BROWSER,
+            // FR-108 (C5): натив — файлы на диске (недавние из config.toml).
+            canvas_manager_ui::StorageRowMode::Files => keys::CANVAS_STORAGE_DISK_FILES,
         };
         let storage_label = crate::i18n::tr(lang, storage_key);
         let storage_label_w = m.width_of(&mut fs, storage_label, family, font);
@@ -6871,7 +7113,13 @@ impl App {
             import: button_w(
                 &mut m,
                 &mut fs,
-                crate::i18n::tr(lang, keys::CANVAS_MANAGER_IMPORT),
+                // FR-108 (C5): натив — слот занят «Открыть…» (файловый
+                // диалог); web — «Импорт файла…» (пикер в workspace).
+                if self.canvas_manager.native {
+                    crate::i18n::tr(lang, keys::CANVAS_MANAGER_OPEN)
+                } else {
+                    crate::i18n::tr(lang, keys::CANVAS_MANAGER_IMPORT)
+                },
             ),
             duplicate: button_w(
                 &mut m,
@@ -8131,6 +8379,8 @@ impl App {
             }
         }
         let opened = path.display().to_string();
+        // FR-108 (C5): копия для записи в недавние — path уходит в сцену.
+        let recent_path = path.clone();
         let canvas = match Canvas::from_str(&json) {
             Ok(canvas) => canvas,
             Err(err) => {
@@ -8188,10 +8438,13 @@ impl App {
         // FR-107 (C4): чип — новое имя/чистый значок ошибки; камера нового
         // канваса (№12/№30b) и режим (№21c: Disk) — обратным каналом (ответ
         // придёт до следующего кадра — микротаск между событиями).
+        // Merge-фикс MC-C4+C5: на нативе web-очередь не дренажируется —
+        // CameraLoad/ActiveKind не запрашиваются; disk-флаг на нативе
+        // сразу поднимается (файлы — ОС, №20), на web — до ответа слоя.
         self.canvas_chip = canvas_chip_ui::CanvasChipState::default();
-        self.active_canvas_disk = false;
+        self.active_canvas_disk = self.canvas_manager.native;
         let opened_name = self.active_canvas_name();
-        if !opened_name.is_empty() {
+        if !opened_name.is_empty() && !self.canvas_manager.native {
             self.pending_web_requests
                 .push(WebRequest::CanvasCameraLoad {
                     name: opened_name.clone(),
@@ -8212,6 +8465,34 @@ impl App {
         if self.manager_after_open.take() == Some(ManagerAfterOpen::OpenGallery) {
             self.scheme_gallery.open();
         }
+        // FR-108 (C5): натив — вотчер и поисковый индекс следуют за новой
+        // сценой (файл-ноды нового канваса: каталог другой — дифф-синк
+        // вотчера идемпотентен, поиск — ReplaceAll как при старте main.rs;
+        // на web бэкенды деградируют в no-op). Недавние — тоже нативная
+        // точка записи (№20): каждая открытая сцена попадает в config.toml.
+        self.sync_watch_dirs();
+        {
+            let canvas_dir = self.scene.canvas_dir();
+            let entries: Vec<canvas_core::search::IndexEntry> = self
+                .scene
+                .canvas
+                .nodes
+                .iter()
+                .filter_map(|node| {
+                    let file = node.file.as_ref()?;
+                    Some(canvas_core::search::IndexEntry {
+                        path: resolve_node_path(file, &canvas_dir),
+                        display_name: Path::new(file)
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| file.clone()),
+                    })
+                })
+                .collect();
+            self.search_service
+                .command(canvas_core::search::SearchCommand::ReplaceAll { entries });
+        }
+        self.record_recent_canvas(&recent_path);
         self.request_redraw();
     }
 
@@ -10104,6 +10385,27 @@ pub fn keyboard_shift_up(node_bottom_screen: f32, viewport_h: f32, bottom_inset:
 }
 
 /// Разбор аргументов вручную — две опции не оправдывают зависимость от clap.
+/// FR-108 (C5, №20): абсолютный путь канваса для списка недавних —
+/// canonicalize (файл существует: резолвятся симлинки/регистр Windows),
+/// иначе join с текущим каталогом. Verbatim-префикс `\\?\` (расширенные
+/// пути canonicalize на Windows) срезается — конфиг читаем, семантика та
+/// же. Вызывается только нативом (web — IndexedDB-недавние FR-104).
+fn absolute_canvas_path(path: &Path) -> String {
+    if let Ok(canon) = path.canonicalize() {
+        let text = canon.to_string_lossy().into_owned();
+        return text
+            .strip_prefix(r"\\?\")
+            .map(str::to_owned)
+            .unwrap_or(text);
+    }
+    if path.is_absolute() {
+        return path.to_string_lossy().into_owned();
+    }
+    std::env::current_dir()
+        .map(|cwd| cwd.join(path).to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string_lossy().into_owned())
+}
+
 pub fn parse_args(args: &[String]) -> anyhow::Result<CliArgs> {
     let mut stress = None;
     let mut stress_widgets = None;
@@ -14776,6 +15078,12 @@ mod tests {
             Arc::new(canvas_core::MemStorage::new()),
         )
         .0;
+        // FR-108 (C5): тесты менеджера ниже моделируют WEB-конвейер
+        // (FR-104/105/106: WebRequest/CanvasOp); App::new на натив-цели
+        // ставит native=true (Linux-тесты = нативная сборка) — возвращаем
+        // web-режим. Нативные ветки менеджера — отдельные тесты ниже
+        // (manager_native_*).
+        app.canvas_manager.native = false;
         let list = entries
             .iter()
             .map(|name| canvas_core::workspace::CanvasEntry {
@@ -15154,6 +15462,9 @@ mod tests {
             "target/tmp/fr107-chip.canvas",
             Arc::new(canvas_core::MemStorage::new()),
         );
+        // Merge-фикс MC-C4+C5: web-режим (ренейм чипа — web-конвейер;
+        // на нативе чип «только просмотр», №20).
+        app.canvas_manager.native = false;
         app.on_canvas_list(vec![
             opfs_entry("fr107-chip.canvas"),
             opfs_entry("занято.canvas"),
@@ -15208,6 +15519,8 @@ mod tests {
             "target/tmp/fr107-chip-blur.canvas",
             Arc::new(canvas_core::MemStorage::new()),
         );
+        // Merge-фикс MC-C4+C5: web-режим (натив — «только просмотр», №20).
+        app.canvas_manager.native = false;
         app.click_canvas_chip("chip-name");
         assert!(app.canvas_chip.is_editing(), "клик по имени — правка");
         assert_eq!(
@@ -15233,6 +15546,9 @@ mod tests {
             "target/tmp/fr107-cam-old.canvas",
             Arc::new(canvas_core::MemStorage::new()),
         );
+        // Merge-фикс MC-C4+C5: web-режим (камера — localStorage web-слоя;
+        // на нативе хуки молчат — web-очередь без дренажа).
+        app.canvas_manager.native = false;
         app.camera.set_center([111.0, -222.0]);
         app.camera.set_zoom(0.5);
         let _ = app.drain_web_requests();
@@ -15278,6 +15594,124 @@ mod tests {
                     zoom: 2.0,
                 },
             }]
+        );
+    }
+
+    // --- FR-108 (мультиканвас C5): тонкий нативный слой --------------------
+
+    /// Хелпер FR-108: нативный App (native=true — как сборка бинарника
+    /// canvasdesk на Linux-тестах) с одним существующим `.canvas`-файлом в
+    /// недавних и менеджером, открытым поверх него.
+    fn native_manager_app() -> (App, std::path::PathBuf) {
+        let (mut app, _storage) = stub_app_on_storage(
+            "target/tmp/fr108-native.canvas",
+            Arc::new(canvas_core::MemStorage::new()),
+        );
+        assert!(app.canvas_manager.native, "натив-цель: native=true");
+        let dir = std::env::temp_dir().join("canvasdesk-fr108-recent");
+        std::fs::create_dir_all(&dir).expect("tmp dir");
+        let live = dir.join("живой.canvas");
+        std::fs::write(&live, "{}").expect("запись файла канваса");
+        // Канонический путь (та же нормализация, что в record_recent):
+        // dedup в push_recent сравнивает строки — симлинки tmp-каталога
+        // не должны рождать дубль одного файла.
+        let live = live.canonicalize().unwrap_or(live);
+        app.settings.recent = vec![
+            live.to_string_lossy().into_owned(),
+            "/точно/отсутствует/протухший.canvas".to_owned(),
+        ];
+        app.open_canvas_manager();
+        (app, live)
+    }
+
+    /// FR-108 (C5, №20): натив — источник строк менеджера = недавние из
+    /// config.toml: существующие файлы показываются (name = имя файла,
+    /// Disk-запись), протухшие — нет; режим хранилища Files (без кнопки
+    /// «Переехать…»); web-конвейер (WebRequest) не дергается вовсе.
+    #[test]
+    fn manager_native_recent_files_as_entries() {
+        let (mut app, live) = native_manager_app();
+        assert_eq!(
+            app.canvas_manager.storage,
+            canvas_manager_ui::StorageRowMode::Files,
+            "№20: файлы на диске, без переезда"
+        );
+        assert!(app.drain_web_requests().is_empty(), "web-конвейер молчит");
+        assert_eq!(app.canvas_entries.len(), 1, "протухшая запись скрыта");
+        assert_eq!(app.canvas_entries[0].name, "живой.canvas");
+        assert_eq!(
+            app.canvas_entries[0].kind,
+            canvas_core::workspace::EntryKind::Disk
+        );
+        assert_eq!(app.native_recent_paths, vec![live.clone()]);
+        // Открытие строки (Enter) = чтение файла диска → новая сцена;
+        // недавние обновляются (путь тем же файлом — dedup, длина та же).
+        let json = Canvas::default().to_json().expect("сериализация канваса");
+        std::fs::write(&live, &json).expect("валидный .canvas на диске");
+        let enter = winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter);
+        app.on_canvas_manager_key(&enter);
+        assert_eq!(app.scene.path, live, "файл открыт в сцену напрямую");
+        assert!(app.drain_web_requests().is_empty(), "и после — web молчит");
+        assert_eq!(app.settings.recent.len(), 1, "dedup: тот же файл");
+        assert_eq!(
+            app.settings.recent[0],
+            live.to_string_lossy().into_owned(),
+            "свежайший первым"
+        );
+    }
+
+    /// FR-108 (C5, тонкий слой): ренейм на нативе недоступен (файлами
+    /// владеет ОС) — F2 и двойной клик по имени НЕ входят в инлайн-ренейм,
+    /// CanvasOp::Rename не уходит (web-запросы на нативе гнили бы в очереди).
+    #[test]
+    fn manager_native_rename_disabled() {
+        let (mut app, _live) = native_manager_app();
+        let f2 = winit::keyboard::Key::Named(winit::keyboard::NamedKey::F2);
+        app.on_canvas_manager_key(&f2);
+        assert!(app.canvas_manager.editing.is_none(), "F2 — тонкий слой");
+        // Двойной клик по зоне имени — тоже без ренейма
+        app.click_canvas_manager("manager-row-0-name");
+        app.click_canvas_manager("manager-row-0-name");
+        assert!(
+            app.canvas_manager.editing.is_none(),
+            "двойной клик по имени — без ренейма"
+        );
+        assert!(app.drain_web_requests().is_empty(), "Rename не уходит");
+    }
+
+    /// FR-108 (C5, №34a): на не-Windows нативе диалоги — заглушки (warn +
+    /// None): «Создать»/«Открыть…»/«Открыть файл с диска…» не меняют сцену,
+    /// web-конвейер молчит (CLI-путь и drag-drop остаются рабочими; web —
+    /// свои пикеры через WebRequest).
+    #[test]
+    fn manager_native_dialogs_stubbed_on_linux() {
+        let (mut app, _live) = native_manager_app();
+        // «Создать» (№34a) — save-диалог заглушки: сцена не тронута
+        app.manager_create_empty();
+        assert_eq!(
+            app.scene.path,
+            PathBuf::from("target/tmp/fr108-native.canvas")
+        );
+        // «Открыть…» (слот import) — open-диалог заглушки
+        app.click_canvas_manager("manager-import");
+        assert_eq!(
+            app.scene.path,
+            PathBuf::from("target/tmp/fr108-native.canvas")
+        );
+        assert!(app.drain_web_requests().is_empty(), "web молчит");
+        // Пустое состояние: недавние пусты → CTA «Открыть файл с диска…»
+        app.settings.recent.clear();
+        app.open_canvas_manager();
+        assert!(
+            app.canvas_manager.entries.is_empty(),
+            "пустое состояние №23a"
+        );
+        app.click_canvas_manager("manager-empty-disk");
+        assert!(app.drain_web_requests().is_empty(), "web молчит и тут");
+        assert_eq!(
+            app.scene.path,
+            PathBuf::from("target/tmp/fr108-native.canvas"),
+            "сцена не тронута"
         );
     }
 

@@ -142,3 +142,23 @@ Stage Summary:
 - WASM L2 не выполнялся (нет wasm-bindgen CLI, 2 ядра/4 ГБ) — ручные сценарии 6 шт. в FR-107 §Проверка (чип-ренейм/коллизия/disk, title, камера после перезагрузки/ренейма, шаг онбординга, панель 3 кнопки RU/EN, dirty-значок)
 - За координатором: мерж wave/mc-c4 (+wt-c5 параллельно — пересечения i18n/canvas_manager_ui/app.rs промаркированы `// FR-107 (C4)`), приёмка CJM J4→J5→J7, закрытие issue #8
 Tokens: in≈600k, out≈160k, total≈760k (estimate; ядро волны прерванной сессии ≈in 420k/out 115k + финализация MC-C4-DONE ≈in 180k/out 45k), model=GLM (subagent MC-C4-DONE), scope=FR-107
+
+---
+Task ID: MC-C5-FIN (GitHub #9, волна C5 мультиканваса; high-level #14; ядро волны — Task ID MC-C5, предыдущий прогон)
+Agent: Super Z (subagent MC-C5-FIN; worktree /home/z/my-project/canvasdesk/wt-c5, ветка wave/mc-c5)
+Task: Финализация волны C5 (FR-108): верификация коммита 039d471 (тонкий нативный слой) против брифа, гейты, FR-108/ACCEPTANCE/индексы/user-docs, worklog-и.
+
+Work Log:
+- Саморевью 039d471 (дифф 13 файлов, +1242/−100) против брифа C5: чистые функции покрыты тестами (recent_files×7, settings back-compat×1, dialogs×2, manager-layout×2, app×3 = 15 новых); cfg(windows)-диалоги изолированы по паттерну menu.rs (SAFETY-комментарии, чистое ядро над COM); web-режим менеджера не сломан — web-тесты идут через manager_app_with с native=false, нативные ветки отдельными manager_native_*; синхронные модальные диалоги вместо AppEvent-канала — обоснование зафиксировано в FR-108 §События
+- Гейты: fmt OK; clippy -D warnings OK; cargo test --workspace — 3072/0 ПОСЛЕ фикса: внешний integration_groups.rs::test_create_group_at_viewport_center остался на старой картине контекстного меню (11 пунктов, юнит-тест lib.rs был обновлён, внешний — нет) → 859ce24 (12 пунктов, CanvasManager в голове, сдвиг индексов +1); wasm_gate.sh --check OK
+- Кросс-компиляция cfg(windows)-диалогов воспроизведена изолированным стендом (windows 0.62.2, features Win32_UI_Shell+Win32_UI_Shell_Common+Win32_System_Com+Win32_Foundation, include dialogs.rs дословно) под x86_64-pc-windows-msvc — зелёная; полный cargo check -p canvas-shell --target msvc на Linux невозможен (libsqlite3-sys требует MSVC lib.exe — окружение) — оговорено в FR-108 §Проверка
+- FR-108: docs/change-requests/fr-108-multicanvas-c5-desktop-acceptance.md (cr-template; §События, §Ограничения тонкого слоя №20 — ренейм/шаблон/дубликат/удаление/миграция на нативе не делаются; §Проверка с честными оговорками: рантайм Windows-диалогов и WASM L2 — за владельцем) + строка в index-cr-fr.md
+- ACCEPTANCE.md §13 «Мультиканвас (волны C0–C5)»: 6 сквозных сценариев issue #9 (создать→переименовать→перезагрузить; удалить активный→менеджер+«Canvas N»; переезд OPFS→папка; два таба→модал Web Locks; восстановление сценария→тост; битый ?canvas=→недавние+тост) с колонками [web|desktop] и статусами А/Р/Р⁺ (авто-тест/ручной шаг/ручной Windows-натив), ручные шаги с ожидаемыми результатами (1a–6a), матрица тёмная/светлая × RU/EN × 900×600/1280×800 (мин. на 2 сценариях), ограничения волны; строка в таблице волн + правка вводки архива (активные волны — §13+)
+- user-docs/interface.md: секция «Менеджер канвасов (десктоп)» — только desktop-поверхности (web-тексты про чип/«Недавние» — зона C4 #8); hotkeys.md не тронут (F2 там про карту потока)
+- doc_lint: 934 ссылки + 2549 бэктик-путей + 5 бюджетов — 0 ошибок; НЕ пушено, GitHub не тронут
+- Коммиты: 039d471 (ядро, предыдущий прогон волны), 859ce24 (fix: догон integration-теста меню), e429d83 (docs)
+
+Stage Summary:
+- Волна C5 закрыта: тонкий нативный слой верифицирован и задокументирован; все гейты зелёные (3072/0); приёмка §13 готова к прогону владельцем (web-сценарии Chromium + Windows-натив: диалоги, ПКМ-вход, недавние в config.toml, матрица тем/локалей/окон)
+- Открытые пункты: мерж wave/mc-c5 + wt-c4 за координатором (пересечения: i18n, canvas_manager_ui, app.rs — маркировка // FR-108 у C5); нативный rename-диалог с переносом ключа камеры (№12/№30b) — будущая волна; вопрос №36b (семантика активного сценария мультиканвас×вкладки) — открыт из C1
+Tokens: in≈600k, out≈150k, total≈750k (estimate; финализация ≈in 250k/out 60k + оценка ядра волны 039d471 по диффу +1242 строк ≈in 350k/out 90k), model=GLM (subagent MC-C5-FIN), scope=FR-108

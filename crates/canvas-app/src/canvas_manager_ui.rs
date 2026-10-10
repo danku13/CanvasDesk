@@ -58,6 +58,9 @@ pub enum StorageRowMode {
     Browser { fs_available: bool },
     /// Granted-папка — кнопки переезда нет (уже на диске).
     Folder,
+    /// FR-108 (C5, №20): натив — файлы на диске (источник строк — недавние
+    /// из config.toml). Кнопки переезда нет: файлами владеет ОС.
+    Files,
 }
 
 /// Показывать ли кнопку «Переехать на диск…» (№51a): только OPFS-режим в
@@ -189,6 +192,12 @@ pub struct CanvasManagerState {
     pub sort: SortMode,
     /// Режим строки хранилища (№51a; `AppEvent::StorageMode`).
     pub storage: StorageRowMode,
+    /// FR-108 (C5, №20): тонкий нативный слой — источник строк менеджера
+    /// НЕ workspace-хранилище web-слоя, а недавние файлы из config.toml
+    /// (`Settings::recent`). Ставится платформой сборки (`cfg!` в
+    /// `App::new`): web — false (конвейер FR-104/105/106), натив — true.
+    /// Компиляция обоих режимов — чистые тесты раскладки гоняют оба.
+    pub native: bool,
 }
 
 impl Default for CanvasManagerState {
@@ -202,6 +211,7 @@ impl Default for CanvasManagerState {
             editing: None,
             sort: SortMode::ModifiedDesc,
             storage: StorageRowMode::Browser { fs_available: true },
+            native: false,
         }
     }
 }
@@ -465,9 +475,13 @@ pub fn manager_layout(
     // создания → список → кнопки строки → строка хранилища → пад.
     // Пустое состояние (№23a): вместо списка и кнопок строки — карточка
     // CTA той же высоты, что окно списка из двух строк.
+    // FR-108 (C5, native): кнопок выбранной строки нет (тонкий слой —
+    // файлами владеет ОС) — ряд не занимает высоту.
     let top_chrome = PANEL_PAD + HEADER_H + gap + SEARCH_H + gap + kit::BUTTON_HEIGHT + gap;
     let bottom_chrome = if empty_shown {
         EMPTY_CARD_H + gap + STORAGE_ROW_H + PANEL_PAD
+    } else if state.native {
+        gap + STORAGE_ROW_H + PANEL_PAD
     } else {
         gap + kit::BUTTON_HEIGHT + gap + STORAGE_ROW_H + PANEL_PAD
     };
@@ -519,17 +533,27 @@ pub fn manager_layout(
         SEARCH_H,
     ];
 
-    // Кнопки создания (№7): слева направо.
+    // Кнопки создания (№7): слева направо. FR-108 (native): «Из шаблона…»
+    // нет (тонкий слой), «Импорт файла…» заменён на «Открыть…» (слот
+    // `import` — тот же hit-id, платформенная ветка в клике).
     let actions_y = search_y + SEARCH_H + gap;
     let create = [inner_x, actions_y, widths.create, kit::BUTTON_HEIGHT];
-    let template = [
-        create[0] + create[2] + tokens::SPACING_SM,
-        actions_y,
-        widths.template,
-        kit::BUTTON_HEIGHT,
-    ];
+    let template = if state.native {
+        [0.0; 4]
+    } else {
+        [
+            create[0] + create[2] + tokens::SPACING_SM,
+            actions_y,
+            widths.template,
+            kit::BUTTON_HEIGHT,
+        ]
+    };
     let import = [
-        template[0] + template[2] + tokens::SPACING_SM,
+        if state.native {
+            create[0] + create[2] + tokens::SPACING_SM
+        } else {
+            template[0] + template[2] + tokens::SPACING_SM
+        },
         actions_y,
         widths.import,
         kit::BUTTON_HEIGHT,
@@ -579,7 +603,10 @@ pub fn manager_layout(
     } else {
         None
     };
-    let (duplicate, rename, delete, export_btn) = if empty_shown {
+    // FR-108 (native): ряд кнопок строки скрыт — ренейм/удаление/дубликат/
+    // экспорт — зона ОС и будущих волн (сознательное ограничение C5,
+    // FR-108 §Ограничения).
+    let (duplicate, rename, delete, export_btn) = if empty_shown || state.native {
         ([0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4])
     } else {
         // Справа налево: Экспорт, Удалить, Переименовать, Дублировать.
@@ -607,8 +634,12 @@ pub fn manager_layout(
     };
 
     // Строка хранилища (№51a): всегда внизу панели (кнопки строки — над ней).
+    // FR-108 (native): ряд кнопок строки пуст — строка хранилища идёт сразу
+    // за списком (bottom_chrome без BUTTON_HEIGHT).
     let storage_y = if empty_shown {
         list_y + EMPTY_CARD_H + gap
+    } else if state.native {
+        after_list_y
     } else {
         after_list_y + kit::BUTTON_HEIGHT + gap
     };
@@ -1110,6 +1141,72 @@ mod tests {
         assert!(lay.rows.len() < VISIBLE_ROWS, "окно ужалось под высоту");
         // Строка хранилища не вылезает за панель
         assert!(lay.storage_label[1] + STORAGE_ROW_H <= lay.panel[1] + lay.panel[3] + 0.5);
+    }
+
+    // --- FR-108 (C5): тонкий нативный слой ----------------------------------------------
+
+    /// Натив: «Из шаблона…» и ряд кнопок строки скрыты (тонкий слой),
+    /// «Открыть…» (слот import) встаёт сразу за «Создать», строка
+    /// хранилища — режим Files без кнопки переезда.
+    #[test]
+    fn layout_native_thin_layer() {
+        let mut state = CanvasManagerState::default();
+        // ts убывают (f0 — свежайший): дефолтная сортировка ModifiedDesc
+        // держит f0 первой строкой — активный файл подсвечен.
+        state.set_entries(
+            (0..3)
+                .map(|i| entry(&format!("f{i}.canvas"), (3 - i) as u64))
+                .collect(),
+        );
+        state.native = true;
+        state.storage = StorageRowMode::Files;
+        let lay = manager_layout([1280.0, 800.0], &state, "f0.canvas", &widths());
+        assert_eq!(lay.template, [0.0; 4], "натив: шаблона нет (тонкий слой)");
+        assert!(
+            lay.import[0] >= lay.create[0] + lay.create[2],
+            "«Открыть…» сразу за «Создать»"
+        );
+        assert!(lay.import[2] > 0.0, "слот import занят «Открыть…»");
+        // Ряд кнопок выбранной строки скрыт (ренейм/удаление/дубликат/экспорт)
+        assert_eq!(lay.duplicate, [0.0; 4]);
+        assert_eq!(lay.rename, [0.0; 4]);
+        assert_eq!(lay.delete, [0.0; 4]);
+        assert_eq!(lay.export, [0.0; 4]);
+        // Файлы на диске — кнопки «Переехать…» нет (файлами владеет ОС)
+        assert_eq!(lay.storage_move, [0.0; 4]);
+        assert!(!storage_move_available(StorageRowMode::Files));
+        assert!(
+            lay.storage_label[2] > 0.0,
+            "подпись хранилища (Files) видна"
+        );
+        // Панель в вьюпорту, список/поиск работают как на web (реюз C3)
+        assert!(lay.has_entries);
+        assert!(lay.panel[1] + lay.panel[3] <= 800.0);
+        assert_eq!(lay.rows.len(), 3);
+        assert!(lay.rows[0].is_active, "активный файл подсвечен");
+        // Нативная панель короче web-режима (нет ряда кнопок строки)
+        let mut web_state = CanvasManagerState::default();
+        web_state.set_entries(state.entries.clone());
+        web_state.sort = state.sort;
+        let web_lay = manager_layout([1280.0, 800.0], &web_state, "f0.canvas", &widths());
+        assert!(
+            lay.panel[3] < web_lay.panel[3],
+            "натив без ряда кнопок строки ниже"
+        );
+    }
+
+    /// Натив: пустое состояние (№23a) живо — CTA «Создать» и «Открыть файл
+    /// с диска…» ведут в нативные диалоги (№34a), карточка та же.
+    #[test]
+    fn layout_native_empty_state() {
+        let mut state = CanvasManagerState::default();
+        state.set_entries(vec![]);
+        state.native = true;
+        let lay = manager_layout([1280.0, 800.0], &state, "", &widths());
+        let empty = lay.empty.expect("пустое состояние живо и на нативе");
+        assert!(empty.create[2] > 0.0, "CTA «Создать канвас»");
+        assert!(empty.open_disk[2] > 0.0, "вторичное «Открыть файл…»");
+        assert!(!lay.has_entries);
     }
 
     // --- дата (format_ts) ---------------------------------------------------------------

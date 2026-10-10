@@ -7615,22 +7615,30 @@ impl App {
             d.control(rect(lay.sort_chip), &sort_style);
             d.label_center(rect(lay.sort_chip), sort_label, sort_style.text, caption);
             // Кнопки создания (№7): Пустой / Из шаблона… / Импорт файла…
+            // FR-108 (натив): «Из шаблона…» скрыт (rect 0×0), слот import
+            // рисует «Открыть…» (файловый диалог вместо импорта).
             draw_button(
                 &mut d,
                 lay.create,
                 crate::i18n::tr(lang, keys::CANVAS_MANAGER_CREATE_EMPTY),
                 canvas_ui::kit::ButtonVariant::Secondary,
             );
-            draw_button(
-                &mut d,
-                lay.template,
-                crate::i18n::tr(lang, keys::CANVAS_MANAGER_CREATE_TEMPLATE),
-                canvas_ui::kit::ButtonVariant::Secondary,
-            );
+            if lay.template[2] > 0.0 {
+                draw_button(
+                    &mut d,
+                    lay.template,
+                    crate::i18n::tr(lang, keys::CANVAS_MANAGER_CREATE_TEMPLATE),
+                    canvas_ui::kit::ButtonVariant::Secondary,
+                );
+            }
             draw_button(
                 &mut d,
                 lay.import,
-                crate::i18n::tr(lang, keys::CANVAS_MANAGER_IMPORT),
+                if self.canvas_manager.native {
+                    crate::i18n::tr(lang, keys::CANVAS_MANAGER_OPEN)
+                } else {
+                    crate::i18n::tr(lang, keys::CANVAS_MANAGER_IMPORT)
+                },
                 canvas_ui::kit::ButtonVariant::Secondary,
             );
             // Строки списка (окно видимости) — стиль строк диалога миграции.
@@ -7788,30 +7796,33 @@ impl App {
             }
             // Кнопки выбранной строки: дубликат/ренейм/экспорт — secondary,
             // удаление (№15a) — danger (разрушающее действие).
-            draw_button(
-                &mut d,
-                lay.duplicate,
-                crate::i18n::tr(lang, keys::CANVAS_MANAGER_DUPLICATE),
-                canvas_ui::kit::ButtonVariant::Secondary,
-            );
-            draw_button(
-                &mut d,
-                lay.rename,
-                crate::i18n::tr(lang, keys::CANVAS_MANAGER_RENAME),
-                canvas_ui::kit::ButtonVariant::Secondary,
-            );
-            draw_button(
-                &mut d,
-                lay.delete,
-                crate::i18n::tr(lang, keys::CANVAS_MANAGER_DELETE),
-                canvas_ui::kit::ButtonVariant::Danger,
-            );
-            draw_button(
-                &mut d,
-                lay.export,
-                crate::i18n::tr(lang, keys::CANVAS_MANAGER_EXPORT),
-                canvas_ui::kit::ButtonVariant::Secondary,
-            );
+            // FR-108 (натив): ряд скрыт (rect 0×0 — тонкий слой).
+            if lay.duplicate[2] > 0.0 {
+                draw_button(
+                    &mut d,
+                    lay.duplicate,
+                    crate::i18n::tr(lang, keys::CANVAS_MANAGER_DUPLICATE),
+                    canvas_ui::kit::ButtonVariant::Secondary,
+                );
+                draw_button(
+                    &mut d,
+                    lay.rename,
+                    crate::i18n::tr(lang, keys::CANVAS_MANAGER_RENAME),
+                    canvas_ui::kit::ButtonVariant::Secondary,
+                );
+                draw_button(
+                    &mut d,
+                    lay.delete,
+                    crate::i18n::tr(lang, keys::CANVAS_MANAGER_DELETE),
+                    canvas_ui::kit::ButtonVariant::Danger,
+                );
+                draw_button(
+                    &mut d,
+                    lay.export,
+                    crate::i18n::tr(lang, keys::CANVAS_MANAGER_EXPORT),
+                    canvas_ui::kit::ButtonVariant::Secondary,
+                );
+            }
         } else if let Some(empty) = &lay.empty {
             // Пустое состояние (№23a): заголовок + подсказка + CTA
             // «Создать канвас» (primary) + вторичное «Открыть файл с диска…».
@@ -7870,6 +7881,10 @@ impl App {
             }
             canvas_manager_ui::StorageRowMode::Browser { .. } => {
                 crate::i18n::tr(lang, keys::CANVAS_STORAGE_BROWSER)
+            }
+            // FR-108 (C5): натив — файлы на диске (недавние из config.toml).
+            canvas_manager_ui::StorageRowMode::Files => {
+                crate::i18n::tr(lang, keys::CANVAS_STORAGE_DISK_FILES)
             }
         };
         let shown = m.ellipsis(
