@@ -46,7 +46,7 @@
 - Много чипов в баре: ряд Wrap, высота бара растёт (BAR_HEIGHT 44 базово).
 
 ## 7. Где в коде
-`canvas-ui/src/kit.rs` — CHIP_HEIGHT/CHIP_PAD_H, `chip_style` (360),
+`crates/canvas-ui/src/kit.rs` — CHIP_HEIGHT/CHIP_PAD_H, `chip_style` (360),
 RowParts/бейджи (1013–1390); what-if чипы — `whatif_ui.rs` (CHIP_*,
 INDICATOR_WIDTH 78); галерейные пилюли — `scheme_gallery_ui.rs` (CHIP_W 108,
 CHIP_ALL_W 56, CHIP_H 28).

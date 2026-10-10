@@ -5,7 +5,7 @@
 1. **Назначение** — где применяется и зачем.
 2. **Анатомия и размеры** — точные константы (px).
 3. **Токены** — какие слоты/цвета потребляются.
-4. **Состояния** — матрица (см. `rules/08-states.md`).
+4. **Состояния** — матрица (см. `../rules/08-states.md`).
 5. **Взаимодействие** — мышь, клавиатура, комбинированные сценарии.
 6. **Граничные случаи** — что происходит на краях условий.
 7. **Где в коде** — crate/файл/константы.
@@ -14,30 +14,30 @@
 ## Индекс
 
 ### Элементы кита (canvas-ui::kit)
-- `button.md` — кнопка (primary/secondary/ghost/danger)
-- `chip-badge.md` — чипы и бейджи
-- `text-field.md` — однострочное текстовое поле
-- `switch.md` — переключатель
-- `dropdown.md` — выпадающее меню
-- `tooltip.md` — тултип
-- `toast.md` — тост-уведомления
-- `modal-dialog.md` — модалка/диалог подтверждения
-- `scrollbar.md` — скроллбар
-- `icon.md` — глиф-иконки
+- `../use-cases/button.md` — кнопка (primary/secondary/ghost/danger)
+- `../use-cases/chip-badge.md` — чипы и бейджи
+- `../use-cases/text-field.md` — однострочное текстовое поле
+- `../use-cases/switch.md` — переключатель
+- `../use-cases/dropdown.md` — выпадающее меню
+- `../use-cases/tooltip.md` — тултип
+- `../use-cases/toast.md` — тост-уведомления
+- `../use-cases/modal-dialog.md` — модалка/диалог подтверждения
+- `../use-cases/scrollbar.md` — скроллбар
+- `../use-cases/icon.md` — глиф-иконки
 
 ### Канвас
-- `card.md` — карточка ноды (анатомия, таблица тела, resize)
-- `edge.md` — связи (типы, хиты, анимации)
-- `minimap.md` — минимапа
-- `wheel-menu.md` — радиальное меню шаблонов
+- `../use-cases/card.md` — карточка ноды (анатомия, таблица тела, resize)
+- `../use-cases/edge.md` — связи (типы, хиты, анимации)
+- `../use-cases/minimap.md` — минимапа
+- `../use-cases/wheel-menu.md` — радиальное меню шаблонов
 
 ### Поверхности (canvas-app)
-- `context-menu.md` — контекстные меню
-- `search-panel.md` — панель поиска Ctrl+F
-- `template-palette.md` — дока палитры шаблонов
-- `scheme-gallery.md` — галерея схем + empty state
-- `whatif-bar.md` — what-if бар и сценарии
-- `hud.md` — HUD (F3) и отладка (F9)
+- `../use-cases/context-menu.md` — контекстные меню
+- `../use-cases/search-panel.md` — панель поиска Ctrl+F
+- `../use-cases/template-palette.md` — дока палитры шаблонов
+- `../use-cases/scheme-gallery.md` — галерея схем + empty state
+- `../use-cases/whatif-bar.md` — what-if бар и сценарии
+- `../use-cases/hud.md` — HUD (F3) и отладка (F9)
 
 Приоритет: правка use case = целевое состояние; расхождение кода с файлом
 фиксируется задачей рефакторинга.

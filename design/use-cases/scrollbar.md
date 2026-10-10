@@ -36,7 +36,7 @@ control_hover_fill. Активный (drag) кноб — accent. Никаких 
   (hit ≥ визуал, A3), трек-клик — по всей ширине полосы.
 
 ## 7. Где в коде
-`canvas-ui/src/kit.rs` — scroll_bar (813–830), SCROLLBAR_* (157–159);
+`crates/canvas-ui/src/kit.rs` — scroll_bar (813–830), SCROLLBAR_* (157–159);
 docs viewer — `docs_ui.rs` (293–303, ширина 6, close 26); списки контекстных
 меню — list_rows + ScrollState (app.rs).
 

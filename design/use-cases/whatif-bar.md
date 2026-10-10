@@ -59,7 +59,7 @@ WHATIF_BADGE #DFA63E; disabled-текст кнопок #8A909C (control_disabled
   hit-rect'ам бара).
 
 ## 7. Где в коде
-`canvas-app/src/whatif_ui.rs` (константы 13–68, выше — цитаты), бар/чипы —
+`crates/canvas-app/src/whatif_ui.rs` (константы 13–68, выше — цитаты), бар/чипы —
 app.rs (сборка кадра L3), сценарии — flow/scenario worker (FR-064), MCP —
 whatif_* инструменты (9 шт., skills синхронизированы). Токены — colors.json
 state.whatif_*.

@@ -45,8 +45,8 @@ accent), строки search_row_fill, hover — control_hover_fill, совпа�
   G4 на пересечения с фиксированными поверхностями).
 
 ## 7. Где в коде
-`canvas-render/src/search_ui.rs` (16–28 константы), поиск/дебаунс —
-`canvas-app/src/app.rs` (200–202), FTS5 — canvas-core/shell (search.rs),
+`crates/canvas-app/src/search_ui.rs` (16–28 константы), поиск/дебаунс —
+`crates/canvas-app/src/app.rs` (200–202), FTS5 — canvas-core/shell (search.rs),
 surface — app/ui_registry.rs.
 
 ## 8. Что меняется при правке файла

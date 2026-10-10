@@ -55,13 +55,13 @@ CanvasDesk. Она отделена от кода специально: влад
 
 **Use cases** (`use-cases/`) — по файлу на компонент:
 
-- Элементы кита: `button.md`, `chip-badge.md`, `text-field.md`,
-  `switch.md`, `dropdown.md`, `tooltip.md`, `toast.md`, `modal-dialog.md`,
-  `scrollbar.md`, `icon.md`.
-- Канвас: `card.md` (карточка ноды), `edge.md` (связи), `minimap.md`,
-  `wheel-menu.md`.
-- Поверхности: `context-menu.md`, `search-panel.md`, `template-palette.md`,
-  `scheme-gallery.md` (+ empty state), `whatif-bar.md`, `hud.md`.
+- Элементы кита: `use-cases/button.md`, `use-cases/chip-badge.md`, `use-cases/text-field.md`,
+  `use-cases/switch.md`, `use-cases/dropdown.md`, `use-cases/tooltip.md`, `use-cases/toast.md`, `use-cases/modal-dialog.md`,
+  `use-cases/scrollbar.md`, `use-cases/icon.md`.
+- Канвас: `use-cases/card.md` (карточка ноды), `use-cases/edge.md` (связи), `use-cases/minimap.md`,
+  `use-cases/wheel-menu.md`.
+- Поверхности: `use-cases/context-menu.md`, `use-cases/search-panel.md`, `use-cases/template-palette.md`,
+  `use-cases/scheme-gallery.md` (+ empty state), `use-cases/whatif-bar.md`, `use-cases/hud.md`.
 
 Каждый use case имеет единую структуру: Назначение → Анатомия и размеры →
 Токены → Состояния → Взаимодействие (мышь/клавиатура) → Граничные случаи →
@@ -75,7 +75,7 @@ W1–W4).
 
 Если `rules/` или `use-cases/` противоречат коду — приоритет у этих файлов
 (они целевое состояние), расхождение фиксируется как задача рефакторинга.
-Если противоречат `docs/prd/prd-0006-design-tokens.md`,
+Если противоречат `docs/prd/prd-0006-design-system-tokens.md`,
 `docs/prd/prd-0009-ui-layering-uikit.md`, `docs/ui-kit.md` — приоритет у
 этой папки для **визуальных/поведенческих** значений; архитектурные решения
 (ADR-0013 отказ от taffy, ADR-0015 стратегия UI-стека) не пересматриваются

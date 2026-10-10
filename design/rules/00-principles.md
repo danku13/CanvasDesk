@@ -1,7 +1,7 @@
 # 00 — Принципы UI-системы
 
 > Фундамент, на котором стоят все остальные правила. Источники архитектуры:
-> `docs/prd/prd-0006-design-tokens.md` (токены), `docs/prd/prd-0009-ui-layering-uikit.md`
+> `docs/prd/prd-0006-design-system-tokens.md` (токены), `docs/prd/prd-0009-ui-layering-uikit.md`
 > (слои/кит), `docs/ui-kit.md` (гайд каркаса экрана). Архитектурные решения
 > не меняются правкой этой папки — только через ADR.
 

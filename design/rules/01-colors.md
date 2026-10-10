@@ -1,7 +1,7 @@
 # 01 — Цвета
 
 > Слой примитивов: `design/tokens/colors.json` ↔ `canvas_core::tokens`.
-> Семантика: `canvas-render/src/theme.rs` (ThemeColors, 36+ слотов).
+> Семантика: `crates/canvas-render/src/theme.rs` (ThemeColors, 36+ слотов).
 > Формат: sRGB, f32-массивы 0..1 RGBA либо u8-байты RGB.
 
 ## C1. Единственный акцент

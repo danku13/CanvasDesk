@@ -35,7 +35,7 @@
 |---|---|---|
 | П1 три слоя токенов | ✅ | кит берёт spacing/radius/шрифты из `canvas_core::tokens` (button.rs, panel_header.rs и др.); рантайм JSON не парсит |
 | П2 I-1 ноль скачка | ⚠️ | инвариант держится, но правка FR-075 (радиус карточки 8→10) прошла мимо папки правил — S2 остался со значением 8 (процессное нарушение П2) |
-| П3 I-5 паритет JSON↔Rust | ✅ | тесты паритета в `canvas_core/src/tokens.rs` (spacing/radius/ui_typography/card…) |
+| П3 I-5 паритет JSON↔Rust | ✅ | тесты паритета в `crates/canvas-core/src/tokens.rs` (spacing/radius/ui_typography/card…) |
 | П4 slot-only кит | ⚠️ | рантайм кита без литералов и rgb-арифметики; НО kit-компоненты banner/radio_card/chat_bubble вычисляют `tint(slot, α)` (подмена альфы) — паттерн оформлен helper'ом `paint.rs::tint` и не описан в правилах (серая зона) |
 | П5 ввод = тому, что видно | ✅ | `Component::hit_test` по тем же rects, что paint; surface-уровень — hit.rs (не тронут) |
 | П6 измеренный текст | ✅ | G5-паттернов в ките нет; `chars().take(budget)` в text_field — санкционированный кламп max_chars (IN7); crumbs take_while — замеренные ширины |
@@ -220,21 +220,21 @@
 Правки — только в `design/rules/` (нормативные тексты), код не тронут
 (инвариант I-1: ни одного визуального изменения):
 
-1. `01-colors.md` — C2: + альфа 0.38; C3: + строки success/warning;
+1. `rules/01-colors.md` — C2: + альфа 0.38; C3: + строки success/warning;
    C8: + легализация alpha-tint слота (rgb-подмена запрещена).
-2. `02-typography.md` — T2: + шкала экранных UI-кеглей `ui_typography`
+2. `rules/02-typography.md` — T2: + шкала экранных UI-кеглей `ui_typography`
    (title_lg 18 / body 13 / caption 11 / hint 10) со ссылками на токены.
-3. `03-spacing-radius.md` — S2: карточка 10 (FR-075), минимапа 8 отдельно;
+3. `rules/03-spacing-radius.md` — S2: карточка 10 (FR-075), минимапа 8 отдельно;
    S3: + высоты шапок панелей S/M/L 30/38/44 + зафиксированные отклонения
    (галерея 40, explain 56, autolink 58 → задачи W1).
-4. `07-theming.md` — TH3: 36→37; TH4: + success/warning/scrollbar_thumb/
+4. `rules/07-theming.md` — TH3: 36→37; TH4: + success/warning/scrollbar_thumb/
    rule_color; TH6: + полный реестр слотов KitPalette (ссылка на 10-й файл).
-5. `08-states.md` — ST2: Pressed = hover-слоты (факт v1), pressed-слот — v2.
+5. `rules/08-states.md` — ST2: Pressed = hover-слоты (факт v1), pressed-слот — v2.
 6. `04-contrast-a11y.md` — A4: пункт про Enter/Ctrl+Enter уточнён как
    контракт инлайн-редактора ноды (kit-поля — IN2).
-7. `00-principles.md` — П4: + alpha-tint исключение; П9: G1-заметка про
+7. `rules/00-principles.md` — П4: + alpha-tint исключение; П9: G1-заметка про
    тест-фикстуры.
-8. `06-motion.md` — M3: + фиксация статичности компонентов кита.
+8. `rules/06-motion.md` — M3: + фиксация статичности компонентов кита.
 9. `design/rules/10-components.md` — НОВЫЙ: реестр компонентов кита v2
    (17 позиций), реестр слотов KitPalette, скролл-модель, витрина-требование.
 10. `design/README.md` — индекс правил + ссылка на этот аудит.

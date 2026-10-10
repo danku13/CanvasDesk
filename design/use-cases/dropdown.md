@@ -42,7 +42,7 @@ normal = прозрачная, hover = control_hover_fill, selected = control_se
   полосе внутри клипа модалки; клики мимо строк глотаются модалкой.
 
 ## 7. Где в коде
-`canvas-ui/src/kit.rs` — dropdown_menu (389–409), DROPDOWN_GAP (135);
+`crates/canvas-ui/src/kit.rs` — dropdown_menu (389–409), DROPDOWN_GAP (135);
 потребители: `settings_ui.rs` (dropdown button 170×24, rows 26),
 what-if выбор сценария (list 480, rows 24).
 

@@ -6,7 +6,7 @@
 > `crates/canvas-ui/src/component/text_field.rs` (`TextFieldModel`,
 > `TextFieldAction`, `text_field()`), маппер клавиш — app-слой
 > (`canvas_app::app::input::text_field_action`). Источники: `00-principles.md`
-> (П4/П5/П6), `08-states.md` (ST1/ST2), `use-cases/text-field.md`.
+> (П4/П5/П6), `08-states.md` (ST1/ST2), `../use-cases/text-field.md`.
 
 ## IN1. Единая модель поля — kit `TextFieldModel`
 
@@ -52,7 +52,7 @@ Enter/Esc — семантика потребителя (submit/cancel), в `app
 
 Если текст шире поля: при фокусе показывается окно текста, следующее за
 кареткой (`TextFieldLayout.scroll_x`, Clip-политика — см.
-`use-cases/text-field.md` §6); ellipsis не применяется к активному вводу.
+`../use-cases/text-field.md` §6); ellipsis не применяется к активному вводу.
 Литералы-каретки `format!("{}|")` в тексте ЗАПРЕЩЕНЫ — каретка рисуется
 из `TextFieldLayout.caret_x` (1.5 px, слот `accent`, паттерн агент-панели).
 

@@ -53,7 +53,7 @@ Selected; drag шаблона: призрак в слое Drag (L6).
 - Узкое окно: док скрывается по HideBelow (деградация вместо сжатия).
 
 ## 7. Где в коде
-`canvas-app/src/template_ui.rs` (52–81 константы дока, 394–408 стрип/flyout),
+`crates/canvas-app/src/template_ui.rs` (52–81 константы дока, 394–408 стрип/flyout),
 задержки — `palette.rs` (859–863), элементы стрипа — palette.rs (58–78),
 каталог — canvas-core/templates.rs, surface — ui_registry.rs.
 

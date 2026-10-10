@@ -26,9 +26,9 @@ danger (деструктивное — удаляет сценарий/связ�
 Рамка — control_border; текст — text (primary: белый/ink по контрасту).
 
 ## 4. Состояния
-Матрица `rules/08-states.md`: Disabled > Pressed > Hovered > Selected >
+Матрица `../rules/08-states.md`: Disabled > Pressed > Hovered > Selected >
 Normal. Pressed в v1 визуально = Normal (дифференциация — v2 через правку
-`rules/08-states.md`).
+`../rules/08-states.md`).
 
 ## 5. Взаимодействие
 - **Мышь**: press внутри → отпуск внутри = клик (один раз). Увод курсора при
@@ -50,7 +50,7 @@ WidgetState. Потребители: settings_ui, whatif_ui, scheme_gallery_ui, 
 (confirm) в app.rs.
 
 ## 8. Что меняется при правке файла
-- Размеры/паддинг → константы kit.rs + при смене кегля шкала `rules/02-typography.md`.
+- Размеры/паддинг → константы kit.rs + при смене кегля шкала `../rules/02-typography.md`.
 - Цвета состояний → слоты ThemeColors/KitPalette (не локальные значения),
   после правки — прогон G3.
-- Новое состояние → новый слот + правка `rules/08-states.md`.
+- Новое состояние → новый слот + правка `../rules/08-states.md`.

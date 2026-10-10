@@ -77,8 +77,8 @@ default / flow / draft / selected (толще 3.5) / focus (accent + breath
   (проверка G4 канонических сцен).
 
 ## 7. Где в коде
-`canvas-render/src/cards.rs` (614–670 константы, 979+ фокус/пульс),
-зоны — `canvas-core/src/edgegeom.rs` (10–30), настройки зон — settings.rs
+`crates/canvas-render/src/cards.rs` (614–670 константы, 979+ фокус/пульс),
+зоны — `crates/canvas-core/src/edgegeom.rs` (10–30), настройки зон — settings.rs
 (332–336). Токены — tokens.rs EDGE_* (42–46), dimensions.json edge.*.
 
 ## 8. Что меняется при правке файла
