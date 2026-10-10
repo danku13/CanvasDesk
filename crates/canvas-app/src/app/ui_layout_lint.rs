@@ -1143,7 +1143,10 @@ fn lint_nav_rail_demo() {
     app.kit_demo.tobe = true;
     let frame = build_frame_at(&app, [1280.0, 800.0]);
     assert!(
-        frame.surfaces.iter().all(|s| s.surface.as_str() != "nav_rail"),
+        frame
+            .surfaces
+            .iter()
+            .all(|s| s.surface.as_str() != "nav_rail"),
         "nav_rail НЕ в реестре (слепая зона INT-1); добавлен — переработать lint"
     );
 }

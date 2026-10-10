@@ -5,9 +5,63 @@
 
 use super::{Component, ComponentHit, KitPalette, PanelStyle};
 use crate::component::panel::{panel_rect, panel_style};
-use crate::geometry::{UiPoint, UiRect, UiVec2};
+use crate::geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
+use crate::layout::{constrain, stack, HAlign, VAlign};
 
 // --- Modal ------------------------------------------------------------------
+
+// === Wave M (issue #50, M1): адаптивное окно модали 80% =====================
+
+/// Тир раскладки по ширине вьюпорта (R-A R2 — именованные диапазоны, не
+/// устройства): Compact ≤767 — mobile-style (одноколоночная вёрстка,
+/// full-bleed лист); Medium 768–1279; Expanded ≥1280. Границы совпадают с
+/// `SETTINGS_BP_MOBILE = 768` / `SETTINGS_BP_COMPACT = 1280`
+/// (canvas-app/ui_registry.rs) — settings уже живёт на этой лестнице.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutTier {
+    /// ≤767 — mobile-style: full-bleed, thumb zone, таргеты ≥44×44 (T-M R1).
+    Compact,
+    /// 768–1279 — 80% слота, min-габариты контракта, скролл внутри (M-O R7).
+    Medium,
+    /// ≥1280 — 80% слота, max-ограничения, канонические пропорции.
+    Expanded,
+}
+
+/// Тир по ширине вьюпорта. Некорректная/нулевая ширина — Compact (самая
+/// консервативная ветка: full-bleed не может выйти за слот).
+pub fn layout_tier(width: f32) -> LayoutTier {
+    if width < 768.0 {
+        LayoutTier::Compact
+    } else if width < 1280.0 {
+        LayoutTier::Medium
+    } else {
+        LayoutTier::Expanded
+    }
+}
+
+/// Доля слота, занимаемая модалью в Medium/Expanded (Wave M: «модали — 80%»).
+pub const MODAL_RATIO_DEFAULT: f32 = 0.8;
+
+/// Адаптивное окно модали Wave M (issue #50): `eff = slot − margin` (uniform);
+/// в Compact — full-bleed `eff` (mobile-style: окно занимает весь слот с
+/// safe-margin, ветвление тиров инкапсулировано — потребители не дублируют);
+/// иначе `size = constrain(min, max, ratio × eff)`, центр `eff`.
+///
+/// Семантика min-инварианта — как у [`modal`]/[`panel_rect`] (parity FR-060):
+/// при `min > eff` панель сохраняет размер min и может выступать за `eff`
+/// (центр `eff`, без клиппа — деградация документирована; «окно в пределах
+/// вьюпорта» на гейте G4, выбор min, помещающихся в целевые вьюпорты, —
+/// ответственность переводимой модали в M3). Финальный viewport-кламп НЕ
+/// выполняется сознательно — пересечение клипповало бы инвариантную панель.
+pub fn modal_rect_flex(slot: UiRect, margin: f32, ratio: f32, min: UiVec2, max: UiVec2) -> UiRect {
+    let eff = slot.inset(&EdgeInsets::uniform(margin));
+    if layout_tier(slot.w) == LayoutTier::Compact {
+        return eff;
+    }
+    let desired = UiVec2::new(eff.w * ratio, eff.h * ratio);
+    let size = constrain(min, max, desired);
+    stack(eff, size, HAlign::Center, VAlign::Center)
+}
 
 /// Раскладка модали: затемнение = весь слот, панель = constrain+stack
 /// (центр). Слой/модальность — только из реестра (поверхность Modals/Block).
@@ -273,4 +327,139 @@ mod tests {
     }
 
     // === FR-062 F-18: геометрический снапшот кит-компонента (без шрифтов) ===
+
+    // === Wave M (issue #50, M1): layout_tier / modal_rect_flex ===============
+
+    /// Сравнение rect'ов с допуском (умножения на 0.8 не точны в f32).
+    fn assert_rect_close(a: UiRect, b: UiRect) {
+        for (x, y, name) in [
+            (a.x, b.x, "x"),
+            (a.y, b.y, "y"),
+            (a.w, b.w, "w"),
+            (a.h, b.h, "h"),
+        ] {
+            assert!(
+                (x - y).abs() < 0.01,
+                "{name}: {x} != {y} (a={a:?}, b={b:?})"
+            );
+        }
+    }
+
+    /// Границы тиров: <768 Compact, 768–1279.99… Medium, ≥1280 Expanded;
+    /// нулевая/отрицательная ширина — Compact (консервативная ветка).
+    #[test]
+    fn layout_tier_boundaries_are_named_ranges() {
+        assert_eq!(layout_tier(375.0), LayoutTier::Compact);
+        assert_eq!(layout_tier(767.9), LayoutTier::Compact);
+        assert_eq!(layout_tier(0.0), LayoutTier::Compact);
+        assert_eq!(layout_tier(-10.0), LayoutTier::Compact);
+        assert_eq!(layout_tier(768.0), LayoutTier::Medium);
+        assert_eq!(layout_tier(1279.9), LayoutTier::Medium);
+        assert_eq!(layout_tier(1024.0), LayoutTier::Medium);
+        assert_eq!(layout_tier(1280.0), LayoutTier::Expanded);
+        assert_eq!(layout_tier(1920.0), LayoutTier::Expanded);
+    }
+
+    /// Expanded (1920×1080, margin 24): желаемое 0.8×eff = 1497.6×825.6
+    /// срезается max 900×640, панель по центру eff.
+    #[test]
+    fn modal_rect_flex_expanded_clamps_to_max_and_centers() {
+        let r = modal_rect_flex(
+            UiRect::new(0.0, 0.0, 1920.0, 1080.0),
+            24.0,
+            MODAL_RATIO_DEFAULT,
+            UiVec2::new(560.0, 420.0),
+            UiVec2::new(900.0, 640.0),
+        );
+        assert_rect_close(r, UiRect::new(510.0, 220.0, 900.0, 640.0));
+    }
+
+    /// Medium (1024×640, margin 24): желаемое 0.8×eff = 780.8×473.6 внутри
+    /// границ — проходит без клампа, центр eff.
+    #[test]
+    fn modal_rect_flex_medium_applies_ratio_when_within_bounds() {
+        let r = modal_rect_flex(
+            UiRect::new(0.0, 0.0, 1024.0, 640.0),
+            24.0,
+            MODAL_RATIO_DEFAULT,
+            UiVec2::new(560.0, 400.0),
+            UiVec2::new(900.0, 640.0),
+        );
+        assert_rect_close(r, UiRect::new(121.6, 83.2, 780.8, 473.6));
+    }
+
+    /// Compact (375×667, margin 12): full-bleed eff — min/max игнорируются
+    /// (даже противоречивые), ветвление тиров инкапсулировано в примитиве.
+    #[test]
+    fn modal_rect_flex_compact_returns_full_bleed() {
+        for (min, max) in [
+            (UiVec2::new(560.0, 420.0), UiVec2::new(900.0, 640.0)),
+            (UiVec2::new(2000.0, 2000.0), UiVec2::new(10.0, 10.0)),
+        ] {
+            let r = modal_rect_flex(
+                UiRect::new(0.0, 0.0, 375.0, 667.0),
+                12.0,
+                MODAL_RATIO_DEFAULT,
+                min,
+                max,
+            );
+            assert_rect_close(r, UiRect::new(12.0, 12.0, 351.0, 643.0));
+        }
+    }
+
+    /// Граница тира: 768 — уже Medium (не Compact): ratio применяется.
+    #[test]
+    fn modal_rect_flex_at_768_is_medium_not_compact() {
+        let r = modal_rect_flex(
+            UiRect::new(0.0, 0.0, 768.0, 600.0),
+            12.0,
+            MODAL_RATIO_DEFAULT,
+            UiVec2::new(320.0, 240.0),
+            UiVec2::new(760.0, 760.0),
+        );
+        // eff = 744×576; 0.8 → 595.2×460.8; центр eff.
+        assert_rect_close(r, UiRect::new(86.4, 69.6, 595.2, 460.8));
+    }
+
+    /// Min-инвариант (parity FR-060): min 760×500 > 0.8×eff при 800×560 —
+    /// панель СОХРАНЯЕТ min, НЕ клиппуется до желаемого (деградация
+    /// документирована; здесь 24+760=784 ≤ 800 — в вьюпорте помещается).
+    #[test]
+    fn modal_rect_flex_min_invariant_wins_over_ratio() {
+        let r = modal_rect_flex(
+            UiRect::new(0.0, 0.0, 800.0, 560.0),
+            24.0,
+            MODAL_RATIO_DEFAULT,
+            UiVec2::new(760.0, 500.0),
+            UiVec2::new(1120.0, 720.0),
+        );
+        assert_rect_close(r, UiRect::new(24.0, 30.0, 760.0, 500.0));
+    }
+
+    /// Противоречивые границы min > max — нижняя приоритетна (constrain):
+    /// размер = min, центр eff (24 + (976−760)/2, 24 + (592−500)/2).
+    #[test]
+    fn modal_rect_flex_min_above_max_yields_min() {
+        let r = modal_rect_flex(
+            UiRect::new(0.0, 0.0, 1024.0, 640.0),
+            24.0,
+            MODAL_RATIO_DEFAULT,
+            UiVec2::new(760.0, 500.0),
+            UiVec2::new(400.0, 300.0),
+        );
+        assert_rect_close(r, UiRect::new(132.0, 70.0, 760.0, 500.0));
+    }
+
+    /// ratio = 1.0 — модаль занимает весь eff (проверка проницаемости ratio).
+    #[test]
+    fn modal_rect_flex_respects_ratio_parameter() {
+        let r = modal_rect_flex(
+            UiRect::new(0.0, 0.0, 1024.0, 640.0),
+            24.0,
+            1.0,
+            UiVec2::new(320.0, 240.0),
+            UiVec2::new(2000.0, 2000.0),
+        );
+        assert_rect_close(r, UiRect::new(24.0, 24.0, 976.0, 592.0));
+    }
 }

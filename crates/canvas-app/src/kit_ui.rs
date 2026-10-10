@@ -32,7 +32,9 @@ use canvas_ui::component::Component as _;
 use canvas_ui::geometry::{EdgeInsets, UiPoint, UiRect, UiVec2};
 // FR-062 (layout v2): примитивы measured/flex/wrap/grid — раскладка витрины
 // использует те же функции, что и потребители (живой образец).
-use canvas_ui::kit::{self, ButtonVariant, ControlStyle, KitPalette, KitState, Response, WidgetExt};
+use canvas_ui::kit::{
+    self, ButtonVariant, ControlStyle, KitPalette, KitState, Response, WidgetExt,
+};
 // FR-068 W1 (ADR-0014 §Решение п.5 P1): витрина — pilot-поверхность, раскладка
 // секций v2 идёт через [`pilot_backend`] (taffy за фичей — opt-in; на default
 // сборке backend тот же Native — геометрия байт-в-байт прежняя).
@@ -2712,8 +2714,8 @@ fn gallery_layout_impl(
 /// Высота контента секции Wave C (динамика состояний — дерево/аккордеон).
 fn wave_c_section_h(id: &str, d: &crate::kit_demo::KitDemoState) -> f32 {
     let md = canvas_ui::component::ControlSize::Md.button_h(); // 36
-    // INT-4 (#46): токены Wave T — Spacing::Sm.px() для зазоров между
-    // строками/кнопками (вместо bare литералов 8.0).
+                                                               // INT-4 (#46): токены Wave T — Spacing::Sm.px() для зазоров между
+                                                               // строками/кнопками (вместо bare литералов 8.0).
     let gap_sm = canvas_ui::kit::Spacing::Sm.px();
     match id {
         "checkbox" | "slider" | "snackbar" | "popover" | "modal" | "command_palette" => md,
@@ -2741,9 +2743,7 @@ fn wave_c_section_h(id: &str, d: &crate::kit_demo::KitDemoState) -> f32 {
         // INT-4 (#46): avatar — 4 строки размеров (Xs20/Sm26/Md32/Lg44) +
         // 3 зазора Spacing::Sm.px() (8) + 4 px нижний пад (вне шкалы S1 —
         // hairline-микрозначение, паттерн BUTTONS_SECTION_GAP_EXTRA).
-        "avatar" => {
-            20.0 + 26.0 + 32.0 + 44.0 + 3.0 * gap_sm + 4.0
-        }
+        "avatar" => 20.0 + 26.0 + 32.0 + 44.0 + 3.0 * gap_sm + 4.0,
         // INT-4 (#46): nav_rail — 5 кнопок высотой 40 + 6 зазоров
         // Spacing::Sm.px() (8): top-pad + 4 inter-button + bottom-pad.
         "nav_rail" => 5.0 * 40.0 + 6.0 * gap_sm,
@@ -3019,12 +3019,7 @@ fn wave_c_consume(
                         let cx = control_x + col as f32 * (per + gap_sm);
                         // Центрируем квадрат аватара в клетке (per × row_h):
                         // row_h = side (квадрат), x-центр — по середине клетки.
-                        let cell = UiRect::new(
-                            cx + (per - side).max(0.0) / 2.0,
-                            row_y,
-                            side,
-                            side,
-                        );
+                        let cell = UiRect::new(cx + (per - side).max(0.0) / 2.0, row_y, side, side);
                         let idx = base.slots.avatar_cells.len();
                         base.slots.avatar_cells.push(cell);
                         hits.push((cell, crate::kit_demo::hit::avatar(idx)));
@@ -3070,12 +3065,7 @@ fn wave_c_consume(
                 // (280) = 328 — помещается в control_w (≥ 540 на 1280×800).
                 let sidebar_w = 280.0_f32.min((control_w - 48.0).max(0.0));
                 let lay = canvas_ui::component::nav_rail::nav_rail_layout(
-                    slot,
-                    &rail,
-                    sidebar_w,
-                    48.0,
-                    40.0,
-                    gap_sm,
+                    slot, &rail, sidebar_w, 48.0, 40.0, gap_sm,
                 );
                 base.slots.nav_rail_rail = lay.rail;
                 base.slots.nav_rail_sidebar = lay.sidebar;
@@ -3305,12 +3295,7 @@ fn demo_state(pressed: Option<&str>, cursor: [f32; 2], r: &UiRect, id: &str) -> 
 /// tooltip-state интеграция — будущая волна).
 ///
 /// Миграция 3+ компонентов: chips / buttons / list rows (draw_demo_extras).
-fn demo_widget_response(
-    pressed: Option<&str>,
-    cursor: [f32; 2],
-    r: &UiRect,
-    id: &str,
-) -> Response {
+fn demo_widget_response(pressed: Option<&str>, cursor: [f32; 2], r: &UiRect, id: &str) -> Response {
     let inside = cursor_in(r, cursor);
     let pressed_now = pressed == Some(id) && inside;
     let mut ws = WidgetState::default();
@@ -3917,10 +3902,20 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
                     d.label_center(lay.rect, s, style.text, size.button_h() * 0.45);
                 }
                 canvas_ui::component::avatar::AvatarSource::Icon(_) => {
-                    d.label_center(lay.rect, &label(glyph_key), style.text, size.button_h() * 0.5);
+                    d.label_center(
+                        lay.rect,
+                        &label(glyph_key),
+                        style.text,
+                        size.button_h() * 0.5,
+                    );
                 }
                 canvas_ui::component::avatar::AvatarSource::Image(_) => {
-                    d.label_center(lay.rect, &label(glyph_key), style.text, size.button_h() * 0.45);
+                    d.label_center(
+                        lay.rect,
+                        &label(glyph_key),
+                        style.text,
+                        size.button_h() * 0.45,
+                    );
                 }
             }
         }
@@ -5862,10 +5857,6 @@ mod tests {
             panic!("TO-BE раскладка без DemoLayout");
         };
         assert_eq!(dl.toolbar.len(), 5, "тулбар: 5 контролов (D3/D4)");
-        // Сайдбар клампится по высоте окна секций (PANEL_MAX 640 → окно
-        // ~538px; 26 секций × 20px + 5 групп × 18px = 610px — Feedback-хвост
-        // за краем): v1 без скролла сайдбара — видимые секции навигируются,
-        // ограничение задокументировано в D7 (kit-demo-v1.md).
         assert!(
             dl.sidebar_items.len() >= 20,
             "сайдбар: большинство секций видно ({} из {})",
@@ -5873,10 +5864,18 @@ mod tests {
             crate::kit_demo::SECTIONS.len(),
         );
         assert!(dl.sidebar_items.len() <= crate::kit_demo::SECTIONS.len());
+        // Сайдбар клампится по высоте окна секций (PANEL_MAX 640 → окно
+        // ~538px). Wave D v1: 26 секций × 20px + 5 групп × 18px = 610px —
+        // Feedback-хвост за краем. INT-волна (#43/#46) добавила 2 секции:
+        // 28 × 20 + 5 × 18 = 650px — за краем теперь и ЗАГОЛОВОК
+        // Feedback-группы (4 группы, петля break до его пуша).
+        // Деградация F1 (P1) — design/kit-demo-layout-review-2026-10.md;
+        // скролл сайдбара — M3-b (issue #53): adaptive-окно 80% вернёт
+        // большинство секций, но скролл обязателен.
         assert_eq!(
             dl.sidebar_groups.len(),
-            5,
-            "сайдбар: 5 групп (Inputs/Navigation/Containers/Data/Feedback)"
+            4,
+            "сайдбар: 4 группы в клампе 538px (F1: Feedback-группа за краем до M3-b)"
         );
         assert!(!dl.demo_hits.is_empty(), "demo_hits заполнены (draw==hit)");
         // Секции Wave C присутствуют в сдвигах заголовков (навигация D5)

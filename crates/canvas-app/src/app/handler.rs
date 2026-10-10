@@ -511,7 +511,12 @@ impl ApplicationHandler<AppEvent> for App {
                 if self.smart_guides_frame.is_some() {
                     let (sg_instances, sg_texts) = self.smart_guides_overlay();
                     if !sg_instances.is_empty() || !sg_texts.is_empty() {
-                        screen_bands.push(UiLayer::WorldOverlay, band_vp_clip, sg_instances, sg_texts);
+                        screen_bands.push(
+                            UiLayer::WorldOverlay,
+                            band_vp_clip,
+                            sg_instances,
+                            sg_texts,
+                        );
                     }
                 }
                 // FR-021: popup подсказок Numi-ввода — поверх редактора

@@ -40,7 +40,11 @@ pub fn build_action_registry() -> ActionRegistry {
         )
         .kbd("ctrl+w"),
     );
-    reg.register(Action::new("toggle_theme", "Сменить тему", CommandCategory::View));
+    reg.register(Action::new(
+        "toggle_theme",
+        "Сменить тему",
+        CommandCategory::View,
+    ));
     reg.register(
         Action::new("close_all", "Закрыть все панели", CommandCategory::View).kbd("escape"),
     );
@@ -61,9 +65,7 @@ pub fn build_action_registry() -> ActionRegistry {
     );
     // Edit
     reg.register(Action::new("undo", "Отменить", CommandCategory::Edit).kbd("ctrl+z"));
-    reg.register(
-        Action::new("redo", "Повторить", CommandCategory::Edit).kbd("ctrl+shift+z"),
-    );
+    reg.register(Action::new("redo", "Повторить", CommandCategory::Edit).kbd("ctrl+shift+z"));
     reg.register(Action::new("duplicate", "Дублировать", CommandCategory::Edit).kbd("ctrl+d"));
     // Help
     reg.register(Action::new("open_help", "Справка", CommandCategory::Help).kbd("?"));

@@ -60,10 +60,7 @@ pub mod hit {
     pub const PALETTE_IDS: [&str; 3] = ids!("palette", [0, 1, 2]);
     /// INT-4 (#46): матрица аватаров 4×3 — индекс 0..11 (Xs/Sm/Md/Lg ×
     /// Initials/Icon/Image). Порядок: row-major — индекс = row*3 + col.
-    pub const AVATAR_IDS: [&str; 12] = ids!(
-        "avatar",
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-    );
+    pub const AVATAR_IDS: [&str; 12] = ids!("avatar", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     /// INT-4 (#46): пункты nav_rail (5 шт: Templates/Calc/Explain/Agent/Settings).
     pub const NAV_RAIL_IDS: [&str; 5] = ids!("nav_rail", [0, 1, 2, 3, 4]);
 
