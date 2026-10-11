@@ -563,3 +563,31 @@ Stage Summary:
 - Все 3 v2-хвоста #32/#67 в main: демо-витрина уважает Size/Density по всей колонке; полный клавиатурный ринг (Tab/стрелки/Esc/Enter, focus_visible ST1) + резолверы кита; 220 snapshot-эталонов.
 - Остаток: ручная приёмка владельцем (клавиатура/size/density вживую — чек-лист #66); вне скоупа #67 — компонентный paint-слой 6 компонентов, standalone canvasdesk-demo (v2-хвосты при запуске).
 Tokens: in≈480000, out≈105000, total≈585000 (estimate), model=GLM-5.3, scope=issue-67-v2-tails
+
+---
+Task ID: 10 (issue #63 / CR-036)
+Agent: Super Z (main; сессия web-b5714086-2f9f-44a0-af82-302aa182533b)
+Task: fix(web-ui): регрессия вёрстки верхнего хрома после CR-035 — кластер к углу, чип слева от «?», author-bar топ-лево как в DOM (директивы владельца 2026-10-11).
+
+Work Log:
+- Продолжение оборванной сессии: issue #63 создан ранее, код не начинался. Верификация деплоя до фикса (зонды кликов + VLM): кластер y=48..84 (WEB_TOOLBAR_INSET=36 — легаси под удалённый DOM-тулбар), чип топ-лево, strip внизу-слева; попутно найден дефект аудита: HELP [1163,66] фактически кнопка ЯЗЫКА (клик переключал RU↔EN, скриншоты «help_menu» снимали не меню).
+- Инсет: WEB_TOOLBAR_INSET удалён (lib.rs: button_rect все углы к кромке, комментарий-некролог); flowmap PANEL_TOP=64. Тест settings_button_corners уже ассертил кромку — но на нативе (cfg(wasm32) невидим тестам).
+- Чип: ChipAnchor{right_x,row_y,wrap_y,left_bound} + chip_left_bound (гарантированный край без замеров); chip_layout — правая привязка, сжатие (CHIP_MIN_ROW_W=96), перенос ряд №2 (flex-wrap DOM-тулбара); app::chip_anchor (TopRight → help.x−GAP/центр ряда; иначе vw−SPACING_LG; left_bound — поиск из чистой арифметики, W3.2); гейт агент-панели в реестре (паттерн CORNER_BUTTONS); rename-подсказка СЛЕВА от пилюли.
+- Author-bar (about_ui.rs): AUTHOR_BAR_BUTTONS ×5 (github/telegram/linkedin/heart/info; фолбэки GH/TG/in/$/ℹ — брендовых глифов в шрифтах нет), 28×28/gap 4/margin 8 (DOM-паритет), author_bar_layout(dock_open) + сдвиг за док (UR-003), author_bar_hit; переименование strip→bar по всем потребителям (поле App::author_bar, id::AUTHOR_BAR, click_author_bar → OpenUrl/About); overlay: kit-кнопки + иконка 16×16 + тултип под кнопкой.
+- Атлас: +16 SVG (пути из прежнего DOM index.html) ×4 набора + rasterize_icons.py (48 имён); icon_pipeline-тест 220→240.
+- Клампы соседей (G4 поймал налезания на чип после переноса): hotkeys right_limit и flyout right_limit — о chip_left_bound−GAP (консервативно, без замеров; рядом №2 тоже чисто).
+- Тур: TourOptions.hooks проброшен в конструктор (заявленная точка не была wired); якоря #gpu-canvas-chip (RU/EN locate-toolbar + save + scheme-gallery); резолвер в index.html (вьюпорт + localStorage button_corner — TOML-регекс, паттерн getLanguage); тексты «правый верхний угол»; npm build + инлайн бандла.
+- wasm_audit.mjs: HELP [1118,30]/THEME [1206,30]/GEAR [1250,30]/MI_* −36px; probe2-клики вне ряда.
+- i18n: ONBOARDING_STEP9_BODY RU/EN — «иконка списка в правом верхнем углу, слева от кнопки „?“».
+- user-docs: interface.md (менеджер — иконка списка на чипе), export.md («Экспорт HTML…» — меню канваса), onboarding.md + v2 (Тур — подменю меню канваса; история #63).
+- Контракт-тест top_chrome_contract_corners_and_rows (позиционные ассерты: кластер у кромки/чип прижат к «?» и в ряду/flowmap ниже/author-bar топ-лево) — лекарство от рецидива; CR-036 doc + индекс + ACCEPTANCE.
+- Гейты: test --workspace (canvas-app 896, G4 49; 3 прогона — ранний прогон с 3 флейками от параллельной сборки), clippy/fmt, wasm_gate --check, mcp_wasm_gate, audit_fs_locks (2 кандидата прекоммитные Wave M — проверено git stash), doc_lint 975/0.
+- Rebase на #67 (00f8094) — origin ушёл во время работы; гейты перепрогнаны. Push fee1d68.
+- E2E: localhost (1280×800: кластер у кромки y≈12-15, чип слева от «?», author-bar 5 кнопок; About-модал по ℹ — 6 ссылок; help-меню по (1118,30); поиск 900×560 — чип переносится на ряд №2; SVG-бренды при icon_style=lucide; тур — тултип «В правом верхнем углу…» у чипа; 0 pageerror) + живой деплой canvas-web-6c118ac8a6c658ef (~4 мин после пуша, VLM: всё то же).
+- Issues: #63 закрыт с комментарием-верификацией (вкл. самоанализ «почему вёрстка не была починена» — 4 причины: компенсация пережила предмет/гейты не видели позицию/аудит легализовал сбитый эталон/чек-лист функционален, не позиционен); #58 — комментарий по директиве владельца (механика + 3 варианта решения, рекомендация: опции развилки ведут на шаг 9), открыт за решением владельца.
+
+Stage Summary:
+- Верхний хром: author-bar (топ-лево, 5 иконок) — чип+кластер (топ-право, чип слева от «?») — паритет html-версии восстановлен; «улетевшие» иконки устранены (инсет удалён).
+- Позиционный контракт закреплён тестом; соседние панели (хоткеев/flyout) клампятся о чип.
+- Остаток: ручная приёмка владельцем (#66-контур); #58 — решение о нумерации шагов карусели за владельцем; Glyph-дефолт author-bar — текстовые метки (конвенция приложения; SVG при выборе набора в настройках).
+Tokens: in≈820000, out≈190000, total≈1010000 (estimate), model=GLM-5.3, scope=CR-036-issue-63
