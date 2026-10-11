@@ -59,8 +59,9 @@ Focused > Dragged > Selected > Normal (Selected не используется). 
 `crates/canvas-ui/src/component/mod.rs` (BUTTON_HEIGHT/GAP_CONTROLS/
 BUTTON_WIDTH); re-export — `crates/canvas-ui/src/kit.rs`. Потребители:
 `crates/canvas-app/src/autolink_ui.rs` и `crates/canvas-app/src/app/graph_builder_ui.rs`
-(измеряемый футер), `crates/canvas-app/src/onboarding_ui.rs` (split). Секции
-Footer в витрине `crates/canvas-app/src/kit_ui.rs` нет — бэклог W2 (K4).
+(измеряемый футер), `crates/canvas-app/src/onboarding_ui.rs` (split). Витрина: секция Footer в `crates/canvas-app/src/kit_sections_k4.rs` (K4) —
+правый ряд (Normal Primary + Hovered Secondary) и split-строка (Pressed
+слева; Disabled + Focused Primary справа).
 
 ## 8. Что меняется при правке файла
 - Зазор/высота → GAP_CONTROLS/BUTTON_HEIGHT (S1/S3

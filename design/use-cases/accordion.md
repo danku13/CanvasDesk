@@ -76,8 +76,8 @@ header).
 `crates/canvas-ui/src/component/accordion.rs` — `accordion_layout`/
 `AccordionLayout`, `accordion_style` (возвращает `ControlStyle` + цвет
 шеврона), `accordion_hit`; ре-экспорт из `crates/canvas-ui/src/kit.rs`
-(строки 94–95). Витрина UI-консоли: секции в
-`crates/canvas-app/src/kit_ui.rs` нет (нарушение K4 — аналог W2).
+(строки 94–95). Витрина: секция accordion в `crates/canvas-app/src/kit_sections_k4.rs`
+(K4) — 4 ряда Normal/Hovered/Pressed/Selected, раскрытые и свёрнутые.
 
 ## 8. Что меняется при правке файла
 - Геометрия → `accordion_layout` + юнит-тесты модуля (expanded/collapsed,

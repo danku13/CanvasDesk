@@ -78,7 +78,9 @@ panel_border, hover строки hover_fill, выбранный результа
 `CommandCategory`, `command_palette_layout`/`CommandPaletteLayout`,
 `search_actions`, `command_palette_hit`, `CommandPaletteKey`; ре-экспорт из
 `crates/canvas-ui/src/kit.rs` (строки 102–104). Потребителей в app нет
-(Ctrl+K не подключён); секции в `crates/canvas-app/src/kit_ui.rs` нет (K4).
+(Ctrl+K не подключён). Витрина: секция command_palette в
+`crates/canvas-app/src/kit_sections_k4.rs` (K4) — окно палитры целиком
+(input + строки результатов: Normal/Selected, Hovered на строке).
 
 ## 8. Что меняется при правке файла
 - Геометрия → `command_palette_layout` + юнит-тесты модуля (centered-top,
@@ -86,5 +88,5 @@ panel_border, hover строки hover_fill, выбранный результа
 - Матчинг → `search_actions` (fuzzy/`ActionRegistry` — волна A, §5.3.15);
   резолвер `CommandPaletteKey` закрывает расхождение из §4; Esc/фокус
   поля — по `../rules/09-input.md`.
-- Витрина/эталоны: секции в `crates/canvas-app/src/kit_ui.rs` и snapshot
-  через `Comp` (FR-068 W0, Контракт-9) отсутствуют.
+- Витрина: секция command_palette в `crates/canvas-app/src/kit_sections_k4.rs`
+  (K4); snapshot через `Comp` (FR-068 W0, Контракт-9) отсутствует.
