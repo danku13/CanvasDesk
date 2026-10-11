@@ -1227,6 +1227,57 @@ pub mod keys {
     pub const MENU_CANVAS_MANAGER: &str = "menu.canvas_manager";
     /// Тост «Создать» (натив, №34a): файл не записан (отказ ФС).
     pub const CANVAS_NATIVE_CREATE_FAILED_TOAST: &str = "canvas.native.create_failed_toast";
+
+    // --- K4-витрина (issue #62): секции 6 W2 + 14 Wave C во всех ST1-состояниях ---
+    // Заголовки секций витрины W2-бэклога (у Wave C ключи kit.section.* уже
+    // есть выше — переиспользуются статичными K4-секциями).
+    pub const KIT_SECTION_BANNER: &str = "kit.section.banner";
+    pub const KIT_SECTION_CHAT_BUBBLE: &str = "kit.section.chat_bubble";
+    pub const KIT_SECTION_CRUMBS: &str = "kit.section.crumbs";
+    pub const KIT_SECTION_FOOTER: &str = "kit.section.footer";
+    pub const KIT_SECTION_RADIO_CARD: &str = "kit.section.radio_card";
+    pub const KIT_SECTION_TWO_COLUMN: &str = "kit.section.two_column";
+    /// Подписи состояний ST1, которых не было в пространстве kit.state
+    /// (Dragged — state-layer 0.16; Error — слот control_danger).
+    pub const KIT_STATE_DRAGGED: &str = "kit.state.dragged";
+    pub const KIT_STATE_ERROR: &str = "kit.state.error";
+    /// Демо-тексты секций K4 (короткие; классы-имена — Raw без ключей).
+    pub const KIT_BANNER_LABEL: &str = "kit.banner.label";
+    pub const KIT_BANNER_ACTION: &str = "kit.banner.action";
+    pub const KIT_CHAT_AUTHOR: &str = "kit.chat.author";
+    pub const KIT_CHAT_MESSAGE: &str = "kit.chat.message";
+    pub const KIT_CHAT_SUCCESS: &str = "kit.chat.success";
+    pub const KIT_CRUMBS_PATH: &str = "kit.crumbs.path";
+    pub const KIT_CRUMBS_OVERFLOW: &str = "kit.crumbs.overflow";
+    pub const KIT_CRUMBS_A: &str = "kit.crumbs.a";
+    pub const KIT_CRUMBS_B: &str = "kit.crumbs.b";
+    pub const KIT_CRUMBS_C: &str = "kit.crumbs.c";
+    pub const KIT_CRUMBS_D: &str = "kit.crumbs.d";
+    pub const KIT_FOOTER_CANCEL: &str = "kit.footer.cancel";
+    pub const KIT_FOOTER_OK: &str = "kit.footer.ok";
+    pub const KIT_FOOTER_PREV: &str = "kit.footer.prev";
+    pub const KIT_FOOTER_NEXT: &str = "kit.footer.next";
+    pub const KIT_RADIO_CARD_LABEL: &str = "kit.radio_card.label";
+    pub const KIT_TWO_COLUMN_LEFT: &str = "kit.two_column.left";
+    pub const KIT_TWO_COLUMN_RIGHT: &str = "kit.two_column.right";
+    pub const KIT_TWO_COLUMN_SIDEBAR: &str = "kit.two_column.sidebar";
+    pub const KIT_TWO_COLUMN_CONTENT: &str = "kit.two_column.content";
+    pub const KIT_COMMAND_QUERY: &str = "kit.command.query";
+    pub const KIT_COMMAND_1: &str = "kit.command.1";
+    pub const KIT_COMMAND_2: &str = "kit.command.2";
+    pub const KIT_COMMAND_3: &str = "kit.command.3";
+    pub const KIT_POPOVER_BODY: &str = "kit.popover.body";
+    pub const KIT_SNACKBAR_MESSAGE: &str = "kit.snackbar.message";
+    pub const KIT_SNACKBAR_ACTION: &str = "kit.snackbar.action";
+    pub const KIT_TREE_BRANCH: &str = "kit.tree.branch";
+    pub const KIT_CHECKBOX_LABEL: &str = "kit.checkbox.label";
+    pub const KIT_SKELETON_LABEL: &str = "kit.skeleton.label";
+    pub const KIT_FOOTER_ROW_RIGHT: &str = "kit.footer.row_right";
+    pub const KIT_FOOTER_ROW_SPLIT: &str = "kit.footer.row_split";
+    pub const KIT_BADGE_ROW_TONES: &str = "kit.badge.row_tones";
+    pub const KIT_BADGE_ROW_KINDS: &str = "kit.badge.row_kinds";
+    pub const KIT_POPOVER_BELOW: &str = "kit.popover.below";
+    pub const KIT_POPOVER_ABOVE: &str = "kit.popover.above";
 }
 
 /// Русская таблица (эталон — порядок и полнота проверяются тестом).
@@ -2771,6 +2822,69 @@ const RU: &[(&str, &str)] = &[
         keys::CANVAS_NATIVE_CREATE_FAILED_TOAST,
         "Не удалось создать файл: {err}",
     ),
+    // --- K4-витрина (issue #62): секции 6 W2 + 14 Wave C ---
+    (
+        keys::KIT_SECTION_BANNER,
+        "Баннер (banner: Info/Warning/Error)",
+    ),
+    (
+        keys::KIT_SECTION_CHAT_BUBBLE,
+        "Пузырь чата (chat_bubble: Normal/Error/Success)",
+    ),
+    (
+        keys::KIT_SECTION_CRUMBS,
+        "Хлебные крошки (crumbs: переполнение «…»)",
+    ),
+    (
+        keys::KIT_SECTION_FOOTER,
+        "Футер (footer: правый ряд + split)",
+    ),
+    (
+        keys::KIT_SECTION_RADIO_CARD,
+        "Радио-карточка (radio_card: выбор)",
+    ),
+    (
+        keys::KIT_SECTION_TWO_COLUMN,
+        "Две колонки (two_column: sidebar | content)",
+    ),
+    (keys::KIT_STATE_DRAGGED, "Перетаскивание"),
+    (keys::KIT_STATE_ERROR, "Ошибка"),
+    (keys::KIT_BANNER_LABEL, "Доступно обновление схемы"),
+    (keys::KIT_BANNER_ACTION, "Обновить"),
+    (keys::KIT_CHAT_AUTHOR, "AI Агент"),
+    (keys::KIT_CHAT_MESSAGE, "Готовлю раскладку схемы…"),
+    (keys::KIT_CHAT_SUCCESS, "Успех"),
+    (keys::KIT_CRUMBS_PATH, "Путь (хвост активен)"),
+    (keys::KIT_CRUMBS_OVERFLOW, "Переполнение («…» вместо корня)"),
+    (keys::KIT_CRUMBS_A, "Проект"),
+    (keys::KIT_CRUMBS_B, "Схема"),
+    (keys::KIT_CRUMBS_C, "Нода"),
+    (keys::KIT_CRUMBS_D, "Порт"),
+    (keys::KIT_FOOTER_CANCEL, "Отмена"),
+    (keys::KIT_FOOTER_OK, "OK"),
+    (keys::KIT_FOOTER_PREV, "Назад"),
+    (keys::KIT_FOOTER_NEXT, "Далее"),
+    (keys::KIT_RADIO_CARD_LABEL, "Формула"),
+    (keys::KIT_TWO_COLUMN_LEFT, "Сайдбар слева"),
+    (keys::KIT_TWO_COLUMN_RIGHT, "Сайдбар справа"),
+    (keys::KIT_TWO_COLUMN_SIDEBAR, "Сайдбар"),
+    (keys::KIT_TWO_COLUMN_CONTENT, "Контент"),
+    (keys::KIT_COMMAND_QUERY, "Найти команду…"),
+    (keys::KIT_COMMAND_1, "Открыть схему"),
+    (keys::KIT_COMMAND_2, "Сохранить"),
+    (keys::KIT_COMMAND_3, "Экспорт PNG"),
+    (keys::KIT_POPOVER_BODY, "Содержимое поповера"),
+    (keys::KIT_SNACKBAR_MESSAGE, "Схема сохранена"),
+    (keys::KIT_SNACKBAR_ACTION, "Отменить"),
+    (keys::KIT_TREE_BRANCH, "Ветка"),
+    (keys::KIT_CHECKBOX_LABEL, "Показывать сетку"),
+    (keys::KIT_SKELETON_LABEL, "Загрузка схемы"),
+    (keys::KIT_FOOTER_ROW_RIGHT, "Правый ряд"),
+    (keys::KIT_FOOTER_ROW_SPLIT, "Split (Prev слева)"),
+    (keys::KIT_BADGE_ROW_TONES, "Тоны"),
+    (keys::KIT_BADGE_ROW_KINDS, "Виды"),
+    (keys::KIT_POPOVER_BELOW, "Пузырь под якорем"),
+    (keys::KIT_POPOVER_ABOVE, "Пузырь над якорем"),
 ];
 
 /// Английская таблица — полный перевод каждого ключа (инвариант полноты).
@@ -4218,6 +4332,69 @@ const EN: &[(&str, &str)] = &[
         keys::CANVAS_NATIVE_CREATE_FAILED_TOAST,
         "Failed to create the file: {err}",
     ),
+    // --- K4-витрина (issue #62): секции 6 W2 + 14 Wave C ---
+    (
+        keys::KIT_SECTION_BANNER,
+        "Banner (Info/Warning/Error)",
+    ),
+    (
+        keys::KIT_SECTION_CHAT_BUBBLE,
+        "Chat bubble (Normal/Error/Success)",
+    ),
+    (
+        keys::KIT_SECTION_CRUMBS,
+        "Breadcrumbs (crumbs: “…” overflow)",
+    ),
+    (
+        keys::KIT_SECTION_FOOTER,
+        "Footer (right row + split)",
+    ),
+    (
+        keys::KIT_SECTION_RADIO_CARD,
+        "Radio card (selection)",
+    ),
+    (
+        keys::KIT_SECTION_TWO_COLUMN,
+        "Two column (sidebar | content)",
+    ),
+    (keys::KIT_STATE_DRAGGED, "Dragged"),
+    (keys::KIT_STATE_ERROR, "Error"),
+    (keys::KIT_BANNER_LABEL, "Scheme update available"),
+    (keys::KIT_BANNER_ACTION, "Update"),
+    (keys::KIT_CHAT_AUTHOR, "AI Agent"),
+    (keys::KIT_CHAT_MESSAGE, "Preparing the scheme layout…"),
+    (keys::KIT_CHAT_SUCCESS, "Success"),
+    (keys::KIT_CRUMBS_PATH, "Path (tail active)"),
+    (keys::KIT_CRUMBS_OVERFLOW, "Overflow (“…” for the root)"),
+    (keys::KIT_CRUMBS_A, "Project"),
+    (keys::KIT_CRUMBS_B, "Scheme"),
+    (keys::KIT_CRUMBS_C, "Node"),
+    (keys::KIT_CRUMBS_D, "Port"),
+    (keys::KIT_FOOTER_CANCEL, "Cancel"),
+    (keys::KIT_FOOTER_OK, "OK"),
+    (keys::KIT_FOOTER_PREV, "Back"),
+    (keys::KIT_FOOTER_NEXT, "Next"),
+    (keys::KIT_RADIO_CARD_LABEL, "Formula"),
+    (keys::KIT_TWO_COLUMN_LEFT, "Sidebar left"),
+    (keys::KIT_TWO_COLUMN_RIGHT, "Sidebar right"),
+    (keys::KIT_TWO_COLUMN_SIDEBAR, "Sidebar"),
+    (keys::KIT_TWO_COLUMN_CONTENT, "Content"),
+    (keys::KIT_COMMAND_QUERY, "Find a command…"),
+    (keys::KIT_COMMAND_1, "Open scheme"),
+    (keys::KIT_COMMAND_2, "Save"),
+    (keys::KIT_COMMAND_3, "Export PNG"),
+    (keys::KIT_POPOVER_BODY, "Popover content"),
+    (keys::KIT_SNACKBAR_MESSAGE, "Scheme saved"),
+    (keys::KIT_SNACKBAR_ACTION, "Undo"),
+    (keys::KIT_TREE_BRANCH, "Branch"),
+    (keys::KIT_CHECKBOX_LABEL, "Show grid"),
+    (keys::KIT_SKELETON_LABEL, "Loading scheme"),
+    (keys::KIT_FOOTER_ROW_RIGHT, "Right-aligned row"),
+    (keys::KIT_FOOTER_ROW_SPLIT, "Split (Prev on the left)"),
+    (keys::KIT_BADGE_ROW_TONES, "Tones"),
+    (keys::KIT_BADGE_ROW_KINDS, "Kinds"),
+    (keys::KIT_POPOVER_BELOW, "Bubble below the anchor"),
+    (keys::KIT_POPOVER_ABOVE, "Bubble above the anchor"),
 ];
 
 /// Поиск по таблице (линейный — таблицы статические, чтение раз в кадр).

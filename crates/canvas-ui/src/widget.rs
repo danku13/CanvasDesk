@@ -140,8 +140,11 @@ impl WidgetState {
 
     /// Wave T §5.1.1: все активные состояния (additive — могут стекаться).
     ///
-    /// Возвращает до 4 состояний одновременно: например `[Hovered, Focused,
-    /// Selected]` если курсор над выбранным сфокусированным виджетом.
+    /// Возвращает до 4 состояний одновременно — `[Error, Pressed, Hovered,
+    /// Focused]` в порядке приоритета: например `[Pressed, Focused]` для
+    /// зажатого сфокусированного виджета. Selected/Dragged/Normal в
+    /// additive-набор не входят (Selected — семантика выбора, Dragged/Normal
+    /// — единственные состояния; issue #62 — rustdoc сверен с реализацией).
     /// Disabled приоритетен — если disabled, другие не возвращаются.
     pub fn active_states(&self) -> [Option<KitState>; 4] {
         if self.disabled {
