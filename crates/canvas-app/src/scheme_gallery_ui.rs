@@ -82,6 +82,12 @@ pub const ROW_TEXT_PAD: f32 = canvas_core::tokens::SPACING_MD;
 /// Высота кнопки empty-state.
 pub const EMPTY_BTN_H: f32 = 34.0;
 
+/// Wave M M3-a (issue #52, T-M R1): тач-минимум «×» в Compact-тире
+/// адаптивной ветки.
+pub const TOUCH_TARGET: f32 = 44.0;
+/// Высота шапки в Compact-тире («×» 44 центрируется без вылета за панель).
+pub const HEADER_H_COMPACT: f32 = 48.0;
+
 /// Состояние галереи схем (модальная; `None`-подобие — `open == false`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SchemeGalleryState {
@@ -275,9 +281,6 @@ pub fn layout_with(
     let max_h = (viewport[1] - canvas_core::tokens::SPACING_XL * 2.0).max(160.0);
     // Панель растёт под список, но не выше вьюпорта (строки скроллятся).
     let panel_h = max_h.min(chrome + ROW_H * list.len().max(1) as f32);
-    let avail_rows_h = (panel_h - chrome).max(0.0);
-    let visible = ((avail_rows_h / ROW_H).floor() as usize).max(1);
-    let shown = visible.min(list.len().saturating_sub(state.scroll_top));
 
     // Панель — Stack по центру вьюпорта (позиция = (vw−w)/2, (vh−h)/2).
     let panel = stack(
@@ -286,8 +289,109 @@ pub fn layout_with(
         HAlign::Center,
         VAlign::Center,
     );
+    layout_from_panel(
+        panel,
+        HEADER_H,
+        canvas_ui::kit::stage_close_button(panel),
+        list,
+        state,
+        ru,
+        m,
+        fs,
+        visible_cats,
+    )
+}
+
+/// То же в адаптивной ветке Wave M M3-a (issue #52, флаг
+/// `modals_adaptive`): окно — `kit::modal_rect_flex` (80% слота;
+/// min = max = канон 660×N — M-O R7 «size follows content», desktop
+/// не разрастается); Compact — full-bleed лист (одноколоночный скелет,
+/// «×» на тач-минимуме 44 — T-M R1). Высота — эластичное окно строк из
+/// бюджета, кратное строке — без мёртвого клапика (M-O R7 «скролл
+/// внутри»). Скелет/хром — общий с прежней веткой ([`layout_from_panel`]).
+#[allow(clippy::too_many_arguments)]
+pub fn layout_with_adaptive(
+    viewport: [f32; 2],
+    list: &[&SchemeManifest],
+    state: &SchemeGalleryState,
+    ru: bool,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    visible_cats: &[String],
+) -> GalleryLayout {
+    let compact = canvas_ui::kit::layout_tier(viewport[0]) == canvas_ui::kit::LayoutTier::Compact;
+    let margin = canvas_core::tokens::SPACING_XL;
+    let header_h = if compact { HEADER_H_COMPACT } else { HEADER_H };
+    let eff_h = (viewport[1] - margin * 2.0).max(160.0);
+    let budget_h = if compact {
+        eff_h
+    } else {
+        eff_h * canvas_ui::kit::MODAL_RATIO_DEFAULT
+    };
+    let chrome = header_h + INPUT_H + CHIP_H + FOOTER_H + PANEL_PAD * 3.0;
+    let fit_rows = (((budget_h - chrome) / ROW_H).floor().max(1.0) as usize).min(list.len().max(1));
+    let panel_h = chrome + fit_rows as f32 * ROW_H;
+    // Compact — примитив вернёт full-bleed eff; Medium/Expanded — панель
+    // 660×panel_h по центру eff.
+    let panel = canvas_ui::kit::modal_rect_flex(
+        UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
+        margin,
+        canvas_ui::kit::MODAL_RATIO_DEFAULT,
+        UiVec2::new(PANEL_W, panel_h),
+        UiVec2::new(PANEL_W, panel_h),
+    );
+    // «×»: канонический угол панели (M/E); Compact — тач-минимум 44,
+    // центрирован в шапке 48 (T-M R1), inset канона `SPACING_SM`.
+    let close = if compact {
+        UiRect::new(
+            panel.x + panel.w - TOUCH_TARGET - canvas_core::tokens::SPACING_SM,
+            panel.y + (header_h - TOUCH_TARGET) * 0.5,
+            TOUCH_TARGET,
+            TOUCH_TARGET,
+        )
+    } else {
+        canvas_ui::kit::stage_close_button(panel)
+    };
+    layout_from_panel(panel, header_h, close, list, state, ru, m, fs, visible_cats)
+}
+
+/// То же с ЯВНЫМ замерщиком в адаптивной ветке — оболочка над
+/// [`layout_with_adaptive`] (паритет [`layout`]/[`layout_with`]).
+pub fn layout_adaptive(
+    viewport: [f32; 2],
+    list: &[&SchemeManifest],
+    state: &SchemeGalleryState,
+    ru: bool,
+    visible_cats: &[String],
+) -> GalleryLayout {
+    // W3.2: замерщик — канонические shared-точки на вызов.
+    let mut m = TextMeasurer::new();
+    let mut fs = canvas_render::text::measure_font_system();
+    layout_with_adaptive(viewport, list, state, ru, &mut m, &mut fs, visible_cats)
+}
+
+/// Тело галереи от готовой панели — единый источник скелета прежней и
+/// адаптивной веток: пад, Column-скелет (W3.2 — MeasuredItem), чипы
+/// `kit::chip_strip`, rect'ы строк окна видимости, футер. `header_h` и
+/// `close` передаёт тир-ветка (Compact — шапка 48 и «×» 44).
+#[allow(clippy::too_many_arguments)]
+fn layout_from_panel(
+    panel: UiRect,
+    header_h: f32,
+    close: UiRect,
+    list: &[&SchemeManifest],
+    state: &SchemeGalleryState,
+    ru: bool,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    visible_cats: &[String],
+) -> GalleryLayout {
+    let avail_rows_h =
+        (panel.h - (header_h + INPUT_H + CHIP_H + FOOTER_H + PANEL_PAD * 3.0)).max(0.0);
+    let visible = ((avail_rows_h / ROW_H).floor() as usize).max(1);
+    let shown = visible.min(list.len().saturating_sub(state.scroll_top));
     let inner = pad(panel, EdgeInsets::uniform(PANEL_PAD));
-    let inner_w = panel_w - PANEL_PAD * 2.0;
+    let inner_w = panel.w - PANEL_PAD * 2.0;
 
     // Вертикальный ритм панели: Column без базового зазора + явные
     // распорки `SPACING_S` там, где прежняя геометрия имела зазор
@@ -300,7 +404,7 @@ pub fn layout_with(
         // Шапка: место под заголовок (кнопка «×» — в правом крае панели).
         MeasuredItem::Fixed {
             w: inner_w - 32.0,
-            h: HEADER_H,
+            h: header_h,
         },
         MeasuredItem::Fixed {
             w: inner_w,
@@ -335,13 +439,10 @@ pub fn layout_with(
     let footer_rect = as_rect(&col[6]);
 
     // FR-070: каноническая «×» в правом-верхнем углу панели —
-    // kit::stage_close_button (audit §6.1 — бывшая раскладка через
-    // `stack(inner, 24×24, End, Start)` с офсетом +4; size 24 →
-    // ICON_BUTTON_SIZE 26, inset 6 (через inner+4) → SPACING_SM 8 от panel —
-    // single source of truth, смещение ≈ 2px вправо/вниз — допустимо по
-    // AGENTS.md §"UI kit"; кнопка переезжает из шапки в угол панели
-    // (канонический паттерн «× в углу модали»).
-    let close = canvas_ui::kit::stage_close_button(panel);
+    // kit::stage_close_button в прежней ветке (audit §6.1; single source
+    // of truth по AGENTS.md §"UI kit", канонический паттерн «× в углу
+    // модали»). Rect приходит параметром от тир-ветки: M/E — канон 26,
+    // адаптивный Compact — тач-минимум 44 (T-M R1).
 
     // Чипы: «Все» + категории — M1 (FR-UI-CHIP-STRIP): мигрировано на
     // `kit::chip_strip`. Кит измеряет подпись (CHIP_FAMILY = SANS_FAMILY,
@@ -444,7 +545,39 @@ pub fn row_labels(
     fs: &mut cosmic_text::FontSystem,
     visible_cats: &[String],
 ) -> Vec<RowLabel> {
-    let lay = layout_with(viewport, list, state, ru, measurer, fs, visible_cats);
+    row_labels_impl(viewport, list, state, ru, measurer, fs, visible_cats, false)
+}
+
+/// То же в адаптивной ветке Wave M M3-a (issue #52): замер от
+/// [`layout_with_adaptive`] (окно/ширины строк — из адаптивной раскладки).
+pub fn row_labels_adaptive(
+    viewport: [f32; 2],
+    list: &[&SchemeManifest],
+    state: &SchemeGalleryState,
+    ru: bool,
+    measurer: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    visible_cats: &[String],
+) -> Vec<RowLabel> {
+    row_labels_impl(viewport, list, state, ru, measurer, fs, visible_cats, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn row_labels_impl(
+    viewport: [f32; 2],
+    list: &[&SchemeManifest],
+    state: &SchemeGalleryState,
+    ru: bool,
+    measurer: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    visible_cats: &[String],
+    adaptive: bool,
+) -> Vec<RowLabel> {
+    let lay = if adaptive {
+        layout_with_adaptive(viewport, list, state, ru, measurer, fs, visible_cats)
+    } else {
+        layout_with(viewport, list, state, ru, measurer, fs, visible_cats)
+    };
     let max_w = (lay.row_rects.first().map(|r| r[2]).unwrap_or(0.0) - ROW_TEXT_PAD * 2.0).max(0.0);
     lay.visible_rows
         .iter()
@@ -996,5 +1129,125 @@ mod tests {
         // Пустой allow-list — вырожденный случай: ничего не видно.
         assert!(rows(registry, &st, &[]).is_empty());
         assert!(categories(registry, &[]).is_empty());
+    }
+
+    // === Wave M M3-a (issue #52): адаптивная ветка ==========================
+    fn adaptive_layout_at(
+        viewport: [f32; 2],
+        registry: &SchemeRegistry,
+        st: &SchemeGalleryState,
+        m: &mut TextMeasurer,
+        fs: &mut cosmic_text::FontSystem,
+    ) -> GalleryLayout {
+        layout_with_adaptive(
+            viewport,
+            &rows(registry, st, &all_visible(registry)),
+            st,
+            true,
+            m,
+            fs,
+            &all_visible(registry),
+        )
+    }
+
+    /// Expanded (1280×800): окно — 80% бюджета высоты, кратное строке;
+    /// ширина — канон 660 (не разрастается, M-O R7); строки — текущая
+    /// плотность; «×» — канон в углу.
+    #[test]
+    fn gallery_adaptive_expanded_budget_window() {
+        let registry = SchemeRegistry::embedded();
+        let st = state();
+        let mut m = TextMeasurer::new();
+        let mut fs = font_system();
+        let lay = adaptive_layout_at([1280.0, 800.0], &registry, &st, &mut m, &mut fs);
+        // панель по центру eff (margin XL), ширина 660
+        assert!((lay.panel_rect[0] - (24.0 + (1232.0 - PANEL_W) * 0.5)).abs() < 0.01);
+        assert_eq!(lay.panel_rect[2], PANEL_W);
+        // высота кратна строке и в бюджете 80%
+        let chrome = HEADER_H + INPUT_H + CHIP_H + FOOTER_H + PANEL_PAD * 3.0;
+        assert!(
+            (lay.panel_rect[3] - chrome) % ROW_H < 0.01,
+            "кратность строке"
+        );
+        assert!(
+            lay.panel_rect[3] <= 0.8 * (800.0 - 48.0) + 0.01,
+            "бюджет 80%"
+        );
+        assert!(lay.visible_rows.len() >= 1);
+        // футер прижат к низу (Column — семантика прежней ветки: низ
+        // футера = низ панели − 2·PANEL_PAD)
+        let footer_bottom = lay.footer_rect[1] + lay.footer_rect[3];
+        assert!(
+            (footer_bottom - (lay.panel_rect[1] + lay.panel_rect[3] - PANEL_PAD * 2.0)).abs()
+                < 0.01
+        );
+        // «×» — канон stage_close_button (26, inset SM)
+        assert_eq!(lay.close_rect[2], canvas_ui::kit::ICON_BUTTON_SIZE);
+        // строки — прежняя плотность (62), одна колонка
+        assert_eq!(lay.row_rects[0][2], PANEL_W - PANEL_PAD * 2.0);
+    }
+
+    /// Medium (800×560): окно сжимается к бюджету 80% — окно строк
+    /// эластично, панель в слоте.
+    #[test]
+    fn gallery_adaptive_medium_shrinks_to_budget() {
+        let registry = SchemeRegistry::embedded();
+        let st = state();
+        let mut m = TextMeasurer::new();
+        let mut fs = font_system();
+        let lay = adaptive_layout_at([800.0, 560.0], &registry, &st, &mut m, &mut fs);
+        let chrome = HEADER_H + INPUT_H + CHIP_H + FOOTER_H + PANEL_PAD * 3.0;
+        assert!(
+            lay.panel_rect[3] <= 0.8 * (560.0 - 48.0) + 0.01,
+            "бюджет 80%"
+        );
+        assert!((lay.panel_rect[3] - chrome) % ROW_H < 0.01);
+        assert!(
+            lay.panel_rect[1] >= 24.0 - 0.01,
+            "панель внутри слота сверху"
+        );
+        assert!(lay.panel_rect[1] + lay.panel_rect[3] <= 560.0 + 0.01);
+    }
+
+    /// Compact (375×667): full-bleed лист — панель = весь слот, «×» 44
+    /// (T-M R1), строки одной колонкой на всю ширину, футер прижат к низу
+    /// (thumb-зона), всё внутри вьюпорта.
+    #[test]
+    fn gallery_adaptive_compact_full_bleed_sheet() {
+        let registry = SchemeRegistry::embedded();
+        let st = state();
+        let mut m = TextMeasurer::new();
+        let mut fs = font_system();
+        let lay = adaptive_layout_at([375.0, 667.0], &registry, &st, &mut m, &mut fs);
+        assert_eq!(lay.panel_rect, [24.0, 24.0, 327.0, 619.0], "full-bleed eff");
+        assert_eq!(lay.close_rect[2], TOUCH_TARGET, "«×» ≥44 (T-M R1)");
+        assert_eq!(lay.close_rect[3], TOUCH_TARGET);
+        assert!(lay.close_rect[1] >= 24.0, "«×» внутри панели");
+        // строки одной колонкой на всю внутреннюю ширину
+        for rect in &lay.row_rects {
+            assert_eq!(rect[2], 327.0 - PANEL_PAD * 2.0);
+        }
+        // футер прижат к низу листа (Column — как в прежней ветке)
+        let footer_bottom = lay.footer_rect[1] + lay.footer_rect[3];
+        assert!((footer_bottom - (24.0 + 619.0 - PANEL_PAD * 2.0)).abs() < 0.01);
+        assert!(lay.visible_rows.len() >= 1);
+    }
+
+    /// wheel-скролл получает окно из раскладки (эластичное окно —
+    /// хвост списка достижим; связка уже параметризована `visible`).
+    #[test]
+    fn gallery_adaptive_scroll_window_flows_to_wheel() {
+        let registry = SchemeRegistry::embedded();
+        let st = state();
+        let mut m = TextMeasurer::new();
+        let mut fs = font_system();
+        let lay = adaptive_layout_at([800.0, 560.0], &registry, &st, &mut m, &mut fs);
+        let list_len = rows(registry, &st, &all_visible(registry)).len();
+        let top = wheel_scroll_top(0, 100.0, list_len, lay.visible_rows.len());
+        assert_eq!(
+            top,
+            list_len.saturating_sub(lay.visible_rows.len()),
+            "хвост достижим при эластичном окне"
+        );
     }
 }

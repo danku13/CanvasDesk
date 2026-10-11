@@ -11,6 +11,7 @@
 
 use canvas_core::tokens;
 use canvas_core::workspace::CanvasEntry;
+use canvas_ui::geometry::{UiRect, UiVec2};
 use canvas_ui::kit;
 
 /// Ширина панели диалога миграции (лог. px): чекбокс + имя + зазоры —
@@ -28,6 +29,15 @@ pub const MIGRATE_HINT_H: f32 = 40.0;
 pub const MIGRATE_FOOTER_H: f32 = kit::BUTTON_HEIGHT + tokens::SPACING_LG;
 /// Сторона чекбокса (индикатор выбора строки) — радиус-карта кита.
 pub const MIGRATE_CHECKBOX: f32 = kit::RADIO_INDICATOR_SIZE;
+
+/// Wave M M3-a (issue #52, T-M R1): тач-минимум интерактивных контролов
+/// (кнопки футера/«✕») в Compact-тире адаптивной ветки.
+pub const MIGRATE_TOUCH_TARGET: f32 = 44.0;
+/// Шаг строки чекбокс-листа в Compact-тире (строка 44 + зазор кита) —
+/// тач-цели строк ≥44×44 (T-M R1).
+pub const MIGRATE_ROW_STEP_COMPACT: f32 = MIGRATE_TOUCH_TARGET + kit::LIST_ROW_GAP;
+/// Высота шапки в Compact-тире («✕» 44 центрируется без вылета за панель).
+pub const MIGRATE_HEADER_H_COMPACT: f32 = 48.0;
 /// Высота баннера потери доступа: кнопка + вертикальные поля.
 pub const BANNER_H: f32 = kit::BUTTON_HEIGHT + tokens::SPACING_SM;
 /// TTL тоста с действием (кнопка «Перезагрузить» №45b): дольше простого
@@ -241,6 +251,10 @@ pub struct MigrateLayout {
     pub cancel: [f32; 4],
     /// Ординал первой видимой строки.
     pub first_row: usize,
+    /// Окно видимости (штук строк) — источник скролл-математики
+    /// (`migrate_wheel_scroll`/`migrate_scroll_to_reveal`); в прежней ветке
+    /// — `MIGRATE_VISIBLE_ROWS`, в адаптивной — эластичное (M-O R7).
+    pub visible_rows: usize,
 }
 
 /// Раскладка диалога миграции (чистая; `go_w`/`cancel_w` — измеренные
@@ -342,6 +356,167 @@ pub fn migrate_layout(
         go,
         cancel,
         first_row,
+        visible_rows: visible,
+    }
+}
+
+// === Wave M M3-a (issue #52): адаптивная ветка (флаг modals_adaptive) ========
+
+/// Бюджет высоты окна адаптивной модали: Compact — весь слот (full-bleed
+/// лист), Medium/Expanded — 80% слота минус margin (формула контракта
+/// Wave M, примитив `kit::modal_rect_flex`).
+fn migrate_budget_h(viewport: [f32; 2]) -> f32 {
+    let margin = tokens::SPACING_LG;
+    let eff_h = (viewport[1] - margin * 2.0).max(0.0);
+    if kit::layout_tier(viewport[0]) == kit::LayoutTier::Compact {
+        eff_h
+    } else {
+        eff_h * kit::MODAL_RATIO_DEFAULT
+    }
+}
+
+/// Окно видимости чекбокс-листа в адаптивной ветке (M-O R7 «скролл
+/// внутри»): эластичное — из бюджета высоты; потолок прежний
+/// (`MIGRATE_VISIBLE_ROWS`), пол — одна строка. Единый источник для
+/// раскладки и клавиатурного скролла («ввод = тому, что видно»).
+pub fn migrate_visible_rows(viewport: [f32; 2], entries_len: usize) -> usize {
+    let compact = kit::layout_tier(viewport[0]) == kit::LayoutTier::Compact;
+    let step = if compact {
+        MIGRATE_ROW_STEP_COMPACT
+    } else {
+        MIGRATE_ROW_STEP
+    };
+    let chrome = if compact {
+        MIGRATE_HEADER_H_COMPACT + MIGRATE_HINT_H + MIGRATE_TOUCH_TARGET + tokens::SPACING_LG * 2.0
+    } else {
+        MIGRATE_HEADER_H + MIGRATE_HINT_H + MIGRATE_FOOTER_H + tokens::SPACING_LG
+    };
+    (((migrate_budget_h(viewport) - chrome) / step)
+        .floor()
+        .max(1.0) as usize)
+        .min(MIGRATE_VISIBLE_ROWS)
+        .clamp(1, entries_len.max(1))
+}
+
+/// Раскладка диалога миграции в адаптивной ветке (Wave M M3-a, issue #52):
+/// окно — `kit::modal_rect_flex` (80% слота; min = max = контент 480×N —
+/// M-O R7 «size follows content», desktop-потолок прежний, окно не
+/// разрастается); Compact — full-bleed лист: одноколоночный скелет,
+/// строки/кнопки/«✕» на тач-минимуме 44 (T-M R1), футер прижат к нижней
+/// thumb-зоне (T-M R2), список скроллится внутри (M-O R7). Скелет/хром
+/// прежней раскладки — дословно; геометрия — токены kit.
+pub fn migrate_layout_adaptive(
+    viewport: [f32; 2],
+    state: &MigrateState,
+    go_w: f32,
+    cancel_w: f32,
+) -> MigrateLayout {
+    let compact = kit::layout_tier(viewport[0]) == kit::LayoutTier::Compact;
+    let margin = tokens::SPACING_LG;
+    let step = if compact {
+        MIGRATE_ROW_STEP_COMPACT
+    } else {
+        MIGRATE_ROW_STEP
+    };
+    let header_h = if compact {
+        MIGRATE_HEADER_H_COMPACT
+    } else {
+        MIGRATE_HEADER_H
+    };
+    let btn_h = if compact {
+        MIGRATE_TOUCH_TARGET
+    } else {
+        kit::BUTTON_HEIGHT
+    };
+    let footer_h = btn_h + tokens::SPACING_LG;
+    let visible = migrate_visible_rows(viewport, state.entries.len());
+    let content_h =
+        header_h + MIGRATE_HINT_H + visible as f32 * step + footer_h + tokens::SPACING_LG;
+    let slot = UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
+    // Compact — примитив вернёт full-bleed eff; Medium/Expanded — панель
+    // 480×content_h по центру eff (min = max = контент).
+    let panel = kit::modal_rect_flex(
+        slot,
+        margin,
+        kit::MODAL_RATIO_DEFAULT,
+        UiVec2::new(MIGRATE_PANEL_W, content_h),
+        UiVec2::new(MIGRATE_PANEL_W, content_h),
+    );
+    let (x, y, width, height) = (panel.x, panel.y, panel.w, panel.h);
+    let title = [
+        x + tokens::SPACING_LG,
+        y + (header_h - kit::BANNER_LABEL_LINE_H) * 0.5,
+        width - header_h,
+        kit::BANNER_LABEL_LINE_H,
+    ];
+    let close = [
+        x + width - header_h,
+        y + (header_h - btn_h) * 0.5,
+        btn_h,
+        btn_h,
+    ];
+    let hint = [
+        x + tokens::SPACING_LG,
+        y + header_h,
+        width - tokens::SPACING_LG * 2.0,
+        MIGRATE_HINT_H,
+    ];
+    let rows_top = y + header_h + MIGRATE_HINT_H;
+    let first_row = state.scroll_top;
+    let row_h = step - kit::LIST_ROW_GAP;
+    let rows = state
+        .entries
+        .iter()
+        .enumerate()
+        .skip(first_row)
+        .take(visible)
+        .map(|(index, _entry)| {
+            let ry = rows_top + (index - first_row) as f32 * step;
+            let row = [
+                x + tokens::SPACING_LG,
+                ry,
+                width - tokens::SPACING_LG * 2.0,
+                row_h,
+            ];
+            let checkbox = [
+                row[0] + tokens::SPACING_SM,
+                ry + (row_h - MIGRATE_CHECKBOX) * 0.5,
+                MIGRATE_CHECKBOX,
+                MIGRATE_CHECKBOX,
+            ];
+            let label = [
+                checkbox[0] + MIGRATE_CHECKBOX + tokens::SPACING_MD,
+                ry,
+                (row[0] + row[2] - (checkbox[0] + MIGRATE_CHECKBOX + tokens::SPACING_MD)).max(0.0),
+                row_h,
+            ];
+            MigrateRowLayout {
+                row,
+                checkbox,
+                label,
+                checked: state.checked.get(index).copied().unwrap_or(false),
+                mandatory: state.is_mandatory(index),
+            }
+        })
+        .collect();
+    // Футер: «Переехать…» справа (primary), «Отмена» левее; в Compact —
+    // нижняя thumb-зона листа (T-M R2). Ширины измерены потребителем.
+    let avail = (width - tokens::SPACING_LG * 2.0).max(0.0);
+    let go_w = go_w.min(avail);
+    let cancel_w = cancel_w.min((avail - go_w - tokens::SPACING_SM).max(0.0));
+    let fy = y + height - footer_h + tokens::SPACING_LG * 0.5;
+    let go = [x + width - tokens::SPACING_LG - go_w, fy, go_w, btn_h];
+    let cancel = [go[0] - tokens::SPACING_SM - cancel_w, fy, cancel_w, btn_h];
+    MigrateLayout {
+        panel: [x, y, width, height],
+        title,
+        close,
+        hint,
+        rows,
+        go,
+        cancel,
+        first_row,
+        visible_rows: visible,
     }
 }
 
@@ -359,8 +534,11 @@ pub fn migrate_row_at(lay: &MigrateLayout, point: [f32; 2]) -> Option<usize> {
 }
 
 /// Скролл списка колесом (шаг — строки): возврат нового scroll_top.
-pub fn migrate_wheel_scroll(current: usize, delta_rows: i32, len: usize) -> usize {
-    let max = len.saturating_sub(MIGRATE_VISIBLE_ROWS);
+/// `visible` — окно видимости раскладки (`MigrateLayout::visible_rows`):
+/// в адаптивной ветке окно эластичное (M-O R7) — хвост списка обязан
+/// оставаться достижимым.
+pub fn migrate_wheel_scroll(current: usize, delta_rows: i32, len: usize, visible: usize) -> usize {
+    let max = len.saturating_sub(visible.max(1));
     (current as i32 - delta_rows).clamp(0, max as i32) as usize
 }
 
@@ -369,11 +547,12 @@ pub fn migrate_wheel_scroll(current: usize, delta_rows: i32, len: usize) -> usiz
 /// (`selected + 1 - MIGRATE_VISIBLE_ROWS`), если ушла ниже. Уже видимая —
 /// без изменений. Тот же инвариант, что у `RowScroll::ensure_visible`
 /// (LAY-W9/K3).
-pub fn migrate_scroll_to_reveal(scroll_top: usize, selected: usize) -> usize {
+pub fn migrate_scroll_to_reveal(scroll_top: usize, selected: usize, visible: usize) -> usize {
+    let visible = visible.max(1);
     if selected < scroll_top {
         selected
-    } else if selected + 1 > scroll_top + MIGRATE_VISIBLE_ROWS {
-        selected + 1 - MIGRATE_VISIBLE_ROWS
+    } else if selected + 1 > scroll_top + visible {
+        selected + 1 - visible
     } else {
         scroll_top
     }
@@ -535,12 +714,28 @@ mod tests {
 
     #[test]
     fn migrate_wheel_scroll_clamps() {
-        assert_eq!(migrate_wheel_scroll(0, -3, 15), 3, "вниз на 3 строки");
-        assert_eq!(migrate_wheel_scroll(4, 2, 15), 2, "вверх на 2 строки");
-        assert_eq!(migrate_wheel_scroll(3, 100, 15), 0, "кламп вверх");
-        assert_eq!(migrate_wheel_scroll(3, -100, 15), 5, "кламп вниз (15-10)");
         assert_eq!(
-            migrate_wheel_scroll(0, -5, 3),
+            migrate_wheel_scroll(0, -3, 15, MIGRATE_VISIBLE_ROWS),
+            3,
+            "вниз на 3 строки"
+        );
+        assert_eq!(
+            migrate_wheel_scroll(4, 2, 15, MIGRATE_VISIBLE_ROWS),
+            2,
+            "вверх на 2 строки"
+        );
+        assert_eq!(
+            migrate_wheel_scroll(3, 100, 15, MIGRATE_VISIBLE_ROWS),
+            0,
+            "кламп вверх"
+        );
+        assert_eq!(
+            migrate_wheel_scroll(3, -100, 15, MIGRATE_VISIBLE_ROWS),
+            5,
+            "кламп вниз (15-10)"
+        );
+        assert_eq!(
+            migrate_wheel_scroll(0, -5, 3, MIGRATE_VISIBLE_ROWS),
             0,
             "короткий список — без скролла"
         );
@@ -549,17 +744,146 @@ mod tests {
     #[test]
     fn migrate_scroll_to_reveal_follows_keyboard_selection() {
         // выбор ушёл выше окна — окно к нему прижалось
-        assert_eq!(migrate_scroll_to_reveal(5, 3), 3);
+        assert_eq!(migrate_scroll_to_reveal(5, 3, MIGRATE_VISIBLE_ROWS), 3);
         // выбор ушёл ниже окна — хвост окна к нему
-        assert_eq!(migrate_scroll_to_reveal(0, 12), 3, "12+1-10");
-        assert_eq!(migrate_scroll_to_reveal(5, 14), 5, "14 в окне 5..15");
+        assert_eq!(
+            migrate_scroll_to_reveal(0, 12, MIGRATE_VISIBLE_ROWS),
+            3,
+            "12+1-10"
+        );
+        assert_eq!(
+            migrate_scroll_to_reveal(5, 14, MIGRATE_VISIBLE_ROWS),
+            5,
+            "14 в окне 5..15"
+        );
         // уже видимая — без изменений (обе границы окна включительно)
-        assert_eq!(migrate_scroll_to_reveal(5, 5), 5);
-        assert_eq!(migrate_scroll_to_reveal(5, 14), 5);
-        assert_eq!(migrate_scroll_to_reveal(5, 9), 5, "середина окна");
+        assert_eq!(migrate_scroll_to_reveal(5, 5, MIGRATE_VISIBLE_ROWS), 5);
+        assert_eq!(migrate_scroll_to_reveal(5, 14, MIGRATE_VISIBLE_ROWS), 5);
+        assert_eq!(
+            migrate_scroll_to_reveal(5, 9, MIGRATE_VISIBLE_ROWS),
+            5,
+            "середина окна"
+        );
         // короткий список (окно длиннее) — 0 без паники usize
-        assert_eq!(migrate_scroll_to_reveal(0, 2), 0);
-        assert_eq!(migrate_scroll_to_reveal(3, 0), 0);
+        assert_eq!(migrate_scroll_to_reveal(0, 2, MIGRATE_VISIBLE_ROWS), 0);
+        assert_eq!(migrate_scroll_to_reveal(3, 0, MIGRATE_VISIBLE_ROWS), 0);
+    }
+
+    // === Wave M M3-a (issue #52): адаптивная ветка ==========================
+
+    fn state_with(n: usize) -> MigrateState {
+        let mut state = MigrateState::default();
+        state.open_with("a.canvas");
+        state.set_entries((0..n).map(|i| entry(&format!("c{i:02}.canvas"))).collect());
+        state
+    }
+
+    /// Expanded (1280×800): бюджет 80% выше контента 10-строчного окна —
+    /// раскладка совпадает с прежней бит-в-бит (окно не разрастается,
+    /// M-O R7).
+    #[test]
+    fn migrate_adaptive_expanded_matches_legacy_window() {
+        let state = state_with(15);
+        let legacy = migrate_layout([1280.0, 800.0], &state, 170.0, 110.0);
+        let lay = migrate_layout_adaptive([1280.0, 800.0], &state, 170.0, 110.0);
+        assert_eq!(lay.panel, legacy.panel, "окно — прежнее (480×10 строк)");
+        assert_eq!(lay.visible_rows, MIGRATE_VISIBLE_ROWS);
+        assert_eq!(lay.rows.len(), MIGRATE_VISIBLE_ROWS);
+        assert_eq!(lay.rows[0].row, legacy.rows[0].row, "скелет строк тот же");
+        assert_eq!(lay.go, legacy.go, "кнопки футера — прежние");
+    }
+
+    /// Medium (800×560): окно сжимается к бюджету 80% — окно строк
+    /// эластично (9 вместо 10), панель по центру eff, без выхода за слот.
+    #[test]
+    fn migrate_adaptive_medium_shrinks_to_budget() {
+        let state = state_with(15);
+        let lay = migrate_layout_adaptive([800.0, 560.0], &state, 170.0, 110.0);
+        assert_eq!(lay.visible_rows, 9, "floor((0.8×536 − 134)/32) = 9");
+        assert_eq!(lay.rows.len(), 9);
+        assert_eq!(lay.panel[2], MIGRATE_PANEL_W, "ширина канона не растёт");
+        let expected_h = MIGRATE_HEADER_H
+            + MIGRATE_HINT_H
+            + 9.0 * MIGRATE_ROW_STEP
+            + MIGRATE_FOOTER_H
+            + tokens::SPACING_LG;
+        assert!((lay.panel[3] - expected_h).abs() < 0.01);
+        assert!(
+            lay.panel[3] <= 0.8 * (560.0 - tokens::SPACING_LG * 2.0) + 0.01,
+            "панель в бюджете 80% слота"
+        );
+        assert!((lay.panel[0] - (12.0 + (776.0 - MIGRATE_PANEL_W) * 0.5)).abs() < 0.01);
+        // скролл-математика из окна раскладки: хвост достижим
+        let top = migrate_wheel_scroll(0, -100, 15, lay.visible_rows);
+        assert_eq!(top, 15 - 9, "максимум = список − окно");
+        let list_bottom = lay.rows[8].row[1] + lay.rows[8].row[3];
+        assert!(
+            list_bottom <= lay.panel[1] + lay.panel[3] + 0.01,
+            "строки внутри панели"
+        );
+    }
+
+    /// Compact (375×667): full-bleed лист — панель = весь слот с
+    /// safe-margin, строки/кнопки/«✕» на тач-минимуме 44 (T-M R1), футер
+    /// прижат к нижней thumb-зоне (T-M R2), всё внутри вьюпорта.
+    #[test]
+    fn migrate_adaptive_compact_full_bleed_touch_sheet() {
+        let state = state_with(15);
+        let lay = migrate_layout_adaptive([375.0, 667.0], &state, 170.0, 110.0);
+        assert_eq!(lay.panel, [12.0, 12.0, 351.0, 643.0], "full-bleed eff");
+        assert_eq!(lay.rows.len(), 9, "floor((643 − 156)/50) = 9");
+        for row in &lay.rows {
+            assert_eq!(row.row[3], 44.0, "тач-цель строки ≥44 (T-M R1)");
+            assert!(row.row[0] >= 12.0 && row.row[0] + row.row[2] <= 363.0);
+        }
+        assert_eq!(lay.go[3], MIGRATE_TOUCH_TARGET, "кнопка ≥44 (T-M R1)");
+        assert_eq!(lay.cancel[3], MIGRATE_TOUCH_TARGET);
+        assert_eq!(lay.close[2], MIGRATE_TOUCH_TARGET, "«✕» ≥44 (T-M R1)");
+        // футер в нижней зоне: низ кнопок — SPACING_LG×0.5 от низа панели
+        assert!((lay.go[1] + lay.go[3] - (12.0 + 643.0 - 6.0)).abs() < 0.01);
+        // всё внутри вьюпорта
+        assert!(lay.go[0] >= 12.0 && lay.go[0] + lay.go[2] <= 363.0);
+        assert!(lay.cancel[0] >= 12.0);
+        assert!(lay.close[1] >= 12.0 && lay.close[1] + lay.close[3] <= 667.0);
+    }
+
+    /// Мало строк — панель по контенту (без мёртвого низа), окно = списку.
+    #[test]
+    fn migrate_adaptive_few_entries_no_dead_space() {
+        let state = state_with(3);
+        let lay = migrate_layout_adaptive([1280.0, 800.0], &state, 170.0, 110.0);
+        assert_eq!(lay.visible_rows, 3);
+        assert_eq!(lay.rows.len(), 3);
+        let expected_h = MIGRATE_HEADER_H
+            + MIGRATE_HINT_H
+            + 3.0 * MIGRATE_ROW_STEP
+            + MIGRATE_FOOTER_H
+            + tokens::SPACING_LG;
+        assert!((lay.panel[3] - expected_h).abs() < 0.01);
+    }
+
+    /// Окно helper'а совпадает с окном раскладки на всех канонических
+    /// вьюпортах (единый источник для клавиатурного скролла).
+    #[test]
+    fn migrate_visible_rows_matches_layout_window() {
+        for vp in [[1280.0, 800.0], [800.0, 560.0], [375.0, 667.0]] {
+            let state = state_with(15);
+            let lay = migrate_layout_adaptive(vp, &state, 170.0, 110.0);
+            assert_eq!(
+                migrate_visible_rows(vp, 15),
+                lay.visible_rows,
+                "helper == раскладка при {vp:?}"
+            );
+        }
+    }
+
+    /// Скролл с эластичным окном: хвост списка достижим при окне 9.
+    #[test]
+    fn migrate_adaptive_scroll_threading_elastic_window() {
+        assert_eq!(migrate_wheel_scroll(0, -3, 15, 9), 3);
+        assert_eq!(migrate_wheel_scroll(11, -100, 15, 9), 6, "хвост = 15 − 9");
+        assert_eq!(migrate_scroll_to_reveal(0, 9, 9), 1, "9+1 − 9");
+        assert_eq!(migrate_scroll_to_reveal(1, 8, 9), 1, "8 в окне 1..10");
     }
 
     // --- тост с действием (№45b) --------------------------------------------

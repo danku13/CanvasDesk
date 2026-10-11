@@ -1608,13 +1608,24 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 &app.scheme_gallery,
                 &app.visible_scheme_categories(),
             );
-            let lay = scheme_gallery_ui::layout(
-                viewport,
-                &list,
-                &app.scheme_gallery,
-                app.settings.language == canvas_core::Language::Ru,
-                &app.visible_scheme_categories(),
-            );
+            // Wave M M3-a: единый источник с отрисовкой/вводом (draw == hit).
+            let lay = if app.settings.modals_adaptive {
+                scheme_gallery_ui::layout_adaptive(
+                    viewport,
+                    &list,
+                    &app.scheme_gallery,
+                    app.settings.language == canvas_core::Language::Ru,
+                    &app.visible_scheme_categories(),
+                )
+            } else {
+                scheme_gallery_ui::layout(
+                    viewport,
+                    &list,
+                    &app.scheme_gallery,
+                    app.settings.language == canvas_core::Language::Ru,
+                    &app.visible_scheme_categories(),
+                )
+            };
             surface
                 .hit_rects
                 .push(HitRect::interactive(rect(lay.panel_rect), "gallery-panel"));
@@ -1657,7 +1668,12 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             let font = canvas_core::tokens::FONT_BODY;
             let go_w = canvas_ui::kit::button_size(go, &mut m, &mut fs, family, font).x;
             let cancel_w = canvas_ui::kit::button_size(cancel, &mut m, &mut fs, family, font).x;
-            let lay = crate::storage_ui::migrate_layout(viewport, &app.migrate, go_w, cancel_w);
+            // Wave M M3-a: единый источник с отрисовкой/вводом (draw == hit).
+            let lay = if app.settings.modals_adaptive {
+                crate::storage_ui::migrate_layout_adaptive(viewport, &app.migrate, go_w, cancel_w)
+            } else {
+                crate::storage_ui::migrate_layout(viewport, &app.migrate, go_w, cancel_w)
+            };
             surface
                 .hit_rects
                 .push(HitRect::interactive(rect(lay.panel), "migrate-panel"));
