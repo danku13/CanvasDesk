@@ -7,6 +7,7 @@ Tokens (правило учёта токенов — AGENTS.md). Записи д
 
 ## Journal index (все записи: текущие и архивные)
 
+- 2026-10-11 | DOCS-ST1 (сессия web-a6dbb853-16af-4113-bc40-c40ccb7269c3) | ST1-sync: KitState 8 состояний (Wave T) в rules/08-states.md (матрица, лестница по widget.rs, ST2 + state-layer M3, additive active_states) + 12 лестниц-сносок в 14 файлах (design/README ×2, use-cases ×11, docs/ui-kit.md §7.1); сверка с crates/; doc_lint 972/0 ошибок; issue #61 closed completed; создан #62 (K4-витрина, код-бэклог) | worklog.md (текущий)
 - 2026-10-11 | HOTFIX-56 (сессия web-b5714086-2f9f-44a0-af82-302aa182533b) | Паника prod-web «cannot recursively acquire mutex» (владелец) — вложенный захват MEASURE_FS: чип C4 каждый кадр/менеджер C3/kit_field_view ×4; фикс (m,fs) параметром + reorder; аудит scripts/audit_fs_locks.py; E2E headless до/после; main снова зелёный (fmt/clippy/тест INT); найдены #57 #58 | worklog.md (текущий)
 - 2026-10-08 | CR-029 (сессия web-c1430de8-9dcf-4130-9380-b5107677d30c) | Репорт владельца «иногда не отрабатывает автодополнение при вставке входящих значений» (скриншот: нода «Корзин | worklog-2026-10-02_10-08.md
 - 2026-10-03 | PRD-0010-UI-прототип | Спроектировать UI 5 новых AI-компонентов LLM-интеграции (PRD-0010/ADR-0016) и доработать docs/prototypes/proto | worklog-2026-10-02_10-08.md
@@ -366,3 +367,21 @@ Stage Summary:
 - Паника #56 закрыта: чип/менеджер/галерея/шаблоны/поиск — без вложенных захватов MEASURE_FS; регрессия — scripts/audit_fs_locks.py; main снова зелёный.
 - Открыто: #57 (чип/author-bar — решение о позиции за владельцем), #58 (карусель онбординга).
 Tokens: in≈390000, out≈98000, total≈488000 (estimate), model=GLM-4.7, scope=HOTFIX-56
+
+---
+Task ID: DOCS-ST1 (issue #61; сессия web-a6dbb853-16af-4113-bc40-c40ccb7269c3)
+Agent: Super Z (main)
+Task: Решение владельца «реализуй эти доработки» (волна 5): ST1-sync — KitState 8 состояний (Wave T) в rules/08-states.md + матричные сноски use-cases. Блок 1 «контракты use-case» уже реализован накануне (#47, cc4ea81: 24 новых дока + актуализация 20) — не дублировался.
+
+Work Log:
+- Pull main (+16 файлов: HOTFIX-56, Wave M M2); инвентаризация: use-cases 46 файлов — план скорректирован владельцу (Telegram), дубль #47 исключён.
+- Issue #61: rules/08-states.md — ST1 матрица 5 → 8 значений, лестница по widget.rs::kit_state (Disabled > Error > Pressed > Hovered > Focused > Dragged > Selected > Normal), буллеты Focused (:focus-visible, keyboard-origin)/Dragged/Error; обе модели (лестница + additive active_states → [Error, Pressed, Hovered, Focused]); ST2 +3 строки (fill не меняют) + механизм M3 state-layer (0.08/0.10/0.10/0.16, resolve_state — max-alpha); шапка-источники + component/mod.rs, component/button.rs.
+- Лестницы-сноски (14 файлов): design/README.md ×2; use-cases: button, switch, banner, chip-strip, panel-header, footer, accordion, tree, tabs; row/slider — примечания (row_style/slider_style Focused/Dragged/Error не дифференцируют — по коду); docs/ui-kit.md §7.1 (агентский контур, сверх скоупа осознанно — класс B1). Исторические (CR/ACCEPTANCE-archive/prd-журнал/dev-researches) не тронуты.
+- Сверка с crates/: лестница widget.rs:121-139; state_layer_alpha component/mod.rs:101-109; active_states widget.rs:146-168 (Selected/Dragged в additive отсутствуют — зафиксировано); button_style button.rs:90-109; switch button.rs:263-271.
+- Гейты: doc_lint 972 ссылок / 2568 бэктик-путей / 0 ошибок; rg по старой лестнице в живых доках — 0; коммит e2a5617, push main (4aca0fb..e2a5617); #61 — чекбоксы, комментарий-верификация, closed completed.
+- Создан issue #62 — K4-витрина (КОД-бэклог): секции UI console для 6 W2 + 14 Wave C компонентов, ограничения K4.1–K4.3.
+
+Stage Summary:
+- ST1 вновь единый источник истины: rules/08-states.md = KitState (8 значений, Wave T §5.1.1); 12 сносок синхронизированы — класс дефекта B1 «правила отстают от кода» закрыт для матрицы состояний.
+- Найдено при синке: rustdoc active_states() (widget.rs) упоминает Selected в примере — реализация не возвращает (док-комментарий отстаёт; попутная заметка в #62).
+Tokens: in≈140000, out≈50000, total≈190000 (estimate), model=GLM-4.7, scope=DOCS-ST1
