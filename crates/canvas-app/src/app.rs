@@ -16161,8 +16161,12 @@ mod tests {
         std::fs::write(&live, "{}").expect("запись файла канваса");
         // Канонический путь (та же нормализация, что в record_recent):
         // dedup в push_recent сравнивает строки — симлинки tmp-каталога
-        // не должны рождать дубль одного файла.
-        let live = live.canonicalize().unwrap_or(live);
+        // не должны рождать дубль одного файла. Windows-фикс (CI): canonicalize
+        // даёт UNC-префикс \\?\, а record_recent_canvas его снимает
+        // (absolute_canvas_path) — фикстура обязана ТОЙ ЖЕ нормализацией,
+        // иначе push_recent не сводит записи (recent.len() == 2 ≠ 1 на
+        // Windows CI).
+        let live = PathBuf::from(absolute_canvas_path(&live));
         app.settings.recent = vec![
             live.to_string_lossy().into_owned(),
             "/точно/отсутствует/протухший.canvas".to_owned(),
@@ -16230,6 +16234,13 @@ mod tests {
     /// None): «Создать»/«Открыть…»/«Открыть файл с диска…» не меняют сцену,
     /// web-конвейер молчит (CLI-путь и drag-drop остаются рабочими; web —
     /// свои пикеры через WebRequest).
+    ///
+    /// Только не-Windows: на Windows диалоги настоящие (COM
+    /// IFileSaveDialog/IFileOpenDialog) и МОДАЛЬНЫЕ — в headless CI
+    /// Show() блокирует навсегда, тест вешает всю матрицу (6-часовой
+    /// таймаут джобы; регрессия CI с 2026-10-10 19:00). Предмет теста —
+    /// поведение ЗАГЛУШКИ, на Windows проверять нечего.
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn manager_native_dialogs_stubbed_on_linux() {
         let (mut app, _live) = native_manager_app();
