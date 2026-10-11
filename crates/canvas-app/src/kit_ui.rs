@@ -3339,6 +3339,12 @@ pub(crate) struct DemoDrawCtx<'a> {
     /// Измеритель (компонентные раскладки badge/skeleton).
     pub m: &'a mut TextMeasurer,
     pub fs: &'a mut cosmic_text::FontSystem,
+    /// Wave D v1.1 (D1, TS-D1): тултип-ховер (hit-id, elapsed_ms) — пузырь
+    /// рисуется после `kit::TOOLTIP_DELAY_MS` (500 мс) через `kit::tooltip`.
+    pub tooltip_hover: Option<(&'a str, u32)>,
+    /// Wave D v1.1 (D1, TS-D3): прогресс knob-slide переключателя 0..1
+    /// (тик из App; 1/0 без анимации = целевое положение — поведение v1).
+    pub switch_anim_t: f32,
 }
 
 /// Состояние контрола от курсора/зажатия: press > hover > normal.
@@ -4213,8 +4219,22 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         let id = crate::kit_demo::hit::SWITCH;
         let state = demo_state(ctx.demo.state_override, ctx.pressed, ctx.cursor, r, id);
         let sw = canvas_ui::kit::switch(*r, ctx.demo.switch_on, state, p);
+        // Wave D v1.1 (D1, TS-D3): knob-slide — линейная интерполяция off→on
+        // по прогрессу тика App (`switch_anim_t`; 1/0 — целевое положение,
+        // поведение v1; reduced-motion — мгновенно, anim::effective_duration).
+        // Края слота симметричны: pad = зазор между краем трека и бегунком.
+        let (on_x, off_x) = if ctx.demo.switch_on {
+            (sw.knob.x, sw.track.x + (sw.track.right() - sw.knob.right()))
+        } else {
+            (
+                sw.track.right() - (sw.knob.x - sw.track.x) - sw.knob.w,
+                sw.knob.x,
+            )
+        };
+        let knob_x = off_x + (on_x - off_x) * ctx.switch_anim_t.clamp(0.0, 1.0);
+        let knob = UiRect::new(knob_x, sw.knob.y, sw.knob.w, sw.knob.h);
         d.control(sw.track, &sw.track_style);
-        d.rect(sw.knob, sw.knob_fill, [0.0; 4], sw.track_style.radius / 2.0);
+        d.rect(knob, sw.knob_fill, [0.0; 4], sw.track_style.radius / 2.0);
     }
     // TextField: интерактивное поле (фокус/текст/каретка из демо)
     if let Some((_, _, tf)) = ctx.lay.text_fields.first() {
@@ -4445,6 +4465,77 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             11.0,
         );
     }
+
+    // --- Тултип живых контролов (D1, TS-D1) -------------------------------
+    // Пузырь над кнопкой/чипом после `kit::TOOLTIP_DELAY_MS` (500 мс; ховер
+    // тикает в App — `tick_demo_tooltip`). Стиль 1:1 со статичной секцией
+    // Tooltip (panel fill, accent-рамка, RADIUS_CHIP, 12px). При оверрайде
+    // состояния текст — имя форсированного состояния (контрол показывает
+    // его же — подписи согласованы).
+    if let Some((id, ms)) = ctx.tooltip_hover {
+        if ms >= kit::TOOLTIP_DELAY_MS {
+            if let Some((r, _)) = dl
+                .demo_hits
+                .iter()
+                .find(|(hr, hid)| *hid == id && hr.w > 0.0)
+            {
+                let text = demo_tooltip_text(id, ctx.lang, ctx.demo.state_override);
+                let w = (ctx.m.width_of(ctx.fs, &text, FONT_FAMILY, 12.0) + 16.0).max(20.0);
+                let tip = kit::tooltip(
+                    UiPoint::new(r.right(), r.y + 4.0),
+                    UiVec2::new(w, 18.0),
+                    ctx.lay.panel,
+                    ms,
+                    kit::TOOLTIP_DELAY_MS,
+                );
+                if let Some(t) = tip {
+                    let panel_style = kit::panel_style(p);
+                    d.rect(
+                        t.rect,
+                        panel_style.fill,
+                        p.accent,
+                        canvas_core::tokens::RADIUS_CHIP,
+                    );
+                    d.label_left(
+                        UiRect::new(t.rect.x + 8.0, t.rect.y + 2.0, t.rect.w - 16.0, 14.0),
+                        &text,
+                        p.text,
+                        12.0,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Текст тултипа живого контрола (D1, TS-D1): «Компонент — метка слота»
+/// (`button:i`/`chips:i` — метки [`STATE_LABELS`]); при оверрайде KitState —
+/// имя форсированного состояния (согласовано с подписью контрола).
+/// Неизвестный id — пустая строка (пузырь не рисуется: ширина < min).
+fn demo_tooltip_text(id: &str, lang: Language, state_override: Option<kit::KitState>) -> String {
+    let (kind, index) = match id.split_once(':') {
+        Some(("button", i)) => ("button", i),
+        Some(("chips", i)) => ("chips", i),
+        _ => return String::new(),
+    };
+    let i: usize = match index.parse() {
+        Ok(i) => i,
+        Err(_) => return String::new(),
+    };
+    let name = match kind {
+        "button" => crate::i18n::tr(lang, crate::i18n::keys::KIT_SECTION_BUTTONS),
+        _ => crate::i18n::tr(lang, crate::i18n::keys::KIT_SECTION_CHIPS),
+    };
+    let slot = match state_override {
+        Some(s) => state_override_name(lang, s),
+        None => {
+            let Some(key) = STATE_LABELS.get(i) else {
+                return String::new();
+            };
+            crate::i18n::tr(lang, key).to_string()
+        }
+    };
+    format!("{name} — {slot}")
 }
 
 /// Заливка «фона панели» — перекрытие скрытых демо-контролов (тост).
@@ -4892,6 +4983,37 @@ pub fn with_font_system<R>(f: impl FnOnce(&mut cosmic_text::FontSystem) -> R) ->
 mod tests {
     use super::*;
     use canvas_ui::kit::{ButtonVariant, ControlStyle};
+
+    /// Wave D v1.1 (D1, TS-D1): текст тултипа живого контрола — «Компонент —
+    /// метка слота» (RU/EN), при оверрайде KitState — имя состояния;
+    /// не-тултип-цели и мусорные индексы дают пустую строку (пузырь скрыт).
+    #[test]
+    fn demo_tooltip_text_labels_and_guards() {
+        // Кнопка/чип без оверрайда — метка слота STATE_LABELS[i].
+        let ru_btn = demo_tooltip_text("button:0", Language::Ru, None);
+        let ru_chip = demo_tooltip_text("chips:2", Language::Ru, None);
+        assert!(ru_btn.contains(" — ") && !ru_btn.is_empty());
+        assert!(ru_chip.contains(" — ") && !ru_chip.is_empty());
+        assert_ne!(ru_btn, ru_chip, "компонент в тексте различает кнопки/чипы");
+        // EN — другой язык, метка слота та же позиция.
+        let en_btn = demo_tooltip_text("button:0", Language::En, None);
+        assert!(en_btn.contains(" — "));
+        assert_ne!(en_btn, ru_btn, "язык влияет на текст");
+        // Оверрайд — имя состояния KitState вместо метки слота.
+        let forced = demo_tooltip_text("button:1", Language::Ru, Some(kit::KitState::Dragged));
+        assert_eq!(
+            forced,
+            format!(
+                "{} — {}",
+                crate::i18n::tr(Language::Ru, crate::i18n::keys::KIT_SECTION_BUTTONS),
+                state_override_name(Language::Ru, kit::KitState::Dragged)
+            )
+        );
+        // Guard-ы: не-тултип id, нечисловой/вне-таблицы индекс — пусто.
+        assert_eq!(demo_tooltip_text("switch", Language::Ru, None), "");
+        assert_eq!(demo_tooltip_text("button:99", Language::Ru, None), "");
+        assert_eq!(demo_tooltip_text("chips:x", Language::Ru, None), "");
+    }
 
     /// FR-057: эквивалентность до/после делегирования — KitDraw через
     /// Painter даёт те же quads/texts, что прямой путь Painter-пути полос
