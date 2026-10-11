@@ -330,6 +330,54 @@ impl App {
     /// Wave D v1 (issue #32): TO-BE — демо-хиты `kit-demo:*` (переходы
     /// состояния через [`crate::kit_demo::apply_click`]) и навигация сайдбара.
     pub(super) fn click_kit_gallery(&mut self, element: &str) {
+        // Wave D v1.1 (D1, issue #32): бэкдроп открытого оверлея закрывает
+        // его и ГЛОТАЕТ клик (контракт модалей, AC-D1). Порядок — z-порядок
+        // отрисовки сверху вниз (поповер → палитра → модалка → dropdown);
+        // клик ВНУТРИ оверлея проваливается в штатную диспетчеризацию хитов
+        // (draw==hit — хиты оверлеев раньше хитов секций в demo_hits).
+        if self.kit_demo.tobe {
+            if let Some(glay) = self.kit_demo_layout.as_ref() {
+                let dl = glay.demo.as_ref();
+                let mut swallowed = false;
+                if self.kit_demo.popover_open {
+                    if let Some(bubble) = dl.and_then(|d| d.popover_bubble.as_ref()) {
+                        if bubble.w > 0.0 && !crate::kit_ui::cursor_in(bubble, self.cursor) {
+                            self.kit_demo.popover_open = false;
+                            swallowed = true;
+                        }
+                    }
+                }
+                if !swallowed && self.kit_demo.palette_open {
+                    if let Some((pp, _, _)) = dl.and_then(|d| d.palette.as_ref()) {
+                        if !crate::kit_ui::cursor_in(pp, self.cursor) {
+                            self.kit_demo.palette_open = false;
+                            swallowed = true;
+                        }
+                    }
+                }
+                if !swallowed && self.kit_demo.modal_open {
+                    if let Some((mp, _)) = dl.and_then(|d| d.modal.as_ref()) {
+                        if !crate::kit_ui::cursor_in(mp, self.cursor) {
+                            self.kit_demo.modal_open = false;
+                            swallowed = true;
+                        }
+                    }
+                }
+                if !swallowed && self.kit_demo.dropdown_open {
+                    // Меню — открытый оверлей; клик вне его (в т.ч. по якорю)
+                    // закрывает (toggle-семантика якоря сохраняется).
+                    let menu = glay.dropdown_menu;
+                    if menu.w > 0.0 && !crate::kit_ui::cursor_in(&menu, self.cursor) {
+                        self.kit_demo.dropdown_open = false;
+                        swallowed = true;
+                    }
+                }
+                if swallowed {
+                    self.request_redraw();
+                    return;
+                }
+            }
+        }
         if let Some(id) = element.strip_prefix(crate::kit_demo::HIT_PREFIX) {
             // Навигация сайдбара (D5) — скролл к секции (нужен скролл-стейт)
             if let Some(section_id) = id.strip_prefix("nav:") {
@@ -355,6 +403,12 @@ impl App {
                 }
             }
             crate::kit_demo::apply_click(&mut self.kit_demo, id);
+            // Wave D v1.1 (D1, TS-D3): knob-slide переключателя — 100 мс
+            // (motion-токен Short2; reduced-motion — мгновенно, см. tick).
+            // Instant — wasm-безопасный alias (canvas_core::time).
+            if id == crate::kit_demo::hit::SWITCH {
+                self.kit_demo_switch_anim = Some(Instant::now());
+            }
             // Тулбар темы — применяем пресет к приложению (settings.theme_preset)
             if id == crate::kit_demo::hit::TOOLBAR_THEME {
                 if let Some(preset) =
@@ -2262,13 +2316,14 @@ impl App {
                     self.help_menu = None;
                     // FR-070: админпанель и витрина взаимоисключимы
                     self.admin_open = false;
-                    self.kit_gallery_open = true;
-                    // FR-059: контент витрины — с начала (скролл секций)
-                    self.kit_gallery_scroll = canvas_ui::kit::ScrollState::default();
+                    // Wave D v1.1 (D6, issue #32): вход меню открывает
+                    // интерактивную demo (TO-BE) — TS-D1 проверяет
+                    // интерактивность с этого входа; AS-IS остаётся
+                    // доступен тумблером шапки витрины.
+                    self.open_kit_demo();
                     // FR-062 F-17: фокус секции Tab — с начала (кольцо пустое:
                     // первый Tab ставит фокус на первый слот)
                     self.kit_gallery_focus.clear();
-                    self.request_redraw();
                 }
                 // FR-070: «UI-консоль» — админпанель (модаль; вход из
                 // меню «?», доступна всегда)

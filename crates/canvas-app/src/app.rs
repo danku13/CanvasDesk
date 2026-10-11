@@ -1763,6 +1763,15 @@ pub struct App {
     /// FR-059: ScrollState — состояние App; content_h/viewport_h
     /// синхронизируются раскладкой — паттерн kit_gallery_scroll).
     pub(crate) kit_demo_sidebar_scroll: canvas_ui::kit::ScrollState,
+    /// Wave D v1.1 (D1, issue #32): hover-тултип демо-кнопок/чипов (TS-D1):
+    /// (hit-id, момент начала ховера). None — курсор не над тултип-целью.
+    /// Появление через `kit::TOOLTIP_DELAY_MS` (500 мс) — `kit::tooltip`.
+    /// Instant — wasm-безопасный alias (canvas_core::time, не std).
+    pub(crate) kit_demo_tooltip: Option<(&'static str, Instant)>,
+    /// Wave D v1.1 (D1, issue #32): старт анимации knob-slide переключателя
+    /// (TS-D3, motion-токен Duration::Short2 = 100 мс). None — не идёт;
+    /// reduced-motion — анимация мгновенная (anim::effective_duration).
+    pub(crate) kit_demo_switch_anim: Option<Instant>,
     /// FR-070: UI-админпанель открыта (поверхность admin_panel,
     /// Modals/Block) — пункт «?» «UI-консоль».
     pub(crate) admin_open: bool,
@@ -2152,6 +2161,8 @@ impl App {
             action_registry: actions::build_action_registry(),
             kit_demo_layout: None,
             kit_demo_sidebar_scroll: canvas_ui::kit::ScrollState::default(),
+            kit_demo_tooltip: None,
+            kit_demo_switch_anim: None,
             admin_open: false,
             admin_section: crate::admin_ui::AdminSection::Components,
             admin_palette_override: None,
@@ -9624,13 +9635,22 @@ impl App {
     }
 
     /// Wave D v1 (issue #32, D6): открыть витрину сразу в TO-BE-режиме
-    /// (web `?ui=demo`); нативный вход — «? → О интерфейсе» без режима.
+    /// (web `?ui=demo`; Wave D v1.1 — и нативный вход «? → О интерфейсе»,
+    /// TS-D1 тестирует интерактивность с этого входа; AS-IS доступен
+    /// тумблером шапки).
     pub fn open_kit_demo(&mut self) {
         self.kit_gallery_open = true;
         self.kit_demo.tobe = true;
         self.kit_gallery_scroll = canvas_ui::kit::ScrollState::default();
         // Wave D v1.1 (F1): скролл сайдбара — с начала колонки.
         self.kit_demo_sidebar_scroll = canvas_ui::kit::ScrollState::default();
+        // Wave D v1.1 (D3): пилюля темы синхронна текущему пресету
+        // приложения — первый клик цикла применяет СЛЕДУЮЩИЙ пресет,
+        // а не перескакивает с произвольного на nord.
+        self.kit_demo.theme_idx = canvas_core::theme_presets::PRESETS
+            .iter()
+            .position(|preset| preset.id == self.settings.theme_preset)
+            .unwrap_or(0);
         self.request_redraw();
     }
 
