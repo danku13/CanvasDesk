@@ -385,3 +385,25 @@ Stage Summary:
 - ST1 вновь единый источник истины: rules/08-states.md = KitState (8 значений, Wave T §5.1.1); 12 сносок синхронизированы — класс дефекта B1 «правила отстают от кода» закрыт для матрицы состояний.
 - Найдено при синке: rustdoc active_states() (widget.rs) упоминает Selected в примере — реализация не возвращает (док-комментарий отстаёт; попутная заметка в #62).
 Tokens: in≈140000, out≈50000, total≈190000 (estimate), model=GLM-4.7, scope=DOCS-ST1
+
+---
+Task ID: WAVE-M-SESSION-B (issue #52; сессия web-0a539c42-84fd-4916-9a97-970c8052c51d)
+Agent: Super Z (main)
+Task: Сессия B Wave M — M3-a: адаптив простых модалей (dialog, migrate, canvas_manager, gallery) под флагом modals_adaptive
+
+Work Log:
+- База 4aca0fb (Session A cd4b705 + HOTFIX-56); ТЗ — issue #52 + контракт design/modals-audit-2026-10.md §3–4
+- migrate: migrate_layout_adaptive — окно kit::modal_rect_flex (min=max=контент 480×N — desktop не разрастается, M-O R7); Compact 375 — full-bleed тач-лист 351×643 (строки/кнопки/«✕» 44 — T-M R1, футер в thumb-зоне — T-M R2, окно 9 строк эластично); Medium 800×560 — сжатие к бюджету 80% (9 строк вместо 10, скролл внутри — M-O R7); Expanded — бит-в-бит прежняя геометрия (тест-паритет); threading окна скролла: MigrateLayout.visible_rows + visible-параметры в migrate_wheel_scroll/migrate_scroll_to_reveal (хвост достижим — раньше last-row был недостижим при окне < константы)
+- canvas_manager: manager_layout_adaptive + TierChrome (M/E — текущая плотность; compact — поиск во всю ширину, чип своей строкой, всё по 44, хранилище закреплено за нижним краем листа); manager_visible_rows — единый источник окна для раскладки и клампов скролла (App::canvas_manager_visible_rows); ManagerLayout.visible_rows → wheel_scroll_top
+- gallery: рефактор — общий скелет вынесен в layout_from_panel (п meddling прежней и адаптивной веток, бит-в-бит паритет OFF); layout_with_adaptive: высота — эластичное окно строк из бюджета 80%, кратное строке (без мёртвого клапика); Compact — full-bleed лист, «×» 44; row_labels_adaptive (FR-053 замер от адаптивных ширин)
+- dialog: dialog_measured_in_adaptive — формула 80% с прежними min/max 280…440 (desktop 440 — не разрастается, audit §4); Compact — full-bleed sheet, кнопки в нижней зоне на всю ширину, тач 44; якоря текстов прежние, ellipsis (G5/G8)
+- Проводка: ветки modals_adaptive во всех точках draw/hit/input (overlays paint ×2, ui_registry ×2, input wheel ×2, app keyboard ×2); manager_layout_current/dialog_measured — единые точки; центровка текста строк менеджера — от высоты rect (row[3]) — паритет OFF бит-в-бит
+- G4: lint_modals_adaptive + migrate/canvas_manager (12 канвасов) — 10 состояний × {1280×800, 800×560} × RU/EN + Compact-край 375×667 (7 поверхностей)
+- Гейты: fmt/check/test --workspace (96 ok)/clippy -D warnings/wasm --check/lay7/doc_lint — зелёные; rebase поверх чужих e2a5617/f91317f (Wave T docs) — конфликтов нет; коммит 1dc509e запушен
+- Инцидент: середина сессии — отказ инструментов окружения (5 подряд), перезапуск сессии владельцем; файл не пострадал, продолжение с того же места
+
+Stage Summary:
+- M3-a в main (1dc509e): 4 простые модали адаптивны под флагом; +24 теста; issue #52 закрыт
+- Отклонения зафиксированы в отчёте #52: (1) issue-текст «gallery medium 2 колонки» → одно-колоночный список по аудиту (row-list ≠ сетка, 2 колонки ломают FR-053 на medium); (2) T-M R1 — поле поиска/чипы галереи остаются на каноне кита (chip_strip измеряет 24 — поднимается отдельной волной kit); (3) migrate compact-окно 9 строк при 667px (sheet-look, slack в зоне списка)
+- Дальше: Сессия C (#53 сложные: settings, kit_gallery +F1/F2, admin) — старт владельца; M4 приёмка
+Tokens: in≈560000, out≈68000, total≈628000 (estimate), model=GLM-4.6, scope=wave-m-m3a
