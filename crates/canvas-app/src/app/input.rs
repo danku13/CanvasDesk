@@ -398,41 +398,14 @@ impl App {
                 self.kit_demo_nav(section_id);
                 return;
             }
-            // Клик мимо демо-поля снимает его фокус (паттерн модалок)
-            if id != crate::kit_demo::hit::TEXTFIELD {
-                self.kit_demo.text_focus = false;
+            // V2 (#67, ST1): клик мыши прячет фокус-рамку (focus ≠ hover);
+            // фокус следует за кликом (рамка появится при следующем Tab
+            // с этого контрола — ринг пересобирается на нажатии).
+            self.kit_demo_focus_visible = false;
+            if let Some(pos) = self.kit_demo_ring.iter().position(|&x| x == id) {
+                self.kit_demo_ring_idx = Some(pos);
             }
-            // Клик по треку слайдера — прыжок значения (drag — в on_cursor_moved)
-            if id == crate::kit_demo::hit::SLIDER {
-                if let Some(sl) = self
-                    .kit_demo_layout
-                    .as_ref()
-                    .and_then(|l| l.demo.as_ref())
-                    .and_then(|d| d.wave_c.slider.as_ref())
-                {
-                    if sl.track.w > 0.0 {
-                        self.kit_demo.slider_value =
-                            ((self.cursor[0] - sl.track.x) / sl.track.w).clamp(0.0, 1.0);
-                    }
-                }
-            }
-            crate::kit_demo::apply_click(&mut self.kit_demo, id);
-            // Wave D v1.1 (D1, TS-D3): knob-slide переключателя — 100 мс
-            // (motion-токен Short2; reduced-motion — мгновенно, см. tick).
-            // Instant — wasm-безопасный alias (canvas_core::time).
-            if id == crate::kit_demo::hit::SWITCH {
-                self.kit_demo_switch_anim = Some(Instant::now());
-            }
-            // Тулбар темы — применяем пресет к приложению (settings.theme_preset)
-            if id == crate::kit_demo::hit::TOOLBAR_THEME {
-                if let Some(preset) =
-                    canvas_core::theme_presets::PRESETS.get(self.kit_demo.theme_idx)
-                {
-                    self.settings.theme_preset = preset.id.to_string();
-                    self.apply_effective_theme();
-                    self.save_settings();
-                }
-            }
+            self.kit_demo_activate(id);
             self.request_redraw();
             return;
         }
@@ -818,6 +791,9 @@ impl App {
                 // клавиши глотаются (интерактив — только кнопки шапки).
                 // FR-062 F-17: Tab/Shift+Tab — фокус-секция витрины
                 // (FocusRing по слотам demo-ряда; рамка — accent).
+                // V2 (#67): TO-BE — Tab/Shift+Tab ведёт полный ринг витрины
+                // (trap-контейнер приоритетен), стрелки — группы
+                // (radio/segmented/tabs/tree/nav_rail), Enter — активация.
                 if self.kit_gallery_open {
                     if event.state == ElementState::Pressed && !event.repeat {
                         match &event.logical_key {
@@ -825,6 +801,9 @@ impl App {
                                 // Wave D (TO-BE): сначала закрываются демо-
                                 // поповеры (модалка/палитра/поповер/dropdown),
                                 // затем сама витрина — лестница Esc.
+                                // V2 (#67): выход из trap-контейнера — семантика
+                                // FocusTrap::restore: ринг сбрасывается, рамка
+                                // прячется (следующий Tab — с первого контрола).
                                 if self.kit_demo.tobe {
                                     if self.kit_demo.palette_open {
                                         self.kit_demo.palette_open = false;
@@ -837,6 +816,8 @@ impl App {
                                     } else {
                                         self.kit_gallery_open = false;
                                     }
+                                    self.kit_demo_ring_idx = None;
+                                    self.kit_demo_focus_visible = false;
                                 } else {
                                     self.kit_gallery_open = false;
                                 }
@@ -844,7 +825,29 @@ impl App {
                             }
                             Key::Named(NamedKey::Tab) => {
                                 let backwards = self.modifiers.shift_key();
-                                self.gallery_focus_step(backwards);
+                                if self.kit_demo.tobe {
+                                    self.kit_demo_focus_step(backwards);
+                                } else {
+                                    self.gallery_focus_step(backwards);
+                                }
+                            }
+                            // V2 (#67): стрелки — группы (TO-BE; AS-IS —
+                            // глотаются, прежнее поведение).
+                            Key::Named(NamedKey::ArrowUp) if self.kit_demo.tobe => {
+                                self.kit_demo_arrow(crate::kit_demo::DemoArrow::Up);
+                            }
+                            Key::Named(NamedKey::ArrowDown) if self.kit_demo.tobe => {
+                                self.kit_demo_arrow(crate::kit_demo::DemoArrow::Down);
+                            }
+                            Key::Named(NamedKey::ArrowLeft) if self.kit_demo.tobe => {
+                                self.kit_demo_arrow(crate::kit_demo::DemoArrow::Left);
+                            }
+                            Key::Named(NamedKey::ArrowRight) if self.kit_demo.tobe => {
+                                self.kit_demo_arrow(crate::kit_demo::DemoArrow::Right);
+                            }
+                            // V2 (#67): Enter — активация сфокусированного.
+                            Key::Named(NamedKey::Enter) if self.kit_demo.tobe => {
+                                self.kit_demo_enter();
                             }
                             _ => {}
                         }

@@ -1940,6 +1940,18 @@ pub struct App {
     /// КОНТЕНТ-координатах раскладки — `GalleryLayout::focus_targets` в kit_ui;
     /// сброс при открытии витрины).
     kit_gallery_focus: canvas_ui::keyboard::FocusRing,
+    /// V2 (issue #67): Tab-кольцо TO-BE-демо-витрины — стабильные id
+    /// ([`crate::kit_ui::demo_ring`]/[`crate::kit_ui::demo_trap_ring`]);
+    /// геометрия берётся из раскладки кадра ([`crate::kit_ui::demo_rect_of`]),
+    /// поэтому скролл/size/density не ломают соответствие. AS-IS — прежнее
+    /// кольцо `kit_gallery_focus` (F-17).
+    kit_demo_ring: Vec<&'static str>,
+    /// V2 (issue #67): позиция в [`Self::kit_demo_ring`] (None — фокус
+    /// ещё не ставился).
+    kit_demo_ring_idx: Option<usize>,
+    /// V2 (issue #67, ST1): фокус-рамка видима только после клавиатурной
+    /// навигации (Tab/стрелки/Enter); клик мыши прячет (focus ≠ hover).
+    kit_demo_focus_visible: bool,
     /// FR-059: скроллы колонок панели «Как считается» (кит список+скролл —
     /// замена среза «… ещё N»; живут с stage, сбрасываются при открытии).
     stage_calc_vars_scroll: canvas_ui::kit::ScrollState,
@@ -2352,6 +2364,9 @@ impl App {
             kit_gallery_scroll: canvas_ui::kit::ScrollState::default(),
             admin_scroll: canvas_ui::kit::ScrollState::default(),
             kit_gallery_focus: canvas_ui::keyboard::FocusRing::default(),
+            kit_demo_ring: Vec::new(),
+            kit_demo_ring_idx: None,
+            kit_demo_focus_visible: false,
             stage_calc_vars_scroll: canvas_ui::kit::ScrollState::default(),
             stage_calc_formulas_scroll: canvas_ui::kit::ScrollState::default(),
             // FR-068 M2: retained-таблицы панели — lazy при первом кадре
@@ -7634,6 +7649,115 @@ impl App {
             self.kit_gallery_focus.next();
         }
         self.request_redraw();
+    }
+
+    // === V2 (issue #67): клавиатурный ринг TO-BE-витрины ====================
+
+    /// V2: Tab/Shift+Tab — шаг по рингу TO-BE-демо (trap-контейнер имеет
+    /// приоритет, иначе полный ринг; порядок — [`crate::kit_ui::demo_ring`]). Кольцо
+    /// пересобирается на каждое нажатие (стоимость раскладки — на кадре
+    /// ввода, паттерн F-17); id стабильны — позиция сохраняется через
+    /// длину (замкнутость).
+    fn kit_demo_focus_step(&mut self, backwards: bool) {
+        let Some(lay) = self.kit_demo_layout.as_ref() else {
+            return;
+        };
+        let ring = crate::kit_ui::demo_trap_ring(lay, &self.kit_demo)
+            .unwrap_or_else(|| crate::kit_ui::demo_ring(lay));
+        let len = ring.len();
+        if len == 0 {
+            self.kit_demo_ring_idx = None;
+            return;
+        }
+        self.kit_demo_ring = ring;
+        self.kit_demo_ring_idx = Some(match self.kit_demo_ring_idx {
+            Some(i) if backwards => (i + len - 1) % len,
+            Some(i) => (i + 1) % len,
+            None if backwards => len - 1,
+            None => 0,
+        });
+        self.kit_demo_focus_visible = true;
+        self.request_redraw();
+    }
+
+    /// V2: текущий id фокуса ринга (None — фокус не ставился).
+    fn kit_demo_ring_current(&self) -> Option<&'static str> {
+        let i = self.kit_demo_ring_idx?;
+        self.kit_demo_ring.get(i).copied()
+    }
+
+    /// V2: переместить фокус ринга на id (стрелки в группах) + ST1
+    /// focus_visible (клавиатурное происхождение).
+    fn kit_demo_focus_move_to(&mut self, id: &'static str) {
+        if let Some(pos) = self.kit_demo_ring.iter().position(|&x| x == id) {
+            self.kit_demo_ring_idx = Some(pos);
+        }
+        self.kit_demo_focus_visible = true;
+    }
+
+    /// V2: стрелка внутри группы (radio/tabs/segmented/tree/nav_rail) —
+    /// переход фокуса на соседний контрол группы (семантика —
+    /// [`crate::kit_demo::apply_group_arrow`]); не потреблённая стрелка
+    /// не двигает ринг (не тратится).
+    fn kit_demo_arrow(&mut self, arrow: crate::kit_demo::DemoArrow) {
+        let Some(id) = self.kit_demo_ring_current() else {
+            return;
+        };
+        if let Some(new_id) = crate::kit_demo::apply_group_arrow(&mut self.kit_demo, id, arrow) {
+            self.kit_demo_focus_move_to(new_id);
+            self.request_redraw();
+        }
+    }
+
+    /// V2: Enter — активация сфокусированного контрола (единая семантика
+    /// переходов с кликом — [`Self::kit_demo_activate`]).
+    fn kit_demo_enter(&mut self) {
+        if !self.kit_demo_focus_visible {
+            return;
+        }
+        let Some(id) = self.kit_demo_ring_current() else {
+            return;
+        };
+        self.kit_demo_activate(id);
+        self.request_redraw();
+    }
+
+    /// V2/D1: применение перехода демо по хит-id (клик И Enter — один
+    /// путь: фокус поля/слайдер-прыжок/apply_click/анимация свитча/применение
+    /// темы). Извлечено из `click_kit_gallery` (переиспользование Enter'ом).
+    fn kit_demo_activate(&mut self, id: &str) {
+        // Клик мимо демо-поля снимает его фокус (паттерн модалок)
+        if id != crate::kit_demo::hit::TEXTFIELD {
+            self.kit_demo.text_focus = false;
+        }
+        // Клик по треку слайдера — прыжок значения (drag — в on_cursor_moved)
+        if id == crate::kit_demo::hit::SLIDER {
+            if let Some(sl) = self
+                .kit_demo_layout
+                .as_ref()
+                .and_then(|l| l.demo.as_ref())
+                .and_then(|d| d.wave_c.slider.as_ref())
+            {
+                if sl.track.w > 0.0 {
+                    self.kit_demo.slider_value =
+                        ((self.cursor[0] - sl.track.x) / sl.track.w).clamp(0.0, 1.0);
+                }
+            }
+        }
+        crate::kit_demo::apply_click(&mut self.kit_demo, id);
+        // Wave D v1.1 (D1, TS-D3): knob-slide переключателя — 100 мс
+        // (motion-токен Short2; reduced-motion — мгновенно, см. tick).
+        if id == crate::kit_demo::hit::SWITCH {
+            self.kit_demo_switch_anim = Some(Instant::now());
+        }
+        // Тулбар темы — применяем пресет к приложению (settings.theme_preset)
+        if id == crate::kit_demo::hit::TOOLBAR_THEME {
+            if let Some(preset) = canvas_core::theme_presets::PRESETS.get(self.kit_demo.theme_idx) {
+                self.settings.theme_preset = preset.id.to_string();
+                self.apply_effective_theme();
+                self.save_settings();
+            }
+        }
     }
 
     /// FR-021: принять выбранную подсказку — заменить токен слева от

@@ -96,6 +96,20 @@ impl FocusRing {
         self.rects.clear();
         self.rects.extend_from_slice(rects);
     }
+
+    /// issue #67 V2: поставить фокус на rect (например, стрелки внутри
+    /// группы перенесли фокус на соседний контрол). Найден в порядке —
+    /// индекс ставится, `true`; нет — кольцо не меняется, `false`
+    /// (потребитель решает: пересобрать порядок или игнорировать).
+    pub fn focus_rect(&mut self, r: UiRect) -> bool {
+        match self.rects.iter().position(|&x| x == r) {
+            Some(i) => {
+                self.index = Some(i);
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 /// Роутер клавиатуры: стек активаций поверхностей. Верхний скоуп первым

@@ -3684,6 +3684,136 @@ fn build_demo_layout(
     }
 }
 
+// === V2 (issue #67): клавиатурный ринг витрины ==============================
+
+/// Id-префиксы не-секционных зон demo_hits (V2).
+const RING_TOOLBAR_PREFIX: &str = "toolbar:";
+const RING_NAV_PREFIX: &str = "nav:";
+const RING_MGROUP_PREFIX: &str = "mgroup:";
+
+/// V2 (#67): полный замкнутый Tab-ринг TO-BE-витрины (id-строки БЕЗ
+/// `kit-demo:`-префикса, без дубликатов). Порядок = порядок секций:
+/// тулбар (6 пилюль — хрома), чипы групп compact-навигации (mgroup),
+/// сайдбар (пункты реестра — nav-id), контролы секций — визуальный
+/// порядок колонки (сортировка сдвинутых rect'ов по (y, x): сверху
+/// вниз, слева направо). Хиты оверлеев (крестики модалки/снекбара/
+/// поповера, пункты палитры) входят, только когда открыты (их хиты
+/// появляются в demo_hits в этом кадре); при открытом trap-контейнере
+/// кольцо ограничено им — [`demo_trap_ring`].
+pub fn demo_ring(lay: &GalleryLayout) -> Vec<&'static str> {
+    let Some(dl) = lay.demo.as_ref() else {
+        return Vec::new();
+    };
+    let mut ring: Vec<&'static str> = Vec::new();
+    let push = |ring: &mut Vec<&'static str>, id: &'static str| {
+        if !id.is_empty() && !ring.contains(&id) {
+            ring.push(id);
+        }
+    };
+    // 1. Тулбар.
+    for (_, id) in &dl.toolbar {
+        push(&mut ring, id);
+    }
+    // 2/3. Чипы групп (compact) + сайдбар (порядок реестра).
+    for (r, id) in &dl.demo_hits {
+        if id.starts_with(RING_MGROUP_PREFIX) && r.w > 0.0 {
+            push(&mut ring, id);
+        }
+    }
+    for (r, id) in &dl.sidebar_items {
+        let nav = crate::kit_demo::hit::nav(id);
+        if r.w > 0.0 {
+            push(&mut ring, nav);
+        }
+    }
+    // 4. Секции — визуальный порядок колонки.
+    let mut rest: Vec<&(UiRect, &'static str)> = dl
+        .demo_hits
+        .iter()
+        .filter(|(r, id)| {
+            r.w > 0.0
+                && r.h > 0.0
+                && !id.starts_with(RING_TOOLBAR_PREFIX)
+                && !id.starts_with(RING_NAV_PREFIX)
+                && !id.starts_with(RING_MGROUP_PREFIX)
+        })
+        .collect();
+    rest.sort_by(|(a, _), (b, _)| {
+        a.y.partial_cmp(&b.y)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    for (_, id) in rest {
+        push(&mut ring, id);
+    }
+    ring
+}
+
+/// V2 (#67): trap-кольцо открытого контейнера (Wave A FocusTrap-семантика:
+/// Tab не выходит за границу контейнера, Esc — выход/закрытие). Приоритет
+/// = лестнице Esc (input.rs): палитра → модалка → поповер → dropdown.
+/// `None` — открытых trap-контейнеров нет (Tab ведёт полный ринг).
+pub fn demo_trap_ring(
+    lay: &GalleryLayout,
+    demo: &crate::kit_demo::KitDemoState,
+) -> Option<Vec<&'static str>> {
+    let dl = lay.demo.as_ref()?;
+    if demo.palette_open {
+        if let Some((_, _, rows)) = &dl.palette {
+            return Some(
+                (0..rows.len())
+                    .map(crate::kit_demo::hit::palette_item)
+                    .filter(|id| !id.is_empty())
+                    .collect(),
+            );
+        }
+    }
+    if demo.modal_open {
+        return Some(vec![crate::kit_demo::hit::MODAL_CLOSE]);
+    }
+    if demo.popover_open {
+        return Some(vec![crate::kit_demo::hit::POPOVER_CLOSE]);
+    }
+    if demo.dropdown_open {
+        let mut ids = vec![crate::kit_demo::hit::DROPDOWN_ANCHOR];
+        for i in 0..lay.dropdown_items.len() {
+            let id = crate::kit_demo::hit::dropdown_item(i);
+            if !id.is_empty() {
+                ids.push(id);
+            }
+        }
+        return Some(ids);
+    }
+    None
+}
+
+/// V2 (#67): rect контрола по хит-id в ТЕКУЩЕМ кадре (draw==hit; ринг
+/// хранит стабильные id — геометрия берётся из раскладки кадра, поэтому
+/// скролл/size/density не ломают соответствие).
+pub fn demo_rect_of(lay: &GalleryLayout, id: &str) -> Option<UiRect> {
+    let dl = lay.demo.as_ref()?;
+    dl.demo_hits
+        .iter()
+        .find(|(r, hid)| *hid == id && r.w > 0.0)
+        .map(|(r, _)| *r)
+}
+
+/// V2 (#67, ST1): rect фокус-рамки кадра. Рамка — ТОЛЬКО при
+/// `focus_visible` (клавиатурная навигация); ховер — независимое состояние
+/// от курсора (focus_visible ≠ hover). Не видимый/отсутствующий id — None.
+pub fn demo_focus_rect(
+    lay: &GalleryLayout,
+    ring: &[&'static str],
+    idx: Option<usize>,
+    visible: bool,
+) -> Option<UiRect> {
+    if !visible {
+        return None;
+    }
+    let id = *ring.get(idx?)?;
+    demo_rect_of(lay, id)
+}
+
 // === Wave D v1: отрисовка демо (TO-BE) =====================================
 
 /// Контекст отрисовки demo-витрины (TO-BE) — все заимствования кадра.
@@ -3711,6 +3841,9 @@ pub(crate) struct DemoDrawCtx<'a> {
     /// Wave D v1.1 (D1, TS-D3): прогресс knob-slide переключателя 0..1
     /// (тик из App; 1/0 без анимации = целевое положение — поведение v1).
     pub switch_anim_t: f32,
+    /// V2 (#67, ST1): rect фокус-рамки кадра — только при focus_visible
+    /// ([`demo_focus_rect`]; None — рамки нет: мышь/нет фокуса).
+    pub focus: Option<UiRect>,
 }
 
 /// Состояние контрола от курсора/зажатия: press > hover > normal.
@@ -4960,6 +5093,14 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
                 }
             }
         }
+    }
+
+    // --- Фокус-рамка (V2 #67, ST1) ------------------------------------------
+    // Рамка accent ТОЛЬКО при focus_visible (клавиатурная навигация — Tab/
+    // стрелки); ховер — независимое состояние от курсора (ST1: focus ≠
+    // hover). Паттерн рамки — контракт FR-057 (switch «в фокусе»).
+    if let Some(fr) = ctx.focus {
+        d.rect(fr, [0.0; 4], p.accent, canvas_core::tokens::RADIUS_CHIP);
     }
 }
 
@@ -7270,21 +7411,12 @@ mod tests {
 
     // === V1 (issue #67): ControlSize/Density re-layout ======================
 
-    /// Тобе-раскладка с заданным size/density (V1-хелпер тестов).
-    fn v1_tobe_layout(
-        size: canvas_ui::component::ControlSize,
-        density: canvas_ui::layout::Density,
-    ) -> GalleryLayout {
+    /// Тобе-раскладка с заданным demo-стейтом (V1/V2-хелпер тестов).
+    fn v1_tobe_layout_with(demo: crate::kit_demo::KitDemoState) -> GalleryLayout {
         let viewport = [1280.0, 800.0];
         let palette = gallery_palette();
         let mut m = new_measurer();
         let mut fs = canvas_render::text::measure_font_system();
-        let demo = crate::kit_demo::KitDemoState {
-            tobe: true,
-            size,
-            density,
-            ..crate::kit_demo::KitDemoState::default()
-        };
         gallery_layout_tobe(
             viewport,
             Language::Ru,
@@ -7295,6 +7427,19 @@ mod tests {
             &mut fs,
             &demo,
         )
+    }
+
+    /// Тобе-раскладка с заданным size/density (V1-хелпер тестов).
+    fn v1_tobe_layout(
+        size: canvas_ui::component::ControlSize,
+        density: canvas_ui::layout::Density,
+    ) -> GalleryLayout {
+        v1_tobe_layout_with(crate::kit_demo::KitDemoState {
+            tobe: true,
+            size,
+            density,
+            ..crate::kit_demo::KitDemoState::default()
+        })
     }
 
     /// V1-хелпер: скролл TO-BE-витрины, пока предикат не увидит секцию
@@ -7595,6 +7740,152 @@ mod tests {
         );
         assert_eq!(lay_mid.text_fields[0].2.rect.h, kit::TEXT_FIELD_HEIGHT);
         assert_eq!(lay_mid.list_rows[0].1.h, kit::LIST_ROW_H);
+    }
+
+    // === V2 (issue #67): клавиатурный ринг ===================================
+
+    /// V2 (#67): ринг замкнут и полен — каждый фокусируемый контрол витрины
+    /// (весь demo_hits текущего кадра: тулбар/сайдбар/секции/оверлеи)
+    /// достижим Tab'ом, дубликатов нет (замкнутый обход = биекция), порядок
+    /// секций соблюдён (тулбар → сайдбар → колонка по (y, x)).
+    #[test]
+    fn v2_ring_full_closed_and_section_ordered() {
+        let lay = v1_tobe_layout(
+            canvas_ui::component::ControlSize::Md,
+            canvas_ui::layout::Density::Comfortable,
+        );
+        let dl = lay.demo.as_ref().expect("TO-BE без DemoLayout");
+        let ring = crate::kit_ui::demo_ring(&lay);
+        assert!(!ring.is_empty(), "ринг пуст на заполненной витрине");
+        // Полный: каждая уникальная видимая цель demo_hits — в ринге.
+        let hit_ids: Vec<&str> = dl
+            .demo_hits
+            .iter()
+            .filter(|(r, _)| r.w > 0.0 && r.h > 0.0)
+            .map(|(_, id)| *id)
+            .collect();
+        for id in &hit_ids {
+            assert!(
+                ring.contains(id),
+                "фокусируемый {id} недостижим Tab'ом (ринг неполон)"
+            );
+        }
+        // Замкнутый: дубликатов нет (len шагов Tab — возврат в начало).
+        let mut uniq = ring.clone();
+        uniq.sort_unstable();
+        uniq.dedup();
+        assert_eq!(uniq.len(), ring.len(), "ринг с дубликатами не замкнут");
+        // Порядок: тулбар — первый блок (6 пилюль).
+        let toolbar_ids: Vec<&str> = dl.toolbar.iter().map(|(_, id)| *id).collect();
+        assert!(
+            ring.len() >= toolbar_ids.len() && ring[..toolbar_ids.len()] == toolbar_ids[..],
+            "тулбар — не первый в ринге: {ring:?}"
+        );
+        // Секции после сайдбара — визуальный порядок колонки (y, x).
+        let section_part = &ring[toolbar_ids.len()..];
+        let mut last: Option<(f32, f32)> = None;
+        for id in section_part {
+            if id.starts_with("nav:") {
+                continue; // сайдбар — колонка слева, свой порядок (реестра)
+            }
+            let r = crate::kit_ui::demo_rect_of(&lay, id).expect("rect секционного id");
+            if let Some((ly, _lx)) = last {
+                assert!(
+                    r.y >= ly - 0.01,
+                    "секционный порядок нарушен: {id} y={} после y={ly}",
+                    r.y
+                );
+            }
+            last = Some((r.y, r.x));
+        }
+        // Каждый id ринга разрешается в rect текущего кадра (draw==hit).
+        for id in &ring {
+            assert!(
+                crate::kit_ui::demo_rect_of(&lay, id).is_some(),
+                "id {id} из ринга не разрешается в rect"
+            );
+        }
+    }
+
+    /// V2 (#67): trap-кольцо — Tab не выходит из открытого контейнера
+    /// (Wave A FocusTrap-семантика); приоритет = лестнице Esc
+    /// (палитра → модалка → поповер → dropdown); без контейнеров — None.
+    #[test]
+    fn v2_trap_ring_priority_matches_esc_ladder() {
+        // Каждый кейс — раскладка ТЕМ ЖЕ стейтом (оверлеи появляются в
+        // demo_hits только когда открыты — draw==hit).
+        let mk = |modal: bool, palette: bool, popover: bool| crate::kit_demo::KitDemoState {
+            tobe: true,
+            modal_open: modal,
+            palette_open: palette,
+            popover_open: popover,
+            ..crate::kit_demo::KitDemoState::default()
+        };
+        // Без контейнеров — полного ринга (None).
+        let lay0 = v1_tobe_layout_with(mk(false, false, false));
+        assert!(crate::kit_ui::demo_trap_ring(&lay0, &mk(false, false, false)).is_none());
+        // Модалка — только её крестик.
+        let lay_m = v1_tobe_layout_with(mk(true, false, false));
+        assert_eq!(
+            crate::kit_ui::demo_trap_ring(&lay_m, &mk(true, false, false)),
+            Some(vec![crate::kit_demo::hit::MODAL_CLOSE])
+        );
+        // Поповер — только его закрытие.
+        let lay_p = v1_tobe_layout_with(mk(false, false, true));
+        assert_eq!(
+            crate::kit_ui::demo_trap_ring(&lay_p, &mk(false, false, true)),
+            Some(vec![crate::kit_demo::hit::POPOVER_CLOSE])
+        );
+        // Палитра + модалка — палитра приоритетнее (лестница Esc).
+        let lay_pm = v1_tobe_layout_with(mk(true, true, false));
+        let trap =
+            crate::kit_ui::demo_trap_ring(&lay_pm, &mk(true, true, false)).expect("trap палитры");
+        assert!(
+            trap.iter().all(|id| id.starts_with("palette:")),
+            "trap палитры содержит чужие контролы: {trap:?}"
+        );
+        assert_eq!(trap.len(), 3, "3 пункта палитры");
+    }
+
+    /// V2 (#67, ST1): focus_visible ≠ hover — рамка рисуется только при
+    /// клавиатурном фокусе; ховер-состояние контрола от курсора независимо.
+    #[test]
+    fn v2_focus_visible_not_hover() {
+        let lay = v1_tobe_layout(
+            canvas_ui::component::ControlSize::Md,
+            canvas_ui::layout::Density::Comfortable,
+        );
+        let ring = crate::kit_ui::demo_ring(&lay);
+        let id = ring[0];
+        let rect = crate::kit_ui::demo_rect_of(&lay, id).expect("rect первого фокуса");
+        // Клавиатурный фокус: visible=true → рамка есть.
+        assert_eq!(
+            crate::kit_ui::demo_focus_rect(&lay, &ring, Some(0), true),
+            Some(rect)
+        );
+        // Мышь (visible=false): рамки НЕТ, даже при активном ринге.
+        assert_eq!(
+            crate::kit_ui::demo_focus_rect(&lay, &ring, Some(0), false),
+            None
+        );
+        // Ховер при клавиатурном фокусе — ортогонален: demo_state вернёт
+        // Hovered от курсора, рамка при этом не обязана исчезать.
+        let hovered = demo_state(None, None, [rect.x + 1.0, rect.y + 1.0], &rect, id);
+        assert_eq!(hovered, kit::KitState::Hovered);
+        assert_eq!(
+            crate::kit_ui::demo_focus_rect(&lay, &ring, Some(0), true),
+            Some(rect),
+            "рамка при ховере не прячется (focus ≠ hover — ST1)"
+        );
+        // Вне диапазона ринга — None.
+        assert_eq!(
+            crate::kit_ui::demo_focus_rect(&lay, &ring, None, true),
+            None
+        );
+        assert_eq!(
+            crate::kit_ui::demo_focus_rect(&lay, &ring, Some(ring.len()), true),
+            None
+        );
     }
 
     /// F4 (Wave D v1.1, issue #32): правый край строк Table — в пределах
