@@ -633,6 +633,36 @@ pub fn next_density(d: Density) -> Density {
     }
 }
 
+// === V1 (issue #67): Density → зазоры из Spacing-токенов ====================
+//
+// Полный re-layout колонки витрины: межсекционные/межстрочные зазоры —
+// НЕ литералы, а шкала S1 (`canvas_core::tokens`), выбранная плотностью.
+// Comfortable — канон v1 (SECTION_GAP = SPACING_LG, шаг рядов SPACING_SM):
+// дефолтное демо не меняет геометрию зазоров; Compact/Spacious — соседние
+// ступени шкалы (без выдуманных значений между токенами).
+
+/// Межсекционный зазор колонки витрины от плотности (шкала S1):
+/// Compact → SPACING_MD (10), Comfortable → SPACING_LG (12, канон v1),
+/// Spacious → SPACING_XL (24).
+pub fn density_section_gap(d: Density) -> f32 {
+    match d {
+        Density::Compact => canvas_core::tokens::SPACING_MD,
+        Density::Comfortable => canvas_core::tokens::SPACING_LG,
+        Density::Spacious => canvas_core::tokens::SPACING_XL,
+    }
+}
+
+/// Межстрочный зазор внутри секций витрины от плотности (шкала S1):
+/// Compact → SPACING_S (6), Comfortable → SPACING_SM (8, канон v1),
+/// Spacious → SPACING_MD (10).
+pub fn density_row_gap(d: Density) -> f32 {
+    match d {
+        Density::Compact => canvas_core::tokens::SPACING_S,
+        Density::Comfortable => canvas_core::tokens::SPACING_SM,
+        Density::Spacious => canvas_core::tokens::SPACING_MD,
+    }
+}
+
 /// Wave D v1.1 (D3): следующий шаг цикла оверрайда состояния — Авто →
 /// 8 значений KitState (ST1, в порядке лестницы) → Авто.
 pub fn next_state_override(cur: Option<KitState>) -> Option<KitState> {
@@ -1018,5 +1048,30 @@ mod tests {
     #[test]
     fn hit_id_prefix() {
         assert_eq!(hit_id("switch"), format!("{HIT_PREFIX}switch"));
+    }
+
+    // --- V1 (issue #67): density → зазоры из Spacing-токенов ----------------
+
+    #[test]
+    fn density_gaps_use_s1_tokens() {
+        // Comfortable — канон v1 (дефолт демо не меняет зазоры).
+        assert_eq!(
+            density_section_gap(Density::Comfortable),
+            canvas_core::tokens::SPACING_LG
+        );
+        assert_eq!(
+            density_row_gap(Density::Comfortable),
+            canvas_core::tokens::SPACING_SM
+        );
+        // Compact/Spacious — соседние ступени шкалы S1 (монотонность).
+        assert!(density_section_gap(Density::Compact) < density_section_gap(Density::Comfortable));
+        assert!(density_section_gap(Density::Comfortable) < density_section_gap(Density::Spacious));
+        assert!(density_row_gap(Density::Compact) < density_row_gap(Density::Comfortable));
+        assert!(density_row_gap(Density::Comfortable) < density_row_gap(Density::Spacious));
+        // Точные значения: MD/XL и S/MD (без выдуманных значений).
+        assert_eq!(density_section_gap(Density::Compact), 10.0);
+        assert_eq!(density_section_gap(Density::Spacious), 24.0);
+        assert_eq!(density_row_gap(Density::Compact), 6.0);
+        assert_eq!(density_row_gap(Density::Spacious), 10.0);
     }
 }

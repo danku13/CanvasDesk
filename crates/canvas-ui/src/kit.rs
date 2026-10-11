@@ -33,9 +33,9 @@ pub use crate::component::banner::{
     BANNER_PAD, BANNER_RADIUS, BANNER_TINT_ALPHA,
 };
 pub use crate::component::button::{
-    button_layout, button_size, button_style, chip_layout, chip_size, chip_style, icon_button_rect,
-    icon_button_style, icon_glyph, icon_name, stage_close_button, stage_close_button_lg, switch,
-    ChipLayout, Icon, SwitchLayout,
+    button_layout, button_layout_sized, button_size, button_style, chip_layout, chip_layout_sized,
+    chip_size, chip_style, icon_button_rect, icon_button_rect_sized, icon_button_style, icon_glyph,
+    icon_name, stage_close_button, stage_close_button_lg, switch, ChipLayout, Icon, SwitchLayout,
 };
 pub use crate::component::chat_bubble::{
     chat_bubble, paint_chat_bubble, ChatBubbleKind, ChatBubbleLayout, ChatBubbleStyle,
