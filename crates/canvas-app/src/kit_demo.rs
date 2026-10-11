@@ -13,6 +13,7 @@
 use crate::i18n::keys;
 use canvas_ui::component::checkbox::CheckboxState;
 use canvas_ui::component::ControlSize;
+use canvas_ui::kit::KitState;
 use canvas_ui::layout::Density;
 
 /// Префикс id хитов демо-витрины (реестр поверхностей — `fill_hit_rects`).
@@ -32,6 +33,10 @@ pub mod hit {
     pub const TOOLBAR_SIZE: &str = "toolbar:size";
     /// Тулбар: следующая Density.
     pub const TOOLBAR_DENSITY: &str = "toolbar:density";
+    /// Wave D v1.1 (D3, issue #32): оверрайд KitState на живых контролах —
+    /// цикл Авто→Normal→Hovered→Focused→Pressed→Dragged→Disabled→Selected→
+    /// Error→Авто (матрица 8 состояний ST1 в шапке витрины).
+    pub const TOOLBAR_STATE: &str = "toolbar:state";
 
     /// Таблица `prefix:i` (0..N) — задаётся вручную (статические строки).
     macro_rules! ids {
@@ -523,6 +528,11 @@ pub struct KitDemoState {
     pub avatar_selected: usize,
     /// NavRail: индекс активного пункта (0..4; Templates/Calc/Explain/Agent/Settings).
     pub nav_rail_active: usize,
+    /// Wave D v1.1 (D3, issue #32): оверрайд KitState — принудительное
+    /// состояние всех живых контролов демо (матрица ST1 в шапке;
+    /// `None` — Авто, состояния от курсора/семантики). Геометрия
+    /// (draw==hit) не меняется — только визуальное состояние.
+    pub state_override: Option<KitState>,
 }
 
 impl Default for KitDemoState {
@@ -557,6 +567,7 @@ impl Default for KitDemoState {
             palette_query: String::new(),
             avatar_selected: 0,
             nav_rail_active: 0,
+            state_override: None,
         }
     }
 }
@@ -586,6 +597,31 @@ pub fn next_density(d: Density) -> Density {
         Density::Compact => Density::Comfortable,
         Density::Comfortable => Density::Spacious,
         Density::Spacious => Density::Compact,
+    }
+}
+
+/// Wave D v1.1 (D3): следующий шаг цикла оверрайда состояния — Авто →
+/// 8 значений KitState (ST1, в порядке лестницы) → Авто.
+pub fn next_state_override(cur: Option<KitState>) -> Option<KitState> {
+    const LADDER: [KitState; 8] = [
+        KitState::Normal,
+        KitState::Hovered,
+        KitState::Focused,
+        KitState::Pressed,
+        KitState::Dragged,
+        KitState::Disabled,
+        KitState::Selected,
+        KitState::Error,
+    ];
+    match cur {
+        None => Some(LADDER[0]),
+        Some(s) => {
+            let i = LADDER
+                .iter()
+                .position(|&x| x == s)
+                .unwrap_or(LADDER.len() - 1);
+            LADDER.get(i + 1).copied()
+        }
     }
 }
 
@@ -626,6 +662,7 @@ pub fn apply_click(demo: &mut KitDemoState, id: &str) -> DemoEffect {
         }
         (hit::TOOLBAR_SIZE, _) => demo.size = next_size(demo.size),
         (hit::TOOLBAR_DENSITY, _) => demo.density = next_density(demo.density),
+        (hit::TOOLBAR_STATE, _) => demo.state_override = next_state_override(demo.state_override),
         // --- D1: существующие секции ---
         ("button", Some(_)) => {
             // Клик-фидбек — визуальное состояние (M3 state-layer) в draw.
@@ -912,6 +949,37 @@ mod tests {
         assert_eq!(apply_click(&mut d, "nope"), DemoEffect::Ignored);
         assert_eq!(apply_click(&mut d, "chips:99"), DemoEffect::Ignored);
         assert_eq!(apply_click(&mut d, ""), DemoEffect::Ignored);
+    }
+
+    #[test]
+    fn state_override_cycles_through_st1_ladder() {
+        // Wave D v1.1 (D3): цикл пилюли «Состояние» — Авто → 8 значений
+        // ST1 (лестница) → Авто. Клики по TOOLBAR_STATE меняют только
+        // state_override (геометрия/хиты не затронуты — тест раскладки
+        // tobe_state_override_keeps_geometry).
+        let mut d = KitDemoState::default();
+        assert_eq!(d.state_override, None, "по умолчанию Авто");
+        let expected: [Option<KitState>; 9] = [
+            Some(KitState::Normal),
+            Some(KitState::Hovered),
+            Some(KitState::Focused),
+            Some(KitState::Pressed),
+            Some(KitState::Dragged),
+            Some(KitState::Disabled),
+            Some(KitState::Selected),
+            Some(KitState::Error),
+            None,
+        ];
+        for want in expected {
+            assert_eq!(apply_click(&mut d, hit::TOOLBAR_STATE), DemoEffect::Redraw);
+            assert_eq!(d.state_override, want, "шаг цикла оверрайда");
+        }
+        // Замкнутость цикла: после Авто снова Normal.
+        apply_click(&mut d, hit::TOOLBAR_STATE);
+        assert_eq!(d.state_override, Some(KitState::Normal));
+        // Прямая функция — тот же порядок без кликов.
+        assert_eq!(next_state_override(None), Some(KitState::Normal));
+        assert_eq!(next_state_override(Some(KitState::Error)), None);
     }
 
     #[test]

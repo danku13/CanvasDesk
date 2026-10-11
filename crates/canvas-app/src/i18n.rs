@@ -560,6 +560,13 @@ pub mod keys {
     pub const KIT_CARD_BODY: &str = "kit.card.body";
     pub const KIT_LIST_ROW: &str = "kit.list.row";
     pub const KIT_STATE_FOCUSED: &str = "kit.state.focused";
+    /// Wave D v1.1 (D3, issue #32): недостающие имена матрицы 8 состояний
+    /// ST1 (пилюля оверрайда состояния в шапке витрины).
+    pub const KIT_STATE_DRAGGED: &str = "kit.state.dragged";
+    pub const KIT_STATE_ERROR: &str = "kit.state.error";
+    /// Wave D v1.1 (D3): пилюля оверрайда состояния + нейтральное «Авто».
+    pub const KIT_DEMO_STATE_LABEL: &str = "kit.demo.state.label";
+    pub const KIT_DEMO_STATE_AUTO: &str = "kit.demo.state.auto";
     /// Wave D v1 (issue #32): секции Wave C + тулбар/сайдбар/описания демо.
     pub const KIT_SECTION_CHECKBOX: &str = "kit.section.checkbox";
     pub const KIT_SECTION_SLIDER: &str = "kit.section.slider";
@@ -1709,7 +1716,7 @@ const RU: &[(&str, &str)] = &[
     (keys::KIT_DEMO_SIZE_LABEL, "Размер: {name}"),
     (keys::KIT_DEMO_DENSITY_LABEL, "Плотность: {name}"),
     (keys::KIT_DEMO_DENSITY_COMPACT, "Компактно"),
-    (keys::KIT_DEMO_DENSITY_COMFORTABLE, "Обычно"),
+    (keys::KIT_DEMO_DENSITY_COMFORTABLE, "Обычная"),
     (keys::KIT_DEMO_DENSITY_SPACIOUS, "Просторно"),
     (keys::KIT_DESC_BUTTONS, "Кнопки · kit::button_style(variant, KitState) — 7 вариантов × состояния; клик активен"),
     (keys::KIT_DESC_ICON_BUTTONS, "Икон-кнопки · kit::icon_button_style(state) — hover/press от курсора"),
@@ -1799,6 +1806,12 @@ const RU: &[(&str, &str)] = &[
     ),
     (keys::KIT_LIST_ROW, "Строка {n}"),
     (keys::KIT_STATE_FOCUSED, "В фокусе"),
+    // Wave D v1.1 (D3, issue #32): матрица 8 состояний ST1 — имена
+    // Dragged/Error + пилюля оверрайда состояния в шапке витрины.
+    (keys::KIT_STATE_DRAGGED, "Перетаскивание"),
+    (keys::KIT_STATE_ERROR, "Ошибка"),
+    (keys::KIT_DEMO_STATE_LABEL, "Состояние: {name}"),
+    (keys::KIT_DEMO_STATE_AUTO, "Авто"),
     // Пересборка поверхностей: демо компонентного слоя + layout-примитивы
     (
         keys::KIT_SECTION_COMPONENT_ROW,
@@ -3340,6 +3353,11 @@ const EN: &[(&str, &str)] = &[
     ),
     (keys::KIT_LIST_ROW, "Row {n}"),
     (keys::KIT_STATE_FOCUSED, "Focused"),
+    // Wave D v1.1 (D3, issue #32): ST1 state-matrix names + override pill.
+    (keys::KIT_STATE_DRAGGED, "Dragged"),
+    (keys::KIT_STATE_ERROR, "Error"),
+    (keys::KIT_DEMO_STATE_LABEL, "State: {name}"),
+    (keys::KIT_DEMO_STATE_AUTO, "Auto"),
     // Surface rebuild wave: component-layer demos + layout primitives
     (
         keys::KIT_SECTION_COMPONENT_ROW,

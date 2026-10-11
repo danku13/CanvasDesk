@@ -1311,6 +1311,7 @@ impl App {
                 viewport,
                 lang,
                 &scroll,
+                &self.kit_demo_sidebar_scroll,
                 &palette,
                 &mut m,
                 &mut fs,
@@ -1365,11 +1366,29 @@ impl App {
 
         let label = |key: &'static str| crate::i18n::tr(lang, key).to_owned();
 
-        // Подписи секций (приглушённые — слот text_muted)
+        // Подписи секций (приглушённые — слот text_muted).
+        // Wave D v1.1 (F3, issue #32): в TO-BE заголовок рисуется по
+        // control_x (выравнивание «заголовок ↔ контент» — гаттер состояний
+        // AS-IS в TO-BE мёртвый и вплотную к сайдбару; ревью L3). AS-IS —
+        // прежняя геометрия (golden-пины).
+        let title_x = if self.kit_demo.tobe {
+            lay.content.x + crate::kit_ui::STATE_LABEL_W + canvas_core::tokens::SPACING_SM
+        } else {
+            0.0
+        };
         for (origin, key) in &lay.section_titles {
             let text = label(key);
             d.label_left(
-                canvas_ui::geometry::UiRect::new(origin.x, origin.y, lay.content.w, 16.0),
+                canvas_ui::geometry::UiRect::new(
+                    if self.kit_demo.tobe {
+                        title_x
+                    } else {
+                        origin.x
+                    },
+                    origin.y,
+                    lay.content.w,
+                    16.0,
+                ),
                 &text,
                 palette.text_muted,
                 11.0,
@@ -1428,7 +1447,14 @@ impl App {
             let area = canvas_ui::geometry::UiRect::new(r.x, r.y + 1.0, r.w, r.h);
             d.label_center(area, icons[i], style.text, 13.0);
         }
-        // Chips: Normal/Hover/Selected/Disabled
+        // Chips: Normal/Hover/Selected/Disabled — подпись соответствует
+        // СОСТОЯНИЮ (дефект v1: слот 2 показывал метку Pressed).
+        let chip_labels = [
+            crate::i18n::keys::KIT_STATE_NORMAL,
+            crate::i18n::keys::KIT_STATE_HOVER,
+            crate::i18n::keys::KIT_STATE_SELECTED,
+            crate::i18n::keys::KIT_STATE_DISABLED,
+        ];
         for (i, r) in lay.chips.iter().enumerate() {
             let state = match i {
                 0 => canvas_ui::kit::KitState::Normal,
@@ -1438,7 +1464,7 @@ impl App {
             };
             let style = canvas_ui::kit::chip_style(state, &palette);
             d.control(*r, &style);
-            let text = crate::i18n::tr(lang, crate::kit_ui::STATE_LABELS[i]);
+            let text = crate::i18n::tr(lang, chip_labels[i]);
             d.label_center(*r, text, style.text, 12.0);
         }
         // Dropdown: якорь + открытое меню (3 строки, hover по курсору)
