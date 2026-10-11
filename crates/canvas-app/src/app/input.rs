@@ -4722,7 +4722,17 @@ impl App {
                         -y * scheme_gallery_ui::WHEEL_ROWS_PER_LINE
                     }
                     MouseScrollDelta::PixelDelta(pos) => {
-                        -pos.y as f32 / self.scale_factor() / canvas_manager_ui::ROW_STEP
+                        // Шаг строки — из той же раскладки, что рисует кадр:
+                        // в адаптивном Compact строки 50px (T-M R1).
+                        let step = if self.settings.modals_adaptive
+                            && canvas_ui::kit::layout_tier(viewport[0])
+                                == canvas_ui::kit::LayoutTier::Compact
+                        {
+                            canvas_manager_ui::ROW_STEP_COMPACT
+                        } else {
+                            canvas_manager_ui::ROW_STEP
+                        };
+                        -pos.y as f32 / self.scale_factor() / step
                     }
                 };
                 let rows_len = self.canvas_manager.rows().len();
@@ -4730,6 +4740,7 @@ impl App {
                     self.canvas_manager.scroll_top,
                     delta_rows,
                     rows_len,
+                    lay.visible_rows,
                 );
                 self.request_redraw();
                 return;
@@ -4750,7 +4761,11 @@ impl App {
             let font = canvas_core::tokens::FONT_BODY;
             let go_w = canvas_ui::kit::button_size(go, &mut m, &mut fs, family, font).x;
             let cancel_w = canvas_ui::kit::button_size(cancel, &mut m, &mut fs, family, font).x;
-            let lay = crate::storage_ui::migrate_layout(viewport, &self.migrate, go_w, cancel_w);
+            let lay = if self.settings.modals_adaptive {
+                crate::storage_ui::migrate_layout_adaptive(viewport, &self.migrate, go_w, cancel_w)
+            } else {
+                crate::storage_ui::migrate_layout(viewport, &self.migrate, go_w, cancel_w)
+            };
             let panel = [
                 lay.panel[0],
                 lay.panel[1],
@@ -4760,17 +4775,25 @@ impl App {
             if point_in_rect(panel, self.cursor) {
                 // Знак — как у списков (галерея/карта): колесо от себя
                 // (y < 0) увеличивает scroll_top; LineDelta — щелчки,
-                // PixelDelta — по высоте строки списка.
+                // PixelDelta — по высоте строки списка (шаг — из той же
+                // раскладки: в Compact строки 50px).
+                let step = if self.settings.modals_adaptive
+                    && canvas_ui::kit::layout_tier(viewport[0])
+                        == canvas_ui::kit::LayoutTier::Compact
+                {
+                    crate::storage_ui::MIGRATE_ROW_STEP_COMPACT
+                } else {
+                    crate::storage_ui::MIGRATE_ROW_STEP
+                };
                 let delta_rows = match delta {
                     MouseScrollDelta::LineDelta(_, y) => -y * 3.0,
-                    MouseScrollDelta::PixelDelta(pos) => {
-                        -pos.y as f32 / self.scale_factor() / crate::storage_ui::MIGRATE_ROW_STEP
-                    }
+                    MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor() / step,
                 };
                 self.migrate.scroll_top = crate::storage_ui::migrate_wheel_scroll(
                     self.migrate.scroll_top,
                     delta_rows as i32,
                     self.migrate.entries.len(),
+                    lay.visible_rows,
                 );
                 self.request_redraw();
                 return;
@@ -4832,13 +4855,24 @@ impl App {
                 &self.scheme_gallery,
                 &self.visible_scheme_categories(),
             );
-            let lay = scheme_gallery_ui::layout(
-                self.viewport_logical(),
-                &list,
-                &self.scheme_gallery,
-                self.settings.language == canvas_core::Language::Ru,
-                &self.visible_scheme_categories(),
-            );
+            // Wave M M3-a: единый источник с отрисовкой/реестром (draw == hit).
+            let lay = if self.settings.modals_adaptive {
+                scheme_gallery_ui::layout_adaptive(
+                    self.viewport_logical(),
+                    &list,
+                    &self.scheme_gallery,
+                    self.settings.language == canvas_core::Language::Ru,
+                    &self.visible_scheme_categories(),
+                )
+            } else {
+                scheme_gallery_ui::layout(
+                    self.viewport_logical(),
+                    &list,
+                    &self.scheme_gallery,
+                    self.settings.language == canvas_core::Language::Ru,
+                    &self.visible_scheme_categories(),
+                )
+            };
             if scheme_gallery_ui::point_in_rect(lay.panel_rect, self.cursor) {
                 // Знак — как у списков (FR-059/автосвязь/карта): колесо от
                 // себя (y < 0) увеличивает scroll_top. LineDelta — щелчки ×

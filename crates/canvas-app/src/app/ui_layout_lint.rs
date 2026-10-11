@@ -1220,6 +1220,26 @@ fn lint_modals_adaptive() {
             overrides: 3,
         });
     });
+    // Wave M M3-a (issue #52): миграция OPFS → диск (12 канвасов — окно
+    // скролла активно) и менеджер канвасов (12 канвасов, эластичное окно).
+    fn seed_entries(n: usize) -> Vec<canvas_core::workspace::CanvasEntry> {
+        (0..n)
+            .map(|i| canvas_core::workspace::CanvasEntry {
+                name: format!("c{i:02}.canvas"),
+                ts: i as u64,
+                kind: canvas_core::workspace::EntryKind::Opfs,
+                repo: None,
+            })
+            .collect()
+    }
+    lint_state_adaptive("migrate", |app, _vp| {
+        app.migrate.open_with("active.canvas");
+        app.migrate.set_entries(seed_entries(12));
+    });
+    lint_state_adaptive("canvas_manager", |app, _vp| {
+        app.canvas_manager.open();
+        app.canvas_manager.set_entries(seed_entries(12));
+    });
 
     // Compact-край 375×667: модали, уже деградирующие корректно, держат
     // full-bleed-ветку мобильной лестницы (settings — Mobile <768, остальные
@@ -1243,6 +1263,32 @@ fn lint_modals_adaptive() {
             overrides: 3,
         });
     }
+    fn open_migrate(app: &mut App, _vp: [f32; 2]) {
+        app.migrate.open_with("active.canvas");
+        app.migrate.set_entries(
+            (0..12)
+                .map(|i| canvas_core::workspace::CanvasEntry {
+                    name: format!("c{i:02}.canvas"),
+                    ts: i as u64,
+                    kind: canvas_core::workspace::EntryKind::Opfs,
+                    repo: None,
+                })
+                .collect(),
+        );
+    }
+    fn open_canvas_manager(app: &mut App, _vp: [f32; 2]) {
+        app.canvas_manager.open();
+        app.canvas_manager.set_entries(
+            (0..12)
+                .map(|i| canvas_core::workspace::CanvasEntry {
+                    name: format!("c{i:02}.canvas"),
+                    ts: i as u64,
+                    kind: canvas_core::workspace::EntryKind::Opfs,
+                    repo: None,
+                })
+                .collect(),
+        );
+    }
     for (tag, open, surface_id) in [
         (
             "settings",
@@ -1257,6 +1303,13 @@ fn lint_modals_adaptive() {
             ui_registry::id::AI_ONBOARDING,
         ),
         ("dialog", open_dialog, ui_registry::id::DIALOG),
+        // Wave M M3-a: full-bleed тач-листы миграции и менеджера.
+        ("migrate", open_migrate, ui_registry::id::MIGRATE),
+        (
+            "canvas_manager",
+            open_canvas_manager,
+            ui_registry::id::CANVAS_MANAGER,
+        ),
     ] {
         for lang in [Language::Ru, Language::En] {
             let mut app = lint_stub(lang);

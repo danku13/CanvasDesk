@@ -275,6 +275,13 @@ const DIALOG_MAX_W: f32 = 440.0;
 // на 24; кламп диалога к вьюпорту при узком окне).
 const DIALOG_VIEWPORT_MARGIN: f32 = 40.0;
 
+/// Wave M M3-a (issue #52, T-M R1): высота кнопок подтверждения в
+/// Compact-тире адаптивной ветки (тач-минимум 44).
+const DIALOG_BTN_H_COMPACT: f32 = 44.0;
+/// Wave M M3-a: боковой safe-margin адаптивного окна диалога (половина
+/// прежнего `DIALOG_VIEWPORT_MARGIN` = 40 — та же отступа от краёв).
+const DIALOG_MARGIN_SIDE: f32 = 20.0;
+
 /// FR-050 Н2 (этап C): высота строки заголовка меню выбора (screen-space,
 /// логические px) — пункты сдвинуты ниже заголовка (клик по заголовку —
 /// «мимо пункта» — отменяет меню).
@@ -7024,7 +7031,7 @@ impl App {
                     self.canvas_manager
                         .rows()
                         .len()
-                        .saturating_sub(canvas_manager_ui::VISIBLE_ROWS),
+                        .saturating_sub(self.canvas_manager_visible_rows()),
                 );
             }
             Key::Named(NamedKey::ArrowDown) => {
@@ -7037,7 +7044,7 @@ impl App {
                     self.canvas_manager
                         .rows()
                         .len()
-                        .saturating_sub(canvas_manager_ui::VISIBLE_ROWS),
+                        .saturating_sub(self.canvas_manager_visible_rows()),
                 );
             }
             Key::Named(NamedKey::Backspace) => {
@@ -7158,10 +7165,29 @@ impl App {
         self.request_redraw();
     }
 
+    /// Окно списка менеджера с учётом флага Wave M («ввод = тому, что
+    /// видно»): в адаптивной ветке окно эластичное — единый источник с
+    /// `manager_layout_adaptive` (`canvas_manager_ui::manager_visible_rows`).
+    pub(crate) fn canvas_manager_visible_rows(&self) -> usize {
+        if !self.settings.modals_adaptive {
+            return canvas_manager_ui::VISIBLE_ROWS;
+        }
+        let state = &self.canvas_manager;
+        canvas_manager_ui::manager_visible_rows(
+            self.viewport_logical(),
+            state.rows().len(),
+            state.entries.is_empty(),
+            state.native,
+        )
+    }
+
     /// Текущая раскладка менеджера (единый источник геометрии для
     /// отрисовки/ввода/реестра поверхностей — «ввод = тому, что видно»):
     /// измеряет кнопки (`kit::button_size`) от текущего языка и строит
-    /// чистую [`canvas_manager_ui::manager_layout`].
+    /// чистую [`canvas_manager_ui::manager_layout`]. Wave M M3-a: при
+    /// включённом флаге `modals_adaptive` — адаптивная ветка
+    /// ([`canvas_manager_ui::manager_layout_adaptive`]: окно 80% по
+    /// `kit::modal_rect_flex`, Compact — mobile-style лист).
     pub(crate) fn manager_layout_current(
         &self,
         viewport: [f32; 2],
@@ -7250,12 +7276,21 @@ impl App {
                 crate::i18n::tr(lang, keys::CANVAS_MANAGER_OPEN_DISK),
             ),
         };
-        canvas_manager_ui::manager_layout(
-            viewport,
-            &self.canvas_manager,
-            &self.active_canvas_name(),
-            &widths,
-        )
+        if self.settings.modals_adaptive {
+            canvas_manager_ui::manager_layout_adaptive(
+                viewport,
+                &self.canvas_manager,
+                &self.active_canvas_name(),
+                &widths,
+            )
+        } else {
+            canvas_manager_ui::manager_layout(
+                viewport,
+                &self.canvas_manager,
+                &self.active_canvas_name(),
+                &widths,
+            )
+        }
     }
 
     /// FR-055 (этап U4, F-10): включить/выключить DebugOverlay извне
@@ -7368,13 +7403,24 @@ impl App {
             &self.scheme_gallery,
             &self.visible_scheme_categories(),
         );
-        let lay = scheme_gallery_ui::layout(
-            self.viewport_logical(),
-            &list,
-            &self.scheme_gallery,
-            self.settings.language == canvas_core::Language::Ru,
-            &self.visible_scheme_categories(),
-        );
+        // Wave M M3-a: единый источник с отрисовкой/реестром (draw == hit).
+        let lay = if self.settings.modals_adaptive {
+            scheme_gallery_ui::layout_adaptive(
+                self.viewport_logical(),
+                &list,
+                &self.scheme_gallery,
+                self.settings.language == canvas_core::Language::Ru,
+                &self.visible_scheme_categories(),
+            )
+        } else {
+            scheme_gallery_ui::layout(
+                self.viewport_logical(),
+                &list,
+                &self.scheme_gallery,
+                self.settings.language == canvas_core::Language::Ru,
+                &self.visible_scheme_categories(),
+            )
+        };
         let visible = lay.visible_rows.len().max(1);
         match &event.logical_key {
             Key::Named(NamedKey::Escape) if !event.repeat => {
@@ -7440,13 +7486,24 @@ impl App {
             &self.scheme_gallery,
             &self.visible_scheme_categories(),
         );
-        let lay = scheme_gallery_ui::layout(
-            self.viewport_logical(),
-            &list,
-            &self.scheme_gallery,
-            self.settings.language == canvas_core::Language::Ru,
-            &self.visible_scheme_categories(),
-        );
+        // Wave M M3-a: единый источник с отрисовкой/реестром (draw == hit).
+        let lay = if self.settings.modals_adaptive {
+            scheme_gallery_ui::layout_adaptive(
+                self.viewport_logical(),
+                &list,
+                &self.scheme_gallery,
+                self.settings.language == canvas_core::Language::Ru,
+                &self.visible_scheme_categories(),
+            )
+        } else {
+            scheme_gallery_ui::layout(
+                self.viewport_logical(),
+                &list,
+                &self.scheme_gallery,
+                self.settings.language == canvas_core::Language::Ru,
+                &self.visible_scheme_categories(),
+            )
+        };
         if scheme_gallery_ui::point_in_rect(lay.close_rect, self.cursor) {
             self.scheme_gallery.close();
             return;
@@ -11080,6 +11137,16 @@ impl App {
     /// строки, Space — галочка, Enter — «Переехать…»). Стрелки ведут
     /// окно видимости за выбором (`migrate_scroll_to_reveal`).
     fn on_migrate_key(&mut self, key: &Key<winit::keyboard::SmolStr>) {
+        // Окно видимости из той же раскладки, что рисует кадр («ввод =
+        // тому, что видно»): в адаптивной ветке окно эластичное (M-O R7).
+        let visible = if self.settings.modals_adaptive {
+            crate::storage_ui::migrate_visible_rows(
+                self.viewport_logical(),
+                self.migrate.entries.len(),
+            )
+        } else {
+            crate::storage_ui::MIGRATE_VISIBLE_ROWS
+        };
         match key {
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
                 self.migrate.close();
@@ -11090,6 +11157,7 @@ impl App {
                 self.migrate.scroll_top = crate::storage_ui::migrate_scroll_to_reveal(
                     self.migrate.scroll_top,
                     self.migrate.selected,
+                    visible,
                 );
                 self.request_redraw();
             }
@@ -11099,6 +11167,7 @@ impl App {
                 self.migrate.scroll_top = crate::storage_ui::migrate_scroll_to_reveal(
                     self.migrate.scroll_top,
                     self.migrate.selected,
+                    visible,
                 );
                 self.request_redraw();
             }
@@ -11666,14 +11735,25 @@ impl App {
             .map(|(label, _)| label.to_owned());
         let mut m = canvas_ui::measure::TextMeasurer::new();
         let mut fs = canvas_render::text::measure_font_system();
-        Self::dialog_measured_in(
-            self.viewport_logical(),
-            &dialog.title(&self.scene.canvas, self.settings.language),
-            &dialog.body(self.settings.language),
-            &buttons,
-            &mut m,
-            &mut fs,
-        )
+        if self.settings.modals_adaptive {
+            Self::dialog_measured_in_adaptive(
+                self.viewport_logical(),
+                &dialog.title(&self.scene.canvas, self.settings.language),
+                &dialog.body(self.settings.language),
+                &buttons,
+                &mut m,
+                &mut fs,
+            )
+        } else {
+            Self::dialog_measured_in(
+                self.viewport_logical(),
+                &dialog.title(&self.scene.canvas, self.settings.language),
+                &dialog.body(self.settings.language),
+                &buttons,
+                &mut m,
+                &mut fs,
+            )
+        }
     }
 
     /// Тело [`App::dialog_measured`] — чистая функция от текстов и вьюпорта
@@ -11739,6 +11819,94 @@ impl App {
             [
                 [start, by, bw0, DIALOG_BTN_H],
                 [start + bw0 + gap, by, bw1, DIALOG_BTN_H],
+            ],
+            [title_shown, body_shown],
+        )
+    }
+
+    /// Тело [`App::dialog_measured`] в адаптивной ветке Wave M M3-a
+    /// (issue #52, флаг `modals_adaptive`) — чистая функция от текстов и
+    /// вьюпорта. Окно — `kit::modal_rect_flex` (80% слота, min/max
+    /// 280…440 — desktop 440, не разрастается — M-O R7; Compact —
+    /// full-bleed sheet с safe-margin 20); якоря заголовка/тела прежние
+    /// (16/46), длинные тексты — ellipsis (G5/G8); Compact: кнопки — в
+    /// нижней thumb-зоне (T-M R2), пара на всю ширину, тач-минимум 44
+    /// (T-M R1); M/E: пара по центру от измеренного текста, высота кита 30.
+    #[allow(clippy::too_many_arguments)]
+    fn dialog_measured_in_adaptive(
+        viewport: [f32; 2],
+        title: &str,
+        body: &str,
+        buttons: &[String; 2],
+        m: &mut canvas_ui::measure::TextMeasurer,
+        fs: &mut cosmic_text::FontSystem,
+    ) -> ([f32; 4], [[f32; 4]; 2], [String; 2]) {
+        const FAMILY: &str = canvas_render::text::SANS_FAMILY;
+        let compact = kit::layout_tier(viewport[0]) == kit::LayoutTier::Compact;
+        // Высота контента: якоря прежней раскладки + измеренная строка тела
+        let body_h = m
+            .measure(
+                fs,
+                &canvas_ui::measure::TextSpec {
+                    text: body,
+                    family: FAMILY,
+                    size: DIALOG_BODY_FS,
+                    max_width: f32::INFINITY,
+                    weight: cosmic_text::Weight::MEDIUM,
+                },
+            )
+            .height;
+        let content_h = DIALOG_BODY_Y
+            + body_h
+            + canvas_core::tokens::SPACING_LG
+            + DIALOG_BTN_H
+            + DIALOG_BTN_BOTTOM;
+        // Окно: формула контракта (80% слота; Compact — full-bleed eff).
+        // Высота — контент (min = max, окно не выше текста); ширина —
+        // кламп 280…440 от желаемой 0.8×eff.
+        let slot = canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
+        let panel = kit::modal_rect_flex(
+            slot,
+            DIALOG_MARGIN_SIDE,
+            kit::MODAL_RATIO_DEFAULT,
+            canvas_ui::geometry::UiVec2::new(DIALOG_MIN_W, content_h),
+            canvas_ui::geometry::UiVec2::new(DIALOG_MAX_W, content_h),
+        );
+        let avail = panel.w - DIALOG_PAD_X * 2.0;
+        let title_shown = m.ellipsis(fs, title, FAMILY, DIALOG_TITLE_FS, avail);
+        let body_shown = m.ellipsis(fs, body, FAMILY, DIALOG_BODY_FS, avail);
+        let by_buttons = if compact {
+            // Нижняя thumb-зона: пара на всю ширину, тач-минимум 44 (T-M R1/R2)
+            let bw =
+                ((panel.w - DIALOG_PAD_X * 2.0 - DIALOG_BTN_GAP) * 0.5).max(DIALOG_MIN_W * 0.5);
+            let by = panel.y + panel.h - DIALOG_BTN_BOTTOM - DIALOG_BTN_H_COMPACT;
+            return (
+                [panel.x, panel.y, panel.w, panel.h],
+                [
+                    [panel.x + DIALOG_PAD_X, by, bw, DIALOG_BTN_H_COMPACT],
+                    [
+                        panel.x + DIALOG_PAD_X + bw + DIALOG_BTN_GAP,
+                        by,
+                        bw,
+                        DIALOG_BTN_H_COMPACT,
+                    ],
+                ],
+                [title_shown, body_shown],
+            );
+        } else {
+            panel.y + panel.h - DIALOG_BTN_H - DIALOG_BTN_BOTTOM
+        };
+        // M/E: ширины от измеренного текста; пара по центру, зазор 16
+        let gap = DIALOG_BTN_GAP;
+        let bw0 = kit::button_size(&buttons[0], m, fs, FAMILY, DIALOG_BTN_FS).x;
+        let bw1 = kit::button_size(&buttons[1], m, fs, FAMILY, DIALOG_BTN_FS).x;
+        let total = bw0 + gap + bw1;
+        let start = panel.x + ((panel.w - total).max(0.0)) / 2.0;
+        (
+            [panel.x, panel.y, panel.w, panel.h],
+            [
+                [start, by_buttons, bw0, DIALOG_BTN_H],
+                [start + bw0 + gap, by_buttons, bw1, DIALOG_BTN_H],
             ],
             [title_shown, body_shown],
         )
@@ -16770,6 +16938,81 @@ mod fr050_stage_e_tests {
             &mut fs,
         );
         assert!((rect[2] - DIALOG_MIN_W).abs() < 0.01, "пол 280 ≡ прежнему");
+    }
+
+    // === Wave M M3-a (issue #52): адаптивная ветка ==========================
+
+    /// Expanded (1280×800): окно по формуле 80% с прежними min/max
+    /// 280…440 — desktop 440 (не разрастается, M-O R7); кнопки —
+    /// измеренная пара по центру, высота кита 30.
+    #[test]
+    fn dialog_adaptive_expanded_desktop_440() {
+        let mut fs = cosmic_text::FontSystem::new();
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let buttons = ["Да".to_owned(), "Нет".to_owned()];
+        let (rect, btns, _) = App::dialog_measured_in_adaptive(
+            [1280.0, 800.0],
+            "Установить виджет?",
+            "Канвас вернётся к состоянию до установки.",
+            &buttons,
+            &mut m,
+            &mut fs,
+        );
+        assert!((rect[2] - DIALOG_MAX_W).abs() < 0.01, "desktop 440 (audit)");
+        assert!((rect[0] - (20.0 + (1240.0 - DIALOG_MAX_W) * 0.5)).abs() < 0.01);
+        // кнопки в нижней зоне: низ пары — DIALOG_BTN_BOTTOM от низа панели
+        assert!(btns[0][3] == DIALOG_BTN_H, "высота кита 30 (desktop)");
+        assert!((btns[0][1] + btns[0][3] - (rect[1] + rect[3] - DIALOG_BTN_BOTTOM)).abs() < 0.01);
+        // пара по центру панели
+        let total = btns[0][2] + DIALOG_BTN_GAP + btns[1][2];
+        assert!((btns[0][0] - (rect[0] + (rect[2] - total) * 0.5)).abs() < 0.01);
+    }
+
+    /// Medium (800×560): желаемое 0.8×(800−40) = 608 → кламп к max 440.
+    #[test]
+    fn dialog_adaptive_medium_clamps_to_max() {
+        let mut fs = cosmic_text::FontSystem::new();
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let buttons = ["Да".to_owned(), "Нет".to_owned()];
+        let (rect, _, _) = App::dialog_measured_in_adaptive(
+            [800.0, 560.0],
+            "Установить виджет?",
+            "тело",
+            &buttons,
+            &mut m,
+            &mut fs,
+        );
+        assert!((rect[2] - DIALOG_MAX_W).abs() < 0.01);
+        assert!(rect[1] >= DIALOG_MARGIN_SIDE - 0.01, "панель в слоте");
+        assert!(rect[1] + rect[3] <= 560.0 + 0.01);
+    }
+
+    /// Compact (375×667): full-bleed sheet — панель = eff (safe-margin 20),
+    /// кнопки — нижняя зона, пара на всю ширину, тач-минимум 44 (T-M R1),
+    /// всё внутри вьюпорта; заголовок/тело — ellipsis по ширине панели.
+    #[test]
+    fn dialog_adaptive_compact_touch_sheet() {
+        let mut fs = cosmic_text::FontSystem::new();
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let long_title = "Цикл: очень длинная цепочка участников расчёта ".repeat(6);
+        let buttons = ["Да".to_owned(), "Нет".to_owned()];
+        let (rect, btns, shown) = App::dialog_measured_in_adaptive(
+            [375.0, 667.0],
+            &long_title,
+            "Канвас вернётся к состоянию до установки.",
+            &buttons,
+            &mut m,
+            &mut fs,
+        );
+        assert_eq!(rect, [20.0, 20.0, 335.0, 627.0], "full-bleed eff");
+        // кнопки ≥44 в нижней зоне (T-M R1/R2)
+        for b in &btns {
+            assert_eq!(b[3], DIALOG_BTN_H_COMPACT, "тач-минимум 44");
+            assert!(b[0] >= 20.0 && b[0] + b[2] <= 355.0, "кнопка в панели");
+        }
+        assert!((btns[0][1] - (20.0 + 627.0 - 16.0 - 44.0)).abs() < 0.01);
+        // длинный заголовок — ellipsis (видимая деградация, G5/G8)
+        assert!(shown[0].ends_with('…'));
     }
 }
 

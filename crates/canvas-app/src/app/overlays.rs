@@ -2051,24 +2051,51 @@ impl App {
         // FR-053 (U3): измеренные подписи строк (Ellipsis по фактической
         // ширине строки) — раскладка и отрисовка используют одни строки.
         let ru = self.settings.language == canvas_core::Language::Ru;
-        let lay = scheme_gallery_ui::layout(
-            viewport,
-            &list,
-            &self.scheme_gallery,
-            ru,
-            &self.visible_scheme_categories(),
-        );
+        // Wave M M3-a: при флаге — адаптивная ветка раскладки/замера
+        // (окно 80% / Compact full-bleed; единый источник draw == hit).
+        let (lay, row_labels) = if self.settings.modals_adaptive {
+            let lay = scheme_gallery_ui::layout_adaptive(
+                viewport,
+                &list,
+                &self.scheme_gallery,
+                ru,
+                &self.visible_scheme_categories(),
+            );
+            let mut measurer = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let labels = scheme_gallery_ui::row_labels_adaptive(
+                viewport,
+                &list,
+                &self.scheme_gallery,
+                ru,
+                &mut measurer,
+                &mut fs,
+                &self.visible_scheme_categories(),
+            );
+            (lay, labels)
+        } else {
+            let lay = scheme_gallery_ui::layout(
+                viewport,
+                &list,
+                &self.scheme_gallery,
+                ru,
+                &self.visible_scheme_categories(),
+            );
+            let mut measurer = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let labels = scheme_gallery_ui::row_labels(
+                viewport,
+                &list,
+                &self.scheme_gallery,
+                ru,
+                &mut measurer,
+                &mut fs,
+                &self.visible_scheme_categories(),
+            );
+            (lay, labels)
+        };
         let mut measurer = canvas_ui::measure::TextMeasurer::new();
         let mut fs = canvas_render::text::measure_font_system();
-        let row_labels = scheme_gallery_ui::row_labels(
-            viewport,
-            &list,
-            &self.scheme_gallery,
-            ru,
-            &mut measurer,
-            &mut fs,
-            &self.visible_scheme_categories(),
-        );
         // Подложка панели — CR-031/S5 (UR-002 п.3): канонический стиль
         // модали кита (kit::modal_style: panel_fill/panel_border,
         // RADIUS_PANEL) — раньше menu_fill/palette_border как у попапа
@@ -7287,7 +7314,13 @@ impl App {
         let cancel = crate::i18n::tr(lang, keys::DIALOG_CANCEL);
         let go_w = canvas_ui::kit::button_size(go, &mut m, &mut fs, family, font).x;
         let cancel_w = canvas_ui::kit::button_size(cancel, &mut m, &mut fs, family, font).x;
-        let lay = crate::storage_ui::migrate_layout(viewport, &self.migrate, go_w, cancel_w);
+        // Wave M M3-a: при флаге — адаптивная ветка (окно 80% / Compact
+        // full-bleed тач-лист; единый источник draw == hit).
+        let lay = if self.settings.modals_adaptive {
+            crate::storage_ui::migrate_layout_adaptive(viewport, &self.migrate, go_w, cancel_w)
+        } else {
+            crate::storage_ui::migrate_layout(viewport, &self.migrate, go_w, cancel_w)
+        };
         let mut d = crate::kit_ui::KitDraw::new();
         // Затемнение + панель — канонический стиль модали кита (kit::modal_style)
         let vp = canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
@@ -7834,7 +7867,10 @@ impl App {
                     d.label_left(
                         canvas_ui::geometry::UiRect::new(
                             row.row[0],
-                            row.row[1] + (kit::LIST_ROW_H - caption - 2.0).max(0.0) * 0.5,
+                            // Центровка от высоты rect строки (Wave M M3-a:
+                            // в Compact строки 44 — паритет при OFF, где
+                            // row[3] == kit::LIST_ROW_H, бит-в-бит)
+                            row.row[1] + (row.row[3] - caption - 2.0).max(0.0) * 0.5,
                             row.row[2],
                             caption + 2.0,
                         ),
@@ -7908,7 +7944,8 @@ impl App {
                     d.label_left(
                         canvas_ui::geometry::UiRect::new(
                             row.name[0],
-                            row.name[1] + (kit::LIST_ROW_H - font - 2.0).max(0.0) * 0.5,
+                            // Центровка от высоты rect строки (см. Wave M M3-a)
+                            row.name[1] + (row.name[3] - font - 2.0).max(0.0) * 0.5,
                             row.name[2],
                             font + 2.0,
                         ),
@@ -7940,7 +7977,8 @@ impl App {
                 d.label_left(
                     canvas_ui::geometry::UiRect::new(
                         badge_x,
-                        row.row[1] + (kit::LIST_ROW_H - caption - 2.0).max(0.0) * 0.5,
+                        // Центровка от высоты rect строки (см. Wave M M3-a)
+                        row.row[1] + (row.row[3] - caption - 2.0).max(0.0) * 0.5,
                         canvas_manager_ui::BADGE_W,
                         caption + 2.0,
                     ),
@@ -7952,7 +7990,8 @@ impl App {
                 d.label_left(
                     canvas_ui::geometry::UiRect::new(
                         row.row[0] + row.row[2] - canvas_manager_ui::TS_W,
-                        row.row[1] + (kit::LIST_ROW_H - caption - 2.0).max(0.0) * 0.5,
+                        // Центровка от высоты rect строки (см. Wave M M3-a)
+                        row.row[1] + (row.row[3] - caption - 2.0).max(0.0) * 0.5,
                         canvas_manager_ui::TS_W,
                         caption + 2.0,
                     ),

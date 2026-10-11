@@ -21,6 +21,7 @@
 
 use canvas_core::tokens;
 use canvas_core::workspace::{group_entries, sorted_entries, CanvasEntry, SortMode};
+use canvas_ui::geometry::{UiRect, UiVec2};
 use canvas_ui::kit;
 
 /// Ширина панели менеджера (лог. px): имя + бейдж источника + дата —
@@ -42,6 +43,17 @@ pub const TS_W: f32 = 66.0;
 pub const BADGE_W: f32 = 86.0;
 /// Высота строки хранилища внизу панели (№51a).
 pub const STORAGE_ROW_H: f32 = kit::BUTTON_HEIGHT + tokens::SPACING_SM;
+
+/// Wave M M3-a (issue #52, T-M R1): тач-минимум интерактивных контролов
+/// (поиск/чип/кнопки/«✕»/строки) в Compact-тире адаптивной ветки.
+pub const TOUCH_TARGET: f32 = 44.0;
+/// Шаг строки списка в Compact-тире (строка 44 + зазор кита).
+pub const ROW_STEP_COMPACT: f32 = TOUCH_TARGET + kit::LIST_ROW_GAP;
+/// Высота шапки в Compact-тире («✕» 44 центрируется без вылета за панель).
+pub const HEADER_H_COMPACT: f32 = 48.0;
+/// Высота строки хранилища в Compact-тире (тач 44 + зазор) — паритет
+/// `STORAGE_ROW_H` прежней ветки (`kit::BUTTON_HEIGHT + SPACING_SM`).
+pub const STORAGE_ROW_H_COMPACT: f32 = TOUCH_TARGET + tokens::SPACING_SM;
 /// Порог двойного клика (мс) — выбор имени/строки (ренейм №9 / открыть).
 pub const DOUBLE_CLICK_MS: u128 = 400;
 
@@ -343,9 +355,11 @@ pub fn scroll_to_reveal(scroll_top: usize, selected: usize, max_top: usize) -> u
 }
 
 /// Верх окна после колес-скролла (шаг — строки): кламп `0..=max_top`,
-/// хвост списка достижим, пустого окна нет.
-pub fn wheel_scroll_top(current: usize, delta_rows: f32, rows_len: usize) -> usize {
-    let max_top = rows_len.saturating_sub(VISIBLE_ROWS);
+/// хвост списка достижим, пустого окна нет. `visible` — окно списка из
+/// раскладки (`ManagerLayout::visible_rows`): в адаптивной ветке окно
+/// эластичное (M-O R7).
+pub fn wheel_scroll_top(current: usize, delta_rows: f32, rows_len: usize, visible: usize) -> usize {
+    let max_top = rows_len.saturating_sub(visible.max(1));
     let next = (current as f32 + delta_rows).round();
     if next <= 0.0 {
         0
@@ -433,6 +447,10 @@ pub struct ManagerLayout {
     pub rows: Vec<ManagerRowLayout>,
     /// Ординал первой видимой строки (в `rows()`-списке).
     pub first_row: usize,
+    /// Окно списка (штук строк) — источник скролл-математики
+    /// (`wheel_scroll_top`/`scroll_to_reveal`); в прежней ветке —
+    /// `VISIBLE_ROWS`, в адаптивной — эластичное (M-O R7).
+    pub visible_rows: usize,
     /// Кнопки выбранной строки: дублировать/переименовать/удалить/экспорт.
     pub duplicate: [f32; 4],
     pub rename: [f32; 4],
@@ -599,7 +617,13 @@ pub fn manager_layout(
     // Кнопки выбранной строки / карточка пустого состояния.
     let after_list_y = list_y + shown_rows as f32 * ROW_STEP + gap;
     let empty = if empty_shown {
-        Some(empty_card_layout(inner_x, list_y, inner_w, widths))
+        Some(empty_card_layout(
+            inner_x,
+            list_y,
+            inner_w,
+            widths,
+            kit::BUTTON_HEIGHT,
+        ))
     } else {
         None
     };
@@ -677,6 +701,7 @@ pub fn manager_layout(
         import,
         rows: rows_layout,
         first_row,
+        visible_rows: VISIBLE_ROWS,
         duplicate,
         rename,
         delete,
@@ -692,7 +717,14 @@ pub fn manager_layout(
 const EMPTY_CARD_H: f32 = 150.0;
 
 /// Карточка пустого состояния (№23a): по центру списка, CTA + вторичная.
-fn empty_card_layout(x: f32, y: f32, w: f32, widths: &ManagerWidths) -> EmptyCardLayout {
+/// `btn_h` — высота кнопок тира (кит 30; Compact — тач-минимум 44).
+fn empty_card_layout(
+    x: f32,
+    y: f32,
+    w: f32,
+    widths: &ManagerWidths,
+    btn_h: f32,
+) -> EmptyCardLayout {
     let title = [x, y + tokens::SPACING_LG, w, kit::BANNER_LABEL_LINE_H];
     let hint = [
         x,
@@ -703,17 +735,357 @@ fn empty_card_layout(x: f32, y: f32, w: f32, widths: &ManagerWidths) -> EmptyCar
     // Кнопки — по центру, рядом (primary слева).
     let both = widths.empty_create + tokens::SPACING_SM + widths.empty_disk;
     let bx = x + (w - both).max(0.0) * 0.5;
-    let by = y + EMPTY_CARD_H - kit::BUTTON_HEIGHT - tokens::SPACING_LG;
+    let by = y + EMPTY_CARD_H - btn_h - tokens::SPACING_LG;
     EmptyCardLayout {
         title,
         hint,
-        create: [bx, by, widths.empty_create, kit::BUTTON_HEIGHT],
+        create: [bx, by, widths.empty_create, btn_h],
         open_disk: [
             bx + widths.empty_create + tokens::SPACING_SM,
             by,
             widths.empty_disk,
-            kit::BUTTON_HEIGHT,
+            btn_h,
         ],
+    }
+}
+
+// === Wave M M3-a (issue #52): адаптивная ветка (флаг modals_adaptive) ========
+
+/// Хром-константы тира адаптивной ветки: Medium/Expanded — канон кита
+/// (текущая плотность), Compact — mobile-style: поиск во всю ширину,
+/// чип своей строкой, тач-минимум 44 (T-M R1).
+struct TierChrome {
+    header_h: f32,
+    close_sz: f32,
+    search_h: f32,
+    chip_h: f32,
+    btn_h: f32,
+    step: f32,
+    /// Чип сортировки своей строкой (компактный мобильный скелет).
+    chip_own_row: bool,
+}
+
+fn tier_chrome(compact: bool) -> TierChrome {
+    if compact {
+        TierChrome {
+            header_h: HEADER_H_COMPACT,
+            close_sz: TOUCH_TARGET,
+            search_h: TOUCH_TARGET,
+            chip_h: TOUCH_TARGET,
+            btn_h: TOUCH_TARGET,
+            step: ROW_STEP_COMPACT,
+            chip_own_row: true,
+        }
+    } else {
+        TierChrome {
+            header_h: HEADER_H,
+            close_sz: kit::ICON_BUTTON_SIZE,
+            search_h: SEARCH_H,
+            chip_h: kit::CHIP_HEIGHT,
+            btn_h: kit::BUTTON_HEIGHT,
+            step: ROW_STEP,
+            chip_own_row: false,
+        }
+    }
+}
+
+/// Верхний хром: пад → шапка → поиск (→ чип своей строкой в Compact) →
+/// кнопки создания. Единый источник с [`manager_layout_adaptive`].
+fn manager_top_chrome(c: &TierChrome) -> f32 {
+    let gap = tokens::SPACING_SM;
+    let mut top = PANEL_PAD + c.header_h + gap + c.search_h + gap;
+    if c.chip_own_row {
+        top += c.chip_h + gap;
+    }
+    top + c.btn_h + gap
+}
+
+/// Нижний хром: (кнопки строки) → строка хранилища → пад.
+fn manager_bottom_chrome(c: &TierChrome, empty_shown: bool, native: bool) -> f32 {
+    let gap = tokens::SPACING_SM;
+    let storage_h = c.btn_h + gap; // STORAGE_ROW_H тира
+    if empty_shown {
+        EMPTY_CARD_H + gap + storage_h + PANEL_PAD
+    } else if native {
+        gap + storage_h + PANEL_PAD
+    } else {
+        gap + c.btn_h + gap + storage_h + PANEL_PAD
+    }
+}
+
+/// Окно списка менеджера в адаптивной ветке (Wave M M3-a, issue #52):
+/// эластичное из бюджета высоты (80% слота; Compact — весь слот),
+/// потолок `VISIBLE_ROWS`, пол — одна строка (M-O R7 «скролл внутри»).
+/// Единый источник с [`manager_layout_adaptive`] — клампы скролла на
+/// App-стороне используют ту же функцию («ввод = тому, что видно»).
+pub fn manager_visible_rows(
+    viewport: [f32; 2],
+    rows_len: usize,
+    empty_shown: bool,
+    native: bool,
+) -> usize {
+    let compact = kit::layout_tier(viewport[0]) == kit::LayoutTier::Compact;
+    let c = tier_chrome(compact);
+    let margin = tokens::SPACING_XL;
+    let eff_h = (viewport[1] - margin * 2.0).max(0.0);
+    let budget = if compact {
+        eff_h
+    } else {
+        eff_h * kit::MODAL_RATIO_DEFAULT
+    };
+    let avail = (budget - manager_top_chrome(&c) - manager_bottom_chrome(&c, empty_shown, native))
+        .max(c.step);
+    (((avail / c.step).floor() as usize).clamp(1, VISIBLE_ROWS)).min(rows_len.max(1))
+}
+
+/// Раскладка менеджера в адаптивной ветке (Wave M M3-a, issue #52):
+/// окно — `kit::modal_rect_flex` (80% слота; min = max = контент 640×N —
+/// M-O R7 «size follows content», desktop-потолок прежний, плотность
+/// Medium/Expanded — текущая); Compact — full-bleed лист: поиск во всю
+/// ширину, чип сортировки своей строкой, строки/кнопки/«✕» на
+/// тач-минимуме 44 (T-M R1), действия строки и хранилище — в нижней
+/// thumb-зоне (T-M R2), список скроллится внутри (M-O R7). Скелет/хром
+/// прежней раскладки — дословно; геометрия — токены kit.
+pub fn manager_layout_adaptive(
+    viewport: [f32; 2],
+    state: &CanvasManagerState,
+    active: &str,
+    widths: &ManagerWidths,
+) -> ManagerLayout {
+    let compact = kit::layout_tier(viewport[0]) == kit::LayoutTier::Compact;
+    let c = tier_chrome(compact);
+    let gap = tokens::SPACING_SM;
+    let rows_all = state.rows();
+    let has_entries = !state.entries.is_empty();
+    let empty_shown = !has_entries;
+    // Окно из бюджета (единый источник с manager_visible_rows).
+    let shown_rows = if empty_shown {
+        0
+    } else {
+        manager_visible_rows(viewport, rows_all.len(), empty_shown, state.native)
+            .min(rows_all.len().saturating_sub(state.scroll_top))
+    };
+    let height = manager_top_chrome(&c)
+        + shown_rows as f32 * c.step
+        + manager_bottom_chrome(&c, empty_shown, state.native);
+    let slot = UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
+    // Compact — примитив вернёт full-bleed eff; Medium/Expanded — панель
+    // 640×height по центру eff (min = max = контент).
+    let panel = kit::modal_rect_flex(
+        slot,
+        tokens::SPACING_XL,
+        kit::MODAL_RATIO_DEFAULT,
+        UiVec2::new(PANEL_W, height),
+        UiVec2::new(PANEL_W, height),
+    );
+    let (x, y, width, height) = (panel.x, panel.y, panel.w, panel.h);
+    let inner_x = x + PANEL_PAD;
+    let inner_w = width - PANEL_PAD * 2.0;
+    let right = inner_x + inner_w;
+    // Compact: низ full-bleed листа закреплён — строка хранилища
+    // прижимается к нижнему краю (слабина высоты уходит в зону списка).
+    let storage_y_compact = y + height - PANEL_PAD - (TOUCH_TARGET + gap);
+
+    // Шапка (титул + «✕» справа).
+    let title = [
+        inner_x,
+        y + PANEL_PAD + (c.header_h - kit::BANNER_LABEL_LINE_H) * 0.5,
+        inner_w - c.header_h,
+        kit::BANNER_LABEL_LINE_H,
+    ];
+    let close = [
+        x + width - c.header_h,
+        y + PANEL_PAD + (c.header_h - c.close_sz) * 0.5,
+        c.close_sz,
+        c.close_sz,
+    ];
+
+    // Поиск + чип сортировки: M/E — чип справа (прежняя плотность);
+    // Compact — поиск во всю ширину, чип своей строкой.
+    let search_y = y + PANEL_PAD + c.header_h + gap;
+    let (sort_chip, search, actions_y) = if c.chip_own_row {
+        (
+            [
+                inner_x,
+                search_y + c.search_h + gap,
+                widths.sort_chip,
+                c.chip_h,
+            ],
+            [inner_x, search_y, inner_w, c.search_h],
+            search_y + c.search_h + gap + c.chip_h + gap,
+        )
+    } else {
+        let sort_chip = [
+            (right - widths.sort_chip).max(inner_x),
+            search_y + (c.search_h - c.chip_h) * 0.5,
+            widths.sort_chip,
+            c.chip_h,
+        ];
+        let search = [
+            inner_x,
+            search_y,
+            (sort_chip[0] - tokens::SPACING_SM - inner_x).max(tokens::SPACING_MD),
+            c.search_h,
+        ];
+        (sort_chip, search, search_y + c.search_h + gap)
+    };
+
+    // Кнопки создания (№7): слева направо, высота тира. FR-108 (native):
+    // «Из шаблона…» нет, слот import — «Открыть…» (как в прежней ветке).
+    let create = [inner_x, actions_y, widths.create, c.btn_h];
+    let template = if state.native {
+        [0.0; 4]
+    } else {
+        [
+            create[0] + create[2] + tokens::SPACING_SM,
+            actions_y,
+            widths.template,
+            c.btn_h,
+        ]
+    };
+    let import = [
+        if state.native {
+            create[0] + create[2] + tokens::SPACING_SM
+        } else {
+            template[0] + template[2] + tokens::SPACING_SM
+        },
+        actions_y,
+        widths.import,
+        c.btn_h,
+    ];
+
+    // Список (или карточка пустого состояния №23a). Строки тача — 44.
+    let list_y = actions_y + c.btn_h + gap;
+    let row_h = c.step - kit::LIST_ROW_GAP;
+    let mut rows_layout = Vec::with_capacity(shown_rows);
+    let first_row = state.scroll_top;
+    let editing_entry = state.editing.as_ref().map(|(index, _)| *index);
+    for (offset, row) in rows_all.iter().enumerate().skip(first_row).take(shown_rows) {
+        let ry = list_y + (offset - first_row) as f32 * c.step;
+        let (entry_index, group, is_header) = match row {
+            ManagerRow::Group(name) => (None, Some(name.clone()), true),
+            ManagerRow::Entry(index) => (Some(*index), None, false),
+        };
+        let is_selected = offset == state.selected && !is_header;
+        let is_active = entry_index
+            .and_then(|index| state.entries.get(index))
+            .is_some_and(|e| e.name.eq_ignore_ascii_case(active));
+        let row_rect = [inner_x, ry, inner_w, row_h];
+        let name_w = if is_header {
+            inner_w
+        } else {
+            (inner_w - BADGE_W - TS_W - tokens::SPACING_MD * 2.0).max(0.0)
+        };
+        let name = [inner_x, ry, name_w, row_h];
+        rows_layout.push(ManagerRowLayout {
+            row: row_rect,
+            name,
+            entry: entry_index,
+            group,
+            is_selected,
+            is_active,
+            is_header,
+            editing: editing_entry.is_some_and(|index| Some(index) == entry_index),
+        });
+    }
+
+    // Кнопки выбранной строки / карточка пустого состояния.
+    let after_list_y = list_y + shown_rows as f32 * c.step + gap;
+    let empty = if empty_shown {
+        Some(empty_card_layout(inner_x, list_y, inner_w, widths, c.btn_h))
+    } else {
+        None
+    };
+    // FR-108 (native): ряд кнопок строки скрыт (как в прежней ветке);
+    // в Compact ряд прижат к нижней thumb-зоне (T-M R2) — над строкой
+    // хранилища (низ листа закреплён, слабина уходит в зону списка).
+    let (duplicate, rename, delete, export_btn) = if empty_shown || state.native {
+        ([0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4])
+    } else {
+        // Справа налево: Экспорт, Удалить, Переименовать, Дублировать.
+        let by = if compact {
+            storage_y_compact - gap - c.btn_h
+        } else {
+            after_list_y
+        };
+        let export_r = [right - widths.export, by, widths.export, c.btn_h];
+        let delete = [
+            export_r[0] - tokens::SPACING_SM - widths.delete,
+            by,
+            widths.delete,
+            c.btn_h,
+        ];
+        let rename = [
+            delete[0] - tokens::SPACING_SM - widths.rename,
+            by,
+            widths.rename,
+            c.btn_h,
+        ];
+        let duplicate = [
+            rename[0] - tokens::SPACING_SM - widths.duplicate,
+            by,
+            widths.duplicate,
+            c.btn_h,
+        ];
+        (duplicate, rename, delete, export_r)
+    };
+
+    // Строка хранилища (№51a): в Compact — закреплена за нижним краем
+    // full-bleed листа (thumb-зона T-M R2); в M/E панель по контенту —
+    // прежняя проводка от списка.
+    let storage_h = c.btn_h + gap;
+    let storage_y = if compact {
+        storage_y_compact
+    } else if empty_shown {
+        list_y + EMPTY_CARD_H + gap
+    } else if state.native {
+        after_list_y
+    } else {
+        after_list_y + c.btn_h + gap
+    };
+    let show_move = storage_move_available(state.storage) && widths.storage_move > 0.0;
+    let storage_move = if show_move {
+        [
+            right - widths.storage_move,
+            storage_y + (storage_h - c.btn_h) * 0.5,
+            widths.storage_move,
+            c.btn_h,
+        ]
+    } else {
+        [0.0; 4]
+    };
+    let storage_label = [
+        inner_x,
+        storage_y + (storage_h - kit::BANNER_LABEL_LINE_H) * 0.5,
+        if show_move {
+            (storage_move[0] - tokens::SPACING_SM - inner_x).max(0.0)
+        } else {
+            inner_w
+        }
+        .min(widths.storage_label),
+        kit::BANNER_LABEL_LINE_H,
+    ];
+
+    ManagerLayout {
+        panel: [x, y, width, height],
+        title,
+        close,
+        search,
+        sort_chip,
+        create,
+        template,
+        import,
+        rows: rows_layout,
+        first_row,
+        visible_rows: manager_visible_rows(viewport, rows_all.len(), empty_shown, state.native),
+        duplicate,
+        rename,
+        delete,
+        export: export_btn,
+        storage_label,
+        storage_move,
+        empty,
+        has_entries,
     }
 }
 
@@ -889,18 +1261,150 @@ mod tests {
 
     #[test]
     fn wheel_scroll_clamps() {
-        assert_eq!(wheel_scroll_top(0, 3.0, 20), 3);
-        assert_eq!(wheel_scroll_top(4, -2.0, 20), 2);
-        assert_eq!(wheel_scroll_top(3, 100.0, 20), 11, "кламп вниз (20-9)");
-        assert_eq!(wheel_scroll_top(3, -100.0, 20), 0, "кламп вверх");
+        assert_eq!(wheel_scroll_top(0, 3.0, 20, VISIBLE_ROWS), 3);
+        assert_eq!(wheel_scroll_top(4, -2.0, 20, VISIBLE_ROWS), 2);
         assert_eq!(
-            wheel_scroll_top(0, 5.0, 3),
+            wheel_scroll_top(3, 100.0, 20, VISIBLE_ROWS),
+            11,
+            "кламп вниз (20-9)"
+        );
+        assert_eq!(
+            wheel_scroll_top(3, -100.0, 20, VISIBLE_ROWS),
+            0,
+            "кламп вверх"
+        );
+        assert_eq!(
+            wheel_scroll_top(0, 5.0, 3, VISIBLE_ROWS),
             0,
             "короткий список — без скролла"
         );
         // Мелкие тачпад-шаги накапливаются (округление суммы)
-        assert_eq!(wheel_scroll_top(0, 0.4, 20), 0);
-        assert_eq!(wheel_scroll_top(0, 0.6, 20), 1);
+        assert_eq!(wheel_scroll_top(0, 0.4, 20, VISIBLE_ROWS), 0);
+        assert_eq!(wheel_scroll_top(0, 0.6, 20, VISIBLE_ROWS), 1);
+    }
+
+    // === Wave M M3-a (issue #52): адаптивная ветка ==========================
+
+    fn state_entries(n: usize) -> CanvasManagerState {
+        let mut state = CanvasManagerState::default();
+        state.open();
+        state.set_entries(
+            (0..n)
+                .map(|i| entry(&format!("c{i:02}.canvas"), i as u64))
+                .collect(),
+        );
+        state
+    }
+
+    /// Expanded (1280×800): бюджет 80% выше контента 9-строчного окна —
+    /// раскладка совпадает с прежней бит-в-бит (окно/плотность прежние).
+    #[test]
+    fn manager_adaptive_expanded_matches_legacy_window() {
+        let state = state_entries(12);
+        let legacy = manager_layout([1280.0, 800.0], &state, "c00.canvas", &widths());
+        let lay = manager_layout_adaptive([1280.0, 800.0], &state, "c00.canvas", &widths());
+        assert_eq!(lay.panel, legacy.panel, "окно — прежнее (640×9 строк)");
+        assert_eq!(lay.visible_rows, VISIBLE_ROWS);
+        assert_eq!(lay.rows.len(), VISIBLE_ROWS);
+        assert_eq!(lay.rows[0].row, legacy.rows[0].row, "скелет строк тот же");
+        assert_eq!(lay.search, legacy.search, "поиск/чип — прежняя строка");
+        assert_eq!(lay.create, legacy.create, "кнопки создания — прежние");
+    }
+
+    /// Medium (800×560): окно сжимается к бюджету 80% — окно списка
+    /// эластично, панель по центру eff, без выхода за слот.
+    #[test]
+    fn manager_adaptive_medium_shrinks_to_budget() {
+        let state = state_entries(12);
+        let lay = manager_layout_adaptive([800.0, 560.0], &state, "c00.canvas", &widths());
+        assert_eq!(lay.visible_rows, 5, "floor((0.8×512 − 232)/32) = 5");
+        assert_eq!(lay.rows.len(), 5);
+        assert_eq!(lay.panel[2], PANEL_W, "ширина канона не растёт");
+        assert!(
+            lay.panel[3] <= 0.8 * (560.0 - tokens::SPACING_XL * 2.0) + 0.01,
+            "панель в бюджете 80% слота"
+        );
+        //(helper == раскладка — единый источник для клампов скролла)
+        assert_eq!(
+            manager_visible_rows([800.0, 560.0], 12, false, false),
+            lay.visible_rows
+        );
+        // хвост списка достижим при эластичном окне
+        assert_eq!(
+            wheel_scroll_top(0, 100.0, 12, lay.visible_rows),
+            12 - 5,
+            "максимум = список − окно"
+        );
+    }
+
+    /// Compact (375×667): full-bleed лист — поиск во всю ширину, чип
+    /// своей строкой, строки/кнопки/«✕» ≥44 (T-M R1), хранилище в нижней
+    /// thumb-зоне (T-M R2), всё внутри вьюпорта.
+    #[test]
+    fn manager_adaptive_compact_full_bleed_touch_sheet() {
+        let state = state_entries(12);
+        let lay = manager_layout_adaptive([375.0, 667.0], &state, "c00.canvas", &widths());
+        assert_eq!(lay.panel, [24.0, 24.0, 327.0, 619.0], "full-bleed eff");
+        let inner_w = 327.0 - PANEL_PAD * 2.0;
+        // поиск во всю ширину, чип ниже поиска
+        assert_eq!(lay.search[2], inner_w, "поиск во всю ширину");
+        assert!(
+            lay.sort_chip[1] > lay.search[1] + lay.search[3],
+            "чип сортировки своей строкой"
+        );
+        for row in &lay.rows {
+            assert_eq!(row.row[3], 44.0, "тач-цель строки ≥44 (T-M R1)");
+        }
+        assert!(lay.rows.len() >= 1, "список начинается выше thumb-зоны");
+        assert_eq!(lay.create[3], TOUCH_TARGET, "кнопка создания ≥44");
+        assert_eq!(lay.close[2], TOUCH_TARGET, "«✕» ≥44");
+        // хранилище закреплено за нижним краем листа: низ СТРОКИ
+        // хранилища — PANEL_PAD от низа панели (кнопка центрирована в
+        // 52-строке = тач 44 + зазор); thumb-зона T-M R2
+        let panel_bottom = 24.0 + 619.0;
+        assert_eq!(lay.storage_move[3], TOUCH_TARGET, "кнопка хранилища ≥44");
+        let storage_row_bottom = lay.storage_move[1]
+            + lay.storage_move[3]
+            + (STORAGE_ROW_H_COMPACT - TOUCH_TARGET) * 0.5;
+        assert!(
+            (storage_row_bottom - (panel_bottom - PANEL_PAD)).abs() < 0.01,
+            "строка хранилища прижата к низу листа"
+        );
+        assert!(
+            lay.rows.last().expect("строки есть").row[1] + lay.rows.last().unwrap().row[3]
+                < lay.storage_move[1],
+            "список выше thumb-зоны"
+        );
+        // всё внутри вьюпорта
+        assert!(lay.create[0] >= 24.0 && lay.create[0] + lay.create[2] <= 351.0);
+        assert!(lay.close[1] >= 24.0 && lay.close[1] + lay.close[3] <= 667.0);
+    }
+
+    /// Пустое состояние в Compact: карточка CTA + строка хранилища
+    /// помещаются в full-bleed лист, кнопки — тач-минимум.
+    #[test]
+    fn manager_adaptive_compact_empty_state_fits() {
+        let state = state_entries(0);
+        let lay = manager_layout_adaptive([375.0, 667.0], &state, "", &widths());
+        assert!(!lay.has_entries);
+        let empty = lay.empty.expect("карточка пустого состояния");
+        assert_eq!(empty.create[3], TOUCH_TARGET, "CTA ≥44 (T-M R1)");
+        assert!(
+            empty.create[1] + empty.create[3] < 24.0 + 619.0,
+            "CTA в листе"
+        );
+        assert!(lay.rows.is_empty(), "строк нет");
+    }
+
+    /// Native-ветка: без кнопок строки (FR-108 C5) — скелет тот же.
+    #[test]
+    fn manager_adaptive_native_hides_row_actions() {
+        let mut state = state_entries(12);
+        state.native = true;
+        let lay = manager_layout_adaptive([1280.0, 800.0], &state, "c00.canvas", &widths());
+        assert_eq!(lay.duplicate, [0.0; 4], "ряд кнопок строки скрыт");
+        assert_eq!(lay.template, [0.0; 4], "«Из шаблона…» скрыта");
+        assert!(lay.import[2] > 0.0, "«Открыть…» жива");
     }
 
     // --- состояние ------------------------------------------------------------------
