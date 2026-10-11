@@ -954,7 +954,7 @@ impl App {
                         && !event.repeat
                     {
                         // шаг имеет смысл, только если есть скрытые узлы
-                        let win = explain_ui::window_rect(self.viewport_logical());
+                        let win = self.explain_window_rect_now(self.viewport_logical());
                         let body = explain_ui::body_rect(win);
                         let can_step = self
                             .explain
@@ -1842,20 +1842,41 @@ impl App {
         if let Some(state) = &self.onboarding {
             let viewport = self.viewport_logical();
             // W-e: раскладка измеренная (общая с отрисовкой/реестром —
-            // «ввод = тому, что видно»)
+            // «ввод = тому, что видно»). Wave M M3-c: флаг — адаптивная
+            // ветка (Compact — тач-rect'ы кнопок).
             let mut m = canvas_ui::measure::TextMeasurer::new();
             let mut fs = canvas_render::text::measure_font_system();
-            let lay = onboarding_ui::card_layout(
-                viewport,
-                state.step,
-                self.settings.language,
-                &self.settings.role,
-                &mut canvas_ui::kit::ScrollState::default(),
-                &mut m,
-                &mut fs,
-            );
+            let onb_flex = self.settings.modals_adaptive;
+            let onb_compact = onb_flex
+                && canvas_ui::kit::layout_tier(viewport[0]) == canvas_ui::kit::LayoutTier::Compact;
+            let lay = if onb_flex {
+                onboarding_ui::card_layout_flex(
+                    viewport,
+                    state.step,
+                    self.settings.language,
+                    &self.settings.role,
+                    &mut canvas_ui::kit::ScrollState::default(),
+                    &mut m,
+                    &mut fs,
+                )
+            } else {
+                onboarding_ui::card_layout(
+                    viewport,
+                    state.step,
+                    self.settings.language,
+                    &self.settings.role,
+                    &mut canvas_ui::kit::ScrollState::default(),
+                    &mut m,
+                    &mut fs,
+                )
+            };
             let card = lay.card;
-            match onboarding_ui::button_at(card, state, self.cursor) {
+            let hit = if onb_compact {
+                onboarding_ui::button_at_touch(card, state, self.cursor)
+            } else {
+                onboarding_ui::button_at(card, state, self.cursor)
+            };
+            match hit {
                 Some(OnboardingButton::Next) => {
                     // CR-031: на финальном шаге «Далее» не рисуется
                     // (hit-тест возвращает None) — ветка defensive
@@ -1911,7 +1932,7 @@ impl App {
         // синхронная подсветка), клик по фону stage — сброс подсветки.
         if self.main_stage.is_some() {
             let viewport = self.viewport_logical();
-            let rect = main_stage_rect(viewport);
+            let rect = self.main_stage_rect_now(viewport);
             // FR-044 (прототип): кнопка ✕ в правом верхнем углу —
             // закрытие stage; геометрия — единый источник с рендером
             // stage_close_button_rect (FR-068 W3-продолжение — закрытие
@@ -3006,7 +3027,16 @@ impl App {
     /// мимо элементов внутри диалога — глотается.
     pub(super) fn on_autolink_click(&mut self) {
         let viewport = self.viewport_logical();
-        let win = autolink_ui::dialog_rect(viewport);
+        // Wave M M3-c (issue #54): флаг modals_adaptive — геометрия
+        // адаптивной ветки (тот же источник, что рендер — детерминизм);
+        // OFF — прежние функции.
+        let flex = self.settings.modals_adaptive;
+        let compact = flex && autolink_ui::is_compact(viewport);
+        let win = if flex {
+            autolink_ui::dialog_rect_flex(viewport)
+        } else {
+            autolink_ui::dialog_rect(viewport)
+        };
         if point_in_rect(autolink_ui::close_rect(win), self.cursor) {
             self.close_autolink_review();
             return;
@@ -3061,7 +3091,11 @@ impl App {
         }
         // Строки и заголовки групп (та же раскладка, что в рендере)
         if let Some(review) = self.autolink_review.as_ref() {
-            let layout = autolink_ui::rows_layout(review, win, self.autolink_scroll);
+            let layout = if flex {
+                autolink_ui::rows_layout_flex(review, win, self.autolink_scroll, compact)
+            } else {
+                autolink_ui::rows_layout(review, win, self.autolink_scroll)
+            };
             let (accepted_count, _, _) = review.counts();
             for (item_idx, rects) in &layout.rows {
                 if !point_in_rect(rects.row, self.cursor) {
@@ -3091,7 +3125,11 @@ impl App {
                 }
             }
             // Футер: массовые действия + создание (AC-5.2/AC-5.3)
-            let [create, accept_all, reject_all] = autolink_ui::footer_buttons(win);
+            let [create, accept_all, reject_all] = if flex {
+                autolink_ui::footer_buttons_flex(win, compact)
+            } else {
+                autolink_ui::footer_buttons(win)
+            };
             if point_in_rect(create, self.cursor) && accepted_count > 0 {
                 let accepted = self
                     .autolink_review
@@ -3123,7 +3161,7 @@ impl App {
 
     pub(super) fn on_explain_click(&mut self) {
         let viewport = self.viewport_logical();
-        let win = explain_ui::window_rect(viewport);
+        let win = self.explain_window_rect_now(viewport);
         // LAY-W8 (FR-097): тач-цель ✕ (CLOSE_SIZE=30) ≥ 44 (кламп в окно).
         if point_in_rect(
             crate::touch_targets::touch_hit_xywh(explain_ui::close_rect(win), win),
@@ -4434,7 +4472,7 @@ impl App {
             if let Some(raw) = raw {
                 self.cursor = logical;
                 let viewport = self.viewport_logical();
-                let win = explain_ui::window_rect(viewport);
+                let win = self.explain_window_rect_now(viewport);
                 let body = explain_ui::body_rect(win);
                 let view = self
                     .explain
@@ -4479,7 +4517,7 @@ impl App {
         // курсора превью гаснет (возвращается фиксированная подсветка)
         if let Some(stage) = self.main_stage.as_ref() {
             let viewport = self.viewport_logical();
-            let rect = main_stage_rect(viewport);
+            let rect = self.main_stage_rect_now(viewport);
             if point_in_rect([rect.x, rect.y, rect.w, rect.h], self.cursor) {
                 let s = stage.scale.max(f32::EPSILON);
                 let ctx = self.stage_frame_ctx(stage, &rect, s);
@@ -4722,7 +4760,7 @@ impl App {
         // фона тела (FR-083).
         if self.explain.as_ref().is_some_and(|s| s.is_ready()) {
             let viewport = self.viewport_logical();
-            let win = explain_ui::window_rect(viewport);
+            let win = self.explain_window_rect_now(viewport);
             let body = explain_ui::body_rect(win);
             if point_in_rect(body, self.cursor) {
                 // Горизонтальная составляющая: наклон колеса / Shift+колесо.
@@ -4796,7 +4834,16 @@ impl App {
         // скроллит список предложений (12+), а не панорамирует канвас
         if self.autolink_review.is_some() {
             let viewport = self.viewport_logical();
-            let win = autolink_ui::dialog_rect(viewport);
+            // Wave M M3-c (issue #54): флаг modals_adaptive — геометрия
+            // адаптивной ветки (Compact — тач-строки 68 / футер 116);
+            // OFF — прежние функции.
+            let flex = self.settings.modals_adaptive;
+            let compact = flex && autolink_ui::is_compact(viewport);
+            let win = if flex {
+                autolink_ui::dialog_rect_flex(viewport)
+            } else {
+                autolink_ui::dialog_rect(viewport)
+            };
             // Баннер отклонённых сдвигает тело вниз — тот же флаг, что у
             // rows_layout (review.counts). Без этого hit-test body_rect
             // не совпадал бы с раскладкой строк (баннер не учтён).
@@ -4805,12 +4852,22 @@ impl App {
                 .as_ref()
                 .map(|r| r.counts())
                 .unwrap_or((0, 0, 0));
-            let body = autolink_ui::body_rect(win, rejected > 0);
+            let body = if flex {
+                autolink_ui::body_rect_flex(win, rejected > 0, compact)
+            } else {
+                autolink_ui::body_rect(win, rejected > 0)
+            };
             if point_in_rect(body, self.cursor) {
                 let max = self
                     .autolink_review
                     .as_ref()
-                    .map(|review| autolink_ui::rows_layout(review, win, 0.0).scroll_max)
+                    .map(|review| {
+                        if flex {
+                            autolink_ui::rows_layout_flex(review, win, 0.0, compact).scroll_max
+                        } else {
+                            autolink_ui::rows_layout(review, win, 0.0).scroll_max
+                        }
+                    })
                     .unwrap_or(0.0);
                 let dy = match delta {
                     MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
@@ -4911,6 +4968,44 @@ impl App {
                 return;
             }
         }
+        // Wave M M3-c (issue #54): колесо над privacy-блоком AI-онбординга
+        // в адаптивном Compact — скроллит измеренные строки блока
+        // (переполнение bottom-sheet), а не панорамирует канвас под
+        // модалью. Образец — ветка онбординга ниже (тот же знак/кламп).
+        // Колесо над карточкой мимо блока — глотается (Block-модаль;
+        // backdrop НЕ закрывает — контракт F-8 сохранён).
+        if let Some(state) = self.ai_onboarding {
+            let viewport = self.viewport_logical();
+            if self.settings.modals_adaptive
+                && canvas_ui::kit::layout_tier(viewport[0]) == canvas_ui::kit::LayoutTier::Compact
+            {
+                let mut m = canvas_ui::measure::TextMeasurer::new();
+                let mut fs = canvas_render::text::measure_font_system();
+                let fl = onboarding_ui::ai_onboarding_layout_flex(
+                    viewport,
+                    &state,
+                    self.settings.language,
+                    &mut m,
+                    &mut fs,
+                );
+                if fl.privacy_view[3] > 0.0 && point_in_rect(fl.privacy_view, self.cursor) {
+                    let dy = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
+                        MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),
+                    };
+                    let mut st = state;
+                    st.privacy_scroll += dy;
+                    onboarding_ui::ai_onb_privacy_scroll_clamp(&mut st, &fl);
+                    self.ai_onboarding = Some(st);
+                    self.request_redraw();
+                    return;
+                }
+                if onboarding_ui::ai_onboarding_point_in_card(fl.card, self.cursor) {
+                    self.request_redraw();
+                    return;
+                }
+            }
+        }
         // W-e (аудит ui-kit §8 №12): колесо над карточкой онбординга скроллит
         // тело (кит список+скролл, состояние `App::onboarding_scroll`), а не
         // панорамирует канвас под модалью — при клампе высоты карточки
@@ -4925,16 +5020,35 @@ impl App {
             let mut scroll = self.onboarding_scroll.clone();
             let mut m = canvas_ui::measure::TextMeasurer::new();
             let mut fs = canvas_render::text::measure_font_system();
-            let lay = onboarding_ui::card_layout(
-                viewport,
-                state.step,
-                self.settings.language,
-                &self.settings.role,
-                &mut scroll,
-                &mut m,
-                &mut fs,
-            );
-            let body = onboarding_ui::body_area(lay.card, state.is_last());
+            let onb_flex = self.settings.modals_adaptive;
+            let onb_compact = onb_flex
+                && canvas_ui::kit::layout_tier(viewport[0]) == canvas_ui::kit::LayoutTier::Compact;
+            let lay = if onb_flex {
+                onboarding_ui::card_layout_flex(
+                    viewport,
+                    state.step,
+                    self.settings.language,
+                    &self.settings.role,
+                    &mut scroll,
+                    &mut m,
+                    &mut fs,
+                )
+            } else {
+                onboarding_ui::card_layout(
+                    viewport,
+                    state.step,
+                    self.settings.language,
+                    &self.settings.role,
+                    &mut scroll,
+                    &mut m,
+                    &mut fs,
+                )
+            };
+            let body = if onb_flex {
+                onboarding_ui::body_area_flex(lay.card, state.is_last(), onb_compact)
+            } else {
+                onboarding_ui::body_area(lay.card, state.is_last())
+            };
             let dy = match delta {
                 MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
                 MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),

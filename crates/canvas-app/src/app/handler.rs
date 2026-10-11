@@ -1020,10 +1020,13 @@ impl ApplicationHandler<AppEvent> for App {
                 let mut stage_edit_instances: Vec<CardInstance> = Vec::new();
                 let mut stage_edit_owned_texts: Vec<OwnedScreenText> = Vec::new();
                 let mut stage_clip: Option<canvas_ui::geometry::UiRect> = None;
+                // Wave M M3-c: rect — единая флаговая точка ветвления
+                // (до мутабельного заимствования main_stage).
+                let stage_rect = self.main_stage_rect_now(stage_viewport);
                 let relaid = self
                     .main_stage
                     .as_mut()
-                    .map(|stage| stage.relayout(stage_viewport));
+                    .map(|stage| stage.relayout(stage_viewport, stage_rect));
                 if let (Some(stage), Some(layout)) = (self.main_stage.as_ref(), relaid) {
                     let (insts, texts) = self.stage_frame(stage_viewport, stage, layout);
                     stage_instances = insts;
@@ -1040,7 +1043,9 @@ impl ApplicationHandler<AppEvent> for App {
                     let (edit_insts, edit_texts) = self.explain_edit_overlay(stage_viewport);
                     stage_edit_instances = edit_insts;
                     stage_edit_owned_texts = edit_texts;
-                    let win = explain_ui::window_rect(stage_viewport);
+                    // Wave M M3-c: clip — из той же флаговой раскладки, что
+                    // explain_frame (детерминизм clip ≡ кадр).
+                    let win = self.explain_window_rect_now(stage_viewport);
                     stage_clip = Some(canvas_ui::geometry::UiRect::new(
                         win[0], win[1], win[2], win[3],
                     ));

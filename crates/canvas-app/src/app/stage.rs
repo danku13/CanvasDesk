@@ -359,7 +359,49 @@ fn paint_calc_panel_rows(
     formulas_table.paint_rows_with(d, m, fs, formulas_viewport);
 }
 
+/// Wave M M3-c (issue #54): rect main stage адаптивной ветки —
+/// `kit::modal_rect_flex`: слот = вьюпорт, margin `STAGE_MARGIN` (24),
+/// ratio 0.8 (аудит M0 §4: «desired 0.8 вместо 0.7 (margin 24)»), max = eff
+/// (сцена без min-инварианта — контент адаптируется scale'ом раскладки).
+/// Compact ≤767 — full-bleed eff: сцена-превью на всю ширину, действия —
+/// нижняя зона (calc-панель и подсказка прибиты к низу rect — issue #54).
+pub fn main_stage_rect_flex(viewport: [f32; 2]) -> canvas_core::bundles::Rect {
+    let vw = viewport[0].max(0.0);
+    let vh = viewport[1].max(0.0);
+    let slot = UiRect::new(0.0, 0.0, vw, vh);
+    let eff_w = (vw - canvas_core::bundles::STAGE_MARGIN * 2.0).max(0.0);
+    let eff_h = (vh - canvas_core::bundles::STAGE_MARGIN * 2.0).max(0.0);
+    let panel = canvas_ui::kit::modal_rect_flex(
+        slot,
+        canvas_core::bundles::STAGE_MARGIN,
+        canvas_ui::kit::MODAL_RATIO_DEFAULT,
+        canvas_ui::geometry::UiVec2::new(0.0, 0.0),
+        canvas_ui::geometry::UiVec2::new(eff_w, eff_h),
+    );
+    canvas_core::bundles::Rect {
+        x: panel.x,
+        y: panel.y,
+        w: panel.w,
+        h: panel.h,
+    }
+}
+
 impl App {
+    /// Wave M M3-c (issue #54): rect main stage с учётом флага
+    /// `modals_adaptive` — единая точка ветвления для рендера
+    /// ([`App::stage_frame`]) и hit-тестов (input.rs / ui_registry.rs):
+    /// ON — [`main_stage_rect_flex`] (80% слота, margin
+    /// `STAGE_MARGIN`; Compact — full-bleed), OFF — прежняя
+    /// `canvas_core::main_stage_rect` (0.7, путь не изменён).
+    /// Golden-пины геометрии OFF-пути остаются на старой функции.
+    pub(super) fn main_stage_rect_now(&self, viewport: [f32; 2]) -> canvas_core::bundles::Rect {
+        if self.settings.modals_adaptive {
+            main_stage_rect_flex(viewport)
+        } else {
+            main_stage_rect(viewport)
+        }
+    }
+
     /// Пересобрать/обновить миникарту (T13, SPEC §6.1): не каждый кадр, а по
     /// факту изменения — мутация модели (`scene.revision`, FR-PERF-B),
     /// движение камеры (пан/зум двигают рамку viewport) или смена размера
@@ -610,7 +652,7 @@ impl App {
             return;
         };
         let viewport = self.viewport_logical();
-        let rect = main_stage_rect(viewport);
+        let rect = self.main_stage_rect_now(viewport);
         if !point_in_rect([rect.x, rect.y, rect.w, rect.h], self.cursor) {
             return;
         }
@@ -1033,7 +1075,7 @@ impl App {
         layout: StageLayout,
     ) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
         let palette = ThemeColors::from_theme(self.settings.theme);
-        let rect = main_stage_rect(viewport);
+        let rect = self.main_stage_rect_now(viewport);
         let transform = StageTransform::new([rect.x, rect.y], layout.scale);
         let camera = &self.camera;
         let zoom = camera.zoom();
@@ -2472,5 +2514,63 @@ mod tests {
             w_local, w_direct,
             "локальный замер = screen/s при поле 8 px"
         );
+    }
+
+    // === Wave M M3-c (issue #54): адаптивная ветка ======================
+
+    /// Окно flex-ветки: M/E — 0.8·eff (eff = вьюпорт − 2·STAGE_MARGIN),
+    /// центрировано; Compact-край 375×667 — full-bleed eff 327×619
+    /// (сцена-превью на всю ширину, действия — нижняя зона). Окно всегда
+    /// в пределах вьюпорта (G4); OFF-функция не затронута.
+    #[test]
+    fn main_stage_rect_flex_tiers() {
+        // Expanded 1280×800: eff = 1232×752 → 0.8 = 985.6×601.6.
+        let r = main_stage_rect_flex([1280.0, 800.0]);
+        assert!((r.w - 985.6).abs() < 1e-3, "ширина 0.8·eff: {}", r.w);
+        assert!((r.h - 601.6).abs() < 1e-3, "высота 0.8·eff: {}", r.h);
+        assert!((r.x - (1280.0 - r.w) / 2.0).abs() < 1e-3, "центр по X");
+        assert!((r.y - (800.0 - r.h) / 2.0).abs() < 1e-3, "центр по Y");
+        // Medium 800×560: eff = 752×512 → 0.8 = 601.6×409.6.
+        let r = main_stage_rect_flex([800.0, 560.0]);
+        assert!((r.w - 601.6).abs() < 1e-3);
+        assert!((r.h - 409.6).abs() < 1e-3);
+        // Compact 375×667: full-bleed eff (margin 24 — safe-area листа).
+        let r = main_stage_rect_flex([375.0, 667.0]);
+        assert!((r.x - 24.0).abs() < 1e-3 && (r.y - 24.0).abs() < 1e-3);
+        assert!((r.w - 327.0).abs() < 1e-3 && (r.h - 619.0).abs() < 1e-3);
+        // В пределах вьюпорта на канонических вьюпортах (G4).
+        for &(vw, vh) in &[
+            (1920.0, 1080.0),
+            (1440.0, 900.0),
+            (1280.0, 800.0),
+            (1024.0, 640.0),
+            (800.0, 560.0),
+            (768.0, 500.0),
+            (375.0, 667.0),
+        ] {
+            let r = main_stage_rect_flex([vw, vh]);
+            assert!(r.x >= -0.01 && r.y >= -0.01, "{vw}×{vh}");
+            assert!(
+                r.x + r.w <= vw + 0.01 && r.y + r.h <= vh + 0.01,
+                "{vw}×{vh}"
+            );
+        }
+    }
+
+    /// OFF-путь не изменён: прежняя формула 0.7 (margin 24) — golden-пины
+    /// геометрии остаются на canvas_core::main_stage_rect.
+    #[test]
+    fn main_stage_rect_off_path_unchanged() {
+        use canvas_core::bundles::{MAIN_STAGE_MAX_FRACTION, STAGE_MARGIN};
+        for &(vw, vh) in &[(1280.0, 800.0), (800.0, 560.0), (375.0, 667.0)] {
+            let old = main_stage_rect([vw, vh]);
+            let w = (vw * MAIN_STAGE_MAX_FRACTION)
+                .min(vw - STAGE_MARGIN * 2.0)
+                .max(1.0);
+            let h = (vh * MAIN_STAGE_MAX_FRACTION)
+                .min(vh - STAGE_MARGIN * 2.0)
+                .max(1.0);
+            assert!((old.w - w).abs() < 1e-3 && (old.h - h).abs() < 1e-3);
+        }
     }
 }
