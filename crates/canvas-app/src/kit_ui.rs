@@ -3371,6 +3371,33 @@ fn demo_state(
     }
 }
 
+/// Wave D (D4, issue #32): показательные ST1/M3-визуалы состояний на живых
+/// контролах TO-BE (AS-IS — статичная матрица без слоёв состояний — разница
+/// режимов видна по TS-D6). Рисуется ПОСЛЕ base-заливки и ДО подписи
+/// (слои полупрозрачны — текст читаем):
+/// - Hovered .08 / Focused .10 / Pressed .10 / Dragged .16 — state-layer
+///   (канон `canvas_ui::component::state_layer_alpha`, overlay accent);
+/// - Focused — фокус-рамка accent (канон FR-062 F-17);
+/// - Error — семантика danger (канон banner): tint `control_danger` .10 +
+///   рамка `control_danger`; у Error нет state-layer (`state_layer_alpha` = 0).
+///
+/// Normal/Selected/Disabled — пусто (Selected семантику даёт variant/fill).
+fn draw_state_visuals(d: &mut KitDraw, r: &UiRect, state: kit::KitState, p: &KitPalette) {
+    if state == kit::KitState::Error {
+        let c = p.control_danger;
+        d.rect(*r, [c[0], c[1], c[2], 0.10], c, 0.0);
+        return;
+    }
+    let a = canvas_ui::component::state_layer_alpha(state);
+    if a > 0.0 {
+        let c = p.accent;
+        d.rect(*r, [c[0], c[1], c[2], a], [0.0; 4], 0.0);
+    }
+    if state == kit::KitState::Focused {
+        d.rect(*r, [0.0; 4], p.accent, 0.0);
+    }
+}
+
 /// Wave D v1.1 (D3): имя значения KitState (пилюля оверрайда и подписи
 /// живых контролов в форсированном состоянии). Все 8 значений ST1:
 /// 6 ключей существовали, Dragged/Error добавлены (RU/EN).
@@ -4173,6 +4200,9 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         let resp = resp.with_state(state);
         let style = kit::chip_style(resp.state, p);
         d.control(*r, &style);
+        // Wave D (D4): показательные ST1-визуалы (state-layer/focus-ring/
+        // danger) — до подписи (слой полупрозрачный).
+        draw_state_visuals(d, r, resp.state, p);
         // В оверрайде подпись — имя форсированного состояния (не статичный
         // слот матрицы), иначе контрол показывает чужую метку.
         if let Some(s) = ctx.demo.state_override {
@@ -4202,6 +4232,9 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             let state = ctx.demo.state_override.unwrap_or(resp.state);
             let style = kit::button_style(row.variant, state, p);
             d.control(*r, &style);
+            // Wave D (D4): показательные ST1-визуалы (state-layer/фокус-рамка/
+            // danger) — см. draw_state_visuals; до подписи (слой полупрозрачный).
+            draw_state_visuals(d, r, state, p);
             if let Some(s) = ctx.demo.state_override {
                 d.label_center(*r, &state_override_name(ctx.lang, s), style.text, 13.0);
                 resp.on_hover_text("Button state override");
@@ -4234,6 +4267,8 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         let knob_x = off_x + (on_x - off_x) * ctx.switch_anim_t.clamp(0.0, 1.0);
         let knob = UiRect::new(knob_x, sw.knob.y, sw.knob.w, sw.knob.h);
         d.control(sw.track, &sw.track_style);
+        // Wave D (D4): показательные ST1-визуалы на треке (Dragged .16 и др.).
+        draw_state_visuals(d, &sw.track, state, p);
         d.rect(knob, sw.knob_fill, [0.0; 4], sw.track_style.radius / 2.0);
     }
     // TextField: интерактивное поле (фокус/текст/каретка из демо)
@@ -4248,6 +4283,9 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         };
         let style = kit::button_style(kit::ButtonVariant::Secondary, state, p);
         d.control(tf.rect, &style);
+        // Wave D (D4): показательные ST1-визуалы (Focused — рамка accent —
+        // канон полей; Error — danger tint/рамка).
+        draw_state_visuals(d, &tf.rect, state, p);
         d.label_left(tf.text_area, &ctx.demo.text_value, p.text, 13.0);
         if focused {
             let caret_x =
@@ -5013,6 +5051,49 @@ mod tests {
         assert_eq!(demo_tooltip_text("switch", Language::Ru, None), "");
         assert_eq!(demo_tooltip_text("button:99", Language::Ru, None), "");
         assert_eq!(demo_tooltip_text("chips:x", Language::Ru, None), "");
+    }
+
+    /// Wave D (D4): показательные ST1-визуалы — state-layer alpha по M3
+    /// (.08/.10/.10/.16), Focused — фокус-рамка accent, Error — danger
+    /// tint+рамка (канон banner), Normal — пусто.
+    #[test]
+    fn state_visuals_layers_match_st1() {
+        let p = gallery_palette();
+        let r = UiRect::new(0.0, 0.0, 40.0, 30.0);
+        // Dragged → один overlay-квад с alpha 0.16 (accent).
+        let mut d = KitDraw::new();
+        draw_state_visuals(&mut d, &r, kit::KitState::Dragged, &p);
+        assert_eq!(d.quads.len(), 1);
+        assert!((d.quads[0].fill[3] - 0.16).abs() < 1e-6);
+        assert_eq!(d.quads[0].fill[..3], p.accent[..3]);
+        // Hovered .08 / Focused .10 (плюс рамка) / Pressed .10.
+        let mut d = KitDraw::new();
+        draw_state_visuals(&mut d, &r, kit::KitState::Hovered, &p);
+        assert_eq!(d.quads.len(), 1);
+        assert!((d.quads[0].fill[3] - 0.08).abs() < 1e-6);
+        let mut d = KitDraw::new();
+        draw_state_visuals(&mut d, &r, kit::KitState::Focused, &p);
+        assert_eq!(d.quads.len(), 2, "Focused: state-layer + фокус-рамка");
+        assert!((d.quads[0].fill[3] - 0.10).abs() < 1e-6);
+        assert_eq!(d.quads[1].fill, [0.0; 4], "рамка — прозрачная заливка");
+        assert_eq!(d.quads[1].border, p.accent);
+        // Error: tint+рамка control_danger (state-layer у Error = 0).
+        let mut d = KitDraw::new();
+        draw_state_visuals(&mut d, &r, kit::KitState::Error, &p);
+        assert_eq!(d.quads.len(), 1);
+        assert!((d.quads[0].fill[3] - 0.10).abs() < 1e-6);
+        assert_eq!(d.quads[0].fill[..3], p.control_danger[..3]);
+        assert_eq!(d.quads[0].border, p.control_danger);
+        // Normal/Selected/Disabled — пусто.
+        for s in [
+            kit::KitState::Normal,
+            kit::KitState::Selected,
+            kit::KitState::Disabled,
+        ] {
+            let mut d = KitDraw::new();
+            draw_state_visuals(&mut d, &r, s, &p);
+            assert_eq!(d.quads.len(), 0, "{s:?} не рисует слой");
+        }
     }
 
     /// FR-057: эквивалентность до/после делегирования — KitDraw через
