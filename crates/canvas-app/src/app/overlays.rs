@@ -1994,6 +1994,12 @@ impl App {
             d.rect(knob, palette.control_border, [0.0; 4], 2.0);
         }
 
+        // K4 (issue #62): хвостовые секции витрины — 6 W2 + 14 Wave C
+        // во всех применимых ST1-состояниях. Геометрия/подписи — из единой
+        // раскладки (lay.k4, hit=draw); стили — компонентные функции от
+        // слотов палитры. Один вызов — адаптер kit_sections_k4::k4_paint.
+        crate::kit_sections_k4::k4_paint(&mut d, &lay.k4, &palette, lang);
+
         // Wave D v1 (issue #32): TO-BE демо-слои (тулбар/сайдбар/секции
         // Wave C/интерактивные оверрайды/оверлеи) — поверх статичных секций
         // (те же rect'ы, что у demo_hits реестра — draw==hit).
