@@ -1159,7 +1159,7 @@ mod tests {
         let st = state();
         let mut m = TextMeasurer::new();
         let mut fs = font_system();
-        let lay = adaptive_layout_at([1280.0, 800.0], &registry, &st, &mut m, &mut fs);
+        let lay = adaptive_layout_at([1280.0, 800.0], registry, &st, &mut m, &mut fs);
         // панель по центру eff (margin XL), ширина 660
         assert!((lay.panel_rect[0] - (24.0 + (1232.0 - PANEL_W) * 0.5)).abs() < 0.01);
         assert_eq!(lay.panel_rect[2], PANEL_W);
@@ -1173,7 +1173,7 @@ mod tests {
             lay.panel_rect[3] <= 0.8 * (800.0 - 48.0) + 0.01,
             "бюджет 80%"
         );
-        assert!(lay.visible_rows.len() >= 1);
+        assert!(!lay.visible_rows.is_empty());
         // футер прижат к низу (Column — семантика прежней ветки: низ
         // футера = низ панели − 2·PANEL_PAD)
         let footer_bottom = lay.footer_rect[1] + lay.footer_rect[3];
@@ -1195,7 +1195,7 @@ mod tests {
         let st = state();
         let mut m = TextMeasurer::new();
         let mut fs = font_system();
-        let lay = adaptive_layout_at([800.0, 560.0], &registry, &st, &mut m, &mut fs);
+        let lay = adaptive_layout_at([800.0, 560.0], registry, &st, &mut m, &mut fs);
         let chrome = HEADER_H + INPUT_H + CHIP_H + FOOTER_H + PANEL_PAD * 3.0;
         assert!(
             lay.panel_rect[3] <= 0.8 * (560.0 - 48.0) + 0.01,
@@ -1218,7 +1218,7 @@ mod tests {
         let st = state();
         let mut m = TextMeasurer::new();
         let mut fs = font_system();
-        let lay = adaptive_layout_at([375.0, 667.0], &registry, &st, &mut m, &mut fs);
+        let lay = adaptive_layout_at([375.0, 667.0], registry, &st, &mut m, &mut fs);
         assert_eq!(lay.panel_rect, [24.0, 24.0, 327.0, 619.0], "full-bleed eff");
         assert_eq!(lay.close_rect[2], TOUCH_TARGET, "«×» ≥44 (T-M R1)");
         assert_eq!(lay.close_rect[3], TOUCH_TARGET);
@@ -1230,7 +1230,7 @@ mod tests {
         // футер прижат к низу листа (Column — как в прежней ветке)
         let footer_bottom = lay.footer_rect[1] + lay.footer_rect[3];
         assert!((footer_bottom - (24.0 + 619.0 - PANEL_PAD * 2.0)).abs() < 0.01);
-        assert!(lay.visible_rows.len() >= 1);
+        assert!(!lay.visible_rows.is_empty());
     }
 
     /// wheel-скролл получает окно из раскладки (эластичное окно —
@@ -1241,7 +1241,7 @@ mod tests {
         let st = state();
         let mut m = TextMeasurer::new();
         let mut fs = font_system();
-        let lay = adaptive_layout_at([800.0, 560.0], &registry, &st, &mut m, &mut fs);
+        let lay = adaptive_layout_at([800.0, 560.0], registry, &st, &mut m, &mut fs);
         let list_len = rows(registry, &st, &all_visible(registry)).len();
         let top = wheel_scroll_top(0, 100.0, list_len, lay.visible_rows.len());
         assert_eq!(

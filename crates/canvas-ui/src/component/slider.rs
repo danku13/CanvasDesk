@@ -189,7 +189,6 @@ mod tests {
         };
         let lay = slider_layout(slot, 50.0, &opts, ControlSize::Sm);
         // Knob в центре (value=50 → knob_x = 100 - knob_side/2)
-        let knob_side = 30.0 * 0.6; // 18
         let knob_center = UiPoint::new(100.0, 15.0);
         assert_eq!(slider_hit(&lay, knob_center), Some(SliderHit::Knob));
         // Track слева от knob

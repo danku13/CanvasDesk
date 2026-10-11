@@ -330,6 +330,54 @@ impl App {
     /// Wave D v1 (issue #32): TO-BE — демо-хиты `kit-demo:*` (переходы
     /// состояния через [`crate::kit_demo::apply_click`]) и навигация сайдбара.
     pub(super) fn click_kit_gallery(&mut self, element: &str) {
+        // Wave D v1.1 (D1, issue #32): бэкдроп открытого оверлея закрывает
+        // его и ГЛОТАЕТ клик (контракт модалей, AC-D1). Порядок — z-порядок
+        // отрисовки сверху вниз (поповер → палитра → модалка → dropdown);
+        // клик ВНУТРИ оверлея проваливается в штатную диспетчеризацию хитов
+        // (draw==hit — хиты оверлеев раньше хитов секций в demo_hits).
+        if self.kit_demo.tobe {
+            if let Some(glay) = self.kit_demo_layout.as_ref() {
+                let dl = glay.demo.as_ref();
+                let mut swallowed = false;
+                if self.kit_demo.popover_open {
+                    if let Some(bubble) = dl.and_then(|d| d.popover_bubble.as_ref()) {
+                        if bubble.w > 0.0 && !crate::kit_ui::cursor_in(bubble, self.cursor) {
+                            self.kit_demo.popover_open = false;
+                            swallowed = true;
+                        }
+                    }
+                }
+                if !swallowed && self.kit_demo.palette_open {
+                    if let Some((pp, _, _)) = dl.and_then(|d| d.palette.as_ref()) {
+                        if !crate::kit_ui::cursor_in(pp, self.cursor) {
+                            self.kit_demo.palette_open = false;
+                            swallowed = true;
+                        }
+                    }
+                }
+                if !swallowed && self.kit_demo.modal_open {
+                    if let Some((mp, _)) = dl.and_then(|d| d.modal.as_ref()) {
+                        if !crate::kit_ui::cursor_in(mp, self.cursor) {
+                            self.kit_demo.modal_open = false;
+                            swallowed = true;
+                        }
+                    }
+                }
+                if !swallowed && self.kit_demo.dropdown_open {
+                    // Меню — открытый оверлей; клик вне его (в т.ч. по якорю)
+                    // закрывает (toggle-семантика якоря сохраняется).
+                    let menu = glay.dropdown_menu;
+                    if menu.w > 0.0 && !crate::kit_ui::cursor_in(&menu, self.cursor) {
+                        self.kit_demo.dropdown_open = false;
+                        swallowed = true;
+                    }
+                }
+                if swallowed {
+                    self.request_redraw();
+                    return;
+                }
+            }
+        }
         if let Some(id) = element.strip_prefix(crate::kit_demo::HIT_PREFIX) {
             // Wave M (M3-b): чип группы мобильной навигации (compact) —
             // смена активной группы (список секций перезбирается на кадре).
@@ -369,6 +417,12 @@ impl App {
                 }
             }
             crate::kit_demo::apply_click(&mut self.kit_demo, id);
+            // Wave D v1.1 (D1, TS-D3): knob-slide переключателя — 100 мс
+            // (motion-токен Short2; reduced-motion — мгновенно, см. tick).
+            // Instant — wasm-безопасный alias (canvas_core::time).
+            if id == crate::kit_demo::hit::SWITCH {
+                self.kit_demo_switch_anim = Some(Instant::now());
+            }
             // Тулбар темы — применяем пресет к приложению (settings.theme_preset)
             if id == crate::kit_demo::hit::TOOLBAR_THEME {
                 if let Some(preset) =
@@ -2330,13 +2384,14 @@ impl App {
                     self.help_menu = None;
                     // FR-070: админпанель и витрина взаимоисключимы
                     self.admin_open = false;
-                    self.kit_gallery_open = true;
-                    // FR-059: контент витрины — с начала (скролл секций)
-                    self.kit_gallery_scroll = canvas_ui::kit::ScrollState::default();
+                    // Wave D v1.1 (D6, issue #32): вход меню открывает
+                    // интерактивную demo (TO-BE) — TS-D1 проверяет
+                    // интерактивность с этого входа; AS-IS остаётся
+                    // доступен тумблером шапки витрины.
+                    self.open_kit_demo();
                     // FR-062 F-17: фокус секции Tab — с начала (кольцо пустое:
                     // первый Tab ставит фокус на первый слот)
                     self.kit_gallery_focus.clear();
-                    self.request_redraw();
                 }
                 // FR-070: «UI-консоль» — админпанель (модаль; вход из
                 // меню «?», доступна всегда)
@@ -5274,7 +5329,8 @@ impl App {
         // FR-059: колесо над контентом витрины кита прокручивает секции
         // (кит список+скролл; шапка фиксирована; знак — как у списков)
         // Wave M (M3-b): в адаптиве сайдбар TO-BE — собственное окно
-        // скролла (F1): колесо над ним крутит сайдбар, не секции.
+        // скролла (F1): колесо над ним крутит сайдбар (состояние —
+        // KitDemoState::sidebar_scroll), не секции.
         if self.kit_gallery_open {
             let viewport = self.viewport_logical();
             if self.settings.modals_adaptive {
@@ -5299,6 +5355,31 @@ impl App {
                         }
                     }
                 }
+            } else if self.kit_demo.tobe {
+                // Wave D v1.1 (F1, issue #32): флаг OFF — в TO-BE колесо над
+                // сайдбаром прокручивает САЙДБАР (тот же контракт ScrollState;
+                // состояние — App, kit_demo_sidebar_scroll).
+                let sb = crate::kit_ui::gallery_demo_sidebar_viewport(viewport);
+                if sb.w > 0.0 && crate::kit_ui::cursor_in(&sb, self.cursor) {
+                    let dy = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
+                        MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),
+                    };
+                    let mut scroll = self.kit_demo_sidebar_scroll.clone();
+                    // content_h последнего кадра (полная колонка сайдбара —
+                    // раскладка не пересобирается: тот же кадр, дешевле).
+                    if let Some(lay) = self.kit_demo_layout.as_ref() {
+                        if let Some(dl) = lay.demo.as_ref() {
+                            scroll.content_h = dl.sidebar_scroll.content_h;
+                            scroll.viewport_h = dl.sidebar_viewport.h;
+                        }
+                    }
+                    scroll.scroll_by(dy);
+                    scroll.clamp();
+                    self.kit_demo_sidebar_scroll = scroll;
+                    self.request_redraw();
+                    return;
+                }
             }
             let sections = crate::kit_ui::gallery_scroll_viewport(viewport);
             if crate::kit_ui::cursor_in(&sections, self.cursor) {
@@ -5313,16 +5394,34 @@ impl App {
                 let mut m = crate::kit_ui::new_measurer();
                 let mut fs = canvas_render::text::measure_font_system();
                 let palette = self.effective_palette().kit_palette();
-                let lay = crate::kit_ui::gallery_layout(
-                    viewport,
-                    self.settings.language,
-                    &scroll,
-                    &palette,
-                    &mut m,
-                    &mut fs,
-                );
-                scroll.viewport_h = lay.sections_viewport.h;
-                scroll.content_h = lay.content_h;
+                // Wave D v1.1: в TO-BE полная высота колонки — от TO-BE
+                // раскладки (секции Wave C длиннее AS-IS; прежний кламп по
+                // AS-IS-высоте не давал докрутить хвост колесом).
+                let content_h_and_vp = if self.kit_demo.tobe {
+                    let lay = crate::kit_ui::gallery_layout_tobe(
+                        viewport,
+                        self.settings.language,
+                        &scroll,
+                        &self.kit_demo_sidebar_scroll,
+                        &palette,
+                        &mut m,
+                        &mut fs,
+                        &self.kit_demo,
+                    );
+                    (lay.content_h, lay.sections_viewport.h)
+                } else {
+                    let lay = crate::kit_ui::gallery_layout(
+                        viewport,
+                        self.settings.language,
+                        &scroll,
+                        &palette,
+                        &mut m,
+                        &mut fs,
+                    );
+                    (lay.content_h, lay.sections_viewport.h)
+                };
+                scroll.viewport_h = content_h_and_vp.1;
+                scroll.content_h = content_h_and_vp.0;
                 scroll.scroll_by(dy);
                 scroll.clamp();
                 self.kit_gallery_scroll = scroll;

@@ -3481,6 +3481,77 @@ mod tests {
         }
     }
 
+    /// Wave D v1 (issue #32 D6, TS-D8): вход demo — `open_kit_demo` (web
+    /// `?ui=demo`; натив — «? → О интерфейсе»): витрина открыта, сразу
+    /// TO-BE, пилюля темы синхронна пресету приложения (первый клик цикла
+    /// применяет СЛЕДУЮЩИЙ пресет — D3 v1.1/F1), скроллы — с начала.
+    #[test]
+    fn kit_demo_entry_opens_tobe_synced_to_theme() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        app.settings.theme_preset = "nord".to_string();
+        app.open_kit_demo();
+        assert!(app.kit_gallery_open, "витрина открыта");
+        assert!(app.kit_demo.tobe, "вход demo — сразу TO-BE");
+        let idx = canvas_core::theme_presets::PRESETS
+            .iter()
+            .position(|p| p.id == "nord")
+            .expect("пресет nord зарегистрирован в PRESETS");
+        assert_eq!(app.kit_demo.theme_idx, idx, "пилюля темы синхронна пресету");
+        // Повторный вход (как повторный ?ui=demo) — скролл с начала
+        app.kit_gallery_scroll.offset = 100.0;
+        app.kit_demo_sidebar_scroll.offset = 50.0;
+        app.open_kit_demo();
+        assert_eq!(app.kit_gallery_scroll.offset, 0.0, "скролл секций сброшен");
+        assert_eq!(
+            app.kit_demo_sidebar_scroll.offset, 0.0,
+            "скролл сайдбара сброшен"
+        );
+    }
+
+    /// Wave D v1.1 (issue #32 D3, TS-D4): клик пилюли темы применяет
+    /// следующий пресет `canvas_core::theme_presets::PRESETS` к приложению
+    /// (`settings.theme_preset`), эффективная палитра меняется (все
+    /// секции перерисовываются), полный цикл заворачивается, пилюля демо
+    /// остаётся синхронной.
+    #[test]
+    fn kit_demo_theme_pill_applies_preset_cycle() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        // Последний пресет реестра — первый клик обязан завернуть цикл
+        let last = canvas_core::theme_presets::PRESETS.len() - 1;
+        app.settings.theme_preset = canvas_core::theme_presets::PRESETS[last].id.to_string();
+        app.open_kit_demo();
+        assert_eq!(app.kit_demo.theme_idx, last, "пилюля синхронна пресету");
+        let palette_before = app.effective_palette().kit_palette();
+        let element = crate::kit_demo::hit_id(crate::kit_demo::hit::TOOLBAR_THEME);
+        // Первый клик: последний пресет → первый; палитра приложения
+        // меняется (все секции витрины перерисовываются от неё)
+        assert!(app.dispatch_surface_click(id::KIT_GALLERY, &element));
+        assert_eq!(app.kit_demo.theme_idx, 0, "цикл тем заворачивается");
+        assert_eq!(
+            app.settings.theme_preset,
+            canvas_core::theme_presets::PRESETS[0].id,
+            "клик темой применяет пресет к приложению"
+        );
+        assert_ne!(
+            palette_before,
+            app.effective_palette().kit_palette(),
+            "пресет меняет эффективную палитру"
+        );
+        // Полный цикл — исходный пресет и пилюля синхронна: после первого
+        // клика (last → 0) осталось last кликов до заворота в last
+        for _ in 1..=last {
+            assert!(app.dispatch_surface_click(id::KIT_GALLERY, &element));
+        }
+        assert_eq!(app.kit_demo.theme_idx, last);
+        assert_eq!(
+            app.settings.theme_preset,
+            canvas_core::theme_presets::PRESETS[last].id,
+            "полный цикл возвращает исходный пресет"
+        );
+    }
+
     /// Регресс: pick-зона main stage — ТОЧНО окно stage (xywh), а не
     /// завышенный rect (x+w / y+h в полях w/h — класс дефекта линта F-11).
     /// Прежняя конверсия UiRect::new(r.x, r.y, r.x + r.w, r.y + r.h)

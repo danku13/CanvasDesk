@@ -22,7 +22,8 @@ AS-IS/TO-BE · Тема (цикл пресетов `canvas_core::theme_presets::
 ## Навигация (D5)
 
 Левый сайдбар: группы **Inputs / Navigation / Containers / Data display /
-Feedback** (реестр `kit_demo::SECTIONS`, 26 секций), клик — скролл к секции
+Feedback** (реестр `kit_demo::SECTIONS`, 28 секций — 26 Wave D + avatar/nav_rail
+из INT-4 #46), клик — скролл к секции
 (`DemoLayout::section_offsets` — базовые y заголовков до сдвига FR-059).
 Секции layout-инженерии (measured/grow/wrap/grid/…, LAY-SHOWCASE) в сайдбар
 не входят — это демонстрация движка раскладки, а не компонентов.
@@ -61,18 +62,25 @@ paint — кандидат Wave D v2).
 
 ## Доступ (D6)
 
-- Натив: `?` → «О интерфейсе» (без режима) → тумблер TO-BE в тулбаре.
+- Натив: `?` → «О интерфейсе» — вход demo открывает витрину сразу в TO-BE
+  (`App::open_kit_demo`, v1.2; AS-IS доступен тумблером шапки).
 - Web: `?ui=demo` — витрина сразу в TO-BE (`url_params::WebParams::ui_demo`,
-  потребление — `app_spawn::spawn_desk_web` → `App::open_kit_demo`).
+  потребление — `app_spawn::spawn_desk_web` → `App::open_kit_demo`; парс
+  покрыт тестом `ui_demo_param_parses`, сценарий приёмки —
+  `docs/WASM-TESTING.md`, §5 хронология).
 - Standalone `canvasdesk-demo` — v2 (упомянут в issue как опциональный).
 
 ## Документация секций (D7)
 
-- В TO-BE каждая секция Wave C несёт строку описания (D7-ключи
-  `kit.desc.*`, RU/EN): компонент · API · интерактив/a11y.
+- Полные контракты по каждой из 28 секций витрины (описание + API
+  `canvas-ui` + a11y-контракт, EN) — [docs/ui-kit.md §7.4](../ui-kit.md);
+  компонентный реестр — `design/rules/10-components.md` (K1).
+- В TO-BE каждая секция несёт строку описания (D7-ключи `kit.desc.*`,
+  RU/EN): компонент · API · интерактив/a11y.
 - a11y-контракты клавиатуры (Space для toggle-ов, стрелки для радио/табов,
   Esc для модалок) зафиксированы в
-  `docs/interface-objects/kit-component-contracts.md`; v1 витрины
+  `docs/interface-objects/kit-component-contracts.md` (Wave C deliverable,
+  issue #62 — файл появляется слиянием #62); v1 витрины
   реализует клик-интерактив + Esc-лестницу (модалка/палитра/поповер/dropdown),
   полный keyboard-ring по демо — v2.
 
