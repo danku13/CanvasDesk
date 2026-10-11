@@ -149,15 +149,22 @@ pub struct SnapOutcome {
 }
 
 /// Эффективный шаг сетки с учётом зума (п.1-3): sub-grid (minor/2) при
-/// крупном зуме, coarse-grid (major) при мелком, иначе minor. Используется
-/// и движком снапа, и рендером zoom-адаптивной сетки (T-038.3).
+/// крупном зуме, ниже — динамический шаг по ряду 1-2-5 (CAD/Figma):
+/// screen-шаг не опускается ниже `coarse_zoom × minor`, при отдалении шаг
+/// укрупняется по ряду 20 → 40 → 100 → 200 … (раньше ниже coarse-порога
+/// шаг прыгал сразу на major — при глубоком отдалении major-линии сгущались
+/// до единиц экранных пикселей и рябели). Используется и движком снапа,
+/// и рендером zoom-адаптивной сетки (T-038.3).
+///
+/// Чистая функция лестницы живёт в `canvas_render::grid::ladder_step` —
+/// единый источник истины для снапа и рендера (app зависит от render,
+/// ADR-0012); паритет веток закреплён оракул-тестом `grid.rs` и матричными
+/// тестами ниже.
 pub fn effective_grid_step(cfg: &SnapConfig) -> f32 {
     if cfg.zoom > cfg.sub_zoom {
         cfg.grid_minor / 2.0
-    } else if cfg.zoom < cfg.coarse_zoom {
-        cfg.grid_major
     } else {
-        cfg.grid_minor
+        canvas_render::grid::ladder_step(cfg.grid_minor, cfg.zoom, cfg.coarse_zoom * cfg.grid_minor)
     }
 }
 
@@ -754,18 +761,26 @@ mod tests {
     }
 
     #[test]
-    fn эффективный_шаг_coarse_grid_ниже_порога_зума() {
+    fn эффективный_шаг_укрупняется_по_ряду_125_ниже_порога_зума() {
+        // Zoom 0.4: пол = coarse×minor = 10 screen-px; базовые 20 дают 8 px —
+        // лестница ×2 → 40 world (16 px на экране).
         let cfg = SnapConfig {
             zoom: 0.4,
             ..SnapConfig::default()
         };
-        assert_eq!(effective_grid_step(&cfg), 100.0); // major
-                                                      // Граница: ровно 0.5 — уже не coarse.
+        assert_eq!(effective_grid_step(&cfg), 40.0);
+        // Граница: ровно 0.5 — ещё база (лестница включается строго ниже).
         let boundary = SnapConfig {
             zoom: 0.5,
             ..SnapConfig::default()
         };
         assert_eq!(effective_grid_step(&boundary), 20.0);
+        // Глубокое отдаление (MIN_ZOOM = 0.05): ряд 20→…→200 (10 px на экране).
+        let deep = SnapConfig {
+            zoom: 0.05,
+            ..SnapConfig::default()
+        };
+        assert_eq!(effective_grid_step(&deep), 200.0);
     }
 
     #[test]
@@ -1158,16 +1173,19 @@ mod tests {
     }
 
     #[test]
-    fn coarse_grid_при_мелком_зуме_использует_major_шаг() {
-        // zoom 0.4 → шаг 100 (не minor 20): левый край 115 тянется к 100
-        // (дельта -15; minor-шаг дал бы 120/+5... у правого края 120 дельта
-        // к линии 100 = -20). Допуск в world вырос до 20 (= 8 / 0.4).
+    fn сетка_при_мелком_зуме_притягивает_к_укрупнённому_шагу_ряда_125() {
+        // zoom 0.4 → шаг лестницы 40 (не minor 20 и не бывший major 100):
+        // края 131..136 тянутся к линии 120 (3×40): дельта -11 у левого края
+        // против -16 у правого → min |дельта| = 11. Minor-шаг 20 дал бы +4
+        // (к линии 140), старый coarse (major 100) молчал бы за допуском
+        // (дельта -31 > 20 world) — значения разные, что доказывает работу
+        // лестницы 1-2-5. Допуск в world вырос до 20 (= 8 / 0.4).
         let coarse = SnapConfig {
             zoom: 0.4,
             ..cfg_only_grid()
         };
-        let out = snap_move(r(115.0, 0.0, 5.0, 5.0), 0.0, 0.0, &[], &coarse);
-        assert_eq!(out.dx, -15.0);
+        let out = snap_move(r(131.0, 0.0, 5.0, 5.0), 0.0, 0.0, &[], &coarse);
+        assert_eq!(out.dx, -11.0);
     }
 
     // --- FR-038 T-038.5: batch-операции выделения (п.16-17) ---
