@@ -97,6 +97,31 @@ pub enum CommandPaletteKey {
     Escape, // close
 }
 
+// --- Резолвер (issue #67 V2, use-case command-palette.md §4/§5) --------------
+
+/// Raw-клавиша палитры (платформо-независимая — без зависимости от winit).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaletteKey {
+    Up,
+    Down,
+    Enter,
+    Escape,
+}
+
+/// Резолвер raw-клавиши → [`CommandPaletteKey`] (контракт use-case
+/// command-palette.md §5: ↑/↓ — navigate, Enter — activate, Esc — close).
+/// Закрывает расхождение из §4 (enum объявлен, резолвера не было —
+/// ревью #47). Tab-автодополнение (§doc-string) — вне матрицы enum,
+/// остаётся контрактом потребителя.
+pub fn command_palette_key(key: PaletteKey) -> CommandPaletteKey {
+    match key {
+        PaletteKey::Up => CommandPaletteKey::Prev,
+        PaletteKey::Down => CommandPaletteKey::Next,
+        PaletteKey::Enter => CommandPaletteKey::Enter,
+        PaletteKey::Escape => CommandPaletteKey::Escape,
+    }
+}
+
 /// Hit-test: возвращает индекс результата по точке.
 pub fn command_palette_hit(layout: &CommandPaletteLayout, p: UiPoint) -> Option<usize> {
     layout
@@ -192,6 +217,25 @@ mod tests {
         assert_eq!(
             command_palette_hit(&lay, UiPoint::new(400.0, 110.0)),
             Some(0)
+        );
+    }
+
+    // --- issue #67 V2: резолвер command_palette_key ---------------------------
+
+    #[test]
+    fn command_palette_key_resolves_all_raw_keys() {
+        assert_eq!(command_palette_key(PaletteKey::Up), CommandPaletteKey::Prev);
+        assert_eq!(
+            command_palette_key(PaletteKey::Down),
+            CommandPaletteKey::Next
+        );
+        assert_eq!(
+            command_palette_key(PaletteKey::Enter),
+            CommandPaletteKey::Enter
+        );
+        assert_eq!(
+            command_palette_key(PaletteKey::Escape),
+            CommandPaletteKey::Escape
         );
     }
 }

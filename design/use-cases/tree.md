@@ -44,10 +44,11 @@ Pressed/Disabled — как у List (rows — «consumer's WidgetState» в §K1
 Focused > Dragged > Selected > Normal — на строку (не на узел данных). Модель выбора: один выделенный узел
 (id); Selected ортогонален hover (ST1); раскрытость — свойство узла, не
 состояние контрола. Keyboard-фокус — KitState::Focused (state-layer 0.10,
-focus-ring `accent`, Wave T §5.1.1). Заявленный в doc-comment клавиатурный
-контракт кодом не обеспечен: enum `TreeAction` {FocusNext, FocusPrev,
-Expand, Collapse, Activate, None} объявлен, резолвера `tree_key` в модуле
-нет — расхождение, задача на рефакторинг.
+focus-ring `accent`, Wave T §5.1.1). Клавиатурный контракт обеспечен
+кодом (issue #67 V2): enum `TreeAction` {FocusNext, FocusPrev, Expand,
+Collapse, Activate, None} + резолвер `tree_key(TreeKey, TreeKeyCtx) ->
+TreeAction` в модуле (↑/↓ — FocusPrev/FocusNext, ←/→ — Collapse/Expand
+узла с детьми, Enter — Activate; избыточные ←/→ — None), покрыт юнит-тестами.
 
 ## 5. Взаимодействие
 - **Мышь**: `tree_hit` — id строки по точке (клик мимо строк — None); клик
@@ -55,7 +56,8 @@ Expand, Collapse, Activate, None} объявлен, резолвера `tree_key
   `TreeRow`; toggle раскрытия = мутация `expanded` узла + перелэйаут.
 - **Клавиатура** (контракт этого файла): ↑/↓ — соседние видимые строки
   (FocusPrev/FocusNext), ←/→ — Collapse/Expand, Enter — Activate; резолвер
-  в модуле отсутствует (см. §4).
+  `tree_key` в модуле (issue #67 V2; demo-потребитель — стрелки группы
+  дерева витрины, `kit_demo::apply_group_arrow`).
 - **Touch**: зоны строк/шевронов — LAY8.3 (`../rules/11-layouts.md`), 44
   logical px на coarse-pointer, центр, кламп в строку.
 
@@ -81,8 +83,8 @@ Expand, Collapse, Activate, None} объявлен, резолвера `tree_key
 - Геометрия/flatten → `tree_layout` + юнит-тесты модуля
   (`tree_flatten_expanded`, `tree_flatten_collapsed`, `tree_hit_returns_id`);
   G4 — при подключении к поверхности.
-- Появление `tree_key` (резолвер ↑/↓/←/→/Enter → `TreeAction`) закрывает
-  расхождение из §4; контракт уже зафиксирован этим файлом.
+- `tree_key` (резолвер ↑/↓/←/→/Enter → `TreeAction`) реализован
+  (issue #67 V2), расхождение из §4 закрыто; контракт зафиксирован этим файлом.
 - Высота/отступ → параметры потребителя; выравнивание на константы §K1/
   `../rules/03-spacing-radius.md` (LIST_ROW_H 26).
 - Витрина/эталоны: SECTION_* в `crates/canvas-app/src/kit_ui.rs`;

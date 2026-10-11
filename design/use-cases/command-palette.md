@@ -45,9 +45,11 @@ panel_border, hover строки hover_fill, выбранный результа
 `SurfaceDecl` по L3, `../rules/05-layering.md`). Строка результата —
 матрица ST1 `../rules/08-states.md`; выделение — курсор `selected`-индекс
 (один активный результат, keyboard-first); поле ввода — фокус поля кита
-(KitState::Focused, state-layer 0.10). Клавиатурный контракт кодом не
-обеспечен: enum `CommandPaletteKey` {Prev, Next, Enter, Escape} объявлен,
-резолвера нет — расхождение, задача на рефакторинг.
+(KitState::Focused, state-layer 0.10). Клавиатурный контракт обеспечен
+кодом (issue #67 V2): enum `CommandPaletteKey` {Prev, Next, Enter, Escape}
++ резолвер `command_palette_key(PaletteKey) -> CommandPaletteKey`
+(↑/↓ — Prev/Next, Enter — activate, Esc — close; Tab-автодополнение —
+контракт потребителя), покрыт юнит-тестами.
 
 ## 5. Взаимодействие
 - **Запрос/матчинг**: `search_actions` — пустой запрос возвращает все
@@ -76,9 +78,10 @@ panel_border, hover строки hover_fill, выбранный результа
 ## 7. Где в коде
 `crates/canvas-ui/src/component/command_palette.rs` — `CommandAction`/
 `CommandCategory`, `command_palette_layout`/`CommandPaletteLayout`,
-`search_actions`, `command_palette_hit`, `CommandPaletteKey`; ре-экспорт из
-`crates/canvas-ui/src/kit.rs` (строки 102–104). Потребителей в app нет
-(Ctrl+K не подключён). Витрина: секция command_palette в
+`search_actions`, `command_palette_hit`, `CommandPaletteKey` + резолвер
+`command_palette_key`/`PaletteKey` (issue #67 V2); ре-экспорт из
+`crates/canvas-ui/src/kit.rs`. Потребитель в app — demo-витрина
+(стрелки/Enter/Escape пунктов палитры через trap-ринг, #67 V2). Витрина: секция command_palette в
 `crates/canvas-app/src/kit_sections_k4.rs` (K4) — окно палитры целиком
 (input + строки результатов: Normal/Selected, Hovered на строке).
 
@@ -86,7 +89,7 @@ panel_border, hover строки hover_fill, выбранный результа
 - Геометрия → `command_palette_layout` + юнит-тесты модуля (centered-top,
   max_visible, hit); G4 — при подключении к поверхности.
 - Матчинг → `search_actions` (fuzzy/`ActionRegistry` — волна A, §5.3.15);
-  резолвер `CommandPaletteKey` закрывает расхождение из §4; Esc/фокус
-  поля — по `../rules/09-input.md`.
+  резолвер `command_palette_key` реализован (issue #67 V2), расхождение из
+  §4 закрыто; Esc/фокус поля — по `../rules/09-input.md`.
 - Витрина: секция command_palette в `crates/canvas-app/src/kit_sections_k4.rs`
   (K4); snapshot через `Comp` (FR-068 W0, Контракт-9) отсутствует.

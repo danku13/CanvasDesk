@@ -33,9 +33,9 @@ pub use crate::component::banner::{
     BANNER_PAD, BANNER_RADIUS, BANNER_TINT_ALPHA,
 };
 pub use crate::component::button::{
-    button_layout, button_size, button_style, chip_layout, chip_size, chip_style, icon_button_rect,
-    icon_button_style, icon_glyph, icon_name, stage_close_button, stage_close_button_lg, switch,
-    ChipLayout, Icon, SwitchLayout,
+    button_layout, button_layout_sized, button_size, button_style, chip_layout, chip_layout_sized,
+    chip_size, chip_style, icon_button_rect, icon_button_rect_sized, icon_button_style, icon_glyph,
+    icon_name, stage_close_button, stage_close_button_lg, switch, ChipLayout, Icon, SwitchLayout,
 };
 pub use crate::component::chat_bubble::{
     chat_bubble, paint_chat_bubble, ChatBubbleKind, ChatBubbleLayout, ChatBubbleStyle,
@@ -103,8 +103,8 @@ pub use crate::component::checkbox::{
     checkbox_glyph, checkbox_hit, checkbox_layout, checkbox_style, CheckboxLayout, CheckboxState,
 };
 pub use crate::component::command_palette::{
-    command_palette_hit, command_palette_layout, search_actions, CommandAction, CommandCategory,
-    CommandPaletteKey, CommandPaletteLayout,
+    command_palette_hit, command_palette_key, command_palette_layout, search_actions,
+    CommandAction, CommandCategory, CommandPaletteKey, CommandPaletteLayout, PaletteKey,
 };
 pub use crate::component::popover::{popover, PopoverLayout};
 pub use crate::component::progress::{
@@ -131,7 +131,9 @@ pub use crate::component::tabs::{
     tab_style, tabs_hit, tabs_key, tabs_layout, TabKey, TabLayout, TabStyle, TabStyleResult,
     TabsLayout,
 };
-pub use crate::component::tree::{tree_hit, tree_layout, TreeAction, TreeNode, TreeRow};
+pub use crate::component::tree::{
+    tree_hit, tree_key, tree_layout, TreeAction, TreeKey, TreeKeyCtx, TreeNode, TreeRow,
+};
 
 // Wave A §5.5: архитектурные паттерны (Response, WidgetExt, NavRail, ActionRegistry, FocusTrap).
 pub use crate::action::{Action, ActionRegistry};

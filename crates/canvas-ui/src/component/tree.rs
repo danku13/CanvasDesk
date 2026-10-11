@@ -171,6 +171,56 @@ pub fn tree_hit(rows: &[TreeRow], p: UiPoint) -> Option<&str> {
         .map(|r| r.id.as_str())
 }
 
+// --- Клавиатурный резолвер (issue #67 V2, use-case tree.md §4/§5) -----------
+
+/// Raw-клавиша дерева (платформо-независимая — без зависимости от winit;
+/// потребитель мапит события своей оконной системы).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeKey {
+    Up,
+    Down,
+    Left,
+    Right,
+    Enter,
+}
+
+/// Контекст текущего узла для резолвера (свойства узла, не состояния ST1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreeKeyCtx {
+    /// Узел раскрыт (свойство узла — tree.md §4).
+    pub expanded: bool,
+    /// Есть дети (rect шеврона ненулевой).
+    pub has_children: bool,
+}
+
+/// Резолвер ↑/↓/←/→/Enter → [`TreeAction`] (контракт use-case tree.md §5):
+/// ↑/↓ — соседние видимые строки (FocusPrev/FocusNext); ← — Collapse
+/// (узел с детьми и раскрыт), → — Expand (узел с детьми и свёрнут);
+/// Enter — Activate. ←/→ на листе или уже в нужном состоянии — None
+/// (потребитель не тратит событие). Закрывает расхождение из §4
+/// (enum TreeAction объявлен, резолвера не было — ревью #47).
+pub fn tree_key(key: TreeKey, ctx: TreeKeyCtx) -> TreeAction {
+    match key {
+        TreeKey::Up => TreeAction::FocusPrev,
+        TreeKey::Down => TreeAction::FocusNext,
+        TreeKey::Left => {
+            if ctx.has_children && ctx.expanded {
+                TreeAction::Collapse
+            } else {
+                TreeAction::None
+            }
+        }
+        TreeKey::Right => {
+            if ctx.has_children && !ctx.expanded {
+                TreeAction::Expand
+            } else {
+                TreeAction::None
+            }
+        }
+        TreeKey::Enter => TreeAction::Activate,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +280,51 @@ mod tests {
         assert_eq!(tree_hit(&rows, UiPoint::new(10.0, 30.0)), Some("c1"));
         // Click below
         assert_eq!(tree_hit(&rows, UiPoint::new(10.0, 100.0)), None);
+    }
+
+    // --- issue #67 V2: резолвер tree_key ------------------------------------
+
+    #[test]
+    fn tree_key_up_down_focus_prev_next() {
+        let ctx = TreeKeyCtx {
+            expanded: false,
+            has_children: false,
+        };
+        assert_eq!(tree_key(TreeKey::Up, ctx), TreeAction::FocusPrev);
+        assert_eq!(tree_key(TreeKey::Down, ctx), TreeAction::FocusNext);
+    }
+
+    #[test]
+    fn tree_key_left_right_expand_collapse() {
+        // Узел с детьми: ← сворачивает раскрытый, → разворачивает свёрнутый.
+        let expanded = TreeKeyCtx {
+            expanded: true,
+            has_children: true,
+        };
+        let collapsed = TreeKeyCtx {
+            expanded: false,
+            has_children: true,
+        };
+        assert_eq!(tree_key(TreeKey::Left, expanded), TreeAction::Collapse);
+        assert_eq!(tree_key(TreeKey::Right, collapsed), TreeAction::Expand);
+        // Избыточные ←/→ — None (событие не тратится).
+        assert_eq!(tree_key(TreeKey::Left, collapsed), TreeAction::None);
+        assert_eq!(tree_key(TreeKey::Right, expanded), TreeAction::None);
+        // Лист: ←/→ — None.
+        let leaf = TreeKeyCtx {
+            expanded: false,
+            has_children: false,
+        };
+        assert_eq!(tree_key(TreeKey::Left, leaf), TreeAction::None);
+        assert_eq!(tree_key(TreeKey::Right, leaf), TreeAction::None);
+    }
+
+    #[test]
+    fn tree_key_enter_activates() {
+        let ctx = TreeKeyCtx {
+            expanded: true,
+            has_children: true,
+        };
+        assert_eq!(tree_key(TreeKey::Enter, ctx), TreeAction::Activate);
     }
 }
