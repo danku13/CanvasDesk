@@ -1,0 +1,4 @@
+rect x=78 y=176 w=164 h=52
+rect x=86 y=180 w=148 h=36
+text x=98 y=180 w=55 h=36 text="Snackbar"
+text x=165 y=180 w=57 h=36 text="Apply"

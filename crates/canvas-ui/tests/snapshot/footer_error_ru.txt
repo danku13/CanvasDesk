@@ -1,0 +1,8 @@
+text x=16 y=154 w=288 h=14 text="Подвал"
+rect x=16 y=176 w=288 h=44
+rect x=16 y=183 w=88 h=30
+text x=16 y=183 w=88 h=30 text="Подсказка"
+rect x=130 y=183 w=71 h=30
+text x=130 y=183 w=71 h=30 text="Отмена"
+rect x=209 y=183 w=95 h=30
+text x=209 y=183 w=95 h=30 text="Применить"

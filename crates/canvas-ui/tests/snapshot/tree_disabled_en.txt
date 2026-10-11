@@ -1,0 +1,4 @@
+text x=16 y=16 w=16 h=26 text="▼"
+text x=36 y=16 w=268 h=26 text="Tree"
+text x=36 y=42 w=268 h=26 text="Settings"
+text x=36 y=68 w=268 h=26 text="Search"
