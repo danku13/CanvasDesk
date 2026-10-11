@@ -8011,7 +8011,12 @@ impl App {
                 && cursor[1] <= r[1] + r[3]
         };
         let mut d = crate::kit_ui::KitDraw::new();
-        d.set_icon_set(self.icon_set_active());
+        // «SVG-иконки всегда» (директива владельца после CR-036): author-bar
+        // рендерит SVG в любом icon_style — глобальный режим Glyph (дефолт
+        // старых конфигов) подменяется lucide (ICON_SETS[0]). DOM-паритет:
+        // #author-bar всегда содержал inline SVG, глифы GH/TG/in/$/ℹ —
+        // только мягкая деградация при отсутствии пары (set, name) в атласе.
+        d.set_icon_set(Some(self.icon_set_active().unwrap_or("lucide")));
         // Кнопки — кит-контролы со своим hover (кнопка = зона, DOM-паритет
         // «иконки с ссылками»; иконка 16×16 по центру, как #author-bar svg).
         for (index, (rect, button)) in lay

@@ -331,6 +331,8 @@ pub mod keys {
     pub const ABOUT_STAR_DESC: &str = "about.star.desc";
     pub const ABOUT_TELEGRAM_CHANNEL: &str = "about.telegram_channel";
     pub const ABOUT_TELEGRAM_CHANNEL_DESC: &str = "about.telegram_channel.desc";
+    pub const ABOUT_TELEGRAM_CHAT: &str = "about.telegram_chat";
+    pub const ABOUT_TELEGRAM_CHAT_DESC: &str = "about.telegram_chat.desc";
     pub const ABOUT_TELEGRAM_CONTACT: &str = "about.telegram_contact";
     pub const ABOUT_TELEGRAM_CONTACT_DESC: &str = "about.telegram_contact.desc";
     pub const ABOUT_LINKEDIN: &str = "about.linkedin";
@@ -1531,6 +1533,8 @@ const RU: &[(&str, &str)] = &[
     (keys::ABOUT_STAR_DESC, "Если проект полезен — поставьте звёзду"),
     (keys::ABOUT_TELEGRAM_CHANNEL, "Канал в Telegram"),
     (keys::ABOUT_TELEGRAM_CHANNEL_DESC, "Обновления, новости, анонсы"),
+    (keys::ABOUT_TELEGRAM_CHAT, "Чат проекта в Telegram"),
+    (keys::ABOUT_TELEGRAM_CHAT_DESC, "Официальный чат CanvasDesk — вопросы, обсуждение, помощь"),
     (keys::ABOUT_TELEGRAM_CONTACT, "Telegram — связаться"),
     (keys::ABOUT_TELEGRAM_CONTACT_DESC, "Вопросы, идеи, сотрудничество"),
     (keys::ABOUT_LINKEDIN, "LinkedIn"),
@@ -3166,6 +3170,8 @@ const EN: &[(&str, &str)] = &[
     (keys::ABOUT_STAR_DESC, "If the project is useful — leave a star"),
     (keys::ABOUT_TELEGRAM_CHANNEL, "Telegram channel"),
     (keys::ABOUT_TELEGRAM_CHANNEL_DESC, "Updates, news, announcements"),
+    (keys::ABOUT_TELEGRAM_CHAT, "Project chat on Telegram"),
+    (keys::ABOUT_TELEGRAM_CHAT_DESC, "Official CanvasDesk chat — questions, discussion, help"),
     (keys::ABOUT_TELEGRAM_CONTACT, "Telegram — get in touch"),
     (keys::ABOUT_TELEGRAM_CONTACT_DESC, "Questions, ideas, collaboration"),
     (keys::ABOUT_LINKEDIN, "LinkedIn"),

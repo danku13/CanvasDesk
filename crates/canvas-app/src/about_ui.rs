@@ -46,8 +46,9 @@ pub struct AboutLink {
     pub url: &'static str,
 }
 
-/// Строки-ссылки модала (порядок = прежний DOM `#about-overlay`).
-pub const ABOUT_LINKS: [AboutLink; 6] = [
+/// Строки-ссылки модала (порядок = прежний DOM `#about-overlay`; чат
+/// t.me/CanvasDesk — добавлен директивой владельца рядом с каналом).
+pub const ABOUT_LINKS: [AboutLink; 7] = [
     AboutLink {
         label_key: crate::i18n::keys::ABOUT_GITHUB,
         desc_key: crate::i18n::keys::ABOUT_GITHUB_DESC,
@@ -64,6 +65,11 @@ pub const ABOUT_LINKS: [AboutLink; 6] = [
         url: "https://t.me/dkuzmichev",
     },
     AboutLink {
+        label_key: crate::i18n::keys::ABOUT_TELEGRAM_CHAT,
+        desc_key: crate::i18n::keys::ABOUT_TELEGRAM_CHAT_DESC,
+        url: "https://t.me/CanvasDesk",
+    },
+    AboutLink {
         label_key: crate::i18n::keys::ABOUT_TELEGRAM_CONTACT,
         desc_key: crate::i18n::keys::ABOUT_TELEGRAM_CONTACT_DESC,
         url: "https://t.me/danku13",
@@ -76,7 +82,7 @@ pub const ABOUT_LINKS: [AboutLink; 6] = [
     AboutLink {
         label_key: crate::i18n::keys::ABOUT_DONATE,
         desc_key: crate::i18n::keys::ABOUT_DONATE_DESC,
-        url: "https://donationalerts.com/r/danku13",
+        url: "https://www.donationalerts.com/r/daniilkuzmichev",
     },
 ];
 
@@ -271,7 +277,7 @@ pub const AUTHOR_BAR_BUTTONS: [AuthorBarButton; 5] = [
         icon: "heart",
         glyph: "$",
         tip_key: crate::i18n::keys::STRIP_DONATE,
-        action: AuthorBarAction::Url("https://donationalerts.com/r/danku13"),
+        action: AuthorBarAction::Url("https://www.donationalerts.com/r/daniilkuzmichev"),
     },
     AuthorBarButton {
         icon: "info",
@@ -349,12 +355,13 @@ mod tests {
     const VP: [f32; 2] = [1280.0, 800.0];
 
     /// Панель центрирована, ширина капится ABOUT_PANEL_W, высота — по
-    /// содержимому (шапка + автор + 6 строк + 2 паддинга).
+    /// содержимому (шапка + автор + 7 строк + 2 паддинга).
     #[test]
     fn about_layout_centers_panel_with_content_height() {
         let lay = about_layout(VP);
         assert_eq!(lay.panel[0], (VP[0] - ABOUT_PANEL_W) * 0.5);
-        let rows_h = 6.0 * ABOUT_ROW_H + 5.0 * ABOUT_ROW_GAP;
+        let rows_h =
+            ABOUT_LINKS.len() as f32 * ABOUT_ROW_H + (ABOUT_LINKS.len() - 1) as f32 * ABOUT_ROW_GAP;
         let want_h = ABOUT_HEADER_H + ABOUT_AUTHOR_H + rows_h + ABOUT_PAD * 2.0;
         assert_eq!(lay.panel[3], want_h);
         assert_eq!(lay.panel[1], (VP[1] - want_h) * 0.5);
@@ -419,13 +426,19 @@ mod tests {
         assert_eq!(about_hit(&lay, [1.0, 1.0]), AboutHit::Backdrop);
     }
 
-    /// Строка-ссылка несёт свою AboutLink (URL совпадает с константой).
+    /// Строка-ссылка несёт свою AboutLink (URL совпадает с константой);
+    /// чат t.me/CanvasDesk — индекс 3, донат — daniilkuzmichev (директива).
     #[test]
     fn about_rows_carry_links() {
         let lay = about_layout(VP);
         assert_eq!(lay.rows[0].link.url, ABOUT_LINKS[0].url);
-        assert_eq!(lay.rows[5].link.url, ABOUT_LINKS[5].url);
-        assert_eq!(ABOUT_LINKS[3].url, "https://t.me/danku13");
+        assert_eq!(lay.rows[6].link.url, ABOUT_LINKS[6].url);
+        assert_eq!(ABOUT_LINKS[3].url, "https://t.me/CanvasDesk");
+        assert_eq!(ABOUT_LINKS[4].url, "https://t.me/danku13");
+        assert_eq!(
+            ABOUT_LINKS[6].url,
+            "https://www.donationalerts.com/r/daniilkuzmichev"
+        );
     }
 
     /// Author-bar: ряд 5 кнопок 28×28 в левом верхнем углу (DOM-паритет
@@ -488,9 +501,27 @@ mod tests {
         );
         assert_eq!(
             AUTHOR_BAR_BUTTONS[3].action,
-            AuthorBarAction::Url("https://donationalerts.com/r/danku13")
+            AuthorBarAction::Url("https://www.donationalerts.com/r/daniilkuzmichev")
         );
         assert_eq!(AUTHOR_BAR_BUTTONS[4].action, AuthorBarAction::About);
         assert_eq!(AUTHOR_BAR_BUTTONS[4].icon, "info");
+    }
+
+    /// «SVG-иконки всегда» (директива владельца после CR-036): каждая
+    /// иконка author-bar растеризована во всех 4 UI-наборах атласа —
+    /// lucide-подмена режима Glyph (overlays: `unwrap_or("lucide")`)
+    /// не деградирует к глифам GH/TG/in/$/ℹ. Удаление имени из атласа
+    /// ломает этот тест раньше, чем рендер молча уйдёт в глифы.
+    #[test]
+    fn author_bar_icons_rasterized_in_all_ui_sets() {
+        for set in ["lucide", "material", "feather", "bootstrap"] {
+            for button in AUTHOR_BAR_BUTTONS.iter() {
+                assert!(
+                    canvas_render::icon_uv(set, button.icon).is_some(),
+                    "{set}/{}: нет в атласе — author-bar деградирует в глиф",
+                    button.icon
+                );
+            }
+        }
     }
 }

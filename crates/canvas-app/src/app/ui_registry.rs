@@ -849,6 +849,12 @@ pub mod ui_frame_flags {
     pub const TOAST_ACTION_ACTIVE: u64 = 1 << 37;
     /// FR-106 (C3): менеджер канвасов открыт (`app.canvas_manager.open`).
     pub const CANVAS_MANAGER_OPEN: u64 = 1 << 38;
+    /// Issue #60 (W-WEBUI): модал «Об авторе» открыт (`app.about_open`).
+    /// Без флага кэш (`App::ui_frame`) отдаёт кадр без ABOUT-поверхности:
+    /// рендер читает флаг напрямую (модал виден), а pick идёт по кэшу с
+    /// прежней сигнатурой — клики по строкам-ссылкам и «✕» не находят
+    /// цель (draw ≠ hit; найдено e2e при добавлении чата t.me/CanvasDesk).
+    pub const ABOUT_OPEN: u64 = 1 << 39;
 }
 
 /// FR-PERF-A: Сигнатура инвалидации кэша UI-кадра — всё, что влияет на
@@ -1147,6 +1153,12 @@ pub fn build_frame_sig(app: &App) -> UiFrameSig {
     // FR-106 (C3): менеджер канвасов открыт — состав кадра меняется.
     if app.canvas_manager.open {
         flags |= ui_frame_flags::CANVAS_MANAGER_OPEN;
+    }
+    // Issue #60 (W-WEBUI): модал «Об авторе» — состав кадра меняется
+    // открытием/закрытием (ABOUT-поверхность в реестре гейтится флагом);
+    // без включения в сигнатуру кэш пик-кадра не инвалидируется.
+    if app.about_open {
+        flags |= ui_frame_flags::ABOUT_OPEN;
     }
     // Hover-раскрытия и скроллы отдельных панелей — влияют на hit-rect'ы
     // внутри поверхности (не на состав кадра).
@@ -3964,5 +3976,24 @@ mod tests {
             base.chip_name,
             "смена активного канваса меняет геометрию чипа"
         );
+    }
+
+    /// Issue #60 (W-WEBUI): `about_open` обязан быть в сигнатуре кэша
+    /// UI-кадра — ABOUT-поверхность гейтится этим флагом в реестре.
+    /// Регрессия «draw ≠ hit»: модал рендерился (рендер читал флаг
+    /// напрямую), а pick шёл по кэш-кадру без ABOUT — клики по строкам
+    /// («Чат в Telegram», донат) и «✕» не находили цель. Найдено e2e
+    /// при добавлении чата t.me/CanvasDesk.
+    #[test]
+    fn ui_frame_sig_tracks_about_open() {
+        let mut app = test_stub();
+        app.onboarding = None;
+        let base = build_frame_sig(&app);
+        app.about_open = true;
+        let open = build_frame_sig(&app);
+        assert_ne!(open.flags, base.flags, "открытие About меняет сигнатуру");
+        assert_ne!(open, base, "кэш пик-кадра инвалидируется");
+        app.about_open = false;
+        assert_eq!(build_frame_sig(&app), base, "закрытие возвращает базу");
     }
 }
