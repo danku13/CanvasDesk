@@ -381,6 +381,26 @@ mod tests {
         assert!(!params.ui_debug);
     }
 
+    /// Wave D v1 (issue #32 D6, TS-D8): `?ui=demo` — витрина кита открыта
+    /// со старта в TO-BE; прочие значения и отсутствие параметра — false
+    /// (мягкий игнор). `ui` — одно значение: `debug` не открывает demo.
+    #[test]
+    fn ui_demo_param_parses() {
+        let params = parse_query("?ui=demo").expect("валидный запрос");
+        assert!(params.ui_demo);
+        assert!(!params.ui_debug, "ui=demo не включает DebugOverlay");
+        // Комбинируется с остальными (TS-D8: demo поверх обычного старта web)
+        let params = parse_query("?ui=demo&canvas=демо&stress=5").expect("валидный запрос");
+        assert!(params.ui_demo);
+        assert_eq!(params.canvas.as_deref(), Some("демо.canvas"));
+        assert_eq!(params.stress, Some(5));
+        // Другое значение / пустое — false
+        let params = parse_query("?ui=verbose").expect("валидный запрос");
+        assert!(!params.ui_demo);
+        let params = parse_query("?ui=").expect("валидный запрос");
+        assert!(!params.ui_demo);
+    }
+
     /// FR-105 (C2, №42a): `?migrate=1` — отладочный вход в диалог
     /// миграции OPFS→папка (временный до волны C3); прочие значения
     /// и отсутствие — false (мягкий игнор).
