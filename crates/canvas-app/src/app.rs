@@ -52,7 +52,7 @@ use crate::template_ui::{
     row_of_ordinal as template_row_of_ordinal, split_two_lines, PanelRow, WheelHit,
 };
 use crate::ui::{
-    button_rect, canvas_menu_label, canvas_menu_visible_items_ext, drag_origins, focus_seed_of,
+    button_rect, canvas_menu_label, canvas_menu_visible_items_web, drag_origins, focus_seed_of,
     help_button_rect, hotkeys_panel_rect_at, in_resize_corner, language_button_rect,
     menu_item_at_for, menu_item_rect, menu_rect_for, next_free_id, nodes_in_rect, paste_nodes,
     plan_group_around, plan_group_around_nodes, plan_group_at, point_in_rect, reassign_ids,
@@ -657,6 +657,16 @@ pub enum WebRequest {
     /// Режим активного канваса (№21c: Disk — чип «только просмотр») —
     /// ответ [`AppEvent::CanvasActiveKind`].
     CanvasActiveKind,
+    // --- Issue #60 (W-WEBUI): единый UI-слой — Former DOM-кнопки ---------
+    /// «Экспорт HTML…» из меню канваса (бывшая кнопка `#btn-export-html`
+    /// DOM #w6-toolbar, FR-076): офлайн-артефакт — самодостаточный HTML
+    /// со снимком канваса, значениями и what-if таблицей
+    /// (`export::export_html_active`).
+    ExportHtml,
+    /// Открыть внешнюю ссылку (строки модала «Об авторе» / чип strip):
+    /// web-слой — `window.open(url, "_blank", "noopener")` (жест клика
+    /// валиден). Натив не дренит канал (about-ссылки — web-фича).
+    OpenUrl { url: String },
 }
 
 /// Превью зоны дропа (T9): план вставки от DragEnter, origin следует за
@@ -1822,6 +1832,14 @@ pub struct App {
     /// канал, дренажируется обёрткой TourAwareApp после каждого события
     /// (паттерн tour-сигналов).
     pending_web_requests: Vec<WebRequest>,
+    /// Issue #60 (W-WEBUI): GPU-модал «Об авторе» открыт (замена DOM
+    /// `#about-overlay`; вход — пункт меню канваса «Об авторе» и чип
+    /// author-strip внизу-слева).
+    pub(crate) about_open: bool,
+    /// Issue #60: чип «ℹ Об авторе» внизу-слева (замена DOM `#author-bar`,
+    /// web-only). Дефолт — платформа сборки; G4-линт форсирует явно
+    /// (нативные тесты видят чип только в состоянии lint).
+    pub(crate) author_strip: bool,
     /// FR-108 (C5, №20): недавние натива — абсолютные пути к открытым
     /// `.canvas`-файлам, параллельные `canvas_entries` (индекс → путь:
     /// строка менеджера N открывает native_recent_paths[N]). Зеркало
@@ -2180,6 +2198,12 @@ impl App {
             // остаётся web-событием (CanvasActiveKind).
             canvas_chip: canvas_chip_ui::CanvasChipState::default(),
             active_canvas_disk: false,
+            // Issue #60 (W-WEBUI): модал «Об авторе» + author-strip —
+            // web-фичи (натив остаётся на меню «Об авторе» без DOM-оверлея);
+            // G4-линт форсирует `author_strip = true` явно (нативные
+            // тест-кадры видят чип только в lint-состоянии).
+            about_open: false,
+            author_strip: cfg!(target_arch = "wasm32"),
             pending_web_requests: Vec::new(),
             // FR-108 (C5): недавние натива — пусты до первого обновления.
             native_recent_paths: Vec::new(),
@@ -5909,21 +5933,14 @@ impl App {
             || (self.agent_panel.open && self.agent_panel.input_focused)
     }
 
-    /// UR-003: перекрытие GPU-панелей DOM-хромом web-сборки. Возвращает
-    /// флаги «(левая панель открыта, правая панель открыта)» — web-слой
-    /// (TourAwareApp → toolbar::set_panel_overlap) вешает на body классы
-    /// `cd-panel-left`/`cd-panel-right`, сдвигая `#author-bar`/`#w6-toolbar`
-    /// из-под углов панелей. Канвас — GPU-UI без z-index, DOM-бары
-    /// (z-index: 10) всегда выше него: обе поверхности во всю высоту
-    /// (Ctrl+P — левый док, Ctrl+I — правая панель) перекрывались шапками,
-    /// включая кнопку ✕ агент-панели — её было нельзя закрыть мышью.
-    ///
-    /// Platform-нейтрально (как `text_input_active` — FR-095): нативная
-    /// сборка метод не вызывает, DOM-хром существует только на web.
-    pub fn html_panel_overlap(&self) -> (bool, bool) {
-        let left = self.template_panel.open;
-        let right = self.agent_panel_rect().is_some();
-        (left, right)
+    /// Issue #60 (W-WEBUI): сборка — web (wasm32)? Гейт web-хвоста меню
+    /// канваса (OpenDisk/ExportHtml/Tour — пункты бывших DOM-кнопок
+    /// #w6-toolbar) и author-strip. Прежний UR-003-канал
+    /// `html_panel_overlap` (body-классы `cd-panel-left/right` для сдвига
+    /// DOM-хрома из-под GPU-панелей) удалён вместе с самим DOM-хромом:
+    /// чип author-strip — GPU-элемент, пересечений слоёв больше нет.
+    pub fn is_web_build(&self) -> bool {
+        cfg!(target_arch = "wasm32")
     }
 
     // FR-LLM-FIX (task FIX-TEXT-INPUT): helpers для доступа к редактируемой
@@ -6697,6 +6714,36 @@ impl App {
             }
             _ => {}
         }
+        self.request_redraw();
+    }
+
+    /// Issue #60 (W-WEBUI): клик по author-strip (hit-зона `strip-about`)
+    /// — открыть GPU-модал «Об авторе» (бывший DOM `#author-bar` →
+    /// `#about-overlay`).
+    fn click_author_strip(&mut self, element: &str) {
+        if element == "strip-about" {
+            self.about_open = true;
+        }
+        self.request_redraw();
+    }
+
+    /// Issue #60 (W-WEBUI): клик по модалу «Об авторе» (hit-зоны:
+    /// `about-close` / `about-link-<i>` / `about-body`). Строка-ссылка —
+    /// `WebRequest::OpenUrl` (web-слой: `window.open`; натив канал не
+    /// дренит — модал остаётся, клик no-op, заметка в about_ui.rs).
+    fn click_about(&mut self, element: &str) {
+        if element == "about-close" {
+            self.about_open = false;
+        } else if let Some(index) = element.strip_prefix("about-link-") {
+            if let Ok(index) = index.parse::<usize>() {
+                if let Some(link) = crate::about_ui::ABOUT_LINKS.get(index) {
+                    self.pending_web_requests.push(WebRequest::OpenUrl {
+                        url: link.url.to_owned(),
+                    });
+                }
+            }
+        }
+        // about-body и пустые зоны — модаль жива (глотается).
         self.request_redraw();
     }
 
@@ -12356,8 +12403,12 @@ impl App {
         let menu = self.menu.as_ref()?;
         Some(menu_rect_for(
             menu.origin,
-            canvas_menu_visible_items_ext(self.align_menu_visible(), self.autowidth_menu_visible())
-                .len(),
+            canvas_menu_visible_items_web(
+                self.align_menu_visible(),
+                self.autowidth_menu_visible(),
+                self.is_web_build(),
+            )
+            .len(),
         ))
     }
 

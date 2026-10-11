@@ -7,7 +7,7 @@
  * `crates/canvas-web/index.html` picks based on
  * `window.__canvasdesk.getLanguage()` (canvas-web JS-bridge).
  */
-export { toolbarTourScenario } from "./toolbar";
+// Issue #60 (W-WEBUI): toolbar-сценарий удалён — DOM #w6-toolbar больше не существует.
 export { firstRunInlineScenario } from "./first-run-inline";
 export { paletteTourScenario } from "./palette-tour";
 export { calculationsTourScenario } from "./calculations-tour";

@@ -146,6 +146,26 @@ pub(crate) fn handle(request: WebRequest, proxy: &EventLoopProxy<AppEvent>) {
                     crate::web_state::active_kind() == Some(crate::web_state::ActiveKind::Disk);
                 let _ = proxy.send_event(AppEvent::CanvasActiveKind { disk });
             }
+            // --- Issue #60 (W-WEBUI): единый UI-слой — Former DOM-кнопки ---
+            // FR-076: офлайн-HTML со значениями (бывшая кнопка
+            // #btn-export-html; вход — пункт меню канваса «Экспорт HTML…»).
+            WebRequest::ExportHtml => {
+                crate::export::export_html_active().await;
+            }
+            // Строки-ссылки модала «Об авторе» / author-strip: жест клика
+            // по GPU-канвасу валиден для window.open (target=_blank).
+            // noopener — паритет DOM-ссылок (rel="noopener" author-bar).
+            WebRequest::OpenUrl { url } => {
+                let window = web_sys::window();
+                let features = "noopener";
+                let opened = window.as_ref().and_then(|w| {
+                    w.open_with_url_and_target_and_features(&url, "_blank", features)
+                        .ok()
+                });
+                if opened.is_none() {
+                    tracing::warn!(target: "canvas_web", url, "window.open заблокирован (popup-blocker?)");
+                }
+            }
         }
     });
 }

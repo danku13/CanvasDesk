@@ -12,8 +12,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "esbuild src/index.ts --format=iife --global-name=CanvasDeskTour --target=es2018 --outfile=canvasdesk-tour.js --banner:js='// CanvasDesk inline onboarding engine — see sdk/web-onboarding/README.md'",
-    "minify": "esbuild src/index.ts --format=iife --global-name=CanvasDeskTour --target=es2018 --minify --outfile=canvasdesk-tour.min.js",
+    "build": "esbuild src/index.ts --bundle --format=iife --global-name=CanvasDeskTour --target=es2018 --outfile=canvasdesk-tour.js --banner:js='// CanvasDesk inline onboarding engine \u2014 see sdk/web-onboarding/README.md'",
+    "minify": "esbuild src/index.ts --bundle --format=iife --global-name=CanvasDeskTour --target=es2018 --minify --outfile=canvasdesk-tour.min.js",
     "typecheck": "tsc --noEmit",
     "demo": "vite"
   },

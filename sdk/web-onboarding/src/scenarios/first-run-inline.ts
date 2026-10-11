@@ -10,8 +10,9 @@
  * Run from a custom menu item "Пройти интерактивный тур" (FR-031 menu
  * extension) or from a URL fragment `#tour=first-run-inline`.
  *
- * Host contract:
- *   - #w6-toolbar must exist (W6 storage panel).
+ * Host contract (issue #60 W-WEBUI — единый UI-слой):
+ *   - The storage UI lives in the GPU layer: the canvas chip (top-left)
+ *     and the canvas manager it opens. No DOM toolbar exists anymore.
  *   - The host app must emit a "canvas:note-created" signal into the tour
  *     bus when the user double-clicks the canvas to create a note. The
  *     engine listens for this signal via `waitFor.kind: "signal"`.
@@ -41,12 +42,14 @@ export const firstRunInlineScenario: TourScenario = {
     },
     {
       id: "locate-toolbar",
-      title: "Панель хранилища",
+      title: "Канвасы и хранилище",
       body:
-        "В правом верхнем углу — кнопки для работы с .canvas-файлами: " +
-        "открыть с диска, экспорт HTML. Канвас автосохраняется в выбранный файл.",
+        "В левом верхнем углу — чип активного канваса: клик по имени " +
+        "переименовывает, по иконке списка — открывает менеджер канвасов " +
+        "(создание, шаблоны, импорт, экспорт). Открыть с диска и экспорт " +
+        "HTML — в меню правого клика по канвасу.",
       side: "bottom",
-      anchor: { kind: "selector", selector: "#w6-toolbar" },
+      anchor: { kind: "rect", rect: { x: 12, y: 12, width: 170, height: 30 } },
     },
     {
       id: "create-note",

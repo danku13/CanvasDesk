@@ -117,11 +117,11 @@ export const schemeGalleryTourScenario: TourScenario = {
       id: "save",
       title: "Сохранение",
       body:
-        "Канвас автосохраняется в выбранный файл (W6: «Открыть с диска» " +
-        "→ File System Access) или в OPFS (по умолчанию). " +
-        "Экспорт в .canvas — для бэкапа или шеринга.",
+        "Канвас автосохраняется в браузерное хранилище (OPFS) или в " +
+        "выбранную папку на диске после переезда в менеджере. Экспорт " +
+        ".canvas и HTML — кнопки менеджера и меню правого клика.",
       side: "bottom",
-      anchor: { kind: "selector", selector: "#w6-toolbar" },
+      anchor: { kind: "rect", rect: { x: 12, y: 12, width: 170, height: 30 } },
     },
     {
       id: "done",

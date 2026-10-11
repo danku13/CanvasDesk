@@ -124,6 +124,13 @@ pub mod id {
     /// инлайн-ренейм, поверхность дополнительно объявляет keyboard-scope
     /// — ввод уходит в буфер ренейма, Esc отменяет).
     pub const CANVAS_CHIP: &str = "canvas_chip";
+    /// Issue #60 (W-WEBUI): author-strip «ℹ Об авторе» — ambient-хром
+    /// ЛЕВОГО НИЖНЕГО угла (L3, Capture — клик по пилюле открывает GPU
+    /// модал About; web-only, дефолт — платформа сборки).
+    pub const AUTHOR_STRIP: &str = "author_strip";
+    /// Issue #60: GPU-модал «Об авторе» (L5, Block — Esc/«✕»/клик мимо
+    /// панели закрывают; строки-ссылки открывают URL через web-слой).
+    pub const ABOUT: &str = "about";
 }
 
 /// Владелец клавиатуры — верх `esc_stack` реестра (Q4 PRD-0009: NUMI-хоткеи
@@ -168,6 +175,9 @@ pub enum KeyOwner {
     /// менеджера). Ренейма нет — скоуп не регистрируется (чип —
     /// ambient-хром, клавиатура канваса живёт как прежде).
     CanvasChip,
+    /// Issue #60 (W-WEBUI): модал «Об авторе» — Esc закрывает, прочие
+    /// клавиши глотаются (модаль без полей ввода; паттерн витрины кита).
+    About,
 }
 
 /// Владелец-обработчик поверхности (FR-054, Q4-a): `Some` — у поверхности
@@ -197,6 +207,8 @@ pub fn owner_of(surface: &str) -> Option<KeyOwner> {
         id::CANVAS_MANAGER => Some(KeyOwner::CanvasManager),
         // FR-107 (C4): инлайн-ренейм чипа (scope только на время правки)
         id::CANVAS_CHIP => Some(KeyOwner::CanvasChip),
+        // Issue #60 (W-WEBUI): модал «Об авторе» — Esc закрывает
+        id::ABOUT => Some(KeyOwner::About),
         _ => None,
     }
 }
@@ -496,6 +508,16 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
                 .with_degradation(DegradationPolicy::Always),
         );
     }
+    // Issue #60 (W-WEBUI): модал «Об авторе» — Modals/Block (Esc/«✕»/
+    // backdrop закрывают; клик по телу глотается — модаль жива).
+    // Деградация — Always (панель клампится к вьюпорту).
+    if app.about_open {
+        reg.add(
+            SurfaceDecl::new(id::ABOUT, UiLayer::Modals, CapturePolicy::Block)
+                .with_scope(id::ABOUT)
+                .with_degradation(DegradationPolicy::Always),
+        );
+    }
     // FR-105 (C2, №45b): тост с действием «Перезагрузить» — Toasts/Capture:
     // интерактивна ТОЛЬКО кнопка (hit-rect ниже); клик мимо — в канвас,
     // прежняя пассивность строки тоста сохранена.
@@ -603,6 +625,17 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
                 .with_degradation(AI_STATUS_DEGRADATION),
         );
     }
+    // Issue #60 (W-WEBUI): author-strip «ℹ Об авторе» — ambient-хром
+    // левого нижнего угла (бывший DOM #author-bar; web-only, дефолт —
+    // платформа сборки, G4-линт форсирует явно). Panels/Capture — как чип
+    // C4: клики по пилюле глотаются, любые панели/модали поверх.
+    if app.author_strip {
+        reg.add(SurfaceDecl::new(
+            id::AUTHOR_STRIP,
+            UiLayer::Panels,
+            CapturePolicy::Capture,
+        ));
+    }
     reg
 }
 
@@ -623,6 +656,9 @@ const VISUAL_ORDER: &[&str] = &[
     // FR-107 (C4): чип — самый нижний в Panels-полосе (ambient-хром:
     // любые панели/модали поверх него)
     id::CANVAS_CHIP,
+    // Issue #60 (W-WEBUI): author-strip — сосед чипа по ambient-хрому
+    // (нижний левый угол; модали поверх)
+    id::AUTHOR_STRIP,
     id::SETTINGS,
     id::HOTKEYS,
     id::CORNER_BUTTONS,
@@ -655,6 +691,8 @@ const VISUAL_ORDER: &[&str] = &[
     id::ADMIN,
     // FR-105 (C2): диалог миграции — модаль уровня галереи/витрины
     id::MIGRATE,
+    // Issue #60 (W-WEBUI): модал About — уровень менеджера/миграции
+    id::ABOUT,
     id::ONBOARDING,
     // LAY-W17: AI-онбординг — над туром онбординга (порядок полосы Modals
     // в handler.rs: ai_onboarding-полоса пушится после onboarding-полосы),
@@ -1792,6 +1830,47 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                     .hit_rects
                     .push(HitRect::interactive(rect(lay.icon), "chip-list"));
             }
+        }
+        // Issue #60 (W-WEBUI): author-strip — пилюля целиком (клик —
+        // открыть GPU-модал About). Геометрия — та же чистая
+        // `about_ui::strip_layout`, что рисует overlays (draw == hit);
+        // ширина подписи — TextMeasurer (как у чипа канваса).
+        id::AUTHOR_STRIP => {
+            let lang = app.settings.language;
+            let label = crate::i18n::tr(lang, keys::MENU_ABOUT);
+            let mut m = canvas_ui::measure::TextMeasurer::new();
+            let mut fs = canvas_render::text::measure_font_system();
+            let label_w = m.width_of(
+                &mut fs,
+                label,
+                canvas_render::text::SANS_FAMILY,
+                canvas_core::tokens::FONT_CAPTION,
+            ) + canvas_core::tokens::SPACING_MD;
+            let lay = crate::about_ui::strip_layout(viewport, label_w);
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(lay.pill), "strip-about"));
+        }
+        // Issue #60 (W-WEBUI): модал «Об авторе» — «✕», строки-ссылки и
+        // тело панели (клик внутри окна глотается, модаль жива; backdrop
+        // — закрытие через dispatch_surface_backdrop). Геометрия — та же
+        // чистая `about_ui::about_layout` (draw == hit).
+        id::ABOUT => {
+            let lay = crate::about_ui::about_layout(viewport);
+            // Тело панели — базовая pick-зона (ПЕРВОЙ — кнопки выше
+            // выигрывают реверс-обход pick'а, паттерн vitrin кита).
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(lay.panel), "about-body"));
+            for (index, row) in lay.rows.iter().enumerate() {
+                surface.hit_rects.push(HitRect::interactive(
+                    rect(row.row),
+                    format!("about-link-{index}"),
+                ));
+            }
+            surface
+                .hit_rects
+                .push(HitRect::interactive(rect(lay.close), "about-close"));
         }
         // FR-105 (C2, №45b): тост с действием — ТОЛЬКО кнопка
         // «Перезагрузить» (геометрия — storage_ui::toast_action_rect от

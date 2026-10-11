@@ -519,6 +519,43 @@ fn lint_hotkeys_open() {
     });
 }
 
+// === Issue #60 (W-WEBUI): новые GPU-поверхности единого UI-слоя ============
+
+/// Чип «ℹ Об авторе» внизу-слева (web-хром: в нативных тест-кадрах скрыт
+/// по умолчанию — линт форсирует явно, как это делает web-сборка).
+#[test]
+fn lint_author_strip_visible() {
+    lint_state("author_strip", |app, _vp| {
+        app.author_strip = true;
+    });
+}
+
+/// GPU-модал «Об авторе» (бывший DOM #about-overlay): Block-накрытие
+/// экрана + строки-ссылки в реестре поверхностей.
+#[test]
+fn lint_about_open() {
+    lint_state("about", |app, _vp| {
+        app.about_open = true;
+    });
+    // Модаль реально модальна: угол экрана — Backdrop about (не канвас).
+    let mut app = lint_stub(Language::Ru);
+    app.about_open = true;
+    let vp = VIEWPORTS[0];
+    let frame = build_frame_at(&app, vp);
+    assert_backdrop_is(&frame, crate::app::ui_registry::id::ABOUT);
+}
+
+/// Обе поверхности сразу: strip остаётся ПОД модалью (VISUAL_ORDER:
+/// AUTHOR_STRIP — Panels-полоса, ABOUT — Modals) — пересечений
+/// интерактивных зон одного слоя нет.
+#[test]
+fn lint_about_over_strip() {
+    lint_state("about_strip", |app, _vp| {
+        app.author_strip = true;
+        app.about_open = true;
+    });
+}
+
 // --- FR-060: канонические состояния перенесённых поверхностей волны 2 -----
 
 /// Предложение автосвязи A→B для линт-состояний волны 2.

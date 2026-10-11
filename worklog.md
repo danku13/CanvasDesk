@@ -407,3 +407,24 @@ Stage Summary:
 - Отклонения зафиксированы в отчёте #52: (1) issue-текст «gallery medium 2 колонки» → одно-колоночный список по аудиту (row-list ≠ сетка, 2 колонки ломают FR-053 на medium); (2) T-M R1 — поле поиска/чипы галереи остаются на каноне кита (chip_strip измеряет 24 — поднимается отдельной волной kit); (3) migrate compact-окно 9 строк при 667px (sheet-look, slack в зоне списка)
 - Дальше: Сессия C (#53 сложные: settings, kit_gallery +F1/F2, admin) — старт владельца; M4 приёмка
 Tokens: in≈560000, out≈68000, total≈628000 (estimate), model=GLM-4.6, scope=wave-m-m3a
+Task ID: W-WEBUI (issue #60, сессия web-b5714086-2f9f-44a0-af82-302aa182533b)
+Agent: Super Z (main)
+Task: Сообщение владельца: «иконки улетели, чип действительно съехал, поясни что такое author-bar. Поясни зачем сейчас у интерфейса два слоя… если у нас нет проблем с переносом всех ui элементов в wasm слой, то давай так и сделаем». Волна #60: единый UI-слой web — перенос DOM-хрома в GPU (закрывает #57).
+
+Work Log:
+- Расследование на живом деплое (Playwright+VLM): чип полностью скрыт под #author-bar (оба top-left: чип GPU (12,12), бар DOM (8,8) 166×30, z-index 10) — #57 подтверждён визуально; архитектурная причина — исторический «жест браузера» для DOM-кнопок, опровергнутый волной C2 (pick_folder из GPU-менеджера).
+- canvas-app: новый модуль about_ui.rs (about_layout/about_hit + strip_layout/strip_hit + ABOUT_LINKS, 8 тестов); пункты меню OpenDisk/ExportHtml/Tour + WEB_MENU_ITEMS + canvas_menu_visible_items_web(align, autowidth, web) (натив — 12 пунктов как было, web — 15); SubmenuAction::RunTour; App::{about_open, author_strip, is_web_build}, WebRequest::{ExportHtml, OpenUrl}, html_panel_overlap удалён; обработчики кликов/Esc (KeyOwner::About); поверхности реестра about (Modals/Block) + author_strip (Panels/Capture) + hit-зоны + VISUAL_ORDER; оверлеи about_overlay/author_strip_overlay (паттерн чипа C4/миграции C2); полосы handler.rs; i18n +27 ключей ×2.
+- canvas-web: toolbar.rs УДАЛЁН (install/bind/set_panel_overlap); web_requests: ExportHtml → export_html_active, OpenUrl → window.open(url, "_blank", "noopener"); tour_aware_app: UR-003-синхронизация удалена; index.html −22 800 симв. (author-bar/about-overlay/w6-toolbar/tour-menu разметка+CSS+JS); листенер ui:run-tour:<id> → tour.run по id+языку.
+- Иконки: info.svg в 4 наборах + rasterize_icons.py (44-е имя, атлас 1408×160) + icon_pipeline-тест 220; glyph-фолбэк ℹ (U+2139 есть в NotoSansDisplay).
+- SDK тура: toolbar.ts удалён (сценарий целиком про несуществующий DOM); first-run-inline/scheme-gallery (RU+EN): шаги locate-toolbar/save → rect-якоря чипа (12,12,170,30) + переписанные тексты про менеджер/меню; НАЙДЕН ДРЕЙФ: инлайн-бандл нёс фикс injectStyles (document.head), источник — нет (пересборка подняла «Only one element on document allowed»); фикс синхронизирован в tour.ts; package.json build-скрипту возвращён потерянный --bundle (без него esbuild не бандлил — 2.5К вместо 78К); бандл пересобран и вшит в index.html.
+- Линты G4: lint_author_strip_visible, lint_about_open (+assert_backdrop_is), lint_about_over_strip.
+- Верификация: cargo test --workspace 3178/0; clippy -D warnings; fmt; wasm_gate --check; audit_fs_locks — зелёные. E2E localhost-стенда (headless): DOM-хрома нет (4 проверки false), чип top-left виден (VLM: «default»+иконка), author-strip клик → GPU-модал About (VLM: 6 строк-ссылок+✕+автор), меню 15 пунктов (VLM-перечень вкл. «Открыть с диска…/Экспорт HTML…/Тур…/Об авторе»), подменю «Тур…» — 4 сценария, запуск сценария — .cd-tour-tooltip в DOM; 0 pageerror/0 console.error.
+- Инфра: тулчейн восстановлен (rustup 1.99.0 b940084 — тот же билд, что в стектрейсе #56), wasm32-таргет, wasm-bindgen-cli 0.2.127; общий shared-target чистил устаревшие golden-бинари wt-c5 (влияли на workspace-тесты); диск чистил (cd-target 3.8G).
+
+Stage Summary:
+- Единый UI-слой: постоянного DOM-хрома в рабочем состоянии больше нет (в DOM остаются только бут-экран языка, оверлеи движка тура ВО ВРЕМЯ тура и невидимые шимы IME/телеметрии).
+- #57 закрыт (чип свободен); UR-003/CR-033-механика удалена за ненадобностью.
+- Натив-меню не изменилось (тест C5 «12 пунктов» в силе); web-меню 12+3.
+- Документация: cr-035-webui-single-layer.md + строка индекса + ACCEPTANCE.
+- Открытый вопрос владельцу (обязательный по AGENTS.md): нужны ли правки user-docs/onboarding (страницы про «панель хранилища»/author-bar в user-docs, если упоминались) — отдельным коммитом по решению.
+Tokens: in≈506000, out≈128000, total≈634000 (estimate), model=GLM-4.7, scope=CR-035
