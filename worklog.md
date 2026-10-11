@@ -474,3 +474,23 @@ Stage Summary:
 - Отклонения для приёмки M4 (владелец): (1) autolink compact — подсказка клавиатуры не рисуется (T-M R3, тач-поверхность); (2) ai_onboarding compact — пара кнопок 55/45 вместо прототипных ширин (168+132 > 291 inner), кнопка banner «Вернуть все» 30px < 44 (kit::banner канон, вынесено в kit-фоллап); (3) onboarding compact — визуальные кнопки остаются ×k-каноном (44 — hit через FR-097 coarse-расширение в M/E и прямые 44-rects в compact футере), арт не тронут; (4) stage compact — «действия вниз» = штатные нижние якоря (calc-панель/подсказка), сцена full-bleed.
 - Дальше: M4 — приёмка владельцем (12 модалей × флаг × 6 вьюпортов × RU/EN); M5 — демонтаж старых веток (отдельная волна по запросу).
 Tokens: in≈520000, out≈75000, total≈595000 (estimate), model=GLM-4.7, scope=wave-m-m3c
+
+---
+Task ID: WAVE-M-STATUS-AUDIT (эпик #55)
+Agent: Super Z (main; сессия web-0a539c42-84fd-4916-9a97-970c8052c51d)
+Task: Статус-аудит эпика Wave M #55 по факту закрытия всех sub-issues #49–54; синхронизация Project v2; решение по закрытию эпика.
+
+Work Log:
+- GitHub API: 6/6 sub-issues #49–54 закрыты (state_reason: completed, 2026-10-10 21:36 — 2026-10-11 12:33 UTC); эпик #55 оставался open без комментариев.
+- Карта завершения сверена с main: #49→d22924b, #50→49be540, #51→cd4b705, #52→1dc509e, #53→0b6d52e, #54→77fa204; все 6 — предки HEAD 002dd0c; после 77fa204 ядро Wave M (modal.rs/kit.rs/settings.rs/ui_registry.rs) не трогалось.
+- Структурный спот-чек main (ff до 002dd0c): modal_rect_flex (kit.rs + modal.rs ×16), LayoutTier/layout_tier, settings.modals_adaptive (settings.rs ×5, overlays.rs ×15), SettingsRow::ModalsAdaptive (settings_ui.rs), lint_modals_adaptive (ui_layout_lint.rs ×4); артефакты M3-b/c: main_stage_rect_flex (stage.rs), window_rect_flex (explain_ui.rs), dialog_rect_flex/rows_layout_flex (autolink_ui.rs), card_layout_flex/privacy_scroll (onboarding_ui.rs), admin_panel_flex (admin_ui.rs), sidebar_viewport (kit_demo.rs) — все на месте.
+- Отчёты сессий A/B/C/D: гейты зелёные ×2 (fmt/check/test 96 сьютов/clippy/wasm/lay7/doc_lint); отклонения для M4 задокументированы в #53/#54 (тач-цели тулбара витрины 24px, кнопка «Вернуть все» 30px < 44, подсказка клавиатуры autolink не рисуется в compact, onboarding визуальные кнопки ×k-канон, stage «действия вниз»).
+- Project v2 (CanvasDesk PVT_kwHOAhnxHc4Bi3lO): sub-issues #49–54 = Done (было верно); эпик #55 переведён Todo → Test (соответствует ожиданию M4-приёмки).
+- Статус-комментарий в эпик #55: issuecomment-6109384357 (карта завершения, верификация, остатки M4/M5).
+- Эпик #55 оставлен ОТКРЫТЫМ до M4-приёмки владельца (чек-лист: 12 модалей × флаг on/off × {1280×800, 1024×640, 800×560, 375, 768, 1440} × RU/EN); M5 — демонтаж старых веток, вне серии.
+
+Stage Summary:
+- Реализация Wave M полностью в main: 6/6 sub-issues closed, 6 фича-коммитов, ~65 новых тестов по отчётам (8+24+11+22), флаг OFF бит-в-бит.
+- Эпик #55: open, Project v2 = Test, готов к закрытию как completed сразу после M4-приёмки владельцем.
+- Telegram: план (msg 1079), этапы 1–2 (msg 1080), финальное саммари — отправлены.
+Tokens: in≈60000, out≈15000, total≈75000 (estimate), model=GLM-4.7, scope=wave-m-status-audit
