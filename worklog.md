@@ -592,3 +592,23 @@ Stage Summary:
 - Позиционный контракт закреплён тестом; соседние панели (хоткеев/flyout) клампятся о чип.
 - Остаток: ручная приёмка владельцем (#66-контур); #58 — решение о нумерации шагов карусели за владельцем; Glyph-дефолт author-bar — текстовые метки (конвенция приложения; SVG при выборе набора в настройках).
 Tokens: in≈820000, out≈190000, total≈1010000 (estimate), model=GLM-5.3, scope=CR-036-issue-63
+
+---
+Task ID: KIT-BUTTON-POLISH
+Agent: Super Z (main)
+Task: Полировка ui-kit компонента кнопки (Button/ButtonProps, canvas-ui)
+
+Work Log:
+- Синк main (0c4a9ad): учтены Wave A/C/T, #67 V1 (sized-API), K4-витрина; аудит показал: retained Button никем не используется, kit-реэкспорт не содержит компонент, ControlSize не дошёл до Component-слоя, focus-ring/state-layer рисуют только потребители (K4)
+- ButtonProps: +size: ControlSize (Sm == legacy паритет, тест), +ButtonProps::new; Button::layout → button_layout_sized
+- Button::paint: state-layer M3 (§5.1.1) — overlay слота text с альфой state_layer_alpha ТОЛЬКО для состояний без fill-слота (keyboard-focus 10% / dragged 16%; hover/pressed отвечают слотом hover_fill — задвоение исключено) + focus-ring FR-057 (§5.1.2, keyboard-origin, контур accent; button_style остаётся ring-агностиком)
+- Button::set_disabled — синхронная смена props+state (ребро клика гасится)
+- kit.rs: реэкспорт Button/ButtonProps/ButtonLayout/BUTTON_FAMILY/BUTTON_FONT_SIZE
+- +6 юнит-тестов; гейты: fmt, check (native+wasm32), test canvas-ui 221 / workspace 3425 (0 fail), clippy --workspace --all-targets -D warnings, lay7, doc_lint — зелёные
+- Ремонт преждесуществующего: canvas-app/lib.rs:3585 assert! на константах → const{} (clippy 1.99 assertions_on_constants; тулчейн свежее пинового CI)
+- token_lint: 3 преждесуществующих файла с hex-литералами (export_html/cards/gpu_gate) — вне гейт-набора закрытия, не тронуты
+
+Stage Summary:
+- Component-слой кнопки доведён до канона кита (Wave T/#67 V1): шкала размеров, M3-отклик, keyboard-ring, retained-эргономика, публичный kit-API
+- Визуальный ноль-скачок: Component потребителей не имеет; снапшоты/витрина не задеты
+- scope=kit-button-polish

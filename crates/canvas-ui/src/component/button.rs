@@ -1,12 +1,22 @@
 //! FR-068 W3: кнопка/чип/свитч/иконка — перенос из kit.rs 1:1 (W3).
 //!
-//! Владелец волны (агент 3-a): [`ButtonProps`]/[`Button`] + `impl
-//! Component` добавлены (см. секцию «Component» внизу файла);
-//! существующие функции — стабильный API кита (§Контракт-1 PRD-0009 V-5).
+//! Три слоя модуля (карта):
+//! 1. Kit-функции (immediate): [`button_size`]/[`button_layout`]/
+//!    [`button_style`] + icon-кнопка/чип/свитч — стабильный API кита
+//!    (§Контракт-1 PRD-0009 V-5).
+//! 2. Sized-API (issue #67 V1): [`button_layout_sized`]/
+//!    [`chip_layout_sized`]/[`icon_button_rect_sized`] — шкала
+//!    [`ControlSize`] с паритетом Sm == legacy.
+//! 3. Component-слой (retained): [`ButtonProps`]/[`Button`] +
+//!    `impl Component` — машина состояний FR-057 ([`WidgetState`]);
+//!    paint: слоты [`button_style`] + state-layer M3 (Wave T §5.1.1,
+//!    только состояния без собственного fill-слота) + focus-ring
+//!    FR-057 (Wave T §5.1.2, keyboard-origin).
 
 use super::{
-    ButtonVariant, Component, ControlSize, ControlStyle, KitPalette, KitState, BUTTON_HEIGHT,
-    BUTTON_PAD_H, CHIP_HEIGHT, CHIP_PAD_H, ICON_BUTTON_SIZE, SWITCH_H, SWITCH_KNOB_PAD, SWITCH_W,
+    state_layer_alpha, ButtonVariant, Component, ControlSize, ControlStyle, KitPalette, KitState,
+    BUTTON_HEIGHT, BUTTON_PAD_H, CHIP_HEIGHT, CHIP_PAD_H, ICON_BUTTON_SIZE, SWITCH_H,
+    SWITCH_KNOB_PAD, SWITCH_W,
 };
 use crate::geometry::{UiPoint, UiRect, UiVec2};
 use crate::layout::{stack, HAlign, LayoutBackend, VAlign};
@@ -507,8 +517,29 @@ pub struct ButtonProps {
     pub palette: KitPalette,
     /// Недоступна: [`Button::new`] транслирует флаг в
     /// [`WidgetState::set_disabled`] (клик игнорируется — контракт
-    /// [`KitState::Disabled`]).
+    /// [`KitState::Disabled`]). Смена между кадрами — [`Button::set_disabled`].
     pub disabled: bool,
+    /// Шкала размера (issue #67 V1): высота layout — [`ControlSize::button_h`];
+    /// `Sm` — канон == legacy [`BUTTON_HEIGHT`] (паритет — тест
+    /// `component_button_props_new_defaults_to_sm_parity`). Кегль подписи —
+    /// [`BUTTON_FONT_SIZE`] независимо от размера (потребитель с собственным
+    /// шрифтовым пулом передаёт свой кегль напрямую в [`button_layout_sized`]).
+    pub size: ControlSize,
+}
+
+impl ButtonProps {
+    /// Удобный конструктор: `size = ControlSize::Sm`, `disabled = false`
+    /// (канон == legacy-кнопка [`BUTTON_HEIGHT`]); остальные поля —
+    /// обновлением структуры.
+    pub fn new(label: impl Into<String>, variant: ButtonVariant, palette: KitPalette) -> Self {
+        Self {
+            label: label.into(),
+            variant,
+            palette,
+            disabled: false,
+            size: ControlSize::Sm,
+        }
+    }
 }
 
 /// Кнопка как [`Component`] — retained-объект (FR-068 §W3): `props` —
@@ -528,11 +559,20 @@ impl Button {
     /// Новая кнопка: `props.disabled` прошивается в состояние виджета —
     /// дальше стиль (`paint`) и ребро клика (`WidgetState::clicked`)
     /// читают одно и то же состояние. Смена `disabled` между кадрами —
-    /// через пересоздание или `state.set_disabled` потребителем.
+    /// через [`Button::set_disabled`] или пересоздание.
     pub fn new(props: ButtonProps) -> Self {
         let mut state = WidgetState::default();
         state.set_disabled(props.disabled);
         Self { props, state }
+    }
+
+    /// Смена disabled между кадрами без пересоздания: props и состояние
+    /// обновляются синхронно — стиль ([`button_style`] через `paint`) и
+    /// ребро клика ([`WidgetState::clicked`]) читают одно и то же
+    /// ([`KitState::Disabled`]: клик игнорируется).
+    pub fn set_disabled(&mut self, disabled: bool) {
+        self.props.disabled = disabled;
+        self.state.set_disabled(disabled);
     }
 }
 
@@ -543,28 +583,29 @@ impl Component for Button {
         &self.props
     }
 
-    /// Один rect — сама кнопка: делегирование [`button_layout`] 1:1
-    /// (размер = подпись + 2·[`BUTTON_PAD_H`], минимум [`BUTTON_HEIGHT`];
-    /// узкий слот — сжатие до ширины слота + ellipsis подписи). Порядок
-    /// rects: `rects[0]` — кнопка; других rect'ов нет.
+    /// Один rect — сама кнопка: делегирование [`button_layout_sized`] 1:1
+    /// (размер = подпись + 2·[`BUTTON_PAD_H`], высота [`ControlSize::button_h`]
+    /// от `props.size` — при `Sm` минимум [`BUTTON_HEIGHT`]; узкий слот —
+    /// сжатие до ширины слота + ellipsis подписи). Порядок rects: `rects[0]`
+    /// — кнопка; других rect'ов нет.
     ///
     /// Выравнивание в слоте — Center/Center (как у кнопок диалога/шапки);
     /// семейство/кегль — [`BUTTON_FAMILY`]/[`BUTTON_FONT_SIZE`].
-    /// `backend` не участвует: `button_layout` — stack одного блока,
-    /// контейнерной вёрстки нет (сигнатура kit-функции НЕ менялась —
-    /// §Контракт-1 FR-068).
+    /// `backend` не участвует: layout — stack одного блока, контейнерной
+    /// вёрстки нет (сигнатуры kit-функций НЕ менялись — §Контракт-1 FR-068).
     ///
     /// Standalone-семантика: измеритель и шрифтовой пул создаются на
     /// вызов (immediate, без retained-состояния — решение FR-068 §W3);
-    /// горячий путь потребителя — [`button_layout`] с собственным пулом
-    /// (владелец пула — canvas-render::text, PRD-0009 §14/Q6).
+    /// горячий путь потребителя — [`button_layout_sized`] с собственным
+    /// пулом (владелец пула — canvas-render::text, PRD-0009 §14/Q6).
     fn layout(&self, _backend: &dyn LayoutBackend, slot: UiRect) -> Vec<UiRect> {
         let mut m = TextMeasurer::new();
         let mut fs = cosmic_text::FontSystem::new();
-        let bl = button_layout(
+        let bl = button_layout_sized(
             slot,
             &self.props.label,
             (HAlign::Center, VAlign::Center),
+            self.props.size,
             &mut m,
             &mut fs,
             BUTTON_FAMILY,
@@ -573,23 +614,51 @@ impl Component for Button {
         vec![bl.rect]
     }
 
-    /// Рисует `rects[0]` (rect из [`Component::layout`]) контролом:
-    /// заливка/рамка/радиус — [`button_style`] по варианту и состоянию
-    /// [`WidgetState::kit_state`] (disabled прошит в state при
-    /// [`Button::new`]). Подпись — забота потребителя (`Painter::label`
-    /// слотом `style.text`; усечённая подпись живёт в [`button_layout`],
-    /// кит цвет от геометрии не отделяет — F-8). Пустой `rects` — no-op
-    /// (деградация, не паника).
+    /// Рисует `rects[0]` (rect из [`Component::layout`]):
+    ///
+    /// 1. Заливка/рамка/радиус — [`button_style`] по варианту и состоянию
+    ///    [`WidgetState::kit_state`] (disabled прошит в state при
+    ///    [`Button::new`]); hover/pressed отвечают слотами fill — это
+    ///    задокументированное отклонение от чистого M3 (state-layer только
+    ///    там, где слотового ответа нет).
+    /// 2. State-layer M3 (Wave T §5.1.1) — overlay-квад слота `text` с
+    ///    альфой [`state_layer_alpha`] для состояний БЕЗ собственного
+    ///    fill-слота: keyboard-focus (10%, `:focus-visible`) и dragged
+    ///    (16%); hover/pressed overlay не дублируют (задвоение отклика
+    ///    исключено).
+    /// 3. Focus-ring FR-057 (Wave T §5.1.2) — контур слота `accent` при
+    ///    [`WidgetState::focus_ring_visible`] (keyboard-origin; та же
+    ///    механика, что у K4-витрины). Компонент владеет состоянием —
+    ///    ring рисует сам; [`button_style`] остаётся ring-агностиком.
+    ///
+    /// Подпись — забота потребителя (`Painter::label` слотом `style.text`;
+    /// усечённая подпись живёт в [`button_layout`], кит цвет от геометрии
+    /// не отделяет — F-8). Пустой `rects` — no-op (деградация, не паника).
     fn paint(&self, painter: &mut Painter, rects: &[UiRect]) {
         let Some(&rect) = rects.first() else {
             return;
         };
-        let style = button_style(
-            self.props.variant,
-            self.state.kit_state(),
-            &self.props.palette,
-        );
+        let state = self.state.kit_state();
+        let style = button_style(self.props.variant, state, &self.props.palette);
         painter.control(rect, &style);
+        // Focus/drag-отклик (M3 state-layer): только состояния без
+        // собственного fill-слота; максимум из активных (§5.1.1 — max,
+        // не сумма).
+        let mut alpha: f32 = 0.0;
+        if self.state.focus_ring_visible() {
+            alpha = alpha.max(state_layer_alpha(KitState::Focused));
+        }
+        if self.state.is_dragged() {
+            alpha = alpha.max(state_layer_alpha(KitState::Dragged));
+        }
+        if alpha > 0.0 {
+            let t = self.props.palette.text;
+            painter.rect(rect, [t[0], t[1], t[2], alpha], [0.0; 4], style.radius);
+        }
+        // Focus-ring (FR-057 §5.1.2): keyboard-origin only, контур accent.
+        if self.state.focus_ring_visible() {
+            painter.rect(rect, [0.0; 4], self.props.palette.accent, style.radius);
+        }
     }
 
     // hit_test — дефолтный из [`Component`] (первый rect, содержащий
@@ -922,12 +991,7 @@ mod tests {
     #[test]
     fn component_button_layout_single_rect_in_slot() {
         let slot = UiRect::new(10.0, 20.0, 400.0, 60.0);
-        let btn = Button::new(ButtonProps {
-            label: "ОО".to_owned(),
-            variant: ButtonVariant::Primary,
-            palette: palette_a(),
-            disabled: false,
-        });
+        let btn = Button::new(ButtonProps::new("ОО", ButtonVariant::Primary, palette_a()));
         let rects = btn.layout(default_backend(), slot);
         assert_eq!(rects.len(), 1, "кнопка — один rect");
         let r = rects[0];
@@ -962,12 +1026,7 @@ mod tests {
     #[test]
     fn component_button_paint_emits_style_rect() {
         let pal = palette_a();
-        let mut btn = Button::new(ButtonProps {
-            label: "ОК".to_owned(),
-            variant: ButtonVariant::Primary,
-            palette: pal,
-            disabled: false,
-        });
+        let mut btn = Button::new(ButtonProps::new("ОК", ButtonVariant::Primary, pal));
         let rects = vec![UiRect::new(0.0, 0.0, 100.0, BUTTON_HEIGHT)];
         let mut painter = Painter::new();
         btn.paint(&mut painter, &rects);
@@ -1011,12 +1070,11 @@ mod tests {
     /// `ComponentHit { index: 0 }`, вне — None.
     #[test]
     fn component_button_hit_test_picks_first_rect() {
-        let btn = Button::new(ButtonProps {
-            label: "ОК".to_owned(),
-            variant: ButtonVariant::Secondary,
-            palette: palette_a(),
-            disabled: false,
-        });
+        let btn = Button::new(ButtonProps::new(
+            "ОК",
+            ButtonVariant::Secondary,
+            palette_a(),
+        ));
         let rects = btn.layout(default_backend(), UiRect::new(0.0, 0.0, 400.0, 60.0));
         assert_eq!(rects.len(), 1);
         let inside = UiPoint::new(rects[0].x + 1.0, rects[0].y + 1.0);
@@ -1124,6 +1182,140 @@ mod tests {
             let icon = icon_button_rect_sized(slot, (HAlign::Start, VAlign::Center), size);
             assert_eq!(icon.w, size.icon_btn(), "icon_btn {size:?}");
             assert_eq!(icon.h, size.icon_btn(), "icon_btn {size:?}");
+        }
+    }
+
+    // === Полировка компонента (kit-реэкспорт, ControlSize, state-layer M3,
+    // focus-ring FR-057) =====================================================
+
+    /// `ButtonProps::new`: `size = ControlSize::Sm`, `disabled = false` —
+    /// канон == legacy: высота layout == [`BUTTON_HEIGHT`], один rect.
+    #[test]
+    fn component_button_props_new_defaults_to_sm_parity() {
+        let btn = Button::new(ButtonProps::new("ОК", ButtonVariant::Primary, palette_a()));
+        assert_eq!(btn.props.size, ControlSize::Sm);
+        assert!(!btn.props.disabled);
+        let rects = btn.layout(default_backend(), UiRect::new(0.0, 0.0, 300.0, 60.0));
+        assert_eq!(rects.len(), 1);
+        assert_eq!(rects[0].h, BUTTON_HEIGHT);
+    }
+
+    /// Шкала размеров на уровне компонента (issue #67 V1): layout уважает
+    /// `props.size` — высоты [`ControlSize::button_h`] (24/30/36/44).
+    #[test]
+    fn component_button_layout_respects_control_size() {
+        let slot = UiRect::new(0.0, 0.0, 300.0, 80.0);
+        for size in [
+            ControlSize::Xs,
+            ControlSize::Sm,
+            ControlSize::Md,
+            ControlSize::Lg,
+        ] {
+            let mut props = ButtonProps::new("ОК", ButtonVariant::Secondary, palette_a());
+            props.size = size;
+            let rects = Button::new(props).layout(default_backend(), slot);
+            assert_eq!(rects[0].h, size.button_h(), "button_h {size:?}");
+        }
+    }
+
+    /// `Button::set_disabled`: props и состояние обновляются синхронно;
+    /// ребро клика гасится ([`WidgetState::clicked`] игнорирует disabled).
+    #[test]
+    fn button_set_disabled_syncs_props_state_and_click_edge() {
+        let mut btn = Button::new(ButtonProps::new("ОК", ButtonVariant::Primary, palette_a()));
+        btn.state.set_pointer(true, true); // press внутри → ребро armed
+        btn.set_disabled(true);
+        assert!(btn.props.disabled);
+        assert_eq!(btn.state.kit_state(), KitState::Disabled);
+        assert!(!btn.state.clicked(true), "disabled — клик игнорируется");
+        btn.set_disabled(false);
+        assert!(!btn.props.disabled);
+        assert_ne!(btn.state.kit_state(), KitState::Disabled);
+    }
+
+    /// Focus-отклик в paint (Wave T §5.1.1/§5.1.2, FR-057) — только
+    /// keyboard-origin: control + state-layer 10% (слот `text`) + ring
+    /// (контур `accent`). Hover — ровно один item (слотовый отклик
+    /// hover_fill, без задвоения); mouse-origin фокус и disabled — без
+    /// focus-отклика.
+    #[test]
+    fn component_button_paint_focus_response_keyboard_origin_only() {
+        let pal = palette_a();
+        let rects = vec![UiRect::new(0.0, 0.0, 100.0, BUTTON_HEIGHT)];
+        let paint_items = |btn: &Button| {
+            let mut p = Painter::new();
+            btn.paint(&mut p, &rects);
+            p.items().to_vec()
+        };
+
+        // Hovered: один item — overlay не дублирует слотовый hover_fill.
+        let mut hovered = Button::new(ButtonProps::new("ОК", ButtonVariant::Secondary, pal));
+        hovered.state.set_pointer(true, false);
+        assert_eq!(paint_items(&hovered).len(), 1);
+
+        // Keyboard-origin focus: control + state-layer + focus-ring.
+        let mut focused = Button::new(ButtonProps::new("ОК", ButtonVariant::Secondary, pal));
+        focused.state.set_focused_visible(true, true);
+        let items = paint_items(&focused);
+        assert_eq!(items.len(), 3, "control + state-layer + focus-ring");
+        match &items[1] {
+            PaintItem::Rect {
+                fill,
+                border,
+                radius,
+                ..
+            } => {
+                let t = pal.text;
+                assert_eq!(
+                    *fill,
+                    [t[0], t[1], t[2], state_layer_alpha(KitState::Focused)]
+                );
+                assert_eq!(*border, [0.0; 4]);
+                assert_eq!(*radius, canvas_core::tokens::RADIUS_CHIP);
+            }
+            other => panic!("item[1] — overlay Rect, получен {other:?}"),
+        }
+        match &items[2] {
+            PaintItem::Rect { fill, border, .. } => {
+                assert_eq!(*fill, [0.0; 4]);
+                assert_eq!(*border, pal.accent, "ring — контур accent");
+            }
+            other => panic!("item[2] — focus-ring Rect, получен {other:?}"),
+        }
+
+        // Mouse-origin (клик): ни overlay, ни ring (:focus-visible).
+        let mut mouse = Button::new(ButtonProps::new("ОК", ButtonVariant::Secondary, pal));
+        mouse.state.set_focused_visible(true, false);
+        assert_eq!(paint_items(&mouse).len(), 1);
+
+        // Disabled + фокус: отклик гасится (focus_ring_visible = false).
+        let mut dis = Button::new(ButtonProps::new("ОК", ButtonVariant::Secondary, pal));
+        dis.state.set_focused_visible(true, true);
+        dis.state.set_disabled(true);
+        assert_eq!(paint_items(&dis).len(), 1);
+    }
+
+    /// Dragged: state-layer 16% (M3) — control + overlay; ring не рисуется.
+    #[test]
+    fn component_button_paint_dragged_state_layer() {
+        let pal = palette_a();
+        let rects = vec![UiRect::new(0.0, 0.0, 100.0, BUTTON_HEIGHT)];
+        let mut btn = Button::new(ButtonProps::new("ОК", ButtonVariant::Secondary, pal));
+        btn.state.set_dragged(true);
+        let mut p = Painter::new();
+        btn.paint(&mut p, &rects);
+        let items = p.items();
+        assert_eq!(items.len(), 2, "control + state-layer 16%");
+        match &items[1] {
+            PaintItem::Rect { fill, border, .. } => {
+                let t = pal.text;
+                assert_eq!(
+                    *fill,
+                    [t[0], t[1], t[2], state_layer_alpha(KitState::Dragged)]
+                );
+                assert_eq!(*border, [0.0; 4]);
+            }
+            other => panic!("item[1] — overlay Rect, получен {other:?}"),
         }
     }
 }

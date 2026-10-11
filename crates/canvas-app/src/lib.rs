@@ -3581,12 +3581,14 @@ pub mod ui {
                 chip.pill[0] + chip.pill[2] <= help[0] + 1e-4,
                 "чип левее «?» — пересечения с кластером нет"
             );
-            // Панель «Проливания» — ниже ряда кластера.
-            assert!(
-                flowmap_ui::PANEL_TOP >= SETTINGS_MARGIN + SETTINGS_BUTTON,
-                "flowmap ниже кластера: PANEL_TOP={}",
-                flowmap_ui::PANEL_TOP
-            );
+            // Панель «Проливания» — ниже ряда кластера (инвариант констант —
+            // проверяется на компиляции; clippy 1.99 assertions_on_constants).
+            const {
+                assert!(
+                    flowmap_ui::PANEL_TOP >= SETTINGS_MARGIN + SETTINGS_BUTTON,
+                    "flowmap ниже кластера"
+                )
+            }
             // Author-bar — топ-лево, DOM-паритет (margin 8).
             let bar = about_ui::author_bar_layout(viewport, false);
             assert_eq!(bar.bar[0], about_ui::BAR_MARGIN, "бар у левой кромки");
