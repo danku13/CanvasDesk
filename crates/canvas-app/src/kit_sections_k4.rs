@@ -175,27 +175,29 @@ pub fn k4_section_h(id: &str) -> f32 {
     match id {
         // Баннер: 4 строки (пары состояний + Error во всю ширину).
         "banner" => rows_h(BANNER_H, 4),
-        // Пузырь: 2 строки (Normal/Error, Success).
+        // Пузырь: 3 строки — Normal и Error парами (пузырь + подпись
+        // состояния в правой ячейке), Success во всю ширину.
         "chat_bubble" => {
             let h = canvas_core::tokens::SPACING_SM * 0.5
                 + CHAT_HEADER_H
                 + CHAT_LINE_H
                 + canvas_core::tokens::SPACING_SM;
-            rows_h(h, 2)
+            rows_h(h, 3)
         }
         // Крошки: путь + переполнение.
         "crumbs" => rows_h(CRUMB_H, 2),
         // Футер: правый ряд + split.
         "footer" => rows_h(kit::BUTTON_HEIGHT, 2),
-        // Радио-карточка: 3 строки × 2 карточки (пад карточки = SPACING_SM,
-        // label/desc — метрики компонента).
+        // Радио-карточка: 2 строки (3 карточки Normal/Hovered/Pressed +
+        // 2 — Selected/Disabled; дубль Normal не показываем) — пад карточки
+        // = SPACING_SM, label/desc — метрики компонента.
         "radio_card" => {
             let h = canvas_core::tokens::SPACING_SM
                 + canvas_ui::component::radio_card::RADIO_LABEL_LINE_H
                 + canvas_core::tokens::SPACING_S
                 + canvas_ui::component::radio_card::RADIO_DESC_LINE_H
                 + canvas_core::tokens::SPACING_SM;
-            rows_h(h, 3)
+            rows_h(h, 2)
         }
         // Две колонки: левый + правый вариант.
         "two_column" => rows_h(K4_TWO_COLUMN_ROW_H, 2),
@@ -1086,7 +1088,9 @@ fn radio_card_section(
         (KitState::Disabled, false),
         (KitState::Normal, false),
     ];
-    let per = ((slot.w - kit::GAP_CONTROLS) / 2.0).max(0.0);
+    // Ряд из ТРЁХ карточек — шаг третей слота (паттерн badge/avatar:
+    // (w − 2·GAP)/3); ряд из двух — тот же шаг (выравнивание по колонкам).
+    let per = ((slot.w - 2.0 * kit::GAP_CONTROLS) / 3.0).max(0.0);
     let mut y = slot.y;
     for half in [rows, rows2] {
         for (i, (state, selected)) in half.into_iter().enumerate() {
@@ -2258,5 +2262,511 @@ pub(crate) fn k4_paint(
             d.label_center(r.row.chevron, chevron, style.text, 10.0);
         }
         d.label_left(r.row.label, &r.row.label_text, style.text, 12.0);
+    }
+}
+
+// === Golden-тесты секций (issue #62; паттерн golden-ов kit_ui.rs) ==========
+
+#[cfg(test)]
+mod k4_golden {
+    use super::*;
+    use crate::kit_ui::{gallery_layout, new_measurer, SECTION_GAP};
+    use canvas_core::tokens::SPACING_SM;
+    use canvas_render::text::measure_font_system;
+    use std::iter::once;
+
+    /// Допуск геометрии (сравнение f32 — значения из целых констант).
+    const EPS: f32 = 0.01;
+
+    /// Альтернативная палитра для [`k4_layout_geometry_palette_free`]
+    /// (значения слотов иные — геометрия от них зависеть не должна).
+    fn alt_palette() -> KitPalette {
+        KitPalette {
+            panel_fill: [0.9; 4],
+            panel_border: [0.8; 4],
+            control_fill: [0.7; 4],
+            control_border: [0.6; 4],
+            control_primary: [0.5; 4],
+            control_danger: [0.4; 4],
+            hover_fill: [0.3; 4],
+            primary_hover_fill: [0.25; 4],
+            selected_fill: [0.2; 4],
+            text: [0.1; 4],
+            text_title: [0.09; 4],
+            text_muted: [0.08; 4],
+            disabled_text: [0.07; 4],
+            accent: [0.06; 4],
+            control_success: [0.10, 0.65, 0.45, 1.0],
+            control_warning: [0.85, 0.55, 0.20, 1.0],
+            stage_dim: [0.04, 0.04, 0.08, 0.6],
+            scrollbar_thumb: [0.45, 0.48, 0.56, 0.7],
+            rule_color: [0.20, 0.23, 0.30, 0.8],
+        }
+    }
+
+    /// Синтетическая линейка K4-хвоста — те же 2 rect'а на секцию (подпись,
+    /// контент), что читает [`k4_consume`] из `gallery_layout_impl`; шаг
+    /// SECTION_GAP — как между секциями реальной линейки. Старт y = 100
+    /// (не 0 — ловит забытый slot.y). Возвращает секции и слоты по id.
+    fn consume_synthetic(
+        lang: Language,
+        m: &mut TextMeasurer,
+        fs: &mut cosmic_text::FontSystem,
+    ) -> (K4Sections, Vec<(&'static str, UiRect)>) {
+        let full_w = 1024.0;
+        let control_x = 150.0;
+        let control_w = full_w - control_x - 40.0;
+        let mut items: Vec<UiRect> = Vec::new();
+        let mut slots: Vec<(&'static str, UiRect)> = Vec::new();
+        let mut y = 100.0;
+        for id in K4_ORDER {
+            items.push(UiRect::new(0.0, y, full_w, SECTION_TITLE_H));
+            y += SECTION_TITLE_H;
+            let h = k4_section_h(id);
+            slots.push((id, UiRect::new(control_x, y, control_w, h)));
+            items.push(UiRect::new(0.0, y, full_w, h));
+            y += h + SECTION_GAP;
+        }
+        let mut titles = Vec::new();
+        let mut it = items.into_iter();
+        let k4 = k4_consume(&mut it, control_x, control_w, lang, m, fs, &mut titles);
+        (k4, slots)
+    }
+
+    /// Все rect'ы секции из раскладки (для инвариантов границ слота).
+    fn section_rects(k4: &K4Sections, id: &str) -> Vec<UiRect> {
+        match id {
+            "banner" => k4.banner_rows.iter().map(|r| r.lay.rect).collect(),
+            "chat_bubble" => k4.chat_rows.iter().map(|r| r.lay.rect).collect(),
+            "crumbs" => k4
+                .crumbs_rows
+                .iter()
+                .flat_map(|r| r.chips.iter().map(|(c, _)| *c))
+                .collect(),
+            "footer" => k4
+                .footer_rows
+                .iter()
+                .flat_map(|r| r.buttons.iter().map(|b| b.rect))
+                .collect(),
+            "radio_card" => k4.radio_card_cells.iter().map(|c| c.lay.rect).collect(),
+            "two_column" => k4
+                .two_column_rows
+                .iter()
+                .flat_map(|r| [r.sidebar, r.content])
+                .collect(),
+            "checkbox" => k4
+                .checkbox_cells
+                .iter()
+                .flat_map(|c| [c.lay.box_rect, c.lay.label_rect])
+                .collect(),
+            "slider" => k4
+                .slider_rows
+                .iter()
+                .flat_map(|r| [r.lay.track, r.lay.filled, r.lay.knob])
+                .collect(),
+            "radio" => k4
+                .radio_cells
+                .iter()
+                .flat_map(|c| [c.lay.circle, c.lay.label_rect])
+                .collect(),
+            "tabs" => k4
+                .tabs_rows
+                .iter()
+                .flat_map(|r| once(r.lay.bar).chain(r.lay.tabs.iter().map(|t| t.rect)))
+                .collect(),
+            "segmented" => k4
+                .segmented_rows
+                .iter()
+                .flat_map(|r| {
+                    once(r.lay.container)
+                        // active_rect — геометрия заливки только у Selected;
+                        // у прочих строк это сигнальный нулевой rect
+                        // «нет активного сегмента» (не геометрия слота).
+                        .chain(r.active.is_some().then_some(r.lay.active_rect))
+                        .chain(r.lay.segments.iter().copied())
+                })
+                .collect(),
+            "command_palette" => {
+                let pl = k4.palette.as_ref().expect("палитра команд в раскладке");
+                once(pl.lay.input)
+                    .chain(pl.lay.results.iter().map(|(r, _)| *r))
+                    .collect()
+            }
+            "accordion" => k4
+                .accordion_rows
+                .iter()
+                .flat_map(|r| [r.lay.header, r.lay.chevron, r.lay.content])
+                .collect(),
+            "progress" => k4
+                .progress_rows
+                .iter()
+                .flat_map(|r| [r.lay.track, r.lay.fill])
+                .collect(),
+            "skeleton" => k4
+                .skeleton_rows
+                .iter()
+                .flat_map(|r| r.lay.rects.iter().copied())
+                .collect(),
+            "badge" => k4
+                .badge_cells
+                .iter()
+                .flat_map(|c| [c.anchor, c.lay.rect])
+                .collect(),
+            "popover" => k4
+                .popover_rows
+                .iter()
+                .flat_map(|r| [r.anchor, r.arrow, r.content])
+                .collect(),
+            "snackbar" => k4.snackbar_rows.iter().map(|r| r.lay.rect).collect(),
+            "avatar" => k4.avatar_cells.iter().map(|c| c.lay.rect).collect(),
+            "tree" => k4.tree_rows.iter().map(|r| r.row.rect).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Порядок и состав K4-ORDER: 20 уникальных id — 6 W2, затем 14 Wave C
+    /// (порядок тела issue #62).
+    #[test]
+    fn k4_order_is_20_w2_then_wave_c() {
+        const W2: [&str; 6] = [
+            "banner",
+            "chat_bubble",
+            "crumbs",
+            "footer",
+            "radio_card",
+            "two_column",
+        ];
+        const WAVE_C: [&str; 14] = [
+            "checkbox",
+            "slider",
+            "radio",
+            "tabs",
+            "segmented",
+            "command_palette",
+            "accordion",
+            "progress",
+            "skeleton",
+            "badge",
+            "popover",
+            "snackbar",
+            "avatar",
+            "tree",
+        ];
+        assert_eq!(K4_ORDER.len(), 20);
+        let mut uniq = K4_ORDER.to_vec();
+        uniq.sort_unstable();
+        uniq.dedup();
+        assert_eq!(uniq.len(), 20, "id секций уникальны");
+        assert_eq!(&K4_ORDER[..6], &W2, "первые 6 — W2");
+        assert_eq!(&K4_ORDER[6..], &WAVE_C, "хвост — 14 Wave C");
+    }
+
+    /// Метки секций зарегистрированы в i18n RU и EN (tr не отдаёт ключ) и
+    /// различаются между языками.
+    #[test]
+    fn k4_section_titles_registered_ru_en() {
+        for id in K4_ORDER {
+            let key = k4_title_key(id);
+            let ru = crate::i18n::tr(Language::Ru, key);
+            let en = crate::i18n::tr(Language::En, key);
+            assert_ne!(ru, key, "RU-метка секции {id} не зарегистрирована");
+            assert_ne!(en, key, "EN-метка секции {id} не зарегистрирована");
+            assert_ne!(ru, en, "метка секции {id} различает RU/EN");
+        }
+    }
+
+    /// Формула высоты [`k4_section_h`] = фактический контент секции:
+    /// ряды начинаются от верха слота, помещаются в него БЕЗ переполнения
+    /// (G5: silent clamps запрещены) и последний ряд оканчивается ровно на
+    /// нижней кромке слота — формула строк едина с раскладкой.
+    #[test]
+    fn k4_sections_rows_fit_block() {
+        let mut m = new_measurer();
+        let mut fs = measure_font_system();
+        let (k4, slots) = consume_synthetic(Language::Ru, &mut m, &mut fs);
+        // Количество строк/ячеек по секциям (демо-состав из body issue #62).
+        let counts: &[(&str, usize)] = &[
+            ("banner", 7), // 3 пары (6 ячеек) + Error во всю ширину
+            ("chat_bubble", 3),
+            ("footer", 5),     // 2 + 3 кнопки в двух строках
+            ("radio_card", 5), // 3 + 2 карточки (дубликат Normal не показываем)
+            ("two_column", 4), // 2 строки × (sidebar + content)
+            ("checkbox", 7),
+            ("slider", 4),
+            ("radio", 5),
+            ("tabs", 6),
+            ("segmented", 4),
+            ("command_palette", 1), // Option palette
+            ("accordion", 4),
+            ("progress", 5),
+            ("skeleton", 3),
+            ("badge", 6),
+            ("popover", 2),
+            ("snackbar", 2),
+            ("avatar", 6),
+            ("tree", 4),
+        ];
+        for (id, want) in counts {
+            let n = match *id {
+                "banner" => k4.banner_rows.len(),
+                "chat_bubble" => k4.chat_rows.len(),
+                "crumbs" => k4.crumbs_rows.len(),
+                "footer" => k4.footer_rows.iter().map(|r| r.buttons.len()).sum(),
+                "radio_card" => k4.radio_card_cells.len(),
+                "two_column" => k4.two_column_rows.len() * 2,
+                "checkbox" => k4.checkbox_cells.len(),
+                "slider" => k4.slider_rows.len(),
+                "radio" => k4.radio_cells.len(),
+                "tabs" => k4.tabs_rows.len(),
+                "segmented" => k4.segmented_rows.len(),
+                "command_palette" => k4.palette.is_some().into(),
+                "accordion" => k4.accordion_rows.len(),
+                "progress" => k4.progress_rows.len(),
+                "skeleton" => k4.skeleton_rows.len(),
+                "badge" => k4.badge_cells.len(),
+                "popover" => k4.popover_rows.len(),
+                "snackbar" => k4.snackbar_rows.len(),
+                "avatar" => k4.avatar_cells.len(),
+                "tree" => k4.tree_rows.len(),
+                _ => usize::MAX,
+            };
+            assert_eq!(n, *want, "количество контента секции {id}");
+        }
+        // Инвариант границ: весь контент внутри слота секции (вертикаль и
+        // горизонталь, допуск EPS).
+        for (id, slot) in &slots {
+            let rects = section_rects(&k4, id);
+            assert!(!rects.is_empty(), "секция {id} без контента");
+            for r in &rects {
+                assert!(
+                    r.y >= slot.y - EPS
+                        && r.bottom() <= slot.bottom() + EPS
+                        && r.x >= slot.x - EPS
+                        && r.right() <= slot.right() + EPS,
+                    "секция {id}: rect {:?} вне слота {:?}",
+                    r,
+                    slot
+                );
+            }
+        }
+        // Флеш-посадка: последний внешний rect каждой секции оканчивается
+        // ровно на нижней кромке слота (формула строк = раскладка; для
+        // palette — последняя строка результатов на SPACING_SM выше кромки,
+        // для snackbar — бар на внутренней нижней марже компонента 24 px,
+        // для badge — якорь на 6 px выше кромки ячейки).
+        let slot = |id: &str| slots.iter().find(|(i, _)| *i == id).unwrap().1;
+        let flush = |got: f32, id: &str, want: f32| {
+            assert!(
+                (got - want).abs() < EPS,
+                "секция {id}: нижняя кромка {got} != {want}"
+            );
+        };
+        flush(
+            k4.banner_rows.last().unwrap().lay.rect.bottom(),
+            "banner",
+            slot("banner").bottom(),
+        );
+        flush(
+            k4.chat_rows.last().unwrap().lay.rect.bottom(),
+            "chat_bubble",
+            slot("chat_bubble").bottom(),
+        );
+        flush(
+            k4.footer_rows
+                .last()
+                .unwrap()
+                .buttons
+                .iter()
+                .map(|b| b.rect.bottom())
+                .fold(f32::MIN, f32::max),
+            "footer",
+            slot("footer").bottom(),
+        );
+        flush(
+            k4.radio_card_cells
+                .iter()
+                .map(|c| c.lay.rect.bottom())
+                .fold(f32::MIN, f32::max),
+            "radio_card",
+            slot("radio_card").bottom(),
+        );
+        flush(
+            k4.two_column_rows
+                .iter()
+                .map(|r| r.sidebar.bottom())
+                .fold(f32::MIN, f32::max),
+            "two_column",
+            slot("two_column").bottom(),
+        );
+        flush(
+            k4.checkbox_cells
+                .iter()
+                .map(|c| c.lay.box_rect.bottom())
+                .fold(f32::MIN, f32::max),
+            "checkbox",
+            slot("checkbox").bottom(),
+        );
+        flush(
+            k4.radio_cells
+                .iter()
+                .map(|c| c.lay.circle.bottom())
+                .fold(f32::MIN, f32::max),
+            "radio",
+            slot("radio").bottom(),
+        );
+        flush(
+            k4.tabs_rows.last().unwrap().lay.bar.bottom(),
+            "tabs",
+            slot("tabs").bottom(),
+        );
+        flush(
+            k4.segmented_rows.last().unwrap().lay.container.bottom(),
+            "segmented",
+            slot("segmented").bottom(),
+        );
+        let pl = k4.palette.as_ref().unwrap();
+        assert!(
+            (pl.lay.input.y - (slot("command_palette").y + K4_PALETTE_TOP_OFFSET)).abs() < EPS,
+            "палитра: input на верхнем отступе компонента"
+        );
+        flush(
+            pl.lay.results.last().unwrap().0.bottom(),
+            "command_palette",
+            slot("command_palette").bottom() - SPACING_SM,
+        );
+        flush(
+            k4.accordion_rows
+                .iter()
+                .map(|r| r.lay.content.bottom())
+                .fold(f32::MIN, f32::max),
+            "accordion",
+            slot("accordion").bottom(),
+        );
+        flush(
+            k4.skeleton_rows
+                .iter()
+                .flat_map(|r| r.lay.rects.iter().map(|q| q.bottom()))
+                .fold(f32::MIN, f32::max),
+            "skeleton",
+            slot("skeleton").bottom(),
+        );
+        flush(
+            k4.badge_cells
+                .iter()
+                .map(|c| c.anchor.bottom())
+                .fold(f32::MIN, f32::max),
+            "badge",
+            slot("badge").bottom() - 6.0,
+        );
+        let pop = k4.popover_rows.last().unwrap();
+        assert!(
+            (!pop.below
+                && (pop.anchor.bottom().max(pop.content.bottom()) - slot("popover").bottom())
+                    .abs()
+                    < EPS),
+            "popover: у ряда Above пузырь прижат к верху строки, кромку слота \
+             держит якорь (bottom = якорь/пузырь последнего ряда)"
+        );
+        flush(
+            k4.snackbar_rows
+                .iter()
+                .map(|r| r.lay.rect.bottom())
+                .fold(f32::MIN, f32::max),
+            "snackbar",
+            slot("snackbar").bottom() - K4_SNACKBAR_MARGIN,
+        );
+        flush(
+            k4.avatar_cells
+                .iter()
+                .map(|c| c.lay.rect.bottom())
+                .fold(f32::MIN, f32::max),
+            "avatar",
+            slot("avatar").bottom(),
+        );
+        flush(
+            k4.tree_rows.last().unwrap().row.rect.bottom(),
+            "tree",
+            slot("tree").bottom(),
+        );
+    }
+
+    /// Геометрия раскладки НЕ зависит от палитры (K4.1: компоненты
+    /// выбирают только слоты; палитра — параметр отрисовки). Претенденты —
+    /// компоненты, принимающие палитру в layout-сигнатуре.
+    #[test]
+    fn k4_layout_geometry_palette_free() {
+        let p1 = neutral_palette();
+        let p2 = alt_palette();
+        let cell = UiRect::new(150.0, 100.0, 480.0, BANNER_H);
+        let (a, _) = banner(cell, 60.0, 48.0, BannerKind::Info, KitState::Hovered, &p1);
+        let (b, _) = banner(cell, 60.0, 48.0, BannerKind::Info, KitState::Hovered, &p2);
+        assert_eq!(a.rect, b.rect, "banner: rect от палитры не зависит");
+        assert_eq!(a.label_area, b.label_area);
+        assert_eq!(a.action_button, b.action_button);
+
+        let chat_h = SPACING_SM * 0.5 + CHAT_HEADER_H + CHAT_LINE_H + SPACING_SM;
+        let cell = UiRect::new(150.0, 100.0, 480.0, chat_h);
+        let (a, _) = chat_bubble(cell, 1, 0, ChatBubbleKind::Error, &p1, true);
+        let (b, _) = chat_bubble(cell, 1, 0, ChatBubbleKind::Error, &p2, true);
+        assert_eq!(a.rect, b.rect, "chat_bubble: rect от палитры не зависит");
+        assert_eq!(a.text_area, b.text_area);
+
+        let card_h = SPACING_SM
+            + canvas_ui::component::radio_card::RADIO_LABEL_LINE_H
+            + canvas_core::tokens::SPACING_S
+            + canvas_ui::component::radio_card::RADIO_DESC_LINE_H
+            + SPACING_SM;
+        let cell = UiRect::new(150.0, 100.0, 320.0, card_h);
+        let (a, _) = radio_card(cell, 90.0, Some(110.0), true, KitState::Selected, &p1);
+        let (b, _) = radio_card(cell, 90.0, Some(110.0), true, KitState::Selected, &p2);
+        assert_eq!(a.rect, b.rect, "radio_card: rect от палитры не зависит");
+        assert_eq!(a.indicator, b.indicator);
+    }
+
+    /// K4-хвост в РЕАЛЬНОЙ раскладке: последние 20 подписей секций
+    /// gallery_layout — ровно K4_ORDER (k4_title_key), без пропусков и
+    /// перестановок.
+    #[test]
+    fn gallery_layout_k4_titles_tail_in_order() {
+        let mut m = new_measurer();
+        let mut fs = measure_font_system();
+        let p = neutral_palette();
+        // FR-059: section_titles отфильтрованы по видимости — полный список
+        // собирается детерминированным сканом offset (шаг 8 px, как в
+        // golden-линейке kit_ui.rs).
+        let lay0 = gallery_layout(
+            [1280.0, 800.0],
+            Language::Ru,
+            &kit::ScrollState::default(),
+            &p,
+            &mut m,
+            &mut fs,
+        );
+        let content_h = lay0.content_h;
+        let viewport_h = lay0.sections_viewport.h;
+        let mut seen: Vec<&'static str> = Vec::new();
+        let mut off = 0.0f32;
+        while off <= content_h - viewport_h {
+            let s = kit::ScrollState {
+                offset: off,
+                content_h,
+                viewport_h,
+            };
+            let lay = gallery_layout([1280.0, 800.0], Language::Ru, &s, &p, &mut m, &mut fs);
+            for (_, key) in &lay.section_titles {
+                if !seen.contains(key) {
+                    seen.push(key);
+                }
+            }
+            off += 8.0;
+        }
+        assert_eq!(seen.len(), 49, "29 прежних секций + 20 K4 (скан полноты)");
+        let keys: Vec<&'static str> = K4_ORDER.iter().map(|id| k4_title_key(id)).collect();
+        let tail: Vec<&'static str> = seen[seen.len() - 20..].to_vec();
+        assert_eq!(tail, keys, "хвост подписей линейки — K4-секции по порядку");
+        assert!(
+            !seen[..seen.len() - 20].iter().any(|k| keys.contains(k)),
+            "K4-подписи ниже всех прежних секций (аддитивный хвост)"
+        );
     }
 }
