@@ -1,0 +1,4 @@
+text x=16 y=16 w=288 h=14 text="Skeleton"
+rect x=16 y=38 w=288 h=14
+rect x=16 y=60 w=288 h=14
+rect x=16 y=82 w=202 h=14

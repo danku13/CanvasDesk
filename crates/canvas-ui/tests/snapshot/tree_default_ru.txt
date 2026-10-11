@@ -1,0 +1,4 @@
+text x=16 y=16 w=16 h=26 text="▼"
+text x=36 y=16 w=268 h=26 text="Дерево"
+text x=36 y=42 w=268 h=26 text="Настройки"
+text x=36 y=68 w=268 h=26 text="Поиск"

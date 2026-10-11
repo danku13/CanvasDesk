@@ -1,0 +1,4 @@
+text x=16 y=16 w=288 h=14 text="Slider"
+rect x=16 y=48 w=173 h=12
+rect x=16 y=48 w=288 h=12
+rect x=180 y=45 w=18 h=18
