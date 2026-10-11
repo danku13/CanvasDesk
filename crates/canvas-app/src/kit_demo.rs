@@ -63,6 +63,14 @@ pub mod hit {
     pub const AVATAR_IDS: [&str; 12] = ids!("avatar", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     /// INT-4 (#46): пункты nav_rail (5 шт: Templates/Calc/Explain/Agent/Settings).
     pub const NAV_RAIL_IDS: [&str; 5] = ids!("nav_rail", [0, 1, 2, 3, 4]);
+    /// Wave M (M3-b): чипы групп мобильной навигации compact-тира витрины
+    /// (индекс в [`super::GROUPS`]).
+    pub const MGROUP_IDS: [&str; 5] = ids!("mgroup", [0, 1, 2, 3, 4]);
+
+    /// Чип группы мобильной навигации (индекс; вне диапазона — пустой).
+    pub fn mgroup(i: usize) -> &'static str {
+        pick(&MGROUP_IDS, i)
+    }
 
     /// Взять статический id из таблицы (вне диапазона — пустой → игнор).
     fn pick(table: &[&'static str], i: usize) -> &'static str {
@@ -218,6 +226,22 @@ pub enum DemoGroup {
     DataDisplay,
     /// Фидбек: тост, тултип, снекбар, поповер.
     Feedback,
+}
+
+/// Все группы в порядке сайдбара (Wave M M3-b, issue #53): мобильная
+/// навигация compact-тира — чипы групп по этому порядку (индекс = hit-id
+/// `mgroup:<i>`).
+pub const GROUPS: [DemoGroup; 5] = [
+    DemoGroup::Inputs,
+    DemoGroup::Navigation,
+    DemoGroup::Containers,
+    DemoGroup::DataDisplay,
+    DemoGroup::Feedback,
+];
+
+/// Индекс группы в [`GROUPS`] (вне списка — 0, консервативная ветка).
+pub fn group_index(group: DemoGroup) -> usize {
+    GROUPS.iter().position(|&g| g == group).unwrap_or(0)
 }
 
 /// Ключ i18n заголовка группы (сайдбар, RU/EN).
@@ -523,6 +547,13 @@ pub struct KitDemoState {
     pub avatar_selected: usize,
     /// NavRail: индекс активного пункта (0..4; Templates/Calc/Explain/Agent/Settings).
     pub nav_rail_active: usize,
+    // --- Wave M (M3-b, issue #53): адаптив витрины ---
+    /// Скролл сайдбара (adaptive medium/expanded — окно [`DemoLayout`:
+    /// `sidebar_viewport`]; compact — список секций активной группы).
+    pub sidebar_scroll: canvas_ui::kit::ScrollState,
+    /// Активная группа мобильной навигации compact-тира (индекс в
+    /// [`GROUPS`]; None — первая группа реестра).
+    pub mobile_group: Option<usize>,
 }
 
 impl Default for KitDemoState {
@@ -557,6 +588,8 @@ impl Default for KitDemoState {
             palette_query: String::new(),
             avatar_selected: 0,
             nav_rail_active: 0,
+            sidebar_scroll: canvas_ui::kit::ScrollState::default(),
+            mobile_group: None,
         }
     }
 }

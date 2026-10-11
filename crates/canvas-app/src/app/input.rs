@@ -331,6 +331,20 @@ impl App {
     /// состояния через [`crate::kit_demo::apply_click`]) и навигация сайдбара.
     pub(super) fn click_kit_gallery(&mut self, element: &str) {
         if let Some(id) = element.strip_prefix(crate::kit_demo::HIT_PREFIX) {
+            // Wave M (M3-b): чип группы мобильной навигации (compact) —
+            // смена активной группы (список секций перезбирается на кадре).
+            if let Some(idx) = id.strip_prefix("mgroup:") {
+                if let Ok(g) = idx.parse::<usize>() {
+                    if g < crate::kit_demo::GROUPS.len() {
+                        self.kit_demo.mobile_group = Some(g);
+                        // Смена группы — список перезбран; сброс скролла
+                        // списка (контент другой).
+                        self.kit_demo.sidebar_scroll = canvas_ui::kit::ScrollState::default();
+                    }
+                }
+                self.request_redraw();
+                return;
+            }
             // Навигация сайдбара (D5) — скролл к секции (нужен скролл-стейт)
             if let Some(section_id) = id.strip_prefix("nav:") {
                 self.kit_demo_nav(section_id);
@@ -5145,8 +5159,33 @@ impl App {
         }
         // FR-059: колесо над контентом витрины кита прокручивает секции
         // (кит список+скролл; шапка фиксирована; знак — как у списков)
+        // Wave M (M3-b): в адаптиве сайдбар TO-BE — собственное окно
+        // скролла (F1): колесо над ним крутит сайдбар, не секции.
         if self.kit_gallery_open {
             let viewport = self.viewport_logical();
+            if self.settings.modals_adaptive {
+                if let Some(lay) = self.kit_demo_layout.as_ref() {
+                    if let Some(dl) = lay.demo.as_ref() {
+                        let sb = dl.sidebar_viewport;
+                        if sb.w > 0.0 && sb.h > 0.0 && crate::kit_ui::cursor_in(&sb, self.cursor) {
+                            let dy = match delta {
+                                MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
+                                MouseScrollDelta::PixelDelta(pos) => {
+                                    -pos.y as f32 / self.scale_factor()
+                                }
+                            };
+                            let mut s = self.kit_demo.sidebar_scroll.clone();
+                            s.viewport_h = sb.h;
+                            s.content_h = dl.sidebar_content_h;
+                            s.scroll_by(dy);
+                            s.clamp();
+                            self.kit_demo.sidebar_scroll = s;
+                            self.request_redraw();
+                            return;
+                        }
+                    }
+                }
+            }
             let sections = crate::kit_ui::gallery_scroll_viewport(viewport);
             if crate::kit_ui::cursor_in(&sections, self.cursor) {
                 let dy = match delta {
@@ -5179,9 +5218,15 @@ impl App {
         }
         // FR-070: колесо над демо-зоной админпанели прокручивает тело
         // секции (кит список+скролл; шапка/сайдбар фиксированы)
+        // Wave M (M3-b): в адаптиве демо-зона — по флагу (compact — ниже
+        // чип-ряда секций).
         if self.admin_open {
             let viewport = self.viewport_logical();
-            let demo = crate::admin_ui::admin_demo_viewport(viewport);
+            let demo = if self.settings.modals_adaptive {
+                crate::admin_ui::admin_demo_viewport_adaptive(viewport)
+            } else {
+                crate::admin_ui::admin_demo_viewport(viewport)
+            };
             if crate::kit_ui::cursor_in(&demo, self.cursor) {
                 let dy = match delta {
                     MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,

@@ -1787,6 +1787,28 @@ fn modal_size(viewport: [f32; 2]) -> [f32; 2] {
     [size.x, size.y]
 }
 
+/// Wave M (M3-b, issue #53): адаптивный размер модалки по контракту
+/// «80% + mobile-style» — примитив M1 `canvas_ui::kit::modal_rect_flex`
+/// над слотом-вьюпортом (margin [`SETTINGS_MARGIN`] — токен SPACING_LG,
+/// ratio `canvas_ui::kit::MODAL_RATIO_DEFAULT`, те же min/max
+/// 560×400…880×640). Compact-тир (≤767) — full-bleed eff: совпадает с
+/// Mobile-веткой [`modal_size`] (брейкпоинты лестницы совпадают —
+/// design/modals-audit-2026-10.md §3.3); Medium/Expanded — 80% слота с
+/// клампом min/max. Читается ТОЛЬКО в ветке флага `modals_adaptive`
+/// (флаг OFF — прежний [`modal_size`] ни символом не меняется).
+fn modal_size_flex(viewport: [f32; 2]) -> [f32; 2] {
+    let slot =
+        canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
+    let panel = canvas_ui::kit::modal_rect_flex(
+        slot,
+        SETTINGS_MARGIN,
+        canvas_ui::kit::MODAL_RATIO_DEFAULT,
+        canvas_ui::geometry::UiVec2::new(MODAL_MIN_W, MODAL_MIN_H),
+        canvas_ui::geometry::UiVec2::new(MODAL_MAX_W, MODAL_MAX_H),
+    );
+    [panel.w, panel.h]
+}
+
 /// Геометрия модалки с позициями навигации, заголовка, строк активного
 /// таба и карточек темы. Активный таб — индекс в [`SETTINGS_TABS`]
 /// (вне диапазона — первый таб; состояние `App::settings_tab` клампится
@@ -1919,6 +1941,33 @@ pub fn modal_layout_with(
     fs: &mut cosmic_text::FontSystem,
     settings_filter: Option<&Settings>,
 ) -> ModalLayout {
+    modal_layout_impl(tab, viewport, m, fs, settings_filter, false)
+}
+
+/// Wave M (M3-b, issue #53): [`modal_layout_with`] в адаптивной ветке
+/// флага `modals_adaptive` — окно по [`modal_size_flex`] (80% слота,
+/// compact — full-bleed); скелет тот же (тиры W-e совпадают с лестницей
+/// Wave M — брейкпоинты 768/1280 общие).
+pub fn modal_layout_with_adaptive(
+    tab: usize,
+    viewport: [f32; 2],
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    settings_filter: Option<&Settings>,
+) -> ModalLayout {
+    modal_layout_impl(tab, viewport, m, fs, settings_filter, true)
+}
+
+/// Общая реализация раскладки (флаг OFF/ON различаются только формулой
+/// окна: [`modal_size`] vs [`modal_size_flex`] — скелет общий).
+fn modal_layout_impl(
+    tab: usize,
+    viewport: [f32; 2],
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    settings_filter: Option<&Settings>,
+    adaptive: bool,
+) -> ModalLayout {
     use canvas_ui::geometry::{EdgeInsets, UiRect, UiVec2};
     use canvas_ui::layout::{stack, Column, HAlign, MeasuredItem, Row, VAlign};
 
@@ -1938,7 +1987,12 @@ pub fn modal_layout_with(
     let effective_rows: &[SettingsRow] = &filtered_rows;
     let mode = modal_mode(viewport);
     let single_column = mode != ModalMode::Desktop;
-    let [w, h] = modal_size(viewport);
+    // Wave M (M3-b): окно — по флагу (OFF — прежняя формула ни символом).
+    let [w, h] = if adaptive {
+        modal_size_flex(viewport)
+    } else {
+        modal_size(viewport)
+    };
     // Панель — по центру вьюпорта.
     let panel = stack(
         UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0)),
@@ -2315,13 +2369,40 @@ pub fn modal_layout_scrolled_with(
     fs: &mut cosmic_text::FontSystem,
     settings_filter: Option<&Settings>,
 ) -> ModalLayout {
+    modal_layout_scrolled_impl(tab, viewport, scroll_top, m, fs, settings_filter, false)
+}
+
+/// Wave M (M3-b, issue #53): [`modal_layout_scrolled_with`] в адаптивной
+/// ветке флага `modals_adaptive` (окно — [`modal_size_flex`]).
+pub fn modal_layout_scrolled_with_adaptive(
+    tab: usize,
+    viewport: [f32; 2],
+    scroll_top: f32,
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    settings_filter: Option<&Settings>,
+) -> ModalLayout {
+    modal_layout_scrolled_impl(tab, viewport, scroll_top, m, fs, settings_filter, true)
+}
+
+/// Общая реализация scrolled-раскладки (различие OFF/ON — только окно).
+fn modal_layout_scrolled_impl(
+    tab: usize,
+    viewport: [f32; 2],
+    scroll_top: f32,
+    m: &mut canvas_ui::measure::TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    settings_filter: Option<&Settings>,
+    adaptive: bool,
+) -> ModalLayout {
     use canvas_ui::geometry::{EdgeInsets, UiRect};
     use canvas_ui::kit::ScrollState;
 
     // База — та же раскладка скелета (навигация/заголовок/зона) без
     // прокрутки: сдвигается и клипается только поток контента правой
     // панели, навигация и заголовок остаются на месте.
-    let base = modal_layout_with(tab, viewport, m, fs, settings_filter);
+    // Wave M (M3-b): окно — по флагу (adaptive — modal_size_flex).
+    let base = modal_layout_impl(tab, viewport, m, fs, settings_filter, adaptive);
     // Зона рядов: контент-зона минус внутренний паддинг (те же поля, что
     // у потока строк в modal_layout_with).
     let rows_viewport = UiRect::new(
@@ -2390,6 +2471,35 @@ pub fn modal_layout_scrolled_with_settings(
     let mut m = canvas_ui::measure::TextMeasurer::new();
     let mut fs = canvas_render::text::measure_font_system();
     modal_layout_scrolled_with(tab, viewport, scroll_top, &mut m, &mut fs, Some(settings))
+}
+
+/// Wave M (M3-b, issue #53): [`modal_layout_scrolled_with_settings`] в
+/// адаптивной ветке флага `modals_adaptive` — окно 80% слота
+/// ([`modal_size_flex`]), compact — full-bleed; скелет общий.
+pub fn modal_layout_scrolled_with_settings_adaptive(
+    tab: usize,
+    viewport: [f32; 2],
+    scroll_top: f32,
+    settings: &Settings,
+) -> ModalLayout {
+    let mut m = canvas_ui::measure::TextMeasurer::new();
+    let mut fs = canvas_render::text::measure_font_system();
+    modal_layout_scrolled_impl(
+        tab,
+        viewport,
+        scroll_top,
+        &mut m,
+        &mut fs,
+        Some(settings),
+        true,
+    )
+}
+
+/// Wave M (M3-b): адаптивная раскладка без скролла — тесты/утилиты.
+pub fn modal_layout_adaptive(tab: usize, viewport: [f32; 2]) -> ModalLayout {
+    let mut m = canvas_ui::measure::TextMeasurer::new();
+    let mut fs = canvas_render::text::measure_font_system();
+    modal_layout_impl(tab, viewport, &mut m, &mut fs, None, true)
 }
 
 /// Hit-test пункта левой навигации: индекс таба под точкой или `None`
@@ -3180,6 +3290,81 @@ mod tests {
         // Вне диапазона таб — первый таб
         let fallback = modal_layout(99, [1920.0, 1080.0]);
         assert_eq!(fallback.rows, modal_layout(0, [1920.0, 1080.0]).rows);
+    }
+
+    // --- Wave M (M3-b, issue #53): адаптив settings под флагом ------------
+
+    /// Контракт «80% + mobile-style» (design/modals-audit-2026-10.md §3):
+    /// флаг ON — окно по `kit::modal_rect_flex` (desired 0.8 слота, те же
+    /// min/max 560×400…880×640); флаг OFF — прежняя формула 0.45/0.60 ни
+    /// символом не меняется.
+    #[test]
+    fn modal_layout_adaptive_window_uses_modal_rect_flex() {
+        // Expanded (1280×800): eff = 1256×776 (margin 12); desired
+        // 0.8×eff = 1004.8×620.8 → кламп max 880×640 → 880×620.8, центр eff
+        // (y = 12 + (776−620.8)/2 = 89.6).
+        let lay = modal_layout_adaptive(0, [1280.0, 800.0]);
+        assert_rect_close(
+            lay.rect,
+            [200.0, 89.6, 880.0, 620.8],
+            "expanded 1280×800: 80% с клампом max",
+        );
+        // Medium (800×560): eff = 776×536; desired 620.8×428.8 внутри
+        // min/max — без клампа, центр eff.
+        let lay = modal_layout_adaptive(0, [800.0, 560.0]);
+        assert_rect_close(
+            lay.rect,
+            [89.6, 65.6, 620.8, 428.8],
+            "medium 800×560: 80% без клампа",
+        );
+        // Compact-край (375×667): full-bleed eff — тот же лист, что
+        // Mobile-ветка прежней формулы (viewport − 2·SETTINGS_MARGIN).
+        let lay = modal_layout_adaptive(0, [375.0, 667.0]);
+        assert_rect_close(
+            lay.rect,
+            [12.0, 12.0, 351.0, 643.0],
+            "compact 375: full-bleed",
+        );
+        assert_eq!(lay.mode, ModalMode::Mobile, "375 — одноколоночный лист");
+        assert_eq!(lay.nav_w, 0.0, "левых колонок на Compact-тире нет");
+        // Скелет на Medium — одноколоночный с таб-баром (как Compact-режим
+        // W-e): навигация-табы достижимы, строки на всю ширину.
+        let lay = modal_layout_adaptive(0, [800.0, 560.0]);
+        assert_eq!(lay.mode, ModalMode::Compact);
+        assert_eq!(lay.nav_items.len(), SETTINGS_TABS.len());
+        for item in &lay.nav_items {
+            assert!(item[2] > 0.0, "слот таба различим на 800×560");
+        }
+    }
+
+    /// Флаг OFF — рендер-путь не меняется ни символом: раскладка с
+    /// adaptive=false (все legacy-обёртки) даёт прежнюю формулу
+    /// 0.45×vw × 0.60×vh в границах MIN/MAX с клампом к окну.
+    #[test]
+    fn modal_layout_flag_off_path_unchanged() {
+        let mut m = canvas_ui::measure::TextMeasurer::new();
+        let mut fs = canvas_render::text::measure_font_system();
+        // 1280×800: 0.45×1280 = 576, 0.6×800 = 480 — внутри границ.
+        let off = modal_layout_with(0, [1280.0, 800.0], &mut m, &mut fs, None);
+        assert_rect_close(
+            off.rect,
+            [352.0, 160.0, 576.0, 480.0],
+            "flag OFF: 0.45/0.60 формула",
+        );
+        // scrolled-вариант — та же геометрия окна (сдвигается только поток).
+        let scrolled = modal_layout_scrolled_with(0, [1280.0, 800.0], 0.0, &mut m, &mut fs, None);
+        assert_eq!(scrolled.rect, off.rect, "flag OFF: scrolled не меняет окно");
+    }
+
+    /// Сравнение rect'ов с допуском (0.8-умножения неточны в f32).
+    fn assert_rect_close(a: [f32; 4], b: [f32; 4], ctx: &str) {
+        for (i, name) in ["x", "y", "w", "h"].iter().enumerate() {
+            assert!(
+                (a[i] - b[i]).abs() < 0.01,
+                "{ctx}: {name}: {} != {b:?} (a={a:?})",
+                a[i]
+            );
+        }
     }
 
     // --- W-e (вариант «A», решение владельца 03.10.2026): брейкпоинты ----

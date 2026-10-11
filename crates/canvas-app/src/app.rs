@@ -32,7 +32,8 @@ use crate::palette::{
 use crate::scheme_gallery_ui;
 use crate::settings_ui::{
     apply_dropdown_value, control_rect, dropdown_item_at, dropdown_layout, dropdown_options,
-    dropdown_value, modal_layout_scrolled_with_settings, modal_layout_with_settings, modal_nav_at,
+    dropdown_value, modal_layout_scrolled_with_settings,
+    modal_layout_scrolled_with_settings_adaptive, modal_layout_with_settings, modal_nav_at,
     modal_row_at, modal_scroll_max_filtered, modal_theme_card_at, pill_knob_rect, row_desc_key,
     row_kind, row_label_key, text_input_field_rect, text_input_has_button, DropdownState,
     ModalMode, RowKind, SettingsRow, DROPDOWN_MARGIN, DROPDOWN_ROW_H, MODAL_ROW_LABEL_W,

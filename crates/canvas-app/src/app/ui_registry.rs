@@ -1416,12 +1416,23 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             // (overlays.rs) и pick (input.rs) — один offset, «ввод = тому,
             // что видно»; dropdown-якорь уезжает со строкой.
             // FR-LLM-FIX: настройки для фильтрации AI-таба (BYOK-модель).
-            let layout = modal_layout_scrolled_with_settings(
-                app.settings_tab,
-                viewport,
-                app.settings_scroll_top,
-                &app.settings,
-            );
+            // Wave M (M3-b, issue #53): флаг modals_adaptive — окно 80%/
+            // full-bleed (та же раскладка, что у рисования).
+            let layout = if app.settings.modals_adaptive {
+                modal_layout_scrolled_with_settings_adaptive(
+                    app.settings_tab,
+                    viewport,
+                    app.settings_scroll_top,
+                    &app.settings,
+                )
+            } else {
+                modal_layout_scrolled_with_settings(
+                    app.settings_tab,
+                    viewport,
+                    app.settings_scroll_top,
+                    &app.settings,
+                )
+            };
             surface
                 .hit_rects
                 .push(HitRect::interactive(rect(layout.rect), "settings-modal"));
@@ -1932,13 +1943,26 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
         // 2026-09-25) — теперь поведение main stage: клик внутри окна
         // глотается (click_kit_gallery, элемент мимо кнопок — no-op).
         id::KIT_GALLERY => {
-            let body =
-                crate::kit_ui::gallery_panel(UiRect::new(0.0, 0.0, vw.max(0.0), vh.max(0.0)));
+            // Wave M (M3-b, issue #53): тело панели — по флагу
+            // modals_adaptive (gallery_panel_flex — 80%/full-bleed); в
+            // adaptive TO-BE демо-хиты идут из кэша адаптивной раскладки
+            // (draw==hit — та же ветка).
+            let body = if app.settings.modals_adaptive {
+                crate::kit_ui::gallery_panel_flex(UiRect::new(0.0, 0.0, vw.max(0.0), vh.max(0.0)))
+            } else {
+                crate::kit_ui::gallery_panel(UiRect::new(0.0, 0.0, vw.max(0.0), vh.max(0.0)))
+            };
             surface
                 .hit_rects
                 .push(HitRect::interactive(body, "kit-gallery-panel"));
-            let (theme, close) =
-                crate::kit_ui::gallery_hit_slots(viewport, &app.effective_palette().kit_palette());
+            let (theme, close) = if app.settings.modals_adaptive {
+                crate::kit_ui::gallery_hit_slots_adaptive(
+                    viewport,
+                    &app.effective_palette().kit_palette(),
+                )
+            } else {
+                crate::kit_ui::gallery_hit_slots(viewport, &app.effective_palette().kit_palette())
+            };
             surface.hit_rects.push(HitRect::interactive(
                 UiRect::new(theme.x, theme.y, theme.w, theme.h),
                 "kit-gallery-theme",
@@ -1980,8 +2004,11 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             surface
                 .hit_rects
                 .push(HitRect::interactive(admin_body, "admin-panel"));
-            let (theme, reset, close) =
-                crate::admin_ui::admin_hit_slots(viewport, &app.admin_effective_palette());
+            let (theme, reset, close) = if app.settings.modals_adaptive {
+                crate::admin_ui::admin_hit_slots_adaptive(viewport, &app.admin_effective_palette())
+            } else {
+                crate::admin_ui::admin_hit_slots(viewport, &app.admin_effective_palette())
+            };
             surface.hit_rects.push(HitRect::interactive(
                 UiRect::new(theme.x, theme.y, theme.w, theme.h),
                 "admin-theme",
