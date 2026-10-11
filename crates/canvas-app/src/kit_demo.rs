@@ -633,6 +633,220 @@ pub fn next_density(d: Density) -> Density {
     }
 }
 
+// === V1 (issue #67): Density → зазоры из Spacing-токенов ====================
+//
+// Полный re-layout колонки витрины: межсекционные/межстрочные зазоры —
+// НЕ литералы, а шкала S1 (`canvas_core::tokens`), выбранная плотностью.
+// Comfortable — канон v1 (SECTION_GAP = SPACING_LG, шаг рядов SPACING_SM):
+// дефолтное демо не меняет геометрию зазоров; Compact/Spacious — соседние
+// ступени шкалы (без выдуманных значений между токенами).
+
+/// Межсекционный зазор колонки витрины от плотности (шкала S1):
+/// Compact → SPACING_MD (10), Comfortable → SPACING_LG (12, канон v1),
+/// Spacious → SPACING_XL (24).
+pub fn density_section_gap(d: Density) -> f32 {
+    match d {
+        Density::Compact => canvas_core::tokens::SPACING_MD,
+        Density::Comfortable => canvas_core::tokens::SPACING_LG,
+        Density::Spacious => canvas_core::tokens::SPACING_XL,
+    }
+}
+
+/// Межстрочный зазор внутри секций витрины от плотности (шкала S1):
+/// Compact → SPACING_S (6), Comfortable → SPACING_SM (8, канон v1),
+/// Spacious → SPACING_MD (10).
+pub fn density_row_gap(d: Density) -> f32 {
+    match d {
+        Density::Compact => canvas_core::tokens::SPACING_S,
+        Density::Comfortable => canvas_core::tokens::SPACING_SM,
+        Density::Spacious => canvas_core::tokens::SPACING_MD,
+    }
+}
+
+// === V2 (issue #67): клавиатурный ринг — стрелки в группах ==================
+
+/// Стрелка demo-витрины (платформо-независимая модель; потребитель мапит
+/// winit-события).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DemoArrow {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+/// V2 (#67): стрелки внутри групп radio/tabs/segmented/tree/nav_rail.
+///
+/// id — текущий фокус (хит-id БЕЗ префикса). Семантика:
+/// - `radio` (Vertical): ↑/↓ — соседний пункт (wrap), выбор следует за
+///   фокусом; ←/→ не тратятся (None);
+/// - `tabs`/`segmented`: ←/→ — соседний сегмент (wrap) через кит-резолвер
+///   `tabs_key`; ↑/↓ не тратятся;
+/// - `tree`: ↑/↓ — соседняя строка (корень ↔ листья, wrap; закрытое
+///   дерево — только корень), ←/→ — кит-резолвер `tree_key`
+///   (Collapse/Expand корня);
+/// - `nav_rail`: ↑/↓ — соседний пункт (wrap).
+///
+/// Возвращает `Some(новый хит-id)` — группа поглотила клавишу и фокус
+/// переходит на этот контрол; `None` — клавиша не для группы (потребитель
+/// ведёт её Tab-кольцом дальше).
+pub fn apply_group_arrow(
+    demo: &mut KitDemoState,
+    id: &str,
+    arrow: DemoArrow,
+) -> Option<&'static str> {
+    use canvas_ui::component::tabs::TabKey;
+    use canvas_ui::component::tree::{tree_key, TreeAction, TreeKey, TreeKeyCtx};
+    use canvas_ui::kit::tabs_key;
+
+    // Листья дерева — статическая таблица hit-id (корень — TREE_TOGGLE).
+    let tree_n = crate::kit_demo::hit::TREE_IDS.len();
+
+    let (section, index) = parse_hit(id)?;
+    // Группы — фиксированные карманы демо (3 пункта radio/tabs/segmented,
+    // 4 строки дерева открыто/1 закрыто, 5 пунктов nav_rail).
+    const GROUP_N: usize = 3;
+    const RAIL_N: usize = 5;
+    match (section, index) {
+        ("radio", Some(i)) if i < GROUP_N => {
+            if !matches!(arrow, DemoArrow::Up | DemoArrow::Down) {
+                return None;
+            }
+            let next = match arrow {
+                DemoArrow::Up => (i + GROUP_N - 1) % GROUP_N,
+                DemoArrow::Down => (i + 1) % GROUP_N,
+                _ => return None,
+            };
+            demo.radio_idx = next;
+            Some(crate::kit_demo::hit::radio(next))
+        }
+        ("tabs", Some(i)) if i < GROUP_N => {
+            let next = tabs_key(
+                i,
+                GROUP_N,
+                match arrow {
+                    DemoArrow::Left => TabKey::Prev,
+                    DemoArrow::Right => TabKey::Next,
+                    _ => return None,
+                },
+            )?;
+            demo.tab_idx = next;
+            Some(crate::kit_demo::hit::tab(next))
+        }
+        ("segmented", Some(i)) if i < GROUP_N => {
+            let next = tabs_key(
+                i,
+                GROUP_N,
+                match arrow {
+                    DemoArrow::Left => TabKey::Prev,
+                    DemoArrow::Right => TabKey::Next,
+                    _ => return None,
+                },
+            )?;
+            demo.segmented_idx = next;
+            Some(crate::kit_demo::hit::segmented(next))
+        }
+        ("tree", Some(i)) if i < tree_n => {
+            // Позиции дерева: 0 — корень (TREE_TOGGLE), 1.. — листья.
+            let leaves = if demo.tree_open { tree_n } else { 0 };
+            let total = 1 + leaves;
+            let pos = 1 + i;
+            if matches!(arrow, DemoArrow::Left | DemoArrow::Right) {
+                // ←/→ — резолвер кита (Collapse/Expand корня).
+                let key = if arrow == DemoArrow::Left {
+                    TreeKey::Left
+                } else {
+                    TreeKey::Right
+                };
+                return match tree_key(
+                    key,
+                    TreeKeyCtx {
+                        expanded: demo.tree_open,
+                        has_children: true,
+                    },
+                ) {
+                    TreeAction::Collapse => {
+                        demo.tree_open = false;
+                        Some(crate::kit_demo::hit::TREE_TOGGLE)
+                    }
+                    TreeAction::Expand => {
+                        demo.tree_open = true;
+                        Some(crate::kit_demo::hit::tree(demo.tree_sel.min(tree_n - 1)))
+                    }
+                    _ => None,
+                };
+            }
+            if total == 1 {
+                // Закрытое дерево: ↑/↓ не двигают фокус (одна строка).
+                return None;
+            }
+            let next_pos = match arrow {
+                DemoArrow::Up => (pos + total - 1) % total,
+                DemoArrow::Down => (pos + 1) % total,
+                _ => return None,
+            };
+            if next_pos == 0 {
+                demo.tree_sel = 0;
+                Some(crate::kit_demo::hit::TREE_TOGGLE)
+            } else {
+                demo.tree_sel = next_pos - 1;
+                Some(crate::kit_demo::hit::tree(demo.tree_sel))
+            }
+        }
+        (hit::TREE_TOGGLE, _) => {
+            // Корень: ↑/↓ — к первому/последнему видимому; ←/→ — резолвер.
+            if matches!(arrow, DemoArrow::Left | DemoArrow::Right) {
+                let key = if arrow == DemoArrow::Left {
+                    TreeKey::Left
+                } else {
+                    TreeKey::Right
+                };
+                return match tree_key(
+                    key,
+                    TreeKeyCtx {
+                        expanded: demo.tree_open,
+                        has_children: true,
+                    },
+                ) {
+                    TreeAction::Collapse => {
+                        demo.tree_open = false;
+                        Some(crate::kit_demo::hit::TREE_TOGGLE)
+                    }
+                    TreeAction::Expand => {
+                        demo.tree_open = true;
+                        Some(crate::kit_demo::hit::tree(demo.tree_sel.min(tree_n - 1)))
+                    }
+                    _ => None,
+                };
+            }
+            if !demo.tree_open {
+                return None;
+            }
+            let total = 1 + tree_n;
+            let next_pos = match arrow {
+                DemoArrow::Up => total - 1,
+                DemoArrow::Down => 1,
+                _ => return None,
+            };
+            demo.tree_sel = next_pos - 1;
+            Some(crate::kit_demo::hit::tree(demo.tree_sel))
+        }
+        ("nav_rail", Some(i)) if i < RAIL_N => {
+            if !matches!(arrow, DemoArrow::Up | DemoArrow::Down) {
+                return None;
+            }
+            let next = match arrow {
+                DemoArrow::Up => (i + RAIL_N - 1) % RAIL_N,
+                DemoArrow::Down => (i + 1) % RAIL_N,
+                _ => return None,
+            };
+            demo.nav_rail_active = next;
+            Some(crate::kit_demo::hit::nav_rail(next))
+        }
+        _ => None,
+    }
+}
+
 /// Wave D v1.1 (D3): следующий шаг цикла оверрайда состояния — Авто →
 /// 8 значений KitState (ST1, в порядке лестницы) → Авто.
 pub fn next_state_override(cur: Option<KitState>) -> Option<KitState> {
@@ -1018,5 +1232,145 @@ mod tests {
     #[test]
     fn hit_id_prefix() {
         assert_eq!(hit_id("switch"), format!("{HIT_PREFIX}switch"));
+    }
+
+    // --- V1 (issue #67): density → зазоры из Spacing-токенов ----------------
+
+    #[test]
+    fn density_gaps_use_s1_tokens() {
+        // Comfortable — канон v1 (дефолт демо не меняет зазоры).
+        assert_eq!(
+            density_section_gap(Density::Comfortable),
+            canvas_core::tokens::SPACING_LG
+        );
+        assert_eq!(
+            density_row_gap(Density::Comfortable),
+            canvas_core::tokens::SPACING_SM
+        );
+        // Compact/Spacious — соседние ступени шкалы S1 (монотонность).
+        assert!(density_section_gap(Density::Compact) < density_section_gap(Density::Comfortable));
+        assert!(density_section_gap(Density::Comfortable) < density_section_gap(Density::Spacious));
+        assert!(density_row_gap(Density::Compact) < density_row_gap(Density::Comfortable));
+        assert!(density_row_gap(Density::Comfortable) < density_row_gap(Density::Spacious));
+        // Точные значения: MD/XL и S/MD (без выдуманных значений).
+        assert_eq!(density_section_gap(Density::Compact), 10.0);
+        assert_eq!(density_section_gap(Density::Spacious), 24.0);
+        assert_eq!(density_row_gap(Density::Compact), 6.0);
+        assert_eq!(density_row_gap(Density::Spacious), 10.0);
+    }
+
+    // --- V2 (issue #67): стрелки в группах -----------------------------------
+
+    #[test]
+    fn v2_radio_arrows_move_selection_with_focus() {
+        let mut d = KitDemoState::default();
+        // ↓ с radio:0 → radio:1, выбор следует за фокусом.
+        assert_eq!(
+            apply_group_arrow(&mut d, "radio:0", DemoArrow::Down),
+            Some("radio:1")
+        );
+        assert_eq!(d.radio_idx, 1);
+        // Wrap вверх: radio:0 ↑ → radio:2.
+        assert_eq!(
+            apply_group_arrow(&mut d, "radio:0", DemoArrow::Up),
+            Some("radio:2")
+        );
+        assert_eq!(d.radio_idx, 2);
+        // ←/→ — не для вертикальной группы.
+        assert_eq!(apply_group_arrow(&mut d, "radio:1", DemoArrow::Left), None);
+        assert_eq!(
+            d.radio_idx, 2,
+            "не потреблённая стрелка не меняет состояние"
+        );
+    }
+
+    #[test]
+    fn v2_tabs_segmented_arrows_wrap() {
+        let mut d = KitDemoState {
+            tab_idx: 2,
+            ..KitDemoState::default()
+        };
+        // → с последнего — wrap на первый (кит-резолвер tabs_key).
+        assert_eq!(
+            apply_group_arrow(&mut d, "tabs:2", DemoArrow::Right),
+            Some("tabs:0")
+        );
+        assert_eq!(d.tab_idx, 0);
+        // ← с первого — wrap на последний.
+        assert_eq!(
+            apply_group_arrow(&mut d, "tabs:0", DemoArrow::Left),
+            Some("tabs:2")
+        );
+        assert_eq!(d.tab_idx, 2);
+        // Segmented — та же семантика.
+        let mut d2 = KitDemoState {
+            segmented_idx: 1,
+            ..KitDemoState::default()
+        };
+        assert_eq!(
+            apply_group_arrow(&mut d2, "segmented:1", DemoArrow::Right),
+            Some("segmented:2")
+        );
+        assert_eq!(d2.segmented_idx, 2);
+        // ↑/↓ — не для горизонтальной группы.
+        assert_eq!(apply_group_arrow(&mut d, "tabs:1", DemoArrow::Up), None);
+    }
+
+    #[test]
+    fn v2_tree_arrows_use_kit_resolver() {
+        let mut d = KitDemoState::default();
+        assert!(d.tree_open, "дерево открыто по умолчанию");
+        // ← на корне — Collapse (кит-резолвер tree_key), фокус остаётся.
+        assert_eq!(
+            apply_group_arrow(&mut d, "tree_toggle", DemoArrow::Left),
+            Some(crate::kit_demo::hit::TREE_TOGGLE)
+        );
+        assert!(!d.tree_open);
+        // → на корне — Expand, фокус переходит на выбранный лист.
+        assert_eq!(
+            apply_group_arrow(&mut d, "tree_toggle", DemoArrow::Right),
+            Some("tree:0")
+        );
+        assert!(d.tree_open);
+        // ↓ с корня — к первому листу.
+        assert_eq!(
+            apply_group_arrow(&mut d, "tree_toggle", DemoArrow::Down),
+            Some("tree:0")
+        );
+        // ↓ с последнего листа — wrap на корень.
+        assert_eq!(
+            apply_group_arrow(&mut d, "tree:2", DemoArrow::Down),
+            Some(crate::kit_demo::hit::TREE_TOGGLE)
+        );
+        assert_eq!(d.tree_sel, 0, "корень — вне выбора листьев");
+    }
+
+    #[test]
+    fn v2_nav_rail_arrows_wrap() {
+        let mut d = KitDemoState::default();
+        assert_eq!(
+            apply_group_arrow(&mut d, "nav_rail:0", DemoArrow::Up),
+            Some("nav_rail:4")
+        );
+        assert_eq!(d.nav_rail_active, 4);
+        assert_eq!(
+            apply_group_arrow(&mut d, "nav_rail:0", DemoArrow::Down),
+            Some("nav_rail:1")
+        );
+        assert_eq!(d.nav_rail_active, 1);
+        // ←/→ — не для вертикального рельса.
+        assert_eq!(
+            apply_group_arrow(&mut d, "nav_rail:1", DemoArrow::Left),
+            None
+        );
+    }
+
+    #[test]
+    fn v2_arrows_ignored_outside_groups() {
+        let mut d = KitDemoState::default();
+        assert_eq!(apply_group_arrow(&mut d, "chips:0", DemoArrow::Down), None);
+        assert_eq!(apply_group_arrow(&mut d, "button:1", DemoArrow::Up), None);
+        assert_eq!(apply_group_arrow(&mut d, "", DemoArrow::Down), None);
+        assert_eq!(apply_group_arrow(&mut d, "radio:99", DemoArrow::Down), None);
     }
 }

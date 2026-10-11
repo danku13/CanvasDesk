@@ -433,7 +433,7 @@ kit primitives):
 | Tabs | `component::tabs_layout` | a click switches the panel | the active index — a flag, not `KitState::Selected` (K1); the arrows — v2 |
 | Segmented | `component::segmented_layout` | a click switches the segment | the container hover/press from K1 |
 | Command palette | demo panel on the kit primitives (`component::command_palette` layout — the component paint, v2) | open by the button, the query filter, pick, Esc | the Cmd+K chord inside the demo keyboard scope — v2 |
-| Tree | demo rows on the kit primitives (`component::tree` — v2) | expand/collapse of the root, picking a leaf | the selected cursor; `tree_key` — declared in K1, v2 |
+| Tree | demo rows on the kit primitives (`component::tree` — v2) | expand/collapse of the root, picking a leaf | the selected cursor; `tree_key` — implemented (#67 V2) |
 | Nav rail | `component::nav_rail_layout` / `nav_rail_button_style` / `nav_rail_hit` | picking the active item (5 items, the sidebar preview) | the slim rail 48; hit = the buttons (K1, INT-4) |
 
 - **Containers**
