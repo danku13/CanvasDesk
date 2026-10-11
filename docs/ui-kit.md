@@ -368,6 +368,100 @@ the shared guides (a parameter ×2 / the formula “ƒ” with a badge “← so
 the states Normal/Zebra/Selected; the drawing — `paint_row` (the same functions
 of the kit as the panel “How it is calculated” and the body of the node).
 
+### 7.4 The interactive demo (Wave D, issue #32)
+
+The TO-BE showcase is the live gallery of the kit (the egui-demo pattern): every control is
+clickable, every state is switchable, AS-IS/TO-BE compares the pre-wave look with the current
+one. The model — `crates/canvas-app/src/kit_demo.rs` (the pure `KitDemoState` + the
+`apply_click` transition machine — the TDD core); the layout/draw —
+`crate::kit_ui::gallery_layout_tobe` in `crates/canvas-app/src/kit_ui.rs` (the draw==hit
+contract: the demo hit-ids are registered from the same rects the draw uses). The
+interface-object doc — `docs/interface-objects/kit-demo-v1.md`; the component registry —
+§K1 of `design/rules/10-components.md`.
+
+**Entry points (D6).** Native: `?` → “About the interface” (the AS-IS/TO-BE toggle; the demo
+entry opens TO-BE directly). Web: `?ui=demo` — `crates/canvas-web/src/url_params.rs` parses
+the param, `app_spawn` calls `App::open_kit_demo`: the showcase in TO-BE from the first
+frame, the theme pill synced to `settings.theme_preset`.
+
+**Toolbar (D3/D4).** AS-IS/TO-BE · Theme — the cycle over
+`canvas_core::theme_presets::PRESETS` (Nord, Dracula, Mocha, Latte, Solarized,
+Tokyo Night, Gruvbox): the click applies the preset to the whole app
+(`settings.theme_preset` + `apply_effective_theme`) — every section repaints from the
+effective palette · RU/EN (the demo language override) · Size (Xs/Sm/Md/Lg —
+`ControlSize`, 24/30/36/44) · Density (Compact/Comfortable/Spacious — `layout::Density`) ·
+State (Auto → the 8 ST1 KitState forced on the live controls → Auto).
+
+**Navigation (D5).** The left sidebar — the registry `kit_demo::SECTIONS` (28 sections)
+grouped Inputs / Navigation / Containers / Data display / Feedback; a click scrolls to the
+section (`DemoLayout::section_offsets`), the wheel scrolls the sidebar.
+
+**Per-section contracts** (the API — the real `canvas-ui` functions behind the section;
+a11y — the ST1 contract of `design/rules/08-states.md`: the state layer 8% hover / 10%
+pressed / 16% dragged, the focus frame = accent, disabled = `disabled_text` + inert, the
+danger tint for Error; “v2” marks the demo behaviors deferred to Wave D v2 — the full
+per-section keyboard ring and the component paint layer where the demo still draws with
+kit primitives):
+
+- **Inputs**
+
+| Section | API (canvas-ui) | Live in the demo | A11y |
+|---|---|---|---|
+| Buttons | `kit::button_style(variant, state)` | Primary/Secondary/Ghost/Danger: hover/press from the cursor, click → the “Clicked: …” toast, the tooltip after 500 ms | the full ST1 ladder (the State pill forces any of the 8 on the row); Disabled is inert |
+| Icon buttons | `kit::icon_button_style(state)` | hover/press from the cursor | the square `ICON_BUTTON_SIZE` hit zone, the same state ladder |
+| Chips | `kit::chip_style` | click toggles Selected (accent fill) | ST1 ×4; Selected is persistent, orthogonal to hover |
+| Text field | `kit::text_field` + `TextFieldModel { text, caret, sel }` | click focuses, typing (keyboard/IME), Backspace, the caret; Esc blurs | the caret/sel in chars (the FR-058 invariant — the unicode-safe edit) |
+| Switch | `kit::switch(slot, on, state, p)` (§7.2) | click toggles, the knob slide 100 ms (Short2; reduced-motion — instant) | on = the `control_primary` track; Disabled is inert |
+| Checkbox | `component::checkbox_layout/style/glyph` | click cycles Unchecked→Checked→Indeterminate (+2 static states) | the 3-state glyph ✓/−; Space — the component contract (v2 in the demo) |
+| Slider | `component::slider_layout/style` | knob drag, a track click jumps the value | the value × ST1; the arrows — the component contract (v2) |
+| Radio | `component::radio_group_layout/style` | picking an option | exactly one selected of N; the arrows — the component contract (v2) |
+
+- **Navigation**
+
+| Section | API (canvas-ui) | Live in the demo | A11y |
+|---|---|---|---|
+| Dropdown | `kit::dropdown_menu` | the anchor opens the menu, an item selects + closes, the flip at the edge | Esc closes (the demo Esc ladder) |
+| Tabs | `component::tabs_layout` | a click switches the panel | the active index — a flag, not `KitState::Selected` (K1); the arrows — v2 |
+| Segmented | `component::segmented_layout` | a click switches the segment | the container hover/press from K1 |
+| Command palette | demo panel on the kit primitives (`component::command_palette` layout — the component paint, v2) | open by the button, the query filter, pick, Esc | the Cmd+K chord inside the demo keyboard scope — v2 |
+| Tree | demo rows on the kit primitives (`component::tree` — v2) | expand/collapse of the root, picking a leaf | the selected cursor; `tree_key` — declared in K1, v2 |
+| Nav rail | `component::nav_rail_layout` / `nav_rail_button_style` / `nav_rail_hit` | picking the active item (5 items, the sidebar preview) | the slim rail 48; hit = the buttons (K1, INT-4) |
+
+- **Containers**
+
+| Section | API (canvas-ui) | Live in the demo | A11y |
+|---|---|---|---|
+| Card | `kit::card` | the header + body container | chrome without states (K1) |
+| Modal | `kit::modal` | “Open modal” → the dim + panel; the backdrop click and Esc close | the Esc ladder first (palette → modal → popover → dropdown → the showcase); the focus trap — v2 |
+| Accordion | `component::accordion_layout/style` | expand/collapse ×3 (the chevron ▶/▼) | expanded = layout, not a KitState (K1) |
+
+- **Data display**
+
+| Section | API (canvas-ui) | Live in the demo | A11y |
+|---|---|---|---|
+| Table | `kit::Table` (`Table::new(TableProps)`, `row_layout_with`) | rows on the shared RowGuides, zebra | per-row KitState; `TABLE_ZEBRA_RUN_MIN` 4 (K1) |
+| List | `kit::list_rows` + `ScrollState` + `scroll_bar` | picking a row, the wheel scrolls | the partial rows at the edges are included; the thumb is the hit zone (П5) |
+| Badge | `component::badge_layout/style` | Dot / Count(3) / Text(“NEW”) | tone → slot (K1); display-only |
+| Progress | `component::progress_layout/style` | the bar 66% + the spinner | the deterministic phase (M3); display-only |
+| Skeleton | `component::skeleton_layout` | the TextLines(3) pattern pulse | the pulse α [0.04, 0.12], 1500 ms (M3); display-only |
+| Icons | `kit::icon_glyph` / Icon | the font glyph samples | tint by a slot (K1) |
+| Avatar | `component::avatar_layout` / `avatar_style` | the 4×3 matrix Initials/Icon/Image × Xs/Sm/Md/Lg; click selects | Lg 44 = the touch target (K1, INT-4) |
+
+- **Feedback**
+
+| Section | API (canvas-ui) | Live in the demo | A11y |
+|---|---|---|---|
+| Toast | kit toast (§7.2) | show/hide | TTL 3000 ms; display-only |
+| Tooltip | kit tooltip (§7.2) | the delay 500 ms, the edge flip | hover-only by contract (K1) |
+| Snackbar | demo bar on the kit primitives (`component::snackbar` — v2) | show + the Close action | the action is a real button (ST1) |
+| Popover | demo bubble on the kit primitives (`component::popover` — v2) | the anchor opens, the backdrop closes | Esc closes; the arrow/flip contract — K1 |
+
+The keyboard realized by the demo v1: Tab/Shift+Tab — the focus ring over the focus-slots
+section (`gallery_focus_step`), Esc — the popups ladder then the showcase, the text field
+input. The per-component contracts (the full keyboard + the state matrix) are collected in
+the Wave C deliverable (issue #62) — see `docs/interface-objects/kit-demo-v1.md` for the
+demo-specific behavior table.
+
 ## 8. The UI admin panel (FR-070)
 
 The surface `admin_panel` (Modals/Block, the entry — the menu “?” → “UI console”):
