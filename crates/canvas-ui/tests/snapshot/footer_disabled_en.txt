@@ -1,0 +1,8 @@
+text x=16 y=154 w=288 h=14 text="Footer"
+rect x=16 y=176 w=288 h=44
+rect x=16 y=183 w=49 h=30
+text x=16 y=183 w=49 h=30 text="Hint"
+rect x=176 y=183 w=63 h=30
+text x=176 y=183 w=63 h=30 text="Cancel"
+rect x=247 y=183 w=57 h=30
+text x=247 y=183 w=57 h=30 text="Apply"

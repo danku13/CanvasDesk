@@ -1,0 +1,6 @@
+text x=16 y=23 w=288 h=14 text="Радио"
+rect x=16 y=48 w=24 h=24
+rect x=16 y=80 w=24 h=24
+rect x=22 y=54 w=12 h=12
+text x=48 y=48 w=128 h=24 text="Настройки"
+text x=48 y=80 w=128 h=24 text="Поиск"

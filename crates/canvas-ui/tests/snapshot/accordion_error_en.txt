@@ -1,0 +1,5 @@
+text x=16 y=16 w=24 h=32 text="▼"
+rect x=16 y=16 w=288 h=32
+rect x=16 y=48 w=288 h=64
+text x=16 y=48 w=288 h=64 text="Hint"
+text x=40 y=16 w=264 h=32 text="Accordion"
