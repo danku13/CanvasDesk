@@ -12,6 +12,19 @@ use super::*;
 use canvas_ui::geometry::UiRect;
 
 impl App {
+    /// Окно проверки с учётом флага `modals_adaptive` (Wave M M3-c, issue
+    /// #54) — единая точка ветвления для рендера и hit-тестов (детерминизм
+    /// «ввод = тому, что видно»): ON — `explain_ui::window_rect_flex`
+    /// (kit::modal_rect_flex, 80% eff / Compact full-bleed), OFF — прежняя
+    /// `window_rect` (путь не изменён).
+    pub(super) fn explain_window_rect_now(&self, viewport: [f32; 2]) -> [f32; 4] {
+        if self.settings.modals_adaptive {
+            explain_ui::window_rect_flex(viewport)
+        } else {
+            explain_ui::window_rect(viewport)
+        }
+    }
+
     /// Открыть окно проверки (§6.4): сессионный кэш — мгновенный Ready
     /// (AC-3.3, ≤ 1 с), иначе Loading с честным лоадером + фоновая сборка
     /// (AC-1.2/G5). Повторный «?» на другую цифру — перестройка на новый
@@ -136,7 +149,16 @@ impl App {
         // диалог «приклеивался» к канвасу, расъезжаясь со screen-текстами.
         let mut d = Painter::new();
         let palette = ThemeColors::from_theme(self.settings.theme);
-        let win = autolink_ui::dialog_rect(viewport);
+        // Wave M M3-c (issue #54): флаг modals_adaptive — окно/строки/футер
+        // из адаптивной ветки autolink_ui (kit::modal_rect_flex, тиры);
+        // OFF — прежние функции, путь не изменён.
+        let flex = self.settings.modals_adaptive;
+        let compact = flex && autolink_ui::is_compact(viewport);
+        let win = if flex {
+            autolink_ui::dialog_rect_flex(viewport)
+        } else {
+            autolink_ui::dialog_rect(viewport)
+        };
         // Затемнение фона (§6.5: диалог модален поверх канваса)
         d.rect(
             canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
@@ -252,8 +274,18 @@ impl App {
                 PaintAlign::Center,
             );
         }
-        // Строки (группы «исток → приёмник», сортировка по имени — У7)
-        let layout = autolink_ui::rows_layout(review, win, self.autolink_scroll);
+        // Строки (группы «исток → приёмник», сортировка по имени — У7).
+        // Wave M M3-c: flex-ветка — rows_layout_flex (Column-fold сдвигов,
+        // Compact — тач-строки 68 с парой 44); OFF — прежняя rows_layout.
+        let layout = if flex {
+            autolink_ui::rows_layout_flex(review, win, self.autolink_scroll, compact)
+        } else {
+            autolink_ui::rows_layout(review, win, self.autolink_scroll)
+        };
+        // Compact: усечение подписей по измеренной ширине (G5/G8 — эллипсис
+        // вместо молчаливого клипа рендера); M/E — прежние подписи.
+        let mut ell_m = canvas_ui::measure::TextMeasurer::new();
+        let mut ell_fs = canvas_render::text::measure_font_system();
         for (group_idx, head) in &layout.group_heads {
             let collapsed = review.collapsed.contains(group_idx);
             d.rect(
@@ -263,6 +295,24 @@ impl App {
                 6.0,
             );
             let group = &review.groups[*group_idx];
+            let head_text = format!(
+                "{}  →  {} · {}{}",
+                group.from,
+                group.to,
+                group.items.len(),
+                if collapsed { " ▸" } else { " ▾" }
+            );
+            let head_text = if compact {
+                ell_m.ellipsis(
+                    &mut ell_fs,
+                    &head_text,
+                    canvas_render::text::SANS_FAMILY,
+                    12.0,
+                    (head[2] - 20.0).max(0.0),
+                )
+            } else {
+                head_text
+            };
             d.label(
                 canvas_ui::geometry::UiRect::new(
                     head[0] + 10.0,
@@ -270,13 +320,7 @@ impl App {
                     (head[2] - 20.0).max(0.0),
                     16.0,
                 ),
-                &format!(
-                    "{}  →  {} · {}{}",
-                    group.from,
-                    group.to,
-                    group.items.len(),
-                    if collapsed { " ▸" } else { " ▾" }
-                ),
+                &head_text,
                 color_to_rgba(palette.title),
                 12.0,
                 PaintAlign::Left,
@@ -312,54 +356,84 @@ impl App {
             // `param → to (параметр param)` показывал имя дважды.
             // Локализованная подпись «параметр {name}» используется как
             // левая часть (информативнее голого имени).
+            // Wave M M3-c Compact: подпись — верхняя строка тач-строки,
+            // процент вписан в текст (эллипсис по измеренной ширине);
+            // отдельный чип не рисуется. M/E — прежняя пара «подпись+чип».
             let param_label = self.trf(
                 keys::AUTOLINK_PARAM,
                 &[("{name}", item.proposal.param.as_str())],
-            );
-            d.label(
-                canvas_ui::geometry::UiRect::new(
-                    rects.row[0] + 10.0,
-                    rects.row[1] + 8.0,
-                    (rects.pct[0] - rects.row[0] - 20.0).max(0.0),
-                    16.0,
-                ),
-                &format!("{} → {}", param_label, item.to_title),
-                color_to_rgba(if item.state == ItemState::Rejected {
-                    palette.quote
-                } else {
-                    palette.body
-                }),
-                11.5,
-                PaintAlign::Left,
             );
             let pct_text = match item.proposal.unit_match {
                 Some(true) => "100% ✓".to_owned(),
                 Some(false) => "100% ✗".to_owned(),
                 None => format!("{}%", item.proposal.percent),
             };
-            d.rect(
-                canvas_ui::geometry::UiRect::new(
-                    rects.pct[0],
-                    rects.pct[1],
-                    rects.pct[2],
-                    rects.pct[3],
-                ),
-                palette.palette_chip_fill,
-                [0.0; 4],
-                9.0,
-            );
-            d.label(
-                canvas_ui::geometry::UiRect::new(
-                    rects.pct[0],
-                    rects.pct[1] + 3.0,
-                    rects.pct[2],
-                    14.0,
-                ),
-                &pct_text,
-                color_to_rgba(palette.body),
-                10.0,
-                PaintAlign::Center,
-            );
+            if compact {
+                let full = format!("{} → {} · {}", param_label, item.to_title, pct_text);
+                let shown = ell_m.ellipsis(
+                    &mut ell_fs,
+                    &full,
+                    canvas_render::text::SANS_FAMILY,
+                    11.5,
+                    rects.pct[2].max(0.0),
+                );
+                d.label(
+                    canvas_ui::geometry::UiRect::new(
+                        rects.pct[0],
+                        rects.pct[1],
+                        rects.pct[2],
+                        rects.pct[3],
+                    ),
+                    &shown,
+                    color_to_rgba(if item.state == ItemState::Rejected {
+                        palette.quote
+                    } else {
+                        palette.body
+                    }),
+                    11.5,
+                    PaintAlign::Left,
+                );
+            } else {
+                d.label(
+                    canvas_ui::geometry::UiRect::new(
+                        rects.row[0] + 10.0,
+                        rects.row[1] + 8.0,
+                        (rects.pct[0] - rects.row[0] - 20.0).max(0.0),
+                        16.0,
+                    ),
+                    &format!("{} → {}", param_label, item.to_title),
+                    color_to_rgba(if item.state == ItemState::Rejected {
+                        palette.quote
+                    } else {
+                        palette.body
+                    }),
+                    11.5,
+                    PaintAlign::Left,
+                );
+                d.rect(
+                    canvas_ui::geometry::UiRect::new(
+                        rects.pct[0],
+                        rects.pct[1],
+                        rects.pct[2],
+                        rects.pct[3],
+                    ),
+                    palette.palette_chip_fill,
+                    [0.0; 4],
+                    9.0,
+                );
+                d.label(
+                    canvas_ui::geometry::UiRect::new(
+                        rects.pct[0],
+                        rects.pct[1] + 3.0,
+                        rects.pct[2],
+                        14.0,
+                    ),
+                    &pct_text,
+                    color_to_rgba(palette.body),
+                    10.0,
+                    PaintAlign::Center,
+                );
+            }
             // Кнопки строки — WidgetState::Selected у активной
             let accept_on = item.state == ItemState::Accepted;
             let reject_on = item.state == ItemState::Rejected;
@@ -440,40 +514,53 @@ impl App {
                 PaintAlign::Center,
             );
         }
-        // Разделитель футера + подсказка + кнопки
-        let footer = autolink_ui::footer_rect(win);
+        // Разделитель футера + подсказка + кнопки.
+        // Wave M M3-c: flex-ветка — footer_rect_flex (Compact — двухрядный
+        // тач-футер 116, подсказка клавиатуры не рисуется — T-M R2/R3);
+        // OFF — прежний footer_rect.
+        let footer = if flex {
+            autolink_ui::footer_rect_flex(win, compact)
+        } else {
+            autolink_ui::footer_rect(win)
+        };
         d.rect(
             canvas_ui::geometry::UiRect::new(footer[0], footer[1], footer[2], 1.0),
             palette.palette_border,
             [0.0; 4],
             0.0,
         );
-        d.label(
-            canvas_ui::geometry::UiRect::new(
-                footer[0] + 16.0,
-                footer[1] + 10.0,
-                // Ширина подсказки: не перекрывать кнопки футера.
-                // Прежняя формула `footer[2] - 3*FOOT_BTN_W - 40` давала
-                // 366px — подсказка наезжала на «Отклонить все» (левая
-                // кнопка начинается на 448px от правого края). Корректная
-                // ширина = footer_w − правый отступ (16) − CREATE_W − 2·(
-                // FOOT_BTN_W + 10) − левый отступ (16) − зазор (10).
-                (footer[2]
-                    - autolink_ui::CREATE_W
-                    - 2.0 * autolink_ui::FOOT_BTN_W
-                    - 2.0 * 10.0
-                    - 16.0
-                    - 16.0
-                    - 10.0)
-                    .max(120.0),
-                15.0,
-            ),
-            self.tr(keys::AUTOLINK_HINT),
-            color_to_rgba(palette.quote),
-            10.5,
-            PaintAlign::Left,
-        );
-        let [create, accept_all, reject_all] = autolink_ui::footer_buttons(win);
+        if !compact {
+            d.label(
+                canvas_ui::geometry::UiRect::new(
+                    footer[0] + 16.0,
+                    footer[1] + 10.0,
+                    // Ширина подсказки: не перекрывать кнопки футера.
+                    // Прежняя формула `footer[2] - 3*FOOT_BTN_W - 40` давала
+                    // 366px — подсказка наезжала на «Отклонить все» (левая
+                    // кнопка начинается на 448px от правого края). Корректная
+                    // ширина = footer_w − правый отступ (16) − CREATE_W − 2·(
+                    // FOOT_BTN_W + 10) − левый отступ (16) − зазор (10).
+                    (footer[2]
+                        - autolink_ui::CREATE_W
+                        - 2.0 * autolink_ui::FOOT_BTN_W
+                        - 2.0 * 10.0
+                        - 16.0
+                        - 16.0
+                        - 10.0)
+                        .max(120.0),
+                    15.0,
+                ),
+                self.tr(keys::AUTOLINK_HINT),
+                color_to_rgba(palette.quote),
+                10.5,
+                PaintAlign::Left,
+            );
+        }
+        let [create, accept_all, reject_all] = if flex {
+            autolink_ui::footer_buttons_flex(win, compact)
+        } else {
+            autolink_ui::footer_buttons(win)
+        };
         // Кнопка «Создать связи (N)» — WidgetState: Selected при accepted>0
         let mut create_state = WidgetState::default();
         create_state.set_selected(accepted > 0);
@@ -569,7 +656,7 @@ impl App {
             // FR-060: draw-журнал кита — items конвертируются в инстансы
             // stage одним проходом в конце ветки (порядок = draw-порядок)
             let mut d = Painter::new();
-            let win = explain_ui::window_rect(viewport);
+            let win = self.explain_window_rect_now(viewport);
             // Заголовок корня — из живой модели (тот же title_for, что у
             // подписей проливания); в Loading дерева ещё нет
             let root_title = self
@@ -1513,7 +1600,7 @@ impl App {
             return (quads, texts);
         };
         let palette = ThemeColors::from_theme(self.settings.theme);
-        let win = explain_ui::window_rect(viewport);
+        let win = self.explain_window_rect_now(viewport);
         let body = explain_ui::body_rect(win);
         let (_, layout, scale, origin) = self.explain_view(state, body);
         let anchor = explain_ui::edit_anchor_rect(&layout, edit.idx, scale, body, origin)

@@ -1214,8 +1214,11 @@ impl MainStageState {
     /// «каши» в stage) позиции сжимались дважды, карточки рисовались в
     /// натуральном размере и расходились с веером и подписями тем сильнее,
     /// чем меньше scale.
-    fn relayout(&mut self, viewport: [f32; 2]) -> StageLayout {
-        let rect = main_stage_rect(viewport);
+    ///
+    /// Wave M M3-c (issue #54): rect передаёт вызывающий (App — единая
+    /// точка ветвления флага `modals_adaptive`); MainStageState настроек
+    /// не читает.
+    fn relayout(&mut self, _viewport: [f32; 2], rect: canvas_core::bundles::Rect) -> StageLayout {
         let layout = stage_layout(
             [self.slice.nodes[0].width, self.slice.nodes[0].height],
             [self.slice.nodes[1].width, self.slice.nodes[1].height],
@@ -13976,9 +13979,9 @@ mod tests {
         let mut stage = MainStageState::open(&canvas, &index, 0).expect("stage открыт");
         // Тесный вьюпорт → масштаб сжатия < 1 (инвариант умещения)
         let viewport = [900.0_f32, 600.0];
-        let layout = stage.relayout(viewport);
-        assert!(layout.scale < 1.0, "узкий viewport требует сжатия");
         let rect = main_stage_rect(viewport);
+        let layout = stage.relayout(viewport, rect);
+        assert!(layout.scale < 1.0, "узкий viewport требует сжатия");
         let transform = StageTransform::new([rect.x, rect.y], layout.scale);
         // Позиция истока на экране = раскладке (масштаб применён один раз)
         let p = transform.map_point([stage.slice.nodes[0].x, stage.slice.nodes[0].y]);

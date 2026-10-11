@@ -528,6 +528,215 @@ pub fn content_height(review: &Review) -> f32 {
     h
 }
 
+// === Wave M M3-c (issue #54, Сессия D): адаптивная ветка ====================
+//
+// Флаг `settings.modals_adaptive` (M2) — контракт «80% + mobile-style»
+// (kit::modal_rect_flex, тиры compact ≤767 / medium 768–1279 / expanded
+// ≥1280; дизайн-контракт — design/modals-audit-2026-10.md §3). Прежний
+// рендер-путь (функции выше) флаг не читает — OFF не изменён ни символом;
+// весь новый код — в этих чистых функциях (`*_flex`), потребляемых
+// веткой флага в app/explain.rs (autolink_frame) и app/input.rs
+// (on_autolink_click / колесо).
+
+/// Safe-margin full-bleed Compact-тира (паритет dialog M3-a:
+/// `DIALOG_MARGIN_SIDE` = 20; на 375 окно 335×627 — лист с полями).
+pub const FLEX_MARGIN: f32 = 20.0;
+
+/// Compact: высота строки ревью (T-M R1 — тач-цели ≥44): подпись сверху +
+/// полноширинная пара кнопок 44 снизу (6 + 18 + 44).
+pub const ROW_H_COMPACT: f32 = 68.0;
+/// Compact: высота тач-кнопок строки и футера (T-M R1).
+pub const BTN_H_COMPACT: f32 = crate::touch_targets::MIN_TOUCH_TARGET;
+/// Compact: высота футера (T-M R2 — нижняя thumb-зона): ряд «Создать
+/// связи (N)» + ряд пары массовых; подсказка клавиатуры (Esc) в Compact
+/// не рисуется — тач-поверхность (документированное отклонение, T-M R3).
+pub const FOOTER_H_COMPACT: f32 = 8.0 + BTN_H_COMPACT + 8.0 + BTN_H_COMPACT + 12.0;
+
+/// Окно диалога в адаптивной ветке — `kit::modal_rect_flex` (80% слота,
+/// margin [`FLEX_MARGIN`]; Compact — full-bleed eff). min — инвариант
+/// читаемости 320×240, max — потолки прототипа 760×760 (аудит §4:
+/// «desired → 0.8»). Прежняя `dialog_rect` (0.94vw×0.88vh) — ветка OFF.
+pub fn dialog_rect_flex(viewport: [f32; 2]) -> [f32; 4] {
+    let slot = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
+    let panel = kit::modal_rect_flex(
+        slot,
+        FLEX_MARGIN,
+        kit::MODAL_RATIO_DEFAULT,
+        UiVec2::new(DLG_MIN_W, DLG_MIN_H),
+        UiVec2::new(DLG_W, DLG_MAX_H),
+    );
+    [panel.x, panel.y, panel.w, panel.h]
+}
+
+/// Тир адаптивной ветки по вьюпорту (единый источник с
+/// `kit::modal_rect_flex` — тот же `layout_tier`).
+pub fn is_compact(viewport: [f32; 2]) -> bool {
+    kit::layout_tier(viewport[0]) == kit::LayoutTier::Compact
+}
+
+/// Футер адаптивной ветки: Compact — двухрядный тач-футер
+/// ([`FOOTER_H_COMPACT`]), M/E — прежний однострочный ([`FOOTER_H`]).
+pub fn footer_rect_flex(win: [f32; 4], compact: bool) -> [f32; 4] {
+    let h = if compact { FOOTER_H_COMPACT } else { FOOTER_H };
+    [win[0], win[1] + win[3] - h, win[2], h]
+}
+
+/// Тело адаптивной ветки — между шапкой/баннером и футером (семантика
+/// [`body_rect`]: баннер отклонённых сдвигает тело вниз на [`BANNER_H`]).
+pub fn body_rect_flex(win: [f32; 4], banner_visible: bool, compact: bool) -> [f32; 4] {
+    let banner_off = if banner_visible { BANNER_H } else { 0.0 };
+    let top = win[1] + HEADER_H + canvas_core::tokens::SPACING_SM + banner_off;
+    let footer = footer_rect_flex(win, compact);
+    [win[0], top, win[2], (footer[1] - top).max(0.0)]
+}
+
+/// Полная высота контента адаптивной ветки (параметризована высотой
+/// строки: Compact — [`ROW_H_COMPACT`], M/E — [`ROW_H`]); единый источник
+/// с fold'ом сдвигов в [`rows_layout_flex`].
+pub fn content_height_flex(review: &Review, row_h: f32) -> f32 {
+    let mut h = BODY_TOP_PAD;
+    for (gi, group) in review.groups.iter().enumerate() {
+        h += GROUP_H;
+        if !review.collapsed.contains(&gi) {
+            h += group.items.len() as f32 * row_h + GROUP_GAP;
+        }
+    }
+    h
+}
+
+/// Раскладка строк адаптивной ветки. Скелет — Column-семантика (M3-c:
+/// замена y+= курсора [`rows_layout`]): контентные сдвиги групп — fold по
+/// накопленным высотам (единый источник с [`content_height_flex`]), окно
+/// видимости строк группы — `kit::list_rows` (тот же канон, что в OFF).
+///
+/// Compact (T-M R1/R2): строка [`ROW_H_COMPACT`] — подпись (чип процента
+/// вписан в текст подписи) + полноширинная пара «Принять»/«Отклонить» 44
+/// в нижней зоне строки; M/E — прежняя геометрия строки ([`BTN_W`] ×
+/// [`ROW_H`]−8, чип отдельным слотом).
+pub fn rows_layout_flex(review: &Review, win: [f32; 4], scroll: f32, compact: bool) -> RowsLayout {
+    let (_, rejected, _) = review.counts();
+    let body = body_rect_flex(win, rejected > 0, compact);
+    let row_h = if compact { ROW_H_COMPACT } else { ROW_H };
+    let content = content_height_flex(review, row_h);
+    let visible = body[3].max(0.0);
+    let mut list = ScrollState {
+        offset: scroll,
+        content_h: content,
+        viewport_h: visible,
+    };
+    list.clamp();
+    let mut layout = RowsLayout {
+        content_height: content,
+        scroll_max: list.max_offset(),
+        scroll: list.offset,
+        ..RowsLayout::default()
+    };
+    // Полоса строк группы — те же инсеты, что в OFF (+20/−40).
+    let rows_area = UiRect::new(body[0] + 20.0, body[1], (body[2] - 40.0).max(0.0), visible);
+    // Column-fold: контентный сдвиг начала каждой группы (виртуализация
+    // списка — детерминизм рендера/hit-теста, паритет семантики OFF).
+    let mut offsets = Vec::with_capacity(review.groups.len());
+    let mut acc = BODY_TOP_PAD;
+    for (gi, group) in review.groups.iter().enumerate() {
+        offsets.push(acc);
+        acc += GROUP_H;
+        if !review.collapsed.contains(&gi) {
+            acc += group.items.len() as f32 * row_h + GROUP_GAP;
+        }
+    }
+    for (gi, group) in review.groups.iter().enumerate() {
+        let collapsed = review.collapsed.contains(&gi);
+        let top = body[1] + offsets[gi] - list.offset;
+        let head = [body[0] + 16.0, top, body[2] - 32.0, GROUP_H];
+        if top + GROUP_H >= body[1] && top <= body[1] + body[3] {
+            layout.group_heads.push((gi, head));
+        }
+        if collapsed {
+            continue;
+        }
+        let n = group.items.len();
+        // Локальный offset группы = scroll − (сдвиг группы + заголовок).
+        let group_list = ScrollState {
+            offset: list.offset - (offsets[gi] + GROUP_H),
+            content_h: n as f32 * row_h,
+            viewport_h: visible,
+        };
+        for (k, rect) in kit::list_rows(rows_area, &group_list, row_h, 0.0, n) {
+            let Some(&item_idx) = group.items.get(k) else {
+                continue;
+            };
+            let row = [rect.x, rect.y, rect.w, rect.h];
+            let rects = if compact {
+                // Подпись — верхняя строка строки-карточки (чип вписан в
+                // текст); кнопки — полноширинная пара 44 в нижней зоне
+                // (T-M R1/R2), зазор 8 между таргетами.
+                let pair_w =
+                    ((row[2] - 32.0 - canvas_core::tokens::SPACING_SM) * 0.5).max(BTN_H_COMPACT);
+                let by = row[1] + 24.0;
+                let reject = [row[0] + row[2] - 16.0 - pair_w, by, pair_w, BTN_H_COMPACT];
+                let accept = [row[0] + 16.0, by, pair_w, BTN_H_COMPACT];
+                let pct = [row[0] + 16.0, row[1] + 4.0, (row[2] - 32.0).max(0.0), 18.0];
+                RowRects {
+                    row,
+                    pct,
+                    accept,
+                    reject,
+                }
+            } else {
+                let right = row[0] + row[2] - canvas_core::tokens::SPACING_SM;
+                let reject = [right - BTN_W, row[1] + 4.0, BTN_W, ROW_H - 8.0];
+                let accept = [
+                    reject[0] - BTN_W - canvas_core::tokens::SPACING_SM,
+                    row[1] + 4.0,
+                    BTN_W,
+                    ROW_H - 8.0,
+                ];
+                let pct = [
+                    accept[0] - PCT_W - canvas_core::tokens::SPACING_MD,
+                    row[1] + 4.0,
+                    PCT_W,
+                    ROW_H - 8.0,
+                ];
+                RowRects {
+                    row,
+                    pct,
+                    accept,
+                    reject,
+                }
+            };
+            layout.rows.push((item_idx, rects));
+        }
+    }
+    layout
+}
+
+/// Кнопки футера адаптивной ветки — `[create, accept_all, reject_all]`
+/// (порядок прежнего API [`footer_buttons`]). Compact (T-M R1/R2):
+/// «Создать связи (N)» — полный ряд 44, пара массовых — второй ряд
+/// (каждая ≥44, зазор 8); M/E — прежний `kit::footer_buttons_measured`
+/// (те же ширины/зазоры — бит-в-бит OFF).
+pub fn footer_buttons_flex(win: [f32; 4], compact: bool) -> [[f32; 4]; 3] {
+    let footer = footer_rect_flex(win, compact);
+    if !compact {
+        return footer_buttons(win);
+    }
+    let inset = 16.0;
+    let w = (footer[2] - inset * 2.0).max(0.0);
+    let create_y = footer[1] + 8.0;
+    let pair_y = create_y + BTN_H_COMPACT + 8.0;
+    let pair_w = ((w - canvas_core::tokens::SPACING_SM) * 0.5).max(BTN_H_COMPACT);
+    [
+        [footer[0] + inset, create_y, w, BTN_H_COMPACT],
+        [footer[0] + inset, pair_y, pair_w, BTN_H_COMPACT],
+        [
+            footer[0] + inset + pair_w + canvas_core::tokens::SPACING_SM,
+            pair_y,
+            pair_w,
+            BTN_H_COMPACT,
+        ],
+    ]
+}
+
 // --- Тесты (§9.4-подобные сценарии модели ревью) ---------------------------
 
 #[cfg(test)]
@@ -856,6 +1065,163 @@ mod tests {
                 (head[1] - body[1] - BODY_TOP_PAD).abs() < 0.5,
                 "заголовок на BODY_TOP_PAD ниже верха тела (без баннера)"
             );
+        }
+    }
+
+    // === Wave M M3-c (issue #54): адаптивная ветка ==========================
+
+    /// Окно flex-ветки: M/E — constrain(min, max, 0.8·eff), компакт-край
+    /// 375×667 — full-bleed eff (лист с полями FLEX_MARGIN).
+    #[test]
+    fn dialog_rect_flex_tiers() {
+        // Expanded 1280×800: eff = 1240×760, desired 0.8 → 992×608,
+        // ширина клампится потолком 760 → 760×608, центр eff.
+        let win = dialog_rect_flex([1280.0, 800.0]);
+        assert_eq!(
+            win,
+            [(1280.0 - 760.0) / 2.0, (800.0 - 608.0) / 2.0, 760.0, 608.0]
+        );
+        // Medium 800×560: eff = 760×520, 0.8 → 608×416 (без клампов).
+        let win = dialog_rect_flex([800.0, 560.0]);
+        assert_eq!(
+            win,
+            [
+                20.0 + (760.0 - 608.0) / 2.0,
+                20.0 + (520.0 - 416.0) / 2.0,
+                608.0,
+                416.0
+            ]
+        );
+        // Compact 375×667: full-bleed eff = 335×627 (mobile-style лист).
+        let win = dialog_rect_flex([375.0, 667.0]);
+        assert_eq!(win, [20.0, 20.0, 335.0, 627.0]);
+        // Окно всегда в пределах вьюпорта (G4).
+        for &(vw, vh) in &[
+            (1280.0, 800.0),
+            (1024.0, 640.0),
+            (800.0, 560.0),
+            (768.0, 500.0),
+            (375.0, 667.0),
+        ] {
+            let [x, y, w, h] = dialog_rect_flex([vw, vh]);
+            assert!(x >= -0.01 && y >= -0.01, "{vw}×{vh}: x={x}, y={y}");
+            assert!(x + w <= vw + 0.01 && y + h <= vh + 0.01, "{vw}×{vh}");
+        }
+    }
+
+    /// M/E flex-строки ≡ прежнему rows_layout бит-в-бит (тир-скелет M/E
+    /// сохраняет геометрию строк; компакт меняет только Compact-ветку).
+    #[test]
+    fn rows_layout_flex_medium_expanded_parity() {
+        let canvas = canvas_ab();
+        let review = Review::build(
+            &canvas,
+            (0..24)
+                .map(|i| proposal("A", "B", format!("p{i:02}").as_str()))
+                .collect(),
+        );
+        let win = dialog_rect_flex([1280.0, 800.0]);
+        for &scroll in &[0.0, 100.0, 250.0] {
+            let flex = rows_layout_flex(&review, win, scroll, false);
+            let old = rows_layout(&review, win, scroll);
+            assert_eq!(flex.scroll, old.scroll, "scroll ≡ ({scroll})");
+            assert_eq!(flex.scroll_max, old.scroll_max);
+            assert_eq!(flex.group_heads, old.group_heads);
+            assert_eq!(flex.rows, old.rows, "строки ≡ ({scroll})");
+        }
+    }
+
+    /// Compact flex-строки: тач-цели кнопок ≥44 (T-M R1), кнопки внутри
+    /// строки, зазор ≥8; прокрутка клампится, последняя строка достижима.
+    #[test]
+    fn rows_layout_flex_compact_touch_targets() {
+        let canvas = canvas_ab();
+        let review = Review::build(
+            &canvas,
+            (0..12)
+                .map(|i| proposal("A", "B", format!("p{i:02}").as_str()))
+                .collect(),
+        );
+        let win = dialog_rect_flex([375.0, 667.0]);
+        let layout = rows_layout_flex(&review, win, 0.0, true);
+        assert!(!layout.rows.is_empty());
+        for (_, rects) in &layout.rows {
+            assert_eq!(rects.accept[3], BTN_H_COMPACT, "кнопка 44 (T-M R1)");
+            assert_eq!(rects.reject[3], BTN_H_COMPACT);
+            assert!(rects.accept[2] >= BTN_H_COMPACT && rects.reject[2] >= BTN_H_COMPACT);
+            // Зазор между таргетами ≥8 (T-M R1).
+            assert!(rects.reject[0] - (rects.accept[0] + rects.accept[2]) >= 7.5);
+            // Кнопки внутри строки.
+            assert!(rects.accept[0] >= rects.row[0]);
+            assert!(rects.reject[0] + rects.reject[2] <= rects.row[0] + rects.row[2] + 0.01);
+            assert!(rects.accept[1] + rects.accept[3] <= rects.row[1] + rects.row[3] + 0.01);
+        }
+        // Прокрутка: 12 строк × 68 + заголовок > тела — кламп работает.
+        assert!(layout.scroll_max > 0.0);
+        let over = rows_layout_flex(&review, win, layout.scroll_max + 500.0, true);
+        assert_eq!(over.scroll, layout.scroll_max);
+        assert_eq!(over.rows.last().map(|(i, _)| *i), Some(11));
+    }
+
+    /// Compact flex-футер: тач-высоты 44 (T-M R1), ряды не пересекаются,
+    /// кнопки в пределах футера; порядок API сохранён [create, accept, reject].
+    #[test]
+    fn footer_buttons_flex_compact_rows() {
+        let win = dialog_rect_flex([375.0, 667.0]);
+        let [create, accept_all, reject_all] = footer_buttons_flex(win, true);
+        let footer = footer_rect_flex(win, true);
+        for (tag, r) in [
+            ("create", create),
+            ("accept_all", accept_all),
+            ("reject_all", reject_all),
+        ] {
+            assert_eq!(r[3], BTN_H_COMPACT, "{tag}: тач-высота 44");
+            assert!(r[1] >= footer[1] && r[1] + r[3] <= footer[1] + footer[3] + 0.01);
+        }
+        // Ряды не пересекаются: пара ниже «Создать».
+        assert!(accept_all[1] >= create[1] + create[3]);
+        // Пара на одном ряду, зазор ≥8.
+        assert_eq!(accept_all[1], reject_all[1]);
+        assert!(reject_all[0] - (accept_all[0] + accept_all[2]) >= 7.5);
+        // M/E — прежний футер (паритет OFF).
+        let win_me = dialog_rect_flex([1280.0, 800.0]);
+        assert_eq!(footer_buttons_flex(win_me, false), footer_buttons(win_me));
+        assert_eq!(footer_rect_flex(win_me, false)[3], FOOTER_H);
+    }
+
+    /// flex-тело: баннер отклонённых сдвигает тело вниз на BANNER_H и
+    /// уменьшает высоту (семантика body_rect) в обоих тирах.
+    #[test]
+    fn body_rect_flex_banner_shift() {
+        for compact in [false, true] {
+            let win = dialog_rect_flex([1280.0, 800.0]);
+            let without = body_rect_flex(win, false, compact);
+            let with = body_rect_flex(win, true, compact);
+            assert_eq!(with[1] - without[1], BANNER_H, "compact={compact}");
+            assert_eq!(without[3] - with[3], BANNER_H, "compact={compact}");
+        }
+    }
+
+    /// Единый источник: fold сдвигов в rows_layout_flex ≡ content_height_flex
+    /// (Compact и M/E; свёрнутые группы дают высоту только заголовка).
+    #[test]
+    fn content_height_flex_matches_fold() {
+        let canvas = canvas_ab();
+        let mut review = Review::build(
+            &canvas,
+            (0..10)
+                .map(|i| proposal("A", "B", format!("p{i:02}").as_str()))
+                .collect(),
+        );
+        for compact in [false, true] {
+            let row_h = if compact { ROW_H_COMPACT } else { ROW_H };
+            let win = dialog_rect_flex([1280.0, 800.0]);
+            let lay = rows_layout_flex(&review, win, 0.0, compact);
+            assert!((lay.content_height - content_height_flex(&review, row_h)).abs() < 0.01);
+            review.collapsed.insert(0);
+            let lay = rows_layout_flex(&review, win, 0.0, compact);
+            assert!((lay.content_height - content_height_flex(&review, row_h)).abs() < 0.01);
+            review.collapsed.clear();
         }
     }
 }

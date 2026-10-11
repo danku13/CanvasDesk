@@ -452,6 +452,7 @@ fn lint_ai_onboarding_open() {
     app.ai_onboarding = Some(crate::onboarding_ui::AiOnboardingState {
         selected: Some(crate::onboarding_ui::AiOnboardingChoice::Cloud),
         privacy_open: true,
+        privacy_scroll: 0.0,
     });
     let frame = build_frame_at(&app, [800.0, 560.0]);
     let surface = frame
@@ -1279,6 +1280,31 @@ fn lint_modals_adaptive() {
         app.canvas_manager.open();
         app.canvas_manager.set_entries(seed_entries(12));
     });
+    // Wave M M3-c (issue #54, сессия D): stage (0.8·eff, margin 24),
+    // explain (80% eff, full-bleed Compact) и autolink (80%, тач-строки
+    // Compact) — адаптивная лестница под флагом.
+    lint_state_adaptive("stage", |app, _vp| {
+        app.main_stage = Some(MainStageState {
+            key: ("a".to_owned(), "b".to_owned()),
+            edges: Vec::new(),
+            slice: Canvas::default(),
+            scale: 1.0,
+        });
+    });
+    lint_state_adaptive("explain", |app, _vp| {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        app.explain = Some(crate::explain_ui::ExplainState::loading(
+            canvas_core::LineageNodeId::total("A"),
+            1,
+            crate::explain_ui::ExplainBuild::Native(rx),
+        ));
+    });
+    lint_state_adaptive("autolink", |app, _vp| {
+        app.autolink_review = Some(crate::autolink_ui::Review::build(
+            &lint_ab_canvas(),
+            vec![lint_autolink_proposal()],
+        ));
+    });
 
     // Compact-край 375×667: модали, уже деградирующие корректно, держат
     // full-bleed-ветку мобильной лестницы (settings — Mobile <768, остальные
@@ -1338,6 +1364,30 @@ fn lint_modals_adaptive() {
     fn open_admin(app: &mut App, _vp: [f32; 2]) {
         app.admin_open = true;
     }
+    // Wave M M3-c (issue #54): stage/explain/autolink — Compact-край
+    // (full-bleed ветка мобильной лестницы под флагом).
+    fn open_stage(app: &mut App, _vp: [f32; 2]) {
+        app.main_stage = Some(MainStageState {
+            key: ("a".to_owned(), "b".to_owned()),
+            edges: Vec::new(),
+            slice: Canvas::default(),
+            scale: 1.0,
+        });
+    }
+    fn open_explain(app: &mut App, _vp: [f32; 2]) {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        app.explain = Some(crate::explain_ui::ExplainState::loading(
+            canvas_core::LineageNodeId::total("A"),
+            1,
+            crate::explain_ui::ExplainBuild::Native(rx),
+        ));
+    }
+    fn open_autolink(app: &mut App, _vp: [f32; 2]) {
+        app.autolink_review = Some(crate::autolink_ui::Review::build(
+            &lint_ab_canvas(),
+            vec![lint_autolink_proposal()],
+        ));
+    }
     for (tag, open, surface_id) in [
         (
             "settings",
@@ -1373,6 +1423,10 @@ fn lint_modals_adaptive() {
             ui_registry::id::KIT_GALLERY,
         ),
         ("admin_panel", open_admin, ui_registry::id::ADMIN),
+        // Wave M M3-c: full-bleed Compact stage/explain/autolink.
+        ("stage", open_stage, ui_registry::id::STAGE),
+        ("explain", open_explain, ui_registry::id::EXPLAIN),
+        ("autolink", open_autolink, ui_registry::id::AUTOLINK),
     ] {
         for lang in [Language::Ru, Language::En] {
             let mut app = lint_stub(lang);
@@ -1412,5 +1466,99 @@ fn lint_modals_adaptive() {
         open(&mut app, ADAPTIVE_COMPACT_VIEWPORT);
         let frame = build_frame_at(&app, ADAPTIVE_COMPACT_VIEWPORT);
         assert_backdrop_is(&frame, surface_id);
+    }
+}
+
+/// Wave M M3-c (issue #54): стек explain↔stage↔autolink под флагом в 3
+/// вьюпортах (1280×800 / 800×560 / 375×667 — LAY8.1 + CR-014 Compact-край).
+/// Контракты взаимодействия неизменны (M0 §5): explain заменяет stage в
+/// stage-проходе кадра (F-10), autolink прячет explain (§6.5) — реестр
+/// публикует поверхности по состояниям, ассерты редуцированные (без
+/// глобального overlaps_within_layer: сосуществующие Block-состояния стека —
+/// documented отклонение M-O R5; интерактивные rect'ы — в пределах вьюпорта).
+#[test]
+fn lint_modals_adaptive_stack_explain_stage_autolink() {
+    fn seed_stage(app: &mut App) {
+        app.main_stage = Some(MainStageState {
+            key: ("a".to_owned(), "b".to_owned()),
+            edges: Vec::new(),
+            slice: Canvas::default(),
+            scale: 1.0,
+        });
+    }
+    fn seed_explain(app: &mut App) {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        app.explain = Some(crate::explain_ui::ExplainState::loading(
+            canvas_core::LineageNodeId::total("A"),
+            1,
+            crate::explain_ui::ExplainBuild::Native(rx),
+        ));
+    }
+    fn seed_autolink(app: &mut App) {
+        app.autolink_review = Some(crate::autolink_ui::Review::build(
+            &lint_ab_canvas(),
+            vec![lint_autolink_proposal()],
+        ));
+    }
+    fn check_hit_rects_in_viewport(frame: &UiFrame, vp: [f32; 2], tag: &str) {
+        for surface in &frame.surfaces {
+            for hit in &surface.hit_rects {
+                if !hit.interactive {
+                    continue;
+                }
+                let r = hit.rect;
+                assert!(
+                    r.x >= -0.01
+                        && r.y >= -0.01
+                        && r.right() <= vp[0] + 0.01
+                        && r.bottom() <= vp[1] + 0.01,
+                    "{tag}: hit-rect {}:{} вне вьюпорта {vp:?}: {:?}",
+                    surface.surface.as_str(),
+                    hit.element,
+                    (r.x, r.y, r.right(), r.bottom())
+                );
+            }
+        }
+    }
+    for vp in [[1280.0, 800.0], [800.0, 560.0], [375.0, 667.0]] {
+        for lang in [Language::Ru, Language::En] {
+            // 1) explain поверх stage (стек §5.1 — обе поверхности в кадре).
+            let mut app = lint_stub(lang);
+            app.settings.modals_adaptive = true;
+            app.test_viewport = Some(vp);
+            seed_stage(&mut app);
+            seed_explain(&mut app);
+            let frame = build_frame_at(&app, vp);
+            check_hit_rects_in_viewport(&frame, vp, "stack stage+explain");
+            assert!(frame
+                .surfaces
+                .iter()
+                .any(|s| s.surface.as_str() == ui_registry::id::STAGE));
+            assert!(frame
+                .surfaces
+                .iter()
+                .any(|s| s.surface.as_str() == ui_registry::id::EXPLAIN));
+            // 2) autolink прячет explain (§6.5): ревью открыто при активном
+            // explain — верхняя модаль стека, hit-rect'ы в вьюпорте.
+            let mut app = lint_stub(lang);
+            app.settings.modals_adaptive = true;
+            app.test_viewport = Some(vp);
+            seed_explain(&mut app);
+            seed_autolink(&mut app);
+            let frame = build_frame_at(&app, vp);
+            check_hit_rects_in_viewport(&frame, vp, "stack autolink>explain");
+            assert!(frame
+                .surfaces
+                .iter()
+                .any(|s| s.surface.as_str() == ui_registry::id::AUTOLINK));
+            // 3) autolink поверх stage.
+            let mut app = lint_stub(lang);
+            app.settings.modals_adaptive = true;
+            app.test_viewport = Some(vp);
+            seed_stage(&mut app);
+            seed_autolink(&mut app);
+            let frame = build_frame_at(&app, vp);
+            check_hit_rects_in_viewport(&frame, vp, "stack autolink>stage");
+        }
     }
 }

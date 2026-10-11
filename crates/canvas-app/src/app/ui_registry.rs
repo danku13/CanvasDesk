@@ -1551,7 +1551,7 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
             }
         }
         id::STAGE => {
-            let r = main_stage_rect(viewport);
+            let r = app.main_stage_rect_now(viewport);
             // Rect::xywh → UiRect::xywh напрямую: прежняя конверсия
             // UiRect::new(r.x, r.y, r.x + r.w, r.y + r.h) трактовала xywh
             // как xyxy и ЗАВЫШАЛА pick-зону до краёв экрана (класс дефекта
@@ -2047,17 +2047,30 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
                 // W-e: раскладка измеренная (общая с отрисовкой/вводом —
                 // «ввод = тому, что видно»); скролл не нужен реестру
                 // (кнопки не двигаются — футер прибит к низу карточки).
+                // Wave M M3-c: флаг — адаптивная ветка (Compact — sheet).
                 let mut m = canvas_ui::measure::TextMeasurer::new();
                 let mut fs = canvas_render::text::measure_font_system();
-                let lay = onboarding_ui::card_layout(
-                    viewport,
-                    state.step,
-                    app.settings.language,
-                    &app.settings.role,
-                    &mut canvas_ui::kit::ScrollState::default(),
-                    &mut m,
-                    &mut fs,
-                );
+                let lay = if app.settings.modals_adaptive {
+                    onboarding_ui::card_layout_flex(
+                        viewport,
+                        state.step,
+                        app.settings.language,
+                        &app.settings.role,
+                        &mut canvas_ui::kit::ScrollState::default(),
+                        &mut m,
+                        &mut fs,
+                    )
+                } else {
+                    onboarding_ui::card_layout(
+                        viewport,
+                        state.step,
+                        app.settings.language,
+                        &app.settings.role,
+                        &mut canvas_ui::kit::ScrollState::default(),
+                        &mut m,
+                        &mut fs,
+                    )
+                };
                 surface
                     .hit_rects
                     .push(HitRect::interactive(rect(lay.card), "onboarding-card"));
@@ -2074,28 +2087,46 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
         // публикуется.
         id::AI_ONBOARDING => {
             if let Some(state) = &app.ai_onboarding {
-                let lay = onboarding_ui::ai_onboarding_layout(viewport, state);
+                // Wave M M3-c: флаг + Compact — flex-раскладка (sheet;
+                // M/E flex ≡ ai_onboarding_layout — прежний источник).
+                let lay_rects = if app.settings.modals_adaptive
+                    && canvas_ui::kit::layout_tier(viewport[0])
+                        == canvas_ui::kit::LayoutTier::Compact
+                {
+                    let mut m = canvas_ui::measure::TextMeasurer::new();
+                    let mut fs = canvas_render::text::measure_font_system();
+                    let fl = onboarding_ui::ai_onboarding_layout_flex(
+                        viewport,
+                        state,
+                        app.settings.language,
+                        &mut m,
+                        &mut fs,
+                    );
+                    (fl.card, fl.mode_cards, fl.btn_privacy, fl.btn_continue)
+                } else {
+                    let lay = onboarding_ui::ai_onboarding_layout(viewport, state);
+                    (lay.card, lay.mode_cards, lay.btn_privacy, lay.btn_continue)
+                };
+                let (card, mode_cards, btn_privacy, btn_continue) = lay_rects;
                 surface
                     .hit_rects
-                    .push(HitRect::interactive(rect(lay.card), "ai-onb-card"));
-                for (i, mode) in lay.mode_cards.iter().enumerate() {
+                    .push(HitRect::interactive(rect(card), "ai-onb-card"));
+                for (i, mode) in mode_cards.iter().enumerate() {
                     surface.hit_rects.push(HitRect::interactive(
                         rect(*mode),
                         format!("ai-onb-mode-{i}"),
                     ));
                 }
-                surface.hit_rects.push(HitRect::interactive(
-                    rect(lay.btn_privacy),
-                    "ai-onb-privacy",
-                ));
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(rect(btn_privacy), "ai-onb-privacy"));
                 // «Продолжить» — disabled до выбора режима (прототип F-8):
                 // rect публикуется как интерактивный — зона кнопки видна
                 // линту G4 при любой геометрии карточки; гейт доступности
                 // (state.selected) — обязанность обработчика, не реестра.
-                surface.hit_rects.push(HitRect::interactive(
-                    rect(lay.btn_continue),
-                    "ai-onb-continue",
-                ));
+                surface
+                    .hit_rects
+                    .push(HitRect::interactive(rect(btn_continue), "ai-onb-continue"));
             }
         }
         id::EMPTY => {

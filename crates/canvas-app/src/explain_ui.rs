@@ -124,6 +124,26 @@ pub fn window_rect(viewport: [f32; 2]) -> [f32; 4] {
     ]
 }
 
+/// Окно проверки в адаптивной ветке Wave M M3-c (issue #54, флаг
+/// `modals_adaptive`) — `kit::modal_rect_flex`: слот = весь вьюпорт,
+/// margin [`WIN_MARGIN`] (Compact — full-bleed eff, safe-margin 20),
+/// ratio 0.8, min — инвариант 320×240, max = eff (потолка нет — окно
+/// всегда ≤ 80%…100% вьюпорта; FR-083: max = размер слота сохранён).
+/// Аудит M0 §4: «уже 80% — перевод на modal_rect_flex бесшовный».
+pub fn window_rect_flex(viewport: [f32; 2]) -> [f32; 4] {
+    let slot = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
+    let eff_w = (viewport[0] - WIN_MARGIN * 2.0).max(0.0);
+    let eff_h = (viewport[1] - WIN_MARGIN * 2.0).max(0.0);
+    let panel = kit::modal_rect_flex(
+        slot,
+        WIN_MARGIN,
+        kit::MODAL_RATIO_DEFAULT,
+        UiVec2::new(WIN_MIN_W, WIN_MIN_H),
+        UiVec2::new(eff_w, eff_h),
+    );
+    [panel.x, panel.y, panel.w, panel.h]
+}
+
 /// Кнопка ✕ — правый верхний угол шапки (паттерн main stage).
 ///
 /// FR-070: позиция/размер — `kit::stage_close_button_lg(panel)` —
@@ -1913,6 +1933,48 @@ mod tests {
                     "инвариант ≥ 320×240 при {vw}×{vh}"
                 );
             }
+        }
+    }
+
+    /// Wave M M3-c (issue #54): окно flex-ветки — modal_rect_flex.
+    /// M/E: 80% eff (eff = вьюпорт − поля), центрировано; Compact-край
+    /// 375×667: full-bleed eff 335×627 (mobile-style лист). Окно всегда
+    /// в пределах вьюпорта (G4); min-инвариант 320×240 соблюдён.
+    #[test]
+    fn window_rect_flex_tiers() {
+        // Expanded 1280×800: eff = 1240×760 → 0.8 = 992×608, центр вьюпорта.
+        let win = window_rect_flex([1280.0, 800.0]);
+        assert!((win[2] - 992.0).abs() < 1e-3, "ширина 0.8·eff: {}", win[2]);
+        assert!((win[3] - 608.0).abs() < 1e-3, "высота 0.8·eff: {}", win[3]);
+        assert!((win[0] + win[2] / 2.0 - 640.0).abs() < 1e-3);
+        assert!((win[1] + win[3] / 2.0 - 400.0).abs() < 1e-3);
+        // Medium 800×560: eff = 760×520 → 0.8 = 608×416.
+        let mid = window_rect_flex([800.0, 560.0]);
+        assert!((mid[2] - 608.0).abs() < 1e-3);
+        assert!((mid[3] - 416.0).abs() < 1e-3);
+        // Compact 375×667: full-bleed eff (лист с полями WIN_MARGIN).
+        let compact = window_rect_flex([375.0, 667.0]);
+        assert_eq!(compact, [20.0, 20.0, 335.0, 627.0]);
+        // Окно в пределах вьюпорта и ≥ инварианта на канонических вьюпортах.
+        for &(vw, vh) in &[
+            (1920.0, 1080.0),
+            (1440.0, 900.0),
+            (1280.0, 800.0),
+            (1024.0, 640.0),
+            (800.0, 560.0),
+            (768.0, 500.0),
+            (375.0, 667.0),
+        ] {
+            let [x, y, w, h] = window_rect_flex([vw, vh]);
+            assert!(x >= -0.01 && y >= -0.01, "{vw}×{vh}: x={x}, y={y}");
+            assert!(
+                x + w <= vw + 0.01 && y + h <= vh + 0.01,
+                "{vw}×{vh}: окно вышло за вьюпорт"
+            );
+            assert!(
+                w >= WIN_MIN_W - 1e-3 && h >= WIN_MIN_H - 1e-3,
+                "{vw}×{vh}: инвариант 320×240 нарушен"
+            );
         }
     }
 

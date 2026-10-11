@@ -4252,15 +4252,33 @@ impl App {
         let mut scroll = self.onboarding_scroll.clone();
         let mut m = canvas_ui::measure::TextMeasurer::new();
         let mut fs = canvas_render::text::measure_font_system();
-        let lay = onboarding_ui::card_layout(
-            viewport,
-            state.step,
-            self.settings.language,
-            &self.settings.role,
-            &mut scroll,
-            &mut m,
-            &mut fs,
-        );
+        // Wave M M3-c (issue #54): флаг modals_adaptive — окно/тело из
+        // адаптивной ветки onboarding_ui (modal_rect_flex; Compact —
+        // full-bleed bottom-sheet с тач-метриками футера); OFF — прежняя
+        // card_layout, путь не изменён.
+        let onb_flex = self.settings.modals_adaptive;
+        let onb_compact = onb_flex && kit::layout_tier(viewport[0]) == kit::LayoutTier::Compact;
+        let lay = if onb_flex {
+            onboarding_ui::card_layout_flex(
+                viewport,
+                state.step,
+                self.settings.language,
+                &self.settings.role,
+                &mut scroll,
+                &mut m,
+                &mut fs,
+            )
+        } else {
+            onboarding_ui::card_layout(
+                viewport,
+                state.step,
+                self.settings.language,
+                &self.settings.role,
+                &mut scroll,
+                &mut m,
+                &mut fs,
+            )
+        };
         let card = lay.card;
         let kit_palette = palette.kit_palette();
         // CR-032/S1 (UR-003): масштаб поверхности — производная ширины карточки
@@ -4344,7 +4362,11 @@ impl App {
         // ужимается прокруткой, футер с CTA не перекрывается. CR-031/
         // FR-107 (C4): на шагах с CTA-зоной (финал FR-028 и карточка
         // мультиканваса №19) тело уже — снизу резервируются опции.
-        let body = onboarding_ui::body_area(card, state.has_cta_zone());
+        let body = if onb_flex {
+            onboarding_ui::body_area_flex(card, state.has_cta_zone(), onb_compact)
+        } else {
+            onboarding_ui::body_area(card, state.has_cta_zone())
+        };
         for (idx, row) in kit::list_rows(
             canvas_ui::geometry::UiRect::new(body[0], body[1], body[2], body[3]),
             &scroll,
@@ -4399,7 +4421,11 @@ impl App {
             // «Далее»: «Открыть шаблонную схему» (primary) и «Начать
             // самому» (secondary). Обе завершают тур; галерею открывает
             // только первая (выбор пользователя, не перегружаем новичка).
-            let [gallery_rect, empty_rect] = onboarding_ui::option_rects(card);
+            let [gallery_rect, empty_rect] = if onb_compact {
+                onboarding_ui::option_rects_touch(card)
+            } else {
+                onboarding_ui::option_rects(card)
+            };
             let opt_font = onboarding_ui::button_label_font(k);
             for (rect, variant, label_key) in [
                 (
@@ -4437,7 +4463,11 @@ impl App {
         // FR-107 (C4, №19): CTA карточки мультиканваса — полноширинная
         // кнопка в зоне опций (верхний слот; primary, открывает менеджер).
         if state.cta().is_some() {
-            let rect = onboarding_ui::cta_rect(card);
+            let rect = if onb_compact {
+                onboarding_ui::button_rect_touch(card, OnboardingButton::Cta)
+            } else {
+                onboarding_ui::cta_rect(card)
+            };
             let opt_font = onboarding_ui::button_label_font(k);
             let mut widget = WidgetState::default();
             widget.set_pointer(point_in_rect(rect, self.cursor), false);
@@ -4470,7 +4500,11 @@ impl App {
             onboarding_ui::skip_label_font(k),
         ));
         for (button, variant, label, font) in &buttons {
-            let rect = onboarding_ui::button_rect(card, *button);
+            let rect = if onb_compact {
+                onboarding_ui::button_rect_touch(card, *button)
+            } else {
+                onboarding_ui::button_rect(card, *button)
+            };
             let mut widget = WidgetState::default();
             widget.set_pointer(point_in_rect(rect, self.cursor), false);
             let style = kit::button_style(*variant, widget.kit_state(), &kit_palette);
@@ -4513,8 +4547,31 @@ impl App {
         }
         let palette = self.effective_palette();
         let kit_palette = palette.kit_palette();
+        // Wave M M3-c (issue #54): флаг modals_adaptive. M/E — прежний
+        // скелет (flex-раскладка M/E бит-в-бит совпадает с ai_onboarding_layout:
+        // modal_rect_flex с min=max=контент ≡ прежний panel_rect); Compact —
+        // bottom-sheet (flex-раскладка: full-bleed, тач-кнопки 44, privacy —
+        // измеренные строки + окно скролла). OFF — прежний путь без изменений.
+        let aionb_compact = self.settings.modals_adaptive
+            && kit::layout_tier(viewport[0]) == kit::LayoutTier::Compact;
         let lay = onboarding_ui::ai_onboarding_layout(viewport, state);
-        let card = lay.card;
+        let flex_lay = if aionb_compact {
+            let mut fm = canvas_ui::measure::TextMeasurer::new();
+            let mut ffs = canvas_render::text::measure_font_system();
+            Some(onboarding_ui::ai_onboarding_layout_flex(
+                viewport,
+                state,
+                self.settings.language,
+                &mut fm,
+                &mut ffs,
+            ))
+        } else {
+            None
+        };
+        let card = match &flex_lay {
+            Some(fl) => fl.card,
+            None => lay.card,
+        };
         // Затемнение канваса (паттерн FR-022/FR-028) — фокус на карточке.
         // FR-070: backdrop — kit::backdrop (paint_items_to_cards адаптирует
         // PaintItem::Rect в CardInstance; те же слоты/значения — 1:1).
@@ -4573,7 +4630,10 @@ impl App {
             AiOnboardingChoice::SelfHosted,
         ];
         for (i, &choice) in choices.iter().enumerate() {
-            let mode_rect = lay.mode_cards[i];
+            let mode_rect = match &flex_lay {
+                Some(fl) => fl.mode_cards[i],
+                None => lay.mode_cards[i],
+            };
             let selected = state.selected == Some(choice);
             let hovered = point_in_rect(mode_rect, self.cursor);
             // O1 (Task O / FR-UI-RADIO): migrate mode-card render to
@@ -4685,7 +4745,10 @@ impl App {
             }
         }
         // Кнопка «Подробнее о privacy» (secondary).
-        let btn_priv = lay.btn_privacy;
+        let btn_priv = match &flex_lay {
+            Some(fl) => fl.btn_privacy,
+            None => lay.btn_privacy,
+        };
         let priv_hovered = point_in_rect(btn_priv, self.cursor);
         quads.push(CardInstance {
             pos: [btn_priv[0], btn_priv[1]],
@@ -4708,7 +4771,10 @@ impl App {
             align: TextAlign::Center,
         });
         // Кнопка «Продолжить» (primary, disabled если selected = None).
-        let btn_cont = lay.btn_continue;
+        let btn_cont = match &flex_lay {
+            Some(fl) => fl.btn_continue,
+            None => lay.btn_continue,
+        };
         let cont_enabled = state.selected.is_some();
         let cont_hovered = cont_enabled && point_in_rect(btn_cont, self.cursor);
         quads.push(CardInstance {
@@ -4742,7 +4808,44 @@ impl App {
             align: TextAlign::Center,
         });
         // Раскрытый блок «Подробнее о privacy» — под кнопками.
-        if state.privacy_open && lay.privacy_block[3] > 0.0 {
+        // Wave M M3-c Compact: измеренные строки privacy в окне скролла
+        // (offset — state.privacy_scroll, кламп раскладкой/вводом); M/E и
+        // OFF — прежний фиксированный блок (шаги LAY-W16 14/30).
+        if aionb_compact {
+            if let Some(fl) = &flex_lay {
+                if state.privacy_open && fl.privacy_block[3] > 0.0 {
+                    let pb = fl.privacy_block;
+                    quads.push(CardInstance {
+                        pos: [pb[0], pb[1]],
+                        size: [pb[2], pb[3]],
+                        fill: palette.palette_row_fill,
+                        border: palette.palette_border,
+                        params: [8.0, 0.0, 0.0, 1.0],
+                        corners: [0.0; 4],
+                    });
+                    let view = fl.privacy_view;
+                    let mut y = view[1] - state.privacy_scroll;
+                    for line in &fl.privacy_lines {
+                        let step = if line.title { 14.0 } else { 15.0 };
+                        if y + step >= view[1] && y <= view[1] + view[3] {
+                            texts.push(OwnedScreenText {
+                                text: line.text.clone(),
+                                origin: [view[0], y],
+                                width: view[2],
+                                font_size: if line.title { 11.5 } else { 11.0 },
+                                color: if line.title {
+                                    palette.title
+                                } else {
+                                    palette.icon
+                                },
+                                align: TextAlign::Left,
+                            });
+                        }
+                        y += step;
+                    }
+                }
+            }
+        } else if state.privacy_open && lay.privacy_block[3] > 0.0 {
             let pb = lay.privacy_block;
             quads.push(CardInstance {
                 pos: [pb[0], pb[1]],

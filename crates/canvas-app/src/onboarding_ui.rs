@@ -760,6 +760,195 @@ pub fn point_in_card(card: [f32; 4], point: [f32; 2]) -> bool {
         && point[1] <= card[1] + card[3]
 }
 
+// === Wave M M3-c (issue #54, Сессия D): адаптивная ветка ====================
+//
+// Флаг `settings.modals_adaptive` — контракт «80% + mobile-style»
+// (kit::modal_rect_flex; design/modals-audit-2026-10.md §4: «desired =
+// 0.8·eff с card-клампом; арт не трогать; compact — full-bleed с нижними
+// CTA (T-M R7)»). Прежние функции выше флаг не читают — OFF не изменён.
+
+/// Compact: тач-высота кнопок/CTA-опций (T-M R1 — цели ≥44×44).
+pub const BTN_H_TOUCH: f32 = crate::touch_targets::MIN_TOUCH_TARGET;
+/// Compact: высота футера с CTA (кнопка 44 + зазоры 8 сверху/снизу).
+pub const FOOTER_H_TOUCH: f32 = BTN_H_TOUCH + 16.0;
+/// Compact: зона CTA-опций (зазор 10 + 2 опции 44 + зазор кита 8).
+pub const OPTION_ZONE_TOUCH: f32 = 10.0 + 2.0 * BTN_H_TOUCH + kit::GAP_CONTROLS;
+
+/// Раскладка карточки шага в адаптивной ветке — `kit::modal_rect_flex`:
+/// слот = вьюпорт, margin [`ONBOARDING_VIEWPORT_MARGIN`] (Compact —
+/// full-bleed eff: bottom-sheet с нижними CTA, T-M R7), ratio 0.8, max =
+/// контент карточки («card-кламп» — карточка не растягивается до доли
+/// слота; M-O R7 «size follows content»). Ширина известна ДО измерения
+/// тела (Compact — eff; M/E — min(карточка×scale, 0.8·eff)) — цикла с
+/// высотой нет. Тач-метрики футера/опций — только Compact (T-M R1).
+/// Скролл-состояние тела синхронизируется, как в [`card_layout`].
+pub fn card_layout_flex(
+    viewport: [f32; 2],
+    step: usize,
+    language: Language,
+    role: &str,
+    scroll: &mut ScrollState,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> OnboardingLayout {
+    let margin = ONBOARDING_VIEWPORT_MARGIN;
+    let slot = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
+    let eff_w = (viewport[0] - margin * 2.0).max(0.0);
+    let eff_h = (viewport[1] - margin * 2.0).max(0.0);
+    let compact = kit::layout_tier(viewport[0]) == kit::LayoutTier::Compact;
+    // Финальная ширина карточки ДО измерения тела (единый источник
+    // с панелью): Compact — full-bleed eff; M/E — card-кламп 0.8·eff.
+    let w = if compact {
+        eff_w
+    } else {
+        (ONBOARDING_CARD_WIDTH * onboarding_scale(viewport))
+            .min(eff_w * kit::MODAL_RATIO_DEFAULT)
+            .max(1.0)
+    };
+    let k = card_scale(w);
+    let lines = body_lines(step, w, language, role, m, fs);
+    let body_h = lines.len() as f32 * body_line_h(k);
+    let reserve_cta = step_has_cta_zone(step);
+    let (footer, options) = if compact {
+        (FOOTER_H_TOUCH, OPTION_ZONE_TOUCH)
+    } else {
+        (footer_h(k), option_zone(k))
+    };
+    let options_h = if reserve_cta { options } else { 0.0 };
+    let desired_h = body_top_offset(k) + body_h + pad(k) + footer + options_h;
+    // Кламп высоты: Compact — к eff (лист), M/E — к 0.8·eff (пре-кламп
+    // желаемой — min-инвариант (0,0) не конфликтует; FR-028 «карточка
+    // целиком в окне» сохранена).
+    let h = desired_h
+        .min(if compact {
+            eff_h
+        } else {
+            (eff_h * kit::MODAL_RATIO_DEFAULT).max(1.0)
+        })
+        .max(1.0);
+    let panel = kit::modal_rect_flex(
+        slot,
+        margin,
+        kit::MODAL_RATIO_DEFAULT,
+        UiVec2::new(0.0, 0.0),
+        UiVec2::new(w, h),
+    );
+    let card = [panel.x, panel.y, panel.w, panel.h];
+    let body = body_area_flex(card, reserve_cta, compact);
+    scroll.content_h = lines.len() as f32 * body_line_h(k);
+    scroll.viewport_h = body[3];
+    scroll.clamp();
+    OnboardingLayout { card, lines }
+}
+
+/// Зона тела шага в адаптивной ветке (параметризована тач-метриками
+/// футера/опций Compact; M/E — те же значения, что [`body_area`]).
+pub fn body_area_flex(card: [f32; 4], reserve_cta: bool, compact: bool) -> [f32; 4] {
+    let k = card_scale(card[2]);
+    let col = text_column(card);
+    let footer = if compact { FOOTER_H_TOUCH } else { footer_h(k) };
+    let mut h = (col[3] - body_top_offset(k) - pad(k) - footer).max(0.0);
+    if reserve_cta {
+        let options = if compact {
+            OPTION_ZONE_TOUCH
+        } else {
+            option_zone(k)
+        };
+        h = (h - options).max(0.0);
+    }
+    [
+        col[0] + pad(k),
+        col[1] + body_top_offset(k),
+        (col[2] - pad(k) * 2.0).max(0.0),
+        h,
+    ]
+}
+
+/// Rect'ы полноширинных CTA-опций адаптивного Compact — тач-высота
+/// ([`BTN_H_TOUCH`]); якоря те же, что [`option_rects`] (низ колонки
+/// минус пад и тач-футер).
+pub fn option_rects_touch(card: [f32; 4]) -> [[f32; 4]; 2] {
+    let k = card_scale(card[2]);
+    let col = text_column(card);
+    let w = (col[2] - pad(k) * 2.0).max(0.0);
+    let bottom = col[1] + col[3] - pad(k) - FOOTER_H_TOUCH;
+    let gallery_y = bottom - 2.0 * BTN_H_TOUCH - option_gap(k);
+    let empty_y = bottom - BTN_H_TOUCH;
+    [
+        [col[0] + pad(k), gallery_y, w, BTN_H_TOUCH],
+        [col[0] + pad(k), empty_y, w, BTN_H_TOUCH],
+    ]
+}
+
+/// Rect кнопки карточки в адаптивном Compact (T-M R1/R2): Prev/Next —
+/// полноширинная пара 44 в футере (зазор 8, инсет — пад колонки), Skip —
+/// 64×44 в правом верхнем углу (цель ≥44), CTA-опции — тач-вариант.
+/// Иллюстрация и арт не затронуты (аудит M0 §4: «арт не трогать»).
+pub fn button_rect_touch(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
+    let k = card_scale(card[2]);
+    let col = text_column(card);
+    match button {
+        OnboardingButton::Prev | OnboardingButton::Next => {
+            let slot_top = col[1] + col[3] - FOOTER_H_TOUCH;
+            let y = slot_top + (FOOTER_H_TOUCH - BTN_H_TOUCH).max(0.0) / 2.0;
+            let w = ((col[2] - pad(k) * 2.0 - kit::GAP_CONTROLS) * 0.5).max(BTN_H_TOUCH);
+            match button {
+                OnboardingButton::Prev => [col[0] + pad(k), y, w, BTN_H_TOUCH],
+                _ => [col[0] + col[2] - pad(k) - w, y, w, BTN_H_TOUCH],
+            }
+        }
+        OnboardingButton::Skip => [
+            card[0] + card[2] - pad(k) - skip_w(k),
+            card[1] + skip_top(k),
+            skip_w(k),
+            BTN_H_TOUCH,
+        ],
+        OnboardingButton::FinalGallery => option_rects_touch(card)[0],
+        OnboardingButton::FinalEmpty => option_rects_touch(card)[1],
+        OnboardingButton::Cta => option_rects_touch(card)[0],
+    }
+}
+
+/// Hit-test кнопок карточки в адаптивном Compact — те же rect'ы, что
+/// рендер ([`button_rect_touch`]); цели уже ≥44 (T-M R1) — coarse-
+/// расширение FR-097 не добавляется, семантика доступности та же
+/// («Назад» на первом шаге отсутствует, «Пропустить» всегда).
+pub fn button_at_touch(
+    card: [f32; 4],
+    state: &OnboardingState,
+    point: [f32; 2],
+) -> Option<OnboardingButton> {
+    let hit = |rect: [f32; 4]| {
+        point[0] >= rect[0]
+            && point[0] <= rect[0] + rect[2]
+            && point[1] >= rect[1]
+            && point[1] <= rect[1] + rect[3]
+    };
+    if state.is_choice() {
+        let [gallery, empty] = option_rects_touch(card);
+        if hit(gallery) {
+            return Some(OnboardingButton::FinalGallery);
+        }
+        if hit(empty) {
+            return Some(OnboardingButton::FinalEmpty);
+        }
+    } else {
+        if state.cta().is_some() && hit(button_rect_touch(card, OnboardingButton::Cta)) {
+            return Some(OnboardingButton::Cta);
+        }
+        if hit(button_rect_touch(card, OnboardingButton::Next)) {
+            return Some(OnboardingButton::Next);
+        }
+    }
+    if hit(button_rect_touch(card, OnboardingButton::Skip)) {
+        return Some(OnboardingButton::Skip);
+    }
+    if state.step > 0 && hit(button_rect_touch(card, OnboardingButton::Prev)) {
+        return Some(OnboardingButton::Prev);
+    }
+    None
+}
+
 // =============================================================================
 // FR-LLM-B / PRD-0010 F-8: AI-онбординг — экран выбора режима (Local / Cloud /
 // Self-hosted). Не часть карусели [`ONBOARDING_STEPS`] — отдельный модальный
@@ -897,13 +1086,19 @@ impl AiOnboardingChoice {
 /// Состояние экрана AI-онбординга. `selected = None` — ничего не выбрано,
 /// кнопка «Продолжить» отключена (прототип F-8: `disabled` пока `onbChoice`
 /// null). `privacy_open` — раскрытый блок «Подробнее о privacy».
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+// Eq снят (Wave M M3-c): `privacy_scroll: f32` — Eq f32 не реализует;
+// PartialEq сохранён (сравнение состояний в тестах не по скроллу).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct AiOnboardingState {
     /// Выбранный режим (Local / Cloud / SelfHosted). `None` до клика по
     /// карточке-радио — кнопка «Продолжить» отключена.
     pub selected: Option<AiOnboardingChoice>,
     /// Раскрыт ли блок «Подробнее о privacy» (toggle кнопкой «Подробнее»).
     pub privacy_open: bool,
+    /// Wave M M3-c (issue #54): смещение скролла privacy-блока в адаптивном
+    /// Compact (переполнение измеренного блока — окно скролла); UI-состояние
+    /// сеанса — не сериализуется (как `privacy_open`).
+    pub privacy_scroll: f32,
 }
 
 /// Кнопка экрана AI-онбординга (hit-тест/рендер).
@@ -1078,6 +1273,281 @@ pub fn ai_onboarding_point_in_card(card: [f32; 4], point: [f32; 2]) -> bool {
         && point[0] <= card[0] + card[2]
         && point[1] >= card[1]
         && point[1] <= card[1] + card[3]
+}
+
+// === Wave M M3-c (issue #54, Сессия D): адаптивная ветка AI-онбординга ======
+//
+// Аудит M0 §4: «desired 0.8; privacy-лист на compact — скролл внутри;
+// y+= ×4 заменить на Column (M3-c); backdrop НЕ закрывает — сохранить».
+
+/// Compact: тач-высота кнопок «Подробнее о privacy»/«Продолжить» (T-M R1).
+pub const AI_ONB_BTN_H_TOUCH: f32 = crate::touch_targets::MIN_TOUCH_TARGET;
+
+/// Строка privacy-блока адаптивного Compact — измеренный перенос по
+/// внутренней ширине карточки («текст не обрезается молча» — G5/G8).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AiOnbPrivacyLine {
+    /// Строка-заголовок параграфа (кегль 11.5, шаг 14) — иначе строка
+    /// тела (кегль 11, шаг 15 — метрики LAY-W16 в перерасчёте на строку).
+    pub title: bool,
+    pub text: String,
+}
+
+/// Раскладка экрана AI-онбординга в адаптивной ветке. M/E — прежний
+/// скелет (окно = `modal_rect_flex` с min=max=контент — constrain
+/// возвращает контент, центрирование то же, что [`ai_onboarding_layout`]);
+/// Compact — bottom-sheet (T-M R7): full-bleed eff, Column-скелет блоков
+/// (сдвиги — fold констант, без живых курсоров), кнопки 44 в нижней
+/// thumb-зоне, privacy-блок — измеренные строки; переполнение — окно
+/// скролла (offset — [`AiOnboardingState::privacy_scroll`], кламп —
+/// [`ScrollState`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AiOnboardingLayoutFlex {
+    /// Rect карточки `[x, y, w, h]`.
+    pub card: [f32; 4],
+    /// Карточки-режимы (Local / Cloud / SelfHosted).
+    pub mode_cards: [[f32; 4]; 3],
+    /// Кнопки «Подробнее о privacy» / «Продолжить».
+    pub btn_privacy: [f32; 4],
+    pub btn_continue: [f32; 4],
+    /// Блок privacy (когда открыт; `[0;4]` — закрыт).
+    pub privacy_block: [f32; 4],
+    /// Измеренные строки privacy (Compact, блок открыт); M/E — пусто
+    /// (рендер прежнего пути — те же ключи, фиксированный блок).
+    pub privacy_lines: Vec<AiOnbPrivacyLine>,
+    /// Окно скролла privacy внутри блока (Compact); `[0;4]` — нет скролла.
+    pub privacy_view: [f32; 4],
+    /// Полная измеренная высота privacy-контента (Compact).
+    pub privacy_content_h: f32,
+    /// Тир-ветка (для рендера: Compact — mobile-style путь).
+    pub compact: bool,
+}
+
+/// Параграфы privacy-блока (ключи i18n; порядок/состав прежнего локального
+/// массива рендера overlays.rs — единый источник замера Compact).
+fn ai_onb_privacy_paras() -> [(&'static str, &'static str); 4] {
+    [
+        (keys::AI_ONB_PRIV_TITLE, keys::AI_ONB_PRIV_BODY),
+        (keys::AI_ONB_PRIV_KEYS, keys::AI_ONB_PRIV_KEYS_BODY),
+        (
+            keys::AI_ONB_PRIV_TELEMETRY,
+            keys::AI_ONB_PRIV_TELEMETRY_BODY,
+        ),
+        (keys::AI_ONB_PRIV_DOCS, ""),
+    ]
+}
+
+/// Раскладка AI-онбординга в адаптивной ветке (чистая функция; замер —
+/// только для privacy-строк Compact). Контракты неизменны: backdrop НЕ
+/// закрывает (решение потребителя), радио-карточки/кнопки — те же зоны.
+pub fn ai_onboarding_layout_flex(
+    viewport: [f32; 2],
+    state: &AiOnboardingState,
+    language: Language,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> AiOnboardingLayoutFlex {
+    let margin = AI_ONB_VIEWPORT_MARGIN;
+    let slot = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
+    let eff_w = (viewport[0] - margin * 2.0).max(0.0);
+    let eff_h = (viewport[1] - margin * 2.0).max(0.0);
+    let compact = kit::layout_tier(viewport[0]) == kit::LayoutTier::Compact;
+    let modes_h = 3.0 * AI_ONB_MODE_H + 2.0 * AI_ONB_MODE_GAP;
+    if !compact {
+        // M/E: прежний скелет — окно modal_rect_flex с min=max=контент
+        // (высота — сумма блоков + privacy, кламп к eff как в OFF).
+        let mut h = AI_ONB_PAD_TOP
+            + AI_ONB_STEP_H
+            + AI_ONB_TITLE_H
+            + AI_ONB_SUB_H
+            + modes_h
+            + 18.0
+            + AI_ONB_ACTIONS_H
+            + AI_ONB_PAD_BOTTOM;
+        if state.privacy_open {
+            h += 15.0 + AI_ONB_PRIV_H;
+        }
+        let h = h.min(eff_h.max(1.0));
+        let panel = kit::modal_rect_flex(
+            slot,
+            margin,
+            kit::MODAL_RATIO_DEFAULT,
+            UiVec2::new(AI_ONB_CARD_W.min(eff_w.max(1.0)), h),
+            UiVec2::new(AI_ONB_CARD_W.min(eff_w.max(1.0)), h),
+        );
+        let card = [panel.x, panel.y, panel.w, panel.h];
+        let x = card[0] + AI_ONB_PAD_X;
+        let inner_w = (card[2] - AI_ONB_PAD_X * 2.0).max(0.0);
+        // Column-fold сдвигов блоков (замена y+= курсора OFF-пути).
+        let mut off = AI_ONB_PAD_TOP + AI_ONB_STEP_H + AI_ONB_TITLE_H + AI_ONB_SUB_H;
+        let mut mode_cards = [[0.0f32; 4]; 3];
+        for (i, rect) in mode_cards.iter_mut().enumerate() {
+            *rect = [
+                x,
+                card[1] + off + i as f32 * (AI_ONB_MODE_H + AI_ONB_MODE_GAP),
+                inner_w,
+                AI_ONB_MODE_H,
+            ];
+        }
+        off += modes_h + 18.0;
+        let actions_slot = UiRect::new(x, card[1] + off, inner_w, AI_ONB_BTN_H);
+        let btns = kit::split_footer_buttons(
+            actions_slot,
+            &[AI_ONB_BTN_PRIV_W],
+            &[AI_ONB_BTN_CONTINUE_W],
+            kit::GAP_CONTROLS,
+            0.0,
+        );
+        let btn_privacy = [btns[0].0.x, btns[0].0.y, btns[0].0.w, btns[0].0.h];
+        let btn_continue = [btns[1].0.x, btns[1].0.y, btns[1].0.w, btns[1].0.h];
+        let privacy_block = if state.privacy_open {
+            [
+                x,
+                card[1] + off + AI_ONB_ACTIONS_H + 15.0,
+                inner_w,
+                AI_ONB_PRIV_H,
+            ]
+        } else {
+            [0.0; 4]
+        };
+        return AiOnboardingLayoutFlex {
+            card,
+            mode_cards,
+            btn_privacy,
+            btn_continue,
+            privacy_block,
+            privacy_lines: Vec::new(),
+            privacy_view: [0.0; 4],
+            privacy_content_h: 0.0,
+            compact: false,
+        };
+    }
+    // Compact: bottom-sheet — full-bleed eff; контент сверху, кнопки 44
+    // прижаты к низу (T-M R2), privacy — измеренные строки + окно скролла.
+    let card = [margin, margin, eff_w, eff_h];
+    let x = card[0] + AI_ONB_PAD_X;
+    let inner_w = (card[2] - AI_ONB_PAD_X * 2.0).max(0.0);
+    // Column-fold: шаг → заголовок → подзаголовок → 3 радио-карточки.
+    let mut off = AI_ONB_PAD_TOP + AI_ONB_STEP_H + AI_ONB_TITLE_H + AI_ONB_SUB_H;
+    let mut mode_cards = [[0.0f32; 4]; 3];
+    for (i, rect) in mode_cards.iter_mut().enumerate() {
+        *rect = [
+            x,
+            card[1] + off + i as f32 * (AI_ONB_MODE_H + AI_ONB_MODE_GAP),
+            inner_w,
+            AI_ONB_MODE_H,
+        ];
+    }
+    off += modes_h;
+    // Кнопки — нижняя thumb-зона (T-M R2): высота 44, пара от краёв.
+    let actions_y = card[1] + card[3] - AI_ONB_PAD_BOTTOM - AI_ONB_BTN_H_TOUCH;
+    // Пара: «Продолжить» справа (45% ширины), «Подробнее» слева (остаток,
+    // зазор 8 — T-M R1); прототипные 168/132 не помещаются в 291px.
+    let continue_w = (inner_w * 0.45).max(AI_ONB_BTN_H_TOUCH);
+    let privacy_w = (inner_w - continue_w - kit::GAP_CONTROLS).max(AI_ONB_BTN_H_TOUCH);
+    let btn_continue = [
+        card[0] + card[2] - AI_ONB_PAD_X - continue_w,
+        actions_y,
+        continue_w,
+        AI_ONB_BTN_H_TOUCH,
+    ];
+    let btn_privacy = [x, actions_y, privacy_w, AI_ONB_BTN_H_TOUCH];
+    // Privacy-блок — над кнопками (зазор 8): измеренные строки.
+    let block_top = card[1] + off + 15.0;
+    let block_bottom = actions_y - 8.0;
+    let (privacy_block, privacy_lines, privacy_view, privacy_content_h) =
+        if state.privacy_open && block_bottom > block_top {
+            let block = [x, block_top, inner_w, block_bottom - block_top];
+            // Замер: заголовок 11.5 → шаг 14; тело 11 → 15/строка
+            // (пара шагов LAY-W16: 14/30 при 2-строчном теле).
+            let mut lines: Vec<AiOnbPrivacyLine> = Vec::new();
+            let mut content_h = 0.0f32;
+            let avail = (block[2] - 20.0).max(10.0);
+            for (title_key, body_key) in ai_onb_privacy_paras() {
+                let title_text = i18n::tr(language, title_key);
+                for line in wrap_privacy(m, fs, title_text, 11.5, avail) {
+                    lines.push(AiOnbPrivacyLine {
+                        title: true,
+                        text: line,
+                    });
+                    content_h += 14.0;
+                }
+                if !body_key.is_empty() {
+                    let body_text = i18n::tr(language, body_key);
+                    for line in wrap_privacy(m, fs, body_text, 11.0, avail) {
+                        lines.push(AiOnbPrivacyLine {
+                            title: false,
+                            text: line,
+                        });
+                        content_h += 15.0;
+                    }
+                }
+            }
+            // Окно скролла: блок минус внутренние поля 8.
+            let view = [
+                block[0] + 8.0,
+                block[1] + 8.0,
+                (block[2] - 16.0).max(0.0),
+                (block[3] - 16.0).max(0.0),
+            ];
+            (block, lines, view, content_h)
+        } else {
+            ([0.0; 4], Vec::new(), [0.0; 4], 0.0)
+        };
+    AiOnboardingLayoutFlex {
+        card,
+        mode_cards,
+        btn_privacy,
+        btn_continue,
+        privacy_block,
+        privacy_lines,
+        privacy_view,
+        privacy_content_h,
+        compact: true,
+    }
+}
+
+/// Перенос privacy-строки по бюджету (тот же протокол, что [`body_lines`]:
+/// `TextMeasurer::wrap` + жёсткий посимвольный разрыв сверхширокого токена).
+fn wrap_privacy(
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    text: &str,
+    font: f32,
+    avail: f32,
+) -> Vec<String> {
+    let wrapped = m.wrap(fs, text, FAMILY, font, avail);
+    let mut lines: Vec<String> = Vec::with_capacity(wrapped.len());
+    for line in wrapped {
+        if m.width_of(fs, &line, FAMILY, font) <= avail {
+            lines.push(line);
+            continue;
+        }
+        let mut cur = String::new();
+        for ch in line.chars() {
+            let mut next = cur.clone();
+            next.push(ch);
+            if m.width_of(fs, &next, FAMILY, font) > avail && !cur.is_empty() {
+                lines.push(std::mem::take(&mut cur));
+            }
+            cur.push(ch);
+        }
+        if !cur.is_empty() {
+            lines.push(cur);
+        }
+    }
+    lines
+}
+
+/// Кламп скролла privacy-блока адаптивного Compact ([`ScrollState`]).
+pub fn ai_onb_privacy_scroll_clamp(state: &mut AiOnboardingState, layout: &AiOnboardingLayoutFlex) {
+    let mut list = ScrollState {
+        offset: state.privacy_scroll,
+        content_h: layout.privacy_content_h,
+        viewport_h: layout.privacy_view[3],
+    };
+    list.clamp();
+    state.privacy_scroll = list.offset;
 }
 
 #[cfg(test)]
@@ -1700,5 +2170,237 @@ mod tests {
         let [g, e] = option_rects(lcard);
         assert!((g[3] - option_h(k)).abs() < 1e-3 && (e[3] - option_h(k)).abs() < 1e-3);
         assert!(g[1] < e[1], "галерея выше «самому»");
+    }
+
+    // === Wave M M3-c (issue #54): адаптивная ветка ==========================
+
+    /// Compact flex: карточка — full-bleed eff (bottom-sheet, T-M R7);
+    /// тач-кнопки футера 44 (T-M R1), прибиты к низу листа; тело —
+    /// одноколоночный фолбэк (ширина < ONBOARDING_SPLIT_MIN_W).
+    #[test]
+    fn card_layout_flex_compact_bottom_sheet() {
+        let (mut m, mut fs) = measurer();
+        let mut scroll = ScrollState::default();
+        let lay = card_layout_flex(
+            [375.0, 667.0],
+            0,
+            Language::Ru,
+            "default",
+            &mut scroll,
+            &mut m,
+            &mut fs,
+        );
+        let card = lay.card;
+        // Full-bleed eff: поля ONBOARDING_VIEWPORT_MARGIN (12).
+        assert_eq!(card, [12.0, 12.0, 351.0, 643.0]);
+        // Одноколоночный фолбэк: ширина < SPLIT_MIN_W.
+        assert!(card[2] < ONBOARDING_SPLIT_MIN_W);
+        assert_eq!(text_column(card), card, "фолбэк — вся карточка");
+        // Тач-футер: Next 44 в футер-зоне 60 (последние 60px колонки,
+        // кнопка центрирована — 8px от низа листа): T-M R1/R2.
+        let next = button_rect_touch(card, OnboardingButton::Next);
+        assert_eq!(next[3], BTN_H_TOUCH);
+        assert!((next[1] + next[3] - (card[1] + card[3] - 8.0)).abs() < 0.01);
+        let prev = button_rect_touch(card, OnboardingButton::Prev);
+        let prev_absent = button_at_touch(
+            card,
+            &OnboardingState { step: 0 },
+            [prev[0] + 1.0, prev[1] + 1.0],
+        );
+        assert!(prev_absent.is_none(), "«Назад» на первом шаге отсутствует");
+        let prev_hit = button_at_touch(
+            card,
+            &OnboardingState { step: 1 },
+            [prev[0] + 1.0, prev[1] + 1.0],
+        );
+        assert_eq!(
+            prev_hit,
+            Some(OnboardingButton::Prev),
+            "со 2-го шага «Назад» есть"
+        );
+        let next_hit = button_at_touch(
+            card,
+            &OnboardingState { step: 0 },
+            [next[0] + 2.0, next[1] + 2.0],
+        );
+        assert_eq!(next_hit, Some(OnboardingButton::Next));
+        // Skip — тач-цель 44 в правом верхнем углу.
+        let skip = button_rect_touch(card, OnboardingButton::Skip);
+        assert_eq!(skip[3], BTN_H_TOUCH);
+        assert!(skip[0] + skip[2] <= card[0] + card[2] + 0.01);
+        // Тело заканчивается ВЫШЕ тач-футера (без перекрытия CTA).
+        let body = body_area_flex(card, false, true);
+        assert!(
+            body[1] + body[3] <= next[1] + 0.01,
+            "тело не перекрывает футер"
+        );
+        // Шаги без горизонтального скролла: строки переноса по ширине листа.
+        assert!(lay.lines.iter().all(|l| m.width_of(
+            &mut fs,
+            l,
+            FAMILY,
+            body_font(card_scale(card[2]))
+        ) <= body[2] + 0.5));
+    }
+
+    /// M/E flex: card-кламп — ширина min(720×scale, 0.8·eff), высота
+    /// min(контент, 0.8·eff); карточка центрирована; двухколоночная
+    /// вёрстка на 1280 (720 ≥ SPLIT_MIN_W).
+    #[test]
+    fn card_layout_flex_medium_expanded_card_clamp() {
+        let (mut m, mut fs) = measurer();
+        let mut scroll = ScrollState::default();
+        let lay = card_layout_flex(
+            [1280.0, 800.0],
+            0,
+            Language::Ru,
+            "default",
+            &mut scroll,
+            &mut m,
+            &mut fs,
+        );
+        let card = lay.card;
+        assert!((card[2] - 720.0).abs() < 1e-3, "720 < 0.8·eff=1004.8");
+        assert!(card[2] >= ONBOARDING_SPLIT_MIN_W, "двухколоночная вёрстка");
+        // Центрирование в eff (eff = вьюпорт − 12).
+        assert!((card[0] + card[2] / 2.0 - 640.0).abs() < 1e-3);
+        // Высота ≤ 0.8·eff = 620.8 (card-кламп доли).
+        assert!(card[3] <= 620.8 + 1e-3, "высота ≤ 0.8·eff: {}", card[3]);
+        // M/E — прежние метрики футера/опций (тач — только Compact).
+        let next = button_rect(card, OnboardingButton::Next);
+        assert!((next[3] - button_h(card_scale(card[2]))).abs() < 1e-3);
+        // 800×560: ширина сжимается к 0.8·eff = 620.8 (< 720) — фолбэк.
+        let mid = card_layout_flex(
+            [800.0, 560.0],
+            0,
+            Language::Ru,
+            "default",
+            &mut ScrollState::default(),
+            &mut m,
+            &mut fs,
+        );
+        assert!((mid.card[2] - 620.8).abs() < 1e-3, "{}", mid.card[2]);
+    }
+
+    /// Flex-скролл тела: на узком листе контент выше тела — окно скролла
+    /// активно, футер с CTA остаётся видим (футер не входит в скролл).
+    #[test]
+    fn card_layout_flex_compact_body_scroll_keeps_footer() {
+        let (mut m, mut fs) = measurer();
+        let mut scroll = ScrollState::default();
+        let lay = card_layout_flex(
+            [375.0, 667.0],
+            0,
+            Language::Ru,
+            "default",
+            &mut scroll,
+            &mut m,
+            &mut fs,
+        );
+        let body = body_area_flex(lay.card, false, true);
+        assert_eq!(scroll.viewport_h, body[3]);
+        // Контент шага 0 на 351px — несколько строк; футер 60 не в скролле.
+        assert!(scroll.content_h > 0.0);
+        assert!((FOOTER_H_TOUCH - (BTN_H_TOUCH + 16.0)).abs() < 1e-3);
+    }
+
+    /// AI-онбординг M/E: flex-раскладка ≡ прежней бит-в-бит (modal_rect_flex
+    /// с min=max=контент ≡ panel_rect) — окно/режимы/кнопки совпадают.
+    #[test]
+    fn ai_onboarding_layout_flex_medium_expanded_parity() {
+        let (mut m, mut fs) = measurer();
+        for &(vw, vh) in &[(1280.0, 800.0), (800.0, 560.0), (1024.0, 640.0)] {
+            for privacy in [false, true] {
+                let state = AiOnboardingState {
+                    selected: Some(AiOnboardingChoice::Cloud),
+                    privacy_open: privacy,
+                    privacy_scroll: 0.0,
+                };
+                let old = ai_onboarding_layout([vw, vh], &state);
+                let flex =
+                    ai_onboarding_layout_flex([vw, vh], &state, Language::Ru, &mut m, &mut fs);
+                assert_eq!(flex.card, old.card, "{vw}×{vh} privacy={privacy}");
+                assert_eq!(flex.mode_cards, old.mode_cards);
+                assert_eq!(flex.btn_privacy, old.btn_privacy);
+                assert_eq!(flex.btn_continue, old.btn_continue);
+                assert_eq!(flex.privacy_block, old.privacy_block);
+                assert!(!flex.compact);
+            }
+        }
+    }
+
+    /// AI-онбординг Compact: bottom-sheet (full-bleed eff), тач-кнопки 44
+    /// в нижней зоне (T-M R1/R2), privacy-строки измерены (не пусты при
+    /// privacy_open), окно скролла внутри блока; кламп скролла работает.
+    #[test]
+    fn ai_onboarding_layout_flex_compact_sheet() {
+        let (mut m, mut fs) = measurer();
+        let state = AiOnboardingState {
+            selected: None,
+            privacy_open: true,
+            privacy_scroll: 0.0,
+        };
+        let fl = ai_onboarding_layout_flex([375.0, 667.0], &state, Language::Ru, &mut m, &mut fs);
+        // Full-bleed лист (поля AI_ONB_VIEWPORT_MARGIN = 12).
+        assert_eq!(fl.card, [12.0, 12.0, 351.0, 643.0]);
+        assert!(fl.compact);
+        // Кнопки 44 в нижней thumb-зоне, не пересекаются, зазор ≥8 (T-M R1).
+        assert_eq!(fl.btn_privacy[3], AI_ONB_BTN_H_TOUCH);
+        assert_eq!(fl.btn_continue[3], AI_ONB_BTN_H_TOUCH);
+        assert!(fl.btn_continue[1] >= fl.btn_privacy[1]);
+        assert!(
+            fl.btn_continue[0] - (fl.btn_privacy[0] + fl.btn_privacy[2]) >= 7.5,
+            "зазор таргетов ≥8"
+        );
+        assert!(
+            (fl.btn_privacy[1] + fl.btn_privacy[3] - (fl.card[1] + fl.card[3] - AI_ONB_PAD_BOTTOM))
+                .abs()
+                < 0.01
+        );
+        // Радио-карточки в пределах листа, цели ≥44 (64 — база).
+        for mode in &fl.mode_cards {
+            assert!(mode[3] >= crate::touch_targets::MIN_TOUCH_TARGET);
+            assert!(mode[0] >= fl.card[0] && mode[0] + mode[2] <= fl.card[0] + fl.card[2] + 0.01);
+        }
+        // Privacy: измеренные строки не пусты; окно скролла внутри блока.
+        assert!(
+            !fl.privacy_lines.is_empty(),
+            "перенос privacy без silent-клипа"
+        );
+        assert!(fl.privacy_content_h > 0.0);
+        assert!(fl.privacy_view[1] >= fl.privacy_block[1]);
+        assert!(
+            fl.privacy_view[1] + fl.privacy_view[3]
+                <= fl.privacy_block[1] + fl.privacy_block[3] + 0.01
+        );
+        // На каноническом 375×667 измеренный контент влезает в блок листа
+        // (overflow не возникает — но механизм скролла покрыт ниже).
+        if fl.privacy_content_h > fl.privacy_view[3] {
+            let mut st = state;
+            st.privacy_scroll = 10_000.0;
+            ai_onb_privacy_scroll_clamp(&mut st, &fl);
+            assert!((st.privacy_scroll - (fl.privacy_content_h - fl.privacy_view[3])).abs() < 0.01);
+        }
+        // Кламп скролла: отрицательный offset приводится к 0.
+        let mut st = state;
+        st.privacy_scroll = -50.0;
+        ai_onb_privacy_scroll_clamp(&mut st, &fl);
+        assert_eq!(st.privacy_scroll, 0.0);
+        // Крайне низкий Compact (375×500): блок сжимается — переполнение
+        // гарантировано, окно скролла активно, сверх-offset клампится к max.
+        let low = ai_onboarding_layout_flex([375.0, 500.0], &state, Language::Ru, &mut m, &mut fs);
+        assert!(low.privacy_view[3] > 0.0, "низкий лист: блок жив");
+        assert!(
+            low.privacy_content_h > low.privacy_view[3],
+            "переполнение — окно скролла"
+        );
+        let mut st = state;
+        st.privacy_scroll = 10_000.0;
+        ai_onb_privacy_scroll_clamp(&mut st, &low);
+        assert!((st.privacy_scroll - (low.privacy_content_h - low.privacy_view[3])).abs() < 0.01);
+        // Закрытый блок — нулевые rect'ы и пустые строки.
+        let closed = AiOnboardingState::default();
+        let fl = ai_onboarding_layout_flex([375.0, 667.0], &closed, Language::Ru, &mut m, &mut fs);
+        assert!(fl.privacy_lines.is_empty() && fl.privacy_block == [0.0; 4]);
     }
 }
