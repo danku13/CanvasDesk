@@ -1,0 +1,5 @@
+rect x=40 y=60 w=240 h=30
+text x=40 y=60 w=240 h=30 text="Palette"
+rect x=40 y=90 w=240 h=26
+text x=40 y=90 w=240 h=26 text="Apply"
+text x=40 y=116 w=240 h=26 text="Cancel"

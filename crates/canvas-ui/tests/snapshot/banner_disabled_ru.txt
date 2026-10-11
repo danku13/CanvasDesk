@@ -1,0 +1,4 @@
+rect x=16 y=40 w=288 h=34
+text x=24 y=48 w=45 h=16 text="Баннер"
+rect x=209 y=42 w=95 h=30
+text x=209 y=42 w=95 h=30 text="Применить"

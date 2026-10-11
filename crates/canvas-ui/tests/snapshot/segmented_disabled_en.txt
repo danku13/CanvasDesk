@@ -1,0 +1,6 @@
+text x=16 y=78 w=240 h=14 text="Segments"
+rect x=16 y=100 w=120 h=28
+text x=16 y=100 w=120 h=28 text="Settings"
+rect x=16 y=100 w=240 h=28
+rect x=136 y=100 w=120 h=28
+text x=136 y=100 w=120 h=28 text="Search"

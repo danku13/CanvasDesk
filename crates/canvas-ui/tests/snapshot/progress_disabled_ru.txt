@@ -1,0 +1,3 @@
+text x=16 y=16 w=288 h=14 text="Прогресс"
+rect x=16 y=43 w=120 h=6
+rect x=16 y=43 w=200 h=6

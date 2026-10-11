@@ -1,0 +1,5 @@
+rect x=16 y=32 w=240 h=96
+text x=24 y=36 w=224 h=12 text="Message"
+text x=24 y=48 w=224 h=14 text="Hint"
+text x=24 y=62 w=224 h=14 text="Saved"
+text x=24 y=82 w=224 h=14 text="Search"
