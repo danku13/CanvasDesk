@@ -64,8 +64,9 @@ control_selected_fill, рамка control_border, текст text (таблиц�
 константы `CRUMB_*`; допуск влезания FIT_EPS 0.05
 (`crates/canvas-ui/src/measure.rs`); re-export — `crates/canvas-ui/src/kit.rs`.
 Потребитель: `crates/canvas-app/src/explain_ui.rs` (`crumb_rects`,
-CRUMB_PAD_X, паритет констант). Секции Crumbs в витрине
-`crates/canvas-app/src/kit_ui.rs` нет — бэклог W2 (K4).
+CRUMB_PAD_X, паритет констант). Витрина: секция Crumbs в `crates/canvas-app/src/kit_sections_k4.rs` (K4) —
+путь целиком с активным хвостом (Selected) и строка переполнения («…» на
+половине слота).
 
 ## 8. Что меняется при правке файла
 - Метрики → константы модуля + паритет explain_ui; CRUMB_H/CRUMB_GAP вне

@@ -74,8 +74,9 @@ overlay-механика `state_layer_alpha` — за потребителем.
 `crates/canvas-ui/src/component/tabs.rs` — `TabStyle` (Underline/Fill/Pill),
 `tabs_layout`/`TabsLayout`/`TabLayout`, `tab_style`/`TabStyleResult`,
 `tabs_hit`, `tabs_key`/`TabKey`; ре-экспорт из `crates/canvas-ui/src/kit.rs`
-(строки 125–126). Витрина UI-консоли: секции в
-`crates/canvas-app/src/kit_ui.rs` нет (нарушение K4 — аналог W2 из аудита).
+(строки 125–126). Витрина: секция tabs в `crates/canvas-app/src/kit_sections_k4.rs`
+(K4) — 6 рядов: Normal/Hovered/Focused/Pressed/Disabled/Selected
+(активная вкладка).
 
 ## 8. Что меняется при правке файла
 - Геометрия/индикаторы → чистые функции `tabs_layout` + юнит-тесты модуля;

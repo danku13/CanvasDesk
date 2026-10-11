@@ -62,8 +62,9 @@ TwoColumn — контейнер: состояний ST1 не имеет (`../ru
 `two_column_right`, `TwoColumnLayout`; re-export —
 `crates/canvas-ui/src/kit.rs`. Прямых вызовов в `canvas-app` пока нет:
 поверхности (`calc_panel_ui`, `admin_ui`, `settings_ui`) воспроизводят
-паттерн вручную — миграция на kit-API задача рефакторинга (K1.2). Секции
-TwoColumn в витрине `crates/canvas-app/src/kit_ui.rs` нет — бэклог W2 (K4).
+паттерн вручную — миграция на kit-API задача рефакторинга (K1.2). Витрина: секция TwoColumn в `crates/canvas-app/src/kit_sections_k4.rs`
+(K4) — две строки sidebar+content; раскладочный паттерн, ST1-состояния
+панелей не дифференцирует.
 
 ## 8. Что меняется при правке файла
 - Геометрия/инварианты → модуль + юнит-тесты

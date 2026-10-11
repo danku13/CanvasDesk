@@ -114,11 +114,18 @@ constant from C2 (recorded in the K1 table); rgb is never modified.
 ## K4. Showcase (extension of ST5)
 
 The UI console (“?” → “UI console”) must show a live sample of every K1
-component in all ST1 states (matrix × RU/EN × themes). The section set as of
-2026-10-09: buttons, icon_buttons, chips, dropdown, toast, tooltip,
-text_field, switch, card, list, icons, table, panel_header — **missing**
-banner, chat_bubble, crumbs, footer, radio_card, two_column (the audit's W2
-backlog). A new component without a showcase section — an unclosed wave.
+component in all applicable ST1 states (matrix × RU/EN × themes). The
+section set as of 2026-10-11 — 33 sections (code: `crates/canvas-app/src/
+kit_ui.rs` + `kit_sections_k4.rs`, `K4_ORDER`): the 13 base sections —
+buttons, icon_buttons, chips, dropdown, toast, tooltip, text_field, switch,
+card, list, icons, table, panel_header — plus the 20 K4 sections: banner,
+chat_bubble, crumbs, footer, radio_card, two_column (the audit's W2 backlog,
+closed) and the Wave C checkbox, slider, radio, tabs, segmented,
+command_palette, accordion, progress, skeleton, badge, popover, snackbar,
+avatar, tree. States are shown by applicability: a component whose style
+does not differentiate a state gets no section for that state (the fact is
+fixed in the use-case doc §7 and the golden test — the row/slider
+precedent). A new component without a showcase section — an unclosed wave.
 
 **Layout showcase** (normative source `design/rules/11-layouts.md`, checklist
 LAY11 item 10): a showcase section is updated in the same wave as the new

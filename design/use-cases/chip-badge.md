@@ -66,6 +66,9 @@ CHIP_GAP = SPACING_S). Бейдж — decoration (не пикется), кром
 + `crates/canvas-render/src/row_grid.rs` (FR-069). What-if чипы —
 `whatif_ui.rs` (CLOSE_WIDTH 28, LIST_WIDTH 480); галерейные —
 `scheme_gallery_ui.rs` (kit::chip_strip; M1: CHIP_W/CHIP_ALL_W удалены).
+Витрина: секция badge в `crates/canvas-app/src/kit_sections_k4.rs` (K4) —
+6 ячеек Count/Dot/Text по тонам (Primary/Success/Danger/Default) на
+якорях-чипах (бейдж заходит за верх якоря на половину высоты).
 
 ## 8. Что меняется при правке файла
 - Высоты/паддинги → константы соответствующих модулей (единый прогон линтов

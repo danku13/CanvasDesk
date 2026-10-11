@@ -70,9 +70,9 @@ FIFO (`Vec`), стакается вертикально bottom-center; геом�
 ## 7. Где в коде
 `crates/canvas-ui/src/component/snackbar.rs` — `snackbar_layout`,
 `snackbar_style`, `Snackbar`, `SnackbarQueue` (push/tick), тесты очереди —
-в модуле. Фасад — `crates/canvas-ui/src/kit.rs` (122–123). Потребителей в
-`crates/canvas-app` нет; секции витрины в `crates/canvas-app/src/kit_ui.rs`
-нет — долг K1.1/K4.
+в модуле. Фасад — `crates/canvas-ui/src/kit.rs` (122–123). Потребителей в `crates/canvas-app` нет. Витрина: секция snackbar в
+`crates/canvas-app/src/kit_sections_k4.rs` (K4) — 2 бара: Default с
+action-кнопкой и Danger без; бар на внутренней нижней марже компонента.
 
 ## 8. Что меняется при правке файла
 - Геометрия/TTL → модуль + юнит-тесты; подача (стопка, фейд) — потребитель.

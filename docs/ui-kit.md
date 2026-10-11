@@ -368,6 +368,15 @@ the shared guides (a parameter ×2 / the formula “ƒ” with a badge “← so
 the states Normal/Zebra/Selected; the drawing — `paint_row` (the same functions
 of the kit as the panel “How it is calculated” and the body of the node).
 
+The K4 wave (issue #62) closes the showcase backlog: the gallery tail grows to
+33 sections — 13 base + 20 K4 (`crates/canvas-app/src/kit_sections_k4.rs`,
+`K4_ORDER`): banner, chat_bubble, crumbs, footer, radio_card, two_column
+(W2) and the Wave C checkbox, slider, radio, tabs, segmented, command_palette,
+accordion, progress, skeleton, badge, popover, snackbar, avatar, tree — each
+in the applicable ST1 states (the static showcase pattern FR-055: no hit
+slots, the geometry and captions from the single `gallery_layout`, the
+full-visibility filter on scroll).
+
 ## 8. The UI admin panel (FR-070)
 
 The surface `admin_panel` (Modals/Block, the entry — the menu “?” → “UI console”):
