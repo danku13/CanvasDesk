@@ -546,3 +546,20 @@ Tokens: in≈1260000 (main+8 агентов), out≈96000, total≈1360000 (esti
 - **Telegram:** план сессии → отчёт этапов 2–5 → финальное саммари. Ветка: `feat/ecommerce-capacity-model`.
 
 ---
+
+---
+Task ID: 9 (issue #67)
+Agent: Super Z (сессия web-c8da020e-a117-4a19-a125-f770d96a883e; V3 — субагент, отдельный клон)
+Task: issue #67 «UI console v2: хвосты витрины — ControlSize re-layout, клавиатурный ринг, snapshot-эталоны»: V1+V2+V3, гейты, закрытие issue + Project v2.
+
+Work Log:
+- V1 (61c0e68): sized-API canvas-ui — button_layout_sized/chip_layout_sized/icon_button_rect_sized (высоты через методы ControlSize; паритет Sm==legacy — тест sized_button_parity_with_legacy); density-гэпы kit_demo (density_section_gap/density_row_gap — ступени S1: Compact MD/S, Comfortable LG/SM = канон v1, Spacious XL/MD); gallery_layout_impl — полный re-layout TO-BE-колонки (локальные btn_h/chip_h/field_h/icon_h/row_h/sec_gap/row_gap/ctl: demo_on → ControlSize-методы/токены, AS-IS → kit-константы — golden-пины целы); Wave C-секции/потребители/отрисовка на demo.size/demo.density (DEMO_TABS_PANEL_H 48 — канон, progress_spinner_radius = 0.3·button_h); тесты: draw==hit ×4 размера (v1_size_relayout_respects_control_size_and_draw_hit, Wave C — скролл-проход), density-ступени (v1_density_relayout_gaps_from_s1_tokens), K1-регресс (v1_asis_kit_metrics_regression).
+- V2 (cc7c761): резолверы canvas-ui — tree_key (TreeKey/TreeKeyCtx → TreeAction) + command_palette_key (PaletteKey → CommandPaletteKey) — закрыты обещания use-cases (tree.md/command-palette.md §4, ревью #47; доки обновлены, doc_lint 0/974); FocusRing::focus_rect; kit_demo::apply_group_arrow (radio ↑/↓ wrap; segmented/tabs ←/→ через кит-tabs_key; tree ↑/↓ + ←/→ через tree_key; nav_rail ↑/↓) + 5 тестов; kit_ui::demo_ring (тулбар → mgroup → сайдбар → секции по (y,x), dedupe, оверлеи когда открыты)/demo_trap_ring (палитра → модалка → поповер → dropdown = лестница Esc)/demo_rect_of/demo_focus_rect (геометрия из кадра — draw==hit при скролле/size/density); app — Tab/Shift+Tab (TO-BE ринг; AS-IS F-17 прежний), стрелки групп, Enter-активация (kit_demo_activate — единый путь с кликом), Esc — trap-выход + сброс ринга (restore); focus_visible ST1 (рамка accent от клавиатуры, клик прячет — focus ≠ hover); тесты: v2_ring_full_closed_and_section_ordered / v2_trap_ring_priority_matches_esc_ladder / v2_focus_visible_not_hover.
+- V3 (942d24f, субагент, ветка wave-67-v3-snapshots): сцены + golden Wave C (14) + W2 (6) × {Normal/Hovered/Disabled/Error} × {RU/EN} = 160 эталонов по образцу W0-кейсов; счётчик 60+160=220; существующие 60 не тронуты (FR-068 W0 §9).
+- Гейты: fmt/clippy --workspace -D warnings 0/test --workspace (3253 → после merge 3417 passed / 0 failed, 96 сьютов)/lay7-lint/wasm_gate (ступени 1–2)/doc_lint 0/974. Урок подтверждён: origin/main двинулся во время работы (grid-125 + e-commerce от параллельной сессии) — сверка origin ПЕРЕД пушем; локальный merge в устаревший main сброшен, ветка пересоздана, re-merge в 321a03b чисто.
+- Merge: 9c68b0a (V1+V2) + 5f20ebb (V3) → main, пуш 321a03b..5f20ebb. Issue #67: 12 чекбоксов [x] → комментарий-верификация (issuecomment-6112521944) → closed completed; Project v2: #67 → Done (токен проектов).
+
+Stage Summary:
+- Все 3 v2-хвоста #32/#67 в main: демо-витрина уважает Size/Density по всей колонке; полный клавиатурный ринг (Tab/стрелки/Esc/Enter, focus_visible ST1) + резолверы кита; 220 snapshot-эталонов.
+- Остаток: ручная приёмка владельцем (клавиатура/size/density вживую — чек-лист #66); вне скоупа #67 — компонентный paint-слой 6 компонентов, standalone canvasdesk-demo (v2-хвосты при запуске).
+Tokens: in≈480000, out≈105000, total≈585000 (estimate), model=GLM-5.3, scope=issue-67-v2-tails
