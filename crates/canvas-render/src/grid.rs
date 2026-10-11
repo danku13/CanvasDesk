@@ -700,7 +700,7 @@ mod tests {
     /// регрессом по матрице плотностей × зумов (п.3: snap к видимым линиям).
     #[test]
     fn adaptive_steps_minor_matches_snap_oracle() {
-        fn snap_oracle(minor: f32, major: f32, zoom: f32, sub: f32, coarse: f32) -> f32 {
+        fn snap_oracle(minor: f32, _major: f32, zoom: f32, sub: f32, coarse: f32) -> f32 {
             if zoom > sub {
                 minor / 2.0
             } else {
