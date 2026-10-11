@@ -7,6 +7,7 @@ Tokens (правило учёта токенов — AGENTS.md). Записи д
 
 ## Journal index (все записи: текущие и архивные)
 
+- 2026-10-11 | WAVE-7 (сессия web-a6dbb853-16af-4113-bc40-c40ccb7269c3) | K4-витрина #62 (секции 6 W2 + 14 Wave C во всех ST1, golden-пины, §K4 33 секции, use-case §7 ×20) + Wave D #32 (интерактивная TO-BE витрина: D1/D3/D4/D5/D6/D7, 8 KitState, 7 тем, сайдбар, ?ui=demo); связка #62↔#32; сосуществование с M3-b адаптивом (#53); #62/#32/#27 closed completed | worklog.md (текущий)
 - 2026-10-11 | DOCS-ST1 (сессия web-a6dbb853-16af-4113-bc40-c40ccb7269c3) | ST1-sync: KitState 8 состояний (Wave T) в rules/08-states.md (матрица, лестница по widget.rs, ST2 + state-layer M3, additive active_states) + 12 лестниц-сносок в 14 файлах (design/README ×2, use-cases ×11, docs/ui-kit.md §7.1); сверка с crates/; doc_lint 972/0 ошибок; issue #61 closed completed; создан #62 (K4-витрина, код-бэклог) | worklog.md (текущий)
 - 2026-10-11 | HOTFIX-56 (сессия web-b5714086-2f9f-44a0-af82-302aa182533b) | Паника prod-web «cannot recursively acquire mutex» (владелец) — вложенный захват MEASURE_FS: чип C4 каждый кадр/менеджер C3/kit_field_view ×4; фикс (m,fs) параметром + reorder; аудит scripts/audit_fs_locks.py; E2E headless до/после; main снова зелёный (fmt/clippy/тест INT); найдены #57 #58 | worklog.md (текущий)
 - 2026-10-08 | CR-029 (сессия web-c1430de8-9dcf-4130-9380-b5107677d30c) | Репорт владельца «иногда не отрабатывает автодополнение при вставке входящих значений» (скриншот: нода «Корзин | worklog-2026-10-02_10-08.md
@@ -511,3 +512,24 @@ Stage Summary:
 - Сирот среди открытых [Приёмка]-issues не осталось: LAY-смоуки + финальный регресс + мультиканвас — под #66; Wave M полностью покрыт набором sub-issues #55 (M0–M3 реализация + M4 приёмка + M5 демонтаж вне серии).
 - Telegram: план (msg 1082), этап 1, этапы 2–3, финальное саммари — отправлены.
 Tokens: in≈70000, out≈18000, total≈88000 (estimate), model=GLM-4.7, scope=issue-structure
+
+---
+Task ID: WAVE-7
+Agent: Super Z (main + 8 субагентов)
+Task: Решение владельца «сделай связку самих issues и двумя агентами реализуй #62 и #32»: K4-витрина (секции 6 W2 + 14 Wave C во всех ST1-состояниях, K4.1–K4.3, golden-тесты) + Wave D Demo v1 (интерактивная витрина D1/D3/D4/D5/D6/D7).
+
+Work Log:
+- Связка: тело #32 обновлено (D2 → реализация в #62; матрица D3 уточнена до 8 KitState с Error по ST1/Wave T #61; AC-D2/AC-D3 синхронизированы), кросс-комментарии в обоих.
+- Исполнение — 5 раундов субагентов (Task-канал рвался по таймауту ~10–20 мин, прогресс сохранялся правилом «этап → гейты → коммит → пуш ветки»; recovery-перезапуски с диска):
+  #62 (wave-62-k4): 2e72bf6 секции → 74bb514 golden → 2d67e65 доводка → ce82a27 доки; kit_sections_k4.rs ~2800 строк; §K4 13→33 секции (EN), use-case §7 ×20 (RU), ui-kit §7.3; rustdoc active_states сведён.
+  #32 (wave-32-demo): 753668a v1.1 (F1–F4 + D3 пилюля 8 KitState) → 444184e v1.2 (D1-финиш + нативный вход) → e972cc9 D4 (AS-IS/TO-BE ST1-визуалы) → 02d7b00 D6 web ?ui=demo → 39dff4d D7 доки (ui-kit §7.4, kit-demo-v1.md).
+- Merge-координация: обнаружен параллельный main (W-WEBUI #60 9f27982 + Wave M M3-a/b/c 77fa204, другая сессия). Порядок: #62 смёржен в новый main чисто (002dd0c, тесты 884+421/0). #32 — семантический конфликт M3-b×Wave D (kit_ui.rs 11 хунков, kit_demo поля, диспетчер overlays, колесо input): разрешён union-политикой (обе фичи в своих режимах: adaptive → M3-b, иначе → 32; ед. сигнатура impl 9-арг, 4 обёртки; App-хранилища скроллов разделены).
+- Параллельная сессия смёржила wave-32-demo раньше (f89079a) с эквивалентным разрешением — мой дубль-merge abfb648 (агентная сборка, гейты зелёные) отброшен как избыточный; принят origin/main 19b1190 (проверено: cargo test 893+421/0, clippy 0 новых, doc_lint 0/974).
+- #62 closed completed (чекбоксы [x], комментарий-верификация); #32 closed completed (D-пункты, ControlSize re-layout честно оставлен [ ] → v2); #27 (мастер-ревью T/C/L/A+Demo) closed completed.
+
+Stage Summary:
+- K4-норматив закрыт: компонент без секции витрины — незакрытая волна (K1.1/K4.3) больше не нарушается; 33 секции.
+- Витрина — интерактивная demo (egui-паттерн): живые контролы, 8 KitState, темы/языки/размер/плотность, AS-IS/TO-BE, сайдбар, web-вход.
+- Урок: параллельные сессии пушат в main во время работы — перед merge/push сверять origin; дублирующиеся merge-разрешения отбрасывать в пользу принятого.
+- v2-хвосты: ControlSize re-layout, клавиатурный ринг, component paint, snapshot-эталоны Comp (FR-068 W0), standalone canvasdesk-demo, ручная браузерная приёмка ?ui=demo (владелец).
+Tokens: in≈1260000 (main+8 агентов), out≈96000, total≈1360000 (estimate), model=GLM-5.3, scope=WAVE-7
