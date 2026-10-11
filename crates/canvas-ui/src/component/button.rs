@@ -5,8 +5,8 @@
 //! существующие функции — стабильный API кита (§Контракт-1 PRD-0009 V-5).
 
 use super::{
-    ButtonVariant, Component, ControlStyle, KitPalette, KitState, BUTTON_HEIGHT, BUTTON_PAD_H,
-    CHIP_HEIGHT, CHIP_PAD_H, ICON_BUTTON_SIZE, SWITCH_H, SWITCH_KNOB_PAD, SWITCH_W,
+    ButtonVariant, Component, ControlSize, ControlStyle, KitPalette, KitState, BUTTON_HEIGHT,
+    BUTTON_PAD_H, CHIP_HEIGHT, CHIP_PAD_H, ICON_BUTTON_SIZE, SWITCH_H, SWITCH_KNOB_PAD, SWITCH_W,
 };
 use crate::geometry::{UiPoint, UiRect, UiVec2};
 use crate::layout::{stack, HAlign, LayoutBackend, VAlign};
@@ -70,6 +70,45 @@ pub fn button_layout(
         label.to_owned()
     };
     let rect = stack(slot, UiVec2::new(width, BUTTON_HEIGHT), align.0, align.1);
+    ButtonLayout { rect, label: shown }
+}
+
+/// Кнопка в слоте с явной шкалой размера (issue #67 V1: demo-витрина
+/// уважает [`ControlSize`] — высота через [`ControlSize::button_h`], не
+/// литерал `BUTTON_HEIGHT`). Ширина/усечение — контракт [`button_layout`];
+/// при `ControlSize::Sm` высота совпадает с прежней константой (паритет
+/// покрыт тестом `sized_button_parity_with_legacy`).
+#[allow(clippy::too_many_arguments)] // прецедент button_layout: layout-функции кита
+pub fn button_layout_sized(
+    slot: UiRect,
+    label: &str,
+    align: (HAlign, VAlign),
+    control: ControlSize,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    family: &str,
+    size: f32,
+) -> ButtonLayout {
+    let desired = button_size(label, m, fs, family, size);
+    let max_w = slot.w;
+    let width = desired.x.min(max_w);
+    let shown = if desired.x > max_w {
+        m.ellipsis(
+            fs,
+            label,
+            family,
+            size,
+            (max_w - BUTTON_PAD_H * 2.0).max(0.0),
+        )
+    } else {
+        label.to_owned()
+    };
+    let rect = stack(
+        slot,
+        UiVec2::new(width, control.button_h()),
+        align.0,
+        align.1,
+    );
     ButtonLayout { rect, label: shown }
 }
 
@@ -143,6 +182,18 @@ pub fn icon_button_rect(slot: UiRect, align: (HAlign, VAlign)) -> UiRect {
     )
 }
 
+/// Квадратная icon-кнопка со шкалой размера (issue #67 V1): сторона —
+/// [`ControlSize::icon_btn`]; при `ControlSize::Sm` — паритет с
+/// [`icon_button_rect`] (константа `ICON_BUTTON_SIZE`), покрыт тестом.
+pub fn icon_button_rect_sized(
+    slot: UiRect,
+    align: (HAlign, VAlign),
+    control: ControlSize,
+) -> UiRect {
+    let side = control.icon_btn();
+    stack(slot, UiVec2::new(side, side), align.0, align.1)
+}
+
 /// Стиль icon-кнопки = Ghost-кнопка (тот же слот hover, без заливки в Normal).
 pub fn icon_button_style(state: KitState, p: &KitPalette) -> ControlStyle {
     button_style(ButtonVariant::Ghost, state, p)
@@ -193,6 +244,39 @@ pub fn chip_layout(
     let w = if shown == label { desired.x } else { max_width };
     ChipLayout {
         rect: UiRect::new(origin.x, origin.y, w, CHIP_HEIGHT),
+        label: shown,
+    }
+}
+
+/// Чип со шкалой размера (issue #67 V1): высота — [`ControlSize::chip_h`],
+/// ширина/усечение — контракт [`chip_layout`]; при `ControlSize::Sm` —
+/// паритет с [`chip_layout`] (константа `CHIP_HEIGHT`), покрыт тестом.
+#[allow(clippy::too_many_arguments)] // прецедент chip_layout: layout-функции кита
+pub fn chip_layout_sized(
+    origin: UiPoint,
+    label: &str,
+    max_width: f32,
+    control: ControlSize,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    family: &str,
+    size: f32,
+) -> ChipLayout {
+    let desired = chip_size(label, m, fs, family, size);
+    let shown = if desired.x > max_width {
+        m.ellipsis(
+            fs,
+            label,
+            family,
+            size,
+            (max_width - CHIP_PAD_H * 2.0).max(0.0),
+        )
+    } else {
+        label.to_owned()
+    };
+    let w = if shown == label { desired.x } else { max_width };
+    ChipLayout {
+        rect: UiRect::new(origin.x, origin.y, w, control.chip_h()),
         label: shown,
     }
 }
@@ -942,5 +1026,104 @@ mod tests {
         );
         let outside = UiPoint::new(rects[0].right() + 10.0, rects[0].y + 1.0);
         assert_eq!(btn.hit_test(&rects, outside), None);
+    }
+
+    // --- issue #67 V1: sized-варианты (шкала ControlSize) -------------------
+
+    /// Паритет: sized при `Sm` === legacy (высоты — прежние константы).
+    /// Гарантия «AS-IS поверхности не дрейфуют» при переходе витрины на
+    /// sized-API (issue #67 V1).
+    #[test]
+    fn sized_button_parity_with_legacy() {
+        let mut m = TextMeasurer::new();
+        let mut fs = cosmic_text::FontSystem::new();
+        let slot = UiRect::new(0.0, 0.0, 300.0, 60.0);
+        let legacy = button_layout(
+            slot,
+            "Применить",
+            (HAlign::Start, VAlign::Center),
+            &mut m,
+            &mut fs,
+            FAMILY,
+            13.0,
+        );
+        let sized = button_layout_sized(
+            slot,
+            "Применить",
+            (HAlign::Start, VAlign::Center),
+            ControlSize::Sm,
+            &mut m,
+            &mut fs,
+            FAMILY,
+            13.0,
+        );
+        assert_eq!(legacy.rect, sized.rect);
+        assert_eq!(legacy.label, sized.label);
+        // Иконка/чип — тот же паритет
+        assert_eq!(
+            icon_button_rect(slot, (HAlign::Center, VAlign::Center)),
+            icon_button_rect_sized(slot, (HAlign::Center, VAlign::Center), ControlSize::Sm)
+        );
+        let chip_legacy = chip_layout(
+            UiPoint::new(0.0, 0.0),
+            "Поиск",
+            160.0,
+            &mut m,
+            &mut fs,
+            FAMILY,
+            12.0,
+        );
+        let chip_sized = chip_layout_sized(
+            UiPoint::new(0.0, 0.0),
+            "Поиск",
+            160.0,
+            ControlSize::Sm,
+            &mut m,
+            &mut fs,
+            FAMILY,
+            12.0,
+        );
+        assert_eq!(chip_legacy.rect, chip_sized.rect);
+    }
+
+    /// Шкала размеров: высоты sized-вариантов = методы `ControlSize`
+    /// (button 24/30/36/44, chip 20/24/28/32, icon 20/26/32/44).
+    #[test]
+    fn sized_variants_follow_control_size_scale() {
+        let mut m = TextMeasurer::new();
+        let mut fs = cosmic_text::FontSystem::new();
+        let slot = UiRect::new(0.0, 0.0, 300.0, 80.0);
+        for size in [
+            ControlSize::Xs,
+            ControlSize::Sm,
+            ControlSize::Md,
+            ControlSize::Lg,
+        ] {
+            let btn = button_layout_sized(
+                slot,
+                "ОК",
+                (HAlign::Start, VAlign::Center),
+                size,
+                &mut m,
+                &mut fs,
+                FAMILY,
+                13.0,
+            );
+            assert_eq!(btn.rect.h, size.button_h(), "button_h {size:?}");
+            let chip = chip_layout_sized(
+                UiPoint::new(0.0, 0.0),
+                "Чип",
+                160.0,
+                size,
+                &mut m,
+                &mut fs,
+                FAMILY,
+                12.0,
+            );
+            assert_eq!(chip.rect.h, size.chip_h(), "chip_h {size:?}");
+            let icon = icon_button_rect_sized(slot, (HAlign::Start, VAlign::Center), size);
+            assert_eq!(icon.w, size.icon_btn(), "icon_btn {size:?}");
+            assert_eq!(icon.h, size.icon_btn(), "icon_btn {size:?}");
+        }
     }
 }

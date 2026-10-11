@@ -931,6 +931,64 @@ fn gallery_layout_impl(
     };
     let full_w = content.w;
 
+    // === V1 (issue #67): ControlSize/Density re-layout TO-BE-колонки ====
+    // Демо-секции уважают пилюли Size/Density тулбара: высоты контролов —
+    // методы [`canvas_ui::component::ControlSize`] (не литералы), зазоры —
+    // ступени шкалы S1 ([`crate::kit_demo::density_section_gap`]/[
+    // `crate::kit_demo::density_row_gap`]). AS-IS (demo=None) — прежние
+    // kit-метрики: константы K1 (BUTTON_HEIGHT и т.д.) и канон S1 —
+    // golden-пины линейки и поверхности app (settings/whatif/gallery) не
+    // дрейфуют. Паритет Sm-методов константам кита покрыт тестом
+    // `sized_button_parity_with_legacy` (canvas-ui, button.rs).
+    let demo_on = demo.is_some();
+    let d_size = demo
+        .map(|d| d.size)
+        .unwrap_or(canvas_ui::component::ControlSize::Sm);
+    let d_density = demo
+        .map(|d| d.density)
+        .unwrap_or(canvas_ui::layout::Density::Comfortable);
+    let btn_h = if demo_on {
+        d_size.button_h()
+    } else {
+        kit::BUTTON_HEIGHT
+    };
+    let chip_h = if demo_on {
+        d_size.chip_h()
+    } else {
+        kit::CHIP_HEIGHT
+    };
+    let field_h = if demo_on {
+        d_size.field_h()
+    } else {
+        kit::TEXT_FIELD_HEIGHT
+    };
+    let icon_h = if demo_on {
+        d_size.icon_btn()
+    } else {
+        kit::ICON_BUTTON_SIZE
+    };
+    let row_h = if demo_on {
+        d_size.list_row_h()
+    } else {
+        kit::LIST_ROW_H
+    };
+    let sec_gap = if demo_on {
+        crate::kit_demo::density_section_gap(d_density)
+    } else {
+        SECTION_GAP
+    };
+    let row_gap = if demo_on {
+        crate::kit_demo::density_row_gap(d_density)
+    } else {
+        canvas_core::tokens::SPACING_SM
+    };
+    // Контрол для sized-API layout-функций (AS-IS — Sm: паритет с legacy).
+    let ctl = if demo_on {
+        d_size
+    } else {
+        canvas_ui::component::ControlSize::Sm
+    };
+
     // Шапка: заголовок слева, кнопка темы + «✕» справа — раскладываются
     // вместе через `kit::panel_header` (FR-070, агент L: panel_header
     // раскладывает toggle + icon-кнопки в едином right-aligned ряду с
@@ -1103,12 +1161,14 @@ fn gallery_layout_impl(
     // у демо-блоков ниже).
     let toast_h = 20.0;
     let card_h = 64.0;
-    let dropdown_item_h = 26.0;
+    // V1 (#67): пункты меню dropdown — строки списков (list_row_h от Size);
+    // пад меню 4 px — hairline-канон v1 (не шкала S1).
+    let dropdown_item_h = row_h;
     let dropdown_menu_h = 3.0 * dropdown_item_h + 2.0 * 4.0;
     // Wave D (D1): в TO-BE меню dropdown видимо только при открытом состоянии
     // (клик по якорю); AS-IS — статичное меню как прежде (golden-пин).
     let dropdown_open_layout = demo.map(|d| d.dropdown_open).unwrap_or(true);
-    let wrap_slot_h = 2.0 * kit::CHIP_HEIGHT + kit::GAP_CONTROLS;
+    let wrap_slot_h = 2.0 * chip_h + kit::GAP_CONTROLS;
     let grid_cell_h = 32.0;
     let grid_slot_h = 2.0 * grid_cell_h + kit::GAP_CONTROLS;
     let align_column_block_h = 3.0 * GALLERY_COLUMN_CELL_H + 3.0 * 6.0 + 12.0;
@@ -1133,33 +1193,30 @@ fn gallery_layout_impl(
         MeasuredItem::Fixed { w: 0.0, h: len }
     }
     let mut ruler_items: Vec<MeasuredItem> = Vec::with_capacity(64);
-    // --- Buttons: подпись + 4 ряда (шаг SPACING_SM; хвост +4 px — пин) ---
+    // --- Buttons: подпись + 4 ряда (шаг — density_row_gap; хвост +4 px — пин) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
-        block(
-            full_w,
-            4.0 * kit::BUTTON_HEIGHT + 3.0 * canvas_core::tokens::SPACING_SM,
-        ),
-        ruler_gap(SECTION_GAP + BUTTONS_SECTION_GAP_EXTRA),
+        block(full_w, 4.0 * btn_h + 3.0 * row_gap),
+        ruler_gap(sec_gap + BUTTONS_SECTION_GAP_EXTRA),
     ]);
     // --- IconButtons ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
-        block(full_w, kit::ICON_BUTTON_SIZE),
-        ruler_gap(SECTION_GAP),
+        block(full_w, icon_h),
+        ruler_gap(sec_gap),
     ]);
     // --- Chips ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
-        block(full_w, kit::CHIP_HEIGHT),
-        ruler_gap(SECTION_GAP),
+        block(full_w, chip_h),
+        ruler_gap(sec_gap),
     ]);
     // --- Dropdown: якорь + зазор + меню (зазор — DROPDOWN_ANCHOR_GAP, пин) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(
             full_w,
-            kit::BUTTON_HEIGHT
+            btn_h
                 + DROPDOWN_ANCHOR_GAP
                 + if dropdown_open_layout {
                     dropdown_menu_h
@@ -1167,102 +1224,100 @@ fn gallery_layout_impl(
                     0.0
                 },
         ),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Toast ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, toast_h),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Tooltip (хвост 18 + 26 — шаг прежнего курсора, пин) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, 18.0 + 26.0),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- TextField ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
-        block(full_w, kit::TEXT_FIELD_HEIGHT),
-        ruler_gap(SECTION_GAP),
+        block(full_w, field_h),
+        ruler_gap(sec_gap),
     ]);
-    // --- Switch ---
+    // --- Switch (компонент без ControlSize — SWITCH_H константа кита) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, kit::SWITCH_H),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Card ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, card_h),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
-    // --- Список + скролл ---
+    // --- Список + скролл (строки — list_row_h от Size, зазор — кит LIST_ROW_GAP) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
-        block(full_w, GALLERY_LIST_VIEWPORT_H),
-        ruler_gap(SECTION_GAP),
+        block(full_w, 3.0 * row_h + 2.0 * kit::LIST_ROW_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Icon-глифы v2 ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
-        block(full_w, kit::ICON_BUTTON_SIZE),
-        ruler_gap(SECTION_GAP),
+        block(full_w, icon_h),
+        ruler_gap(sec_gap),
     ]);
-    // --- Table: 4 строки без межстрочных зазоров (row_gap: 0) ---
+    // --- Table: 4 строки без межстрочных зазоров (row_gap: 0; Table —
+    // компонентная демо GALLERY_ROW_H, не list_row_h — см. секцию ниже) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, 4.0 * GALLERY_ROW_H),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Measured-ряд (F-13) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
-        block(full_w, kit::CHIP_HEIGHT),
-        ruler_gap(SECTION_GAP),
+        block(full_w, chip_h),
+        ruler_gap(sec_gap),
     ]);
     // --- Flex-факторы (F-14) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
-        block(full_w, kit::BUTTON_HEIGHT),
-        ruler_gap(SECTION_GAP),
+        block(full_w, btn_h),
+        ruler_gap(sec_gap),
     ]);
     // --- Wrap (F-15) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, wrap_slot_h),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Сетка (F-16) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, grid_slot_h),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Фокус (F-17): нулевой хвост до ComponentRow — исторический, пин ---
-    ruler_items.extend([
-        block(full_w, SECTION_TITLE_H),
-        block(full_w, kit::BUTTON_HEIGHT),
-    ]);
+    ruler_items.extend([block(full_w, SECTION_TITLE_H), block(full_w, btn_h)]);
     // --- Компонент Row ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, GALLERY_ROW_H),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Компонент Panel ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, GALLERY_COMPONENT_PANEL_H),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- SqueezeTail ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, GALLERY_SQUEEZE_BOX_H),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Align: SpaceBetween-ряд + Column-демо с зазором SPACING_S;
     // нулевой хвост до Constrain — исторический, пин ---
@@ -1270,60 +1325,61 @@ fn gallery_layout_impl(
         block(full_w, SECTION_TITLE_H),
         block(
             full_w,
-            kit::CHIP_HEIGHT + canvas_core::tokens::SPACING_S + align_column_block_h,
+            chip_h + canvas_core::tokens::SPACING_S + align_column_block_h,
         ),
     ]);
     // --- Constrain (LAY2) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, GALLERY_LAYOUT_BLOCK_H),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Pad (LAY2 + LAY7) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, GALLERY_LAYOUT_CELL_H),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Stack (LAY2) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, GALLERY_LAYOUT_CELL_H),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
-    // --- Шкала зазоров S1 (LAY7): 5 рядов с шагом SPACING_SM ---
+    // --- Шкала зазоров S1 (LAY7): 5 рядов с шагом SPACING_SM (секция
+    // демонстрирует саму шкалу — канон S1, не density) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(
             full_w,
             5.0 * GALLERY_GAP_BLOCK_H + 4.0 * canvas_core::tokens::SPACING_SM,
         ),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Сцена: percent + Fill (LAY5) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, GALLERY_LAYOUT_BLOCK_H),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Сцена: aspect-ratio (LAY5) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, aspect_h),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Сцена: sticky-шапка (LAY5) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, sticky_window_h),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
     // --- Деградация HideBelow (LAY8 п.3) + хвостовая распорка линейки
     // (входит в content_h — скролл-контракт FR-059) ---
     ruler_items.extend([
         block(full_w, SECTION_TITLE_H),
         block(full_w, GALLERY_HIDE_BELOW_H),
-        ruler_gap(SECTION_GAP),
+        ruler_gap(sec_gap),
     ]);
 
     // Merge-проход: rect-зазоры (Fixed{w:0}) сливаются в высоту ПРЕДЫДУЩЕГО
@@ -1339,7 +1395,7 @@ fn gallery_layout_impl(
                 block(full_w, SECTION_TITLE_H),
                 block(full_w, DEMO_DESC_GAP + DEMO_DESC_H),
                 block(full_w, h),
-                ruler_gap(SECTION_GAP),
+                ruler_gap(sec_gap),
             ]);
         }
     }
@@ -1352,7 +1408,7 @@ fn gallery_layout_impl(
         ruler_items.extend([
             block(full_w, SECTION_TITLE_H),
             block(full_w, crate::kit_sections_k4::k4_section_h(id)),
-            ruler_gap(SECTION_GAP),
+            ruler_gap(sec_gap),
         ]);
     }
 
@@ -1402,7 +1458,7 @@ fn gallery_layout_impl(
         SECTION_BUTTONS,
     ));
     let button_row_rects = Column {
-        gap: canvas_core::tokens::SPACING_SM,
+        gap: row_gap,
         ..Column::default()
     }
     .lay_out_measured_with(
@@ -1410,10 +1466,10 @@ fn gallery_layout_impl(
         pilot_backend(),
         ruler.next().unwrap_or_default(),
         &[
-            block(full_w, kit::BUTTON_HEIGHT),
-            block(full_w, kit::BUTTON_HEIGHT),
-            block(full_w, kit::BUTTON_HEIGHT),
-            block(full_w, kit::BUTTON_HEIGHT),
+            block(full_w, btn_h),
+            block(full_w, btn_h),
+            block(full_w, btn_h),
+            block(full_w, btn_h),
         ],
         m,
         fs,
@@ -1434,16 +1490,17 @@ fn gallery_layout_impl(
                 control_x + i as f32 * (per + kit::GAP_CONTROLS),
                 slot.y,
                 per,
-                kit::BUTTON_HEIGHT,
+                btn_h,
             );
             let label = tr(lang, state_label);
-            let bl = kit::button_layout(
+            let bl = kit::button_layout_sized(
                 cell,
                 &label,
                 (
                     canvas_ui::layout::HAlign::Start,
                     canvas_ui::layout::VAlign::Center,
                 ),
+                ctl,
                 m,
                 fs,
                 FONT_FAMILY,
@@ -1464,17 +1521,18 @@ fn gallery_layout_impl(
     let icon_y = ruler.next().unwrap_or_default().y;
     for i in 0..4 {
         let cell = UiRect::new(
-            control_x + i as f32 * (kit::ICON_BUTTON_SIZE + kit::GAP_CONTROLS),
+            control_x + i as f32 * (icon_h + kit::GAP_CONTROLS),
             icon_y,
-            kit::ICON_BUTTON_SIZE,
-            kit::ICON_BUTTON_SIZE,
+            icon_h,
+            icon_h,
         );
-        icon_buttons.push(kit::icon_button_rect(
+        icon_buttons.push(kit::icon_button_rect_sized(
             cell,
             (
                 canvas_ui::layout::HAlign::Start,
                 canvas_ui::layout::VAlign::Center,
             ),
+            ctl,
         ));
     }
 
@@ -1496,10 +1554,11 @@ fn gallery_layout_impl(
         ];
         for state_label in chip_state_labels.iter() {
             let label = tr(lang, state_label);
-            let cl = kit::chip_layout(
+            let cl = kit::chip_layout_sized(
                 UiPoint::new(x, chips_y),
                 &label,
                 max_w,
+                ctl,
                 m,
                 fs,
                 FONT_FAMILY,
@@ -1518,13 +1577,14 @@ fn gallery_layout_impl(
     ));
     let dropdown_y = ruler.next().unwrap_or_default().y;
     let anchor_label = tr(lang, "kit.dropdown.anchor");
-    let anchor_btn = kit::button_layout(
-        UiRect::new(control_x, dropdown_y, 190.0, kit::BUTTON_HEIGHT),
+    let anchor_btn = kit::button_layout_sized(
+        UiRect::new(control_x, dropdown_y, 190.0, btn_h),
         &anchor_label,
         (
             canvas_ui::layout::HAlign::Start,
             canvas_ui::layout::VAlign::Center,
         ),
+        ctl,
         m,
         fs,
         FONT_FAMILY,
@@ -1633,7 +1693,7 @@ fn gallery_layout_impl(
                 control_x + i as f32 * (per + kit::GAP_CONTROLS),
                 text_field_y,
                 per,
-                kit::TEXT_FIELD_HEIGHT,
+                field_h,
             );
             let focused = i == 1; // второе поле — в фокусе (каретка видна)
             let placeholder = if placeholder_key.is_empty() {
@@ -1643,8 +1703,8 @@ fn gallery_layout_impl(
             };
             let lay = kit::text_field(
                 slot,
-                UiVec2::new(kit::TEXT_FIELD_MIN_W, kit::TEXT_FIELD_HEIGHT),
-                UiVec2::new(per, kit::TEXT_FIELD_HEIGHT),
+                UiVec2::new(kit::TEXT_FIELD_MIN_W, field_h),
+                UiVec2::new(per, field_h),
                 &model,
                 placeholder,
                 focused,
@@ -1699,25 +1759,27 @@ fn gallery_layout_impl(
     );
 
     // --- Список + скролл: 8 строк в окне 3 (бегунок в треке) ---
+    // V1 (#67): строки — list_row_h от Size (окно/контент — те же формулы).
     let list_title = ruler.next().unwrap_or_default();
     section_titles.push((UiPoint::new(list_title.x, list_title.y), SECTION_LIST));
+    let list_viewport_h = 3.0 * row_h + 2.0 * kit::LIST_ROW_GAP;
     let list_area = UiRect::new(
         control_x,
         ruler.next().unwrap_or_default().y,
         control_w,
-        GALLERY_LIST_VIEWPORT_H,
+        list_viewport_h,
     );
     let mut list_scroll = kit::ScrollState {
         offset: GALLERY_LIST_DEMO_OFFSET,
-        content_h: GALLERY_LIST_ROWS as f32 * kit::LIST_ROW_H
+        content_h: GALLERY_LIST_ROWS as f32 * row_h
             + (GALLERY_LIST_ROWS.saturating_sub(1)) as f32 * kit::LIST_ROW_GAP,
-        viewport_h: GALLERY_LIST_VIEWPORT_H,
+        viewport_h: list_viewport_h,
     };
     list_scroll.clamp();
     let list_rows = kit::list_rows(
         list_area,
         &list_scroll,
-        kit::LIST_ROW_H,
+        row_h,
         kit::LIST_ROW_GAP,
         GALLERY_LIST_ROWS,
     );
@@ -1742,17 +1804,18 @@ fn gallery_layout_impl(
         ];
         for (i, icon) in glyphs.into_iter().enumerate() {
             let cell = UiRect::new(
-                control_x + i as f32 * (kit::ICON_BUTTON_SIZE + kit::GAP_CONTROLS),
+                control_x + i as f32 * (icon_h + kit::GAP_CONTROLS),
                 icons_y,
-                kit::ICON_BUTTON_SIZE,
-                kit::ICON_BUTTON_SIZE,
+                icon_h,
+                icon_h,
             );
-            let rect = kit::icon_button_rect(
+            let rect = kit::icon_button_rect_sized(
                 cell,
                 (
                     canvas_ui::layout::HAlign::Start,
                     canvas_ui::layout::VAlign::Center,
                 ),
+                ctl,
             );
             icon_glyphs.push((rect, icon));
         }
@@ -1860,7 +1923,7 @@ fn gallery_layout_impl(
         .lay_out_measured_with(
             // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
             pilot_backend(),
-            UiRect::new(control_x, measured_y, control_w, kit::CHIP_HEIGHT),
+            UiRect::new(control_x, measured_y, control_w, chip_h),
             &[
                 MeasuredItem::Text {
                     text: &t_a,
@@ -1903,11 +1966,11 @@ fn gallery_layout_impl(
     .lay_out_with(
         // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
         pilot_backend(),
-        UiRect::new(control_x, grow_y, control_w, kit::BUTTON_HEIGHT),
+        UiRect::new(control_x, grow_y, control_w, btn_h),
         &[
-            Child::fixed(64.0, kit::BUTTON_HEIGHT),
-            Child::flexible(40.0, kit::BUTTON_HEIGHT, 2.0),
-            Child::flexible(40.0, kit::BUTTON_HEIGHT, 1.0),
+            Child::fixed(64.0, btn_h),
+            Child::flexible(40.0, btn_h, 2.0),
+            Child::flexible(40.0, btn_h, 1.0),
         ],
     )
     .into_iter()
@@ -1995,7 +2058,7 @@ fn gallery_layout_impl(
                 control_x + i as f32 * (GALLERY_FOCUS_W + kit::GAP_CONTROLS),
                 focus_y,
                 GALLERY_FOCUS_W,
-                kit::BUTTON_HEIGHT,
+                btn_h,
             )
         })
         .collect();
@@ -2107,10 +2170,10 @@ fn gallery_layout_impl(
             control_x,
             ruler.next().unwrap_or_default().y,
             control_w,
-            kit::CHIP_HEIGHT + canvas_core::tokens::SPACING_S + align_column_block_h,
+            chip_h + canvas_core::tokens::SPACING_S + align_column_block_h,
         ),
         &[
-            block(control_w, kit::CHIP_HEIGHT),
+            block(control_w, chip_h),
             block(control_w, align_column_block_h),
         ],
         m,
@@ -2146,7 +2209,7 @@ fn gallery_layout_impl(
         .lay_out_measured_with(
             // LAY9.1: паритет-оракул, см. design/rules/11-layouts.md §LAY9.1 — снимается при default_backend.
             pilot_backend(),
-            UiRect::new(control_x, align_between_y, control_w, kit::CHIP_HEIGHT),
+            UiRect::new(control_x, align_between_y, control_w, chip_h),
             &items,
             m,
             fs,
@@ -3053,21 +3116,39 @@ fn gallery_layout_impl(
 // === Wave D v1: хелперы демо-раскладки =====================================
 
 /// Высота контента секции Wave C (динамика состояний — дерево/аккордеон).
+/// V1 (#67): высота панели контента табов — канон v1 (DEMO-константа,
+/// не контрол — шкалой ControlSize не масштабируется).
+const DEMO_TABS_PANEL_H: f32 = 48.0;
+
+/// V1 (#67): радиус спиннера Progress от пилюли Size (30% высоты кнопки —
+/// вписывается в слот button_h × button_h; единый источник для раскладки
+/// и отрисовки).
+fn progress_spinner_radius(size: canvas_ui::component::ControlSize) -> f32 {
+    size.button_h() * 0.3
+}
+
 fn wave_c_section_h(id: &str, d: &crate::kit_demo::KitDemoState) -> f32 {
-    let md = canvas_ui::component::ControlSize::Md.button_h(); // 36
-                                                               // INT-4 (#46): токены Wave T — Spacing::Sm.px() для зазоров между
-                                                               // строками/кнопками (вместо bare литералов 8.0).
+    // V1 (issue #67): секции Wave C уважают пилюлю Size — высоты через
+    // методы [`canvas_ui::component::ControlSize`]; межстрочные зазоры —
+    // density_row_gap (шкала S1 от Density). Формулы — единый источник с
+    // wave_c_consume (раскладка) и draw (слоты).
+    let size = d.size;
+    let row_gap = crate::kit_demo::density_row_gap(d.density);
+    // INT-4 (#46): токены Wave T — Spacing::Sm.px() для зазоров матрицы
+    // аватаров/nav_rail (секции-шоу шкалы ControlSize — не масштабируются).
     let gap_sm = canvas_ui::kit::Spacing::Sm.px();
     match id {
-        "checkbox" | "slider" | "snackbar" | "popover" | "modal" | "command_palette" => md,
-        "radio" => 3.0 * 24.0 + 2.0 * 6.0,
-        "tabs" => 32.0 + 48.0,
-        "segmented" => 32.0,
+        "checkbox" | "slider" | "snackbar" | "popover" | "modal" | "command_palette" => {
+            size.button_h()
+        }
+        "radio" => 3.0 * size.chip_h() + 2.0 * row_gap,
+        "tabs" => size.chip_h() + DEMO_TABS_PANEL_H,
+        "segmented" => size.button_h(),
         "tree" => {
             if d.tree_open {
-                4.0 * 26.0
+                4.0 * size.list_row_h()
             } else {
-                26.0
+                size.list_row_h()
             }
         }
         "accordion" => {
@@ -3076,10 +3157,10 @@ fn wave_c_section_h(id: &str, d: &crate::kit_demo::KitDemoState) -> f32 {
                 .iter()
                 .map(|&o| if o { DEMO_ACCORDION_BODY_H } else { 0.0 })
                 .sum();
-            3.0 * 32.0 + bodies
+            3.0 * size.button_h() + bodies
         }
-        "badge" => 24.0,
-        "progress" => 40.0,
+        "badge" => size.chip_h(),
+        "progress" => size.button_h(),
         "skeleton" => 3.0 * 10.0 + 2.0 * 6.0,
         // INT-4 (#46): avatar — 4 строки размеров (Xs20/Sm26/Md32/Lg44) +
         // 3 зазора Spacing::Sm.px() (8) + 4 px нижний пад (вне шкалы S1 —
@@ -3092,20 +3173,23 @@ fn wave_c_section_h(id: &str, d: &crate::kit_demo::KitDemoState) -> f32 {
     }
 }
 
-/// Кнопка-якорь секции (kit Button, Start/Center).
+/// Кнопка-якорь секции (kit Button, Start/Center; V1 #67 — со шкалой
+/// ControlSize: высота = control.button_h()).
 fn wave_c_anchor_btn(
     cell: UiRect,
     label: &str,
+    control: canvas_ui::component::ControlSize,
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> UiRect {
-    kit::button_layout(
+    kit::button_layout_sized(
         cell,
         label,
         (
             canvas_ui::layout::HAlign::Start,
             canvas_ui::layout::VAlign::Center,
         ),
+        control,
         m,
         fs,
         FONT_FAMILY,
@@ -3172,7 +3256,7 @@ fn wave_c_consume(
                     slot,
                     d.slider_value,
                     &opts,
-                    canvas_ui::component::ControlSize::Md,
+                    d.size,
                 );
                 hits.push((slot, crate::kit_demo::hit::SLIDER));
                 base.slots.slider = Some(lay);
@@ -3191,8 +3275,8 @@ fn wave_c_consume(
                     slot,
                     &group,
                     canvas_ui::component::radio::RadioOrientation::Vertical,
-                    canvas_ui::component::ControlSize::Sm,
-                    6.0,
+                    d.size,
+                    crate::kit_demo::density_row_gap(d.density),
                     8.0,
                     m,
                     fs,
@@ -3219,7 +3303,7 @@ fn wave_c_consume(
                     &labels,
                     d.tab_idx,
                     canvas_ui::component::tabs::TabStyle::Underline,
-                    32.0,
+                    d.size.chip_h(),
                     8.0,
                     m,
                     fs,
@@ -3256,6 +3340,7 @@ fn wave_c_consume(
                 let r = wave_c_anchor_btn(
                     UiRect::new(control_x, slot.y, 200.0, h),
                     &tr(lang, crate::i18n::keys::KIT_DEMO_PALETTE_OPEN),
+                    d.size,
                     m,
                     fs,
                 );
@@ -3263,7 +3348,7 @@ fn wave_c_consume(
                 hits.push((r, crate::kit_demo::hit::PALETTE_OPEN));
             }
             "tree" => {
-                let row_h = 26.0;
+                let row_h = d.size.list_row_h();
                 base.slots.tree_root = UiRect::new(control_x, slot.y, control_w, row_h);
                 hits.push((base.slots.tree_root, crate::kit_demo::hit::TREE_TOGGLE));
                 if d.tree_open {
@@ -3283,6 +3368,7 @@ fn wave_c_consume(
                 let r = wave_c_anchor_btn(
                     UiRect::new(control_x, slot.y, 170.0, h),
                     &tr(lang, crate::i18n::keys::KIT_DEMO_MODAL_OPEN),
+                    d.size,
                     m,
                     fs,
                 );
@@ -3290,7 +3376,7 @@ fn wave_c_consume(
                 hits.push((r, crate::kit_demo::hit::MODAL_OPEN));
             }
             "accordion" => {
-                let hh = 32.0;
+                let hh = d.size.button_h();
                 let mut y = slot.y;
                 for i in 0..3usize {
                     base.slots.accordion[i] = UiRect::new(control_x, y, control_w, hh);
@@ -3309,9 +3395,11 @@ fn wave_c_consume(
                 base.slots.badges = slot;
             }
             "progress" => {
-                base.slots.progress_linear = UiRect::new(control_x, slot.y, control_w * 0.6, 16.0);
+                // V1 (#67): трек/спиннер масштабируются пилюлей Size (спиннер
+                // вписывается в квадрат button_h × button_h).
+                base.slots.progress_linear = UiRect::new(control_x, slot.y, control_w * 0.6, h);
                 base.slots.progress_spin =
-                    UiRect::new(control_x + control_w * 0.6 + 16.0, slot.y, 24.0, 24.0);
+                    UiRect::new(control_x + control_w * 0.6 + 16.0, slot.y, h, h);
             }
             "skeleton" => {
                 base.slots.skeleton = UiRect::new(control_x, slot.y, control_w.min(260.0), h);
@@ -3320,6 +3408,7 @@ fn wave_c_consume(
                 let r = wave_c_anchor_btn(
                     UiRect::new(control_x, slot.y, 160.0, h),
                     &tr(lang, crate::i18n::keys::KIT_DEMO_SNACKBAR_SHOW),
+                    d.size,
                     m,
                     fs,
                 );
@@ -3327,10 +3416,11 @@ fn wave_c_consume(
                 hits.push((r, crate::kit_demo::hit::SNACKBAR_SHOW));
             }
             "popover" => {
-                let cl = kit::chip_layout(
+                let cl = kit::chip_layout_sized(
                     UiPoint::new(control_x, slot.y),
                     &tr(lang, crate::i18n::keys::KIT_DEMO_CLICK_ME),
                     120.0,
+                    d.size,
                     m,
                     fs,
                     FONT_FAMILY,
@@ -3947,7 +4037,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             *r,
             "",
             cb_state,
-            canvas_ui::component::ControlSize::Md,
+            ctx.demo.size,
             8.0,
             m,
             fs,
@@ -4023,7 +4113,8 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             crate::i18n::keys::KIT_DEMO_TAB_2,
             crate::i18n::keys::KIT_DEMO_TAB_3,
         ];
-        let bar_h = 32.0;
+        // V1 (#67): bar — пилюля Size (паритет с wave_c_consume).
+        let bar_h = ctx.demo.size.chip_h();
         for (i, r) in wc.tabs_parts.iter().enumerate() {
             let active = i == ctx.demo.tab_idx;
             let state = if active {
@@ -4247,12 +4338,14 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         );
         let _ = i;
     }
-    // Badge: 3 варианта от якорных чипов
+    // Badge: 3 варианта от якорных чипов (якоря центрированы по вертикали
+    // слота — V1 #67: слот = chip_h от Size)
     if wc.badges.w > 0.0 {
+        let anchor_y = wc.badges.y + (wc.badges.h - 20.0).max(0.0) / 2.0;
         let anchors = [
-            UiRect::new(wc.badges.x + 24.0, wc.badges.y + 8.0, 32.0, 20.0),
-            UiRect::new(wc.badges.x + 96.0, wc.badges.y + 8.0, 32.0, 20.0),
-            UiRect::new(wc.badges.x + 168.0, wc.badges.y + 8.0, 32.0, 20.0),
+            UiRect::new(wc.badges.x + 24.0, anchor_y, 32.0, 20.0),
+            UiRect::new(wc.badges.x + 96.0, anchor_y, 32.0, 20.0),
+            UiRect::new(wc.badges.x + 168.0, anchor_y, 32.0, 20.0),
         ];
         let kinds = [
             (
@@ -4289,12 +4382,13 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             }
         }
     }
-    // Progress: bar 66% + спиннер (кольцо — рамка-круг)
+    // Progress: bar 66% + спиннер (кольцо — рамка-круг); V1 (#67) — Size
+    // (паритет с wave_c_consume: спиннер вписан в слот button_h × button_h)
     if wc.progress_linear.w > 0.0 {
         let lay = canvas_ui::component::progress::progress_layout(
             wc.progress_linear,
             canvas_ui::component::progress::ProgressKind::Linear { value: 0.66 },
-            canvas_ui::component::ControlSize::Md,
+            ctx.demo.size,
         );
         let (style, fill) =
             canvas_ui::component::progress::progress_style(kit::KitState::Normal, p);
@@ -4302,8 +4396,10 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         d.rect(lay.fill, fill, [0.0; 4], 2.0);
         let lay = canvas_ui::component::progress::progress_layout(
             wc.progress_spin,
-            canvas_ui::component::progress::ProgressKind::Spinner { radius: 10.0 },
-            canvas_ui::component::ControlSize::Md,
+            canvas_ui::component::progress::ProgressKind::Spinner {
+                radius: progress_spinner_radius(ctx.demo.size),
+            },
+            ctx.demo.size,
         );
         d.rect(lay.track, [0.0; 4], fill, 2.0);
     }
@@ -7170,6 +7266,335 @@ mod tests {
                 .any(|(_, id)| *id == crate::kit_demo::hit::TOOLBAR_STATE),
             "hit пилюли оверрайда в реестре"
         );
+    }
+
+    // === V1 (issue #67): ControlSize/Density re-layout ======================
+
+    /// Тобе-раскладка с заданным size/density (V1-хелпер тестов).
+    fn v1_tobe_layout(
+        size: canvas_ui::component::ControlSize,
+        density: canvas_ui::layout::Density,
+    ) -> GalleryLayout {
+        let viewport = [1280.0, 800.0];
+        let palette = gallery_palette();
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let demo = crate::kit_demo::KitDemoState {
+            tobe: true,
+            size,
+            density,
+            ..crate::kit_demo::KitDemoState::default()
+        };
+        gallery_layout_tobe(
+            viewport,
+            Language::Ru,
+            &kit::ScrollState::default(),
+            &kit::ScrollState::default(),
+            &palette,
+            &mut m,
+            &mut fs,
+            &demo,
+        )
+    }
+
+    /// V1-хелпер: скролл TO-BE-витрины, пока предикат не увидит секцию
+    /// (паттерн scan_to секций FR-059: полная видимость в окне).
+    fn v1_tobe_scan(
+        size: canvas_ui::component::ControlSize,
+        density: canvas_ui::layout::Density,
+        want: &dyn Fn(&GalleryLayout) -> bool,
+    ) -> GalleryLayout {
+        let viewport = [1280.0, 800.0];
+        let palette = gallery_palette();
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let demo = crate::kit_demo::KitDemoState {
+            tobe: true,
+            size,
+            density,
+            ..crate::kit_demo::KitDemoState::default()
+        };
+        let base = gallery_layout_tobe(
+            viewport,
+            Language::Ru,
+            &kit::ScrollState::default(),
+            &kit::ScrollState::default(),
+            &palette,
+            &mut m,
+            &mut fs,
+            &demo,
+        );
+        let mut off = 0.0f32;
+        loop {
+            let s = kit::ScrollState {
+                offset: off,
+                content_h: base.content_h,
+                viewport_h: base.sections_viewport.h,
+            };
+            let lay = gallery_layout_tobe(
+                viewport,
+                Language::Ru,
+                &s,
+                &kit::ScrollState::default(),
+                &palette,
+                &mut m,
+                &mut fs,
+                &demo,
+            );
+            if want(&lay) || off >= base.content_h - base.sections_viewport.h {
+                return lay;
+            }
+            off += 8.0;
+        }
+    }
+
+    /// V1-хелпер: TO-BE-раскладка при явном скролле секций (Md/Comfortable
+    /// не важны — size берётся из demo-дефолта? нет: дефолт demo). Используется
+    /// скан-проходом Wave C.
+    fn v1_tobe_layout_at(
+        size: canvas_ui::component::ControlSize,
+        scroll: &kit::ScrollState,
+    ) -> GalleryLayout {
+        let viewport = [1280.0, 800.0];
+        let palette = gallery_palette();
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let demo = crate::kit_demo::KitDemoState {
+            tobe: true,
+            size,
+            ..crate::kit_demo::KitDemoState::default()
+        };
+        gallery_layout_tobe(
+            viewport,
+            Language::Ru,
+            scroll,
+            &kit::ScrollState::default(),
+            &palette,
+            &mut m,
+            &mut fs,
+            &demo,
+        )
+    }
+
+    /// V1 (#67): все секции demo уважают ControlSize — высоты кнопок/чипов/
+    /// иконок/полей/строк списков = методы ControlSize (не литералы);
+    /// Wave C (checkbox/radio/tabs/tree) — тот же источник; инвариант
+    /// draw==hit сохраняется при смене size (hit-rect'ы реестра = rect'ы
+    /// раскладки, из которой рисует draw).
+    #[test]
+    fn v1_size_relayout_respects_control_size_and_draw_hit() {
+        for size in [
+            canvas_ui::component::ControlSize::Xs,
+            canvas_ui::component::ControlSize::Sm,
+            canvas_ui::component::ControlSize::Md,
+            canvas_ui::component::ControlSize::Lg,
+        ] {
+            // --- Верх колонки (offset 0): кнопки/чипы/иконки/dropdown ---
+            let lay = v1_tobe_layout(size, canvas_ui::layout::Density::Comfortable);
+            let dl = lay.demo.as_ref().expect("TO-BE без DemoLayout");
+            let btn = &lay.button_rows[0].buttons[0];
+            assert_eq!(btn.h, size.button_h(), "button_h {size:?}");
+            assert_eq!(
+                dl.demo_hits
+                    .iter()
+                    .find(|(r, id)| *id == crate::kit_demo::hit::button(0) && r.w > 0.0)
+                    .map(|(r, _)| *r),
+                Some(*btn),
+                "hit button(0) == rect раскладки ({size:?})"
+            );
+            assert_eq!(lay.chips[0].h, size.chip_h(), "chip_h {size:?}");
+            assert_eq!(
+                dl.demo_hits
+                    .iter()
+                    .find(|(r, id)| *id == crate::kit_demo::hit::chip(0) && r.w > 0.0)
+                    .map(|(r, _)| *r),
+                Some(lay.chips[0]),
+                "hit chip(0) == rect раскладки ({size:?})"
+            );
+            assert_eq!(lay.icon_buttons[0].w, size.icon_btn(), "icon_btn {size:?}");
+            assert_eq!(lay.icon_buttons[0].h, size.icon_btn(), "icon_btn {size:?}");
+            assert_eq!(
+                lay.dropdown_anchor.h,
+                size.button_h(),
+                "dropdown anchor button_h {size:?}"
+            );
+
+            // --- TextField + список (скролл до секции) ---
+            let lay_mid = v1_tobe_scan(size, canvas_ui::layout::Density::Comfortable, &|lay| {
+                !lay.text_fields.is_empty() && !lay.list_rows.is_empty()
+            });
+            assert_eq!(
+                lay_mid.text_fields[0].2.rect.h,
+                size.field_h(),
+                "field_h {size:?}"
+            );
+            assert_eq!(
+                lay_mid.list_rows[0].1.h,
+                size.list_row_h(),
+                "list_row_h {size:?}"
+            );
+            let dlm = lay_mid.demo.as_ref().expect("demo (mid)");
+            assert_eq!(
+                dlm.demo_hits
+                    .iter()
+                    .find(|(r, id)| *id == crate::kit_demo::hit::TEXTFIELD && r.w > 0.0)
+                    .map(|(r, _)| *r),
+                Some(lay_mid.text_fields[0].2.rect),
+                "hit TEXTFIELD == rect ({size:?})"
+            );
+            // Демо-список прокручен (GALLERY_LIST_DEMO_OFFSET): первой
+            // видимой может быть строка с индексом > 0 — инвариант проверяем
+            // по rect'у (hit с тем же rect существует и это list:N).
+            let first_row = lay_mid.list_rows[0].1;
+            let row_hit = dlm
+                .demo_hits
+                .iter()
+                .find(|(hr, _)| *hr == first_row)
+                .expect("hit первой видимой строки списка");
+            assert!(
+                row_hit.1.starts_with("list:"),
+                "hit строки списка — list:N, а не {}",
+                row_hit.1
+            );
+
+            // --- Wave C (один скролл-проход): checkbox/radio/tabs/tree ---
+            // Секции разнесены по колонке (checkbox…tree ≈ > окна 574px):
+            // собираем первые видимые хиты по мере прокрутки.
+            let base_wc = v1_tobe_layout(size, canvas_ui::layout::Density::Comfortable);
+            let (mut cb, mut radio, mut tree, mut tab) = (None, None, None, None);
+            let mut off = 0.0f32;
+            while off <= base_wc.content_h - base_wc.sections_viewport.h
+                && (cb.is_none() || radio.is_none() || tree.is_none() || tab.is_none())
+            {
+                let s = kit::ScrollState {
+                    offset: off,
+                    content_h: base_wc.content_h,
+                    viewport_h: base_wc.sections_viewport.h,
+                };
+                let lay = v1_tobe_layout_at(size, &s);
+                if let Some(dl) = lay.demo.as_ref() {
+                    if cb.is_none() && dl.wave_c.checkbox[0].w > 0.0 {
+                        cb = Some(dl.wave_c.checkbox[0].h);
+                    }
+                    if radio.is_none() {
+                        radio = dl
+                            .demo_hits
+                            .iter()
+                            .find(|(r, id)| *id == crate::kit_demo::hit::radio(0) && r.w > 0.0)
+                            .map(|(r, _)| r.h);
+                    }
+                    if tree.is_none() {
+                        tree = dl
+                            .demo_hits
+                            .iter()
+                            .find(|(r, id)| *id == crate::kit_demo::hit::TREE_TOGGLE && r.w > 0.0)
+                            .map(|(r, _)| r.h);
+                    }
+                    if tab.is_none() {
+                        tab = dl
+                            .demo_hits
+                            .iter()
+                            .find(|(r, id)| *id == crate::kit_demo::hit::tab(0) && r.w > 0.0)
+                            .map(|(r, _)| r.h);
+                    }
+                }
+                off += 24.0;
+            }
+            assert_eq!(cb, Some(size.button_h()), "wave C checkbox row {size:?}");
+            assert_eq!(radio, Some(size.chip_h()), "radio circle = chip_h {size:?}");
+            assert_eq!(
+                tree,
+                Some(size.list_row_h()),
+                "tree row = list_row_h {size:?}"
+            );
+            assert_eq!(tab, Some(size.chip_h()), "tab bar = chip_h {size:?}");
+        }
+    }
+
+    /// V1 (#67): Density-пилюля — полный re-layout колонки: межстрочные/
+    /// межсекционные зазоры из Spacing-токенов (density_row_gap/
+    /// density_section_gap), монотонность по лестнице плотности.
+    #[test]
+    fn v1_density_relayout_gaps_from_s1_tokens() {
+        let heights: Vec<f32> = [
+            canvas_ui::layout::Density::Compact,
+            canvas_ui::layout::Density::Comfortable,
+            canvas_ui::layout::Density::Spacious,
+        ]
+        .iter()
+        .map(|&d| v1_tobe_layout(canvas_ui::component::ControlSize::Md, d).content_h)
+        .collect();
+        // Полная высота колонки растёт с плотностью (зазоры — единственная
+        // переменная при фиксированном Md).
+        assert!(
+            heights[0] < heights[1] && heights[1] < heights[2],
+            "content_h монотонен по Density: {heights:?}"
+        );
+        // Шаг рядов кнопок = button_h + density_row_gap (точные ступени).
+        let spacious = v1_tobe_layout(
+            canvas_ui::component::ControlSize::Md,
+            canvas_ui::layout::Density::Spacious,
+        );
+        let step = spacious.button_rows[1].slot.y - spacious.button_rows[0].slot.y;
+        assert_eq!(
+            step,
+            canvas_ui::component::ControlSize::Md.button_h()
+                + crate::kit_demo::density_row_gap(canvas_ui::layout::Density::Spacious),
+            "шаг рядов кнопок = button_h + row_gap(Spacious)"
+        );
+        // Comfortable — канон v1: шаг = 36 + SPACING_SM(8).
+        let comfy = v1_tobe_layout(
+            canvas_ui::component::ControlSize::Md,
+            canvas_ui::layout::Density::Comfortable,
+        );
+        let step_c = comfy.button_rows[1].slot.y - comfy.button_rows[0].slot.y;
+        assert_eq!(
+            step_c,
+            canvas_ui::component::ControlSize::Md.button_h() + canvas_core::tokens::SPACING_SM,
+            "шаг рядов кнопок Comfortable — канон v1"
+        );
+    }
+
+    /// V1 (#67): регресс K1-высот — AS-IS (gallery_layout) остаётся на
+    /// kit-метриках (BUTTON_HEIGHT/CHIP_HEIGHT/TEXT_FIELD_HEIGHT/
+    /// ICON_BUTTON_SIZE/LIST_ROW_H), surfaces app (settings/whatif/gallery)
+    /// не дрейфуют; demo-дефолты (Md/Comfortable) на AS-IS не влияют.
+    #[test]
+    fn v1_asis_kit_metrics_regression() {
+        // Константы K1 не изменены (регресс-пин Wave T).
+        assert_eq!(kit::BUTTON_HEIGHT, 30.0);
+        assert_eq!(kit::CHIP_HEIGHT, 24.0);
+        assert_eq!(kit::TEXT_FIELD_HEIGHT, 30.0);
+        assert_eq!(kit::ICON_BUTTON_SIZE, 26.0);
+        assert_eq!(kit::LIST_ROW_H, 26.0);
+        let viewport = [1280.0, 800.0];
+        let palette = gallery_palette();
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        // AS-IS верх колонки (offset 0): кнопки/чипы/иконки.
+        let lay = gallery_layout(
+            viewport,
+            Language::Ru,
+            &kit::ScrollState::default(),
+            &palette,
+            &mut m,
+            &mut fs,
+        );
+        assert!(lay.demo.is_none(), "AS-IS без DemoLayout");
+        assert_eq!(lay.button_rows[0].buttons[0].h, kit::BUTTON_HEIGHT);
+        assert_eq!(lay.chips[0].h, kit::CHIP_HEIGHT);
+        assert_eq!(lay.icon_buttons[0].w, kit::ICON_BUTTON_SIZE);
+        // AS-IS середина (скролл scan_to): поля ×3 + строки списка.
+        let lay_mid = scan_to(
+            &|lay| !lay.text_fields.is_empty() && !lay.list_rows.is_empty(),
+            &palette,
+            &mut m,
+            &mut fs,
+            lay.content_h,
+            lay.sections_viewport.h,
+        );
+        assert_eq!(lay_mid.text_fields[0].2.rect.h, kit::TEXT_FIELD_HEIGHT);
+        assert_eq!(lay_mid.list_rows[0].1.h, kit::LIST_ROW_H);
     }
 
     /// F4 (Wave D v1.1, issue #32): правый край строк Table — в пределах
