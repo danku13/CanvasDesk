@@ -3779,8 +3779,11 @@ impl App {
         let Some(menu) = &self.menu else {
             return (instances, texts);
         };
-        let items =
-            canvas_menu_visible_items_ext(self.align_menu_visible(), self.autowidth_menu_visible());
+        let items = canvas_menu_visible_items_web(
+            self.align_menu_visible(),
+            self.autowidth_menu_visible(),
+            self.is_web_build(),
+        );
         let palette = self.effective_palette();
         let [x, y, w, h] = menu_rect_for(menu.origin, items.len());
         instances.push(CardInstance {
@@ -7714,6 +7717,243 @@ impl App {
             .collect();
         // FR-ICONS: иконка списка (SVG-атлас; пусто для Glyph).
         out.2 = d.icons;
+        out
+    }
+
+    /// Issue #60 (W-WEBUI): author-strip — чип «ℹ Об авторе» внизу-слева
+    /// (замена DOM `#author-bar`, web-only; клик — GPU-модал About).
+    /// Паттерн чипа C4: пилюля `kit::chip_style`, иконка + подпись,
+    /// hover — вся пилюля. Геометрия — чистая `about_ui::strip_layout`
+    /// (одна для отрисовки/ввода/реестра — draw == hit).
+    pub(super) fn author_strip_overlay(
+        &self,
+    ) -> (
+        Vec<CardInstance>,
+        Vec<OwnedScreenText>,
+        Vec<canvas_render::IconInstance>,
+    ) {
+        let mut out = (Vec::new(), Vec::new(), Vec::new());
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return out;
+        }
+        let kit_palette = self.effective_palette().kit_palette();
+        let lang = self.settings.language;
+        let caption = canvas_core::tokens::FONT_CAPTION;
+        let label = crate::i18n::tr(lang, keys::MENU_ABOUT);
+        // Ширина подписи — ТОЛЬКО TextMeasurer (CR-015: без эвристик).
+        let mut m = crate::kit_ui::new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let label_w = m.width_of(&mut fs, label, canvas_render::text::SANS_FAMILY, caption)
+            + canvas_core::tokens::SPACING_MD;
+        let lay = crate::about_ui::strip_layout(viewport, label_w);
+        let cursor = self.cursor;
+        let hover = |r: [f32; 4]| {
+            cursor[0] >= r[0]
+                && cursor[0] <= r[0] + r[2]
+                && cursor[1] >= r[1]
+                && cursor[1] <= r[1] + r[3]
+        };
+        let mut d = crate::kit_ui::KitDraw::new();
+        d.set_icon_set(self.icon_set_active());
+        let mut pill_widget = WidgetState::default();
+        pill_widget.set_pointer(hover(lay.pill), false);
+        let pill_style = canvas_ui::kit::chip_style(pill_widget.kit_state(), &kit_palette);
+        let pill =
+            canvas_ui::geometry::UiRect::new(lay.pill[0], lay.pill[1], lay.pill[2], lay.pill[3]);
+        d.control(pill, &pill_style);
+        // Иконка «ℹ» (SVG-атлас FR-ICONS; Glyph-фолбэк — U+2139 из
+        // NotoSansDisplay).
+        let icon = canvas_ui::geometry::UiRect::new(
+            lay.icon[0] + 5.0,
+            lay.icon[1] + 5.0,
+            (lay.icon[2] - 10.0).max(0.0),
+            (lay.icon[3] - 10.0).max(0.0),
+        );
+        d.icon(icon, "info", "ℹ", pill_style.text, caption);
+        // Подпись «Об авторе».
+        d.label_left(
+            canvas_ui::geometry::UiRect::new(
+                lay.label[0],
+                lay.label[1] + (lay.pill[3] - caption - 2.0).max(0.0) * 0.5,
+                lay.label[2],
+                caption + 2.0,
+            ),
+            label,
+            kit_palette.text_title,
+            caption,
+        );
+        // Тултип зоны (не интерактивен).
+        if hover(lay.pill) {
+            let hint = crate::i18n::tr(lang, keys::STRIP_ABOUT);
+            let hint_w = m.width_of(&mut fs, hint, canvas_render::text::SANS_FAMILY, caption)
+                + canvas_core::tokens::SPACING_MD * 2.0;
+            let h = caption + 8.0;
+            let x = lay.pill[0];
+            let y = (lay.pill[1] - canvas_core::tokens::SPACING_SM - h).max(0.0);
+            d.rect(
+                canvas_ui::geometry::UiRect::new(x, y, hint_w.min((viewport[0] - x).max(0.0)), h),
+                kit_palette.panel_fill,
+                kit_palette.panel_border,
+                canvas_core::tokens::RADIUS_CHIP,
+            );
+            d.label_left(
+                canvas_ui::geometry::UiRect::new(
+                    x + canvas_core::tokens::SPACING_MD,
+                    y + 4.0,
+                    hint_w,
+                    caption + 1.0,
+                ),
+                hint,
+                kit_palette.text,
+                caption,
+            );
+        }
+        out.0 = d.quads;
+        out.1 = d
+            .texts
+            .into_iter()
+            .map(|t| OwnedScreenText {
+                text: t.text,
+                origin: t.origin,
+                width: t.width,
+                font_size: t.font_size,
+                color: t.color,
+                align: t.align,
+            })
+            .collect();
+        out.2 = d.icons;
+        out
+    }
+
+    /// Issue #60 (W-WEBUI): GPU-модал «Об авторе» — замена DOM
+    /// `#about-overlay`. Паттерн диалога миграции C2: затемнение, панель
+    /// `kit::modal_style`, шапка (титул + «✕»), подпись автора, строки-
+    /// ссылки (метка + описание; клик — `WebRequest::OpenUrl` web-слоем).
+    /// Геометрия — чистая `about_ui::about_layout` (draw == hit).
+    pub(super) fn about_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+        let mut out = (Vec::new(), Vec::new());
+        let viewport = self.viewport_logical();
+        if viewport[0] <= 0.0 || viewport[1] <= 0.0 {
+            return out;
+        }
+        let kit_palette = self.effective_palette().kit_palette();
+        let lang = self.settings.language;
+        let font = canvas_core::tokens::FONT_BODY;
+        let caption = canvas_core::tokens::FONT_CAPTION;
+        let lay = crate::about_ui::about_layout(viewport);
+        let mut d = crate::kit_ui::KitDraw::new();
+        // Затемнение + панель — канонический стиль модали кита.
+        let vp = canvas_ui::geometry::UiRect::new(0.0, 0.0, viewport[0], viewport[1]);
+        d.rect(vp, canvas_core::tokens::WHEEL_DIM, [0.0; 4], 0.0);
+        let panel_style = canvas_ui::kit::modal_style(&kit_palette);
+        let panel = canvas_ui::geometry::UiRect::new(
+            lay.panel[0],
+            lay.panel[1],
+            lay.panel[2],
+            lay.panel[3],
+        );
+        d.rect(
+            panel,
+            panel_style.fill,
+            panel_style.border,
+            panel_style.radius,
+        );
+        // Титул.
+        d.label_left(
+            canvas_ui::geometry::UiRect::new(
+                lay.title[0],
+                lay.title[1],
+                lay.title[2],
+                lay.title[3],
+            ),
+            crate::i18n::tr(lang, keys::ABOUT_TITLE),
+            kit_palette.text_title,
+            font,
+        );
+        // «✕» — иконка-кнопка кита.
+        let cursor = self.cursor;
+        let hover = |rect: [f32; 4]| {
+            cursor[0] >= rect[0]
+                && cursor[0] <= rect[0] + rect[2]
+                && cursor[1] >= rect[1]
+                && cursor[1] <= rect[1] + rect[3]
+        };
+        let mut close_widget = WidgetState::default();
+        close_widget.set_pointer(hover(lay.close), false);
+        let close_style = canvas_ui::kit::icon_button_style(close_widget.kit_state(), &kit_palette);
+        let close_rect = canvas_ui::geometry::UiRect::new(
+            lay.close[0],
+            lay.close[1],
+            lay.close[2],
+            lay.close[3],
+        );
+        d.control(close_rect, &close_style);
+        d.icon(close_rect, "close", "×", close_style.text, font);
+        // Подпись автора.
+        d.label_left(
+            canvas_ui::geometry::UiRect::new(
+                lay.author[0],
+                lay.author[1],
+                lay.author[2],
+                lay.author[3],
+            ),
+            crate::i18n::tr(lang, keys::ABOUT_AUTHOR),
+            kit_palette.text_muted,
+            caption,
+        );
+        // Строки-ссылки: hover — кнопка-строка кита; метка — титульный
+        // цвет, описание — приглушённый (паттерн .link-row DOM-оверлея).
+        for row in &lay.rows {
+            let row_widget = if hover(row.row) {
+                canvas_ui::kit::KitState::Hovered
+            } else {
+                canvas_ui::kit::KitState::Normal
+            };
+            let row_style = canvas_ui::kit::button_style(
+                canvas_ui::kit::ButtonVariant::Secondary,
+                row_widget,
+                &kit_palette,
+            );
+            let row_rect =
+                canvas_ui::geometry::UiRect::new(row.row[0], row.row[1], row.row[2], row.row[3]);
+            d.control(row_rect, &row_style);
+            d.label_left(
+                canvas_ui::geometry::UiRect::new(
+                    row.label[0],
+                    row.label[1],
+                    row.label[2],
+                    row.label[3],
+                ),
+                crate::i18n::tr(lang, row.link.label_key),
+                kit_palette.text_title,
+                caption,
+            );
+            d.label_left(
+                canvas_ui::geometry::UiRect::new(
+                    row.desc[0],
+                    row.desc[1],
+                    row.desc[2],
+                    row.desc[3],
+                ),
+                crate::i18n::tr(lang, row.link.desc_key),
+                kit_palette.text_muted,
+                caption,
+            );
+        }
+        out.0 = d.quads;
+        out.1 = d
+            .texts
+            .into_iter()
+            .map(|t| OwnedScreenText {
+                text: t.text,
+                origin: t.origin,
+                width: t.width,
+                font_size: t.font_size,
+                color: t.color,
+                align: t.align,
+            })
+            .collect();
         out
     }
 

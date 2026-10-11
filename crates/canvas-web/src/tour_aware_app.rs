@@ -52,11 +52,10 @@ impl TourAwareApp {
     /// редактор/поиск ↔ канвас доезжает до web-слоя без отдельных мостов.
     fn drain_and_emit(&mut self) {
         crate::ime::set_text_input_active(self.inner.text_input_active());
-        // UR-003: синхронизация DOM-хрома с GPU-панелями во всю высоту —
-        // body-классы сдвигают #author-bar/#w6-toolbar из-под углов
-        // палитры (Ctrl+P) и агент-панели (Ctrl+I). Идемпотентно.
-        let (panel_left, panel_right) = self.inner.html_panel_overlap();
-        crate::toolbar::set_panel_overlap(panel_left, panel_right);
+        // Issue #60 (W-WEBUI): UR-003-синхронизация DOM-хрома
+        // (`toolbar::set_panel_overlap` — body-классы cd-panel-left/right)
+        // удалена ВМЕСТЕ с DOM-хромом (#author-bar/#w6-toolbar): чип
+        // author-strip — GPU-элемент, пересечений DOM/GPU-слоёв больше нет.
         let signals = self.inner.drain_tour_signals();
         for name in signals {
             crate::tour_signal::emit(&name);

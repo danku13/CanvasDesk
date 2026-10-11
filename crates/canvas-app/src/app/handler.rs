@@ -253,6 +253,26 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                     // FR-ICONS: иконка списка чипа (SVG-атлас; пусто для Glyph).
                     self.icon_instances.extend(chip_icons);
+                    // Issue #60 (W-WEBUI): author-strip «ℹ Об авторе» —
+                    // ambient-хром ЛЕВОГО НИЖНЕГО угла (бывший DOM
+                    // #author-bar, web-only; полоса Panels — как чип C4,
+                    // любые модали поверх). Клип — весь вьюпорт (мал).
+                    if self.author_strip {
+                        let (strip_instances, strip_texts, strip_icons) =
+                            self.author_strip_overlay();
+                        if !strip_instances.is_empty() || !strip_texts.is_empty() {
+                            let strip_clip =
+                                canvas_ui::UiRect::new(0.0, 0.0, band_vp[0], band_vp[1]);
+                            screen_bands.push(
+                                UiLayer::Panels,
+                                strip_clip,
+                                strip_instances,
+                                strip_texts,
+                            );
+                        }
+                        // FR-ICONS: иконка «ℹ» чипа (SVG-атлас).
+                        self.icon_instances.extend(strip_icons);
+                    }
                     // FR-CLIP: settings_overlay возвращает основную полосу
                     // (кнопки + модалка + строки) И отдельную полосу
                     // выпадающего меню (popup над модалкой, клип = menu rect).
@@ -324,6 +344,13 @@ impl ApplicationHandler<AppEvent> for App {
                 if self.canvas_manager.open {
                     let (mgr_instances, mgr_texts) = self.canvas_manager_overlay();
                     screen_bands.push(UiLayer::Modals, band_vp_clip, mgr_instances, mgr_texts);
+                }
+                // Issue #60 (W-WEBUI): модал «Об авторе» — поверх канваса
+                // (бывший DOM #about-overlay; затемнение рисует сам
+                // оверлей — паттерн менеджера C3).
+                if self.about_open {
+                    let (about_instances, about_texts) = self.about_overlay();
+                    screen_bands.push(UiLayer::Modals, band_vp_clip, about_instances, about_texts);
                 }
                 // Меню пустого канваса (T7): screen-space, константный размер
                 {

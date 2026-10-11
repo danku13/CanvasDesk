@@ -599,6 +599,11 @@ function injectStyles(container: HTMLElement, css: string): void {
   const style = document.createElement("style");
   style.dataset.cdTourStyles = "1";
   style.textContent = css;
-  (container.getRootNode() as Document | ShadowRoot).appendChild(style);
+  // Дрейф источник/бандл (найден пересборкой issue #60): прежний инлайн-бандл
+  // уже нёс фикс — appendChild в document кидает «Only one element on
+  // document allowed»; источник — нет. Синхронизируем: корень-документ →
+  // head, иначе (ShadowRoot) — сам корень.
+  const root = container.getRootNode() as Document | ShadowRoot;
+  (root === document ? document.head : root).appendChild(style);
   stylesInjected = true;
 }

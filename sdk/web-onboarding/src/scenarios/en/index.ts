@@ -13,39 +13,9 @@
  */
 import type { TourScenario } from "../../types";
 
-export const toolbarTourScenario: TourScenario = {
-  id: "cd-toolbar-tour",
-  name: "Storage Toolbar Tour",
-  primaryLabel: "Next",
-  skipLabel: "Skip",
-  backLabel: "Back",
-  doneLabel: "Done",
-  skippable: true,
-  steps: [
-    {
-      id: "intro", title: "Storage Toolbar",
-      body:
-        "Top-right corner — two buttons for managing .canvas files. " +
-        "We'll walk through each.",
-      side: "bottom", anchor: { kind: "selector", selector: "#w6-toolbar" },
-    },
-    {
-      id: "open", title: "Open from Disk",
-      body:
-        "Opens the system file picker for .canvas files. Once selected, " +
-        "the file becomes the active canvas and auto-saves back to disk.",
-      side: "bottom", anchor: { kind: "selector", selector: "#btn-open" },
-      advanceOnClick: "#btn-open", primaryLabel: "Got it",
-    },
-    {
-      id: "done", title: "Done",
-      body:
-        "The canvas always saves automatically. The canvas list, creation " +
-        "and renaming live in the active-canvas chip in the top-left corner.",
-      side: "center",
-    },
-  ],
-};
+// Issue #60 (W-WEBUI): toolbarTourScenario removed — the DOM #w6-toolbar
+// it toured no longer exists (storage UI lives in the GPU layer now:
+// canvas chip + manager + canvas context menu).
 
 export const firstRunInlineScenario: TourScenario = {
   id: "cd-first-run-inline",
@@ -66,11 +36,14 @@ export const firstRunInlineScenario: TourScenario = {
       side: "center",
     },
     {
-      id: "locate-toolbar", title: "Storage Toolbar",
+      id: "locate-toolbar", title: "Canvases and Storage",
       body:
-        "Top-right corner — buttons for managing .canvas files: open from " +
-        "disk, export HTML. Canvas auto-saves to the selected file.",
-      side: "bottom", anchor: { kind: "selector", selector: "#w6-toolbar" },
+        "Top-left corner — the active-canvas chip: click the name to " +
+        "rename, the list icon to open the canvas manager (create, " +
+        "templates, import, export). Open from disk and Export HTML live " +
+        "in the canvas right-click menu.",
+      side: "bottom",
+      anchor: { kind: "rect", rect: { x: 12, y: 12, width: 170, height: 30 } },
     },
     {
       id: "create-note", title: "Create your first note",
@@ -303,9 +276,10 @@ export const schemeGalleryTourScenario: TourScenario = {
     {
       id: "save", title: "Saving",
       body:
-        "Canvas auto-saves to the selected file (W6: Open from disk → File System Access) " +
-        "or to OPFS (default). Export to .canvas — for backup or sharing.",
-      side: "bottom", anchor: { kind: "selector", selector: "#w6-toolbar" },
+        "Canvas auto-saves to the browser storage (OPFS) or to a chosen " +
+        "folder on disk after moving storage in the manager. Export to " +
+        ".canvas and HTML — manager buttons and the right-click menu.",
+      side: "bottom", anchor: { kind: "rect", rect: { x: 12, y: 12, width: 170, height: 30 } },
     },
     {
       id: "done", title: "Done",

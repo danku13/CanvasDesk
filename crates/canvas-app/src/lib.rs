@@ -160,6 +160,13 @@ pub mod canvas_manager_ui;
 /// Состояние без I/O, раскладка — чистые функции; рендер/ввод — в app.
 pub mod canvas_chip_ui;
 
+/// Issue #60 (W-WEBUI): GPU-модал «Об авторе» + author-strip (чип
+/// «ℹ Об авторе» внизу-слева, web-only) — замена DOM `#author-bar` /
+/// `#about-overlay` (закрывает #57: чип канваса больше не перекрыт
+/// DOM-хромом). Состояние без I/O, раскладка — чистые функции;
+/// рендер/ввод — в app.
+pub mod about_ui;
+
 /// FR-079 (S3): SuggestWorker — фоновый поток ранжирования (натив;
 /// паттерн flow-worker FR-064). На wasm не компилируется — синхронный
 /// путь в `about_to_wait`.
@@ -397,6 +404,10 @@ pub mod ui {
         Insert(String),
         /// Удалить пакет (id пакета; с диалогом подтверждения П11).
         Remove(String),
+        /// Issue #60 (W-WEBUI): запуск сценария онбординг-тура по id
+        /// (web-only; сигнал `ui:run-tour:<id>` → JS-движок
+        /// sdk/web-onboarding).
+        RunTour(String),
     }
 
     /// Пункт подменю виджетов.
@@ -1366,11 +1377,21 @@ pub mod ui {
         /// шаблонные ноды пропускаются — у них ширина зависит от детей /
         /// структуры параметров, не от текста.
         AutoWidth,
-        /// FR-087: «Об авторе» — открывает DOM overlay с ссылками на
-        /// GitHub / Telegram / LinkedIn / DonationAlerts. Виден всегда.
-        /// Клик → window.__canvasdesk_openAbout() через JS-bridge
-        /// (canvas-web src/tour_signal.rs или __canvasdesk glue).
+        /// FR-087: «Об авторе» — открывает GPU-модал со ссылками на
+        /// GitHub / Telegram / LinkedIn / DonationAlerts (issue #60:
+        /// раньше — DOM overlay через JS-bridge). Виден всегда.
         About,
+        /// Issue #60 (W-WEBUI): «Открыть с диска…» — FS Access пикер
+        /// (web-конвейер `WebRequest::CanvasOpenDisk`; на нативе вход —
+        /// файловый диалог менеджера C5, пункт web-only). Виден только
+        /// в web-меню.
+        OpenDisk,
+        /// Issue #60: «Экспорт HTML…» — офлайн-артефакт FR-076
+        /// (`WebRequest::ExportHtml`, web-only).
+        ExportHtml,
+        /// Issue #60: «Тур…» — подменю сценариев онбординга (web-only,
+        /// сигнал `ui:run-tour:<id>` → JS-движок тура).
+        Tour,
     }
 
     /// Меню пустого канваса (базовые пункты — видны всегда).
@@ -1407,6 +1428,17 @@ pub mod ui {
     /// гейт (там нужно N≥3 для распределения, для автоширины — достаточно 1).
     pub const AUTOWIDTH_MENU_ITEMS: [CanvasMenuItem; 1] = [CanvasMenuItem::AutoWidth];
 
+    /// Issue #60 (W-WEBUI): web-хвост меню канваса — хранение/онбординг
+    /// (бывшие кнопки DOM #w6-toolbar + «Тур…»). Добавляются ПЕРЕД
+    /// `About` (финальная строка меню остаётся неизменной). На нативе
+    /// пунктов нет: вход в файлы — менеджер C5 (тонкий слой №34a),
+    /// тура в нативной сборке не существует.
+    pub const WEB_MENU_ITEMS: [CanvasMenuItem; 3] = [
+        CanvasMenuItem::OpenDisk,
+        CanvasMenuItem::ExportHtml,
+        CanvasMenuItem::Tour,
+    ];
+
     /// Видимый список пунктов меню канваса: базовые 9 + batch-выравнивание
     /// при `align_visible` (N≥3 выделенных, [`ALIGN_MIN_SELECTION`]) +
     /// FR-080 автоширина при `autowidth_visible` (N≥1). Список единый
@@ -1432,6 +1464,31 @@ pub mod ui {
         let mut items = canvas_menu_visible_items(align_visible);
         if autowidth_visible {
             items.extend_from_slice(&AUTOWIDTH_MENU_ITEMS);
+        }
+        items
+    }
+
+    /// Issue #60 (W-WEBUI): полная версия с web-хвостом. Порядок: базовые
+    /// 12 (11 без About) + batch + autowidth + web-пункты (OpenDisk /
+    /// ExportHtml / Tour) + About последней строкой. На нативе
+    /// (`web == false`) — идентична `canvas_menu_visible_items_ext`
+    /// (меню C5-приёмки не меняется, интеграционный тест «12 пунктов»
+    /// в силе).
+    pub fn canvas_menu_visible_items_web(
+        align_visible: bool,
+        autowidth_visible: bool,
+        web: bool,
+    ) -> Vec<CanvasMenuItem> {
+        let mut items = canvas_menu_visible_items_ext(align_visible, autowidth_visible);
+        // About — финальная строка базового списка: web-хвост — ПЕРЕД
+        // ним (завершённость меню «Об авторе» — последняя, как в DOM-меню
+        // тура и прежнем author-bar).
+        if web {
+            let about = items.pop();
+            items.extend_from_slice(&WEB_MENU_ITEMS);
+            if about.is_some() {
+                items.push(CanvasMenuItem::About);
+            }
         }
         items
     }
@@ -1524,6 +1581,15 @@ pub mod ui {
                 i18n::tr(language, crate::i18n::keys::MENU_AUTOWIDTH).to_owned()
             }
             CanvasMenuItem::About => i18n::tr(language, crate::i18n::keys::MENU_ABOUT).to_owned(),
+            // Issue #60 (W-WEBUI): действия web-хвоста — не переключатели,
+            // без галочек (как FlowMap/AiGraphBuilder).
+            CanvasMenuItem::OpenDisk => {
+                i18n::tr(language, crate::i18n::keys::MENU_OPEN_DISK).to_owned()
+            }
+            CanvasMenuItem::ExportHtml => {
+                i18n::tr(language, crate::i18n::keys::MENU_EXPORT_HTML).to_owned()
+            }
+            CanvasMenuItem::Tour => i18n::tr(language, crate::i18n::keys::MENU_TOUR).to_owned(),
         }
     }
 
@@ -2940,6 +3006,78 @@ pub mod ui {
                 menu_item_at_for(origin, [110.0, 50.0 + menu_rect_for(origin, n)[3] + 1.0], n),
                 None
             );
+        }
+
+        /// Issue #60 (W-WEBUI): web-хвост меню — хранение/онбординг
+        /// (OpenDisk/ExportHtml/Tour) перед «Об авторе»; на нативе
+        /// (`web == false`) меню не меняется (интеграционный тест C5
+        /// «12 пунктов» в силе).
+        #[test]
+        fn canvas_menu_web_tail_items() {
+            use super::canvas_menu_visible_items_web;
+            // Натив: без batch/autowidth — ровно базовые 12 (как C5-приёмка)
+            let native = canvas_menu_visible_items_web(false, false, false);
+            assert_eq!(native.len(), CANVAS_MENU_ITEMS.len());
+            assert_eq!(native[11], CanvasMenuItem::About);
+            assert!(!native
+                .iter()
+                .any(|item| matches!(item, CanvasMenuItem::Tour)));
+            // Web: 12 базовых + 3 web-пункта; About — последняя строка
+            let web = canvas_menu_visible_items_web(false, false, true);
+            assert_eq!(web.len(), CANVAS_MENU_ITEMS.len() + WEB_MENU_ITEMS.len());
+            assert_eq!(web[11], CanvasMenuItem::OpenDisk);
+            assert_eq!(web[12], CanvasMenuItem::ExportHtml);
+            assert_eq!(web[13], CanvasMenuItem::Tour);
+            assert_eq!(web[14], CanvasMenuItem::About);
+            // Подписи RU/EN — i18n, без ✓-галочек (действия)
+            assert_eq!(
+                canvas_menu_label(
+                    CanvasMenuItem::OpenDisk,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::Ru
+                ),
+                "Открыть с диска…"
+            );
+            assert_eq!(
+                canvas_menu_label(
+                    CanvasMenuItem::ExportHtml,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::En
+                ),
+                "Export HTML…"
+            );
+            assert_eq!(
+                canvas_menu_label(
+                    CanvasMenuItem::Tour,
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    Language::Ru
+                ),
+                "Тур…"
+            );
+            // Batch + autowidth + web — суммарный порядок не ломается:
+            // batch → autowidth → web-хвост → About.
+            let full = canvas_menu_visible_items_web(true, true, true);
+            assert_eq!(
+                full.len(),
+                CANVAS_MENU_ITEMS.len()
+                    + ALIGN_MENU_ITEMS.len()
+                    + AUTOWIDTH_MENU_ITEMS.len()
+                    + WEB_MENU_ITEMS.len()
+            );
+            assert_eq!(*full.last().unwrap(), CanvasMenuItem::About);
+            assert_eq!(full[full.len() - 2], CanvasMenuItem::Tour);
         }
 
         /// FR-038 (T-038.5): batch-пункты — хвост меню при N≥3 выделенных,

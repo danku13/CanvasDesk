@@ -304,6 +304,48 @@ pub mod keys {
     pub const MENU_AUTOWIDTH: &str = "menu.autowidth";
     /// FR-087: «Об авторе» — открывает overlay с ссылками.
     pub const MENU_ABOUT: &str = "menu.about";
+    /// Issue #60 (W-WEBUI): «Открыть с диска…» — FS Access пикер
+    /// (web-конвейер `WebRequest::CanvasOpenDisk`; натив — файловый
+    /// диалог менеджера C5).
+    pub const MENU_OPEN_DISK: &str = "menu.open_disk";
+    /// Issue #60: «Экспорт HTML…» — офлайн-артефакт FR-076
+    /// (web-only, `WebRequest::ExportHtml`).
+    pub const MENU_EXPORT_HTML: &str = "menu.export_html";
+    /// Issue #60: «Тур…» — подменю сценариев онбординга (web-only,
+    /// сигнал `ui:run-tour:<id>`).
+    pub const MENU_TOUR: &str = "menu.tour";
+
+    // --- Issue #60 (W-WEBUI): подменю «Тур…» — сценарии онбординга ---
+    pub const TOUR_SCENARIO_FIRST_RUN: &str = "menu.tour.first_run";
+    pub const TOUR_SCENARIO_PALETTE: &str = "menu.tour.palette";
+    pub const TOUR_SCENARIO_CALCULATIONS: &str = "menu.tour.calculations";
+    pub const TOUR_SCENARIO_SCHEME_GALLERY: &str = "menu.tour.scheme_gallery";
+
+    // --- Issue #60 (W-WEBUI): GPU-модал «Об авторе» (замена DOM
+    // #about-overlay; ссылки открываются web-слоем `window.open`) ---
+    pub const ABOUT_TITLE: &str = "about.title";
+    pub const ABOUT_AUTHOR: &str = "about.author";
+    pub const ABOUT_GITHUB: &str = "about.github";
+    pub const ABOUT_GITHUB_DESC: &str = "about.github.desc";
+    pub const ABOUT_STAR: &str = "about.star";
+    pub const ABOUT_STAR_DESC: &str = "about.star.desc";
+    pub const ABOUT_TELEGRAM_CHANNEL: &str = "about.telegram_channel";
+    pub const ABOUT_TELEGRAM_CHANNEL_DESC: &str = "about.telegram_channel.desc";
+    pub const ABOUT_TELEGRAM_CONTACT: &str = "about.telegram_contact";
+    pub const ABOUT_TELEGRAM_CONTACT_DESC: &str = "about.telegram_contact.desc";
+    pub const ABOUT_LINKEDIN: &str = "about.linkedin";
+    pub const ABOUT_LINKEDIN_DESC: &str = "about.linkedin.desc";
+    pub const ABOUT_DONATE: &str = "about.donate";
+    pub const ABOUT_DONATE_DESC: &str = "about.donate.desc";
+    pub const ABOUT_CLOSE: &str = "about.close";
+
+    // --- Issue #60 (W-WEBUI): GPU author-strip (замена DOM
+    // #author-bar — иконки-ссылки внизу-слева, web-only) ---
+    pub const STRIP_GITHUB: &str = "author.strip.github";
+    pub const STRIP_TELEGRAM: &str = "author.strip.telegram";
+    pub const STRIP_LINKEDIN: &str = "author.strip.linkedin";
+    pub const STRIP_DONATE: &str = "author.strip.donate";
+    pub const STRIP_ABOUT: &str = "author.strip.about";
 
     // --- Панель хоткеев (FR-004): колонка клавиши («ЛКМ» — раскладочная
     // аббревиатура, тоже переводится) и описания ---
@@ -1416,6 +1458,36 @@ const RU: &[(&str, &str)] = &[
     (keys::MENU_DISTRIBUTE_EVENLY, "Распределить равномерно"),
     (keys::MENU_AUTOWIDTH, "Автоширина по контенту"),
     (keys::MENU_ABOUT, "Об авторе"),
+    // --- Issue #60 (W-WEBUI): хранение/онбординг — пункты меню канваса ---
+    (keys::MENU_OPEN_DISK, "Открыть с диска…"),
+    (keys::MENU_EXPORT_HTML, "Экспорт HTML…"),
+    (keys::MENU_TOUR, "Тур…"),
+    (keys::TOUR_SCENARIO_FIRST_RUN, "Тур: первый запуск (интерактив)"),
+    (keys::TOUR_SCENARIO_PALETTE, "Тур: палитра шаблонов"),
+    (keys::TOUR_SCENARIO_CALCULATIONS, "Тур: расчёты Numi"),
+    (keys::TOUR_SCENARIO_SCHEME_GALLERY, "Тур: галерея схем"),
+    // --- Issue #60: GPU-модал «Об авторе» ---
+    (keys::ABOUT_TITLE, "Об авторе"),
+    (keys::ABOUT_AUTHOR, "Даниил Кузьмичев · Daniil Kuzmichev"),
+    (keys::ABOUT_GITHUB, "GitHub"),
+    (keys::ABOUT_GITHUB_DESC, "Проект CanvasDesk — исходники, issues, релизы"),
+    (keys::ABOUT_STAR, "★ Поставить звезду"),
+    (keys::ABOUT_STAR_DESC, "Если проект полезен — поставьте звёзду"),
+    (keys::ABOUT_TELEGRAM_CHANNEL, "Канал в Telegram"),
+    (keys::ABOUT_TELEGRAM_CHANNEL_DESC, "Обновления, новости, анонсы"),
+    (keys::ABOUT_TELEGRAM_CONTACT, "Telegram — связаться"),
+    (keys::ABOUT_TELEGRAM_CONTACT_DESC, "Вопросы, идеи, сотрудничество"),
+    (keys::ABOUT_LINKEDIN, "LinkedIn"),
+    (keys::ABOUT_LINKEDIN_DESC, "Daniil Kuzmichev — профессиональный профиль"),
+    (keys::ABOUT_DONATE, "Поддержать проект"),
+    (keys::ABOUT_DONATE_DESC, "DonationAlerts — донат на развитие"),
+    (keys::ABOUT_CLOSE, "Закрыть"),
+    // --- Issue #60: GPU author-strip (тултипы) ---
+    (keys::STRIP_GITHUB, "GitHub — проект CanvasDesk"),
+    (keys::STRIP_TELEGRAM, "Телеграм-канал автора"),
+    (keys::STRIP_LINKEDIN, "LinkedIn автора"),
+    (keys::STRIP_DONATE, "Поддержать проект"),
+    (keys::STRIP_ABOUT, "Об авторе"),
     // --- Панель хоткеев ---
     (keys::HOTKEYS_TITLE, "Горячие клавиши"),
     (keys::HKEY_F1, "F1"),
@@ -2954,6 +3026,36 @@ const EN: &[(&str, &str)] = &[
     (keys::MENU_DISTRIBUTE_EVENLY, "Distribute evenly"),
     (keys::MENU_AUTOWIDTH, "Auto-width by content"),
     (keys::MENU_ABOUT, "About the author"),
+    // --- Issue #60 (W-WEBUI): storage/onboarding — canvas menu items ---
+    (keys::MENU_OPEN_DISK, "Open from disk…"),
+    (keys::MENU_EXPORT_HTML, "Export HTML…"),
+    (keys::MENU_TOUR, "Tour…"),
+    (keys::TOUR_SCENARIO_FIRST_RUN, "Tour: first run (interactive)"),
+    (keys::TOUR_SCENARIO_PALETTE, "Tour: template palette"),
+    (keys::TOUR_SCENARIO_CALCULATIONS, "Tour: Numi calculations"),
+    (keys::TOUR_SCENARIO_SCHEME_GALLERY, "Tour: scheme gallery"),
+    // --- Issue #60: GPU "About the author" modal ---
+    (keys::ABOUT_TITLE, "About the author"),
+    (keys::ABOUT_AUTHOR, "Daniil Kuzmichev · Даниил Кузьмичев"),
+    (keys::ABOUT_GITHUB, "GitHub"),
+    (keys::ABOUT_GITHUB_DESC, "CanvasDesk project — source code, issues, releases"),
+    (keys::ABOUT_STAR, "★ Star on GitHub"),
+    (keys::ABOUT_STAR_DESC, "If the project is useful — leave a star"),
+    (keys::ABOUT_TELEGRAM_CHANNEL, "Telegram channel"),
+    (keys::ABOUT_TELEGRAM_CHANNEL_DESC, "Updates, news, announcements"),
+    (keys::ABOUT_TELEGRAM_CONTACT, "Telegram — get in touch"),
+    (keys::ABOUT_TELEGRAM_CONTACT_DESC, "Questions, ideas, collaboration"),
+    (keys::ABOUT_LINKEDIN, "LinkedIn"),
+    (keys::ABOUT_LINKEDIN_DESC, "Daniil Kuzmichev — professional profile"),
+    (keys::ABOUT_DONATE, "Support the project"),
+    (keys::ABOUT_DONATE_DESC, "DonationAlerts — donate to development"),
+    (keys::ABOUT_CLOSE, "Close"),
+    // --- Issue #60: GPU author-strip (tooltips) ---
+    (keys::STRIP_GITHUB, "GitHub — CanvasDesk project"),
+    (keys::STRIP_TELEGRAM, "Author's Telegram channel"),
+    (keys::STRIP_LINKEDIN, "Author's LinkedIn"),
+    (keys::STRIP_DONATE, "Support the project"),
+    (keys::STRIP_ABOUT, "About the author"),
     // --- Hotkeys panel ---
     (keys::HOTKEYS_TITLE, "Hotkeys"),
     (keys::HKEY_F1, "F1"),

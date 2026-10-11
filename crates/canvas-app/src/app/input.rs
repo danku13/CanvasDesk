@@ -832,6 +832,20 @@ impl App {
                 }
                 true
             }
+            // Issue #60 (W-WEBUI): модал «Об авторе» — Esc закрывает,
+            // прочие клавиши глотаются (полей ввода нет; паттерн витрины
+            // кита — KitGallery выше).
+            ui_registry::KeyOwner::About => {
+                if self.about_open
+                    && event.state == ElementState::Pressed
+                    && !event.repeat
+                    && event.logical_key == Key::Named(NamedKey::Escape)
+                {
+                    self.about_open = false;
+                    self.request_redraw();
+                }
+                true
+            }
             ui_registry::KeyOwner::Editor => {
                 // Активное редактирование (T7): клавиатура уходит в редактор
                 self.route_editor_key(&event.logical_key, event.state, event.repeat)
@@ -1644,6 +1658,18 @@ impl App {
                 self.click_canvas_chip(element);
                 true
             }
+            // Issue #60 (W-WEBUI): author-strip — клик по пилюле «ℹ Об
+            // авторе» открывает GPU-модал About.
+            ui_registry::id::AUTHOR_STRIP => {
+                self.click_author_strip(element);
+                true
+            }
+            // Issue #60 (W-WEBUI): модал «Об авторе» — «✕»/строки-ссылки/
+            // тело; клик по телу глотается (модаль жива).
+            ui_registry::id::ABOUT => {
+                self.click_about(element);
+                true
+            }
             // FR-105 (C2, №45b): кнопка «Перезагрузить» тоста внешнего
             // изменения (локальные правки — сперва в .bak)
             ui_registry::id::TOAST => {
@@ -1695,6 +1721,13 @@ impl App {
             // глотнуть (паттерн Block-модалей)
             ui_registry::id::CANVAS_MANAGER => {
                 self.close_canvas_manager();
+                true
+            }
+            // Issue #60 (W-WEBUI): клик мимо модала «Об авторе» — закрыть
+            // и глотнуть (паттерн Block-модалей)
+            ui_registry::id::ABOUT => {
+                self.about_open = false;
+                self.request_redraw();
                 true
             }
             // FR-070: клик мимо админпанели — закрыть и глотнуть (паттерн
@@ -2657,6 +2690,12 @@ impl App {
                                 .unwrap_or(widget_id.clone());
                             self.dialog = Some(AppDialog::RemovePackage { widget_id, name });
                         }
+                        // Issue #60 (W-WEBUI): запуск сценария онбординг-тура
+                        // (бывшее DOM #tour-menu): сигнал в JS-движок
+                        // тура (sdk/web-onboarding) через tour-bus.
+                        crate::ui::SubmenuAction::RunTour(id) => {
+                            self.push_tour_signal(&format!("ui:run-tour:{id}"));
+                        }
                     }
                     self.request_redraw();
                     return;
@@ -2668,11 +2707,13 @@ impl App {
                 return;
             }
             // 3. Пункт или паддинг базового меню (список — тот же,
-            // что в отрисовке: batch-пункты видны только при N≥3)
+            // что в отрисовке: batch-пункты видны только при N≥3;
+            // web-хвост — только на web, issue #60)
             if let Some(menu) = self.menu.take() {
-                let items = canvas_menu_visible_items_ext(
+                let items = canvas_menu_visible_items_web(
                     self.align_menu_visible(),
                     self.autowidth_menu_visible(),
+                    self.is_web_build(),
                 );
                 if let Some(i) = menu_item_at_for(menu.origin, self.cursor, items.len()) {
                     match items[i] {
@@ -2833,12 +2874,68 @@ impl App {
                             self.apply_auto_width_to_selection();
                         }
                         CanvasMenuItem::About => {
-                            // FR-087: открыть «Об авторе» overlay.
-                            // Через tour-signal bus: push_tour_signal →
-                            // TourAwareApp drain → tour_signal::emit →
-                            // window.__canvasdeskTour.signal("ui:open-about")
-                            // → JS listener → __canvasdesk_openAbout().
-                            self.push_tour_signal("ui:open-about");
+                            // Issue #60 (W-WEBUI): GPU-модал «Об авторе» —
+                            // прямо в слое приложения (замена DOM
+                            // #about-overlay через сигнал `ui:open-about`:
+                            // двухслойный мост больше не нужен).
+                            self.about_open = true;
+                        }
+                        // Issue #60 (W-WEBUI): web-хвост — бывшие кнопки
+                        // DOM #w6-toolbar (Тур / Открыть с диска… /
+                        // Экспорт HTML) + подменю сценариев тура.
+                        CanvasMenuItem::OpenDisk => {
+                            // Тот же конвейер, что «Открыть файл с диска…»
+                            // менеджера (fs_access::open_from_disk; пикер
+                            // в жесте клика — Canvas C2 доказал, что жест
+                            // из GPU-слоя валиден).
+                            self.pending_web_requests.push(WebRequest::CanvasOpenDisk);
+                        }
+                        CanvasMenuItem::ExportHtml => {
+                            // FR-076: офлайн-HTML со значениями (бывшая
+                            // кнопка #btn-export-html).
+                            self.pending_web_requests.push(WebRequest::ExportHtml);
+                        }
+                        CanvasMenuItem::Tour => {
+                            // Подменю сценариев онбординга (замена DOM
+                            // #tour-menu): 4 сценария движка
+                            // sdk/web-onboarding (toolbar-сценарий удалён
+                            // вместе с #w6-toolbar).
+                            let lang = self.settings.language;
+                            let entries = [
+                                (
+                                    crate::i18n::keys::TOUR_SCENARIO_FIRST_RUN,
+                                    "cd-first-run-inline",
+                                ),
+                                (crate::i18n::keys::TOUR_SCENARIO_PALETTE, "cd-palette-tour"),
+                                (
+                                    crate::i18n::keys::TOUR_SCENARIO_CALCULATIONS,
+                                    "cd-calculations-tour",
+                                ),
+                                (
+                                    crate::i18n::keys::TOUR_SCENARIO_SCHEME_GALLERY,
+                                    "cd-scheme-gallery-tour",
+                                ),
+                            ]
+                            .into_iter()
+                            .map(|(key, id)| SubmenuEntry {
+                                action: crate::ui::SubmenuAction::RunTour(id.to_owned()),
+                                label: crate::i18n::tr(lang, key).to_owned(),
+                            })
+                            .collect();
+                            self.menu = Some(ContextMenu {
+                                origin: menu.origin,
+                                submenu: Some(Submenu {
+                                    origin: submenu_origin_next_to(
+                                        menu.origin,
+                                        self.viewport_logical(),
+                                    ),
+                                    entries,
+                                }),
+                            });
+                            // Возврат: меню с подменю — рано выходить после
+                            // request_redraw (меню живо).
+                            self.request_redraw();
+                            return;
                         }
                     }
                     self.request_redraw();
@@ -4254,9 +4351,10 @@ impl App {
                                     // clamped_menu_origin — полным путём: имени
                                     // нет в import-списке app.rs, чужой файл
                                     // под этот фикс не редактируется
-                                    let items = canvas_menu_visible_items_ext(
+                                    let items = canvas_menu_visible_items_web(
                                         self.align_menu_visible(),
                                         self.autowidth_menu_visible(),
+                                        self.is_web_build(),
                                     )
                                     .len();
                                     Some(ContextMenu {

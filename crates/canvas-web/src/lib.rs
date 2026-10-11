@@ -65,8 +65,9 @@ pub mod js_glue;
 // включён только на wasm32-цели (feature-флип в Cargo.toml).
 #[cfg(target_arch = "wasm32")]
 pub mod llm_web;
-#[cfg(target_arch = "wasm32")]
-pub mod toolbar;
+// Issue #60 (W-WEBUI): DOM-панель хранилища (toolbar.rs) удалена —
+// кнопки «Тур / Открыть с диска… / Экспорт HTML» переехали в меню
+// канваса (web-хвост `canvas_menu_visible_items_web`, canvas-app).
 // FR-104 (мультиканвас C1): обработчик WebRequest-ов App — обратный канал
 // конвейера хранилища канвасов (CanvasList/CanvasOp/CanvasFallback).
 #[cfg(target_arch = "wasm32")]

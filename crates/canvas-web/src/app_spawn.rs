@@ -279,8 +279,10 @@ async fn spawn_desk_web(params: WebParams) -> anyhow::Result<()> {
     }
     // W11: тик LOD/refresh — setInterval 1 с (зеркало widget-tick-потока)
     crate::widgets_web::web::install_tick(widget_sender);
-    // W6: DOM-панель хранилища (открыть/недавние/экспорт) + приём drop
-    crate::toolbar::install(proxy.clone());
+    // Issue #60 (W-WEBUI): DOM-панель хранилища (toolbar.rs) УДАЛЕНА —
+    // кнопки «Тур / Открыть с диска… / Экспорт HTML» переехали в меню
+    // канваса (web-хвост canvas_menu_visible_items_web), листенеры
+    // файлов — drop-зона ниже. Приём drop остаётся (drag-n-drop файлов).
     crate::drop_files::install(proxy.clone());
     // FR-096/097 (мобильный web): будилка long-press (палец без движения
     // событий не рождает — время доставляет платформа) + coarse-указатель
