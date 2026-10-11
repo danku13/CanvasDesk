@@ -36,8 +36,8 @@ danger (деструктивное — удаляет сценарий/связ�
 Pressed = Hovered (ST2).
 
 ## 4. Состояния
-Матрица `../rules/08-states.md`: Disabled > Pressed > Hovered > Selected >
-Normal. Pressed визуально = Hovered (одни и те же hover-слоты в
+Матрица `../rules/08-states.md`: Disabled > Error > Pressed > Hovered >
+Focused > Dragged > Selected > Normal. Pressed визуально = Hovered (одни и те же hover-слоты в
 `button_style`; полная дифференциация — v2 через правку
 `../rules/08-states.md`). Волна T расширила KitState (Focused/Dragged/Error,
 additive `active_states`) — базовый порядок матрицы не менялся.

@@ -280,7 +280,9 @@ copy the adapter:
   the equivalence of the quads/texts — the test `kitdraw_delegation_matches_direct_path`);
 - **`canvas_ui::widget`** — `WidgetState`: the transitions of the pointer/selection/focus
   → `KitState` by a deterministic matrix of priorities
-  **Disabled > Pressed > Hovered > Selected > Normal** + the click edge
+  **Disabled > Error > Pressed > Hovered > Focused > Dragged > Selected > Normal**
+  (Wave T §5.1.1: + Focused/Dragged/Error; additive `active_states()` —
+  `[Error, Pressed, Hovered, Focused]`) + the click edge
   `clicked()` (“the press was inside, the release inside”; a press on disabled and a press
   outside the widget do not give a click). `cursor_state`/`dropdown_item_state` in
   `crates/canvas-app/src/kit_ui.rs` — deprecated delegates to `WidgetState` (the consumers migrate

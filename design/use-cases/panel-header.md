@@ -42,8 +42,9 @@ scheme_gallery 40→38, autolink 58→44; до миграции значение
 потребитель рисует сам через Painter::icon). Фон шапки кит не рисует.
 
 ## 4. Состояния
-Кнопки шапки — контролы с полной матрицей ST1 (Disabled > Pressed > Hovered >
-Selected > Normal, `../rules/08-states.md`); стиль — `button_style` (вариант
+Кнопки шапки — контролы с полной матрицей ST1 (Disabled > Error > Pressed >
+Hovered > Focused > Dragged > Selected > Normal, `../rules/08-states.md`);
+стиль — `button_style` (вариант
 + состояние) на потребителе. Полоса и сепаратор — не контролы (ST6): без
 hover, как hit-цели не выбираются.
 
