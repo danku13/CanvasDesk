@@ -2131,6 +2131,13 @@ impl App {
             // &self.kit_demo; мутации после — borrow-конфликт).
             let tooltip_hover = self.tick_demo_tooltip(&lay, cursor);
             let switch_anim_t = self.tick_demo_switch_anim();
+            // V2 (#67, ST1): rect фокус-рамки кадра (только focus_visible).
+            let focus = crate::kit_ui::demo_focus_rect(
+                &lay,
+                &self.kit_demo_ring,
+                self.kit_demo_ring_idx,
+                self.kit_demo_focus_visible,
+            );
             let mut ctx = crate::kit_ui::DemoDrawCtx {
                 d: &mut d,
                 lay: &lay,
@@ -2143,6 +2150,7 @@ impl App {
                 fs: &mut fs,
                 tooltip_hover,
                 switch_anim_t,
+                focus,
             };
             crate::kit_ui::draw_demo_extras(&mut ctx);
         }

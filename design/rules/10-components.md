@@ -47,7 +47,7 @@ S3 heights) and the T2 font sizes. A new state = a new slot (П4), not a formula
 | Slider | `slider.rs` | a track (h = button_h·0.4, min 4) + a fill + a knob (side = button_h·0.6) | value × ST1 (Hovered/Pressed → hover_fill, Disabled) | track min 4, knob Sm 18 |
 | Snackbar | `snackbar.rs` | message + an optional action — a single pill bottom-center | lifecycle push → expire (tick retain); ST1 on the action | ttl 3000 ms (TOAST_TTL_MS), offset 24 (SPACING_XL) |
 | Tabs | `tabs.rs` | a bar + N equal tabs; an Underline indicator (tab_w×0.6, h 2) or a Pill (inset 4) | the active index — a flag, not KitState::Selected (persistent, orthogonal to hover) × ST1 | bar_h — a call param (tests 36), indicator 0.6/h 2, Pill inset 4 |
-| Tree | `tree.rs` | node rows: chevron 16, icon 20, gaps 4 | the selected cursor × ST1; keyboard resolver declared (tree_key) — a refactor task | chevron 16, icon 20, gap 4 |
+| Tree | `tree.rs` | node rows: chevron 16, icon 20, gaps 4 | the selected cursor × ST1; keyboard resolver tree_key implemented (#67 V2) | chevron 16, icon 20, gap 4 |
 
 Rules:
 
