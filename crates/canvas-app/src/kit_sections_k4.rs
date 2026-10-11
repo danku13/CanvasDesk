@@ -629,7 +629,10 @@ impl K4Sections {
             r.lay.active_rect = sh(r.lay.active_rect, off);
         }
         if let Some(pl) = self.palette.as_mut() {
-            if !visible(&pl.lay.input) {
+            // Окно целиком: input и ВСЕ строки результатов (полная видимость —
+            // частичное окно палитры за краем не рисуется).
+            let results_visible = pl.lay.results.iter().all(|(r, _)| visible(r));
+            if !visible(&pl.lay.input) || !results_visible {
                 self.palette = None;
             } else {
                 pl.lay.input = sh(pl.lay.input, off);
@@ -638,7 +641,10 @@ impl K4Sections {
                 }
             }
         }
-        self.accordion_rows.retain(|r| visible(&r.lay.header));
+        // Заголовок + контент (у свёрнутых content — 0-height на нижней
+        // кромке header — предикат совпадает с видимостью header).
+        self.accordion_rows
+            .retain(|r| visible(&r.lay.header) && visible(&r.lay.content));
         for r in self.accordion_rows.iter_mut() {
             r.lay.header = sh(r.lay.header, off);
             r.lay.content = sh(r.lay.content, off);
@@ -654,12 +660,18 @@ impl K4Sections {
         for r in self.skeleton_rows.iter_mut() {
             vis_shift_vec(&mut r.lay.rects);
         }
-        self.badge_cells.retain(|c| visible(&c.anchor));
+        // Якорь + сам бейдж (бейдж всплывает над якорем на h/2 — виден
+        // только когда целиком в окне).
+        self.badge_cells
+            .retain(|c| visible(&c.anchor) && visible(&c.lay.rect));
         for c in self.badge_cells.iter_mut() {
             c.anchor = sh(c.anchor, off);
             c.lay.rect = sh(c.lay.rect, off);
         }
-        self.popover_rows.retain(|r| visible(&r.anchor));
+        // Якорь + стрелка + пузырь (у рядов Below пузырь НАМОГОГО ниже
+        // якоря — видимость якоря недостаточна).
+        self.popover_rows
+            .retain(|r| visible(&r.anchor) && visible(&r.arrow) && visible(&r.content));
         for r in self.popover_rows.iter_mut() {
             r.anchor = sh(r.anchor, off);
             r.arrow = sh(r.arrow, off);
@@ -2386,12 +2398,14 @@ mod k4_golden {
                         .chain(r.lay.segments.iter().copied())
                 })
                 .collect(),
-            "command_palette" => {
-                let pl = k4.palette.as_ref().expect("палитра команд в раскладке");
-                once(pl.lay.input)
+            "command_palette" => match &k4.palette {
+                // Окно целиком либо в раскладке, либо отброшено
+                // shift_and_filter (FR-059: частичное окно не рисуется).
+                Some(pl) => once(pl.lay.input)
                     .chain(pl.lay.results.iter().map(|(r, _)| *r))
-                    .collect()
-            }
+                    .collect(),
+                None => Vec::new(),
+            },
             "accordion" => k4
                 .accordion_rows
                 .iter()
@@ -2725,7 +2739,9 @@ mod k4_golden {
 
     /// K4-хвост в РЕАЛЬНОЙ раскладке: последние 20 подписей секций
     /// gallery_layout — ровно K4_ORDER (k4_title_key), без пропусков и
-    /// перестановок.
+    /// перестановок; попутно на каждом шаге скана — весь удержанный
+    /// K4-контент целиком в границах sections_viewport (hit=draw: рисуются
+    /// только полностью видимые секции, выход за окно невозможен).
     #[test]
     fn gallery_layout_k4_titles_tail_in_order() {
         let mut m = new_measurer();
@@ -2756,6 +2772,24 @@ mod k4_golden {
             for (_, key) in &lay.section_titles {
                 if !seen.contains(key) {
                     seen.push(key);
+                }
+            }
+            // Геометрия в границах sections_viewport: после shift_and_filter
+            // весь удержанный K4-контент целиком внутри окна секций
+            // (вертикаль — контракт видимости FR-059 с допуском 0.01,
+            // горизонталь — слот control-колонки внутри окна).
+            let vp = lay.sections_viewport;
+            for id in K4_ORDER {
+                for r in section_rects(&lay.k4, id) {
+                    assert!(
+                        r.y >= vp.y - 0.01
+                            && r.bottom() <= vp.bottom() + 0.01
+                            && r.x >= vp.x - EPS
+                            && r.right() <= vp.right() + EPS,
+                        "offset {off}: {id} rect {:?} вне sections_viewport {:?}",
+                        r,
+                        vp
+                    );
                 }
             }
             off += 8.0;
