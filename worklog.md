@@ -426,5 +426,7 @@ Stage Summary:
 - #57 закрыт (чип свободен); UR-003/CR-033-механика удалена за ненадобностью.
 - Натив-меню не изменилось (тест C5 «12 пунктов» в силе); web-меню 12+3.
 - Документация: cr-035-webui-single-layer.md + строка индекса + ACCEPTANCE.
+- Rebase поверх параллельных сессий (DOCS-ST1 #61 e2a5617, Wave M M3-a #52 1dc509e — те же overlays/ui_registry/input): все гейты перепрогнаны — test 3196/0, clippy/fmt/wasm-check/fs-locks/doc_lint зелёные; push 9f27982.
+- ЖИВАЯ верификация деплоя Pages (canvas-web-deaf40c86d8b0969, ~3 мин после пуша): DOM-хром отсутствует (4×false), чип «default» свободен (VLM), About-модал 6 ссылок (VLM), меню 15 пунктов с «Открыть с диска…/Экспорт HTML…/Тур…» (VLM), 0 pageerror/console.error. #57 и #60 закрыты со сводками-верификациями.
 - Открытый вопрос владельцу (обязательный по AGENTS.md): нужны ли правки user-docs/onboarding (страницы про «панель хранилища»/author-bar в user-docs, если упоминались) — отдельным коммитом по решению.
 Tokens: in≈506000, out≈128000, total≈634000 (estimate), model=GLM-4.7, scope=CR-035
