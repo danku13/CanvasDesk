@@ -66,8 +66,9 @@ dt-детерминизм M2 (`../rules/06-motion.md`): кит таймеров 
 `progress_style`, `progress_phase`, `ProgressKind`; тесты клампа/фазы — в
 модуле. Общие типы (`ControlSize`, `Shape`, `KitPalette`) —
 `crates/canvas-ui/src/component/mod.rs`. Фасад —
-`crates/canvas-ui/src/kit.rs` (108). Потребителей в `crates/canvas-app` нет;
-секции витрины в `crates/canvas-app/src/kit_ui.rs` нет — долг K1.1/K4.
+`crates/canvas-ui/src/kit.rs` (108). Потребителей в `crates/canvas-app` нет. Витрина: секция progress в
+`crates/canvas-app/src/kit_sections_k4.rs` (K4) — 5 рядов Linear/
+LinearIndeterminate/Circular/Spinner в Normal + Linear в Disabled.
 
 ## 8. Что меняется при правке файла
 - Формулы трека/фазы → модуль + его юнит-тесты.

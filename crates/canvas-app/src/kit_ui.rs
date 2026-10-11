@@ -62,8 +62,9 @@ pub const PANEL_MAX: UiVec2 = UiVec2::new(900.0, 640.0);
 pub use canvas_core::tokens::SPACING_LG as SECTION_GAP;
 /// Высота строки подписи секции в линейке (шаг прежнего курсора; кегль
 /// подписи 11, окно отрисовки 16 — overlays.rs). Вне S3 — пин геометрии,
-/// кандидат в `kit::CONST` (LAY-W7).
-const SECTION_TITLE_H: f32 = 18.0;
+/// кандидат в `kit::CONST` (LAY-W7). K4-секции (#62) переиспользуют
+/// высоту для вертикального центрирования подписей строк состояний.
+pub const SECTION_TITLE_H: f32 = 18.0;
 /// Историческая надбавка зазора после секции Buttons (+4 px к SECTION_GAP;
 /// вне шкалы S1 — исключение LAY7: «Исключения» 11-layouts.md,
 /// «Hairline-микрозначения 2–4 px», LAY-W16; появилась в W3b, геометрия
@@ -480,6 +481,12 @@ pub struct GalleryLayout {
     /// LAY-SHOWCASE (LAY8): HideBelow — слот + панель (None при скрытии
     /// ниже порога [`GALLERY_HIDE_BELOW_MIN`] — скрывается ЦЕЛИКОМ).
     pub layout_hide_below: HideBelowDemo,
+    /// K4 (issue #62): статичные секции 6 W2 + 14 Wave C во всех применимых
+    /// ST1-состояниях (design/rules/10-components.md §K4). Геометрия —
+    /// контент-координаты витрины, уже сдвинутые на offset и
+    /// отфильтрованные по полной видимости (FR-059); отрисовка —
+    /// `kit_sections_k4::k4_paint` (один вызов из overlays.rs).
+    pub k4: crate::kit_sections_k4::K4Sections,
     /// Wave D v1 (issue #32): TO-BE демо-раскладка (тулбар/сайдбар/секции
     /// Wave C/хиты/навигация). None = AS-IS (статичная витрина — прежнее
     /// поведение и golden-пины).
@@ -1300,6 +1307,18 @@ fn gallery_layout_impl(
                 ruler_gap(SECTION_GAP),
             ]);
         }
+    }
+
+    // --- K4 (issue #62): секции 6 W2 + 14 Wave C — хвост линейки (AS-IS и
+    // TO-BE): по 2 блока на секцию (подпись, контент) — потребление
+    // k4_consume (высоты формул — k4_section_h, единый источник с раскладкой).
+    // Статичные секции без интерактива — хиты не нужны (FR-055 паттерн).
+    for id in crate::kit_sections_k4::K4_ORDER {
+        ruler_items.extend([
+            block(full_w, SECTION_TITLE_H),
+            block(full_w, crate::kit_sections_k4::k4_section_h(id)),
+            ruler_gap(SECTION_GAP),
+        ]);
     }
 
     // токенами S1 (SECTION_GAP / BUTTONS_SECTION_GAP_EXTRA).
@@ -2501,6 +2520,17 @@ fn gallery_layout_impl(
         ),
         None => WaveCBase::default(),
     };
+    // --- K4 (issue #62): потребление секций K4 (геометрия в контент-координатах
+    // ДО сдвига; сдвиг/фильтр — K4Sections::shift_and_filter ниже) ---
+    let mut k4 = crate::kit_sections_k4::k4_consume(
+        &mut ruler,
+        control_x,
+        control_w,
+        lang,
+        m,
+        fs,
+        &mut section_titles,
+    );
     // Полная высота колонки секций (для скролла) — сумма блоков и распорок
     // линейки (накопление Column тождественно прежнему курсору `y +=`;
     // скролл-контракт FR-059 сохранён, включая хвостовую распорку).
@@ -2844,6 +2874,9 @@ fn gallery_layout_impl(
         }
     };
     // focus_targets НЕ сдвигаются/фильтруются — контент-координаты Tab-кольца
+    // K4 (issue #62): сдвиг + фильтр полной видимости (тот же контракт
+    // FR-059, что у секций выше).
+    k4.shift_and_filter(off, &visible);
 
     // --- Wave D: сборка демо-раскладки (TO-BE): сдвиг слотов, оверлеи ---
     let mut demo_layout = demo.map(|d| {
@@ -2958,6 +2991,7 @@ fn gallery_layout_impl(
         layout_aspect,
         layout_sticky,
         layout_hide_below,
+        k4,
         demo: demo_layout,
     }
 }
@@ -5162,11 +5196,31 @@ mod tests {
             viewport_h: lay0.sections_viewport.h,
         };
         let lay1 = gallery_layout([1280.0, 800.0], Language::Ru, &bottom, &p, &mut m, &mut fs);
+        // K4 (issue #62): хвост колонки — статичные секции K4 (последняя —
+        // tree). LAY-SHOWCASE (витрина раскладок) — выше K4-хвоста: скан
+        // до её видимости (детерминированный скан — якоримся на факт).
         assert!(
-            lay1.layout_hide_below.slot.w > 0.0,
-            "HideBelow (LAY-SHOWCASE) — хвост колонки"
+            !lay1.k4.tree_rows.is_empty(),
+            "K4-хвост: секция tree — хвост колонки"
+        );
+        assert!(
+            lay1.k4.banner_rows.is_empty(),
+            "K4-начало (banner) ушли вверх за край"
         );
         assert!(lay1.button_rows.is_empty(), "секции v1 ушли вверх");
+        let lay_showcase = scan_offset(
+            &|lay| lay.layout_hide_below.slot.w > 0.0 && lay.layout_hide_below.panel.is_some(),
+            &p,
+            &mut m,
+            &mut fs,
+            lay0.content_h,
+            lay0.sections_viewport.h,
+            lay0.content_h - lay0.sections_viewport.h,
+        );
+        assert!(
+            lay_showcase.layout_hide_below.slot.w > 0.0,
+            "HideBelow (LAY-SHOWCASE) — выше K4-хвоста (скан)"
+        );
         // Секции волны 2 — выше нового хвоста: скан до их полной видимости.
         let lay_w2 = scan_offset(
             &|lay| {
@@ -5922,7 +5976,7 @@ mod tests {
     fn gallery_layout_ruler_golden_column_skeleton() {
         const TOL: f32 = 0.005;
         let expected: &[(&str, f32)] = &[
-            ("content_h", 2624.0),
+            ("content_h", 5996.0), // 2624 + K4-хвост (20 секций, issue #62)
             ("TITLE kit.section.buttons", 134.0),
             ("TITLE kit.section.icon_buttons", 312.0),
             ("TITLE kit.section.chips", 368.0),
@@ -5952,6 +6006,29 @@ mod tests {
             ("TITLE kit.section.layout_aspect", 690.0),
             ("TITLE kit.section.layout_sticky", 688.0),
             ("TITLE kit.section.layout_hide_below", 688.0),
+            // K4-хвост (issue #62): 6 W2 + 14 Wave C — аддитивные секции
+            // после Wave C-линейки; пины сняты пробником
+            // kit_sections_k4::probe (скан смещения шагом 8 px, 1280×800, RU).
+            ("TITLE kit.section.banner", 686.0),
+            ("TITLE kit.section.chat_bubble", 692.0),
+            ("TITLE kit.section.crumbs", 692.0),
+            ("TITLE kit.section.footer", 686.0),
+            ("TITLE kit.section.radio_card", 688.0),
+            ("TITLE kit.section.two_column", 686.0),
+            ("TITLE kit.section.checkbox", 692.0),
+            ("TITLE kit.section.slider", 690.0),
+            ("TITLE kit.section.radio", 688.0),
+            ("TITLE kit.section.tabs", 686.0),
+            ("TITLE kit.section.segmented", 692.0),
+            ("TITLE kit.section.command_palette", 690.0),
+            ("TITLE kit.section.accordion", 688.0),
+            ("TITLE kit.section.progress", 686.0),
+            ("TITLE kit.section.skeleton", 692.0),
+            ("TITLE kit.section.badge", 688.0),
+            ("TITLE kit.section.popover", 686.0),
+            ("TITLE kit.section.snackbar", 688.0),
+            ("TITLE kit.section.avatar", 690.0),
+            ("TITLE kit.section.tree", 692.0),
             ("ANCHOR buttons.first", 152.0),
             ("ANCHOR buttons.last", 266.0),
             ("ANCHOR icon", 330.0),

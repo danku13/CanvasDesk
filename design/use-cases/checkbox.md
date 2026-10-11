@@ -66,8 +66,9 @@ hit ≥ 44 px (box + label) — MIN_TOUCH_TARGET, LAY8.3
 `crates/canvas-ui/src/component/checkbox.rs` — `CheckboxState`,
 `checkbox_glyph`, `checkbox_layout`, `checkbox_style`, `checkbox_hit` +
 unit-тесты. Фасад — `crates/canvas-ui/src/kit.rs` (re-export «Wave C §5.3»).
-Витрина `crates/canvas-app/src/kit_ui.rs` секции для checkbox не содержит
-(K4: компонент без секции витрины — незакрытая волна). Потребителей в app
+Витрина: секция checkbox в `crates/canvas-app/src/kit_sections_k4.rs`
+(K4) — 7 ячеек: Normal/Hovered/Pressed/Disabled, Focused с подписью,
+плюс Checked и Indeterminate. Потребителей в app
 пока нет.
 
 ## 8. Что меняется при правке файла

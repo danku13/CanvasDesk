@@ -57,9 +57,9 @@ dt-детерминизм M2 (`../rules/06-motion.md`), таймеров кит 
 ## 7. Где в коде
 `crates/canvas-ui/src/component/skeleton.rs` — `skeleton_layout`,
 `skeleton_alpha`, `SkeletonPattern`; тесты паттернов/диапазона alpha — в
-модуле. Фасад — `crates/canvas-ui/src/kit.rs` (117). Потребителей в
-`crates/canvas-app` нет; секции витрины в `crates/canvas-app/src/kit_ui.rs`
-нет — долг K1.1/K4.
+модуле. Фасад — `crates/canvas-ui/src/kit.rs` (117). Потребителей в `crates/canvas-app` нет. Витрина: секция skeleton в
+`crates/canvas-app/src/kit_sections_k4.rs` (K4) — паттерны TextLines/
+Card/Table, статичный кадр пульса (альфа 0.12, витрина не анимируется).
 
 ## 8. Что меняется при правке файла
 - Паттерны/пропорции блоков → модуль + его юнит-тесты.

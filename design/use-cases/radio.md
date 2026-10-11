@@ -66,9 +66,8 @@ Focused/Dragged/Selected/Error — как Normal. Выбор эксклюзив�
 `crates/canvas-ui/src/component/radio.rs` — `RadioGroup`,
 `RadioOrientation`, `RadioLayout`, `RadioKey`, `radio_group_layout`,
 `radio_style`, `radio_hit`, `radio_group_key` + unit-тесты. Фасад —
-`crates/canvas-ui/src/kit.rs` (re-export «Wave C §5.3»). Витрина
-`crates/canvas-app/src/kit_ui.rs` секции для radio не содержит (K4:
-незакрытая волна). Потребителей в app пока нет.
+`crates/canvas-ui/src/kit.rs` (re-export «Wave C §5.3»). Витрина: секция radio в `crates/canvas-app/src/kit_sections_k4.rs`
+(K4) — Normal/Hovered/Pressed/Disabled + выбранная группа (Selected). Потребителей в app пока нет.
 
 ## 8. Что меняется при правке файла
 - Строки в реестре K1 нет — по K1.1 компонент обязан появиться в таблице K1

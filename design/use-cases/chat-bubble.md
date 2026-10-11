@@ -68,8 +68,9 @@ Error/Success), выбирающая слоты, а не состояние ма
 `CHAT_LINE_H`/`CHAT_TOOL_CALL_H`/`CHAT_HEADER_H`; re-export —
 `crates/canvas-ui/src/kit.rs`. Потребитель:
 `crates/canvas-app/src/app/agent_panel.rs` (AgentMsgKind → ChatBubbleKind,
-рендер бабла бота, Q2). Секции ChatBubble в витрине
-`crates/canvas-app/src/kit_ui.rs` нет — бэклог W2 (K4).
+рендер бабла бота, Q2). Витрина: секция ChatBubble в `crates/canvas-app/src/kit_sections_k4.rs` (K4) —
+три бабла по видам: Normal и Error парами (Error подписан), Success во всю
+ширину; ST1-состояний бабл не дифференцирует.
 
 ## 8. Что меняется при правке файла
 - Метрики строк/пады → константы модуля + паритет agent_panel (шкала S1

@@ -68,8 +68,8 @@ Selected/Error и Disabled — без отдельного слота (Disabled-
 `crates/canvas-ui/src/component/segmented.rs` — `SegmentedLayout`,
 `SegmentedKey`, `segmented_layout`, `segmented_style`, `segmented_hit`,
 `segmented_key` + unit-тесты. Фасад — `crates/canvas-ui/src/kit.rs`
-(re-export «Wave C §5.3»). Витрина `crates/canvas-app/src/kit_ui.rs` секции
-для segmented не содержит (K4: незакрытая волна). Потребителей в app пока нет.
+(re-export «Wave C §5.3»). Витрина: секция segmented в `crates/canvas-app/src/kit_sections_k4.rs`
+(K4) — Normal/Hovered/Pressed + выбранный сегмент (Selected). Потребителей в app пока нет.
 
 ## 8. Что меняется при правке файла
 - Строки в реестре K1 нет — по K1.1 компонент обязан появиться в таблице K1

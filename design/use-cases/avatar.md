@@ -66,8 +66,9 @@ Hovered/Selected-эффекты — у обёртки потребителя (с
 `AvatarSource`; тесты центрирования — в модуле. Общие типы: `ControlSize`/
 `Shape` — `crates/canvas-ui/src/component/mod.rs`, `BadgeTone` —
 `crates/canvas-ui/src/component/badge.rs`. Фасад —
-`crates/canvas-ui/src/kit.rs` (97). Потребителей в `crates/canvas-app` нет;
-секции витрины в `crates/canvas-app/src/kit_ui.rs` нет — долг K1.1/K4.
+`crates/canvas-ui/src/kit.rs` (97). Потребителей в `crates/canvas-app` нет. Витрина: секция avatar в
+`crates/canvas-app/src/kit_sections_k4.rs` (K4) — ряд размеров (Lg,
+3 источника) и ряд тонов (Md); аватар decoration — ST1-состояний нет.
 
 ## 8. Что меняется при правке файла
 - Размеры → `ControlSize::icon_btn` (`crates/canvas-ui/src/component/mod.rs`),

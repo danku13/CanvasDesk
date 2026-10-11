@@ -74,8 +74,9 @@ Pressed трактуется как Hovered — стиль не различае
 `crates/canvas-ui/src/kit.rs` (re-export radio_card-группы). Потребители:
 `crates/canvas-app/src/app/overlays.rs` (онбординг, kit::radio_card +
 paint_radio_card), `crates/canvas-app/src/graph_builder_ui.rs` (glyph-фолбэк
-`◉`/`○`). Витрина: секция radio_card в `crates/canvas-app/src/kit_ui.rs`
-отсутствует — K4 прямо называет radio_card среди недостающих (W2 backlog).
+`◉`/`○`). Витрина: секция radio_card в `crates/canvas-app/src/kit_sections_k4.rs`
+(K4) — карточки Normal/Hovered/Pressed/Selected/Disabled (дубликат Normal
+в демо не показывается).
 
 ## 8. Что меняется при правке файла
 - Строка RadioCard в реестре K1 — синхронизировать анатомию/состояния/
