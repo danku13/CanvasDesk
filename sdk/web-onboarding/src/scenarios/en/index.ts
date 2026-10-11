@@ -38,12 +38,13 @@ export const firstRunInlineScenario: TourScenario = {
     {
       id: "locate-toolbar", title: "Canvases and Storage",
       body:
-        "Top-left corner — the active-canvas chip: click the name to " +
+        "Top-right corner, to the left of the «?» button, — the active-canvas " +
+        "chip: click the name to " +
         "rename, the list icon to open the canvas manager (create, " +
         "templates, import, export). Open from disk and Export HTML live " +
         "in the canvas right-click menu.",
       side: "bottom",
-      anchor: { kind: "rect", rect: { x: 12, y: 12, width: 170, height: 30 } },
+      anchor: { kind: "selector", selector: "#gpu-canvas-chip" },
     },
     {
       id: "create-note", title: "Create your first note",
@@ -279,7 +280,8 @@ export const schemeGalleryTourScenario: TourScenario = {
         "Canvas auto-saves to the browser storage (OPFS) or to a chosen " +
         "folder on disk after moving storage in the manager. Export to " +
         ".canvas and HTML — manager buttons and the right-click menu.",
-      side: "bottom", anchor: { kind: "rect", rect: { x: 12, y: 12, width: 170, height: 30 } },
+      side: "bottom",
+      anchor: { kind: "selector", selector: "#gpu-canvas-chip" },
     },
     {
       id: "done", title: "Done",

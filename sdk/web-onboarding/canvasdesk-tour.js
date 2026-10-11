@@ -595,17 +595,17 @@ var CanvasDeskTour = (() => {
       this.keyHandler = null;
       this.refreshRaf = null;
       this.signalBus = /* @__PURE__ */ new Set();
-      var _a, _b, _c, _d;
+      var _a, _b, _c, _d, _e;
       this.container = (_a = opts.container) != null ? _a : document.body;
       this.zIndex = (_b = opts.baseZIndex) != null ? _b : 1e4;
       this.log = (_c = opts.log) != null ? _c : (lvl, msg) => {
         var _a2;
         return (_a2 = console[lvl]) == null ? void 0 : _a2.call(console, `[tour] ${msg}`);
       };
-      this.hooks = {};
+      this.hooks = (_d = opts.hooks) != null ? _d : {};
       this.storageKey = opts.storageKey === void 0 ? "cd-tour:" : opts.storageKey;
       this.highlight = createHighlight(this.container, this.zIndex + 1);
-      injectStyles(this.container, (_d = opts.styles) != null ? _d : DEFAULT_STYLES);
+      injectStyles(this.container, (_e = opts.styles) != null ? _e : DEFAULT_STYLES);
       _Tour.instance = this;
     }
     // ── persistence ────────────────────────────────────────────────
@@ -1080,9 +1080,9 @@ var CanvasDeskTour = (() => {
       {
         id: "locate-toolbar",
         title: "\u041A\u0430\u043D\u0432\u0430\u0441\u044B \u0438 \u0445\u0440\u0430\u043D\u0438\u043B\u0438\u0449\u0435",
-        body: "\u0412 \u043B\u0435\u0432\u043E\u043C \u0432\u0435\u0440\u0445\u043D\u0435\u043C \u0443\u0433\u043B\u0443 \u2014 \u0447\u0438\u043F \u0430\u043A\u0442\u0438\u0432\u043D\u043E\u0433\u043E \u043A\u0430\u043D\u0432\u0430\u0441\u0430: \u043A\u043B\u0438\u043A \u043F\u043E \u0438\u043C\u0435\u043D\u0438 \u043F\u0435\u0440\u0435\u0438\u043C\u0435\u043D\u043E\u0432\u044B\u0432\u0430\u0435\u0442, \u043F\u043E \u0438\u043A\u043E\u043D\u043A\u0435 \u0441\u043F\u0438\u0441\u043A\u0430 \u2014 \u043E\u0442\u043A\u0440\u044B\u0432\u0430\u0435\u0442 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u043A\u0430\u043D\u0432\u0430\u0441\u043E\u0432 (\u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0435, \u0448\u0430\u0431\u043B\u043E\u043D\u044B, \u0438\u043C\u043F\u043E\u0440\u0442, \u044D\u043A\u0441\u043F\u043E\u0440\u0442). \u041E\u0442\u043A\u0440\u044B\u0442\u044C \u0441 \u0434\u0438\u0441\u043A\u0430 \u0438 \u044D\u043A\u0441\u043F\u043E\u0440\u0442 HTML \u2014 \u0432 \u043C\u0435\u043D\u044E \u043F\u0440\u0430\u0432\u043E\u0433\u043E \u043A\u043B\u0438\u043A\u0430 \u043F\u043E \u043A\u0430\u043D\u0432\u0430\u0441\u0443.",
+        body: "\u0412 \u043F\u0440\u0430\u0432\u043E\u043C \u0432\u0435\u0440\u0445\u043D\u0435\u043C \u0443\u0433\u043B\u0443, \u0441\u043B\u0435\u0432\u0430 \u043E\u0442 \u043A\u043D\u043E\u043F\u043A\u0438 \xAB?\xBB, \u2014 \u0447\u0438\u043F \u0430\u043A\u0442\u0438\u0432\u043D\u043E\u0433\u043E \u043A\u0430\u043D\u0432\u0430\u0441\u0430: \u043A\u043B\u0438\u043A \u043F\u043E \u0438\u043C\u0435\u043D\u0438 \u043F\u0435\u0440\u0435\u0438\u043C\u0435\u043D\u043E\u0432\u044B\u0432\u0430\u0435\u0442, \u043F\u043E \u0438\u043A\u043E\u043D\u043A\u0435 \u0441\u043F\u0438\u0441\u043A\u0430 \u2014 \u043E\u0442\u043A\u0440\u044B\u0432\u0430\u0435\u0442 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440 \u043A\u0430\u043D\u0432\u0430\u0441\u043E\u0432 (\u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0435, \u0448\u0430\u0431\u043B\u043E\u043D\u044B, \u0438\u043C\u043F\u043E\u0440\u0442, \u044D\u043A\u0441\u043F\u043E\u0440\u0442). \u041E\u0442\u043A\u0440\u044B\u0442\u044C \u0441 \u0434\u0438\u0441\u043A\u0430 \u0438 \u044D\u043A\u0441\u043F\u043E\u0440\u0442 HTML \u2014 \u0432 \u043C\u0435\u043D\u044E \u043F\u0440\u0430\u0432\u043E\u0433\u043E \u043A\u043B\u0438\u043A\u0430 \u043F\u043E \u043A\u0430\u043D\u0432\u0430\u0441\u0443.",
         side: "bottom",
-        anchor: { kind: "rect", rect: { x: 12, y: 12, width: 170, height: 30 } }
+        anchor: { kind: "selector", selector: "#gpu-canvas-chip" }
       },
       {
         id: "create-note",
@@ -1326,7 +1326,7 @@ var CanvasDeskTour = (() => {
         title: "\u0421\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u0438\u0435",
         body: "\u041A\u0430\u043D\u0432\u0430\u0441 \u0430\u0432\u0442\u043E\u0441\u043E\u0445\u0440\u0430\u043D\u044F\u0435\u0442\u0441\u044F \u0432 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u043D\u043E\u0435 \u0445\u0440\u0430\u043D\u0438\u043B\u0438\u0449\u0435 (OPFS) \u0438\u043B\u0438 \u0432 \u0432\u044B\u0431\u0440\u0430\u043D\u043D\u0443\u044E \u043F\u0430\u043F\u043A\u0443 \u043D\u0430 \u0434\u0438\u0441\u043A\u0435 \u043F\u043E\u0441\u043B\u0435 \u043F\u0435\u0440\u0435\u0435\u0437\u0434\u0430 \u0432 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0435. \u042D\u043A\u0441\u043F\u043E\u0440\u0442 .canvas \u0438 HTML \u2014 \u043A\u043D\u043E\u043F\u043A\u0438 \u043C\u0435\u043D\u0435\u0434\u0436\u0435\u0440\u0430 \u0438 \u043C\u0435\u043D\u044E \u043F\u0440\u0430\u0432\u043E\u0433\u043E \u043A\u043B\u0438\u043A\u0430.",
         side: "bottom",
-        anchor: { kind: "rect", rect: { x: 12, y: 12, width: 170, height: 30 } }
+        anchor: { kind: "selector", selector: "#gpu-canvas-chip" }
       },
       {
         id: "done",
@@ -1364,9 +1364,9 @@ var CanvasDeskTour = (() => {
       {
         id: "locate-toolbar",
         title: "Canvases and Storage",
-        body: "Top-left corner \u2014 the active-canvas chip: click the name to rename, the list icon to open the canvas manager (create, templates, import, export). Open from disk and Export HTML live in the canvas right-click menu.",
+        body: "Top-right corner, to the left of the \xAB?\xBB button, \u2014 the active-canvas chip: click the name to rename, the list icon to open the canvas manager (create, templates, import, export). Open from disk and Export HTML live in the canvas right-click menu.",
         side: "bottom",
-        anchor: { kind: "rect", rect: { x: 12, y: 12, width: 170, height: 30 } }
+        anchor: { kind: "selector", selector: "#gpu-canvas-chip" }
       },
       {
         id: "create-note",
@@ -1580,7 +1580,7 @@ var CanvasDeskTour = (() => {
         title: "Saving",
         body: "Canvas auto-saves to the browser storage (OPFS) or to a chosen folder on disk after moving storage in the manager. Export to .canvas and HTML \u2014 manager buttons and the right-click menu.",
         side: "bottom",
-        anchor: { kind: "rect", rect: { x: 12, y: 12, width: 170, height: 30 } }
+        anchor: { kind: "selector", selector: "#gpu-canvas-chip" }
       },
       {
         id: "done",

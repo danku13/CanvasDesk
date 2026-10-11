@@ -57,6 +57,10 @@ ICON_NAMES = [
     # Issue #60 (W-WEBUI): info — чип «ℹ Об авторе» (author-strip) и
     # строки модала About (glyph-фолбэк — U+2139 ℹ из NotoSansDisplay).
     "info",
+    # Issue #63 (author-bar — паритет DOM #author-bar): брендовые иконки
+    # 4 внешних ссылок + доната (пути из прежнего DOM index.html;
+    # glyph-фолбэки — короткие текстовые метки, брендов в шрифтах нет).
+    "github", "telegram", "linkedin", "heart",
 ]
 # FR-075 W2: роли шаблонных нод — отдельный SPARSE-набор: имена существуют
 # только в наборе "roles", у остальных наборов эти ячейки атласа прозрачны.

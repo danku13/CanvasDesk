@@ -768,16 +768,20 @@ pub fn flyout_layout(
     window_w: f32,
     window_h: f32,
     scroll_top: usize,
+    right_limit: f32,
 ) -> FlyoutLayout {
     use canvas_ui::geometry::{UiRect, UiVec2};
     use canvas_ui::kit;
 
-    // Вьюпорт: поля PANEL_TOP_MARGIN сверху/снизу, PANEL_MARGIN справа
-    // (левая граница — край окна: flyout и так правее полосы).
+    // Вьюпорт: поля PANEL_TOP_MARGIN сверху/снизу, справа — минимум из
+    // кромки окна (PANEL_MARGIN) и right_limit (левая граница — край
+    // окна: flyout и так правее полосы). #63: right_limit — кламп о чип
+    // активного канваса (правый верхний угол): flyout не наезжает на
+    // чип ни в ряду №1, ни в переносе №2.
     let viewport = UiRect::new(
         0.0,
         PANEL_TOP_MARGIN,
-        (window_w - PANEL_MARGIN).max(0.0),
+        (window_w - PANEL_MARGIN).min(right_limit.max(0.0)).max(0.0),
         (window_h - PANEL_TOP_MARGIN * 2.0).max(0.0),
     );
     // Якорь — правый край строки категории + FLYOUT_GAP, высота = строка.
@@ -2012,7 +2016,7 @@ mod tests {
         // 40 шаблонов в окне 600 px высотой: высота клампится к окну, строки
         // не вылезают ни за прямоугольник flyout, ни за окно
         let strip_row = [12.0, 300.0, 80.0, CATEGORY_ROW_H];
-        let fly = flyout_layout(strip_row, 40, 1280.0, 600.0, 0);
+        let fly = flyout_layout(strip_row, 40, 1280.0, 600.0, 0, 1280.0 - PANEL_MARGIN);
         let max_h = 600.0 - PANEL_TOP_MARGIN * 2.0;
         assert!(fly.rect[3] <= max_h + 0.01, "высота клампится к окну");
         assert!(fly.rect[1] >= PANEL_TOP_MARGIN - 0.01);
@@ -2030,7 +2034,7 @@ mod tests {
             assert!(rect[0] + rect[2] <= fly.rect[0] + fly.rect[2] + 0.01);
         }
         // Скролл клампится к max_scroll
-        let scrolled = flyout_layout(strip_row, 40, 1280.0, 600.0, 100);
+        let scrolled = flyout_layout(strip_row, 40, 1280.0, 600.0, 100, 1280.0 - PANEL_MARGIN);
         assert_eq!(scrolled.scroll_top, fly.max_scroll);
         assert!(!scrolled.row_rects.is_empty());
         assert!((scrolled.row_rects[0][1] - (scrolled.rect[1] + FLYOUT_PAD_V)).abs() < 0.01);
@@ -2043,7 +2047,7 @@ mod tests {
     #[test]
     fn flyout_layout_few_items_anchor_below_row() {
         let strip_row = [12.0, 200.0, 80.0, CATEGORY_ROW_H];
-        let fly = flyout_layout(strip_row, 3, 1280.0, 800.0, 0);
+        let fly = flyout_layout(strip_row, 3, 1280.0, 800.0, 0, 1280.0 - PANEL_MARGIN);
         let expected_h = 3.0 * ROW_HEIGHT + FLYOUT_PAD_V * 2.0;
         assert!((fly.rect[3] - expected_h).abs() < 0.01);
         // Под строкой: верх = низ строки + DROPDOWN_GAP (кит), правее полосы
@@ -2072,7 +2076,7 @@ mod tests {
             80.0,
             CATEGORY_ROW_H,
         ];
-        let fly = flyout_layout(strip_row, 3, 1280.0, window_h, 0);
+        let fly = flyout_layout(strip_row, 3, 1280.0, window_h, 0, 1280.0 - PANEL_MARGIN);
         let expected_h = 3.0 * ROW_HEIGHT + FLYOUT_PAD_V * 2.0;
         assert!((fly.rect[3] - expected_h).abs() < 0.01);
         // Низ меню — над якорем с зазором DROPDOWN_GAP кита
@@ -2091,12 +2095,12 @@ mod tests {
         let strip_row = [12.0, 200.0, 80.0, CATEGORY_ROW_H];
         // Окно 400: меню (300) не помещается справа от полосы — x сдвинут
         // влево, правый край = window_w − PANEL_MARGIN
-        let fly = flyout_layout(strip_row, 3, 400.0, 600.0, 0);
+        let fly = flyout_layout(strip_row, 3, 400.0, 600.0, 0, 400.0 - PANEL_MARGIN);
         assert!((fly.rect[0] + fly.rect[2] - (400.0 - PANEL_MARGIN)).abs() < 0.01);
         assert!(fly.rect[0] >= 0.0);
         // Окно 200 (меню шире вьюпорта): ширина обрезана до вьюпорта,
         // строки не вылезают за меню
-        let narrow = flyout_layout(strip_row, 3, 200.0, 600.0, 0);
+        let narrow = flyout_layout(strip_row, 3, 200.0, 600.0, 0, 200.0 - PANEL_MARGIN);
         assert!(narrow.rect[0] >= 0.0);
         assert!(narrow.rect[0] + narrow.rect[2] <= 200.0 - PANEL_MARGIN + 0.01);
         for rect in &narrow.row_rects {

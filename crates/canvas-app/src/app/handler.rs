@@ -243,7 +243,7 @@ impl ApplicationHandler<AppEvent> for App {
                 let band_vp_clip = canvas_ui::UiRect::new(0.0, 0.0, band_vp[0], band_vp[1]);
                 {
                     // FR-107 (мультиканвас C4, №21c): чип активного канваса —
-                    // ambient-хром верхней ЛЕВОЙ зоны. Полоса Panels, первая
+                    // ambient-хром правого ВЕРХНЕГО угла (слева от «?», #63). Полоса Panels, первая
                     // в полосе (VISUAL_ORDER — самый низкий ранг): любые
                     // панели/модали поверх. Клип — свой rect (мал).
                     let (chip_instances, chip_texts, chip_icons) = self.canvas_chip_overlay();
@@ -253,25 +253,18 @@ impl ApplicationHandler<AppEvent> for App {
                     }
                     // FR-ICONS: иконка списка чипа (SVG-атлас; пусто для Glyph).
                     self.icon_instances.extend(chip_icons);
-                    // Issue #60 (W-WEBUI): author-strip «ℹ Об авторе» —
-                    // ambient-хром ЛЕВОГО НИЖНЕГО угла (бывший DOM
-                    // #author-bar, web-only; полоса Panels — как чип C4,
-                    // любые модали поверх). Клип — весь вьюпорт (мал).
-                    if self.author_strip {
-                        let (strip_instances, strip_texts, strip_icons) =
-                            self.author_strip_overlay();
-                        if !strip_instances.is_empty() || !strip_texts.is_empty() {
-                            let strip_clip =
-                                canvas_ui::UiRect::new(0.0, 0.0, band_vp[0], band_vp[1]);
-                            screen_bands.push(
-                                UiLayer::Panels,
-                                strip_clip,
-                                strip_instances,
-                                strip_texts,
-                            );
+                    // Issue #63: author-bar — ambient-хром ЛЕВОГО ВЕРХНЕГО
+                    // угла (визуальный паритет DOM #author-bar, web-only;
+                    // полоса Panels — как чип C4, любые модали поверх).
+                    // Клип — весь вьюпорт (мал).
+                    if self.author_bar {
+                        let (bar_instances, bar_texts, bar_icons) = self.author_bar_overlay();
+                        if !bar_instances.is_empty() || !bar_texts.is_empty() {
+                            let bar_clip = canvas_ui::UiRect::new(0.0, 0.0, band_vp[0], band_vp[1]);
+                            screen_bands.push(UiLayer::Panels, bar_clip, bar_instances, bar_texts);
                         }
-                        // FR-ICONS: иконка «ℹ» чипа (SVG-атлас).
-                        self.icon_instances.extend(strip_icons);
+                        // FR-ICONS: иконки кнопок (SVG-атлас).
+                        self.icon_instances.extend(bar_icons);
                     }
                     // FR-CLIP: settings_overlay возвращает основную полосу
                     // (кнопки + модалка + строки) И отдельную полосу

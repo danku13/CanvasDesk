@@ -1853,10 +1853,11 @@ pub struct App {
     /// `#about-overlay`; вход — пункт меню канваса «Об авторе» и чип
     /// author-strip внизу-слева).
     pub(crate) about_open: bool,
-    /// Issue #60: чип «ℹ Об авторе» внизу-слева (замена DOM `#author-bar`,
-    /// web-only). Дефолт — платформа сборки; G4-линт форсирует явно
-    /// (нативные тесты видят чип только в состоянии lint).
-    pub(crate) author_strip: bool,
+    /// Issue #63: author-bar — ряд из 5 иконок в левом верхнем углу
+    /// (визуальный паритет DOM `#author-bar`, web-only). Дефолт —
+    /// платформа сборки; G4-линт форсирует явно (нативные тесты видят
+    /// бар только в состоянии lint).
+    pub(crate) author_bar: bool,
     /// FR-108 (C5, №20): недавние натива — абсолютные пути к открытым
     /// `.canvas`-файлам, параллельные `canvas_entries` (индекс → путь:
     /// строка менеджера N открывает native_recent_paths[N]). Зеркало
@@ -2232,10 +2233,10 @@ impl App {
             active_canvas_disk: false,
             // Issue #60 (W-WEBUI): модал «Об авторе» + author-strip —
             // web-фичи (натив остаётся на меню «Об авторе» без DOM-оверлея);
-            // G4-линт форсирует `author_strip = true` явно (нативные
+            // G4-линт форсирует `author_bar = true` явно (нативные
             // тест-кадры видят чип только в lint-состоянии).
             about_open: false,
-            author_strip: cfg!(target_arch = "wasm32"),
+            author_bar: cfg!(target_arch = "wasm32"),
             pending_web_requests: Vec::new(),
             // FR-108 (C5): недавние натива — пусты до первого обновления.
             native_recent_paths: Vec::new(),
@@ -6680,15 +6681,63 @@ impl App {
         let mut text_w = m.width_of(&mut fs, &name, family, font);
         // Пады зоны имени — как у кит-кнопки (BUTTON_PAD_H с двух сторон)
         text_w += canvas_ui::kit::BUTTON_PAD_H * 2.0;
-        // UR-003-паритет: развёрнутый левый док палитры сдвигает чип правее
-        // себя (DOM-бары уходят за док cd-panel-left — GPU-чип делает то же;
-        // в сигнатуре кадра — флаг TEMPLATE_PANEL_OPEN).
-        let left_offset = if self.template_panel.open {
-            canvas_chip_ui::template_dock_offset()
+        // Якорь ряда (#63) вычисляется БЕЗ FontSystem (геометрия поиска —
+        // чистая арифметика) — до guard'а не требуется, он и не нужен:
+        // W3.2-контракт — внутри этой функции уже один лок, второй нельзя.
+        let anchor = self.chip_anchor(viewport);
+        canvas_chip_ui::chip_layout(viewport, text_w, self.canvas_chip.save_failed, anchor)
+    }
+
+    /// Якорь ряда чипа (#63): правый верхний угол. Кластер TopRight
+    /// (дефолт) — чип прижат к «?» и центрирован на ряду кластера;
+    /// кластер в другом углу — чип один у правой кромки. Открытый поиск
+    /// (топ-центр) на узких окнах не оставляет места в ряду №1 —
+    /// `chip_layout` переносит чип на ряд №2 (flex-wrap).
+    fn chip_anchor(&self, viewport: [f32; 2]) -> canvas_chip_ui::ChipAnchor {
+        use canvas_core::Corner;
+        let (right_x, row_y, wrap_y) = if self.settings.button_corner == Corner::TopRight {
+            let help = crate::ui::help_button_rect(Corner::TopRight, viewport);
+            (
+                help[0] - crate::ui::SETTINGS_GAP,
+                crate::ui::SETTINGS_MARGIN
+                    + (crate::ui::SETTINGS_BUTTON - canvas_chip_ui::CHIP_H) * 0.5,
+                crate::ui::SETTINGS_MARGIN
+                    + crate::ui::SETTINGS_BUTTON
+                    + canvas_core::tokens::SPACING_SM,
+            )
         } else {
-            0.0
+            // Кластер в другом углу: чип — единственный житель правого
+            // верхнего угла, ряд от кромки.
+            (
+                viewport[0] - canvas_core::tokens::SPACING_LG,
+                canvas_core::tokens::SPACING_LG,
+                canvas_core::tokens::SPACING_LG
+                    + canvas_chip_ui::CHIP_H
+                    + canvas_core::tokens::SPACING_SM,
+            )
         };
-        canvas_chip_ui::chip_layout(viewport, text_w, self.canvas_chip.save_failed, left_offset)
+        // Левая граница ряда №1: открытая панель поиска (топ-центр) — её
+        // правый край + зазор. Геометрия — чистая арифметика `search_ui`
+        // (центрирование HAlign::Center) без FontSystem: повторный лок
+        // мьютекса замера внутри этой функции невозможен (W3.2).
+        let left_bound = if self.search.is_open() {
+            let width_target = if viewport[0] < 1024.0 {
+                crate::search_ui::PANEL_WIDTH - 40.0
+            } else {
+                crate::search_ui::PANEL_WIDTH
+            };
+            let available = (viewport[0] - 2.0 * crate::search_ui::PANEL_SIDE_MARGIN).max(0.0);
+            let width = width_target.min(available);
+            viewport[0] * 0.5 + width * 0.5 + canvas_core::tokens::SPACING_SM
+        } else {
+            canvas_core::tokens::SPACING_LG
+        };
+        canvas_chip_ui::ChipAnchor {
+            right_x,
+            row_y,
+            wrap_y,
+            left_bound,
+        }
     }
 
     /// Отображаемое имя активного канваса для чипа (display_name: без
@@ -6752,12 +6801,27 @@ impl App {
         self.request_redraw();
     }
 
-    /// Issue #60 (W-WEBUI): клик по author-strip (hit-зона `strip-about`)
-    /// — открыть GPU-модал «Об авторе» (бывший DOM `#author-bar` →
-    /// `#about-overlay`).
-    fn click_author_strip(&mut self, element: &str) {
-        if element == "strip-about" {
-            self.about_open = true;
+    /// Issue #63: клик по кнопке author-bar (hit-зоны `author-bar-<i>`):
+    /// 4 внешние ссылки — `WebRequest::OpenUrl` (web — window.open),
+    /// ℹ — GPU-модал «Об авторе» (паттерн клика строк About-модала).
+    fn click_author_bar(&mut self, element: &str) {
+        if let Some(index) = element.strip_prefix("author-bar-") {
+            if let Ok(index) = index.parse::<usize>() {
+                match crate::about_ui::AUTHOR_BAR_BUTTONS
+                    .get(index)
+                    .map(|b| b.action)
+                {
+                    Some(crate::about_ui::AuthorBarAction::Url(url)) => {
+                        self.pending_web_requests.push(WebRequest::OpenUrl {
+                            url: url.to_owned(),
+                        });
+                    }
+                    Some(crate::about_ui::AuthorBarAction::About) => {
+                        self.about_open = true;
+                    }
+                    None => {}
+                }
+            }
         }
         self.request_redraw();
     }
@@ -9462,12 +9526,20 @@ impl App {
             .get(category)
             .map(|raw| self.visible_templates_by_category(raw).len())
             .unwrap_or(0);
+        // #63: правый предел — минимум кромки окна и гарантированного
+        // левого края чипа канваса (топ-право) минус зазор: flyout не
+        // наезжает на чип ни в ряду №1, ни в переносе №2 (поиск).
+        let right_limit = (canvas_chip_ui::chip_left_bound(viewport, self.settings.button_corner)
+            - crate::ui::SETTINGS_GAP)
+            .min(viewport[0] - template_ui::PANEL_MARGIN)
+            .max(0.0);
         Some(template_ui::flyout_layout(
             *row_rect,
             count,
             viewport[0],
             viewport[1],
             hover.scroll.first,
+            right_limit,
         ))
     }
 

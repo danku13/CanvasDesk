@@ -1729,10 +1729,10 @@ impl App {
                 self.click_canvas_chip(element);
                 true
             }
-            // Issue #60 (W-WEBUI): author-strip — клик по пилюле «ℹ Об
-            // авторе» открывает GPU-модал About.
-            ui_registry::id::AUTHOR_STRIP => {
-                self.click_author_strip(element);
+            // Issue #63: author-bar — клик по кнопке ряда (4 ссылки +
+            // ℹ → GPU-модал About).
+            ui_registry::id::AUTHOR_BAR => {
+                self.click_author_bar(element);
                 true
             }
             // Issue #60 (W-WEBUI): модал «Об авторе» — «✕»/строки-ссылки/

@@ -76,7 +76,7 @@ export class Tour {
     this.container = opts.container ?? document.body;
     this.zIndex = opts.baseZIndex ?? 10000;
     this.log = opts.log ?? ((lvl, msg) => console[lvl]?.(`[tour] ${msg}`));
-    this.hooks = {};
+    this.hooks = opts.hooks ?? {};
     this.storageKey = opts.storageKey === undefined ? "cd-tour:" : opts.storageKey;
     this.highlight = createHighlight(this.container, this.zIndex + 1);
     injectStyles(this.container, opts.styles ?? DEFAULT_STYLES);

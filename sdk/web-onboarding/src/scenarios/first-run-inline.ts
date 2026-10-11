@@ -44,12 +44,12 @@ export const firstRunInlineScenario: TourScenario = {
       id: "locate-toolbar",
       title: "Канвасы и хранилище",
       body:
-        "В левом верхнем углу — чип активного канваса: клик по имени " +
+        "В правом верхнем углу, слева от кнопки «?», — чип активного канваса: клик по имени " +
         "переименовывает, по иконке списка — открывает менеджер канвасов " +
         "(создание, шаблоны, импорт, экспорт). Открыть с диска и экспорт " +
         "HTML — в меню правого клика по канвасу.",
       side: "bottom",
-      anchor: { kind: "rect", rect: { x: 12, y: 12, width: 170, height: 30 } },
+      anchor: { kind: "selector", selector: "#gpu-canvas-chip" },
     },
     {
       id: "create-note",
