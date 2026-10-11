@@ -120,7 +120,7 @@ mod tests {
         for t in [0, 375, 750, 1125, 1500, 1875] {
             let a = skeleton_alpha(t);
             assert!(
-                a >= 0.04 - 0.001 && a <= 0.12 + 0.001,
+                (0.04 - 0.001..=0.12 + 0.001).contains(&a),
                 "alpha {} at t={} out of range",
                 a,
                 t

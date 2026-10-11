@@ -164,6 +164,15 @@ What happens inside (`scripts/wasm_ui_scenario.mjs`):
   the oracle is finding the replacement in the model (the log `поиск завершён rows≥1`)
   + the absence of `pageerror`. The scenario was added; the run was not executed in this
   environment — manual web acceptance by the owner (a macOS browser: the same chords via Cmd).
+- 2026-10-11 (Wave D, issue #32 D6, TS-D8): the web entry to the interactive demo —
+  the query param `?ui=demo` (`canvas_web::url_params` → `app_spawn` →
+  `App::open_kit_demo`: the showcase is open in TO-BE from the first frame, the theme
+  pill is synced to `settings.theme_preset`). The parse is covered by the native unit
+  test `ui_demo_param_parses`; the L2 browser run was not executed in this environment —
+  manual acceptance by the owner: open the web build with `?ui=demo` → the demo showcase
+  (not the canvas) is expected: the toolbar AS-IS/TO-BE·Theme·RU/EN·Size·Density·State,
+  the theme pill click repaints every section with the new preset, Esc closes the demo
+  popups first and then the showcase (the Esc ladder).
 
 ## 6. Cheat sheet
 

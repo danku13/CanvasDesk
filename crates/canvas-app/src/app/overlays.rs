@@ -1294,6 +1294,70 @@ impl App {
         }
     }
 
+    /// Wave D v1.1 (D1, issue #32): тик hover-тултипа демо-кнопок/чипов
+    /// (TS-D1). Возвращает (hit-id, elapsed_ms) для отрисовки; ховер новой
+    /// цели сбрасывает таймер, уход с цели — гасит. Пока elapsed <
+    /// `kit::TOOLTIP_DELAY_MS` (500), запрашивает перерисовку — пузырь
+    /// появляется по таймеру, не только по движению курсора.
+    fn tick_demo_tooltip(
+        &mut self,
+        lay: &crate::kit_ui::GalleryLayout,
+        cursor: [f32; 2],
+    ) -> Option<(&'static str, u32)> {
+        let tooltipable = lay.demo.as_ref().and_then(|dl| {
+            dl.demo_hits.iter().find_map(|(r, id)| {
+                let is_tt = id.starts_with("button:") || id.starts_with("chips:");
+                (is_tt && r.w > 0.0 && crate::kit_ui::cursor_in(r, cursor)).then_some(*id)
+            })
+        });
+        match tooltipable {
+            Some(id) => match self.kit_demo_tooltip {
+                Some((cur, start)) if cur == id => {
+                    let ms = start.elapsed().as_millis() as u32;
+                    if ms < canvas_ui::component::TOOLTIP_DELAY_MS {
+                        self.request_redraw();
+                    }
+                    Some((id, ms))
+                }
+                _ => {
+                    self.kit_demo_tooltip = Some((id, Instant::now()));
+                    self.request_redraw();
+                    Some((id, 0))
+                }
+            },
+            None => {
+                if self.kit_demo_tooltip.take().is_some() {
+                    self.request_redraw();
+                }
+                None
+            }
+        }
+    }
+
+    /// Wave D v1.1 (D1, issue #32): тик анимации knob-slide переключателя
+    /// (TS-D3) — прогресс 0..1 (motion-токен `Duration::Short2` = 100 мс;
+    /// reduced-motion — 0 мс → мгновенно). Пока идёт — перерисовка.
+    /// Без анимации — целевое положение (on=1/off=0), поведение v1.
+    fn tick_demo_switch_anim(&mut self) -> f32 {
+        match self.kit_demo_switch_anim {
+            None => f32::from(u8::from(self.kit_demo.switch_on)),
+            Some(start) => {
+                let dur_ms = canvas_ui::anim::effective_duration(canvas_ui::anim::Duration::Short2);
+                let t = if dur_ms == 0 {
+                    1.0
+                } else {
+                    (start.elapsed().as_secs_f32() / (dur_ms as f32 / 1000.0)).min(1.0)
+                };
+                if t >= 1.0 {
+                    self.kit_demo_switch_anim = None;
+                } else {
+                    self.request_redraw();
+                }
+                t
+            }
+        }
+    }
+
     /// FR-055 (этап U4 PRD-0009, F-8): витрина кита — полоса Modals кадра.
     /// Компоненты × состояния × RU/EN × темы; слоты палитры — из
     /// `effective_palette().kit_palette()` (маппинг render→ui).
@@ -1338,6 +1402,7 @@ impl App {
                     viewport,
                     lang,
                     &scroll,
+                    &self.kit_demo_sidebar_scroll,
                     &palette,
                     &mut m,
                     &mut fs,
@@ -1397,11 +1462,29 @@ impl App {
 
         let label = |key: &'static str| crate::i18n::tr(lang, key).to_owned();
 
-        // Подписи секций (приглушённые — слот text_muted)
+        // Подписи секций (приглушённые — слот text_muted).
+        // Wave D v1.1 (F3, issue #32): в TO-BE заголовок рисуется по
+        // control_x (выравнивание «заголовок ↔ контент» — гаттер состояний
+        // AS-IS в TO-BE мёртвый и вплотную к сайдбару; ревью L3). AS-IS —
+        // прежняя геометрия (golden-пины).
+        let title_x = if self.kit_demo.tobe {
+            lay.content.x + crate::kit_ui::STATE_LABEL_W + canvas_core::tokens::SPACING_SM
+        } else {
+            0.0
+        };
         for (origin, key) in &lay.section_titles {
             let text = label(key);
             d.label_left(
-                canvas_ui::geometry::UiRect::new(origin.x, origin.y, lay.content.w, 16.0),
+                canvas_ui::geometry::UiRect::new(
+                    if self.kit_demo.tobe {
+                        title_x
+                    } else {
+                        origin.x
+                    },
+                    origin.y,
+                    lay.content.w,
+                    16.0,
+                ),
                 &text,
                 palette.text_muted,
                 11.0,
@@ -1460,7 +1543,14 @@ impl App {
             let area = canvas_ui::geometry::UiRect::new(r.x, r.y + 1.0, r.w, r.h);
             d.label_center(area, icons[i], style.text, 13.0);
         }
-        // Chips: Normal/Hover/Selected/Disabled
+        // Chips: Normal/Hover/Selected/Disabled — подпись соответствует
+        // СОСТОЯНИЮ (дефект v1: слот 2 показывал метку Pressed).
+        let chip_labels = [
+            crate::i18n::keys::KIT_STATE_NORMAL,
+            crate::i18n::keys::KIT_STATE_HOVER,
+            crate::i18n::keys::KIT_STATE_SELECTED,
+            crate::i18n::keys::KIT_STATE_DISABLED,
+        ];
         for (i, r) in lay.chips.iter().enumerate() {
             let state = match i {
                 0 => canvas_ui::kit::KitState::Normal,
@@ -1470,7 +1560,7 @@ impl App {
             };
             let style = canvas_ui::kit::chip_style(state, &palette);
             d.control(*r, &style);
-            let text = crate::i18n::tr(lang, crate::kit_ui::STATE_LABELS[i]);
+            let text = crate::i18n::tr(lang, chip_labels[i]);
             d.label_center(*r, text, style.text, 12.0);
         }
         // Dropdown: якорь + открытое меню (3 строки, hover по курсору)
@@ -2036,6 +2126,11 @@ impl App {
         // Wave C/интерактивные оверрайды/оверлеи) — поверх статичных секций
         // (те же rect'ы, что у demo_hits реестра — draw==hit).
         if self.kit_demo.tobe {
+            // Wave D v1.1 (D1): ховер-тултип и анимация переключателя —
+            // состояние App тикает ДО построения ctx (ctx заимствует
+            // &self.kit_demo; мутации после — borrow-конфликт).
+            let tooltip_hover = self.tick_demo_tooltip(&lay, cursor);
+            let switch_anim_t = self.tick_demo_switch_anim();
             let mut ctx = crate::kit_ui::DemoDrawCtx {
                 d: &mut d,
                 lay: &lay,
@@ -2046,6 +2141,8 @@ impl App {
                 lang,
                 m: &mut m,
                 fs: &mut fs,
+                tooltip_hover,
+                switch_anim_t,
             };
             crate::kit_ui::draw_demo_extras(&mut ctx);
         }

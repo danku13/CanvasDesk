@@ -295,6 +295,11 @@ pub struct DemoLayout {
     pub snackbar_bar: Option<(UiRect, UiRect)>,
     /// Демо-поповер (пузырь) — None = закрыт.
     pub popover_bubble: Option<UiRect>,
+    /// Wave D v1.1 (F1, issue #32): скролл сайдбара на момент раскладки
+    /// (offset — из App/адаптива; content_h/viewport_h синхронизируются
+    /// раскладкой, контракт FR-059). AS-IS — default (offset 0).
+    /// Окно сайдбара — [`DemoLayout::sidebar_viewport`] (M3-b/F1).
+    pub sidebar_scroll: kit::ScrollState,
 }
 
 /// Слоты секций Wave C (v1: слоты-строки; draw==hit на уровне слота).
@@ -685,7 +690,17 @@ pub fn gallery_layout(
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> GalleryLayout {
-    gallery_layout_impl(viewport, lang, scroll, p, m, fs, None, false)
+    gallery_layout_impl(
+        viewport,
+        lang,
+        scroll,
+        &kit::ScrollState::default(),
+        p,
+        m,
+        fs,
+        None,
+        false,
+    )
 }
 
 /// Wave M (M3-b, issue #53): AS-IS раскладка в адаптивной ветке флага —
@@ -699,30 +714,43 @@ pub fn gallery_layout_adaptive(
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> GalleryLayout {
-    gallery_layout_impl(viewport, lang, scroll, p, m, fs, None, true)
+    gallery_layout_impl(
+        viewport,
+        lang,
+        scroll,
+        &kit::ScrollState::default(),
+        p,
+        m,
+        fs,
+        None,
+        true,
+    )
 }
 
 /// TO-BE раскладка витрины (Wave D v1, issue #32): интерактивная demo —
 /// тулбар тем/языка/размера/плотности (D3), сайдбар-навигация (D5),
 /// секции Wave C (D2), интерактивные контролы (D1). Геометрия секций —
 /// та же линейка, но колонка уже (сайдбар) и ниже на тулбар.
+#[allow(clippy::too_many_arguments)] // плоский контракт раскладки (прецедент overlays.rs:74); Wave D v1.1 добавляет скролл сайдбара (F1)
 pub fn gallery_layout_tobe(
     viewport: [f32; 2],
     lang: Language,
     scroll: &kit::ScrollState,
+    sidebar: &kit::ScrollState,
     p: &KitPalette,
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
     demo: &crate::kit_demo::KitDemoState,
 ) -> GalleryLayout {
-    gallery_layout_impl(viewport, lang, scroll, p, m, fs, Some(demo), false)
+    gallery_layout_impl(viewport, lang, scroll, sidebar, p, m, fs, Some(demo), false)
 }
 
 /// Wave M (M3-b, issue #53): TO-BE раскладка в адаптивной ветке флага
 /// `modals_adaptive` — окно по [`gallery_panel_flex`]; F1: сайдбар со
 /// скроллом в medium/expanded (все секции достижимы), в compact — группы
 /// в мобильную навигацию (чипы групп + список секций активной группы);
-/// состояние скролла/группы — [`crate::kit_demo::KitDemoState`].
+/// состояние скролла/группы — [`crate::kit_demo::KitDemoState`] (в impl
+/// передаётся параметром `sidebar` = `&demo.sidebar_scroll`).
 pub fn gallery_layout_tobe_adaptive(
     viewport: [f32; 2],
     lang: Language,
@@ -732,14 +760,25 @@ pub fn gallery_layout_tobe_adaptive(
     fs: &mut cosmic_text::FontSystem,
     demo: &crate::kit_demo::KitDemoState,
 ) -> GalleryLayout {
-    gallery_layout_impl(viewport, lang, scroll, p, m, fs, Some(demo), true)
+    gallery_layout_impl(
+        viewport,
+        lang,
+        scroll,
+        &demo.sidebar_scroll,
+        p,
+        m,
+        fs,
+        Some(demo),
+        true,
+    )
 }
 
-#[allow(clippy::too_many_arguments)] // прецедент gallery_layout/admin_layout
+#[allow(clippy::too_many_arguments)] // плоский контракт раскладки (прецедент overlays.rs:74); Wave D v1.1 — скролл сайдбара (F1), M3-b — adaptive
 fn gallery_layout_impl(
     viewport: [f32; 2],
     lang: Language,
     scroll: &kit::ScrollState,
+    sidebar: &kit::ScrollState,
     p: &KitPalette,
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
@@ -771,8 +810,6 @@ fn gallery_layout_impl(
     // секции реестра достижимы, F1).
     let adaptive_compact_nav =
         adaptive && demo.is_some() && kit::layout_tier(vp.w) == kit::LayoutTier::Compact;
-    let adaptive_sidebar_scroll =
-        adaptive && demo.is_some() && kit::layout_tier(vp.w) != kit::LayoutTier::Compact;
     // Мобильная навигация (compact): доп. высота под тулбаром (чипы групп
     // + список секций) — считается ДО content (окно секций ниже навигации).
     let mut demo_toolbar: Vec<(UiRect, &'static str)> = Vec::new();
@@ -780,20 +817,23 @@ fn gallery_layout_impl(
     let mut demo_sidebar_items: Vec<(UiRect, &'static str)> = Vec::new();
     let mut demo_sidebar_viewport = UiRect::default();
     let mut demo_sidebar_content_h = 0.0f32;
+    let mut demo_sidebar_offset = sidebar.offset;
     let mut demo_mobile_nav = false;
     let mut compact_nav_extra_h = 0.0f32;
     if adaptive_compact_nav {
         demo_mobile_nav = true;
         let dstate = demo.expect("adaptive_compact_nav ⇒ demo есть");
-        // Тулбар: те же 5 пилюль (D3), жадная упаковка в строки по ширине
-        // body (в compact одна строка ~610px не помещается).
+        // Тулбар: те же 6 пилюль (D3 + Wave D v1.1 TOOLBAR_STATE), жадная
+        // упаковка в строки по ширине body (в compact одна строка ~610px
+        // не помещается).
         let tb_y = y + 30.0 + SECTION_GAP;
-        let controls: [(&'static str, f32); 5] = [
+        let controls: [(&'static str, f32); 6] = [
             (crate::kit_demo::hit::TOOLBAR_MODE, 118.0),
             (crate::kit_demo::hit::TOOLBAR_THEME, 148.0),
             (crate::kit_demo::hit::TOOLBAR_LANG, 64.0),
             (crate::kit_demo::hit::TOOLBAR_SIZE, 108.0),
             (crate::kit_demo::hit::TOOLBAR_DENSITY, 148.0),
+            (crate::kit_demo::hit::TOOLBAR_STATE, 128.0),
         ];
         let mut tx = body.x;
         // Строки wrap — счётчиком (без дробного курсора — LAY7): y строки =
@@ -950,18 +990,20 @@ fn gallery_layout_impl(
     );
 
     // --- Wave D: тулбар (D3/D4) и сайдбар (D5) — фиксированные зоны ---
-    // Wave M (M3-b): compact — зоны построены ДО content (мобильная
-    // навигация); medium/expanded — сайдбар со скроллом (F1); flag OFF —
-    // прежний v1-путь (break-кламп) ни символом не меняется.
-    if let (false, Some(dstate)) = (adaptive_compact_nav, demo) {
-        // Тулбар: 5 контролов-пилюль слева направо (высота 24, Sm)
+    // Wave M (M3-b): compact-адаптив — зоны построены ДО content (мобильная
+    // навигация); medium/expanded и flag OFF — сайдбар со скроллом (F1).
+    if demo.is_some() && !adaptive_compact_nav {
+        // Тулбар: 5 контролов-пилюль слева направо (высота 24, Sm) +
+        // Wave D v1.1 (D3): 6-я пилюля — оверрайд KitState (матрица 8
+        // состояний ST1; новый элемент в конце — существующие не менялись).
         let tb_y = y + 30.0 + SECTION_GAP;
-        let controls: [(&'static str, f32); 5] = [
+        let controls: [(&'static str, f32); 6] = [
             (crate::kit_demo::hit::TOOLBAR_MODE, 118.0),
             (crate::kit_demo::hit::TOOLBAR_THEME, 148.0),
             (crate::kit_demo::hit::TOOLBAR_LANG, 64.0),
             (crate::kit_demo::hit::TOOLBAR_SIZE, 108.0),
             (crate::kit_demo::hit::TOOLBAR_DENSITY, 148.0),
+            (crate::kit_demo::hit::TOOLBAR_STATE, 128.0),
         ];
         let mut tx = body.x;
         for (id, w) in controls {
@@ -972,73 +1014,66 @@ fn gallery_layout_impl(
             demo_toolbar.push((UiRect::new(tx, tb_y, w, 24.0), id));
             tx += w + kit::GAP_CONTROLS;
         }
-        // Сайдбар: группы + секции реестра (v1 — без скролла: компактный
-        // список 26 секций × 20px + 5 групп × 18px ≈ 610px, окно ≥ 640px)
+        // Сайдбар: окно (от тулбара до низа окна секций) + полная колонка
+        // (группы + секции реестра). Wave D v1.1 (F1, issue #32):
+        // колонка строится ЦЕЛИКОМ (без клампа-`break` v1: хвост Feedback
+        // был недостижим при любой высоте окна), затем сдвигается на
+        // `sidebar.offset` и фильтруется по полной видимости в окне
+        // сайдбара (тот же контракт, что скролл секций FR-059).
+        // Состояние скролла приходит параметром `sidebar`: flag OFF —
+        // App (`kit_demo_sidebar_scroll`), adaptive medium/expanded —
+        // `KitDemoState::sidebar_scroll`. Инвариант-тест: все секции
+        // реестра достижимы кликом при любом окне (1280×800, 800×560).
         let sb_top = tb_y + DEMO_TOOLBAR_H;
-        let mut sy = sb_top;
-        // Кламп по высоте окна секций (G4-линт: хиты внутри вьюпорта):
-        // в узких окнах сайдбар обрезается снизу (v1, без скролла — D7).
-        let sb_bottom = sections_viewport.bottom();
-        // Wave M (M3-b, F1): адаптив — окно скролла сайдбара: строится
-        // ПОЛНЫЙ список (нав ↔ контент согласованы), строки сдвигаются
-        // на sidebar_scroll.offset и фильтруются по полной видимости
-        // (контракт FR-059 — тексты не клипаются); флаг OFF — прежний
-        // break-кламп (v1) ни символом не меняется.
-        let adaptive_sb = adaptive_sidebar_scroll;
-        let sb_window = UiRect::new(
+        demo_sidebar_viewport = UiRect::new(
             body.x,
             sb_top,
             DEMO_SIDEBAR_W,
-            (sb_bottom - sb_top).max(0.0),
+            (sections_viewport.bottom() - sb_top).max(0.0),
         );
-        let mut sb_groups_all: Vec<(UiRect, &'static str)> = Vec::new();
-        let mut sb_items_all: Vec<(UiRect, &'static str)> = Vec::new();
+        let sb_bottom = demo_sidebar_viewport.bottom();
+        let mut sy = sb_top;
+        let mut sb_base: Vec<(UiRect, &'static str)> = Vec::new();
         let mut last_group: Option<crate::kit_demo::DemoGroup> = None;
         for s in crate::kit_demo::SECTIONS {
-            if !adaptive_sb && sy + DEMO_NAV_ROW_H > sb_bottom {
-                break;
-            }
             if last_group != Some(s.group) {
-                if !adaptive_sb && sy + DEMO_NAV_GROUP_H > sb_bottom {
-                    break;
-                }
-                sb_groups_all.push((
+                sb_base.push((
                     UiRect::new(body.x, sy, DEMO_SIDEBAR_W, DEMO_NAV_GROUP_H),
                     crate::kit_demo::group_title_key(s.group),
                 ));
                 sy += DEMO_NAV_GROUP_H;
                 last_group = Some(s.group);
             }
-            sb_items_all.push((
+            sb_base.push((
                 UiRect::new(body.x + 8.0, sy, DEMO_SIDEBAR_W - 8.0, DEMO_NAV_ROW_H),
                 s.id,
             ));
             sy += DEMO_NAV_ROW_H;
         }
-        if adaptive_sb {
-            let mut sscroll = dstate.sidebar_scroll.clone();
-            sscroll.viewport_h = sb_window.h;
-            sscroll.content_h = sy - sb_top;
-            sscroll.clamp();
-            let soff = sscroll.offset;
-            let sb_vis = |r: &UiRect| -> bool {
-                r.y - soff >= sb_window.y - 0.01 && r.bottom() - soff <= sb_window.bottom() + 0.01
-            };
-            for (r, k) in &sb_groups_all {
-                if sb_vis(r) {
-                    demo_sidebar_groups.push((UiRect::new(r.x, r.y - soff, r.w, r.h), *k));
-                }
+        // Полная высота колонки (скролл-контракт FR-059) + сдвиг/фильтр.
+        // Offset клампится раскладкой (M3-b): максимум = контент − окно,
+        // иначе завышенный offset «уводит» колонку за хвост — секции
+        // исчезают из окна навигации.
+        demo_sidebar_content_h = (sy - sb_top).max(0.0);
+        let sb_max_off = (demo_sidebar_content_h - demo_sidebar_viewport.h).max(0.0);
+        demo_sidebar_offset = sidebar.offset.min(sb_max_off);
+        let sb_visible = |r: &UiRect| -> bool {
+            r.y - demo_sidebar_offset >= demo_sidebar_viewport.y - 0.01
+                && r.bottom() - demo_sidebar_offset <= sb_bottom + 0.01
+        };
+        for (r, id) in sb_base {
+            if !sb_visible(&r) {
+                continue;
             }
-            for (r, id) in &sb_items_all {
-                if sb_vis(r) {
-                    demo_sidebar_items.push((UiRect::new(r.x, r.y - soff, r.w, r.h), *id));
-                }
+            let shifted = UiRect::new(r.x, r.y - demo_sidebar_offset, r.w, r.h);
+            // Группы — ключи i18n (title_key), секции — id (stab-строки);
+            // различение на draw: group_title_key для групп, section(id)
+            // для пунктов. Реестр требует &'static — оба статические.
+            if crate::kit_demo::section(id).is_some() {
+                demo_sidebar_items.push((shifted, id));
+            } else {
+                demo_sidebar_groups.push((shifted, id));
             }
-            demo_sidebar_viewport = sb_window;
-            demo_sidebar_content_h = sy - sb_top;
-        } else {
-            demo_sidebar_groups = sb_groups_all;
-            demo_sidebar_items = sb_items_all;
         }
     }
 
@@ -1450,7 +1485,16 @@ fn gallery_layout_impl(
     {
         let mut x = control_x;
         let max_w = ((control_w - 3.0 * kit::GAP_CONTROLS) / 4.0).max(0.0);
-        for state_label in STATE_LABELS.iter() {
+        // Метки матрицы чипов соответствуют СОСТОЯНИЯМ (Normal/Hover/
+        // Selected/Disabled — v1.1: слот 2 показывал метку Pressed;
+        // ширины почти не меняются — «Нажатие»/«Выбрано» одной длины).
+        let chip_state_labels = [
+            crate::i18n::keys::KIT_STATE_NORMAL,
+            crate::i18n::keys::KIT_STATE_HOVER,
+            crate::i18n::keys::KIT_STATE_SELECTED,
+            crate::i18n::keys::KIT_STATE_DISABLED,
+        ];
+        for state_label in chip_state_labels.iter() {
             let label = tr(lang, state_label);
             let cl = kit::chip_layout(
                 UiPoint::new(x, chips_y),
@@ -1718,10 +1762,12 @@ fn gallery_layout_impl(
     // компонент Table (retained-вход кадра: set_rows + row_layout_with по
     // фиксированным слотам GALLERY_ROW_H). W3.3 (решение владельца):
     // витрина Row v1 (FR-061) заменена компонентом — табличная секция
-    // одна, следует за Icons. Параметры: right_pad 0 (правый край
-    // направляющих — край контрол-колонки; viewport_right — ПРАВЫЙ КРАЙ
-    // В КООРДИНАТАХ СЛОТОВ, слоты здесь x=control_x), зазор
-    // TABLE_GUIDE_GAP, лидер on (RowOpts::default), кегль LABEL_SIZE.
+    // одна, следует за Icons. Параметры: right_pad SPACING_SM (Wave D
+    // v1.1 F4, issue #32: бейдж «← ИСТОЧНИК» прижат к правой кромке
+    // панели с зазором 0 — клипался на узких окнах; теперь отступ
+    // ступени S1; viewport_right — ПРАВЫЙ КРАЙ В КООРДИНАТАХ СЛОТОВ,
+    // слоты здесь x=control_x), зазор TABLE_GUIDE_GAP, лидер on
+    // (RowOpts::default), кегль LABEL_SIZE.
     // Зебра — переопределением слота fill (TableRowStyle {
     // fill: Some(hover_fill) }, F-8 — готовый слот, без арифметики),
     // Σ — state: Selected. Отрисовка — общий путь `row_rows` (paint_row
@@ -1743,7 +1789,7 @@ fn gallery_layout_impl(
                 gap: canvas_core::tokens::TABLE_GUIDE_GAP,
                 row_h: GALLERY_ROW_H,
                 row_gap: 0.0,
-                right_pad: 0.0,
+                right_pad: canvas_core::tokens::SPACING_SM,
             },
             palette: *p,
         });
@@ -2901,6 +2947,14 @@ fn gallery_layout_impl(
         dl.sidebar_viewport = demo_sidebar_viewport;
         dl.sidebar_content_h = demo_sidebar_content_h;
         dl.mobile_nav = demo_mobile_nav;
+        // Wave D v1.1 (F1): скролл сайдбара на момент раскладки — offset
+        // из параметра `sidebar` (App или KitDemoState::sidebar_scroll),
+        // окно/контент — из фактической раскладки (контракт FR-059).
+        dl.sidebar_scroll = kit::ScrollState {
+            viewport_h: demo_sidebar_viewport.h,
+            content_h: demo_sidebar_content_h,
+            offset: demo_sidebar_offset,
+        };
         if demo_mobile_nav {
             for (i, (r, _)) in dl.sidebar_groups.iter().enumerate() {
                 let id = crate::kit_demo::hit::mgroup(i);
@@ -3528,6 +3582,7 @@ fn build_demo_layout(
         sidebar_viewport: UiRect::default(),
         sidebar_content_h: 0.0,
         mobile_nav: false,
+        sidebar_scroll: kit::ScrollState::default(),
         wave_c: s,
         demo_hits: hits,
         desc,
@@ -3560,11 +3615,29 @@ pub(crate) struct DemoDrawCtx<'a> {
     /// Измеритель (компонентные раскладки badge/skeleton).
     pub m: &'a mut TextMeasurer,
     pub fs: &'a mut cosmic_text::FontSystem,
+    /// Wave D v1.1 (D1, TS-D1): тултип-ховер (hit-id, elapsed_ms) — пузырь
+    /// рисуется после `kit::TOOLTIP_DELAY_MS` (500 мс) через `kit::tooltip`.
+    pub tooltip_hover: Option<(&'a str, u32)>,
+    /// Wave D v1.1 (D1, TS-D3): прогресс knob-slide переключателя 0..1
+    /// (тик из App; 1/0 без анимации = целевое положение — поведение v1).
+    pub switch_anim_t: f32,
 }
 
 /// Состояние контрола от курсора/зажатия: press > hover > normal.
 /// Поля контекста передаются явно — вызов совместим с активным &mut ctx.d.
-fn demo_state(pressed: Option<&str>, cursor: [f32; 2], r: &UiRect, id: &str) -> kit::KitState {
+/// Wave D v1.1 (D3): `ov` — оверрайд KitState из тулбара (матрица ST1):
+/// `Some(state)` форсирует состояние живого контрола (draw==hit без изменений);
+/// `None` — Авто (состояния от курсора/семантики). Хрома (тулбар) — None.
+fn demo_state(
+    ov: Option<kit::KitState>,
+    pressed: Option<&str>,
+    cursor: [f32; 2],
+    r: &UiRect,
+    id: &str,
+) -> kit::KitState {
+    if let Some(s) = ov {
+        return s;
+    }
     if pressed == Some(id) && cursor_in(r, cursor) {
         kit::KitState::Pressed
     } else if cursor_in(r, cursor) {
@@ -3572,6 +3645,50 @@ fn demo_state(pressed: Option<&str>, cursor: [f32; 2], r: &UiRect, id: &str) -> 
     } else {
         kit::KitState::Normal
     }
+}
+
+/// Wave D (D4, issue #32): показательные ST1/M3-визуалы состояний на живых
+/// контролах TO-BE (AS-IS — статичная матрица без слоёв состояний — разница
+/// режимов видна по TS-D6). Рисуется ПОСЛЕ base-заливки и ДО подписи
+/// (слои полупрозрачны — текст читаем):
+/// - Hovered .08 / Focused .10 / Pressed .10 / Dragged .16 — state-layer
+///   (канон `canvas_ui::component::state_layer_alpha`, overlay accent);
+/// - Focused — фокус-рамка accent (канон FR-062 F-17);
+/// - Error — семантика danger (канон banner): tint `control_danger` .10 +
+///   рамка `control_danger`; у Error нет state-layer (`state_layer_alpha` = 0).
+///
+/// Normal/Selected/Disabled — пусто (Selected семантику даёт variant/fill).
+fn draw_state_visuals(d: &mut KitDraw, r: &UiRect, state: kit::KitState, p: &KitPalette) {
+    if state == kit::KitState::Error {
+        let c = p.control_danger;
+        d.rect(*r, [c[0], c[1], c[2], 0.10], c, 0.0);
+        return;
+    }
+    let a = canvas_ui::component::state_layer_alpha(state);
+    if a > 0.0 {
+        let c = p.accent;
+        d.rect(*r, [c[0], c[1], c[2], a], [0.0; 4], 0.0);
+    }
+    if state == kit::KitState::Focused {
+        d.rect(*r, [0.0; 4], p.accent, 0.0);
+    }
+}
+
+/// Wave D v1.1 (D3): имя значения KitState (пилюля оверрайда и подписи
+/// живых контролов в форсированном состоянии). Все 8 значений ST1:
+/// 6 ключей существовали, Dragged/Error добавлены (RU/EN).
+fn state_override_name(lang: Language, s: kit::KitState) -> String {
+    let key = match s {
+        kit::KitState::Normal => crate::i18n::keys::KIT_STATE_NORMAL,
+        kit::KitState::Hovered => crate::i18n::keys::KIT_STATE_HOVER,
+        kit::KitState::Focused => crate::i18n::keys::KIT_STATE_FOCUSED,
+        kit::KitState::Pressed => crate::i18n::keys::KIT_STATE_PRESSED,
+        kit::KitState::Dragged => crate::i18n::keys::KIT_STATE_DRAGGED,
+        kit::KitState::Disabled => crate::i18n::keys::KIT_STATE_DISABLED,
+        kit::KitState::Selected => crate::i18n::keys::KIT_STATE_SELECTED,
+        kit::KitState::Error => crate::i18n::keys::KIT_STATE_ERROR,
+    };
+    crate::i18n::tr(lang, key).to_string()
 }
 
 /// INT-2 (#44) P2: Response API (Wave A §5.5.1, паттерн egui) для демо-виджетов.
@@ -3611,9 +3728,12 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
     for (r, id) in &dl.toolbar {
         let active = match *id {
             crate::kit_demo::hit::TOOLBAR_MODE => ctx.demo.tobe,
+            // Wave D v1.1 (D3): пилюля состояния активна, пока оверрайд включён.
+            crate::kit_demo::hit::TOOLBAR_STATE => ctx.demo.state_override.is_some(),
             _ => false,
         };
-        let state = demo_state(ctx.pressed, ctx.cursor, r, id);
+        // Хрома (тулбар) — без оверрайда: состояния пилюль всегда от курсора.
+        let state = demo_state(None, ctx.pressed, ctx.cursor, r, id);
         let variant = if active {
             kit::ButtonVariant::Primary
         } else {
@@ -3659,6 +3779,20 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
                     },
                 )],
             ),
+            // Wave D v1.1 (D3): пилюля оверрайда состояния — «Состояние: X»
+            // (Авто → 8 значений ST1; имена — ключи kit.state.*).
+            crate::kit_demo::hit::TOOLBAR_STATE => {
+                let name = match ctx.demo.state_override {
+                    Some(s) => state_override_name(ctx.lang, s),
+                    None => crate::i18n::tr(ctx.lang, crate::i18n::keys::KIT_DEMO_STATE_AUTO)
+                        .to_string(),
+                };
+                crate::i18n::trf(
+                    ctx.lang,
+                    crate::i18n::keys::KIT_DEMO_STATE_LABEL,
+                    &[("name", &name)],
+                )
+            }
             _ => crate::i18n::trf(
                 ctx.lang,
                 crate::i18n::keys::KIT_DEMO_DENSITY_LABEL,
@@ -3689,7 +3823,13 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
     if dl.mobile_nav {
         let active_group = ctx.demo.mobile_group.unwrap_or(0);
         for (i, (r, key)) in dl.sidebar_groups.iter().enumerate() {
-            let state = demo_state(ctx.pressed, ctx.cursor, r, crate::kit_demo::hit::mgroup(i));
+            let state = demo_state(
+                ctx.demo.state_override,
+                ctx.pressed,
+                ctx.cursor,
+                r,
+                crate::kit_demo::hit::mgroup(i),
+            );
             let variant = if i == active_group {
                 ButtonVariant::Primary
             } else {
@@ -3737,18 +3877,24 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
                 continue;
             };
             let title = label(sec.title_key);
-            // Wave M (M3-b, F2 — P1, design/kit-demo-layout-review-2026-10.md):
-            // усечение по измеренной ширине (TextMeasurer + эллипсис), не по
-            // счёту символов — бюджет = item.w − 8 (item inset) − 8 (label
-            // inset): эллипсис виден целиком, строка не режется клипом
-            // посреди слова. Заменяет v1-кламп «36 символов».
-            let title = m.ellipsis(fs, &title, FONT_FAMILY, 11.0, (r.w - 16.0).max(0.0));
+            // Wave D v1.1 (F2): усечение ПО ШИРИНЕ с «…» (TextMeasurer::ellipsis;
+            // символьный порог 36 v1 рендерил эллипсис за клип-кромкой —
+            // design/kit-demo-layout-review-2026-10.md L2). Бюджет =
+            // item.w − 8 (item inset) − 8 (label inset), метка не режется клипом.
+            let shown = sidebar_item_label(m, fs, &title, r.w - 16.0);
             d.label_left(
                 UiRect::new(r.x + 8.0, r.y + 3.0, r.w - 16.0, 14.0),
-                &title,
+                &shown,
                 p.text,
                 11.0,
             );
+        }
+    }
+    // Wave D v1.1 (F1): бегунок скролла сайдбара (кит scroll_bar — тот же
+    // контракт, что скролл секций FR-059; AS-IS — окно нулевое, нет бегунка).
+    if dl.sidebar_viewport.h > 0.0 {
+        if let Some(knob) = kit::scroll_bar(dl.sidebar_viewport, &dl.sidebar_scroll, p) {
+            d.rect(knob, p.control_fill, [0.0; 4], 2.0);
         }
     }
 
@@ -3773,7 +3919,13 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             continue;
         }
         let state = if i == 0 {
-            let st = demo_state(ctx.pressed, ctx.cursor, r, crate::kit_demo::hit::CHECKBOX);
+            let st = demo_state(
+                ctx.demo.state_override,
+                ctx.pressed,
+                ctx.cursor,
+                r,
+                crate::kit_demo::hit::CHECKBOX,
+            );
             if st == kit::KitState::Normal
                 && ctx.demo.checkbox != canvas_ui::component::checkbox::CheckboxState::Unchecked
             {
@@ -3813,7 +3965,13 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
     if let Some(sl) = &wc.slider {
         if sl.track.w > 0.0 {
             let id = crate::kit_demo::hit::SLIDER;
-            let state = demo_state(ctx.pressed, ctx.cursor, &sl.knob, id);
+            let state = demo_state(
+                ctx.demo.state_override,
+                ctx.pressed,
+                ctx.cursor,
+                &sl.knob,
+                id,
+            );
             let (style, knob_fill) = canvas_ui::component::slider::slider_style(state, p);
             d.rect(sl.track, style.fill, style.border, 2.0);
             d.rect(sl.filled, knob_fill, [0.0; 4], 2.0);
@@ -3826,7 +3984,13 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             continue;
         }
         let selected = i == ctx.demo.radio_idx;
-        let state = demo_state(ctx.pressed, ctx.cursor, r, crate::kit_demo::hit::radio(i));
+        let state = demo_state(
+            ctx.demo.state_override,
+            ctx.pressed,
+            ctx.cursor,
+            r,
+            crate::kit_demo::hit::radio(i),
+        );
         let style = canvas_ui::component::radio::radio_style(selected, state, p);
         let circle = UiRect::new(r.x, r.y, r.h, r.h);
         d.control(circle, &style);
@@ -3865,7 +4029,13 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             let state = if active {
                 kit::KitState::Selected
             } else {
-                demo_state(ctx.pressed, ctx.cursor, r, crate::kit_demo::hit::tab(i))
+                demo_state(
+                    ctx.demo.state_override,
+                    ctx.pressed,
+                    ctx.cursor,
+                    r,
+                    crate::kit_demo::hit::tab(i),
+                )
             };
             let style = kit::button_style(kit::ButtonVariant::Ghost, state, p);
             d.control(*r, &style);
@@ -3901,6 +4071,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
                 kit::KitState::Selected
             } else {
                 demo_state(
+                    ctx.demo.state_override,
                     ctx.pressed,
                     ctx.cursor,
                     r,
@@ -3924,6 +4095,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         let style = kit::button_style(
             kit::ButtonVariant::Secondary,
             demo_state(
+                ctx.demo.state_override,
                 ctx.pressed,
                 ctx.cursor,
                 &wc.palette_anchor,
@@ -3944,6 +4116,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         let style = kit::button_style(
             kit::ButtonVariant::Primary,
             demo_state(
+                ctx.demo.state_override,
                 ctx.pressed,
                 ctx.cursor,
                 &wc.modal_anchor,
@@ -3963,6 +4136,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
     if wc.tree_root.w > 0.0 {
         let chevron = if ctx.demo.tree_open { "▾" } else { "▸" };
         let state = demo_state(
+            ctx.demo.state_override,
             ctx.pressed,
             ctx.cursor,
             &wc.tree_root,
@@ -3995,7 +4169,13 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             let state = if selected {
                 kit::KitState::Selected
             } else {
-                demo_state(ctx.pressed, ctx.cursor, r, crate::kit_demo::hit::tree(i))
+                demo_state(
+                    ctx.demo.state_override,
+                    ctx.pressed,
+                    ctx.cursor,
+                    r,
+                    crate::kit_demo::hit::tree(i),
+                )
             };
             let style = kit::button_style(kit::ButtonVariant::Ghost, state, p);
             d.control(*r, &style);
@@ -4027,6 +4207,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             kit::KitState::Selected
         } else {
             demo_state(
+                ctx.demo.state_override,
                 ctx.pressed,
                 ctx.cursor,
                 r,
@@ -4148,6 +4329,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         let style = kit::button_style(
             kit::ButtonVariant::Secondary,
             demo_state(
+                ctx.demo.state_override,
                 ctx.pressed,
                 ctx.cursor,
                 &wc.snackbar_anchor,
@@ -4167,6 +4349,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
     if wc.popover_anchor.w > 0.0 {
         let style = kit::chip_style(
             demo_state(
+                ctx.demo.state_override,
                 ctx.pressed,
                 ctx.cursor,
                 &wc.popover_anchor,
@@ -4297,7 +4480,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             let state = if is_active {
                 kit::KitState::Selected
             } else {
-                demo_state(ctx.pressed, ctx.cursor, r, id)
+                demo_state(ctx.demo.state_override, ctx.pressed, ctx.cursor, r, id)
             };
             let style = canvas_ui::component::nav_rail::nav_rail_button_style(is_active, state, p);
             d.control(*r, &style);
@@ -4321,20 +4504,33 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         }
         let id = crate::kit_demo::hit::chip(i);
         let resp = demo_widget_response(ctx.pressed, ctx.cursor, r, id);
-        let state = if ctx.demo.chips[i] {
-            if resp.state == kit::KitState::Pressed {
-                kit::KitState::Pressed
-            } else {
-                kit::KitState::Selected
+        // Wave D v1.1 (D3): оверрайд состояния сильнее семантики Selected.
+        let state = match ctx.demo.state_override {
+            Some(s) => s,
+            None if ctx.demo.chips[i] => {
+                if resp.state == kit::KitState::Pressed {
+                    kit::KitState::Pressed
+                } else {
+                    kit::KitState::Selected
+                }
             }
-        } else {
-            resp.state
+            None => resp.state,
         };
         // WidgetExt chain: переопределяем state на Response (семантика
         // Selected — trait-only метод, не входит в inherent impl Response).
         let resp = resp.with_state(state);
         let style = kit::chip_style(resp.state, p);
         d.control(*r, &style);
+        // Wave D (D4): показательные ST1-визуалы (state-layer/focus-ring/
+        // danger) — до подписи (слой полупрозрачный).
+        draw_state_visuals(d, r, resp.state, p);
+        // В оверрайде подпись — имя форсированного состояния (не статичный
+        // слот матрицы), иначе контрол показывает чужую метку.
+        if let Some(s) = ctx.demo.state_override {
+            d.label_center(*r, &state_override_name(ctx.lang, s), style.text, 12.0);
+            resp.on_hover_text("Chip state override");
+            continue;
+        }
         let Some(text_key) = STATE_LABELS.get(i) else {
             continue;
         };
@@ -4353,8 +4549,18 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             }
             let id = crate::kit_demo::hit::button(i);
             let resp = demo_widget_response(ctx.pressed, ctx.cursor, r, id);
-            let style = kit::button_style(row.variant, resp.state, p);
+            // Wave D v1.1 (D3): оверрайд состояния живой кнопки.
+            let state = ctx.demo.state_override.unwrap_or(resp.state);
+            let style = kit::button_style(row.variant, state, p);
             d.control(*r, &style);
+            // Wave D (D4): показательные ST1-визуалы (state-layer/фокус-рамка/
+            // danger) — см. draw_state_visuals; до подписи (слой полупрозрачный).
+            draw_state_visuals(d, r, state, p);
+            if let Some(s) = ctx.demo.state_override {
+                d.label_center(*r, &state_override_name(ctx.lang, s), style.text, 13.0);
+                resp.on_hover_text("Button state override");
+                continue;
+            }
             let Some(text_key) = STATE_LABELS.get(i) else {
                 continue;
             };
@@ -4365,22 +4571,42 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
     // Switch: первое (Normal) — состояние из демо (kit::switch — слоты)
     if let Some((r, _, _, _)) = ctx.lay.switches.first() {
         let id = crate::kit_demo::hit::SWITCH;
-        let state = demo_state(ctx.pressed, ctx.cursor, r, id);
+        let state = demo_state(ctx.demo.state_override, ctx.pressed, ctx.cursor, r, id);
         let sw = canvas_ui::kit::switch(*r, ctx.demo.switch_on, state, p);
+        // Wave D v1.1 (D1, TS-D3): knob-slide — линейная интерполяция off→on
+        // по прогрессу тика App (`switch_anim_t`; 1/0 — целевое положение,
+        // поведение v1; reduced-motion — мгновенно, anim::effective_duration).
+        // Края слота симметричны: pad = зазор между краем трека и бегунком.
+        let (on_x, off_x) = if ctx.demo.switch_on {
+            (sw.knob.x, sw.track.x + (sw.track.right() - sw.knob.right()))
+        } else {
+            (
+                sw.track.right() - (sw.knob.x - sw.track.x) - sw.knob.w,
+                sw.knob.x,
+            )
+        };
+        let knob_x = off_x + (on_x - off_x) * ctx.switch_anim_t.clamp(0.0, 1.0);
+        let knob = UiRect::new(knob_x, sw.knob.y, sw.knob.w, sw.knob.h);
         d.control(sw.track, &sw.track_style);
-        d.rect(sw.knob, sw.knob_fill, [0.0; 4], sw.track_style.radius / 2.0);
+        // Wave D (D4): показательные ST1-визуалы на треке (Dragged .16 и др.).
+        draw_state_visuals(d, &sw.track, state, p);
+        d.rect(knob, sw.knob_fill, [0.0; 4], sw.track_style.radius / 2.0);
     }
     // TextField: интерактивное поле (фокус/текст/каретка из демо)
     if let Some((_, _, tf)) = ctx.lay.text_fields.first() {
         let id = crate::kit_demo::hit::TEXTFIELD;
         let focused = ctx.demo.text_focus;
-        let state = if focused {
-            kit::KitState::Focused
-        } else {
-            demo_state(ctx.pressed, ctx.cursor, &tf.rect, id)
+        // Wave D v1.1 (D3): оверрайд состояния — Focused форсируется явно.
+        let state = match ctx.demo.state_override {
+            Some(s) => s,
+            None if focused => kit::KitState::Focused,
+            None => demo_state(None, ctx.pressed, ctx.cursor, &tf.rect, id),
         };
         let style = kit::button_style(kit::ButtonVariant::Secondary, state, p);
         d.control(tf.rect, &style);
+        // Wave D (D4): показательные ST1-визуалы (Focused — рамка accent —
+        // канон полей; Error — danger tint/рамка).
+        draw_state_visuals(d, &tf.rect, state, p);
         d.label_left(tf.text_area, &ctx.demo.text_value, p.text, 13.0);
         if focused {
             let caret_x =
@@ -4404,10 +4630,11 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         let selected = *idx == ctx.demo.list_sel;
         let id = crate::kit_demo::hit::list_row(*idx);
         let resp = demo_widget_response(ctx.pressed, ctx.cursor, r, id);
-        let state = if selected {
-            kit::KitState::Selected
-        } else {
-            resp.state
+        // Wave D v1.1 (D3): оверрайд состояния сильнее семантики Selected.
+        let state = match ctx.demo.state_override {
+            Some(s) => s,
+            None if selected => kit::KitState::Selected,
+            None => resp.state,
         };
         let style = kit::row_style(state, p);
         d.rect(*r, style.fill, [0.0; 4], 4.0);
@@ -4427,7 +4654,13 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
     // Dropdown: подпись якоря = выбранное; меню при открытом + hover пунктов
     {
         let id = crate::kit_demo::hit::DROPDOWN_ANCHOR;
-        let state = demo_state(ctx.pressed, ctx.cursor, &ctx.lay.dropdown_anchor, id);
+        let state = demo_state(
+            ctx.demo.state_override,
+            ctx.pressed,
+            ctx.cursor,
+            &ctx.lay.dropdown_anchor,
+            id,
+        );
         let style = kit::button_style(kit::ButtonVariant::Secondary, state, p);
         d.control(ctx.lay.dropdown_anchor, &style);
         d.label_center(
@@ -4446,12 +4679,15 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
                     continue;
                 }
                 let selected = i == ctx.demo.dropdown_sel;
-                let state = if selected {
-                    kit::KitState::Selected
-                } else {
-                    let mut ws = canvas_ui::widget::WidgetState::default();
-                    ws.set_pointer(cursor_in(r, ctx.cursor), false);
-                    ws.kit_state()
+                // Wave D v1.1 (D3): оверрайд состояния пунктов меню.
+                let state = match ctx.demo.state_override {
+                    Some(s) => s,
+                    None if selected => kit::KitState::Selected,
+                    None => {
+                        let mut ws = canvas_ui::widget::WidgetState::default();
+                        ws.set_pointer(cursor_in(r, ctx.cursor), false);
+                        ws.kit_state()
+                    }
                 };
                 let style = kit::button_style(kit::ButtonVariant::Ghost, state, p);
                 d.rect(*r, style.fill, [0.0; 4], 4.0);
@@ -4507,6 +4743,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         );
         let close_style = kit::icon_button_style(
             demo_state(
+                ctx.demo.state_override,
                 ctx.pressed,
                 ctx.cursor,
                 close,
@@ -4542,7 +4779,8 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         for (i, r) in rows.iter().enumerate() {
             let mut ws = canvas_ui::widget::WidgetState::default();
             ws.set_pointer(cursor_in(r, ctx.cursor), false);
-            let state = ws.kit_state();
+            // Wave D v1.1 (D3): оверрайд состояния пунктов палитры.
+            let state = ctx.demo.state_override.unwrap_or_else(|| ws.kit_state());
             let style = kit::button_style(kit::ButtonVariant::Ghost, state, p);
             d.rect(*r, style.fill, [0.0; 4], 4.0);
             let Some(key) = items.get(i) else { continue };
@@ -4565,6 +4803,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         );
         let close_style = kit::icon_button_style(
             demo_state(
+                ctx.demo.state_override,
                 ctx.pressed,
                 ctx.cursor,
                 close,
@@ -4585,6 +4824,77 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             11.0,
         );
     }
+
+    // --- Тултип живых контролов (D1, TS-D1) -------------------------------
+    // Пузырь над кнопкой/чипом после `kit::TOOLTIP_DELAY_MS` (500 мс; ховер
+    // тикает в App — `tick_demo_tooltip`). Стиль 1:1 со статичной секцией
+    // Tooltip (panel fill, accent-рамка, RADIUS_CHIP, 12px). При оверрайде
+    // состояния текст — имя форсированного состояния (контрол показывает
+    // его же — подписи согласованы).
+    if let Some((id, ms)) = ctx.tooltip_hover {
+        if ms >= kit::TOOLTIP_DELAY_MS {
+            if let Some((r, _)) = dl
+                .demo_hits
+                .iter()
+                .find(|(hr, hid)| *hid == id && hr.w > 0.0)
+            {
+                let text = demo_tooltip_text(id, ctx.lang, ctx.demo.state_override);
+                let w = (ctx.m.width_of(ctx.fs, &text, FONT_FAMILY, 12.0) + 16.0).max(20.0);
+                let tip = kit::tooltip(
+                    UiPoint::new(r.right(), r.y + 4.0),
+                    UiVec2::new(w, 18.0),
+                    ctx.lay.panel,
+                    ms,
+                    kit::TOOLTIP_DELAY_MS,
+                );
+                if let Some(t) = tip {
+                    let panel_style = kit::panel_style(p);
+                    d.rect(
+                        t.rect,
+                        panel_style.fill,
+                        p.accent,
+                        canvas_core::tokens::RADIUS_CHIP,
+                    );
+                    d.label_left(
+                        UiRect::new(t.rect.x + 8.0, t.rect.y + 2.0, t.rect.w - 16.0, 14.0),
+                        &text,
+                        p.text,
+                        12.0,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Текст тултипа живого контрола (D1, TS-D1): «Компонент — метка слота»
+/// (`button:i`/`chips:i` — метки [`STATE_LABELS`]); при оверрайде KitState —
+/// имя форсированного состояния (согласовано с подписью контрола).
+/// Неизвестный id — пустая строка (пузырь не рисуется: ширина < min).
+fn demo_tooltip_text(id: &str, lang: Language, state_override: Option<kit::KitState>) -> String {
+    let (kind, index) = match id.split_once(':') {
+        Some(("button", i)) => ("button", i),
+        Some(("chips", i)) => ("chips", i),
+        _ => return String::new(),
+    };
+    let i: usize = match index.parse() {
+        Ok(i) => i,
+        Err(_) => return String::new(),
+    };
+    let name = match kind {
+        "button" => crate::i18n::tr(lang, crate::i18n::keys::KIT_SECTION_BUTTONS),
+        _ => crate::i18n::tr(lang, crate::i18n::keys::KIT_SECTION_CHIPS),
+    };
+    let slot = match state_override {
+        Some(s) => state_override_name(lang, s),
+        None => {
+            let Some(key) = STATE_LABELS.get(i) else {
+                return String::new();
+            };
+            crate::i18n::tr(lang, key).to_string()
+        }
+    };
+    format!("{name} — {slot}")
 }
 
 /// Заливка «фона панели» — перекрытие скрытых демо-контролов (тост).
@@ -4659,6 +4969,36 @@ pub fn gallery_scroll_viewport(viewport: [f32; 2]) -> UiRect {
         content.w,
         (content.bottom() - sections_top).max(0.0),
     )
+}
+
+/// Wave D v1.1 (F1, issue #32): окно сайдбара TO-BE (wheel-hit без полной
+/// раскладки — та же математика panel/body/шапки/тулбара, что в
+/// [`gallery_layout_impl`]; от шапки+тулбара до низа окна секций).
+pub fn gallery_demo_sidebar_viewport(viewport: [f32; 2]) -> UiRect {
+    let vp = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
+    let panel = gallery_panel(vp);
+    let body = panel.inset(&EdgeInsets::uniform(canvas_core::tokens::SPACING_LG));
+    let sb_top = body.y + 30.0 + SECTION_GAP + DEMO_TOOLBAR_H;
+    UiRect::new(
+        body.x,
+        sb_top,
+        DEMO_SIDEBAR_W,
+        (body.bottom() - sb_top).max(0.0),
+    )
+}
+
+/// Wave D v1.1 (F2, issue #32): подпись пункта сайдбара, усечённая ПО
+/// ШИРИНЕ до слота с «…» (замер [`TextMeasurer::ellipsis`] — замена
+/// символьного порога 36 v1: эллипсис рендерился за клип-кромкой).
+/// Бюджет ширины — слот подписи строки: `r.w − 8` (внутренний отступ
+/// подписи; от ширины сайдбара — 8+8: отступ строки + отступ подписи).
+pub(crate) fn sidebar_item_label(
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    title: &str,
+    avail_w: f32,
+) -> String {
+    m.ellipsis(fs, title, FONT_FAMILY, 11.0, avail_w.max(0.0))
 }
 
 /// Состояние интерактивного контрола по курсору (hover).
@@ -5020,6 +5360,80 @@ pub fn with_font_system<R>(f: impl FnOnce(&mut cosmic_text::FontSystem) -> R) ->
 mod tests {
     use super::*;
     use canvas_ui::kit::{ButtonVariant, ControlStyle};
+
+    /// Wave D v1.1 (D1, TS-D1): текст тултипа живого контрола — «Компонент —
+    /// метка слота» (RU/EN), при оверрайде KitState — имя состояния;
+    /// не-тултип-цели и мусорные индексы дают пустую строку (пузырь скрыт).
+    #[test]
+    fn demo_tooltip_text_labels_and_guards() {
+        // Кнопка/чип без оверрайда — метка слота STATE_LABELS[i].
+        let ru_btn = demo_tooltip_text("button:0", Language::Ru, None);
+        let ru_chip = demo_tooltip_text("chips:2", Language::Ru, None);
+        assert!(ru_btn.contains(" — ") && !ru_btn.is_empty());
+        assert!(ru_chip.contains(" — ") && !ru_chip.is_empty());
+        assert_ne!(ru_btn, ru_chip, "компонент в тексте различает кнопки/чипы");
+        // EN — другой язык, метка слота та же позиция.
+        let en_btn = demo_tooltip_text("button:0", Language::En, None);
+        assert!(en_btn.contains(" — "));
+        assert_ne!(en_btn, ru_btn, "язык влияет на текст");
+        // Оверрайд — имя состояния KitState вместо метки слота.
+        let forced = demo_tooltip_text("button:1", Language::Ru, Some(kit::KitState::Dragged));
+        assert_eq!(
+            forced,
+            format!(
+                "{} — {}",
+                crate::i18n::tr(Language::Ru, crate::i18n::keys::KIT_SECTION_BUTTONS),
+                state_override_name(Language::Ru, kit::KitState::Dragged)
+            )
+        );
+        // Guard-ы: не-тултип id, нечисловой/вне-таблицы индекс — пусто.
+        assert_eq!(demo_tooltip_text("switch", Language::Ru, None), "");
+        assert_eq!(demo_tooltip_text("button:99", Language::Ru, None), "");
+        assert_eq!(demo_tooltip_text("chips:x", Language::Ru, None), "");
+    }
+
+    /// Wave D (D4): показательные ST1-визуалы — state-layer alpha по M3
+    /// (.08/.10/.10/.16), Focused — фокус-рамка accent, Error — danger
+    /// tint+рамка (канон banner), Normal — пусто.
+    #[test]
+    fn state_visuals_layers_match_st1() {
+        let p = gallery_palette();
+        let r = UiRect::new(0.0, 0.0, 40.0, 30.0);
+        // Dragged → один overlay-квад с alpha 0.16 (accent).
+        let mut d = KitDraw::new();
+        draw_state_visuals(&mut d, &r, kit::KitState::Dragged, &p);
+        assert_eq!(d.quads.len(), 1);
+        assert!((d.quads[0].fill[3] - 0.16).abs() < 1e-6);
+        assert_eq!(d.quads[0].fill[..3], p.accent[..3]);
+        // Hovered .08 / Focused .10 (плюс рамка) / Pressed .10.
+        let mut d = KitDraw::new();
+        draw_state_visuals(&mut d, &r, kit::KitState::Hovered, &p);
+        assert_eq!(d.quads.len(), 1);
+        assert!((d.quads[0].fill[3] - 0.08).abs() < 1e-6);
+        let mut d = KitDraw::new();
+        draw_state_visuals(&mut d, &r, kit::KitState::Focused, &p);
+        assert_eq!(d.quads.len(), 2, "Focused: state-layer + фокус-рамка");
+        assert!((d.quads[0].fill[3] - 0.10).abs() < 1e-6);
+        assert_eq!(d.quads[1].fill, [0.0; 4], "рамка — прозрачная заливка");
+        assert_eq!(d.quads[1].border, p.accent);
+        // Error: tint+рамка control_danger (state-layer у Error = 0).
+        let mut d = KitDraw::new();
+        draw_state_visuals(&mut d, &r, kit::KitState::Error, &p);
+        assert_eq!(d.quads.len(), 1);
+        assert!((d.quads[0].fill[3] - 0.10).abs() < 1e-6);
+        assert_eq!(d.quads[0].fill[..3], p.control_danger[..3]);
+        assert_eq!(d.quads[0].border, p.control_danger);
+        // Normal/Selected/Disabled — пусто.
+        for s in [
+            kit::KitState::Normal,
+            kit::KitState::Selected,
+            kit::KitState::Disabled,
+        ] {
+            let mut d = KitDraw::new();
+            draw_state_visuals(&mut d, &r, s, &p);
+            assert_eq!(d.quads.len(), 0, "{s:?} не рисует слой");
+        }
+    }
 
     /// FR-057: эквивалентность до/после делегирования — KitDraw через
     /// Painter даёт те же quads/texts, что прямой путь Painter-пути полос
@@ -5451,7 +5865,11 @@ mod tests {
         let viewport_right = control_x + control_w;
 
         // Путь Row (kit-функции, бывший путь витрины FR-061):
-        // row_guides + row_layout per слот
+        // row_guides + row_layout per слот. right_pad Table применяется
+        // к viewport_right ДО row_guides (table.rs:378), поэтому для
+        // оракула бит-в-бит Row-путь получает тот же right_edge
+        // (F4, Wave D v1.1).
+        let right_edge = viewport_right - canvas_core::tokens::SPACING_SM;
         let parts: Vec<kit::RowParts<'_>> = demo.iter().map(|(parts, _, _)| *parts).collect();
         let rg = kit::row_guides(
             &mut m,
@@ -5459,7 +5877,7 @@ mod tests {
             FONT_FAMILY,
             LABEL_SIZE,
             &parts,
-            viewport_right,
+            right_edge,
             canvas_core::tokens::TABLE_GUIDE_GAP,
         )
         .expect("демо имеет живые правые колонки");
@@ -5486,7 +5904,8 @@ mod tests {
             })
             .collect();
 
-        // Путь Table (компонент витрины): set_rows + row_layout_with (те же слоты)
+        // Путь Table (компонент витрины): set_rows + row_layout_with (те же слоты;
+        // right_pad синхронен секции — F4, оракул «Row ≡ Table» бит-в-бит)
         let mut table = kit::Table::new(kit::TableProps {
             size: LABEL_SIZE,
             family: FONT_FAMILY,
@@ -5495,7 +5914,7 @@ mod tests {
                 gap: canvas_core::tokens::TABLE_GUIDE_GAP,
                 row_h: GALLERY_ROW_H,
                 row_gap: 0.0,
-                right_pad: 0.0,
+                right_pad: canvas_core::tokens::SPACING_SM,
             },
             palette: p,
         });
@@ -6227,14 +6646,16 @@ mod tests {
 
     // === Wave D v1 (issue #32): TO-BE demo-раскладка ========================
 
-    /// TO-BE: тулбар (5 контролов), сайдбар (26 секций + 5 групп), хвост
-    /// Wave C (14 секций), demo_hits непусты, section_offsets покрывают
-    /// реестр. AS-IS: demo-поле None (регрессия прежнего поведения).
+    /// TO-BE: тулбар (6 контролов — Wave D v1.1 добавляет оверрайд состояния
+    /// в КОНЕЦ), сайдбар (полная колонка со скроллом F1), хвост Wave C,
+    /// demo_hits непусты, section_offsets покрывают реестр.
+    /// AS-IS: demo-поле None (регрессия прежнего поведения).
     #[test]
     fn tobe_demo_layout_structure() {
         let viewport = [1280.0, 800.0];
         let lang = Language::Ru;
         let scroll = kit::ScrollState::default();
+        let sidebar = kit::ScrollState::default();
         let palette = gallery_palette();
         let mut m = new_measurer();
         let mut fs = canvas_render::text::measure_font_system();
@@ -6242,30 +6663,44 @@ mod tests {
             tobe: true,
             ..crate::kit_demo::KitDemoState::default()
         };
-        let lay = gallery_layout_tobe(viewport, lang, &scroll, &palette, &mut m, &mut fs, &demo);
+        let lay = gallery_layout_tobe(
+            viewport, lang, &scroll, &sidebar, &palette, &mut m, &mut fs, &demo,
+        );
         let Some(dl) = lay.demo.as_ref() else {
             panic!("TO-BE раскладка без DemoLayout");
         };
-        assert_eq!(dl.toolbar.len(), 5, "тулбар: 5 контролов (D3/D4)");
-        assert!(
-            dl.sidebar_items.len() >= 20,
-            "сайдбар: большинство секций видно ({} из {})",
-            dl.sidebar_items.len(),
-            crate::kit_demo::SECTIONS.len(),
-        );
-        assert!(dl.sidebar_items.len() <= crate::kit_demo::SECTIONS.len());
-        // Сайдбар клампится по высоте окна секций (PANEL_MAX 640 → окно
-        // ~538px). Wave D v1: 26 секций × 20px + 5 групп × 18px = 610px —
-        // Feedback-хвост за краем. INT-волна (#43/#46) добавила 2 секции:
-        // 28 × 20 + 5 × 18 = 650px — за краем теперь и ЗАГОЛОВОК
-        // Feedback-группы (4 группы, петля break до его пуша).
-        // Деградация F1 (P1) — design/kit-demo-layout-review-2026-10.md;
-        // скролл сайдбара — M3-b (issue #53): adaptive-окно 80% вернёт
-        // большинство секций, но скролл обязателен.
         assert_eq!(
-            dl.sidebar_groups.len(),
-            4,
-            "сайдбар: 4 группы в клампе 538px (F1: Feedback-группа за краем до M3-b)"
+            dl.toolbar.len(),
+            6,
+            "тулбар: 6 контролов (D3/D4 + оверрайд состояния)"
+        );
+        assert!(
+            dl.toolbar
+                .iter()
+                .any(|(_, id)| *id == crate::kit_demo::hit::TOOLBAR_STATE),
+            "нет пилюли оверрайда состояния (D3, Wave D v1.1)"
+        );
+        // F1 (Wave D v1.1): сайдбар — полная колонка со СКРОЛЛОМ (дефект v1:
+        // кламп-break молча терял хвост Feedback при любой высоте окна).
+        let registry_groups = {
+            let mut n = 0usize;
+            let mut last: Option<crate::kit_demo::DemoGroup> = None;
+            for s in crate::kit_demo::SECTIONS {
+                if last != Some(s.group) {
+                    n += 1;
+                    last = Some(s.group);
+                }
+            }
+            n
+        };
+        let expect_content_h = crate::kit_demo::SECTIONS.len() as f32 * DEMO_NAV_ROW_H
+            + registry_groups as f32 * DEMO_NAV_GROUP_H;
+        assert!(dl.sidebar_viewport.h > 0.0, "окно сайдбара непустое");
+        assert!(
+            (dl.sidebar_scroll.content_h - expect_content_h).abs() < 0.5,
+            "полная высота колонки сайдбара ({} ≠ {}): все секции в навигации",
+            dl.sidebar_scroll.content_h,
+            expect_content_h
         );
         assert!(!dl.demo_hits.is_empty(), "demo_hits заполнены (draw==hit)");
         // Секции Wave C присутствуют в сдвигах заголовков (навигация D5)
@@ -6286,6 +6721,7 @@ mod tests {
             viewport,
             lang,
             &scroll,
+            &sidebar,
             &palette,
             &mut m,
             &mut fs,
@@ -6550,6 +6986,270 @@ mod tests {
         }
     }
 
+    /// F1 (Wave D v1.1, issue #32): сайдбар-скролл — ВСЕ секции реестра
+    /// достижимы кликом при ЛЮБОМ окне (1280×800 и минимум 800×560):
+    /// offset 0 — первая секция видна; offset max — последняя («popover»)
+    /// с её nav-хитом в кадре (end-to-end D5).
+    #[test]
+    fn tobe_sidebar_scroll_reaches_all_sections() {
+        let palette = gallery_palette();
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let demo = crate::kit_demo::KitDemoState {
+            tobe: true,
+            ..crate::kit_demo::KitDemoState::default()
+        };
+        let first_id = crate::kit_demo::SECTIONS[0].id;
+        let last_id = crate::kit_demo::SECTIONS[crate::kit_demo::SECTIONS.len() - 1].id;
+        for viewport in [[1280.0, 800.0], [800.0, 560.0]] {
+            let mut sidebar = kit::ScrollState::default();
+            let lay0 = gallery_layout_tobe(
+                viewport,
+                Language::Ru,
+                &kit::ScrollState::default(),
+                &sidebar,
+                &palette,
+                &mut m,
+                &mut fs,
+                &demo,
+            );
+            let Some(dl0) = lay0.demo.as_ref() else {
+                panic!("нет DemoLayout");
+            };
+            sidebar.content_h = dl0.sidebar_scroll.content_h;
+            sidebar.viewport_h = dl0.sidebar_viewport.h;
+            // Первая секция видна при offset 0.
+            assert!(
+                dl0.sidebar_items.iter().any(|(_, id)| *id == first_id),
+                "{viewport:?}: первая секция «{first_id}» не видна при offset 0"
+            );
+            // Скролл нужен (колонка выше окна) — иначе инвариант вырожден.
+            assert!(
+                sidebar.needs_scroll(),
+                "{viewport:?}: колонка сайдбара выше окна — скролл обязателен"
+            );
+            // Offset max → последняя секция реестра видна + nav-хит в кадре.
+            sidebar.offset = sidebar.max_offset();
+            let lay1 = gallery_layout_tobe(
+                viewport,
+                Language::Ru,
+                &kit::ScrollState::default(),
+                &sidebar,
+                &palette,
+                &mut m,
+                &mut fs,
+                &demo,
+            );
+            let Some(dl1) = lay1.demo.as_ref() else {
+                panic!("нет DemoLayout");
+            };
+            let nav_last = crate::kit_demo::hit::nav(last_id);
+            assert!(
+                !nav_last.is_empty(),
+                "нет nav-id для последней секции «{last_id}»"
+            );
+            assert!(
+                dl1.sidebar_items.iter().any(|(_, id)| *id == last_id),
+                "{viewport:?}: последняя секция «{last_id}» недостижима скроллом (F1)"
+            );
+            assert!(
+                dl1.demo_hits.iter().any(|(_, hid)| *hid == nav_last),
+                "{viewport:?}: нет nav-хита «{nav_last}» при offset max"
+            );
+        }
+    }
+
+    /// F2 (Wave D v1.1, issue #32): подписи пунктов сайдбара усечены ПО
+    /// ШИРИНЕ с «…» (замер TextMeasurer) — каждая видимая подпись влезает
+    /// в слот строки (r.w − 8) на обоих языках; RU-метки (кириллица шире)
+    /// получают эллипсис (не символьное жёсткое обрезание v1). EN-метки
+    /// короче — все влезают целиком, потому порог усечения — только RU.
+    #[test]
+    fn tobe_sidebar_labels_fit_slot_width() {
+        for lang in [Language::Ru, Language::En] {
+            let palette = gallery_palette();
+            let mut m = new_measurer();
+            let mut fs = canvas_render::text::measure_font_system();
+            let demo = crate::kit_demo::KitDemoState {
+                tobe: true,
+                ..crate::kit_demo::KitDemoState::default()
+            };
+            let lay = gallery_layout_tobe(
+                [1280.0, 800.0],
+                lang,
+                &kit::ScrollState::default(),
+                &kit::ScrollState::default(),
+                &palette,
+                &mut m,
+                &mut fs,
+                &demo,
+            );
+            let Some(dl) = lay.demo.as_ref() else {
+                panic!("нет DemoLayout");
+            };
+            assert!(!dl.sidebar_items.is_empty(), "есть пункты сайдбара");
+            let mut truncated = 0usize;
+            for (r, id) in &dl.sidebar_items {
+                let sec = crate::kit_demo::section(id).expect("id секции в реестре");
+                let title = crate::i18n::tr(lang, sec.title_key).to_owned();
+                let avail = r.w - 8.0;
+                let shown = sidebar_item_label(&mut m, &mut fs, &title, avail);
+                assert!(!shown.is_empty(), "{lang:?}: пустая подпись «{title}»");
+                let shown_w = m.width_of(&mut fs, &shown, FONT_FAMILY, 11.0);
+                assert!(
+                    shown_w <= avail + 0.5,
+                    "{lang:?}: подпись шире слота ({shown_w:.1} > {avail:.1}): «{shown}»"
+                );
+                if shown != title {
+                    truncated += 1;
+                    assert!(
+                        shown.ends_with('\u{2026}'),
+                        "{lang:?}: усечение без эллипсиса: «{shown}»"
+                    );
+                }
+            }
+            // RU: сайдбар узкий (184px), кириллические метки длинные —
+            // минимум одна усечена с «…». EN: метки короче, все влезают —
+            // порог неприменим (frail-ассерт снят для EN).
+            if lang == Language::Ru {
+                assert!(
+                    truncated > 0,
+                    "{lang:?}: ожидалась хотя бы одна усечённая метка (сайдбар узкий)"
+                );
+            }
+        }
+    }
+
+    /// D3 (Wave D v1.1, issue #32): оверрайд KitState не меняет геометрию
+    /// (draw==hit): demo_hits и тулбар бит-в-бит равны Auto-кадру; hit
+    /// пилюли TOOLBAR_STATE присутствует.
+    #[test]
+    fn tobe_state_override_keeps_geometry() {
+        let viewport = [1280.0, 800.0];
+        let palette = gallery_palette();
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let mk = |ov: Option<kit::KitState>| crate::kit_demo::KitDemoState {
+            tobe: true,
+            state_override: ov,
+            ..crate::kit_demo::KitDemoState::default()
+        };
+        let auto = gallery_layout_tobe(
+            viewport,
+            Language::Ru,
+            &kit::ScrollState::default(),
+            &kit::ScrollState::default(),
+            &palette,
+            &mut m,
+            &mut fs,
+            &mk(None),
+        );
+        let forced = gallery_layout_tobe(
+            viewport,
+            Language::Ru,
+            &kit::ScrollState::default(),
+            &kit::ScrollState::default(),
+            &palette,
+            &mut m,
+            &mut fs,
+            &mk(Some(kit::KitState::Error)),
+        );
+        assert_eq!(
+            auto.content_h, forced.content_h,
+            "геометрия не зависит от оверрайда"
+        );
+        let (a, f) = (
+            auto.demo.as_ref().expect("demo"),
+            forced.demo.as_ref().expect("demo"),
+        );
+        assert_eq!(a.toolbar, f.toolbar, "тулбар бит-в-бит");
+        assert_eq!(a.demo_hits, f.demo_hits, "хиты бит-в-бит (draw==hit)");
+        assert!(
+            a.demo_hits
+                .iter()
+                .any(|(_, id)| *id == crate::kit_demo::hit::TOOLBAR_STATE),
+            "hit пилюли оверрайда в реестре"
+        );
+    }
+
+    /// F4 (Wave D v1.1, issue #32): правый край строк Table — в пределах
+    /// right_pad (SPACING_SM) от правой кромки контрол-колонки: бейдж
+    /// «← ИСТОЧНИК» больше не прижат к кромке панели (клип на узких окнах).
+    #[test]
+    fn tobe_table_rows_within_right_pad() {
+        let viewport = [1280.0, 800.0];
+        let palette = gallery_palette();
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let demo = crate::kit_demo::KitDemoState {
+            tobe: true,
+            ..crate::kit_demo::KitDemoState::default()
+        };
+        // Скролл к секции Table (строки фильтруются видимостью FR-059).
+        let base = gallery_layout_tobe(
+            viewport,
+            Language::Ru,
+            &kit::ScrollState::default(),
+            &kit::ScrollState::default(),
+            &palette,
+            &mut m,
+            &mut fs,
+            &demo,
+        );
+        let mut st = kit::ScrollState {
+            viewport_h: base.sections_viewport.h,
+            content_h: base.content_h,
+            offset: 0.0,
+        };
+        if let Some((_, y)) = base
+            .demo
+            .as_ref()
+            .and_then(|d| d.section_offsets.iter().find(|(id, _)| *id == "table"))
+        {
+            st.offset = (*y - base.sections_viewport.y).max(0.0);
+        }
+        st.clamp();
+        let lay = gallery_layout_tobe(
+            viewport,
+            Language::Ru,
+            &st,
+            &kit::ScrollState::default(),
+            &palette,
+            &mut m,
+            &mut fs,
+            &demo,
+        );
+        assert!(
+            !lay.row_rows.is_empty(),
+            "строки Table видимы после навигации"
+        );
+        // right_pad действует на ЯЧЕЙКИ строки (value/unit/badge) — правый
+        // край контента ≤ viewport_right − SPACING_SM. Rect строки — слот
+        // (зебра/хит) — на всю контрол-колонку, правая кромка = content.
+        let right_edge = lay.content.right() - canvas_core::tokens::SPACING_SM;
+        for row in &lay.row_rows {
+            assert!(
+                row.lay.row.right() <= lay.content.right() + 0.5,
+                "строка Table за кромкой контента: {:.1} > {:.1}",
+                row.lay.row.right(),
+                lay.content.right()
+            );
+            assert!(
+                row.lay.value.right() <= right_edge + 0.5,
+                "value за кромкой right_pad (F4): {:.1} > {:.1}",
+                row.lay.value.right(),
+                right_edge
+            );
+            if let Some(b) = row.lay.badge {
+                assert!(
+                    b.right() <= right_edge + 0.5,
+                    "бейдж прижат к кромке (F4): {:.1} > {:.1}",
+                    b.right(),
+                    right_edge
+                );
+            }
+        }
+    }
     /// TO-BE: dropdown-меню в раскладке только при открытом состоянии
     /// (D1); хиты закрывают тулбар/сайдбар/секции (выборочная проверка id).
     #[test]
@@ -6567,6 +7267,7 @@ mod tests {
             viewport,
             Language::Ru,
             &kit::ScrollState::default(),
+            &kit::ScrollState::default(),
             &palette,
             &mut m,
             &mut fs,
@@ -6575,6 +7276,7 @@ mod tests {
         let opened = gallery_layout_tobe(
             viewport,
             Language::Ru,
+            &kit::ScrollState::default(),
             &kit::ScrollState::default(),
             &palette,
             &mut m,
@@ -6603,9 +7305,11 @@ mod tests {
         // Секции — скролл-зависимы (фильтр полной видимости FR-059): навигация
         // D5 по section_offsets приводит к появлению хитов секции (end-to-end).
         let scroll_for = |lay: &GalleryLayout, sid: &str| {
-            let mut st = kit::ScrollState::default();
-            st.viewport_h = lay.sections_viewport.h;
-            st.content_h = lay.content_h;
+            let mut st = kit::ScrollState {
+                viewport_h: lay.sections_viewport.h,
+                content_h: lay.content_h,
+                offset: 0.0,
+            };
             if let Some((_, base_y)) = lay
                 .demo
                 .as_ref()
@@ -6634,6 +7338,7 @@ mod tests {
                 viewport,
                 Language::Ru,
                 &st,
+                &kit::ScrollState::default(),
                 &palette,
                 &mut m,
                 &mut fs,

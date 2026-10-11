@@ -1355,7 +1355,7 @@ mod tests {
         for row in &lay.rows {
             assert_eq!(row.row[3], 44.0, "тач-цель строки ≥44 (T-M R1)");
         }
-        assert!(lay.rows.len() >= 1, "список начинается выше thumb-зоны");
+        assert!(!lay.rows.is_empty(), "список начинается выше thumb-зоны");
         assert_eq!(lay.create[3], TOUCH_TARGET, "кнопка создания ≥44");
         assert_eq!(lay.close[2], TOUCH_TARGET, "«✕» ≥44");
         // хранилище закреплено за нижним краем листа: низ СТРОКИ
@@ -1617,17 +1617,13 @@ mod tests {
         state.storage = StorageRowMode::Folder;
         let lay = manager_layout([1280.0, 800.0], &state, "", &widths());
         assert_eq!(lay.storage_move, [0.0; 4]);
-        assert_eq!(storage_move_available(StorageRowMode::Folder), false);
-        assert_eq!(
-            storage_move_available(StorageRowMode::Browser {
-                fs_available: false
-            }),
-            false
-        );
-        assert_eq!(
-            storage_move_available(StorageRowMode::Browser { fs_available: true }),
-            true
-        );
+        assert!(!storage_move_available(StorageRowMode::Folder));
+        assert!(!storage_move_available(StorageRowMode::Browser {
+            fs_available: false
+        }));
+        assert!(storage_move_available(StorageRowMode::Browser {
+            fs_available: true
+        }));
     }
 
     #[test]
