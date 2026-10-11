@@ -1759,6 +1759,10 @@ pub struct App {
     /// Wave D v1: кэш раскладки витрины последнего кадра (реестр хитов и
     /// навигация/press читают без пересчёта; обновляется в draw-пути).
     pub(crate) kit_demo_layout: Option<crate::kit_ui::GalleryLayout>,
+    /// Wave D v1.1 (F1, issue #32): скролл сайдбара демо-витрины (контракт
+    /// FR-059: ScrollState — состояние App; content_h/viewport_h
+    /// синхронизируются раскладкой — паттерн kit_gallery_scroll).
+    pub(crate) kit_demo_sidebar_scroll: canvas_ui::kit::ScrollState,
     /// FR-070: UI-админпанель открыта (поверхность admin_panel,
     /// Modals/Block) — пункт «?» «UI-консоль».
     pub(crate) admin_open: bool,
@@ -2147,6 +2151,7 @@ impl App {
             // команд (Cmd+K), `?` cheatsheet, контекстного меню.
             action_registry: actions::build_action_registry(),
             kit_demo_layout: None,
+            kit_demo_sidebar_scroll: canvas_ui::kit::ScrollState::default(),
             admin_open: false,
             admin_section: crate::admin_ui::AdminSection::Components,
             admin_palette_override: None,
@@ -9624,6 +9629,8 @@ impl App {
         self.kit_gallery_open = true;
         self.kit_demo.tobe = true;
         self.kit_gallery_scroll = canvas_ui::kit::ScrollState::default();
+        // Wave D v1.1 (F1): скролл сайдбара — с начала колонки.
+        self.kit_demo_sidebar_scroll = canvas_ui::kit::ScrollState::default();
         self.request_redraw();
     }
 

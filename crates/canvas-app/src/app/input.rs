@@ -5013,8 +5013,35 @@ impl App {
         }
         // FR-059: колесо над контентом витрины кита прокручивает секции
         // (кит список+скролл; шапка фиксирована; знак — как у списков)
+        // Wave D v1.1 (F1, issue #32): в TO-BE колесо над сайдбаром
+        // прокручивает САЙДБАР (тот же контракт ScrollState).
         if self.kit_gallery_open {
             let viewport = self.viewport_logical();
+            // TO-BE: сайдбар — фиксированная зона слева (wheel-hit без
+            // полной раскладки, та же математика, что в раскладке).
+            if self.kit_demo.tobe {
+                let sb = crate::kit_ui::gallery_demo_sidebar_viewport(viewport);
+                if sb.w > 0.0 && crate::kit_ui::cursor_in(&sb, self.cursor) {
+                    let dy = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
+                        MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),
+                    };
+                    let mut scroll = self.kit_demo_sidebar_scroll.clone();
+                    // content_h последнего кадра (полная колонка сайдбара —
+                    // раскладка не пересобирается: тот же кадр, дешевле).
+                    if let Some(lay) = self.kit_demo_layout.as_ref() {
+                        if let Some(dl) = lay.demo.as_ref() {
+                            scroll.content_h = dl.sidebar_scroll.content_h;
+                            scroll.viewport_h = dl.sidebar_viewport.h;
+                        }
+                    }
+                    scroll.scroll_by(dy);
+                    scroll.clamp();
+                    self.kit_demo_sidebar_scroll = scroll;
+                    self.request_redraw();
+                    return;
+                }
+            }
             let sections = crate::kit_ui::gallery_scroll_viewport(viewport);
             if crate::kit_ui::cursor_in(&sections, self.cursor) {
                 let dy = match delta {
@@ -5028,16 +5055,34 @@ impl App {
                 let mut m = crate::kit_ui::new_measurer();
                 let mut fs = canvas_render::text::measure_font_system();
                 let palette = self.effective_palette().kit_palette();
-                let lay = crate::kit_ui::gallery_layout(
-                    viewport,
-                    self.settings.language,
-                    &scroll,
-                    &palette,
-                    &mut m,
-                    &mut fs,
-                );
-                scroll.viewport_h = lay.sections_viewport.h;
-                scroll.content_h = lay.content_h;
+                // Wave D v1.1: в TO-BE полная высота колонки — от TO-BE
+                // раскладки (секции Wave C длиннее AS-IS; прежний кламп по
+                // AS-IS-высоте не давал докрутить хвост колесом).
+                let content_h_and_vp = if self.kit_demo.tobe {
+                    let lay = crate::kit_ui::gallery_layout_tobe(
+                        viewport,
+                        self.settings.language,
+                        &scroll,
+                        &self.kit_demo_sidebar_scroll,
+                        &palette,
+                        &mut m,
+                        &mut fs,
+                        &self.kit_demo,
+                    );
+                    (lay.content_h, lay.sections_viewport.h)
+                } else {
+                    let lay = crate::kit_ui::gallery_layout(
+                        viewport,
+                        self.settings.language,
+                        &scroll,
+                        &palette,
+                        &mut m,
+                        &mut fs,
+                    );
+                    (lay.content_h, lay.sections_viewport.h)
+                };
+                scroll.viewport_h = content_h_and_vp.1;
+                scroll.content_h = content_h_and_vp.0;
                 scroll.scroll_by(dy);
                 scroll.clamp();
                 self.kit_gallery_scroll = scroll;
