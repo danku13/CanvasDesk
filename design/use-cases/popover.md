@@ -66,9 +66,9 @@ policy)». Анимация показа — на потребителе: ком
 `crates/canvas-ui/src/component/popover.rs` — `popover()`, `PopoverLayout`;
 тесты флипа/стрелки — в модуле (`#[cfg(test)]`). `AnchoredSide` —
 `crates/canvas-ui/src/component/dropdown.rs` (121–130). Фасад —
-`crates/canvas-ui/src/kit.rs` (106). Потребителей в `crates/canvas-app` нет;
-секции витрины в `crates/canvas-app/src/kit_ui.rs` нет (константы `SECTION_*`
-её не содержат), в реестре K1 компонента нет — долг K1.1/K4.
+`crates/canvas-ui/src/kit.rs` (106). Потребителей в `crates/canvas-app` нет. Витрина: секция popover в
+`crates/canvas-app/src/kit_sections_k4.rs` (K4) — 2 ряда якорь+пузырь
+с флипом Top/Bottom; в реестре K1 компонента нет — долг K1.1.
 
 ## 8. Что меняется при правке файла
 - Логика флипа/зазоров → модуль + его юнит-тесты; G4-линт поверхностей.

@@ -73,9 +73,9 @@ Expand, Collapse, Activate, None} объявлен, резолвера `tree_key
 ## 7. Где в коде
 `crates/canvas-ui/src/component/tree.rs` — `TreeNode` (+ билдеры
 `new`/`child`/`expanded`), `tree_layout`/`TreeRow`, `tree_hit`, `TreeAction`;
-ре-экспорт из `crates/canvas-ui/src/kit.rs` (строки 129–130). Витрина
-UI-консоли: секции в `crates/canvas-app/src/kit_ui.rs` нет (нарушение K4 —
-аналог W2 из `../rules/10-components.md`).
+ре-экспорт из `crates/canvas-ui/src/kit.rs` (строки 129–130). Витрина: секция tree в `crates/canvas-app/src/kit_sections_k4.rs`
+(K4) — 4 ряда Normal/Hovered/Selected/Disabled, раскрытые и свёрнутые
+узлы (индент уровня 16).
 
 ## 8. Что меняется при правке файла
 - Геометрия/flatten → `tree_layout` + юнит-тесты модуля

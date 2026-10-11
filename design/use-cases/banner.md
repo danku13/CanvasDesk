@@ -74,7 +74,7 @@ Pressed > Hovered > Focused > Dragged > Selected > Normal), стиль чере�
 `crates/canvas-ui/src/kit.rs`. Потребители: `crates/canvas-app/src/autolink_ui.rs`
 (`banner_layout`, Error), `crates/canvas-app/src/app/overlays.rs` (Warning),
 `crates/canvas-app/src/app/explain.rs` (через `autolink_ui::banner_layout`).
-Секции Banner в витрине `crates/canvas-app/src/kit_ui.rs` нет — бэклог W2 (K4).
+Витрина: секция Banner в `crates/canvas-app/src/kit_sections_k4.rs` (K4) — Normal/Hovered/Focused/Pressed/Dragged/Disabled парами в строках + Error во всю ширину; подписи ячеек — имена состояний.
 
 ## 8. Что меняется при правке файла
 - Высоты/пады/радиус → константы модуля + паритет `autolink_ui`/`explain.rs`
