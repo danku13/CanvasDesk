@@ -234,6 +234,13 @@ export interface TourOptions {
   /** localStorage key prefix for completion + resume state.
    *  Default: "cd-tour:". Set to null to disable persistence. */
   storageKey?: string | null;
+  /** Engine-level hooks (custom anchor resolver for non-DOM anchors —
+   *  e.g. canvas-internal element rects exposed by the host; custom
+   *  tooltip/dim renderers). Issue #63: опция существовала в дизайне
+   *  («Hosts may register a custom resolver»), но не была проброшена
+   *  из TourOptions — чип GPU теперь якорится селектором
+   *  "#gpu-canvas-chip", резолвер даёт хост. */
+  hooks?: TourHooks;
 }
 
 /** Options for `Tour.run()`. */

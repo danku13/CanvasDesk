@@ -127,7 +127,7 @@ pub mod id {
     /// Issue #60 (W-WEBUI): author-strip «ℹ Об авторе» — ambient-хром
     /// ЛЕВОГО НИЖНЕГО угла (L3, Capture — клик по пилюле открывает GPU
     /// модал About; web-only, дефолт — платформа сборки).
-    pub const AUTHOR_STRIP: &str = "author_strip";
+    pub const AUTHOR_BAR: &str = "author_bar";
     /// Issue #60: GPU-модал «Об авторе» (L5, Block — Esc/«✕»/клик мимо
     /// панели закрывают; строки-ссылки открывают URL через web-слой).
     pub const ABOUT: &str = "about";
@@ -625,13 +625,13 @@ pub fn build_registry(app: &App) -> SurfaceRegistry {
                 .with_degradation(AI_STATUS_DEGRADATION),
         );
     }
-    // Issue #60 (W-WEBUI): author-strip «ℹ Об авторе» — ambient-хром
-    // левого нижнего угла (бывший DOM #author-bar; web-only, дефолт —
-    // платформа сборки, G4-линт форсирует явно). Panels/Capture — как чип
-    // C4: клики по пилюле глотаются, любые панели/модали поверх.
-    if app.author_strip {
+    // Issue #63: author-bar — ambient-хром левого верхнего угла
+    // (визуальный паритет DOM #author-bar; web-only, дефолт — платформа
+    // сборки, G4-линт форсирует явно). Panels/Capture — как чип C4:
+    // клики по кнопкам глотаются, любые панели/модали поверх.
+    if app.author_bar {
         reg.add(SurfaceDecl::new(
-            id::AUTHOR_STRIP,
+            id::AUTHOR_BAR,
             UiLayer::Panels,
             CapturePolicy::Capture,
         ));
@@ -656,9 +656,9 @@ const VISUAL_ORDER: &[&str] = &[
     // FR-107 (C4): чип — самый нижний в Panels-полосе (ambient-хром:
     // любые панели/модали поверх него)
     id::CANVAS_CHIP,
-    // Issue #60 (W-WEBUI): author-strip — сосед чипа по ambient-хрому
-    // (нижний левый угол; модали поверх)
-    id::AUTHOR_STRIP,
+    // Issue #63: author-bar — сосед чипа по ambient-хрому
+    // (верхний левый угол; модали поверх)
+    id::AUTHOR_BAR,
     id::SETTINGS,
     id::HOTKEYS,
     id::CORNER_BUTTONS,
@@ -1262,20 +1262,16 @@ pub(crate) fn hotkeys_panel_rect(
     // ⚙/тема/язык/«?» — та же полоса Panels. Налезание было только
     // ВИЗУАЛЬНЫМ с фикса среза 2026-09-25: hit-rect реестра оставался
     // константным, линт слепого кадра его не видел; синхронизация pick с
-    // draw (эта функция) сделала налезание видимым линту. Расширение
-    // клампится левой кромкой кластера (зазор SETTINGS_GAP); у левых
-    // углов кластер не мешает правому краю панели — просто отступ от
-    // кромки вьюпорта. Цена компромисса: на самом узком окне G4 самое
-    // длинное RU-описание снова частично срезается — перекрытие
-    // интерактивных кнопок хуже срезанного текста.
-    let right_limit = match corner {
-        canvas_core::Corner::TopRight | canvas_core::Corner::BottomRight => {
-            (crate::ui::help_button_rect(corner, viewport)[0] - crate::ui::SETTINGS_GAP).max(0.0)
-        }
-        canvas_core::Corner::TopLeft | canvas_core::Corner::BottomLeft => {
-            (viewport[0] - crate::ui::SETTINGS_MARGIN).max(0.0)
-        }
-    };
+    // draw (эта функция) сделала налезание видимым линту. #63: чип
+    // активного канваса теперь живёт слева от «?» (правый верхний угол,
+    // ВСЕГДА — независимо от угла кластера) — правый предел панели =
+    // гарантированный левый край чипа (worst case капа ширины, без
+    // замеров — W3.2) минус зазор. Цена компромисса та же: на самом
+    // узком окне G4 самое длинное RU-описание частично срезается —
+    // перекрытие интерактивных кнопок хуже срезанного текста.
+    let right_limit = (crate::canvas_chip_ui::chip_left_bound(viewport, corner)
+        - crate::ui::SETTINGS_GAP)
+        .max(0.0);
     panel[2] = panel[2].min((right_limit - panel[0]).max(0.0));
     panel
 }
@@ -1829,38 +1825,39 @@ fn fill_hit_rects(app: &App, surface: &mut SurfaceFrame, vw: f32, vh: f32) {
         // (менеджер). Значок ошибки №29b — маркер, не интерактивен (живёт
         // в зоне имени). Порядок: иконка ПОСЛЕ имени — реверс-обход pick'а
         // отдаёт стык иконке (правый край — частый жест «открыть список»).
+        // #63: чип в правом верхнем углу — при открытой агент-панели
+        // (правые 388px во всю высоту) накрыт ею, как CORNER_BUTTONS:
+        // hit-rect'ы не публикуются («ввод = тому, что видно», П5/LAY1.2).
         id::CANVAS_CHIP => {
-            let lay = app.chip_layout_current(viewport);
-            if lay.name[2] > 0.0 {
-                surface
-                    .hit_rects
-                    .push(HitRect::interactive(rect(lay.name), "chip-name"));
-            }
-            if lay.icon[2] > 0.0 {
-                surface
-                    .hit_rects
-                    .push(HitRect::interactive(rect(lay.icon), "chip-list"));
+            let agent_covers = app.agent_panel_rect().is_some();
+            if !agent_covers {
+                let lay = app.chip_layout_current(viewport);
+                if lay.name[2] > 0.0 {
+                    surface
+                        .hit_rects
+                        .push(HitRect::interactive(rect(lay.name), "chip-name"));
+                }
+                if lay.icon[2] > 0.0 {
+                    surface
+                        .hit_rects
+                        .push(HitRect::interactive(rect(lay.icon), "chip-list"));
+                }
             }
         }
-        // Issue #60 (W-WEBUI): author-strip — пилюля целиком (клик —
-        // открыть GPU-модал About). Геометрия — та же чистая
-        // `about_ui::strip_layout`, что рисует overlays (draw == hit);
-        // ширина подписи — TextMeasurer (как у чипа канваса).
-        id::AUTHOR_STRIP => {
-            let lang = app.settings.language;
-            let label = crate::i18n::tr(lang, keys::MENU_ABOUT);
-            let mut m = canvas_ui::measure::TextMeasurer::new();
-            let mut fs = canvas_render::text::measure_font_system();
-            let label_w = m.width_of(
-                &mut fs,
-                label,
-                canvas_render::text::SANS_FAMILY,
-                canvas_core::tokens::FONT_CAPTION,
-            ) + canvas_core::tokens::SPACING_MD;
-            let lay = crate::about_ui::strip_layout(viewport, label_w);
-            surface
-                .hit_rects
-                .push(HitRect::interactive(rect(lay.pill), "strip-about"));
+        // Issue #63: author-bar — кнопки ряда (draw == hit: та же чистая
+        // `about_ui::author_bar_layout`, что рисует overlays). UR-003:
+        // развёрнутый док палитры сдвигает ряд (в сигнатуре кадра — флаг
+        // TEMPLATE_PANEL_OPEN).
+        id::AUTHOR_BAR => {
+            let lay = crate::about_ui::author_bar_layout(viewport, app.template_panel.open);
+            for (index, button) in lay.buttons.iter().enumerate() {
+                if button[2] > 0.0 {
+                    surface.hit_rects.push(HitRect::interactive(
+                        rect(*button),
+                        format!("author-bar-{index}"),
+                    ));
+                }
+            }
         }
         // Issue #60 (W-WEBUI): модал «Об авторе» — «✕», строки-ссылки и
         // тело панели (клик внутри окна глотается, модаль жива; backdrop

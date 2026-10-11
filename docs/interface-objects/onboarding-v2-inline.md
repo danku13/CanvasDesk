@@ -275,7 +275,8 @@ WebGPU-renderer, рисующий dim прямо в канвас).
 
 1. `trunk serve` (см. `scripts/web_bundle.sh`) — поднять web-shell.
 2. Открыть `http://localhost:8080/`.
-3. Нажать «Тур» в `#w6-toolbar` → выбрать сценарий.
+3. Правый клик по пустому месту → «Тур…» → выбрать сценарий
+   (DOM-тулбар `#w6-toolbar` удалён в CR-035, вход — через меню канваса).
 4. Пройти шаги; проверить:
    - tooltip виден и не уезжает за viewport;
    - cutout подсвечивает якорь;
@@ -287,9 +288,10 @@ WebGPU-renderer, рисующий dim прямо в канвас).
 Puppeteer/Playwright:
 
 1. Открыть `index.html`.
-2. `page.click("#btn-tour")`.
+2. ПКМ по пустому месту → пункт «Тур…» → первый сценарий
+   (или URL `#tour=cd-first-run-inline`).
 3. `page.on("dialog", d => d.accept("1"))`.
-4. Дождаться `.cd-tour-tooltip` с текстом «Панель хранилища».
+4. Дождаться `.cd-tour-tooltip` шага «Канвасы и хранилище».
 5. `page.click(".cd-tour-btn_primary")` × N.
 6. Проверить: тур закрылся, `tour:<id>:complete` signal эмитился.
 
@@ -303,15 +305,22 @@ Puppeteer/Playwright:
 - `docs/change-requests/fr-028-onboarding-carousel.md` — FR-028.
 - `sdk/web-onboarding/README.md` — справочник API библиотеки.
 - `crates/canvas-web/index.html` — точка интеграции (`<script>`-тег,
-  кнопка «Тур»).
+  резолвер GPU-якорей `#gpu-canvas-chip` — issue #63).
 - `crates/canvas-app/src/onboarding_ui.rs` — Rust-реализация v1.
-- `crates/canvas-web/src/toolbar.rs` — листенеры W6-тулбара
-  (Rust-side кнопок `#btn-open` / `#btn-recent` / `#btn-export`).
+- Вход в тур — подменю «Тур…» меню канваса (сигнал `ui:run-tour:<id>`;
+  DOM-тулбар и `toolbar.rs` удалены в CR-035).
 
 ---
 
 ## 10. История изменений
 
+- `2026-10-12` — агент (#63, фикс вёрстки после CR-035): якоря чипа
+  канваса переведены на селектор `#gpu-canvas-chip` (позиция чипа —
+  правый верхний угол, слева от «?»); движок дополнен опцией
+  `TourOptions.hooks` (резолвер GPU-якорей хостом — индекс.html
+  вычисляет rect из вьюпорта + localStorage-конфига угла кластера);
+  тексты RU/EN шагов указывают на правый верхний угол. Сценарий
+  `cd-toolbar-tour` удалён ещё в CR-035 вместе с DOM-тулбаром.
 - `2026-10-03` — агент (FR-089): пикер первого запуска (та же точка
   интеграции `crates/canvas-web/index.html`) дополнен блоком согласий
   телеметрии «Помочь проекту» — два предвыбранных чекбокса (анонимный

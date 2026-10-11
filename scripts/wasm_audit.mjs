@@ -35,16 +35,20 @@ const C = Object.assign(
     // (empty_buttons: slot inset 10, btn_w 175, EMPTY_BTN_H 34 → центр ≈ 732×468
     // на вьюпорте 1280×800)
     EMPTY_DISMISS: [732, 468],
-    HELP: [1163, 66], // кнопка «?» — после WEB_TOOLBAR_INSET y=48..84
-    THEME: [1204, 66], // угловая кнопка темы
-    GEAR: [1249, 66], // угловая кнопка настроек ⚙
-    // пункты меню «?» — меню якорится к верху кнопки «?» (y=48):
-    // первый пункт больше не под DOM-тулбаром (фикс D2)
-    MI_DOCS: [1000, 68],
-    MI_ONBOARD: [1000, 96],
-    MI_GALLERY: [1000, 124],
-    MI_KIT: [1035, 152],
-    MI_ADMIN: [1035, 180],
+    // Issue #63: WEB_TOOLBAR_INSET удалён — кластер ⚙/☼/RU-EN/? у верхней
+    // кромки y=12..48 (центр ряда y=30). Прежние значения [*,66] держали
+    // кнопки на y=48..84 (легаси-инсет под удалённый DOM-тулбар), а метка
+    // HELP указывала на кнопку ЯЗЫКА (1144..1180) — клики «help_menu»
+    // фактически переключали язык.
+    HELP: [1118, 30], // кнопка «?» — центр ряда у кромки
+    THEME: [1206, 30], // угловая кнопка темы
+    GEAR: [1250, 30], // угловая кнопка настроек ⚙
+    // пункты меню «?» — меню якорится к верху кнопки «?» (y=12)
+    MI_DOCS: [1000, 32],
+    MI_ONBOARD: [1000, 60],
+    MI_GALLERY: [1000, 88],
+    MI_KIT: [1035, 116],
+    MI_ADMIN: [1035, 144],
     CANVAS: [640, 400], // центр канваса
   },
   process.env.COORDS_JSON ? JSON.parse(process.env.COORDS_JSON) : {},
@@ -55,9 +59,9 @@ const STEPS = [
   { g: 'probe', name: '00_onboarding', url: '/', actions: [['wait', 1200], ['shot']] },
   { g: 'probe', name: '01_idle', url: '/', actions: [['click', C.SKIP], ['wait', 900], ['shot']] },
   { g: 'probe', name: '02_help_menu', url: '/', actions: [['click', C.SKIP], ['click', C.HELP], ['wait', 900], ['shot']] },
-  { g: 'probe2', name: '03_corner_mid', url: '/', actions: [['click', C.SKIP], ['click', [1204, 44]], ['wait', 1000], ['shot']] },
-  { g: 'probe2', name: '04_corner_right', url: '/', actions: [['click', C.SKIP], ['click', [1249, 44]], ['wait', 1000], ['shot']] },
-  { g: 'probe2', name: '05_docs_lower', url: '/', actions: [['click', C.SKIP], ['click', C.HELP], ['wait', 600], ['click', [1000, 42]], ['wait', 1200], ['shot']] },
+  { g: 'probe2', name: '03_corner_mid', url: '/', actions: [['click', C.SKIP], ['click', [1204, 56]], ['wait', 1000], ['shot']] },
+  { g: 'probe2', name: '04_corner_right', url: '/', actions: [['click', C.SKIP], ['click', [1249, 56]], ['wait', 1000], ['shot']] },
+  { g: 'probe2', name: '05_docs_lower', url: '/', actions: [['click', C.SKIP], ['click', C.HELP], ['wait', 600], ['click', [1000, 10]], ['wait', 1200], ['shot']] },
 
   // ---------- RU: панели ----------
   { g: 'ru_panels', name: '10_empty', url: '/', actions: [['click', C.SKIP], ['wait', 900], ['shot']] },

@@ -121,7 +121,7 @@ export const schemeGalleryTourScenario: TourScenario = {
         "выбранную папку на диске после переезда в менеджере. Экспорт " +
         ".canvas и HTML — кнопки менеджера и меню правого клика.",
       side: "bottom",
-      anchor: { kind: "rect", rect: { x: 12, y: 12, width: 170, height: 30 } },
+      anchor: { kind: "selector", selector: "#gpu-canvas-chip" },
     },
     {
       id: "done",

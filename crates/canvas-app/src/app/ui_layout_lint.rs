@@ -78,11 +78,12 @@ fn lint_frame(frame: &UiFrame, viewport: [f32; 2], tag: &str) {
         overlaps
             .iter()
             .map(|o| format!(
-                "{}:{} × {}:{}",
+                "{}:{} × {}:{} пересечение {:?}",
                 o.a_surface.as_str(),
                 o.a_element,
                 o.b_surface.as_str(),
-                o.b_element
+                o.b_element,
+                o.at
             ))
             .collect::<Vec<_>>()
     );
@@ -525,9 +526,9 @@ fn lint_hotkeys_open() {
 /// Чип «ℹ Об авторе» внизу-слева (web-хром: в нативных тест-кадрах скрыт
 /// по умолчанию — линт форсирует явно, как это делает web-сборка).
 #[test]
-fn lint_author_strip_visible() {
-    lint_state("author_strip", |app, _vp| {
-        app.author_strip = true;
+fn lint_author_bar_visible() {
+    lint_state("author_bar", |app, _vp| {
+        app.author_bar = true;
     });
 }
 
@@ -546,13 +547,13 @@ fn lint_about_open() {
     assert_backdrop_is(&frame, crate::app::ui_registry::id::ABOUT);
 }
 
-/// Обе поверхности сразу: strip остаётся ПОД модалью (VISUAL_ORDER:
-/// AUTHOR_STRIP — Panels-полоса, ABOUT — Modals) — пересечений
+/// Обе поверхности сразу: author-bar остаётся ПОД модалью (VISUAL_ORDER:
+/// AUTHOR_BAR — Panels-полоса, ABOUT — Modals) — пересечений
 /// интерактивных зон одного слоя нет.
 #[test]
-fn lint_about_over_strip() {
-    lint_state("about_strip", |app, _vp| {
-        app.author_strip = true;
+fn lint_about_over_author_bar() {
+    lint_state("about_author_bar", |app, _vp| {
+        app.author_bar = true;
         app.about_open = true;
     });
 }

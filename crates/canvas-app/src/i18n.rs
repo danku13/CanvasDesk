@@ -2167,7 +2167,7 @@ const RU: &[(&str, &str)] = &[
     (keys::ONBOARDING_STEP9_TITLE, "Одна работа — один канвас"),
     (
         keys::ONBOARDING_STEP9_BODY,
-        "Не сваливайте всё в один файл: новая работа — новый канвас. Так проще возвращаться к задачам, ничего не теряется, а список канвасов всегда под рукой — иконка списка в левом верхнем углу.",
+        "Не сваливайте всё в один файл: новая работа — новый канвас. Так проще возвращаться к задачам, ничего не теряется, а список канвасов всегда под рукой — иконка списка в правом верхнем углу, слева от кнопки «?».",
     ),
     (keys::ONBOARDING_MULTICANVAS_CTA, "Создать канвас"),
     // --- Меню «?» и документация ---
@@ -3798,7 +3798,7 @@ const EN: &[(&str, &str)] = &[
     (keys::ONBOARDING_STEP9_TITLE, "One task — one canvas"),
     (
         keys::ONBOARDING_STEP9_BODY,
-        "Don't pile everything into one file: a new task is a new canvas. It's easier to come back to your work, nothing gets lost, and the canvas list is always at hand — the list icon in the top-left corner.",
+        "Don't pile everything into one file: a new task is a new canvas. It's easier to come back to your work, nothing gets lost, and the canvas list is always at hand — the list icon in the top-right corner, to the left of the «?» button.",
     ),
     (keys::ONBOARDING_MULTICANVAS_CTA, "Create a canvas"),
     // --- Help menu and docs viewer ---

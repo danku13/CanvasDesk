@@ -7844,11 +7844,14 @@ impl App {
             let hint = crate::i18n::tr(lang, keys::CANVAS_CHIP_RENAME_HINT);
             let hint_w = m.width_of(&mut fs, hint, canvas_render::text::SANS_FAMILY, caption)
                 + canvas_core::tokens::SPACING_MD;
+            // #63: чип в правом углу — подсказка СЛЕВА от пилюли (справа
+            // кластер «?»/кромка экрана). Кламп к левому краю вьюпорта.
+            let hint_x = (lay.pill[0] - canvas_core::tokens::SPACING_SM - hint_w).max(0.0);
             d.label_left(
                 canvas_ui::geometry::UiRect::new(
-                    lay.pill[0] + lay.pill[2] + canvas_core::tokens::SPACING_SM,
+                    hint_x,
                     lay.pill[1] + (lay.pill[3] - caption - 2.0).max(0.0) * 0.5,
-                    hint_w.min((viewport[0] - lay.pill[0] - lay.pill[2]).max(0.0)),
+                    hint_w.min(lay.pill[0]),
                     caption + 2.0,
                 ),
                 hint,
@@ -7977,12 +7980,14 @@ impl App {
         out
     }
 
-    /// Issue #60 (W-WEBUI): author-strip — чип «ℹ Об авторе» внизу-слева
-    /// (замена DOM `#author-bar`, web-only; клик — GPU-модал About).
-    /// Паттерн чипа C4: пилюля `kit::chip_style`, иконка + подпись,
-    /// hover — вся пилюля. Геометрия — чистая `about_ui::strip_layout`
-    /// (одна для отрисовки/ввода/реестра — draw == hit).
-    pub(super) fn author_strip_overlay(
+    /// Issue #63: GPU author-bar — ряд из 5 иконок в ЛЕВОМ ВЕРХНЕМ углу
+    /// (web-only; визуальный паритет удалённого DOM `#author-bar`:
+    /// кнопки 28×28 с фоном/рамкой/радиусом, зазор 4, отступ 8, иконка
+    /// 16×16 по центру). Развёрнутый док палитры сдвигает ряд правее
+    /// себя (UR-003-паритет). Клик — `WebRequest::OpenUrl` (4 ссылки)
+    /// или GPU-модал About (ℹ). Геометрия — чистая
+    /// `about_ui::author_bar_layout` (draw == hit).
+    pub(super) fn author_bar_overlay(
         &self,
     ) -> (
         Vec<CardInstance>,
@@ -7997,13 +8002,7 @@ impl App {
         let kit_palette = self.effective_palette().kit_palette();
         let lang = self.settings.language;
         let caption = canvas_core::tokens::FONT_CAPTION;
-        let label = crate::i18n::tr(lang, keys::MENU_ABOUT);
-        // Ширина подписи — ТОЛЬКО TextMeasurer (CR-015: без эвристик).
-        let mut m = crate::kit_ui::new_measurer();
-        let mut fs = canvas_render::text::measure_font_system();
-        let label_w = m.width_of(&mut fs, label, canvas_render::text::SANS_FAMILY, caption)
-            + canvas_core::tokens::SPACING_MD;
-        let lay = crate::about_ui::strip_layout(viewport, label_w);
+        let lay = crate::about_ui::author_bar_layout(viewport, self.template_panel.open);
         let cursor = self.cursor;
         let hover = |r: [f32; 4]| {
             cursor[0] >= r[0]
@@ -8013,58 +8012,67 @@ impl App {
         };
         let mut d = crate::kit_ui::KitDraw::new();
         d.set_icon_set(self.icon_set_active());
-        let mut pill_widget = WidgetState::default();
-        pill_widget.set_pointer(hover(lay.pill), false);
-        let pill_style = canvas_ui::kit::chip_style(pill_widget.kit_state(), &kit_palette);
-        let pill =
-            canvas_ui::geometry::UiRect::new(lay.pill[0], lay.pill[1], lay.pill[2], lay.pill[3]);
-        d.control(pill, &pill_style);
-        // Иконка «ℹ» (SVG-атлас FR-ICONS; Glyph-фолбэк — U+2139 из
-        // NotoSansDisplay).
-        let icon = canvas_ui::geometry::UiRect::new(
-            lay.icon[0] + 5.0,
-            lay.icon[1] + 5.0,
-            (lay.icon[2] - 10.0).max(0.0),
-            (lay.icon[3] - 10.0).max(0.0),
-        );
-        d.icon(icon, "info", "ℹ", pill_style.text, caption);
-        // Подпись «Об авторе».
-        d.label_left(
-            canvas_ui::geometry::UiRect::new(
-                lay.label[0],
-                lay.label[1] + (lay.pill[3] - caption - 2.0).max(0.0) * 0.5,
-                lay.label[2],
-                caption + 2.0,
-            ),
-            label,
-            kit_palette.text_title,
-            caption,
-        );
-        // Тултип зоны (не интерактивен).
-        if hover(lay.pill) {
-            let hint = crate::i18n::tr(lang, keys::STRIP_ABOUT);
-            let hint_w = m.width_of(&mut fs, hint, canvas_render::text::SANS_FAMILY, caption)
-                + canvas_core::tokens::SPACING_MD * 2.0;
-            let h = caption + 8.0;
-            let x = lay.pill[0];
-            let y = (lay.pill[1] - canvas_core::tokens::SPACING_SM - h).max(0.0);
-            d.rect(
-                canvas_ui::geometry::UiRect::new(x, y, hint_w.min((viewport[0] - x).max(0.0)), h),
-                kit_palette.panel_fill,
-                kit_palette.panel_border,
-                canvas_core::tokens::RADIUS_CHIP,
+        // Кнопки — кит-контролы со своим hover (кнопка = зона, DOM-паритет
+        // «иконки с ссылками»; иконка 16×16 по центру, как #author-bar svg).
+        for (index, (rect, button)) in lay
+            .buttons
+            .iter()
+            .zip(crate::about_ui::AUTHOR_BAR_BUTTONS.iter())
+            .enumerate()
+        {
+            if rect[2] <= 0.0 || rect[3] <= 0.0 {
+                continue; // вырожденный вьюпорт
+            }
+            let mut widget = WidgetState::default();
+            widget.set_pointer(hover(*rect), false);
+            let style = canvas_ui::kit::icon_button_style(widget.kit_state(), &kit_palette);
+            d.control(
+                canvas_ui::geometry::UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                &style,
             );
-            d.label_left(
-                canvas_ui::geometry::UiRect::new(
-                    x + canvas_core::tokens::SPACING_MD,
-                    y + 4.0,
-                    hint_w,
-                    caption + 1.0,
-                ),
-                hint,
-                kit_palette.text,
-                caption,
+            // DOM-паритет: SVG 16×16 в кнопке 28×28 — центрированная
+            // вписка (не на всю кнопку: иконки «дышат» полями).
+            let icon = canvas_ui::geometry::UiRect::new(
+                rect[0] + (rect[2] - 16.0) * 0.5,
+                rect[1] + (rect[3] - 16.0) * 0.5,
+                16.0_f32.min(rect[2]),
+                16.0_f32.min(rect[3]),
             );
+            d.icon(icon, button.icon, button.glyph, style.text, caption);
+            // Тултип кнопки (не интерактивен): мини-панель ПОД кнопкой.
+            if hover(*rect) {
+                let tip = crate::i18n::tr(lang, button.tip_key);
+                let mut m = crate::kit_ui::new_measurer();
+                let mut fs = canvas_render::text::measure_font_system();
+                let tip_w = m.width_of(&mut fs, tip, canvas_render::text::SANS_FAMILY, caption)
+                    + canvas_core::tokens::SPACING_MD * 2.0;
+                let h = caption + 8.0;
+                let x = rect[0];
+                let y = rect[1] + rect[3] + canvas_core::tokens::SPACING_SM;
+                d.rect(
+                    canvas_ui::geometry::UiRect::new(
+                        x,
+                        y,
+                        tip_w.min((viewport[0] - x).max(0.0)),
+                        h,
+                    ),
+                    kit_palette.panel_fill,
+                    kit_palette.panel_border,
+                    canvas_core::tokens::RADIUS_CHIP,
+                );
+                d.label_left(
+                    canvas_ui::geometry::UiRect::new(
+                        x + canvas_core::tokens::SPACING_MD,
+                        y + 4.0,
+                        tip_w,
+                        caption + 1.0,
+                    ),
+                    tip,
+                    kit_palette.text,
+                    caption,
+                );
+                let _ = index;
+            }
         }
         out.0 = d.quads;
         out.1 = d

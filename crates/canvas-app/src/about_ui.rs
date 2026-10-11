@@ -213,51 +213,133 @@ pub fn point_in_rect(rect: [f32; 4], point: [f32; 2]) -> bool {
 }
 
 // ============================================================================
-// Issue #60: GPU author-strip — чип «Об авторе» внизу-слева (web-only)
+// Issue #63: GPU author-bar — ряд из 5 иконок в ЛЕВОМ ВЕРХНЕМ углу
+// (web-only; визуальный паритет DOM `#author-bar`, удалённого в CR-035)
 // ============================================================================
 
-/// Высота чипа author-strip (ряд нижнего хрома — как поле поиска,
-/// `kit::BUTTON_HEIGHT`, паритет `canvas_chip_ui::CHIP_H`).
-pub const STRIP_CHIP_H: f32 = kit::BUTTON_HEIGHT;
-/// Отступ чипа от края вьюпорта (тот же ряд, что у чипа канваса —
-/// `tokens::SPACING_LG`).
-pub const STRIP_MARGIN: f32 = tokens::SPACING_LG;
+/// Сторона кнопки author-bar (лог. px; DOM-паритет `#author-bar a` — 28×28).
+pub const BAR_BTN: f32 = 28.0;
+/// Зазор между кнопками (DOM gap: 4px).
+pub const BAR_GAP: f32 = 4.0;
+/// Отступ ряда от левого/верхнего края (DOM top/left: 8px).
+pub const BAR_MARGIN: f32 = 8.0;
 
-/// Раскладка author-strip: чип «ℹ Об авторе» в левом нижнем углу
-/// (web-only — прежняя DOM `#author-bar` жила в top-left и перекрывала
-/// чип канваса, issue #57; нижний левый угол на web всегда свободен:
-/// тулбар №37b убран, what-if — по центру, миникарта — справа).
+/// Действие кнопки author-bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorBarAction {
+    /// Внешняя ссылка (web — `WebRequest::OpenUrl` → `window.open`).
+    Url(&'static str),
+    /// ℹ — открыть GPU-модал «Об авторе» (о нём — секция выше).
+    About,
+}
+
+/// Кнопка author-bar: иконка SVG-атласа (фолбэк — короткая текстовая
+/// метка: брендовых глифов во встроенных шрифтах нет), тултип — i18n.
+#[derive(Debug, Clone, Copy)]
+pub struct AuthorBarButton {
+    /// Имя иконки в SVG-атласе (rasterize_icons.py, #63).
+    pub icon: &'static str,
+    /// Glyph-фолбэк (набор «Glyph» в настройках иконок).
+    pub glyph: &'static str,
+    /// i18n-ключ тултипа (hover).
+    pub tip_key: &'static str,
+    /// Действие по клику.
+    pub action: AuthorBarAction,
+}
+
+/// Кнопки author-bar (порядок = прежний DOM `#author-bar`).
+pub const AUTHOR_BAR_BUTTONS: [AuthorBarButton; 5] = [
+    AuthorBarButton {
+        icon: "github",
+        glyph: "GH",
+        tip_key: crate::i18n::keys::STRIP_GITHUB,
+        action: AuthorBarAction::Url("https://github.com/danku13/CanvasDesk"),
+    },
+    AuthorBarButton {
+        icon: "telegram",
+        glyph: "TG",
+        tip_key: crate::i18n::keys::STRIP_TELEGRAM,
+        action: AuthorBarAction::Url("https://t.me/dkuzmichev"),
+    },
+    AuthorBarButton {
+        icon: "linkedin",
+        glyph: "in",
+        tip_key: crate::i18n::keys::STRIP_LINKEDIN,
+        action: AuthorBarAction::Url("https://www.linkedin.com/in/daniil-kuzmichev/"),
+    },
+    AuthorBarButton {
+        icon: "heart",
+        glyph: "$",
+        tip_key: crate::i18n::keys::STRIP_DONATE,
+        action: AuthorBarAction::Url("https://donationalerts.com/r/danku13"),
+    },
+    AuthorBarButton {
+        icon: "info",
+        glyph: "ℹ",
+        tip_key: crate::i18n::keys::STRIP_ABOUT,
+        action: AuthorBarAction::About,
+    },
+];
+
+/// Раскладка author-bar: ряд кнопок в левом верхнем углу (топ-лево —
+/// чип канваса переехал вправо в #63, угол свободен). Развёрнутый левый
+/// док палитры сдвигает ряд правее себя (UR-003-паритет, как делал
+/// прежний DOM-бар `cd-panel-left` и чип до #63) — кламп держит ряд
+/// на экране у узкого окна (ширина ряда 5×28+4×4 = 156).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct StripLayout {
-    /// Пилюля чипа (фон/рамка).
-    pub pill: [f32; 4],
-    /// Зона иконки «ℹ» (слева, квадрат).
-    pub icon: [f32; 4],
-    /// Зона подписи «Об авторе» (правее иконки).
-    pub label: [f32; 4],
+pub struct AuthorBarLayout {
+    /// Rect ряда (фон не рисуется — кнопки самодостаточны, как в DOM).
+    pub bar: [f32; 4],
+    /// Rect кнопки каждой из [`AUTHOR_BAR_BUTTONS`] (draw == hit).
+    pub buttons: [[f32; 4]; AUTHOR_BAR_BUTTONS.len()],
 }
 
-/// Раскладка author-strip от вьюпорта и измеренной ширины подписи
-/// (`label_w` — измеренное потребителем `TextMeasurer::width_of` + пад).
-pub fn strip_layout(viewport: [f32; 2], label_w: f32) -> StripLayout {
-    let icon_zone = STRIP_CHIP_H;
-    let width = (label_w + icon_zone).max(STRIP_CHIP_H);
-    let x = STRIP_MARGIN;
-    let y = (viewport[1] - STRIP_MARGIN - STRIP_CHIP_H).max(0.0);
-    let pill = [x, y, width, STRIP_CHIP_H];
-    let icon = [pill[0], pill[1], icon_zone, STRIP_CHIP_H];
-    let label = [
-        pill[0] + icon_zone,
-        pill[1],
-        (width - icon_zone).max(0.0),
-        STRIP_CHIP_H,
-    ];
-    StripLayout { pill, icon, label }
+/// Сдвиг author-bar правее развёрнутого левого дока палитры
+/// (UR-003-паритет): `PANEL_MARGIN + PANEL_WIDTH + зазор` — тот же край,
+/// за который уходили DOM-бары (`cd-panel-left`). Константы дока —
+/// `template_ui` (единственный источник).
+pub fn template_dock_offset() -> f32 {
+    crate::template_ui::PANEL_MARGIN + crate::template_ui::PANEL_WIDTH + tokens::SPACING_SM
 }
 
-/// Зона чипа author-strip под точкой: true — клик (открыть модал).
-pub fn strip_hit(lay: &StripLayout, point: [f32; 2]) -> bool {
-    point_in_rect(lay.pill, point)
+/// Ширина ряда author-bar (все наборы кнопок — константа).
+pub fn author_bar_width() -> f32 {
+    AUTHOR_BAR_BUTTONS.len() as f32 * BAR_BTN + (AUTHOR_BAR_BUTTONS.len() - 1) as f32 * BAR_GAP
+}
+
+/// Раскладка author-bar от вьюпорта и флага развёрнутого левого дока.
+/// Вырожденный вьюпорт (нулевая ширина) — ряд схлопывается в кромку,
+/// без паники; климп сдвига — DOM-паритет `translateX(min(352px,
+/// calc(100vw − 172px)))`: ряд не вылезает за правый край.
+pub fn author_bar_layout(viewport: [f32; 2], dock_open: bool) -> AuthorBarLayout {
+    let width = author_bar_width();
+    let shift = if dock_open {
+        template_dock_offset().min((viewport[0] - BAR_MARGIN - width - BAR_MARGIN).max(0.0))
+    } else {
+        0.0
+    };
+    let x = BAR_MARGIN + shift.max(0.0);
+    let y = BAR_MARGIN;
+    let mut buttons = [[0.0; 4]; AUTHOR_BAR_BUTTONS.len()];
+    for (index, button) in buttons.iter_mut().enumerate() {
+        *button = [
+            x + index as f32 * (BAR_BTN + BAR_GAP),
+            y,
+            BAR_BTN.min((viewport[0] - x).max(0.0)),
+            BAR_BTN,
+        ];
+    }
+    AuthorBarLayout {
+        bar: [x, y, width, BAR_BTN],
+        buttons,
+    }
+}
+
+/// Зона author-bar под точкой: индекс кнопки (draw == hit) или None.
+pub fn author_bar_hit(lay: &AuthorBarLayout, point: [f32; 2]) -> Option<usize> {
+    lay.buttons
+        .iter()
+        .position(|rect| point_in_rect(*rect, point))
 }
 
 #[cfg(test)]
@@ -346,34 +428,69 @@ mod tests {
         assert_eq!(ABOUT_LINKS[3].url, "https://t.me/danku13");
     }
 
-    /// Author-strip: чип в левом нижнем углу, иконка квадратом слева.
+    /// Author-bar: ряд 5 кнопок 28×28 в левом верхнем углу (DOM-паритет
+    /// #author-bar: margin 8, gap 4).
     #[test]
-    fn strip_layout_bottom_left() {
-        let lay = strip_layout(VP, 90.0);
-        assert_eq!(lay.pill[0], STRIP_MARGIN);
-        assert_eq!(lay.pill[1] + lay.pill[3], VP[1] - STRIP_MARGIN);
-        assert_eq!(lay.icon[2], STRIP_CHIP_H);
-        assert_eq!(lay.icon[3], STRIP_CHIP_H);
-        assert_eq!(lay.label[0], lay.pill[0] + STRIP_CHIP_H);
-        // Минимальная ширина — квадрат пилюли.
-        let tiny = strip_layout(VP, 0.0);
-        assert_eq!(tiny.pill[2], STRIP_CHIP_H);
+    fn author_bar_row_top_left_dom_parity() {
+        let lay = author_bar_layout(VP, false);
+        assert_eq!(lay.bar[0], BAR_MARGIN);
+        assert_eq!(lay.bar[1], BAR_MARGIN);
+        assert_eq!(lay.bar[3], BAR_BTN);
+        assert!((lay.bar[2] - (5.0 * BAR_BTN + 4.0 * BAR_GAP)).abs() < 1e-4);
+        for (index, button) in lay.buttons.iter().enumerate() {
+            assert_eq!(button[1], BAR_MARGIN);
+            assert_eq!(button[2], BAR_BTN);
+            assert_eq!(button[3], BAR_BTN);
+            assert!((button[0] - (BAR_MARGIN + index as f32 * (BAR_BTN + BAR_GAP))).abs() < 1e-4);
+        }
     }
 
-    /// Hit чипа author-strip: внутри пилюли — true, вне — false.
+    /// Hit кнопок: центр каждой — свой индекс; между кнопками и вне — None.
     #[test]
-    fn strip_hit_inside_pill() {
-        let lay = strip_layout(VP, 90.0);
-        let cx = lay.pill[0] + lay.pill[2] * 0.5;
-        let cy = lay.pill[1] + lay.pill[3] * 0.5;
-        assert!(strip_hit(&lay, [cx, cy]));
-        assert!(!strip_hit(&lay, [VP[0] * 0.5, VP[1] * 0.5]));
+    fn author_bar_hit_returns_button_index() {
+        let lay = author_bar_layout(VP, false);
+        for (index, button) in lay.buttons.iter().enumerate() {
+            let c = [button[0] + BAR_BTN * 0.5, button[1] + BAR_BTN * 0.5];
+            assert_eq!(author_bar_hit(&lay, c), Some(index));
+        }
+        // Мимо ряда (правее последней кнопки и ниже ряда)
+        assert_eq!(
+            author_bar_hit(&lay, [lay.bar[0] + lay.bar[2] + 5.0, BAR_MARGIN]),
+            None
+        );
+        assert_eq!(
+            author_bar_hit(&lay, [BAR_MARGIN, BAR_MARGIN + BAR_BTN + 5.0]),
+            None
+        );
     }
 
-    /// Низкий вьюпорт: чип не уезжает за экран (y клампится в 0).
+    /// Развёрнутый док палитры сдвигает ряд правее себя; кламп держит
+    /// ряд на экране у узкого окна (DOM-паритет translateX(min(...))).
     #[test]
-    fn strip_layout_clamps_low_viewport() {
-        let lay = strip_layout([640.0, 20.0], 90.0);
-        assert!(lay.pill[1] >= 0.0);
+    fn author_bar_shifts_right_of_left_dock() {
+        let dock = template_dock_offset();
+        let lay = author_bar_layout(VP, true);
+        assert!((lay.bar[0] - (BAR_MARGIN + dock)).abs() < 1e-4, "за док");
+        // Узкое окно: сдвиг клампится — ряд виден целиком
+        let narrow = author_bar_layout([dock + 100.0, 800.0], true);
+        assert!(narrow.bar[0] + narrow.bar[2] <= dock + 100.0 - BAR_MARGIN + 0.01);
+        // Вырожденный вьюпорт — без паник, кнопки схлопываются по ширине
+        let tiny = author_bar_layout([0.0, 0.0], true);
+        assert!(tiny.buttons.iter().all(|b| b[2] <= 0.0 || b[0] >= 0.0));
+    }
+
+    /// Кнопки несут свои действия: 4 ссылки + модал About (порядок DOM).
+    #[test]
+    fn author_bar_buttons_carry_dom_actions() {
+        assert_eq!(
+            AUTHOR_BAR_BUTTONS[0].action,
+            AuthorBarAction::Url("https://github.com/danku13/CanvasDesk")
+        );
+        assert_eq!(
+            AUTHOR_BAR_BUTTONS[3].action,
+            AuthorBarAction::Url("https://donationalerts.com/r/danku13")
+        );
+        assert_eq!(AUTHOR_BAR_BUTTONS[4].action, AuthorBarAction::About);
+        assert_eq!(AUTHOR_BAR_BUTTONS[4].icon, "info");
     }
 }

@@ -269,18 +269,13 @@ pub mod ui {
     /// токен `canvas_core::tokens::SPACING_LG` (значение прежнего литерала 12).
     pub use canvas_core::tokens::SPACING_LG as SETTINGS_MARGIN;
 
-    /// Верхний отступ под DOM-панель хранилища (W6) на web. Тулбар
-    /// «Открыть с диска… / Недавние / Экспорт .canvas» занимает полосу
-    /// 8..36 px в правом верхнем углу и ПЕРЕКРЫВАЛ угловые GPU-кнопки
-    /// (обрезка иконок) и первый пункт меню «?» — «Документация» был
-    /// недоступен кликом (wasm-аудит 2026-09-25, скриншоты corner_3x,
-    /// 02_help_menu). На десктопе DOM-тулбара нет — 0.
-    #[cfg(target_arch = "wasm32")]
-    pub const WEB_TOOLBAR_INSET: f32 = 36.0;
-    #[cfg(not(target_arch = "wasm32"))]
-    pub const WEB_TOOLBAR_INSET: f32 = 0.0;
+    // Issue #63: инсет верхнего ряда web удалён вместе с DOM-тулбаром
+    // хранилища W6 (CR-035): кластер ⚙/☼/RU-EN/? сидит у верхней кромки
+    // y = SETTINGS_MARGIN на всех платформах (паритет с нативом).
+    // Прежний `WEB_TOOLBAR_INSET = 36.0` (wasm) держал кнопки ниже уже
+    // несуществующего DOM-хрома — «улетевшие» иконки владельца.
 
-    /// Зазор между кнопкой и панелью настроек — токен
+    // Зазор между кнопкой и панелью настроек — токен
     /// `canvas_core::tokens::SPACING_SM` (значение прежнего литерала 8).
     pub use canvas_core::tokens::SPACING_SM as SETTINGS_GAP;
     /// Ширина панели настроек.
@@ -316,19 +311,15 @@ pub mod ui {
     }
 
     /// Rect летающей кнопки настроек в логических px от угла окна.
-    /// WEB_TOOLBAR_INSET: на web кнопки правого ВЕРХНЕГО угла опускаются
-    /// под DOM-тулбар хранилища (иначе он их обрезает — wasm-аудит).
+    /// Все углы прижаты к кромке (SETTINGS_MARGIN) — DOM-хрома web
+    /// больше нет (CR-035/#63), компенсационные инсеты удалены.
     pub fn button_rect(corner: Corner, viewport: Vec2) -> [f32; 4] {
         let x = match corner {
             Corner::TopLeft | Corner::BottomLeft => SETTINGS_MARGIN,
             _ => viewport[0] - SETTINGS_MARGIN - SETTINGS_BUTTON,
         };
-        let top = SETTINGS_MARGIN + WEB_TOOLBAR_INSET;
         let y = match corner {
-            // DOM-тулбар хранилища — только в правом верхнем углу: inset
-            // нужен ТОЛЬКО там (TopLeft-кнопки с ним не пересекаются)
-            Corner::TopRight => top,
-            Corner::TopLeft => SETTINGS_MARGIN,
+            Corner::TopLeft | Corner::TopRight => SETTINGS_MARGIN,
             _ => viewport[1] - SETTINGS_MARGIN - SETTINGS_BUTTON,
         };
         [x, y, SETTINGS_BUTTON, SETTINGS_BUTTON]
@@ -3542,6 +3533,64 @@ pub mod ui {
                 let help = help_button_rect(corner, [320.0, 240.0]);
                 assert!(help[0] >= 0.0 && help[0] + help[2] <= 320.0, "{corner:?}");
             }
+        }
+
+        /// Issue #63: контракт верхнего хрома — кто в каком углу живёт.
+        /// Регрессия «улетевших» иконок: после удаления DOM-тулбара
+        /// (CR-035) компенсационный `WEB_TOOLBAR_INSET = 36` остался —
+        /// кластер висел на y=48..84 вместо кромки, и ни один гейт этого
+        /// не видел (нативные тесты инсет не знали — cfg(wasm32)).
+        /// Ассерты: кластер у верхней кромки (y = SETTINGS_MARGIN), чип —
+        /// в ряду кластера прижат к «?» (правый край = help.x − GAP),
+        /// flowmap — ниже ряда кластера, author-bar — топ-лево.
+        #[test]
+        fn top_chrome_contract_corners_and_rows() {
+            let viewport = [1280.0, 800.0];
+            // Кластер ⚙/☼/RU-EN/? — все 4 кнопки у верхней кромки, в ряд.
+            let gear = button_rect(Corner::TopRight, viewport);
+            let theme = theme_button_rect(Corner::TopRight, viewport);
+            let language = language_button_rect(Corner::TopRight, viewport);
+            let help = help_button_rect(Corner::TopRight, viewport);
+            for (name, rect) in [
+                ("gear", gear),
+                ("theme", theme),
+                ("language", language),
+                ("help", help),
+            ] {
+                assert_eq!(rect[1], SETTINGS_MARGIN, "{name}: у верхней кромки");
+            }
+            // Чип активного канваса — правый край к «?» минус зазор,
+            // вертикально — в пределах ряда кластера.
+            let anchor = canvas_chip_ui::ChipAnchor {
+                right_x: help[0] - SETTINGS_GAP,
+                row_y: SETTINGS_MARGIN + (SETTINGS_BUTTON - canvas_chip_ui::CHIP_H) * 0.5,
+                wrap_y: SETTINGS_MARGIN + SETTINGS_BUTTON + canvas_core::tokens::SPACING_SM,
+                left_bound: canvas_core::tokens::SPACING_LG,
+            };
+            let chip = canvas_chip_ui::chip_layout(viewport, 120.0, false, anchor);
+            assert!(
+                (chip.pill[0] + chip.pill[2] - (help[0] - SETTINGS_GAP)).abs() < 1e-4,
+                "чип прижат слева от «?»: pill={:?} help={help:?}",
+                chip.pill
+            );
+            assert!(
+                chip.pill[1] >= gear[1] && chip.pill[1] + chip.pill[3] <= gear[1] + gear[3],
+                "чип в пределах ряда кластера"
+            );
+            assert!(
+                chip.pill[0] + chip.pill[2] <= help[0] + 1e-4,
+                "чип левее «?» — пересечения с кластером нет"
+            );
+            // Панель «Проливания» — ниже ряда кластера.
+            assert!(
+                flowmap_ui::PANEL_TOP >= SETTINGS_MARGIN + SETTINGS_BUTTON,
+                "flowmap ниже кластера: PANEL_TOP={}",
+                flowmap_ui::PANEL_TOP
+            );
+            // Author-bar — топ-лево, DOM-паритет (margin 8).
+            let bar = about_ui::author_bar_layout(viewport, false);
+            assert_eq!(bar.bar[0], about_ui::BAR_MARGIN, "бар у левой кромки");
+            assert_eq!(bar.bar[1], about_ui::BAR_MARGIN, "бар у верхней кромки");
         }
 
         /// FR-040 v2: кнопка «RU/EN» — третий элемент кластера между
