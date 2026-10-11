@@ -1205,7 +1205,9 @@ fn lint_nav_rail_demo() {
 const ADAPTIVE_VIEWPORTS: [[f32; 2]; 2] = [[1280.0, 800.0], [800.0, 560.0]];
 
 /// Compact-край (mobile-style, full-bleed) для модалей, деградирующих
-/// корректно уже сейчас (кламп/Fullscreen-sheet-ветка).
+/// корректно уже сейчас (кламп/Fullscreen-sheet-ветка). Wave M (M3-b):
+/// сессия C перевела settings/kit_gallery/admin_panel на full-bleed
+/// Compact — их 375-ветка включена (см. комментарий в lint_modals_adaptive).
 const ADAPTIVE_COMPACT_VIEWPORT: [f32; 2] = [375.0, 667.0];
 
 /// `lint_state` на адаптивной лестнице с включённым флагом Wave M.
@@ -1326,6 +1328,16 @@ fn lint_modals_adaptive() {
                 .collect(),
         );
     }
+    fn open_kit_gallery(app: &mut App, _vp: [f32; 2]) {
+        app.kit_gallery_open = true;
+    }
+    fn open_kit_demo_tobe(app: &mut App, _vp: [f32; 2]) {
+        app.kit_gallery_open = true;
+        app.kit_demo.tobe = true;
+    }
+    fn open_admin(app: &mut App, _vp: [f32; 2]) {
+        app.admin_open = true;
+    }
     for (tag, open, surface_id) in [
         (
             "settings",
@@ -1347,6 +1359,20 @@ fn lint_modals_adaptive() {
             open_canvas_manager,
             ui_registry::id::CANVAS_MANAGER,
         ),
+        // Wave M (M3-b, сессия C): kit_gallery (AS-IS и TO-BE) и admin_panel
+        // под флагом перешли на full-bleed Compact (modal_rect_flex) —
+        // min-инвариант шире вьюпорта больше не возникает.
+        (
+            "kit_gallery",
+            open_kit_gallery,
+            ui_registry::id::KIT_GALLERY,
+        ),
+        (
+            "kit_demo_tobe",
+            open_kit_demo_tobe,
+            ui_registry::id::KIT_GALLERY,
+        ),
+        ("admin_panel", open_admin, ui_registry::id::ADMIN),
     ] {
         for lang in [Language::Ru, Language::En] {
             let mut app = lint_stub(lang);

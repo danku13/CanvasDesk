@@ -1262,22 +1262,36 @@ impl App {
     }
 
     /// FR-070: раскладка админпанели на явном вьюпорте (headless-тесты —
-    /// G4: 1280×800 / 800×560).
+    /// G4: 1280×800 / 800×560). Wave M (M3-b): читает флаг
+    /// `settings.modals_adaptive` — окно 80% + тир-скелет обвязки.
     pub(crate) fn admin_layout_at(&self, viewport: [f32; 2]) -> crate::admin_ui::AdminLayout {
         let palette = self.admin_effective_palette();
         let theme = self.effective_palette();
         let mut m = crate::kit_ui::new_measurer();
         let mut fs = canvas_render::text::measure_font_system();
-        crate::admin_ui::admin_layout(
-            viewport,
-            self.admin_section,
-            self.admin_scroll.offset,
-            &palette,
-            theme.card_fill,
-            self.settings.language,
-            &mut m,
-            &mut fs,
-        )
+        if self.settings.modals_adaptive {
+            crate::admin_ui::admin_layout_adaptive(
+                viewport,
+                self.admin_section,
+                self.admin_scroll.offset,
+                &palette,
+                theme.card_fill,
+                self.settings.language,
+                &mut m,
+                &mut fs,
+            )
+        } else {
+            crate::admin_ui::admin_layout(
+                viewport,
+                self.admin_section,
+                self.admin_scroll.offset,
+                &palette,
+                theme.card_fill,
+                self.settings.language,
+                &mut m,
+                &mut fs,
+            )
+        }
     }
 
     /// FR-055 (этап U4 PRD-0009, F-8): витрина кита — полоса Modals кадра.
@@ -1306,15 +1320,33 @@ impl App {
         let scroll = self.kit_gallery_scroll.clone();
         // Wave D v1 (issue #32): TO-BE — интерактивная demo-раскладка
         // (тулбар/сайдбар/секции Wave C); AS-IS — прежняя дословно.
+        // Wave M (M3-b, issue #53): флаг modals_adaptive — окно 80%/
+        // full-bleed + F1 (скролл сайдбара / мобильная навигация compact).
         let lay = if self.kit_demo.tobe {
-            crate::kit_ui::gallery_layout_tobe(
-                viewport,
-                lang,
-                &scroll,
-                &palette,
-                &mut m,
-                &mut fs,
-                &self.kit_demo,
+            if self.settings.modals_adaptive {
+                crate::kit_ui::gallery_layout_tobe_adaptive(
+                    viewport,
+                    lang,
+                    &scroll,
+                    &palette,
+                    &mut m,
+                    &mut fs,
+                    &self.kit_demo,
+                )
+            } else {
+                crate::kit_ui::gallery_layout_tobe(
+                    viewport,
+                    lang,
+                    &scroll,
+                    &palette,
+                    &mut m,
+                    &mut fs,
+                    &self.kit_demo,
+                )
+            }
+        } else if self.settings.modals_adaptive {
+            crate::kit_ui::gallery_layout_adaptive(
+                viewport, lang, &scroll, &palette, &mut m, &mut fs,
             )
         } else {
             crate::kit_ui::gallery_layout(viewport, lang, &scroll, &palette, &mut m, &mut fs)
@@ -5754,12 +5786,23 @@ impl App {
         // видно»); навигация/заголовок/карточки тем неподвижны.
         // FR-LLM-FIX: передаём настройки для фильтрации AI-таба (BYOK-
         // модель видна только когда провайдер = BYOK).
-        let layout = modal_layout_scrolled_with_settings(
-            self.settings_tab,
-            viewport,
-            self.settings_scroll_top,
-            &self.settings,
-        );
+        // Wave M (M3-b, issue #53): флаг modals_adaptive — окно 80% слота
+        // (modal_rect_flex), compact — full-bleed; скелет общий.
+        let layout = if self.settings.modals_adaptive {
+            modal_layout_scrolled_with_settings_adaptive(
+                self.settings_tab,
+                viewport,
+                self.settings_scroll_top,
+                &self.settings,
+            )
+        } else {
+            modal_layout_scrolled_with_settings(
+                self.settings_tab,
+                viewport,
+                self.settings_scroll_top,
+                &self.settings,
+            )
+        };
         let modal = layout.rect;
         instances.push(CardInstance {
             pos: [modal[0], modal[1]],

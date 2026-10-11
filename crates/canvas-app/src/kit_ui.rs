@@ -247,6 +247,9 @@ pub const DEMO_DESC_H: f32 = 14.0;
 pub const DEMO_DESC_GAP: f32 = 2.0;
 /// Высота строки сайдбара.
 pub const DEMO_NAV_ROW_H: f32 = 20.0;
+/// Wave M (M3-b): touch-цель навигации compact-тира — 44×44 (T-M R1);
+/// desktop-тиры не трогаем (M0 §5.4 — отклонение документировано).
+pub const DEMO_NAV_TOUCH_H: f32 = 44.0;
 /// Высота тела раскрытой секции аккордеона (Wave C, LAY7: именованный
 /// шаг курсора вместо литерала `y += 48.0`).
 pub const DEMO_ACCORDION_BODY_H: f32 = 48.0;
@@ -260,10 +263,21 @@ pub const DEMO_NAV_GROUP_H: f32 = 18.0;
 pub struct DemoLayout {
     /// Тулбар: (rect, hit-id) — подписи вычисляет draw.
     pub toolbar: Vec<(UiRect, &'static str)>,
-    /// Сайдбар: заголовки групп (rect, ключ i18n).
+    /// Сайдбар: заголовки групп (rect, ключ i18n). В compact-адаптиве —
+    /// чипы мобильной навигации (см. `mobile_nav`).
     pub sidebar_groups: Vec<(UiRect, &'static str)>,
-    /// Сайдбар: пункты секций (rect, id секции).
+    /// Сайдбар: пункты секций (rect, id секции). В adaptive — сдвинуты на
+    /// `sidebar_scroll.offset` и отфильтрованы по полной видимости (F1).
     pub sidebar_items: Vec<(UiRect, &'static str)>,
+    /// Wave M (M3-b, F1): окно скролла сайдбара (medium/expanded — колонка
+    /// сайдбара; compact — список секций активной группы). Нулевой rect —
+    /// скролла нет (v1-путь, флаг OFF).
+    pub sidebar_viewport: UiRect,
+    /// Полная высота колонки сайдбара (для скролла — контент).
+    pub sidebar_content_h: f32,
+    /// Wave M (M3-b): мобильная навигация compact-тира (чипы групп +
+    /// список секций активной группы вместо колонки сайдбара).
+    pub mobile_nav: bool,
     /// Слоты секций Wave C (базовые → сдвинутые в `gallery_layout_impl`).
     pub wave_c: WaveCSlots,
     /// Хит-цели демо (rect, id без префикса) — реестр поверхностей.
@@ -626,6 +640,29 @@ pub fn gallery_panel(vp: UiRect) -> UiRect {
     kit::panel_rect(vp, min, max, PANEL_MAX)
 }
 
+/// Wave M (M3-b, F1): максимум панели витрины в адаптивной ветке —
+/// пересчёт под тулбар TO-BE (+44px: 32 тулбар + 12 зазор): потребность
+/// сайдбара 28×20 + 5×18 = 650px + 30 шапка + 12 + 32 + 24 поля ≈ 748 →
+/// потолок 720 даёт все секции без скролла на expanded (1920×1080),
+/// на меньших окнах сайдбар скроллится (F1). Флаг OFF — прежний
+/// [`PANEL_MAX`] (640) ни символом не меняется.
+pub const PANEL_MAX_FLEX: UiVec2 = UiVec2::new(900.0, 720.0);
+
+/// Wave M (M3-b, issue #53): панель витрины в адаптивной ветке флага
+/// `modals_adaptive` — контракт «80% + mobile-style»:
+/// `kit::modal_rect_flex(slot, VIEWPORT_MARGIN, 0.8, PANEL_MIN,
+/// PANEL_MAX_FLEX)`. Compact-тир (≤767) — full-bleed eff (mobile-style);
+/// Medium/Expanded — 80% слота с клампом min/max.
+pub fn gallery_panel_flex(vp: UiRect) -> UiRect {
+    kit::modal_rect_flex(
+        vp,
+        VIEWPORT_MARGIN,
+        kit::MODAL_RATIO_DEFAULT,
+        PANEL_MIN,
+        PANEL_MAX_FLEX,
+    )
+}
+
 /// Раскладка витрины. Секции — Column-поток от контента; высоты — метрики
 /// кита, ширины подписей — измеренные. FR-059: контент выше максимальной
 /// панели — секции сдвигаются на `scroll.offset` и фильтруются по полной
@@ -641,7 +678,21 @@ pub fn gallery_layout(
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> GalleryLayout {
-    gallery_layout_impl(viewport, lang, scroll, p, m, fs, None)
+    gallery_layout_impl(viewport, lang, scroll, p, m, fs, None, false)
+}
+
+/// Wave M (M3-b, issue #53): AS-IS раскладка в адаптивной ветке флага —
+/// окно по [`gallery_panel_flex`] (80% / full-bleed compact); скелет
+/// статичной витрины прежний (сайдбара в AS-IS нет).
+pub fn gallery_layout_adaptive(
+    viewport: [f32; 2],
+    lang: Language,
+    scroll: &kit::ScrollState,
+    p: &KitPalette,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> GalleryLayout {
+    gallery_layout_impl(viewport, lang, scroll, p, m, fs, None, true)
 }
 
 /// TO-BE раскладка витрины (Wave D v1, issue #32): интерактивная demo —
@@ -657,9 +708,27 @@ pub fn gallery_layout_tobe(
     fs: &mut cosmic_text::FontSystem,
     demo: &crate::kit_demo::KitDemoState,
 ) -> GalleryLayout {
-    gallery_layout_impl(viewport, lang, scroll, p, m, fs, Some(demo))
+    gallery_layout_impl(viewport, lang, scroll, p, m, fs, Some(demo), false)
 }
 
+/// Wave M (M3-b, issue #53): TO-BE раскладка в адаптивной ветке флага
+/// `modals_adaptive` — окно по [`gallery_panel_flex`]; F1: сайдбар со
+/// скроллом в medium/expanded (все секции достижимы), в compact — группы
+/// в мобильную навигацию (чипы групп + список секций активной группы);
+/// состояние скролла/группы — [`crate::kit_demo::KitDemoState`].
+pub fn gallery_layout_tobe_adaptive(
+    viewport: [f32; 2],
+    lang: Language,
+    scroll: &kit::ScrollState,
+    p: &KitPalette,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    demo: &crate::kit_demo::KitDemoState,
+) -> GalleryLayout {
+    gallery_layout_impl(viewport, lang, scroll, p, m, fs, Some(demo), true)
+}
+
+#[allow(clippy::too_many_arguments)] // прецедент gallery_layout/admin_layout
 fn gallery_layout_impl(
     viewport: [f32; 2],
     lang: Language,
@@ -668,25 +737,148 @@ fn gallery_layout_impl(
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
     demo: Option<&crate::kit_demo::KitDemoState>,
+    adaptive: bool,
 ) -> GalleryLayout {
     // D3: язык демо — оверрайд (None = следовать языку приложения).
     let lang = demo.and_then(|d| d.lang_override).unwrap_or(lang);
     let vp = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
     // Панель: kit Modal (constrain + stack по центру, зажата во вьюпорт)
-    let panel = gallery_panel(vp);
+    // Wave M (M3-b): в адаптивной ветке — modal_rect_flex (80%/full-bleed).
+    let panel = if adaptive {
+        gallery_panel_flex(vp)
+    } else {
+        gallery_panel(vp)
+    };
     let content = panel.inset(&EdgeInsets::uniform(canvas_core::tokens::SPACING_LG));
 
     let y = content.y;
     // Wave D (TO-BE): шапка — на всю ширину панели (`body`); сайдбар+тулбар
     // съедают ширину/высоту у колонки секций (`content`). AS-IS — дословно.
     let body = content;
+    // --- Wave M (M3-b, F1): адаптивный тир TO-BE ------------------------
+    // Compact (≤767) — мобильная навигация (одноколоночная вёрстка):
+    // тулбар wrap + чипы групп (touch 44) + список секций активной группы
+    // (окно ≤3 строк, скролл [`crate::kit_demo::KitDemoState::
+    // sidebar_scroll`]); контент секций — ниже навигации. Medium/Expanded —
+    // двухколоночная вёрстка прежняя, но сайдбар — окно скролла (все
+    // секции реестра достижимы, F1).
+    let adaptive_compact_nav =
+        adaptive && demo.is_some() && kit::layout_tier(vp.w) == kit::LayoutTier::Compact;
+    let adaptive_sidebar_scroll =
+        adaptive && demo.is_some() && kit::layout_tier(vp.w) != kit::LayoutTier::Compact;
+    // Мобильная навигация (compact): доп. высота под тулбаром (чипы групп
+    // + список секций) — считается ДО content (окно секций ниже навигации).
+    let mut demo_toolbar: Vec<(UiRect, &'static str)> = Vec::new();
+    let mut demo_sidebar_groups: Vec<(UiRect, &'static str)> = Vec::new();
+    let mut demo_sidebar_items: Vec<(UiRect, &'static str)> = Vec::new();
+    let mut demo_sidebar_viewport = UiRect::default();
+    let mut demo_sidebar_content_h = 0.0f32;
+    let mut demo_mobile_nav = false;
+    let mut compact_nav_extra_h = 0.0f32;
+    if adaptive_compact_nav {
+        demo_mobile_nav = true;
+        let dstate = demo.expect("adaptive_compact_nav ⇒ demo есть");
+        // Тулбар: те же 5 пилюль (D3), жадная упаковка в строки по ширине
+        // body (в compact одна строка ~610px не помещается).
+        let tb_y = y + 30.0 + SECTION_GAP;
+        let controls: [(&'static str, f32); 5] = [
+            (crate::kit_demo::hit::TOOLBAR_MODE, 118.0),
+            (crate::kit_demo::hit::TOOLBAR_THEME, 148.0),
+            (crate::kit_demo::hit::TOOLBAR_LANG, 64.0),
+            (crate::kit_demo::hit::TOOLBAR_SIZE, 108.0),
+            (crate::kit_demo::hit::TOOLBAR_DENSITY, 148.0),
+        ];
+        let mut tx = body.x;
+        // Строки wrap — счётчиком (без дробного курсора — LAY7): y строки =
+        // tb_y + row · (24 + GAP_CONTROLS); 24 — высота пилюли тулбара
+        // (kit::CHIP_HEIGHT), шаг прежнего тулбара D3.
+        let mut row = 0usize;
+        for (id, w) in controls {
+            // Перенос: пилюля не влезает в остаток строки — новая строка
+            // (зазор между строками — GAP_CONTROLS).
+            if tx > body.x && tx + w > body.right() {
+                tx = body.x;
+                row += 1;
+            }
+            let w = w.min((body.right() - tx).max(0.0));
+            if w <= 0.0 {
+                break;
+            }
+            let ty = tb_y + row as f32 * (kit::CHIP_HEIGHT + kit::GAP_CONTROLS);
+            demo_toolbar.push((UiRect::new(tx, ty, w, kit::CHIP_HEIGHT), id));
+            tx += w + kit::GAP_CONTROLS;
+        }
+        let tb_bottom = tb_y + (row + 1) as f32 * kit::CHIP_HEIGHT + row as f32 * kit::GAP_CONTROLS;
+        // Чипы групп — мобильная навигация (табы): 5 равных слотов на всю
+        // ширину, touch-цель 44px (T-M R1), hit-id mgroup:<i>.
+        let chips_y = tb_bottom + SECTION_GAP;
+        let chip_slot_w =
+            ((body.w - 4.0 * kit::GAP_CONTROLS) / crate::kit_demo::GROUPS.len() as f32).max(0.0);
+        for (i, g) in crate::kit_demo::GROUPS.iter().enumerate() {
+            let x = body.x + i as f32 * (chip_slot_w + kit::GAP_CONTROLS);
+            demo_sidebar_groups.push((
+                UiRect::new(x, chips_y, chip_slot_w, DEMO_NAV_TOUCH_H),
+                crate::kit_demo::group_title_key(*g),
+            ));
+        }
+        // Список секций активной группы — окно скролла ≤3 строк (те же
+        // touch-цели 44px; overflow — sidebar_scroll, M-O R7).
+        let active_group = crate::kit_demo::GROUPS
+            .get(dstate.mobile_group.unwrap_or(0))
+            .copied()
+            .unwrap_or(crate::kit_demo::GROUPS[0]);
+        let group_sections: Vec<&crate::kit_demo::DemoSection> = crate::kit_demo::SECTIONS
+            .iter()
+            .filter(|s| s.group == active_group)
+            .collect();
+        let items_y = chips_y + DEMO_NAV_TOUCH_H + canvas_core::tokens::SPACING_SM;
+        let items_need = group_sections.len() as f32 * DEMO_NAV_TOUCH_H;
+        let items_window_h = items_need.min(3.0 * DEMO_NAV_TOUCH_H);
+        // Кламп окна к высоте body (не вылезать за панель — G4).
+        let items_window_h = items_window_h.min((body.bottom() - items_y).max(0.0));
+        let items_window = UiRect::new(body.x, items_y, body.w, items_window_h);
+        // Сдвиг/фильтр строк по sidebar_scroll (тот же контракт, что у
+        // сайдбара medium: полная видимость, тексты не клипаются).
+        let mut sscroll = dstate.sidebar_scroll.clone();
+        sscroll.viewport_h = items_window.h;
+        sscroll.content_h = items_need;
+        sscroll.clamp();
+        let soff = sscroll.offset;
+        for (i, s) in group_sections.iter().enumerate() {
+            let r = UiRect::new(
+                body.x,
+                items_y + i as f32 * DEMO_NAV_TOUCH_H,
+                body.w,
+                DEMO_NAV_TOUCH_H,
+            );
+            let vis = r.y - soff >= items_window.y - 0.01
+                && r.bottom() - soff <= items_window.bottom() + 0.01;
+            if vis {
+                demo_sidebar_items.push((UiRect::new(r.x, r.y - soff, r.w, r.h), s.id));
+            }
+        }
+        demo_sidebar_viewport = items_window;
+        demo_sidebar_content_h = items_need;
+        // Контент секций — ниже навигации (шапка + тулбар + чипы + список).
+        let nav_bottom = items_y + items_window_h + SECTION_GAP;
+        compact_nav_extra_h = nav_bottom - (y + 30.0 + SECTION_GAP + DEMO_TOOLBAR_H);
+    }
     let content = if demo.is_some() {
-        UiRect::new(
-            body.x + DEMO_SIDEBAR_W + DEMO_SIDEBAR_GAP,
-            body.y + 30.0 + SECTION_GAP + DEMO_TOOLBAR_H,
-            (body.w - DEMO_SIDEBAR_W - DEMO_SIDEBAR_GAP).max(0.0),
-            (body.h - 30.0 - SECTION_GAP - DEMO_TOOLBAR_H).max(0.0),
-        )
+        if adaptive_compact_nav {
+            UiRect::new(
+                body.x,
+                body.y + 30.0 + SECTION_GAP + DEMO_TOOLBAR_H + compact_nav_extra_h,
+                body.w,
+                (body.h - 30.0 - SECTION_GAP - DEMO_TOOLBAR_H - compact_nav_extra_h).max(0.0),
+            )
+        } else {
+            UiRect::new(
+                body.x + DEMO_SIDEBAR_W + DEMO_SIDEBAR_GAP,
+                body.y + 30.0 + SECTION_GAP + DEMO_TOOLBAR_H,
+                (body.w - DEMO_SIDEBAR_W - DEMO_SIDEBAR_GAP).max(0.0),
+                (body.h - 30.0 - SECTION_GAP - DEMO_TOOLBAR_H).max(0.0),
+            )
+        }
     } else {
         body
     };
@@ -735,7 +927,13 @@ fn gallery_layout_impl(
     // Шаг шапки (30 + SECTION_GAP) фиксирован — скролл-контракт FR-059:
     // тот же шаг повторяет `gallery_scroll_viewport` (окно секций).
     // Wave D: тулбар (TO-BE) — фиксированная строка между шапкой и секциями.
-    let sections_top = y + 30.0 + SECTION_GAP + if demo.is_some() { DEMO_TOOLBAR_H } else { 0.0 };
+    // Wave M (M3-b): compact — выше ещё и мобильная навигация
+    // (compact_nav_extra_h: чипы групп + список секций активной группы).
+    let sections_top = y
+        + 30.0
+        + SECTION_GAP
+        + if demo.is_some() { DEMO_TOOLBAR_H } else { 0.0 }
+        + compact_nav_extra_h;
     // Окно скролла секций (шапка выше — фиксирована)
     let sections_viewport = UiRect::new(
         content.x,
@@ -745,10 +943,10 @@ fn gallery_layout_impl(
     );
 
     // --- Wave D: тулбар (D3/D4) и сайдбар (D5) — фиксированные зоны ---
-    let mut demo_toolbar: Vec<(UiRect, &'static str)> = Vec::new();
-    let mut demo_sidebar_groups: Vec<(UiRect, &'static str)> = Vec::new();
-    let mut demo_sidebar_items: Vec<(UiRect, &'static str)> = Vec::new();
-    if demo.is_some() {
+    // Wave M (M3-b): compact — зоны построены ДО content (мобильная
+    // навигация); medium/expanded — сайдбар со скроллом (F1); flag OFF —
+    // прежний v1-путь (break-кламп) ни символом не меняется.
+    if let (false, Some(dstate)) = (adaptive_compact_nav, demo) {
         // Тулбар: 5 контролов-пилюль слева направо (высота 24, Sm)
         let tb_y = y + 30.0 + SECTION_GAP;
         let controls: [(&'static str, f32); 5] = [
@@ -774,27 +972,66 @@ fn gallery_layout_impl(
         // Кламп по высоте окна секций (G4-линт: хиты внутри вьюпорта):
         // в узких окнах сайдбар обрезается снизу (v1, без скролла — D7).
         let sb_bottom = sections_viewport.bottom();
+        // Wave M (M3-b, F1): адаптив — окно скролла сайдбара: строится
+        // ПОЛНЫЙ список (нав ↔ контент согласованы), строки сдвигаются
+        // на sidebar_scroll.offset и фильтруются по полной видимости
+        // (контракт FR-059 — тексты не клипаются); флаг OFF — прежний
+        // break-кламп (v1) ни символом не меняется.
+        let adaptive_sb = adaptive_sidebar_scroll;
+        let sb_window = UiRect::new(
+            body.x,
+            sb_top,
+            DEMO_SIDEBAR_W,
+            (sb_bottom - sb_top).max(0.0),
+        );
+        let mut sb_groups_all: Vec<(UiRect, &'static str)> = Vec::new();
+        let mut sb_items_all: Vec<(UiRect, &'static str)> = Vec::new();
         let mut last_group: Option<crate::kit_demo::DemoGroup> = None;
         for s in crate::kit_demo::SECTIONS {
-            if sy + DEMO_NAV_ROW_H > sb_bottom {
+            if !adaptive_sb && sy + DEMO_NAV_ROW_H > sb_bottom {
                 break;
             }
             if last_group != Some(s.group) {
-                if sy + DEMO_NAV_GROUP_H > sb_bottom {
+                if !adaptive_sb && sy + DEMO_NAV_GROUP_H > sb_bottom {
                     break;
                 }
-                demo_sidebar_groups.push((
+                sb_groups_all.push((
                     UiRect::new(body.x, sy, DEMO_SIDEBAR_W, DEMO_NAV_GROUP_H),
                     crate::kit_demo::group_title_key(s.group),
                 ));
                 sy += DEMO_NAV_GROUP_H;
                 last_group = Some(s.group);
             }
-            demo_sidebar_items.push((
+            sb_items_all.push((
                 UiRect::new(body.x + 8.0, sy, DEMO_SIDEBAR_W - 8.0, DEMO_NAV_ROW_H),
                 s.id,
             ));
             sy += DEMO_NAV_ROW_H;
+        }
+        if adaptive_sb {
+            let mut sscroll = dstate.sidebar_scroll.clone();
+            sscroll.viewport_h = sb_window.h;
+            sscroll.content_h = sy - sb_top;
+            sscroll.clamp();
+            let soff = sscroll.offset;
+            let sb_vis = |r: &UiRect| -> bool {
+                r.y - soff >= sb_window.y - 0.01 && r.bottom() - soff <= sb_window.bottom() + 0.01
+            };
+            for (r, k) in &sb_groups_all {
+                if sb_vis(r) {
+                    demo_sidebar_groups.push((UiRect::new(r.x, r.y - soff, r.w, r.h), *k));
+                }
+            }
+            for (r, id) in &sb_items_all {
+                if sb_vis(r) {
+                    demo_sidebar_items.push((UiRect::new(r.x, r.y - soff, r.w, r.h), *id));
+                }
+            }
+            demo_sidebar_viewport = sb_window;
+            demo_sidebar_content_h = sy - sb_top;
+        } else {
+            demo_sidebar_groups = sb_groups_all;
+            demo_sidebar_items = sb_items_all;
         }
     }
 
@@ -2624,6 +2861,22 @@ fn gallery_layout_impl(
             &visible,
         )
     });
+    // Wave M (M3-b): скролл-окно/флаг мобильной навигации сайдбара
+    // (adaptive-ветка; в v1 — нулевые дефолты) + хиты чипов групп
+    // (compact — мобильная навигация, hit-id mgroup:<i>).
+    if let Some(dl) = demo_layout.as_mut() {
+        dl.sidebar_viewport = demo_sidebar_viewport;
+        dl.sidebar_content_h = demo_sidebar_content_h;
+        dl.mobile_nav = demo_mobile_nav;
+        if demo_mobile_nav {
+            for (i, (r, _)) in dl.sidebar_groups.iter().enumerate() {
+                let id = crate::kit_demo::hit::mgroup(i);
+                if !id.is_empty() && r.w > 0.0 && r.h > 0.0 {
+                    dl.demo_hits.push((*r, id));
+                }
+            }
+        }
+    }
     // Хиты существующих секций (rect'ы уже сдвинуты FR-059-проходом)
     if let Some(dl) = demo_layout.as_mut() {
         for (i, r) in chips.iter().enumerate() {
@@ -3238,6 +3491,9 @@ fn build_demo_layout(
         toolbar,
         sidebar_groups,
         sidebar_items,
+        sidebar_viewport: UiRect::default(),
+        sidebar_content_h: 0.0,
+        mobile_nav: false,
         wave_c: s,
         demo_hits: hits,
         desc,
@@ -3393,34 +3649,73 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
     }
 
     // --- Сайдбар (D5): группы + секции ---
-    for (r, key) in &dl.sidebar_groups {
-        d.label_left(
-            UiRect::new(r.x + 8.0, r.y + 2.0, r.w - 8.0, 14.0),
-            &label(key),
-            p.text_muted,
-            10.0,
-        );
-    }
-    for (r, id) in &dl.sidebar_items {
-        let hover = cursor_in(r, ctx.cursor);
-        if hover {
-            d.rect(*r, p.hover_fill, [0.0; 4], 4.0);
+    // Wave M (M3-b): compact — мобильная навигация: группы — чипы-кнопки
+    // (активная — Primary), секции — touch-строки 44px (T-M R1);
+    // medium/expanded и флаг OFF — прежний двухколоночный вид.
+    if dl.mobile_nav {
+        let active_group = ctx.demo.mobile_group.unwrap_or(0);
+        for (i, (r, key)) in dl.sidebar_groups.iter().enumerate() {
+            let state = demo_state(ctx.pressed, ctx.cursor, r, crate::kit_demo::hit::mgroup(i));
+            let variant = if i == active_group {
+                ButtonVariant::Primary
+            } else {
+                ButtonVariant::Secondary
+            };
+            let style = kit::button_style(variant, state, p);
+            d.control(*r, &style);
+            // F2: подпись чипа — по измеренной ширине слота (не по счёту).
+            let text = m.ellipsis(fs, &label(key), FONT_FAMILY, 11.0, (r.w - 8.0).max(0.0));
+            d.label_center(*r, &text, style.text, 11.0);
         }
-        let Some(sec) = crate::kit_demo::section(id) else {
-            continue;
-        };
-        let mut title = label(sec.title_key);
-        // Сайдбар узкий — укорачиваем до ~36 символов (без замера: метки
-        // секций длинные; v1 — грубое усечение, документировано в D7).
-        if title.chars().count() > 36 {
-            title = format!("{}…", title.chars().take(35).collect::<String>());
+        for (r, id) in &dl.sidebar_items {
+            let hover = cursor_in(r, ctx.cursor);
+            if hover {
+                d.rect(*r, p.hover_fill, [0.0; 4], 4.0);
+            }
+            let Some(sec) = crate::kit_demo::section(id) else {
+                continue;
+            };
+            let title = label(sec.title_key);
+            // F2: усечение по измеренной ширине строки (TextMeasurer).
+            let title = m.ellipsis(fs, &title, FONT_FAMILY, 11.0, (r.w - 16.0).max(0.0));
+            d.label_left(
+                UiRect::new(r.x + 8.0, r.y + (r.h - 14.0) / 2.0, r.w - 16.0, 14.0),
+                &title,
+                p.text,
+                11.0,
+            );
         }
-        d.label_left(
-            UiRect::new(r.x + 8.0, r.y + 3.0, r.w - 8.0, 14.0),
-            &title,
-            p.text,
-            11.0,
-        );
+    } else {
+        for (r, key) in &dl.sidebar_groups {
+            d.label_left(
+                UiRect::new(r.x + 8.0, r.y + 2.0, r.w - 8.0, 14.0),
+                &label(key),
+                p.text_muted,
+                10.0,
+            );
+        }
+        for (r, id) in &dl.sidebar_items {
+            let hover = cursor_in(r, ctx.cursor);
+            if hover {
+                d.rect(*r, p.hover_fill, [0.0; 4], 4.0);
+            }
+            let Some(sec) = crate::kit_demo::section(id) else {
+                continue;
+            };
+            let title = label(sec.title_key);
+            // Wave M (M3-b, F2 — P1, design/kit-demo-layout-review-2026-10.md):
+            // усечение по измеренной ширине (TextMeasurer + эллипсис), не по
+            // счёту символов — бюджет = item.w − 8 (item inset) − 8 (label
+            // inset): эллипсис виден целиком, строка не режется клипом
+            // посреди слова. Заменяет v1-кламп «36 символов».
+            let title = m.ellipsis(fs, &title, FONT_FAMILY, 11.0, (r.w - 16.0).max(0.0));
+            d.label_left(
+                UiRect::new(r.x + 8.0, r.y + 3.0, r.w - 16.0, 14.0),
+                &title,
+                p.text,
+                11.0,
+            );
+        }
     }
 
     // --- Описания секций Wave C (D7) ---
@@ -4272,8 +4567,26 @@ fn panel_fill(p: &KitPalette) -> [f32; 4] {
 /// Палитра нужна только для separator-style (который hit-слотам не нужен),
 /// но подпись сохранена для симметрии с `gallery_layout`.
 pub fn gallery_hit_slots(viewport: [f32; 2], palette: &KitPalette) -> (UiRect, UiRect) {
+    gallery_hit_slots_impl(viewport, palette, false)
+}
+
+/// Wave M (M3-b): hit-слоты шапки витрины в адаптивной ветке (панель 80%).
+pub fn gallery_hit_slots_adaptive(viewport: [f32; 2], palette: &KitPalette) -> (UiRect, UiRect) {
+    gallery_hit_slots_impl(viewport, palette, true)
+}
+
+/// Общая реализация hit-слотов (различие OFF/ON — панель).
+fn gallery_hit_slots_impl(
+    viewport: [f32; 2],
+    palette: &KitPalette,
+    adaptive: bool,
+) -> (UiRect, UiRect) {
     let vp = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
-    let panel = gallery_panel(vp);
+    let panel = if adaptive {
+        gallery_panel_flex(vp)
+    } else {
+        gallery_panel(vp)
+    };
     let content = panel.inset(&EdgeInsets::uniform(canvas_core::tokens::SPACING_LG));
     let header_slot = UiRect::new(content.x, content.y, content.w, 30.0);
     let header_buttons = [
@@ -5912,6 +6225,252 @@ mod tests {
             lay_asis.content_h < lay.content_h,
             "TO-BE длиннее AS-IS (секции Wave C добавлены)"
         );
+    }
+
+    // === Wave M (M3-b, issue #53): адаптив витрины + F1/F2 =================
+
+    /// Панель адаптива: Expanded клампится к PANEL_MAX_FLEX 900×720
+    /// (пересчёт F1 под тулбар +44px), флаг OFF — прежние 900×640.
+    #[test]
+    fn gallery_panel_flex_expanded_clamps_to_recalculated_max() {
+        // 1920×1080: eff = 1872×1032 (margin 24), desired 0.8×eff =
+        // 1497.6×825.6 → кламп max → 900×720, центр eff (y = 24+156 = 180).
+        let vp = UiRect::new(0.0, 0.0, 1920.0, 1080.0);
+        let flex = gallery_panel_flex(vp);
+        assert_rect_close_xywh(
+            flex,
+            UiRect::new(510.0, 180.0, 900.0, 720.0),
+            "expanded: PANEL_MAX_FLEX 900×720",
+        );
+        // Флаг OFF — прежняя панель ни символом: 900×640 (тест v1).
+        let off = gallery_panel(vp);
+        assert_eq!((off.w, off.h), (900.0, 640.0), "flag OFF: PANEL_MAX 640");
+        // Compact (375×667): full-bleed eff (margin 24).
+        let r = gallery_panel_flex(UiRect::new(0.0, 0.0, 375.0, 667.0));
+        assert_rect_close_xywh(
+            r,
+            UiRect::new(24.0, 24.0, 327.0, 619.0),
+            "compact: full-bleed",
+        );
+    }
+
+    /// F1 (P1): adaptive medium/expanded — сайдбар со скроллом: все секции
+    /// реестра присутствуют в навигации (нав ↔ контент согласованы),
+    /// окно скролла заполнено, полная высота ≥ потребности 650px.
+    #[test]
+    fn gallery_adaptive_sidebar_scrolls_all_sections_reachable() {
+        let viewport = [1280.0, 800.0];
+        let palette = gallery_palette();
+        let scroll = kit::ScrollState::default();
+        let demo = crate::kit_demo::KitDemoState {
+            tobe: true,
+            ..crate::kit_demo::KitDemoState::default()
+        };
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let lay = gallery_layout_tobe_adaptive(
+            viewport,
+            Language::Ru,
+            &scroll,
+            &palette,
+            &mut m,
+            &mut fs,
+            &demo,
+        );
+        let Some(dl) = lay.demo.as_ref() else {
+            panic!("TO-BE adaptive без DemoLayout");
+        };
+        // Инвариант F1 (замена «>= 20»): колонка сайдбара содержит ВСЕ
+        // секции реестра (полная высота), окно меньше колонки — секции
+        // достижимы скроллом (v1 обрезал хвост НАВСЕГДА — break).
+        assert!(dl.sidebar_viewport.w > 0.0, "окно скролла сайдбара задано");
+        let need = crate::kit_demo::SECTIONS.len() as f32 * DEMO_NAV_ROW_H
+            + crate::kit_demo::GROUPS.len() as f32 * DEMO_NAV_GROUP_H;
+        assert!(
+            (dl.sidebar_content_h - need).abs() < 0.01,
+            "полная высота колонки == {} ({}: все секции в скролл-контенте)",
+            need,
+            dl.sidebar_content_h
+        );
+        assert!(
+            dl.sidebar_viewport.h < dl.sidebar_content_h - 0.01,
+            "окно сайдбара меньше колонки — нужен скролл (F1)"
+        );
+        // Первая секция видна при offset 0.
+        let first_id = crate::kit_demo::SECTIONS
+            .first()
+            .map(|s| s.id)
+            .expect("реестр непуст");
+        assert!(
+            dl.sidebar_items.iter().any(|(_, id)| *id == first_id),
+            "первая секция видна при offset 0"
+        );
+        // Все НЕПУСТЫЕ хиты в пределах панели (draw==hit, G4; нулевой
+        // rect — легальная конвенция «не виден», реестр их пропускает).
+        for (r, id) in &dl.demo_hits {
+            if r.w <= 0.0 || r.h <= 0.0 {
+                continue;
+            }
+            assert!(
+                r.x >= lay.panel.x - 0.01 && r.right() <= lay.panel.right() + 0.01,
+                "хит {id} по X вне панели: {:?} vs {:?}",
+                (r.x, r.right()),
+                (lay.panel.x, lay.panel.right())
+            );
+            assert!(
+                r.y >= lay.panel.y - 0.01 && r.bottom() <= lay.panel.bottom() + 0.01,
+                "хит {id} по Y вне панели: {:?} vs {:?}",
+                (r.y, r.bottom()),
+                (lay.panel.y, lay.panel.bottom())
+            );
+        }
+        // Скролл до низа: последние секции реестра становятся видимыми.
+        let scrolled = crate::kit_demo::KitDemoState {
+            tobe: true,
+            sidebar_scroll: kit::ScrollState {
+                offset: 650.0,
+                ..kit::ScrollState::default()
+            },
+            ..crate::kit_demo::KitDemoState::default()
+        };
+        let lay2 = gallery_layout_tobe_adaptive(
+            viewport,
+            Language::Ru,
+            &scroll,
+            &palette,
+            &mut m,
+            &mut fs,
+            &scrolled,
+        );
+        let dl2 = lay2.demo.as_ref().expect("TO-BE adaptive без DemoLayout");
+        let last_id = crate::kit_demo::SECTIONS
+            .last()
+            .map(|s| s.id)
+            .expect("реестр непуст");
+        assert!(
+            dl2.sidebar_items.iter().any(|(_, id)| *id == last_id),
+            "последняя секция реестра достижима скроллом сайдбара"
+        );
+    }
+
+    /// F1 compact (375×667): мобильная навигация — 5 чипов групп + список
+    /// секций активной группы в окне скролла; контент ниже навигации;
+    /// тулбар упакован в строки по ширине панели.
+    #[test]
+    fn gallery_adaptive_compact_mobile_nav() {
+        let viewport = [375.0, 667.0];
+        let palette = gallery_palette();
+        let scroll = kit::ScrollState::default();
+        let demo = crate::kit_demo::KitDemoState {
+            tobe: true,
+            ..crate::kit_demo::KitDemoState::default()
+        };
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let lay = gallery_layout_tobe_adaptive(
+            viewport,
+            Language::Ru,
+            &scroll,
+            &palette,
+            &mut m,
+            &mut fs,
+            &demo,
+        );
+        let Some(dl) = lay.demo.as_ref() else {
+            panic!("TO-BE adaptive compact без DemoLayout");
+        };
+        assert!(dl.mobile_nav, "compact — мобильная навигация");
+        assert_eq!(
+            dl.sidebar_groups.len(),
+            crate::kit_demo::GROUPS.len(),
+            "чипы групп: 5"
+        );
+        // Активная группа по умолчанию — первая (Inputs): только её секции.
+        let inputs: Vec<_> = crate::kit_demo::SECTIONS
+            .iter()
+            .filter(|s| s.group == crate::kit_demo::GROUPS[0])
+            .collect();
+        assert_eq!(
+            dl.sidebar_items.len(),
+            inputs.len().min(3),
+            "список активной группы, окно ≤3 touch-строк"
+        );
+        // Touch-цели ≥44 (T-M R1): чипы групп.
+        for (r, _) in &dl.sidebar_groups {
+            assert!(r.h >= DEMO_NAV_TOUCH_H - 0.01, "чип группы ≥44px");
+        }
+        // Тулбар упакован в строки: пилюли не выходят за ширину панели.
+        for (r, _) in &dl.toolbar {
+            assert!(r.right() <= lay.panel.right() + 0.01, "тулбар в панели");
+        }
+        // Контент — ниже навигации (окно секций начинается после списка).
+        let nav_bottom = dl.sidebar_viewport.bottom().max(lay.sections_viewport.y);
+        assert!(
+            lay.sections_viewport.y >= nav_bottom - 0.01,
+            "секции ниже мобильной навигации"
+        );
+        // Все НЕПУСТЫЕ хиты в панели (G4; нулевой rect — «не виден»).
+        for (r, id) in &dl.demo_hits {
+            if r.w <= 0.0 || r.h <= 0.0 {
+                continue;
+            }
+            assert!(
+                r.x >= lay.panel.x - 0.01 && r.right() <= lay.panel.right() + 0.01,
+                "хит {id} по X вне панели: {:?} vs {:?}",
+                (r.x, r.right()),
+                (lay.panel.x, lay.panel.right())
+            );
+            assert!(
+                r.y >= lay.panel.y - 0.01 && r.bottom() <= lay.panel.bottom() + 0.01,
+                "хит {id} по Y вне панели: {:?} vs {:?}",
+                (r.y, r.bottom()),
+                (lay.panel.y, lay.panel.bottom())
+            );
+        }
+    }
+
+    /// F2 (P1): подписи сайдбара усекаются по измеренной ширине
+    /// (TextMeasurer + эллипсис), а не по счёту символов: RU/EN × все
+    /// секции — результат помещается в бюджет; при широком бюджете длинная
+    /// подпись НЕ режется (нет «36 символов»).
+    #[test]
+    fn sidebar_labels_truncate_by_measured_width_not_char_count() {
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        for lang in [Language::Ru, Language::En] {
+            for s in crate::kit_demo::SECTIONS {
+                let title = crate::i18n::tr(lang, s.title_key).to_owned();
+                // Бюджет строки сайдбара v1: 200 − 8 (item inset) − 8
+                // (label inset) = 184px; эллипсис укладывается в бюджет.
+                let out = m.ellipsis(&mut fs, &title, FONT_FAMILY, 11.0, 184.0);
+                let w = m.width_of(&mut fs, &out, FONT_FAMILY, 11.0);
+                assert!(
+                    w <= 184.0 + 0.01,
+                    "{lang:?}/{}: ширина {w} > бюджета 184 (усечение по ширине)",
+                    s.id
+                );
+                // Анти-паттерн «36 символов»: широкий бюджет сохраняет
+                // подпись целиком — усечения нет.
+                let full = m.ellipsis(&mut fs, &title, FONT_FAMILY, 11.0, 4000.0);
+                assert_eq!(
+                    full, title,
+                    "{lang:?}/{}: широкий бюджет — без усечения",
+                    s.id
+                );
+            }
+        }
+    }
+
+    /// Сравнение rect'ов с допуском (0.8-умножения неточны в f32).
+    fn assert_rect_close_xywh(a: UiRect, b: UiRect, ctx: &str) {
+        for (x, y, name) in [
+            (a.x, b.x, "x"),
+            (a.y, b.y, "y"),
+            (a.w, b.w, "w"),
+            (a.h, b.h, "h"),
+        ] {
+            assert!((x - y).abs() < 0.01, "{ctx}: {name}: {x} != {y}");
+        }
     }
 
     /// TO-BE: dropdown-меню в раскладке только при открытом состоянии

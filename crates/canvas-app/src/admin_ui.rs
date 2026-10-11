@@ -42,12 +42,22 @@ pub const SIDEBAR_ITEM_H: f32 = kit::BUTTON_HEIGHT;
 /// Зазор между пунктами сайдбара — токен `canvas_core::tokens::SPACING_S`
 /// (значение прежнего литерала 6).
 pub use canvas_core::tokens::SPACING_S as SIDEBAR_ITEM_GAP;
+/// Wave M (M3-b): touch-цель чипа секции в compact-тире — 44×44 (T-M R1);
+/// desktop-тиры не трогаем (M0 §5.4).
+pub const SIDEBAR_TOUCH_H: f32 = 44.0;
+/// Wave M (M3-b): колонок чип-ряда секций в compact-тире — 2×2 сетка
+/// (детерминированная обвязка: подписи секций по 13px помещаются в слот
+/// уже при 320; touch-цели 44 сохраняются).
+pub const SIDEBAR_CHIP_COLS: usize = 2;
 /// Ширина колонки сайдбара.
 pub const SIDEBAR_W: f32 = 190.0;
 /// Ширина слота кнопки «Сброс».
 pub const RESET_SLOT_W: f32 = 96.0;
 /// Ширина слота кнопки темы (как в витрине).
 pub const THEME_SLOT_W: f32 = crate::kit_ui::THEME_SLOT_W;
+/// Wave M (M3-b): слот кнопки темы в compact-тире — шапка должна
+/// помещаться в контент 375 (см. admin_hit_slots_impl).
+pub const THEME_SLOT_W_COMPACT: f32 = 150.0;
 /// Высота шапки (ряд кнопок + заголовок).
 pub const HEADER_H: f32 = 30.0;
 
@@ -152,19 +162,69 @@ pub fn admin_panel(vp: UiRect) -> UiRect {
     kit::panel_rect(vp, min, max, PANEL_MAX)
 }
 
+/// Wave M (M3-b, issue #53): панель админпанели в адаптивной ветке флага
+/// `modals_adaptive` — контракт «80% + mobile-style»:
+/// `kit::modal_rect_flex(slot, VIEWPORT_MARGIN, 0.8, PANEL_MIN,
+/// PANEL_MAX)`. Compact-тир (≤767) — full-bleed eff (min 760×500 на
+/// 375 игнорируется примитивом); Medium/Expanded — 80% слота. Риск
+/// min-инварианта (800×560 → панель 760×500 при eff 752×512) — панель
+/// центрируется в eff и целиком в вьюпорте (проверено G4/тестом ниже).
+pub fn admin_panel_flex(vp: UiRect) -> UiRect {
+    kit::modal_rect_flex(
+        vp,
+        VIEWPORT_MARGIN,
+        kit::MODAL_RATIO_DEFAULT,
+        PANEL_MIN,
+        PANEL_MAX,
+    )
+}
+
+/// Панель по флагу (общая точка для layout/hit/demo-хелперов).
+fn admin_panel_of(vp: UiRect, adaptive: bool) -> UiRect {
+    if adaptive {
+        admin_panel_flex(vp)
+    } else {
+        admin_panel(vp)
+    }
+}
+
 /// Геометрия демо-зоны без полной раскладки (колесо скролла — hit-тест
 /// зоны без перестроения тел секций; та же формула, что у [`admin_layout`]).
 pub fn admin_demo_viewport(viewport: [f32; 2]) -> UiRect {
+    admin_demo_viewport_impl(viewport, false)
+}
+
+/// Wave M (M3-b): демо-зона в адаптивной ветке (compact — чипы секций
+/// сверху, демо-зона ниже на их высоту).
+pub fn admin_demo_viewport_adaptive(viewport: [f32; 2]) -> UiRect {
+    admin_demo_viewport_impl(viewport, true)
+}
+
+/// Общая реализация демо-зоны (различие OFF/ON — панель и compact-скелет).
+fn admin_demo_viewport_impl(viewport: [f32; 2], adaptive: bool) -> UiRect {
     let vp = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
-    let panel = admin_panel(vp);
+    let panel = admin_panel_of(vp, adaptive);
     let content = panel.inset(&EdgeInsets::uniform(canvas_core::tokens::SPACING_LG));
     let body_top = content.y + HEADER_H + ZONE_GAP;
-    let demo_x = content.x + SIDEBAR_W + ZONE_GAP;
+    // Wave M (M3-b): compact — вместо колонки сайдбара сетка 2×2 чипов
+    // секций (touch 44) — демо-зона ниже на их высоту + зазор.
+    let nav_h = if adaptive && kit::layout_tier(vp.w) == kit::LayoutTier::Compact {
+        let rows = ADMIN_SECTIONS.len().div_ceil(SIDEBAR_CHIP_COLS) as f32;
+        rows * SIDEBAR_TOUCH_H + (rows - 1.0) * ZONE_GAP + ZONE_GAP
+    } else {
+        0.0
+    };
+    let demo_y = body_top + nav_h;
+    let demo_x = if nav_h > 0.0 {
+        content.x
+    } else {
+        content.x + SIDEBAR_W + ZONE_GAP
+    };
     UiRect::new(
         demo_x,
-        body_top,
+        demo_y,
         (content.right() - demo_x).max(0.0),
-        (content.bottom() - body_top).max(0.0),
+        (content.bottom() - demo_y).max(0.0),
     )
 }
 
@@ -179,10 +239,36 @@ pub fn admin_demo_viewport(viewport: [f32; 2]) -> UiRect {
 /// `content.right` — все 3 кнопки сдвигаются на 8px влево (canonical
 /// panel-header inset, паритет с `kit_ui::gallery_hit_slots`).
 pub fn admin_hit_slots(viewport: [f32; 2], palette: &KitPalette) -> (UiRect, UiRect, UiRect) {
+    admin_hit_slots_impl(viewport, palette, false)
+}
+
+/// Wave M (M3-b): hit-слоты шапки в адаптивной ветке (панель 80%).
+pub fn admin_hit_slots_adaptive(
+    viewport: [f32; 2],
+    palette: &KitPalette,
+) -> (UiRect, UiRect, UiRect) {
+    admin_hit_slots_impl(viewport, palette, true)
+}
+
+/// Общая реализация hit-слотов (различие OFF/ON — панель).
+fn admin_hit_slots_impl(
+    viewport: [f32; 2],
+    palette: &KitPalette,
+    adaptive: bool,
+) -> (UiRect, UiRect, UiRect) {
     let vp = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
-    let panel = admin_panel(vp);
+    let panel = admin_panel_of(vp, adaptive);
     let content = panel.inset(&EdgeInsets::uniform(canvas_core::tokens::SPACING_LG));
     let header_slot = UiRect::new(content.x, content.y, content.w, HEADER_H);
+    // Wave M (M3-b): compact — узкий слот темы (panel_header переполнение
+    // НЕ маскирует — G4): сумма 96+8+170+8+26+8 = 316 > 303 контента на
+    // 375; слот 150 (подпись темы эллипсится в button_layout) даёт 296 ≤
+    // 303. Прецедент константы — THEME_SLOT_W (170).
+    let theme_slot_w = if adaptive && kit::layout_tier(vp.w) == kit::LayoutTier::Compact {
+        THEME_SLOT_W_COMPACT
+    } else {
+        THEME_SLOT_W
+    };
     // Порядок справа-налево: reset (toggle, левее), theme (toggle), close (icon, правее).
     let header_buttons = [
         kit::HeaderButton::Toggle {
@@ -190,7 +276,7 @@ pub fn admin_hit_slots(viewport: [f32; 2], palette: &KitPalette) -> (UiRect, UiR
             id: "reset",
         },
         kit::HeaderButton::Toggle {
-            label_w: THEME_SLOT_W,
+            label_w: theme_slot_w,
             id: "theme",
         },
         kit::HeaderButton::Icon {
@@ -215,7 +301,7 @@ pub fn admin_hit_slots(viewport: [f32; 2], palette: &KitPalette) -> (UiRect, UiR
 
 /// Раскладка админпанели. Шапка фиксирована (hit-слоты реестра —
 /// [`admin_hit_slots`]); сайдбар и демо-зона — ниже шапки; тело секции
-/// (этап 1) — заголовок + подсказка.
+/// (этап 1) — заголовок + подсказка. Флаг OFF — прежний путь.
 #[allow(clippy::too_many_arguments)]
 pub fn admin_layout(
     viewport: [f32; 2],
@@ -227,42 +313,124 @@ pub fn admin_layout(
     m: &mut TextMeasurer,
     fs: &mut cosmic_text::FontSystem,
 ) -> AdminLayout {
+    admin_layout_impl(
+        viewport,
+        section,
+        scroll_offset,
+        p,
+        card_fill,
+        lang,
+        m,
+        fs,
+        false,
+    )
+}
+
+/// Wave M (M3-b, issue #53): раскладка админпанели в адаптивной ветке
+/// флага `modals_adaptive` — окно 80% ([`admin_panel_flex`]); тир-скелет
+/// обвязки: compact (≤767) — одноколоночная вёрстка (секции — чип-ряд
+/// touch 44 сверху, демо-зона ниже на всю ширину), medium/expanded —
+/// прежний двухзонный скелет (сайдбар + демо).
+#[allow(clippy::too_many_arguments)]
+pub fn admin_layout_adaptive(
+    viewport: [f32; 2],
+    section: AdminSection,
+    scroll_offset: f32,
+    p: &KitPalette,
+    card_fill: [f32; 4],
+    lang: Language,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> AdminLayout {
+    admin_layout_impl(
+        viewport,
+        section,
+        scroll_offset,
+        p,
+        card_fill,
+        lang,
+        m,
+        fs,
+        true,
+    )
+}
+
+/// Общая реализация раскладки (различие OFF/ON — панель и compact-скелет).
+#[allow(clippy::too_many_arguments)]
+fn admin_layout_impl(
+    viewport: [f32; 2],
+    section: AdminSection,
+    scroll_offset: f32,
+    p: &KitPalette,
+    card_fill: [f32; 4],
+    lang: Language,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+    adaptive: bool,
+) -> AdminLayout {
     let vp = UiRect::new(0.0, 0.0, viewport[0].max(0.0), viewport[1].max(0.0));
-    let panel = admin_panel(vp);
+    let panel = admin_panel_of(vp, adaptive);
     let content = panel.inset(&EdgeInsets::uniform(canvas_core::tokens::SPACING_LG));
+    // Wave M (M3-b): тир по ширине вьюпорта (R-A R2 — именованные диапазоны).
+    let compact = adaptive && kit::layout_tier(vp.w) == kit::LayoutTier::Compact;
 
     // Шапка: заголовок слева; справа — «Сброс», тема, «✕» (край).
-    let (theme, reset, close) = admin_hit_slots(viewport, p);
+    let (theme, reset, close) = admin_hit_slots_impl(viewport, p, adaptive);
     let title_w = (reset.x - 8.0 - content.x).max(0.0);
     let title = UiRect::new(content.x, content.y + 6.0, title_w, 20.0);
 
-    // Тело: сайдбар слева, демо-зона в остатке ширины.
+    // Тело: сайдбар слева, демо-зона в остатке ширины; compact — чип-ряд
+    // секций сверху (одноколоночный mobile-style, touch-цели 44 — T-M R1).
     let body_top = content.y + HEADER_H + ZONE_GAP;
-    let sidebar = UiRect::new(
-        content.x,
-        body_top,
-        SIDEBAR_W,
-        (content.bottom() - body_top).max(0.0),
-    );
+    let sidebar = if compact {
+        UiRect::default()
+    } else {
+        UiRect::new(
+            content.x,
+            body_top,
+            SIDEBAR_W,
+            (content.bottom() - body_top).max(0.0),
+        )
+    };
     let mut sidebar_items = Vec::with_capacity(ADMIN_SECTIONS.len());
-    for (i, sec) in ADMIN_SECTIONS.iter().enumerate() {
-        let item = kit::button_layout(
-            UiRect::new(
-                sidebar.x,
-                sidebar.y + i as f32 * (SIDEBAR_ITEM_H + SIDEBAR_ITEM_GAP),
-                SIDEBAR_W,
-                SIDEBAR_ITEM_H,
-            ),
-            crate::i18n::tr(Language::Ru, sec.label_key()),
-            (HAlign::Start, VAlign::Center),
-            m,
-            fs,
-            FONT_FAMILY,
-            LABEL_SIZE,
-        );
-        sidebar_items.push(item.rect);
+    if compact {
+        // Сетка 2×2: равные слоты, touch-цели 44 (T-M R1); rect = слот
+        // (кнопка 30px внутри 44px слота не даёт touch-цель — хрома
+        // рисуется по слоту: d.control(*item) в оверлее). Подписи секций
+        // при 13px помещаются в слот от вьюпорта 320 (≈148px в слоте).
+        let cols = SIDEBAR_CHIP_COLS as f32;
+        let slot_w = ((content.w - (cols - 1.0) * SIDEBAR_ITEM_GAP) / cols).max(0.0);
+        for (i, _sec) in ADMIN_SECTIONS.iter().enumerate() {
+            let col = (i % SIDEBAR_CHIP_COLS) as f32;
+            let row = (i / SIDEBAR_CHIP_COLS) as f32;
+            sidebar_items.push(UiRect::new(
+                content.x + col * (slot_w + SIDEBAR_ITEM_GAP),
+                body_top + row * (SIDEBAR_TOUCH_H + SIDEBAR_ITEM_GAP),
+                slot_w,
+                SIDEBAR_TOUCH_H,
+            ));
+        }
+    } else {
+        for (i, sec) in ADMIN_SECTIONS.iter().enumerate() {
+            let _ = sec;
+            let item = kit::button_layout(
+                UiRect::new(
+                    sidebar.x,
+                    sidebar.y + i as f32 * (SIDEBAR_ITEM_H + SIDEBAR_ITEM_GAP),
+                    SIDEBAR_W,
+                    SIDEBAR_ITEM_H,
+                ),
+                crate::i18n::tr(Language::Ru, sec.label_key()),
+                (HAlign::Start, VAlign::Center),
+                m,
+                fs,
+                FONT_FAMILY,
+                LABEL_SIZE,
+            );
+            sidebar_items.push(item.rect);
+        }
     }
-    let demo = admin_demo_viewport(viewport);
+    let demo = admin_demo_viewport_impl(viewport, adaptive);
 
     // Тело секции (этап 1): заголовок секции + подсказка с переносом.
     let section_title = (UiPoint::new(demo.x, demo.y), section.label_key());
@@ -3041,6 +3209,149 @@ pub(crate) fn draw_tokens(
 mod tests {
     use super::*;
     use crate::kit_ui::{color4, cursor_in, new_measurer, KitDraw};
+
+    // === Wave M (M3-b, issue #53): адаптив админпанели ======================
+
+    /// Сравнение rect'ов с допуском (0.8-умножения неточны в f32).
+    fn assert_panel_close(a: UiRect, b: UiRect, ctx: &str) {
+        for (x, y, name) in [
+            (a.x, b.x, "x"),
+            (a.y, b.y, "y"),
+            (a.w, b.w, "w"),
+            (a.h, b.h, "h"),
+        ] {
+            assert!((x - y).abs() < 0.01, "{ctx}: {name}: {x} != {y}");
+        }
+    }
+
+    /// Окно 80% по modal_rect_flex: Medium — desired 0.8×eff (кламп min
+    /// 760×500 при 800×560 — панель целиком в вьюпорте), Expanded — кламп
+    /// max 1120×720, Compact — full-bleed. Флаг OFF — прежняя панель.
+    #[test]
+    fn admin_panel_flex_tiers() {
+        // Medium (800×560): eff = 752×512 (margin 24); desired 601.6×409.6 →
+        // min 760×500 — панель 760×500, центр eff (y = 24+6 = 30; x-сдвиг
+        // (752−760)/2 < 0 — stack клампит к началу eff: x = 24; панель
+        // целиком в вьюпорте: 24+760 = 784 ≤ 800 — деградации нет).
+        let vp = UiRect::new(0.0, 0.0, 800.0, 560.0);
+        let flex = admin_panel_flex(vp);
+        assert_panel_close(
+            flex,
+            UiRect::new(24.0, 30.0, 760.0, 500.0),
+            "medium 800×560: min-инвариант",
+        );
+        // Инвариант вьюпорта (G4): панель целиком внутри окна.
+        assert!(flex.x >= 0.0 && flex.right() <= 800.0 + 0.01);
+        assert!(flex.y >= 0.0 && flex.bottom() <= 560.0 + 0.01);
+        // Expanded (1280×800): eff = 1232×752; desired 985.6×601.6 внутри
+        // min/max — без клампа, центр eff.
+        let flex = admin_panel_flex(UiRect::new(0.0, 0.0, 1280.0, 800.0));
+        assert_panel_close(
+            flex,
+            UiRect::new(147.2, 99.2, 985.6, 601.6),
+            "expanded 1280×800: 80%",
+        );
+        // Compact (375×667): full-bleed eff (min игнорируется примитивом).
+        let flex = admin_panel_flex(UiRect::new(0.0, 0.0, 375.0, 667.0));
+        assert_panel_close(
+            flex,
+            UiRect::new(24.0, 24.0, 327.0, 619.0),
+            "compact 375: full-bleed",
+        );
+        // Флаг OFF — прежняя формула (constrain + кламп к окну минус
+        // VIEWPORT_MARGIN) ни символом: 776×536 на 800×560.
+        let off = admin_panel(UiRect::new(0.0, 0.0, 800.0, 560.0));
+        assert_eq!((off.w, off.h), (776.0, 536.0), "flag OFF: кламп к окну");
+    }
+
+    /// Compact-скелет (375): секции — чип-ряд touch 44 сверху, демо-зона
+    /// ниже на всю ширину; хиты в панели; шапка достижима.
+    #[test]
+    fn admin_layout_adaptive_compact_chips_row() {
+        let palette = test_palette();
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let lay = admin_layout_adaptive(
+            [375.0, 667.0],
+            AdminSection::Components,
+            0.0,
+            &palette,
+            [0.2, 0.2, 0.25, 1.0],
+            Language::Ru,
+            &mut m,
+            &mut fs,
+        );
+        // Чипы секций: сетка 2×2, touch-цели ≥44.
+        assert_eq!(lay.sidebar_items.len(), ADMIN_SECTIONS.len());
+        for r in &lay.sidebar_items {
+            assert!(r.h >= SIDEBAR_TOUCH_H - 0.01, "чип секции ≥44px");
+        }
+        // Две строки по две: одна строка = совпадает y, столбцы по X.
+        for pair in lay.sidebar_items.chunks(2) {
+            if pair.len() == 2 {
+                assert!(
+                    pair[1].x > pair[0].x && pair[1].y == pair[0].y,
+                    "чипы в сетке 2×2"
+                );
+            }
+        }
+        assert!(
+            lay.sidebar_items[2].y > lay.sidebar_items[0].y,
+            "вторая строка сетки ниже первой"
+        );
+        // Демо-зона — на всю ширину контента, ниже чип-ряда.
+        assert!(lay.demo.w >= lay.content.w - 0.01, "демо на всю ширину");
+        let chips_bottom = lay
+            .sidebar_items
+            .iter()
+            .map(|r| r.bottom())
+            .fold(0.0_f32, f32::max);
+        assert!(lay.demo.y >= chips_bottom - 0.01, "демо ниже чип-ряда");
+        // Хиты в панели (G4).
+        for r in &lay.sidebar_items {
+            assert!(r.x >= lay.panel.x - 0.01 && r.right() <= lay.panel.right() + 0.01);
+            assert!(r.y >= lay.panel.y - 0.01 && r.bottom() <= lay.panel.bottom() + 0.01);
+        }
+        // Шапка: reset/theme/close внутри панели.
+        for r in [&lay.reset, &lay.theme, &lay.close] {
+            eprintln!(
+                "hdr panel=({},{},{},{}) rect=({},{},{},{})",
+                lay.panel.x, lay.panel.y, lay.panel.w, lay.panel.h, r.x, r.y, r.w, r.h
+            );
+            assert!(r.x >= lay.panel.x - 0.01 && r.right() <= lay.panel.right() + 0.01);
+            assert!(r.y >= lay.panel.y - 0.01 && r.bottom() <= lay.panel.bottom() + 0.01);
+        }
+    }
+
+    /// Medium/Expanded adaptive: скелет прежний (сайдбар + демо), окно 80%.
+    #[test]
+    fn admin_layout_adaptive_medium_keeps_two_zones() {
+        let palette = test_palette();
+        let mut m = new_measurer();
+        let mut fs = canvas_render::text::measure_font_system();
+        let lay = admin_layout_adaptive(
+            [800.0, 560.0],
+            AdminSection::Components,
+            0.0,
+            &palette,
+            [0.2, 0.2, 0.25, 1.0],
+            Language::Ru,
+            &mut m,
+            &mut fs,
+        );
+        // Панель — modal_rect_flex (760×500, центр eff).
+        assert_panel_close(
+            lay.panel,
+            admin_panel_flex(UiRect::new(0.0, 0.0, 800.0, 560.0)),
+            "панель адаптива",
+        );
+        // Сайдбар прежний: 4 пункта колонкой, ширина SIDEBAR_W.
+        assert_eq!(lay.sidebar_items.len(), ADMIN_SECTIONS.len());
+        assert!((lay.sidebar.w - SIDEBAR_W).abs() < 0.01);
+        for pair in lay.sidebar_items.windows(2) {
+            assert!(pair[1].y > pair[0].y, "пункты колонкой");
+        }
+    }
 
     /// Раскладка детерминирована на канонических вьюпортах (G4-линт:
     /// 1280×800 / 1024×640 / 800×560), панель зажата во вьюпорт.
