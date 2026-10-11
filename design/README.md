@@ -36,7 +36,8 @@ Three contours, three file types:
 8. `rules/07-theming.md` — themes as data (7 presets), dark/light,
    derived slots, the bridge into the kit.
 9. `rules/08-states.md` — the control state matrix
-   (Disabled > Pressed > Hovered > Selected > Normal), state slots.
+   (Disabled > Error > Pressed > Hovered > Focused > Dragged > Selected >
+   Normal), state slots.
 10. `rules/09-input.md` — behavioral adequacy of input modules: a single
     field model (kit TextFieldModel), the keyboard contract, scroll-follows-caret,
     the password mask, IME/web parity, the ban on duplicates.
@@ -109,5 +110,5 @@ here — only via an ADR.
 | Text | text ≥ 4.5:1, graphics ≥ 3:1, line spacing ×1.3 (screen) |
 | Animations | 150 ms micro / 300 ms flight / 1200+ ms decorative |
 | Layers | World → WorldOverlay → Widgets → Panels → Popups → Modals → Drag → Toasts → Debug |
-| States | Disabled > Pressed > Hovered > Selected > Normal |
+| States | Disabled > Error > Pressed > Hovered > Focused > Dragged > Selected > Normal |
 | Layouts | slot → Row/Column/grid_cells/stack → scene (percent/sticky) → Custom; overflow — a named policy; 3 G4 viewports (11-layouts) |

@@ -38,7 +38,8 @@ control_hover_fill / control_selected_fill, рамка control_border, текс�
 
 ## 4. Состояния
 Полоса — контейнер без состояний; каждый чип — контрол полной матрицы ST1
-(`../rules/08-states.md`): Disabled > Pressed > Hovered > Selected > Normal.
+(`../rules/08-states.md`): Disabled > Error > Pressed > Hovered > Focused >
+Dragged > Selected > Normal.
 Selected — активный чип (галерея — одиночный выбор, палитра — множественный).
 Полоса себя не анимирует (K1.3: переходы мгновенные, длительности M1 —
 потребителя).

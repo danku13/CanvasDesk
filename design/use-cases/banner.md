@@ -42,8 +42,9 @@ Alpha-tint — единственное исключение из П4 (слот-
 
 ## 4. Состояния
 Сам баннер — не контрол (ST6, `../rules/08-states.md`): у полосы нет hover
-и нажатий. Интерактивен только action button — полная матрица ST1 (Disabled >
-Pressed > Hovered > Selected > Normal), стиль через `kit::button_style`
+и нажатий. Интерактивен только action button — полная матрица ST1 (Disabled > Error >
+Pressed > Hovered > Focused > Dragged > Selected > Normal), стиль через
+`kit::button_style`
 (Secondary/Ghost; приоритеты — ST2). BannerKind — не состояние ST1, а
 семантика: kind выбирает слот по таблице §3; новый kind = новая пара
 «слот + константа альфы» (П4), не формула. state в `banner()` влияет только

@@ -33,6 +33,9 @@ Progress — индикация без ввода.
 | Трек | control_fill + рамка control_border | hover_fill | control_fill |
 | Бегунок | control_primary | control_primary | disabled_text |
 
+Focused/Dragged/Error `slider_style` не дифференцирует; фокус-ринг и
+state-layer — на потребителе (Wave T §5.1.1, ST2).
+
 Doc-comment: «track — control_fill, filled — primary, knob —
 primary/text_title»; elevation — `Elevation::None`. Слоты — реестр K2
 ([../rules/10-components.md](../rules/10-components.md)).

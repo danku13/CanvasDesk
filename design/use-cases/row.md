@@ -43,6 +43,10 @@ value/unit/badge) → позиции от правого края (`RowGuides::w
 | unit | text_muted | = Normal | text_muted | disabled_text |
 | badge_fill/badge_border | control_fill / control_border | = Normal | = Normal | прозрачные |
 
+Focused/Dragged/Error `row_style` не дифференцирует (по коду — match только
+по Normal/Hovered/Selected/Disabled); фокус-ринг и state-layer — на
+потребителе (Wave T §5.1.1, ST2).
+
 Потребитель переопределяет поля семантикой своей поверхности — plain data.
 Зебра — не слот: фон прогона из ≥ TABLE_ZEBRA_RUN_MIN 4 строк кладётся в fill
 сам (помощник — `zebra_run_flags`; tint-варианты — только K2.2).

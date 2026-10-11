@@ -28,8 +28,10 @@
   правило кита, а не произвольный белый); disabled — disabled_text.
 
 ## 4. Состояния
-Полная матрица ST1: Disabled > Pressed > Hovered > Selected(off/on — это
-value, не KitState.Selected) > Normal. Кит значение on/off не анимирует
+Полная матрица ST1: Disabled > Error > Pressed > Hovered > Focused >
+Dragged > Selected(off/on — это value, не KitState.Selected) > Normal.
+Focused/Dragged/Error switch не дифференцирует — фокус-ринг и state-layer
+на потребителе (Wave T §5.1.1, ST2). Кит значение on/off не анимирует
 (M3/K1.3 — переход мгновенный); v1-формулировка «BoolAnim (0..1), 150 мс» не
 пересматривалась — анимация кноба возможна только на стороне потребителя
 (dt-детерминизм M2).

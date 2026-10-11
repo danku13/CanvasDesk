@@ -1,29 +1,50 @@
 # 08 — Control states
 
-> Code: `crates/canvas-ui/src/widget.rs` (WidgetState), `kit.rs` (button_style/
-> chip_style), slots — `01-colors.md §C7`.
+> Code: `crates/canvas-ui/src/widget.rs` (WidgetState),
+> `crates/canvas-ui/src/component/mod.rs` (KitState, state_layer_alpha,
+> resolve_state), `crates/canvas-ui/src/component/button.rs` (button_style),
+> slots — `01-colors.md §C7`.
 
 ## ST1. State matrix
 
-`KitState::Normal | Hovered | Selected | Pressed | Disabled`
+`KitState::Normal | Hovered | Focused | Pressed | Dragged | Disabled | Selected | Error`
 
-Priority when evaluating (the upper one swallows the lower ones):
+(8 values; `component/mod.rs` — Wave T §5.1.1 added Focused/Dragged/Error.)
+
+Priority when evaluating (`widget.rs::WidgetState::kit_state`, the upper one
+swallows the lower ones):
 
 ```
-Disabled > Pressed > Hovered > Selected > Normal
+Disabled > Error > Pressed > Hovered > Focused > Dragged > Selected > Normal
 ```
 
 Rules:
 - `Pressed` = the button is held down and the cursor is over it; the cursor
   leaves → return to Hovered (the press is cancelled).
+- `Focused` = keyboard focus only (`:focus-visible` semantics): a mouse
+  click does not activate it (`WidgetState::set_focused` carries the
+  keyboard-origin flag; only keyboard-origin draws the focus-ring).
+  Visual — the focus-ring in the `accent` slot + the 0.10 state-layer.
+- `Dragged` = a drag operation is in progress (state-layer 16%).
+- `Error` = a validation failure; the kit does not paint it — the consumer
+  renders it from the `control_danger` slot (the field example — IN6).
 - `Selected` — a persistent selection state (the selected gallery row, a
   filter chip), orthogonal to hover.
 - `Disabled` — never highlighted by hover; pressing a disabled control does
   not “charge” a click (press on disabled does not arm the release event).
 
+Two reading models, both normative:
+- the ladder above — the single-value resolver `kit_state()` (the priority
+  model; 40+ consumers per the `widget.rs` header);
+- additive — `active_states()` returns up to 4 stacked states
+  `[Error, Pressed, Hovered, Focused]`; Selected/Dragged participate in the
+  ladder only. The additive set feeds the M3 state-layer (`state_layer_alpha`
+  + `resolve_state`: several active states → the max alpha, not a sum).
+
 ## ST2. State slots
 
-The color is chosen by mapping state → palette slot (no arithmetic):
+The fill color is chosen by mapping state → palette slot (no arithmetic) —
+this is what `button_style` differentiates:
 
 | State | Slot (normal controls) | Slot (primary) |
 |---|---|---|
@@ -32,6 +53,15 @@ The color is chosen by mapping state → palette slot (no arithmetic):
 | Selected | control_selected_fill | — |
 | Pressed | = Hovered (the hover slots; the 2026-10-09 audit was aligned to the actual `button_style` — the earlier “= Normal” text contradicted the code) | = primary_hover_fill |
 | Disabled | control_fill + text → control_disabled_text | ← |
+| Focused | = Normal — the fill does not change | = Normal |
+| Dragged | = Normal — the fill does not change | = Normal |
+| Error | = Normal in the kit; the visual — the `control_danger` slot on the consumer | ← |
+
+The Wave T §5.1.1 states have no fill slots of their own: the mechanism is
+the M3 state-layer — a translucent overlay over the base fill
+(`state_layer_alpha`: Hovered 0.08 / Focused 0.10 / Pressed 0.10 /
+Dragged 0.16, the rest 0.0; the overlay color = content or accent). With
+several active states the alphas do not sum: `resolve_state` takes the max.
 
 A separate `control_pressed_fill` slot (full pressed differentiation) —
 a managed v2 change: editing this table + KitPalette + the tokens.

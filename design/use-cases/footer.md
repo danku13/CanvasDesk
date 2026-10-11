@@ -34,8 +34,8 @@ hover-слоты, disabled_text).
 
 ## 4. Состояния
 Футер — контейнер без собственных состояний; каждая кнопка — контрол полной
-матрицы ST1 (`../rules/08-states.md`): Disabled > Pressed > Hovered > Normal
-(Selected не используется). Disabled-кнопка не «заряжает» клик (ST1).
+матрицы ST1 (`../rules/08-states.md`): Disabled > Error > Pressed > Hovered >
+Focused > Dragged > Selected > Normal (Selected не используется). Disabled-кнопка не «заряжает» клик (ST1).
 
 ## 5. Взаимодействие
 - Клик — контракт ST3: press внутри + release внутри; увод курсора при

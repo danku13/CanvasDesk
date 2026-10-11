@@ -40,8 +40,8 @@ Pressed/Disabled — как у List (rows — «consumer's WidgetState» в §K1
 Новые цвета — только новые слоты (K2.1), не локальные литералы.
 
 ## 4. Состояния
-Матрица ST1 `../rules/08-states.md`: Disabled > Pressed > Hovered > Selected >
-Normal — на строку (не на узел данных). Модель выбора: один выделенный узел
+Матрица ST1 `../rules/08-states.md`: Disabled > Error > Pressed > Hovered >
+Focused > Dragged > Selected > Normal — на строку (не на узел данных). Модель выбора: один выделенный узел
 (id); Selected ортогонален hover (ST1); раскрытость — свойство узла, не
 состояние контрола. Keyboard-фокус — KitState::Focused (state-layer 0.10,
 focus-ring `accent`, Wave T §5.1.1). Заявленный в doc-comment клавиатурный

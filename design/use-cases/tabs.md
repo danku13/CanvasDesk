@@ -44,8 +44,8 @@ SegmentedControl (`crates/canvas-ui/src/component/segmented.rs`) — режим�
 Слоты взяты из реестра §K2, новых нет (K2.1); Pressed в v1 = Hovered (ST2).
 
 ## 4. Состояния
-Матрица ST1 `../rules/08-states.md`: Disabled > Pressed > Hovered > Selected >
-Normal. Активная вкладка — отдельный флаг (`active`-индекс), а не
+Матрица ST1 `../rules/08-states.md`: Disabled > Error > Pressed > Hovered >
+Focused > Dragged > Selected > Normal. Активная вкладка — отдельный флаг (`active`-индекс), а не
 KitState::Selected: выбор постоянный, ортогонален hover (семантика Selected
 из ST1). Keyboard-фокус — KitState::Focused (Wave T §5.1.1: state-layer
 0.10, focus-ring по слоту `accent`); в `tab_style` ветки Focused нет —

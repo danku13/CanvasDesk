@@ -44,7 +44,8 @@ egui `CollapsingHeader`, M3 Expansion panels). Отличия: от Tabs — с�
 
 ## 4. Состояния
 Состояния ST1 `../rules/08-states.md` относятся к заголовку-контролу:
-Disabled > Pressed > Hovered > Normal. Раскрытость — раскладка, а не
+Disabled > Error > Pressed > Hovered > Focused > Dragged > Selected > Normal.
+Раскрытость — раскладка, а не
 KitState. Disabled в `accordion_style` не дифференцирован (fill = control_fill,
 текст = text) — расхождение со ST2: нужен disabled_text (рефакторинг).
 KitState::Focused (Tab-фокус, state-layer 0.10) — через
