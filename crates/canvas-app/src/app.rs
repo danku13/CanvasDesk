@@ -16163,7 +16163,19 @@ mod tests {
             Arc::new(canvas_core::MemStorage::new()),
         );
         assert!(app.canvas_manager.native, "натив-цель: native=true");
-        let dir = std::env::temp_dir().join("canvasdesk-fr108-recent");
+        // Уникальный tmp-каталог на ВЫЗОВ (pid + счётчик): хелпер зовут три
+        // теста ПАРАЛЛЕЛЬНО (cargo test — потоки), и они делили один файл
+        // живой.canvas — «{}» из хелпера соседнего теста перетирало
+        // валидный json между `fs::write` теста и его `Enter` →
+        // Canvas::from_str падал в тост, сцена оставалась на stub-пути
+        // (CI ubuntu 2026-10-12, manager_native_recent_files_as_entries:
+        // локально зелёный — раскрутка потоков другая).
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "canvasdesk-fr108-recent-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        ));
         std::fs::create_dir_all(&dir).expect("tmp dir");
         let live = dir.join("живой.canvas");
         std::fs::write(&live, "{}").expect("запись файла канваса");
