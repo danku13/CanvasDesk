@@ -1,0 +1,2002 @@
+     1→<!doctype html>
+     2→<!-- CanvasDesk web (M8, wasm-port §3.5). Прошивка W4: trunk подключает
+     3→     JS-глю canvas_web — #[wasm_bindgen(start)] поднимает App; winit web
+     4→     создаёт <canvas> при create_window, а canvas-web вставляет его в DOM
+     5→     (winit 0.30 не делает этого сам), Renderer инициализируется
+     6→     асинхронно (spawn_local, §3.4). -->
+     7→<html lang="ru">
+     8→  <head>
+     9→    <meta charset="utf-8" />
+    10→    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    11→    <title>CanvasDesk — web</title>
+    12→    <!-- FR-028 v2 + FR-087 v2 (единый пикер первого запуска): первый экран —
+    13→         ОДНА страница с выбором языка и опциональной рабочей роли (class).
+    14→         Запускается СИНХРОННО до всех остальных скриптов (включая WASM
+    15→         init Trunk'а в конце body). Если localStorage уже содержит
+    16→         canvasdesk.config (с полем language) — пикер не показывается,
+    17→         приложение грузится на выбранном языке. Если нет — пикер
+    18→         блокирует экран overlay'ем. Язык — переключатель: активная
+    19→         кнопка залита основным акцентом (#D68A32), тексты роли живо
+    20→         перерисовываются. Клик по карточке роли (или «Продолжить без
+    21→         роли») записывает минимальный TOML `language = "ru"`
+    22→         (+ `role = "architect"`) в localStorage и перезагружает страницу
+    23→         (так canvas-app::load_settings гарантированно подхватит оба поля
+    24→         до WASM init). -->
+    25→    <style>
+    26→      #lang-picker-overlay {
+    27→        position: fixed; inset: 0; z-index: 100000;
+    28→        background: var(--cd-bg);
+    29→        display: flex; align-items: center; justify-content: center;
+    30→        flex-direction: column; gap: 16px;
+    31→        color: var(--cd-text);
+    32→        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    33→        padding: 16px; overflow-y: auto;
+    34→        /* Акценты владельца (FR-087 v2): основной — активная кнопка языка,
+    35→           вторичный — hover карточек ролей и вторичная кнопка. */
+    36→        /* W-f: локальные алиасы → центральные слоты :root (значения
+    37→           прежние — резолв через var()). */
+    38→        --accent: var(--cd-accent);
+    39→        --accent-2: var(--cd-accent-2);
+    40→      }
+    41→      #lang-picker-overlay[hidden] { display: none; }
+    42→      #lang-picker-overlay h1 {
+    43→        font-size: 22px; color: var(--cd-text-title); font-weight: 600; margin: 0;
+    44→      }
+    45→      #lang-picker-overlay p { color: var(--cd-text-muted); margin: 0; }
+    46→      #lang-picker-overlay .buttons { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+    47→      /* Единая страница (FR-087 v2): язык + роль на одном экране —
+    48→         скрытых шагов нет. */
+    49→      #lang-picker-overlay .step { display: flex; flex-direction: column; gap: 12px; align-items: center; max-width: min(640px, 92vw); }
+    50→      /* ГВАРД РЕГРЕССА: авторский display на .step перебивает атрибут
+    51→         hidden (UA-правило [hidden] слабее любого авторского display) —
+    52→         баг FR-087 v1: оба шага рисовались одновременно, пользователь
+    53→         видел «две страницы входа» с пустой кнопкой пропуска. Явное
+    54→         правило гасит .step, если hidden когда-нибудь вернут. */
+    55→      #lang-picker-overlay .step[hidden] { display: none; }
+    56→      #lang-picker-overlay button {
+    57→        background: var(--cd-surface); color: var(--cd-text-title);
+    58→        border: 1px solid var(--cd-border); border-radius: 8px;
+    59→        font: 600 16px/1.4 system-ui, sans-serif;
+    60→        padding: 12px 24px; cursor: pointer; min-width: 140px;
+    61→        /* W-e (дефект №14 аудита ui-kit): тач-цель ≥44×44 CSS px (WCAG 2.5.5
+    62→         * / Apple HIG). border-box + min-height гарантируют размер и для
+    63→         * оверрайдов паддинга ниже (#role-grid button, .secondary) — текст
+    64→         * кнопки браузер центрирует по вертикали сам. */
+    65→        box-sizing: border-box; min-height: 44px;
+    66→        transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+    67→        -webkit-tap-highlight-color: transparent;
+    68→      }
+    69→      #lang-picker-overlay button:focus-visible {
+    70→        outline: 2px solid var(--accent-2); outline-offset: 2px;
+    71→      }
+    72→      /* Язык — переключатель: hover невыбранной кнопки — основной акцент;
+    73→         АКТИВНАЯ кнопка залита основным акцентом (тёмный текст, контраст ~6:1). */
+    74→      #lang-picker-overlay .buttons button[data-lang]:hover {
+    75→        background: var(--cd-accent-tint); border-color: var(--accent); color: var(--cd-text-on-tint);
+    76→      }
+    77→      #lang-picker-overlay .buttons button[data-lang].active {
+    78→        background: var(--accent); border-color: var(--accent); color: var(--cd-text-on-accent);
+    79→      }
+    80→      #lang-picker-overlay .buttons button[data-lang].active:hover {
+    81→        background: var(--cd-accent-hover); border-color: var(--cd-accent-hover);
+    82→      }
+    83→      /* Роли — карточки: hover/focus — вторичный акцент (превью выбора). */
+    84→      #lang-picker-overlay #role-grid {
+    85→        display: flex; flex-wrap: wrap; justify-content: center;
+    86→        gap: 10px; max-width: 560px;
+    87→      }
+    88→      #lang-picker-overlay #role-grid button {
+    89→        min-width: 150px; padding: 10px 16px; font-size: 14px;
+    90→      }
+    91→      #lang-picker-overlay #role-grid button:hover,
+    92→      #lang-picker-overlay #role-grid button:focus-visible {
+    93→        background: var(--cd-accent-2-tint); border-color: var(--accent-2); color: var(--cd-text-on-tint);
+    94→      }
+    95→      #lang-picker-overlay #role-info {
+    96→        min-height: 40px; max-width: 520px; text-align: center;
+    97→        color: var(--cd-text-muted); font-size: 13px; line-height: 1.5;
+    98→        margin: 0;
+    99→      }
+   100→      /* «Продолжить без роли» — вторичная кнопка: hover вторичным акцентом. */
+   101→      #lang-picker-overlay .secondary {
+   102→        background: transparent; color: var(--cd-text-muted); border: 1px solid var(--cd-border);
+   103→        font-weight: 400; font-size: 13px !important; min-width: 0 !important;
+   104→        padding: 8px 14px !important;
+   105→      }
+   106→      #lang-picker-overlay .secondary:hover {
+   107→        background: var(--cd-accent-2-tint-weak); border-color: var(--accent-2); color: var(--cd-text);
+   108→      }
+   109→      /* FR-089: согласия телеметрии — два предвыбранных чекбокса внизу
+   110→         страницы первого запуска. Нативные чекбоксы с accent-color =
+   111→         основной акцент (отметка #D68A32); лейблы кликабельны, hover —
+   112→         вторичный акцент (как у карточек ролей), focus-within —
+   113→         outline вторичного акцента (клавиатурная доступность). */
+   114→      #lang-picker-overlay .consent {
+   115→        display: flex; flex-direction: column; gap: 6px; align-items: stretch;
+   116→        margin-top: 6px; padding: 12px 14px; max-width: 560px;
+   117→        border: 1px solid var(--cd-border-soft); border-radius: 10px;
+   118→        background: var(--cd-surface-veil);
+   119→      }
+   120→      #lang-picker-overlay .consent-title {
+   121→        color: var(--cd-text-muted); font-size: 12px; font-weight: 600; margin: 0;
+   122→        text-transform: uppercase; letter-spacing: 0.4px;
+   123→      }
+   124→      #lang-picker-overlay .consent label {
+   125→        display: flex; align-items: flex-start; gap: 10px;
+   126→        cursor: pointer; color: var(--cd-text); font-size: 13px; line-height: 1.45;
+   127→        border-radius: 6px; padding: 4px 6px; margin: 0 -6px;
+   128→        /* W-e (дефект №14): строка согласия — тач-цель (клик по лейблу
+   129→         * переключает чекбокс), поэтому ≥44px по высоте. */
+   130→        box-sizing: border-box; min-height: 44px;
+   131→        transition: background 150ms ease, color 150ms ease;
+   132→        -webkit-tap-highlight-color: transparent;
+   133→      }
+   134→      #lang-picker-overlay .consent label:hover {
+   135→        background: var(--cd-accent-2-tint-weak); color: var(--cd-text-on-tint);
+   136→      }
+   137→      #lang-picker-overlay .consent label:focus-within {
+   138→        outline: 2px solid var(--accent-2); outline-offset: 2px;
+   139→      }
+   140→      #lang-picker-overlay .consent input[type="checkbox"] {
+   141→        accent-color: var(--accent); width: 16px; height: 16px;
+   142→        margin: 2px 0 0 0; flex: none; cursor: pointer;
+   143→      }
+   144→      #lang-picker-overlay .consent .hint {
+   145→        color: var(--cd-text-hint); font-size: 11px; line-height: 1.45; margin: 0;
+   146→      }
+   147→    </style>
+   148→    <script>
+   149→      /* FR-028 v2 + FR-087 v2 (единый пикер первого запуска): первый экран
+   150→       * web-версии — ОДНА страница: выбор языка (переключатель, активная
+   151→       * кнопка залита основным акцентом) и опциональная рабочая роль
+   152→       * (class) — сетка карточек, hover/focus показывает краткую
+   153→       * информацию «какие типы подсказок будут включены». «Продолжить
+   154→       * без роли» — class=default (все подсказки, прежнее поведение).
+   155→       * Выбор пишет минимальный TOML `language = "ru"`
+   156→       * (+ `role = "architect"`) в localStorage и перезагружает страницу —
+   157→       * canvas-app::load_settings подхватит оба поля до WASM init. Роль
+   158→       * можно сменить позже в настройках (таб «Профиль», dropdown «Роль»).
+   159→       * Данные ролей синхронны реестру canvas-core::roles (RU+EN).
+   160→       * История: v1 была двухшаговой (язык → роль), но авторский CSS
+   161→       * .step{display:flex} перебивал атрибут hidden UA-стилей — оба шага
+   162→       * рисовались одновременно («две страницы входа» с пустой кнопкой
+   163→       * пропуска); v2 свела всё в один экран без шагов. */
+   164→      (function () {
+   165→        // Проверяем, есть ли уже canvasdesk.config в localStorage.
+   166→        // Если есть — приложение уже было запущено, язык выбран (или
+   167→        // пользователь явно сбросил — тогда покажем пикер заново).
+   168→        try {
+   169→          var ls = window.localStorage;
+   170→          if (ls && ls.getItem("canvasdesk.config") !== null) {
+   171→            return; // язык уже выбран — пикер не нужен
+   172→          }
+   173→        } catch (e) {
+   174→          // localStorage недоступен (приватный режим) — пикер всё равно
+   175→          // покажем, но выбор не сохранится (canvas-app дефолт = Ru).
+   176→        }
+   177→        // FR-087: реестр ролей (зеркало canvas_core::roles::ROLES;
+   178→        // default здесь нет — его выбирает «Продолжить без роли»).
+   179→        var ROLES = [
+   180→          { id: "architect", name_ru: "Архитектор", name_en: "Architect",
+   181→            d_ru: "Подсказки шаблонов: бэкенд и сеть. Схемы: архитектура и планирование мощностей.",
+   182→            d_en: "Template hints: backend and network. Schemes: architecture and capacity planning." },
+   183→          { id: "developer", name_ru: "Разработчик", name_en: "Developer",
+   184→            d_ru: "Подсказки шаблонов: бэкенд и сеть. Схемы: архитектура сервисов.",
+   185→            d_en: "Template hints: backend and network. Schemes: service architecture." },
+   186→          { id: "product-manager", name_ru: "Продакт-менеджер", name_en: "Product Manager",
+   187→            d_ru: "Подсказки шаблонов: продуктовая аналитика и юнит-экономика. Схемы: бизнес-модели и фреймворки.",
+   188→            d_en: "Template hints: product analytics and unit economics. Schemes: business models and frameworks." },
+   189→          { id: "analyst", name_ru: "Аналитик", name_en: "Analyst",
+   190→            d_ru: "Подсказки шаблонов: продуктовая аналитика и юнит-экономика. Схемы: бизнес, фреймворки и планирование.",
+   191→            d_en: "Template hints: product analytics and unit economics. Schemes: business, frameworks and planning." },
+   192→          { id: "cio", name_ru: "CIO", name_en: "CIO",
+   193→            d_ru: "Подсказки шаблонов: бэкенд-инфраструктура и юнит-экономика. Схемы: бизнес, архитектура и планирование.",
+   194→            d_en: "Template hints: backend infrastructure and unit economics. Schemes: business, architecture and planning." },
+   195→          { id: "cto", name_ru: "CTO", name_en: "CTO",
+   196→            d_ru: "Подсказки шаблонов: бэкенд, сеть и юнит-экономика. Схемы: архитектура, бизнес и планирование.",
+   197→            d_en: "Template hints: backend, network and unit economics. Schemes: architecture, business and planning." },
+   198→          { id: "founder", name_ru: "Основатель / CEO", name_en: "Founder / CEO",
+   199→            d_ru: "Подсказки шаблонов: юнит-экономика. Схемы: бизнес-модели, планирование и фреймворки.",
+   200→            d_en: "Template hints: unit economics. Schemes: business models, planning and frameworks." }
+   201→        ];
+   202→        document.addEventListener("DOMContentLoaded", function () {
+   203→          var overlay = document.getElementById("lang-picker-overlay");
+   204→          if (!overlay) return;
+   205→          overlay.hidden = false;
+   206→          var roleGrid = document.getElementById("role-grid");
+   207→          var roleInfo = document.getElementById("role-info");
+   208→          var roleTitle = document.getElementById("role-title");
+   209→          var roleSkip = document.getElementById("role-skip");
+   210→          var consentTitle = document.getElementById("consent-title");
+   211→          var consentCounterLabel = document.getElementById("consent-counter-label");
+   212→          var consentAnalyticsLabel = document.getElementById("consent-analytics-label");
+   213→          var consentHint = document.getElementById("consent-hint");
+   214→          var consentCounter = document.getElementById("consent-counter");
+   215→          var consentAnalytics = document.getElementById("consent-analytics");
+   216→          var langBtns = overlay.querySelectorAll("button[data-lang]");
+   217→          var chosen = "ru"; // дефолт — как у <html lang="ru"> и canvas-app
+   218→          var t = {
+   219→            ru: {
+   220→              title: "Рабочая роль (необязательно)",
+   221→              hint: "Роль включает подсказки соответствующих типов шаблонов и схем — наведите на карточку, чтобы увидеть какие. Сменить роль можно позже в настройках, таб «Профиль».",
+   222→              skip: "Продолжить без роли (все подсказки)",
+   223→              // FR-089: согласия телеметрии (оба чекбокса предвыбраны)
+   224→              consentTitle: "Помочь проекту (необязательно)",
+   225→              consentCounter: "Анонимный счётчик использования",
+   226→              consentAnalytics: "Метрики и отчёты об ошибках",
+   227→              consentHint: "Одна отметка в сутки, без личных данных. Метрики помогают находить баги. Отключаются в настройках, таб «Профиль»."
+   228→            },
+   229→            en: {
+   230→              title: "Work role (optional)",
+   231→              hint: "A role enables matching template and scheme hints — hover a card to see which. You can change the role later in Settings, the Profile tab.",
+   232→              skip: "Continue without a role (all hints)",
+   233→              consentTitle: "Help improve CanvasDesk (optional)",
+   234→              consentCounter: "Anonymous usage counter",
+   235→              consentAnalytics: "Metrics & error reports",
+   236→              consentHint: "One note per day, no personal data. Metrics help find bugs. Turn off anytime in Settings, the Profile tab."
+   237→            }
+   238→          };
+   239→          function pick(role) {
+   240→            // Записываем минимальный TOML в localStorage — canvas-app
+   241→            // через load_settings::toml::from_str подхватит `language = "ru"`
+   242→            // и `role = "..."`; остальные поля — serde(default).
+   243→            // FR-089: согласия чекбоксов — теми же bool-полями в TOML
+   244→            // (тумблеры таба «Профиль» подхватят их после загрузки).
+   245→            var toml = 'language = "' + chosen + '"';
+   246→            if (role) toml += '\nrole = "' + role + '"';
+   247→            var cCounter = consentCounter ? consentCounter.checked : true;
+   248→            var cAnalytics = consentAnalytics ? consentAnalytics.checked : true;
+   249→            toml += "\ntelemetry_counter = " + (cCounter ? "true" : "false");
+   250→            toml += "\ntelemetry_analytics = " + (cAnalytics ? "true" : "false");
+   251→            // FR-089: JSON-согласие — рантайм-источник правды JS-модуля
+   252→            // телеметрии (скрипт ниже в <head>): флаги + анонимный UUID
+   253→            // (генерируем здесь один раз; без crypto — деградация к
+   254→            // случайной строке) + отметка суток счётчика.
+   255→            var anonId = "";
+   256→            try {
+   257→              anonId = window.crypto && window.crypto.randomUUID
+   258→                ? window.crypto.randomUUID()
+   259→                : "cd-" + Date.now().toString(36) + "-" +
+   260→                  Math.random().toString(36).slice(2, 10);
+   261→            } catch (e) { /* без UUID — счётчик всё равно работает */ }
+   262→            try {
+   263→              var ls = window.localStorage;
+   264→              if (ls) {
+   265→                ls.setItem("canvasdesk.config", toml);
+   266→                ls.setItem("canvasdesk.consent", JSON.stringify({
+   267→                  counter: cCounter,
+   268→                  analytics: cAnalytics,
+   269→                  anonId: anonId,
+   270→                  lastWasmDay: null
+   271→                }));
+   272→              }
+   273→            } catch (e) { /* localStorage недоступен — продолжаем */ }
+   274→            // Перезагружаем страницу — WASM init начнётся заново и
+   275→            // подхватит новый localStorage.
+   276→            window.location.reload();
+   277→          }
+   278→          function infoDefault() {
+   279→            roleInfo.textContent = t[chosen].hint;
+   280→          }
+   281→          // Одна страница: смена языка перерисовывает тексты живо (без
+   282→          // перезагрузки); клик по карточке роли применяет выбор сразу.
+   283→          function render() {
+   284→            roleTitle.textContent = t[chosen].title;
+   285→            roleSkip.textContent = t[chosen].skip;
+   286→            // FR-089: тексты согласий — тем же живым переключателем языка
+   287→            consentTitle.textContent = t[chosen].consentTitle;
+   288→            consentCounterLabel.textContent = t[chosen].consentCounter;
+   289→            consentAnalyticsLabel.textContent = t[chosen].consentAnalytics;
+   290→            consentHint.textContent = t[chosen].consentHint;
+   291→            infoDefault();
+   292→            for (var i = 0; i < langBtns.length; i++) {
+   293→              var active = langBtns[i].getAttribute("data-lang") === chosen;
+   294→              langBtns[i].classList.toggle("active", active);
+   295→              langBtns[i].setAttribute("aria-pressed", active ? "true" : "false");
+   296→            }
+   297→            roleGrid.innerHTML = "";
+   298→            for (var j = 0; j < ROLES.length; j++) {
+   299→              var role = ROLES[j];
+   300→              var btn = document.createElement("button");
+   301→              btn.type = "button";
+   302→              btn.textContent = chosen === "en" ? role.name_en : role.name_ru;
+   303→              (function (r) {
+   304→                function describe() {
+   305→                  roleInfo.textContent = chosen === "en" ? r.d_en : r.d_ru;
+   306→                }
+   307→                btn.addEventListener("mouseenter", describe);
+   308→                btn.addEventListener("focus", describe);
+   309→                btn.addEventListener("mouseleave", infoDefault);
+   310→                btn.addEventListener("blur", infoDefault);
+   311→                btn.addEventListener("click", function () { pick(r.id); });
+   312→              })(role);
+   313→              roleGrid.appendChild(btn);
+   314→            }
+   315→          }
+   316→          for (var i = 0; i < langBtns.length; i++) {
+   317→            langBtns[i].addEventListener("click", function (e) {
+   318→              var lang = e.currentTarget.getAttribute("data-lang");
+   319→              if (lang !== chosen) {
+   320→                chosen = lang;
+   321→                render();
+   322→              }
+   323→            });
+   324→          }
+   325→          roleSkip.addEventListener("click", function () { pick(null); });
+   326→          render();
+   327→        });
+   328→      })();
+   329→    </script>
+   330→    <script>
+   331→      /* FR-089: телеметрия web-версии — двухуровневое согласие, PostHog
+   332→       * (продуктовые метрики + отчёты об ошибках) и анонимный счётчик
+   333→       * уникальных пользователей WASM-сервиса.
+   334→       *
+   335→       * ═════════ КОНФИГ ВЛАДЕЛЬЦА ═════════
+   336→       * Ключ и регион вписаны (EU cloud): POSTHOG_KEY/HOST ниже, проверен
+   337→       * запросом /batch/ из сессии сборки (200 Ok). Остался один шаг в
+   338→       * самом PostHog: Settings → General → Allowed domains → домен
+   339→       * хостинга CanvasDesk (защита публичного ключа от чужих лимитов).
+   340→       * Ключ phc_... клиентский — публиковать в открытом репозитории
+   341→       * безопасно (как Firebase config); при мусорных событиях —
+   342→       * перегенерировать в настройках проекта и заменить здесь.
+   343→       * Пустой POSTHOG_KEY = полный no-op: SDK не грузится, счётчик не
+   344→       * отправляется, локально читаются только согласия.
+   345→       *
+   346→       * Согласия (чекбоксы первого запуска, оба предвыбраны; источник
+   347→       * правды рантайма — JSON localStorage `canvasdesk.consent`, пикер
+   348→       * пишет при первом входе, Rust-персист настроек синхронизирует
+   349→       * дальше и эмитит canvasdesk:consent-changed):
+   350→       *   counter   — «сколько уникальных пользователей взаимодействует
+   351→       *               с WASM-сервисом»: суточная отметка wasm_used,
+   352→       *               distinct_id = анонимный UUID; отправка прямой в
+   353→       *               PostHog /batch/ БЕЗ SDK — работает даже при
+   354→       *               выключенных метриках (двухуровневое согласие).
+   355→       *   analytics — PostHog SDK (jsDelivr +esm, динамический import
+   356→       *               только при согласии): ошибки окна (window error +
+   357→       *               unhandledrejection → $exception; SDK-перехват
+   358→       *               capture_exceptions), продуктовые события/autocapture.
+   359→       *               Выключение тумблером → opt_out_capturing() на лету.
+   360→       * Приватность: в wasm_used нет ни браузера, ни URL, ни действий —
+   361→       * только флаг «пользователь с UUID N пользовался сегодня».
+   362→       * Отказ (снят чекбокс) = данные не собираются вовсе.
+   363→       * Скрипт не ломает приложение ни на одном шаге (все ошибки — catch).
+   364→       */
+   365→      (function () {
+   366→        var POSTHOG_KEY = "phc_kTAanM7umvZmxTT5fCSbKf6swaYkRaypo5WMD7Y54TBw"; // Project API key (EU cloud, владелец)
+   367→        var POSTHOG_HOST = "https://eu.i.posthog.com"; // регион EU; US: https://us.i.posthog.com
+   368→        var POSTHOG_CDN = "https://cdn.jsdelivr.net/npm/posthog-js@1/+esm";
+   369→        var CONSENT_KEY = "canvasdesk.consent";
+   370→        var state = { counter: true, analytics: true, anonId: "", lastWasmDay: null };
+   371→        var ph = null;        // PostHog SDK (после успешного импорта)
+   372→        var phPending = false; // импорт в полёте (не ретраим без нужды)
+   373→
+   374→        function readConsent() {
+   375→          try {
+   376→            var raw = window.localStorage.getItem(CONSENT_KEY);
+   377→            if (raw) {
+   378→              var parsed = JSON.parse(raw);
+   379→              if (typeof parsed.counter === "boolean") state.counter = parsed.counter;
+   380→              if (typeof parsed.analytics === "boolean") state.analytics = parsed.analytics;
+   381→              if (typeof parsed.anonId === "string" && parsed.anonId) state.anonId = parsed.anonId;
+   382→              if (typeof parsed.lastWasmDay === "string" || parsed.lastWasmDay === null) {
+   383→                state.lastWasmDay = parsed.lastWasmDay;
+   384→              }
+   385→            }
+   386→          } catch (e) { /* приватный режим/битая запись — дефолты true */ }
+   387→        }
+   388→        function writeConsent() {
+   389→          try {
+   390→            window.localStorage.setItem(CONSENT_KEY, JSON.stringify(state));
+   391→          } catch (e) { /* нет localStorage — телеметрия молча нет */ }
+   392→        }
+   393→
+   394→        /* Счётчик: метрика «уникальные пользователи WASM-сервиса».
+   395→         * Дедуп — одна отметка в UTC-сутки (lastWasmDay): активные
+   396→         * пользователи считаются один раз в день, полный отказ
+   397→         * (counter=false) не отправляет ничего. Прямая отправка в
+   398→         * /batch/ без SDK — согласие counter не тянет за собой
+   399→         * продуктовую аналитику. */
+   400→        function todayUTC() { return new Date().toISOString().slice(0, 10); }
+   401→        function ensureAnonId() {
+   402→          if (!state.anonId) {
+   403→            try {
+   404→              state.anonId = window.crypto && window.crypto.randomUUID
+   405→                ? window.crypto.randomUUID()
+   406→                : "cd-" + Date.now().toString(36) + "-" +
+   407→                  Math.random().toString(36).slice(2, 10);
+   408→            } catch (e) {
+   409→              state.anonId = "cd-" + Date.now().toString(36);
+   410→            }
+   411→          }
+   412→          return state.anonId;
+   413→        }
+   414→        function trackWasmUsed() {
+   415→          if (!POSTHOG_KEY || !state.counter) return; // no-op без ключа/согласия
+   416→          if (!pickerDone()) return; // свежий визит: пикер не подтверждён
+   417→          var today = todayUTC();
+   418→          if (state.lastWasmDay === today) return;
+   419→          state.lastWasmDay = today;
+   420→          writeConsent();
+   421→          try {
+   422→            fetch(POSTHOG_HOST + "/batch/", {
+   423→              method: "POST",
+   424→              headers: { "Content-Type": "application/json" },
+   425→              body: JSON.stringify({
+   426→                api_key: POSTHOG_KEY,
+   427→                batch: [{
+   428→                  event: "wasm_used",
+   429→                  distinct_id: ensureAnonId(),
+   430→                  properties: { app: "canvadesk-web" }
+   431→                }]
+   432→              }),
+   433→              keepalive: true
+   434→            }).catch(function () { /* офлайн/блокировщик — завтра */ });
+   435→          } catch (e) { /* блокировщик расширений — молча */ }
+   436→        }
+   437→
+   438→        /* «Взаимодействовал с WASM-сервисом» — первый жест пользователя
+   439→         * (клик/клавиша/колесо) на странице. once-слушатели дёшевы;
+   440→         * дальше дозирует суточный дедуп. Жест, а не загрузка: счётчик
+   441→         * меряет использование, не открытия вкладки. */
+   442→        function armInteractionTracking() {
+   443→          var events = ["pointerdown", "keydown", "wheel"];
+   444→          for (var i = 0; i < events.length; i++) {
+   445→            window.addEventListener(events[i], trackWasmUsed, { capture: true, once: true });
+   446→          }
+   447→        }
+   448→
+   449→        /* Свежий визит (пикер ещё не завершён): нет ни согласия, ни
+   450→         * конфига в localStorage — телеметрию не грузим и счётчик не
+   451→         * отправляем, первое событие уйдёт после выбора (reload).
+   452→         * Старые конфиги до FR-089 (конфиг есть, записи согласий нет)
+   453→         * считаются согласившимися — дефолты true, как чекбоксы. */
+   454→        function pickerDone() {
+   455→          try {
+   456→            var ls = window.localStorage;
+   457→            if (!ls) return true; // приватный режим — дефолты
+   458→            return ls.getItem(CONSENT_KEY) !== null ||
+   459→              ls.getItem("canvasdesk.config") !== null;
+   460→          } catch (e) { return true; }
+   461→        }
+   462→
+   463→        /* ─── Продуктовые события (ключ вписан — слой активен) ───
+   464→         * Автоматически идут: $pageview + autocapture (клики по DOM:
+   465→         * кнопки, меню, пикер — PostHog сам пишет элемент/текст),
+   466→         * $exception (installErrorHandlers ниже), wasm_used (суточно,
+   467→         * без SDK), app_launched (старт сессии с ролью/языком ниже).
+   468→         * Явные события — два способа из кода:
+   469→         *  1) JS: window.__cdTelemetry.track("template_used", {tpl: id});
+   470→         *  2) DOM-мост для Rust: dispatchEvent CustomEvent
+   471→         *     "canvasdesk:track", detail {event, properties}:
+   472→         *       web_sys::CustomEvent::new_with_event_init_dict(
+   473→         *         "canvasdesk:track",
+   474→         *         &CustomEventInit::new().detail(&JsValue::from_serde(
+   475→         *           &serde_json::json!({"event": "...", "properties": {...}}))))
+   476→         * track() — no-op без ключа/SDK/согласия analytics: отказавшим
+   477→         * не отправляется ничего; вызовы из любого кода безопасны. */
+   478→        function track(event, properties) {
+   479→          if (!ph || !state.analytics) return;
+   480→          if (typeof event !== "string" || !event) return;
+   481→          try {
+   482→            ph.capture(event, properties || {});
+   483→          } catch (e) { /* телеметрия не роняет приложение */ }
+   484→        }
+   485→        document.addEventListener("canvasdesk:track", function (e) {
+   486→          var d = e && e.detail;
+   487→          if (d && typeof d.event === "string") track(d.event, d.properties || {});
+   488→        });
+   489→
+   490→        /* app_launched — старт сессии с контекстом роли/языка: база
+   491→         * DAU и распределения ролей; $set обновляет person-свойства
+   492→         * (role, language), чтобы ЛЮБЫЕ события делились по ролям в
+   493→         * PostHog. Читается из TOML canvasdesk.config (пикер /
+   494→         * Rust-персист persist_settings_web). */
+   495→        function readProfile() {
+   496→          var out = { language: null, role: null };
+   497→          try {
+   498→            var raw = window.localStorage.getItem("canvasdesk.config");
+   499→            if (raw) {
+   500→              var m = /(^|\n)[ \t]*language[ \t]*=[ \t]*"([^"\n]*)"/.exec(raw);
+   501→              if (m) out.language = m[2];
+   502→              var r = /(^|\n)[ \t]*role[ \t]*=[ \t]*"([^"\n]*)"/.exec(raw);
+   503→              if (r) out.role = r[2];
+   504→            }
+   505→          } catch (e) { /* контекст события не критичен */ }
+   506→          return out;
+   507→        }
+   508→        function captureAppLaunched() {
+   509→          try {
+   510→            var p = readProfile();
+   511→            /* FR-090: identify со стабильным anonId (тот же UUID, что у
+   512→             * счётчика wasm_used). До этого события висят на анонимном
+   513→             * device-id, а PostHog по умолчанию создаёт person-профили
+   514→             * только для identified (person_profiles: identified_only) —
+   515→             * вкладка People пуста. identify мёржит анонимную историю в
+   516→             * person с ролью/языком ($set ниже дополняет при каждом
+   517→             * запуске) — «люди с ролями» в People; счётчик wasm_used
+   518→             * (distinct_id = тот же anonId) ложится на того же person. */
+   519→            try {
+   520→              ph.identify(ensureAnonId(), {
+   521→                language: p.language || "unset",
+   522→                role: p.role || "default"
+   523→              });
+   524→            } catch (e2) { /* identify не должен ронять app_launched */ }
+   525→            ph.capture("app_launched", {
+   526→              app: "canvadesk-web",
+   527→              language: p.language || "unset",
+   528→              role: p.role || "default",
+   529→              $set: { language: p.language || "unset", role: p.role || "default" }
+   530→            });
+   531→          } catch (e) { /* нет события — не поломка */ }
+   532→        }
+   533→
+   534→        /* PostHog SDK — динамический import ТОЛЬКО при analytics=true
+   535→         * (согласие до загрузки SDK: не грузим скрипт отказавшим).
+   536→         * +esm — ESM-сборка jsDelivr, default export = posthog. */
+   537→        function loadPostHog() {
+   538→          if (!POSTHOG_KEY || phPending || ph) return;
+   539→          phPending = true;
+   540→          import(POSTHOG_CDN)
+   541→            .then(function (mod) {
+   542→              var posthog = mod.default;
+   543→              posthog.init(POSTHOG_KEY, {
+   544→                api_host: POSTHOG_HOST,
+   545→                capture_exceptions: true,
+   546→                /* FR-091: session replay — захват WASM-канваса. Весь UI
+   547→                 * рисуется Rust/wgpu в ОДИН <canvas> (WebGPU, winit
+   548→                 * вставляет в body), для rrweb это чёрный ящик: запись
+   549→                 * сеанса показывала только DOM-слой (пикер первого
+   550→                 * запуска), канвас — пустой. Canvas capture выключен у
+   551→                 * PostHog по умолчанию (канвас не маскируется
+   552→                 * DOM-механикой) — включаем явно.
+   553→                 *
+   554→                 * captureCanvas (локальный конфиг, приоритет над
+   555→                 * настройками проекта Settings → Session replay):
+   556→                 *   recordCanvas  — включить захват;
+   557→                 *   canvasFps     — 0–12 кадров/с (дефолт PostHog 4);
+   558→                 *   canvasQuality — "0"–"1" (WebP-качество, дефолт 0.4).
+   559→                 * canvasCapture.resolutionScale — даунскейл кадров;
+   560→                 * ВАЖНО (FR-091 v2, сверено с исходниками lazy-recorder
+   561→                 * v1.435.8): локальное resolutionScale ИГНОРИРУЕТСЯ —
+   562→                 * масштаб приходит только из удалённого date-default
+   563→                 * конфига проекта («defaults 2026-05-30» = 0.6;
+   564→                 * подтверждено live: снапшоты 1280×800 → 768×480). Блок
+   565→                 * оставлен как документация намерения и на случай
+   566→                 * появления локального приоритета в будущих SDK.
+   567→                 * Механика (исходники + live-репро 2026-10-03):
+   568→                 * FPS-обсервер снапшотит ВСЕ <canvas> в DOM через
+   569→                 * createImageBitmap. 2d — читается; webgl/webgl2 —
+   570→                 * читается ТОЛЬКО при preserveDrawingBuffer:true (иначе
+   571→                 * буфер после композитинга пуст — getContext-шим выше
+   572→                 * форсит флаг до создания контекста, перманентно выигрывая
+   573→                 * гонку у патча рекордера); webgpu — НЕ читается вовсе
+   574→                 * (аналога preserveDrawingBuffer нет,
+   575→                 * posthog/posthog#57008), поэтому при analytics=true
+   576→                 * canvas-web предпочитает WebGL2-бэкенд
+   577→                 * (set_prefer_gl_for_capture, renderer_launch.rs).
+   578→                 * Требует posthog-js ≥ 1.105.7 (тянем @1 → 1.435.8).
+   579→                 * В записи виден и «видео»-слой WASM, и события FR-090
+   580→                 * (surface_opened и т.д.) в таймлайне реплея.
+   581→                 *
+   582→                 * Приватность: содержимое заметок попадает в записи
+   583→                 * (только для согласившихся на аналитику — гейт FR-089).
+   584→                 * Для маскировки областей — canvasCapture.maskRegionsFn
+   585→                 * (posthog-js ≥ 1.408: пиксели под регионами не покидают
+   586→                 * браузер); альтернатива — не включать recordCanvas и
+   587→                 * включить захват в настройках проекта (локальные опции
+   588→                 * всё равно выигрывают — убрать их, чтобы управлялось из
+   589→                 * PostHog). */
+   590→                session_recording: {
+   591→                  captureCanvas: {
+   592→                    recordCanvas: true,
+   593→                    canvasFps: 4,
+   594→                    canvasQuality: "0.4"
+   595→                  },
+   596→                  canvasCapture: {
+   597→                    resolutionScale: 0.6
+   598→                  }
+   599→                }
+   600→              });
+   601→              ph = posthog;
+   602→              phPending = false;
+   603→              installErrorHandlers();
+   604→              captureAppLaunched();
+   605→            })
+   606→            .catch(function () {
+   607→              phPending = false; /* CDN недоступен/офлайн — тихо */
+   608→            });
+   609→        }
+   610→
+   611→        /* Отчёты об ошибках: $exception по window.error и
+   612→         * unhandledrejection. capture_exceptions в init ловит
+   613→         * исключения внутри SDK-обёрток — эти листенеры закрывают
+   614→         * остальное окно (до/вне SDK событий не собираем: телеметрия
+   615→         * строго после согласия). */
+   616→        function reportException(type, message, extra) {
+   617→          if (!ph || !state.analytics) return;
+   618→          try {
+   619→            var props = {
+   620→              $exception_type: type,
+   621→              $exception_message: String(message).slice(0, 500)
+   622→            };
+   623→            if (extra) {
+   624→              if (extra.file) props.$exception_source = String(extra.file).slice(0, 200);
+   625→              if (extra.line) props.$exception_lineno = extra.line;
+   626→            }
+   627→            ph.capture("$exception", props);
+   628→          } catch (e) { /* телеметрия не должна ронять приложение */ }
+   629→        }
+   630→        function installErrorHandlers() {
+   631→          window.addEventListener("error", function (e) {
+   632→            if (e.message || e.error) {
+   633→              reportException("window.error", e.message || String(e.error), {
+   634→                file: e.filename, line: e.lineno
+   635→              });
+   636→            }
+   637→          });
+   638→          window.addEventListener("unhandledrejection", function (e) {
+   639→            var r = e.reason;
+   640→            reportException("unhandledrejection", r && r.message ? r.message : String(r));
+   641→          });
+   642→        }
+   643→
+   644→        /* Смена согласий на лету: Rust (persist_settings_web) пишет
+   645→         * canvasdesk.consent и эмитит canvasdesk:consent-changed;
+   646→         * storage — кросс-вкладочная синхронизация. Перечитываем JSON,
+   647→         * приводим PostHog в соответствие (opt-in/opt-out) без
+   648→         * перезагрузки; счётчик просто перестаёт/начинает отправляться. */
+   649→        function applyConsentChange() {
+   650→          readConsent();
+   651→          if (!POSTHOG_KEY) return;
+   652→          if (state.analytics && !ph && !phPending) {
+   653→            loadPostHog();
+   654→          } else if (state.analytics && ph) {
+   655→            try { ph.opt_in_capturing(); } catch (e) { /* тихо */ }
+   656→          } else if (!state.analytics && ph) {
+   657→            try { ph.opt_out_capturing(); } catch (e) { /* тихо */ }
+   658→          }
+   659→        }
+   660→        document.addEventListener("canvasdesk:consent-changed", applyConsentChange);
+   661→        window.addEventListener("canvasdesk:consent-changed", applyConsentChange);
+   662→        window.addEventListener("storage", function (e) {
+   663→          if (e && e.key === CONSENT_KEY) applyConsentChange();
+   664→        });
+   665→
+   666→        /* Публичный API (window.__cdTelemetry): getConsent — флаги;
+   667→         * setConsent — мерж + перечитать PostHog; trackWasmUsed —
+   668→         * счётчик; track(event, props) — продуктовые события из JS
+   669→         * (из Rust — CustomEvent canvasdesk:track, см. выше). */
+   670→        window.__cdTelemetry = {
+   671→          getConsent: function () {
+   672→            return { counter: state.counter, analytics: state.analytics };
+   673→          },
+   674→          setConsent: function (patch) {
+   675→            if (patch && typeof patch.counter === "boolean") state.counter = patch.counter;
+   676→            if (patch && typeof patch.analytics === "boolean") state.analytics = patch.analytics;
+   677→            writeConsent();
+   678→            applyConsentChange();
+   679→          },
+   680→          trackWasmUsed: trackWasmUsed,
+   681→          track: track
+   682→        };
+   683→
+   684→        /* Boot: согласия читаются синхронно до любых загрузок; пикер
+   685→         * (первый вход) уже записал canvasdesk.consent до reload — здесь
+   686→         * он существует. Свежий визит (пикер не завершён) — телеметрию
+   687→         * не грузим до подтверждения выбора. Старые конфиги до FR-089
+   688→         * без записи согласий — дефолты true (как чекбоксы). */
+   689→        readConsent();
+   690→        if (POSTHOG_KEY && state.analytics && pickerDone()) loadPostHog();
+   691→        armInteractionTracking();
+   692→      })();
+   693→    </script>
+   694→    <script>
+   695→      /* M8/W4 web-compat шим (wasm-port §7, «WebGPU-драйверные баги
+   696→         Chromium» — конкретный случай дрейфа спеки). wgpu 22 просит у
+   697→         requestDevice лимит maxInterStageShaderComponents, удалённый из
+   698→         WebGPU (переименован в maxInterStageShaderVariables): свежие
+   699→         Chromium отклоняют весь запрос из-за нераспознанного имени
+   700→         («The limit … is not recognized») — падение замаскировано под
+   701→         «GPU-адаптер не найден». Шим удаляет из requiredLimits имена,
+   702→         которых нет в limits адаптера (generic-фильтр: переживает и
+   703→         будущие переименования); значения распознанных лимитов не
+   704→         трогает — запрос лимита выше возможностей адаптера честно
+   705→         отклоняется браузером, как в спеке. Правило §3.1: web-костыли
+   706→         живут в web-слое (canvas-web), ядро и wgpu не патчатся. */
+   707→      (function () {
+   708→        if (typeof GPUAdapter === "undefined") return;
+   709→        var proto = GPUAdapter.prototype;
+   710→        if (!proto || !proto.requestDevice) return;
+   711→        var orig = proto.requestDevice;
+   712→        proto.requestDevice = function (desc) {
+   713→          if (
+   714→            desc &&
+   715→            desc.requiredLimits &&
+   716→            this.limits &&
+   717→            typeof this.limits === "object"
+   718→          ) {
+   719→            // for..in, а не Object.keys: свойства GPUAdapterLimits —
+   720→            // геттеры на прототипе (собственных enumerable-ключей нет)
+   721→            var known = {};
+   722→            for (var limit in this.limits) known[limit] = true;
+   723→            var filtered = {};
+   724→            var dropped = [];
+   725→            for (var key in desc.requiredLimits) {
+   726→              if (known[key]) {
+   727→                filtered[key] = desc.requiredLimits[key];
+   728→              } else {
+   729→                dropped.push(key);
+   730→              }
+   731→            }
+   732→            if (dropped.length > 0) {
+   733→              console.warn(
+   734→                "[canvas-web compat] лимиты не распознаны браузером, исключены из requestDevice: " +
+   735→                  dropped.join(", "),
+   736→              );
+   737→              desc = Object.assign({}, desc, { requiredLimits: filtered });
+   738→            }
+   739→          }
+   740→          return orig.call(this, desc);
+   741→        };
+   742→      })();
+   743→    </script>
+   744→    <script>
+   745→      /* FR-091 v2: читаемый WebGL2-канвас для session recording (и любых
+   746→         внешних читателей растра). PostHog FPS-обсервер снапшотит каждый
+   747→         <canvas> через createImageBitmap → WebP. Два платформенных факта
+   748→         (воспроизведены на live-сайте 2026-10-03):
+   749→         1) WebGL2 drawing buffer после композитинга браузер очищает, если
+   750→            контекст создан без preserveDrawingBuffer (дефолт) — readback
+   751→            (createImageBitmap / toDataURL) возвращает 100% прозрачный
+   752→            растр, при том что compositor показывает отрендеренный кадр.
+   753→            Сам PostHog патчит HTMLCanvasElement.prototype.getContext и
+   754→            форсит флаг, но его патч ставится после загрузки SDK +
+   755→            decide-запроса + lazy-recorder.js — и проигрывает гонку буту
+   756→            WASM: wgpu создаёт webgl2-контекст раньше патча. Этот шим
+   757→            ставится в <head> синхронно — ДО любых getContext (wgpu,
+   758→            gpu_gate-проба, тесты), выбор бэкенда не меняет. Цена —
+   759→            сохранённый drawing buffer (незначительно для UI-нагрузки
+   760→            редактора; перф-компромисс осознанный).
+   761→         2) WebGPU-контекстов шим не касается: у WebGPU аналога
+   762→            preserveDrawingBuffer нет, и растр webgpu-канваса рекордер
+   763→            PostHog не читает вовсе (posthog/posthog#57008). Поэтому при
+   764→            включённом согласии analytics canvas-web предпочитает
+   765→            WebGL2-бэкенд (renderer_launch →
+   766→            canvas_render::set_prefer_gl_for_capture) — см. Rust-сторону.
+   767→         Правило §3.1: web-костыли живут в web-слое. */
+   768→      (function () {
+   769→        var proto = HTMLCanvasElement.prototype;
+   770→        var orig = proto.getContext;
+   771→        proto.getContext = function (type, opts) {
+   772→          if (
+   773→            type === "webgl" ||
+   774→            type === "webgl2" ||
+   775→            type === "experimental-webgl"
+   776→          ) {
+   777→            opts = Object.assign({}, opts, { preserveDrawingBuffer: true });
+   778→          }
+   779→          return orig.call(this, type, opts);
+   780→        };
+   781→      })();
+   782→    </script>
+   783→    <script>
+   784→      /* M8/W9 шим (wasm-port §7, «WebGPU-драйверные баги Chromium» —
+   785→         горячая клавиша против браузерного ускорителя). Ctrl+P —
+   786→         продуктовая связка палитры шаблонов (FR-018), но Chromium по
+   787→         Ctrl+P открывает диалог печати: winit-web не делает
+   788→         preventDefault для браузерных акселераторов, и печать
+   789→         поверхностно перехватывает ввод (пауза rAF-насоса winit) —
+   790→         палитра «открывается и умирает». Шим в фазе перехвата (до
+   791→         listeners winit на канвасе) гасит ТОЛЬКО default-действие
+   792→         браузера; событие продолжает распространяться и доходит до
+   793→         App (preventDefault не мешает propagation). Кириллица — «з»
+   794→         (русская раскладка, ср. on_key в canvas-app). F5/Ctrl+S/F12 не
+   795→         трогаем: перезагрузка — часть UX хранения (W6), остальное вне
+   796→         продуктовых связок. Правило §3.1: web-костыли — в canvas-web. */
+   797→      (function () {
+   798→        document.addEventListener(
+   799→          "keydown",
+   800→          function (e) {
+   801→            if (
+   802→              (e.ctrlKey || e.metaKey) &&
+   803→              !e.shiftKey &&
+   804→              !e.altKey &&
+   805→              (e.key === "p" || e.key === "P" || e.key === "з" || e.key === "З")
+   806→            ) {
+   807→              e.preventDefault();
+   808→              /* FR-028 v2: optimistic signal for tour engine. The WASM
+   809→               * side opens the template palette (template_ui.rs) after
+   810→               * receiving the keydown from winit; we don't have a JS API
+   811→               * to query canvas-internal state, so emit optimistically.
+   812→               * paletteTour scenario's waitFor(signal:"canvas:palette-opened")
+   813→               * advances. False positive if the palette fails to open
+   814→               * (rare); user can still click "Skip" on the tour. */
+   815→              if (window.__canvasdeskTour) {
+   816→                setTimeout(function () {
+   817→                  window.__canvasdeskTour.signal("canvas:palette-opened");
+   818→                }, 120);
+   819→              }
+   820→            }
+   821→          },
+   822→          true,
+   823→        );
+   824→      })();
+   825→    </script>
+   826→    <script>
+   827→      /* FR-028 v2: JS-side signal detection for tour engine. The WASM
+   828→       * app creates notes / opens panels in response to user gestures
+   829→       * that the JS layer can detect via DOM events on the winit canvas
+   830→       * (body > canvas). This shim emits tour signals optimistically —
+   831→       * the engine's waitFor(signal) gates advance without Rust-side
+   832→       * wiring. Real implementation (AppEvent::TourSignal + drain in
+   833→       * canvas-web wrapper) is documented as a TODO; this JS shim is
+   834→       * the fallback that makes paletteTour / firstRunInline work in
+   835→       * production today. See docs/interface-objects/onboarding-v2-inline.md
+   836→       * §6 (TODO: Rust-side signal emission). */
+   837→      (function () {
+   838→        function emit(name) {
+   839→          if (window.__canvasdeskTour) {
+   840→            /* Short delay lets the WASM side handle the gesture first;
+   841→             * the signal represents "the action happened", not "the
+   842→             * gesture was received". */
+   843→            setTimeout(function () {
+   844→              window.__canvasdeskTour.signal(name);
+   845→            }, 120);
+   846→          }
+   847→        }
+   848→        function install() {
+   849→          /* Double-click on canvas → note creation (FR-006 / create_note_at).
+   850→           * False positives: dblclick on existing node opens edit mode
+   851→           * instead of creating a note. The user in the tour context is
+   852→           * explicitly told to "double-click on empty canvas", so this
+   853→           * is a reasonable proxy. */
+   854→          var canvas = document.querySelector("body > canvas");
+   855→          if (canvas) {
+   856→            canvas.addEventListener("dblclick", function () {
+   857→              emit("canvas:note-created");
+   858→            });
+   859→          } else {
+   860→            /* Canvas may not be inserted yet (winit web does it async).
+   861→             * Retry on next frame. */
+   862→            requestAnimationFrame(install);
+   863→          }
+   864→        }
+   865→        if (document.readyState === "loading") {
+   866→          document.addEventListener("DOMContentLoaded", install);
+   867→        } else {
+   868→          install();
+   869→        }
+   870→      })();
+   871→    </script>
+   872→    <style>
+   873→      /* Канвас winit (вставляется canvas-web'ом из renderer_launch) —
+   874→      * единственный контент, растянут на окно; тёмный фон в тон продукта
+   875→      * (SPEC §6, темы CR-007) — до первого кадра async-init Renderer.
+   876→      * CR-014: dvh — динамический viewport мобильных браузеров (адресная
+   877→      * строка): 100vh выше видимой области, низ канваса уходил под бар;
+   878→      * dvh ставится ПОСЛЕ vh — старые браузеры берут vh, новые — dvh.
+   879→      * touch-action — тач-жесты не скроллят/зумят страницу поверх канваса. */
+   880→      /* W-f (аудит ui-kit §6, консолидация shell-литералов): единые слоты
+   881→      * палитры DOM-оболочки. Значения — байт-в-байт прежние литералы
+   882→      * index.html и gpu_gate.rs (НИКАКИХ новых цветов); паритет сверяет
+   883→      * scripts/web_shell_palette_parity.py (разбор CSS до/после по
+   884→      * селекторам). Shell не читает Rust-токены через границу wasm —
+   885→      * соответствие слотам ThemeColors фиксируется только комментариями.
+   886→      * JS-потребители: инлайн-бандл тура (ниже в body) использует
+   887→      * var(--cd-*, прежний-литерал) — fallback сохраняет переносимость
+   888→      * бандла вне CanvasDesk; DIM_DEFAULTS тура читает --cd-dim через
+   889→      * getComputedStyle, т.к. внутри SVG data-URI маски затемнения
+   890→      * CSS-переменные не резолвятся. */
+   891→      :root {
+   892→        color-scheme: dark;
+   893→        /* Фон окна/канваса до первого кадра, подложка оверлеев; тон
+   894→        * оболочки — НЕ ThemeColors::background (там #1e1e22, канвас). */
+   895→        --cd-bg: #14161a;
+   896→        /* Поверхность панелей/кнопок (тулбар, автор-бар, about,
+   897→        * тур-меню, пикер); по роли ≈ ThemeColors::menu_fill. */
+   898→        --cd-surface: #1d2128;
+   899→        /* Hover подложек кнопок/строк (кандидат на control_hover_fill). */
+   900→        --cd-surface-hover: #262c35;
+   901→        /* Hover приподнятых элементов (author-bar, link-row, тур-кнопки). */
+   902→        --cd-surface-raised: #2e353f;
+   903→        /* Полупрозрачная подложка модального оверлея «Об авторе». */
+   904→        --cd-overlay: rgba(20, 22, 26, 0.92);
+   905→        /* Заголовки/акцентные подписи. */
+   906→        --cd-text-title: #f3f5f8;
+   907→        /* Основной текст. */
+   908→        --cd-text: #d5d9e0;
+   909→        /* Тело тултипа тура (мягче основного). */
+   910→        --cd-text-soft: #b9c0cb;
+   911→        /* Вторичный текст и иконки. */
+   912→        --cd-text-muted: #8b95a3;
+   913→        /* Приглушённый текст (дескрипторы, прогресс тура). */
+   914→        --cd-text-faint: #6b7480;
+   915→        /* Hint под согласиями пикера. */
+   916→        --cd-text-hint: #6f7887;
+   917→        /* Тёмные «чернила» на залитом акценте (активная кнопка языка). */
+   918→        --cd-text-on-accent: #14161a;
+   919→        /* Светлый текст на цветной заливке (hover-тинты, primary тура). */
+   920→        --cd-text-on-tint: #fff;
+   921→        /* Волосяные рамки панелей/кнопок. */
+   922→        --cd-border: #333a44;
+   923→        /* Рамка consent-блока пикера. */
+   924→        --cd-border-soft: #2a313b;
+   925→        /* Разделитель футера тултипа тура. */
+   926→        --cd-border-divider: #2a3138;
+   927→        /* Focus-visible outline DOM-контролов (браузерный синий). */
+   928→        --cd-focus-ring: #8ab4ff;
+   929→        /* Акцент владельца FR-087 (активная кнопка языка, чекбоксы). */
+   930→        --cd-accent: #d68a32;
+   931→        /* Hover активной кнопки языка. */
+   932→        --cd-accent-hover: #e39a45;
+   933→        /* Вторичный акцент FR-087 (hover карточек ролей, secondary). */
+   934→        --cd-accent-2: #5baec4;
+   935→        /* Hover-тинт основного акцента (14%). */
+   936→        --cd-accent-tint: rgba(214, 138, 50, 0.14);
+   937→        /* Hover-тинт вторичного акцента на карточках ролей (14%). */
+   938→        --cd-accent-2-tint: rgba(91, 174, 196, 0.14);
+   939→        /* Слабый тинт вторичного акцента (10%, secondary/consent hover). */
+   940→        --cd-accent-2-tint-weak: rgba(91, 174, 196, 0.10);
+   941→        /* Полупрозрачная вуаль поверхности (фон consent-блока). */
+   942→        --cd-surface-veil: rgba(29, 33, 40, 0.55);
+   943→        /* Тень модальной панели (about). */
+   944→        --cd-shadow-panel: rgba(0,0,0,0.5);
+   945→        /* Тень всплывающих меню/тултипа тура. */
+   946→        --cd-shadow-pop: rgba(0,0,0,0.45);
+   947→        /* Затемнение сцены туром (spotlight); читается JS через
+   948→        * getComputedStyle (SVG data-URI маска не резолвит var()). */
+   949→        --cd-dim: rgba(0,0,0,0.55);
+   950→        /* Primary-кнопка тура («Далее»); shell-локальный синий,
+   951→        * вне ThemeColors. */
+   952→        --cd-tour-primary: #2f6fda;
+   953→        --cd-tour-primary-hover: #3a78e0;
+   954→      }
+   955→      html, body {
+   956→        margin: 0;
+   957→        height: 100%;
+   958→        overflow: hidden;
+   959→        background: var(--cd-bg);
+   960→      }
+   961→      body > canvas {
+   962→        display: block;
+   963→        width: 100vw;
+   964→        height: 100vh;
+   965→        height: 100dvh;
+   966→        /* tabindex="0" (winit: клавиатура) — без рамки фокуса */
+   967→        outline: none;
+   968→        touch-action: none;
+   969→      }
+   970→      /* M8/W6 (wasm-port §4.2): DOM-панель хранилища — файловые жесты
+   971→      * браузера (пикер/экспорт/недавние) требуют window+жест, канвас —
+   972→      * GPU-UI, поэтому три кнопки поверх (W12 отполировали стиль,
+   973→      * CR-014 — адаптивность). Инвариант панели: НИКОГДА не покидает
+   974→      * экран — flex-wrap + max-width переносят кнопки на новые строки,
+   975→      * эллипсис режет текст кнопки (полное имя — в title-тултипе). */
+   976→      #w6-toolbar {
+   977→        position: fixed;
+   978→        top: 8px;
+   979→        right: 8px;
+   980→        display: flex;
+   981→        flex-wrap: wrap;
+   982→        justify-content: flex-end;
+   983→        gap: 6px;
+   984→        z-index: 10;
+   985→        /* Край до края экрана минус отступы: шире не бываем никогда */
+   986→        max-width: calc(100vw - 16px);
+   987→      }
+   988→      #w6-toolbar button {
+   989→        background: var(--cd-surface);
+   990→        color: var(--cd-text);
+   991→        border: 1px solid var(--cd-border);
+   992→        border-radius: 6px;
+   993→        font: 12px/1.4 system-ui, sans-serif;
+   994→        padding: 4px 10px;
+   995→        cursor: pointer;
+   996→        /* W-e (дефект №14): тач-цель ≥44×44 на ЛЮБОМ указателе (было ~27px
+   997→         * на десктопе, ~44 только на coarse). border-box + min-height —
+   998→         * ровно 44px высоты, текст центрируется браузером. */
+   999→        box-sizing: border-box;
+  1000→        min-height: 44px;
+  1001→        /* min-width: 44 — горизонталь той же цели; эллипсису не мешает:
+  1002→         * #btn-recent по-прежнему сжимается (до 44px) внутри капа ниже. */
+  1003→        min-width: 44px;
+  1004→        max-width: 100%;
+  1005→        overflow: hidden;
+  1006→        text-overflow: ellipsis;
+  1007→        white-space: nowrap;
+  1008→        -webkit-user-select: none;
+  1009→        user-select: none;
+  1010→        -webkit-tap-highlight-color: transparent;
+  1011→      }
+  1012→      #w6-toolbar button:hover { background: var(--cd-surface-hover); }
+  1013→      #w6-toolbar button:focus-visible {
+  1014→        outline: 2px solid var(--cd-focus-ring);
+  1015→        outline-offset: 1px;
+  1016→      }
+  1017→      /* Подпись «Недавние: <имя>» — единственная растяжимая кнопка.
+  1018→       * Детерминированный кап в px (ch/vw зависят от системного шрифта
+  1019→       * — на fallback-шрифтах headless/лиукса цифры шире и кап плывёт):
+  1020→       * панель ≤ ~480px — при открытой панели поиска (топ-центр 460px,
+  1021→       * правый край vw/2+230) тулбар ≥1200px-окна до неё не
+  1022→       * дотягивается; 40vw — компаньон для узких окон. Полное имя —
+  1023→       * в title-тултипе. */
+  1024→      #w6-toolbar #btn-recent { max-width: min(40vw, 240px); }
+  1025→      /* Узкие окна/планшеты (<1200px): верх занят GPU-панелями — поиск
+  1026→       * топ-центр (search_ui.rs, 460px, правый край vw/2+230 — при
+  1027→       * верстке-как-сейчас тулбар топ-право на 768–1024 наезжает на
+  1028→       * поле ввода), HUD топ-лево, миникарта — правый нижний угол
+  1029→       * (220px + отступы), палитра — левый край на всю высоту (футер —
+  1030→       * подсказка, свернутый стрип — по центру левого края). Тулбар
+  1031→       * уходит в ЛЕВЫЙ НИЖНИЙ угол — единственную всегда-пустую зону;
+  1032→       * кап 100vw−264px не даёт залезать в колонку миникарты (floor
+  1033→       * 180px — на 320-375px кнопки стопкой с эллипсисом). */
+  1034→      @media (max-width: 1199px) {
+  1035→        #w6-toolbar {
+  1036→          top: auto;
+  1037→          /* FR-099 (safe-area): env(safe-area-inset-*) — notch/жест-бар
+  1038→           * iPhone не перекрывает тулбар; fallback 8px — старые браузеры */
+  1039→          bottom: max(8px, env(safe-area-inset-bottom));
+  1040→          left: max(8px, env(safe-area-inset-left));
+  1041→          right: auto;
+  1042→          justify-content: flex-start;
+  1043→          max-width: max(120px, calc(100vw - 264px));
+  1044→        }
+  1045→      }
+  1046→      /* FR-080 follow-up: авторская панель — top-left viewport, иконки
+  1047→       * с ссылками на GitHub/Telegram/LinkedIn/Donate. Мини-тулбар из
+  1048→       * SVG-иконок (inline — не требует внешних файлов, Trunk не
+  1049→       * копирует). z-index: 10 — ниже tour overlay (10000), но выше
+  1050→       * канваса. */
+  1051→      #author-bar {
+  1052→        position: fixed;
+  1053→        top: 8px;
+  1054→        left: 8px;
+  1055→        display: flex;
+  1056→        gap: 4px;
+  1057→        z-index: 10;
+  1058→      }
+  1059→      #author-bar a {
+  1060→        display: flex;
+  1061→        position: relative; /* якорь ::after-расширения хит-зоны (W-e) */
+  1062→        align-items: center;
+  1063→        justify-content: center;
+  1064→        width: 28px;
+  1065→        height: 28px;
+  1066→        background: var(--cd-surface);
+  1067→        border: 1px solid var(--cd-border);
+  1068→        border-radius: 6px;
+  1069→        cursor: pointer;
+  1070→        text-decoration: none;
+  1071→        transition: background 150ms ease, transform 150ms ease;
+  1072→        -webkit-user-select: none;
+  1073→        user-select: none;
+  1074→        -webkit-tap-highlight-color: transparent;
+  1075→      }
+  1076→      #author-bar a:hover {
+  1077→        background: var(--cd-surface-raised);
+  1078→        transform: translateY(-1px);
+  1079→      }
+  1080→      #author-bar a:focus-visible {
+  1081→        outline: 2px solid var(--cd-focus-ring);
+  1082→        outline-offset: 1px;
+  1083→      }
+  1084→      /* W-e (дефект №14): визуал иконки не трогаем (28px, coarse 36px —
+  1085→      * дизайн), хит-зону расширяем невидимым ::after до ≥44×44 — клики
+  1086→      * по псевдоэлементу попадают в саму ссылку (WCAG 2.5.5 / Apple HIG). */
+  1087→      #author-bar a::after {
+  1088→        content: "";
+  1089→        position: absolute;
+  1090→        inset: -8px;
+  1091→      }
+  1092→      #author-bar svg {
+  1093→        width: 16px;
+  1094→        height: 16px;
+  1095→        fill: var(--cd-text-muted);
+  1096→        transition: fill 150ms ease;
+  1097→      }
+  1098→      #author-bar a:hover svg { fill: var(--cd-text); }
+  1099→      /* "Об авторе" overlay — модальный экран с подробными ссылками.
+  1100→       * Открывается кликом по ℹ-иконке в #author-bar или через
+  1101→       * CanvasMenuItem::About (window.__canvasdesk_openAbout()). */
+  1102→      #about-overlay {
+  1103→        position: fixed; inset: 0; z-index: 100001;
+  1104→        background: var(--cd-overlay);
+  1105→        display: none;
+  1106→        align-items: center; justify-content: center;
+  1107→        font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  1108→        color: var(--cd-text);
+  1109→      }
+  1110→      #about-overlay[data-open="true"] { display: flex; }
+  1111→      #about-overlay .panel {
+  1112→        background: var(--cd-surface);
+  1113→        border: 1px solid var(--cd-border);
+  1114→        border-radius: 12px;
+  1115→        padding: 28px 32px;
+  1116→        max-width: 480px;
+  1117→        width: calc(100vw - 32px);
+  1118→        box-shadow: 0 12px 40px var(--cd-shadow-panel);
+  1119→      }
+  1120→      #about-overlay h2 {
+  1121→        font-size: 18px; color: var(--cd-text-title); font-weight: 600;
+  1122→        margin: 0 0 4px;
+  1123→      }
+  1124→      #about-overlay .author-name { color: var(--cd-text-faint); font-size: 13px; margin: 0 0 20px; }
+  1125→      #about-overlay .links { display: flex; flex-direction: column; gap: 8px; }
+  1126→      #about-overlay .link-row {
+  1127→        display: flex; align-items: center; gap: 12px;
+  1128→        padding: 10px 12px;
+  1129→        background: var(--cd-surface-hover);
+  1130→        border: 1px solid var(--cd-border);
+  1131→        border-radius: 8px;
+  1132→        text-decoration: none;
+  1133→        color: var(--cd-text);
+  1134→        transition: background 150ms ease;
+  1135→      }
+  1136→      #about-overlay .link-row:hover { background: var(--cd-surface-raised); }
+  1137→      #about-overlay .link-row svg { width: 18px; height: 18px; fill: var(--cd-text-muted); flex-shrink: 0; }
+  1138→      #about-overlay .link-text { display: flex; flex-direction: column; gap: 1px; }
+  1139→      #about-overlay .link-label { color: var(--cd-text-title); font-weight: 500; font-size: 13px; }
+  1140→      #about-overlay .link-desc { color: var(--cd-text-faint); font-size: 11px; }
+  1141→      #about-overlay .close-btn {
+  1142→        position: absolute; top: 16px; right: 16px;
+  1143→        background: transparent; border: none; cursor: pointer;
+  1144→        font-size: 20px; color: var(--cd-text-faint); padding: 4px 8px;
+  1145→        border-radius: 6px; line-height: 1;
+  1146→      }
+  1147→      #about-overlay .close-btn:hover { color: var(--cd-text); background: var(--cd-surface-hover); }
+  1148→      /* W-e (дефект №14): хит-зона крестика ≥44×44 (::after-расширение:
+  1149→      * −8px по вертикали, −10px по горизонтали — глиф × уже 44-й цели),
+  1150→      * визуальный размер кнопки не менялся. */
+  1151→      #about-overlay .close-btn::after {
+  1152→        content: "";
+  1153→        position: absolute;
+  1154→        inset: -8px -10px;
+  1155→      }
+  1156→      @media (pointer: coarse) {
+  1157→        #author-bar a { width: 36px; height: 36px; }
+  1158→      }
+  1159→      /* Тач-экраны: минимальная высота цели ~44px (Apple HIG/Material);
+  1160→       * у 12px-кнопки с padding 4px было ~27px — мимо пальца. */
+  1161→      @media (pointer: coarse) {
+  1162→        #w6-toolbar button {
+  1163→          font: 13px/1.4 system-ui, sans-serif;
+  1164→          padding: 12px 16px;
+  1165→        }
+  1166→      }
+  1167→
+  1168→      /* FR-028 v2: dropdown-меню выбора сценария inline-тура
+  1169→       * (sdk/web-onboarding/). Раньше был prompt() — NativeUI-блокер,
+  1170→       * не стилизуем, не скрин-ридер-дружелюбный. Заменили на DOM-меню,
+  1171→       * стилизованное под W6-toolbar (та же палитра: --cd-surface/--cd-border).
+  1172→       * Закрытие: клик мимо / Esc / выбор пункта. */
+  1173→      #tour-menu {
+  1174→        position: fixed;
+  1175→        /* 8px отступ тулбара + 44px тач-цель кнопки (W-e) + 4px зазор */
+  1176→        top: 56px;
+  1177→        right: 8px;
+  1178→        background: var(--cd-surface);
+  1179→        border: 1px solid var(--cd-border);
+  1180→        border-radius: 8px;
+  1181→        box-shadow: 0 8px 24px var(--cd-shadow-pop);
+  1182→        z-index: 11;
+  1183→        min-width: 240px;
+  1184→        max-width: calc(100vw - 16px);
+  1185→        font: 13px/1.4 system-ui, sans-serif;
+  1186→        color: var(--cd-text);
+  1187→        padding: 6px 0;
+  1188→        display: none;
+  1189→      }
+  1190→      #tour-menu[data-open="true"] { display: block; }
+  1191→      #tour-menu > div {
+  1192→        padding: 8px 12px 4px;
+  1193→        font-size: 11px;
+  1194→        color: var(--cd-text-faint);
+  1195→        text-transform: uppercase;
+  1196→        letter-spacing: 0.04em;
+  1197→      }
+  1198→      #tour-menu button {
+  1199→        display: block;
+  1200→        width: 100%;
+  1201→        text-align: left;
+  1202→        background: transparent;
+  1203→        color: var(--cd-text);
+  1204→        border: none;
+  1205→        font: inherit;
+  1206→        padding: 8px 12px;
+  1207→        cursor: pointer;
+  1208→        -webkit-user-select: none;
+  1209→        user-select: none;
+  1210→        -webkit-tap-highlight-color: transparent;
+  1211→      }
+  1212→      #tour-menu button:hover { background: var(--cd-surface-hover); }
+  1213→      #tour-menu button:focus-visible {
+  1214→        outline: 2px solid var(--cd-focus-ring);
+  1215→        outline-offset: -1px;
+  1216→      }
+  1217→      #tour-menu button b { color: var(--cd-text-title); font-weight: 600; }
+  1218→      #tour-menu button small {
+  1219→        display: block;
+  1220→        font-size: 11px;
+  1221→        color: var(--cd-text-faint);
+  1222→        margin-top: 2px;
+  1223→      }
+  1224→      @media (max-width: 1199px) {
+  1225→        #tour-menu {
+  1226→          top: auto;
+  1227→          /* над тулбаром: 8px отступ + 44px тач-цель кнопки (W-e) + 4px */
+  1228→          bottom: 56px;
+  1229→          right: 8px;
+  1230→        }
+  1231→      }
+  1232→    </style>
+  1233→    <!-- M8/W6: JS-глю web-оболочки — IndexedDB (недавние + хэндлы FS
+  1234→         Access) компактнее в JS; Rust-мост — canvas_web::js_glue (вызовы
+  1235→         Promise → JsFuture). Бойлерплейт open/upgrade транзакций спрятан
+  1236→         здесь; ошибки — в консоль (оракул дыма), промисы не роняют Rust. -->
+  1237→    <script>
+  1238→      window.__canvasdesk = (function () {
+  1239→        function openDb() {
+  1240→          return new Promise((resolve, reject) => {
+  1241→            const req = indexedDB.open("canvasdesk", 1);
+  1242→            req.onupgradeneeded = () => {
+  1243→              const db = req.result;
+  1244→              if (!db.objectStoreNames.contains("recent"))
+  1245→                db.createObjectStore("recent", { keyPath: "name" });
+  1246→              if (!db.objectStoreNames.contains("handles"))
+  1247→                db.createObjectStore("handles");
+  1248→            };
+  1249→            req.onsuccess = () => resolve(req.result);
+  1250→            req.onerror = () => reject(req.error);
+  1251→          });
+  1252→        }
+  1253→        async function tx(store, mode, fn) {
+  1254→          const db = await openDb();
+  1255→          return new Promise((resolve, reject) => {
+  1256→            const t = db.transaction(store, mode);
+  1257→            const req = fn(t.objectStore(store));
+  1258→            req.onsuccess = () => resolve(req.result);
+  1259→            req.onerror = () => reject(req.error);
+  1260→            t.oncomplete = () => db.close();
+  1261→          });
+  1262→        }
+  1263→        return {
+  1264→          recentPut: (name) =>
+  1265→            tx("recent", "readwrite", (s) => s.put({ name: name, ts: Date.now() })),
+  1266→          recentList: () => tx("recent", "readonly", (s) => s.getAll()),
+  1267→          handlePut: (name, handle) =>
+  1268→            tx("handles", "readwrite", (s) => s.put(handle, name)),
+  1269→          handleGet: (name) => tx("handles", "readonly", (s) => s.get(name)),
+  1270→          /* FR-028 v2: read current language from localStorage
+  1271→             canvasdesk.config (TOML `language = "ru"` or `"en"`).
+  1272→             Tour engine (canvasdesk-tour.js) and dropdown picker use
+  1273→             this to choose between ru/en scenario variants. Returns
+  1274→             "ru" (default) if localStorage is missing/unparseable. */
+  1275→          getLanguage: function () {
+  1276→            try {
+  1277→              var ls = window.localStorage;
+  1278→              if (!ls) return "ru";
+  1279→              var text = ls.getItem("canvasdesk.config");
+  1280→              if (!text) return "ru";
+  1281→              // Minimal TOML parser for `language = "..."` line —
+  1282→              // avoids pulling a full TOML lib in JS. If the regex
+  1283→              // misses, defaults to "ru" (canvas-app default).
+  1284→              var m = text.match(/^language\s*=\s*"([^"]+)"/m);
+  1285→              return m ? (m[1] === "en" ? "en" : "ru") : "ru";
+  1286→            } catch (e) { return "ru"; }
+  1287→          },
+  1288→        };
+  1289→      })();
+  1290→    </script>
+  1291→  </head>
+  1292→  <body>
+  1293→    <!-- Авторская панель (top-left): иконки с ссылками на GitHub,
+  1294→         Telegram, LinkedIn, Donate. Inline SVG — не требует внешних
+  1295→         файлов. ℹ-иконка открывает "Об авторе" overlay. -->
+  1296→    <nav id="author-bar" aria-label="Author links">
+  1297→      <a href="https://github.com/danku13/CanvasDesk" target="_blank" rel="noopener" title="GitHub — CanvasDesk project">
+  1298→        <svg viewBox="0 0 24 24"><path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.9 1.3 1.9 1.3 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.3-3.2 0-.4-.6-1.6.1-3.3 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.7.1 2.9.1 3.3.8.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>
+  1299→      </a>
+  1300→      <a href="https://t.me/dkuzmichev" target="_blank" rel="noopener" title="Telegram channel">
+  1301→        <svg viewBox="0 0 24 24"><path d="M22 2L2 10l5 2 2 6 3-4 5 4 5-16zM9 13l-3-1 11-6-8 7z"/></svg>
+  1302→      </a>
+  1303→      <a href="https://www.linkedin.com/in/daniil-kuzmichev/" target="_blank" rel="noopener" title="LinkedIn">
+  1304→        <svg viewBox="0 0 24 24"><path d="M20 3H4a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zM8 17H5.5v-7H8v7zM6.7 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zM18.5 17H16v-3.8c0-1-.4-1.7-1.3-1.7-.7 0-1 .5-1.2 1-.1.2-.1.5-.1.7V17H11s.1-6.3 0-7h2.5v1c.3-.5 1-1.2 2.3-1.2 1.7 0 2.7 1.1 2.7 3.5V17z"/></svg>
+  1305→      </a>
+  1306→      <a href="https://donationalerts.com/r/danku13" target="_blank" rel="noopener" title="Support the project">
+  1307→        <svg viewBox="0 0 24 24"><path d="M12 21s-7-4.4-9.3-8.5C1 9 2.5 5 6 5c2 0 3.2 1.3 4 2.5C10.8 6.3 12 5 14 5c3.5 0 5 4 3.3 7.5C19 16.6 12 21 12 21z"/></svg>
+  1308→      </a>
+  1309→      <a href="#" onclick="window.__canvasdesk_openAbout();return false" title="Об авторе / About" aria-label="About author">
+  1310→        <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zM14 17h-4v-1h1v-4h-1v-1h3v5h1v1z"/></svg>
+  1311→      </a>
+  1312→    </nav>
+  1313→
+  1314→    <!-- "Об авторе" overlay -->
+  1315→    <div id="about-overlay">
+  1316→      <div class="panel">
+  1317→        <button class="close-btn" onclick="window.__canvasdesk_closeAbout()" aria-label="Close">&times;</button>
+  1318→        <h2>CanvasDesk</h2>
+  1319→        <p class="author-name">Даниил Кузьмичев &middot; Daniil Kuzmichev</p>
+  1320→        <div class="links">
+  1321→          <a class="link-row" href="https://github.com/danku13/CanvasDesk" target="_blank" rel="noopener">
+  1322→            <svg viewBox="0 0 24 24"><path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.9 1.3 1.9 1.3 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.3-3.2 0-.4-.6-1.6.1-3.3 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.7.1 2.9.1 3.3.8.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>
+  1323→            <div class="link-text"><span class="link-label">GitHub</span><span class="link-desc">CanvasDesk project &mdash; source code, issues, releases</span></div>
+  1324→          </a>
+  1325→          <a class="link-row" href="https://github.com/danku13/CanvasDesk" target="_blank" rel="noopener">
+  1326→            <svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 16.8 5.8 21.3l2.4-7.4L2 9.4h7.6z"/></svg>
+  1327→            <div class="link-text"><span class="link-label">&starf; Star on GitHub</span><span class="link-desc">Если проект полезен &mdash; поставьте звёзду</span></div>
+  1328→          </a>
+  1329→          <a class="link-row" href="https://t.me/dkuzmichev" target="_blank" rel="noopener">
+  1330→            <svg viewBox="0 0 24 24"><path d="M22 2L2 10l5 2 2 6 3-4 5 4 5-16zM9 13l-3-1 11-6-8 7z"/></svg>
+  1331→            <div class="link-text"><span class="link-label">Telegram channel</span><span class="link-desc">Обновления, новости, анонсы</span></div>
+  1332→          </a>
+  1333→          <a class="link-row" href="https://t.me/danku13" target="_blank" rel="noopener">
+  1334→            <svg viewBox="0 0 24 24"><path d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 4l-8 5-8-5"/></svg>
+  1335→            <div class="link-text"><span class="link-label">Telegram &mdash; связаться</span><span class="link-desc">Вопросы, идеи, сотрудничество</span></div>
+  1336→          </a>
+  1337→          <a class="link-row" href="https://www.linkedin.com/in/daniil-kuzmichev/" target="_blank" rel="noopener">
+  1338→            <svg viewBox="0 0 24 24"><path d="M20 3H4a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zM8 17H5.5v-7H8v7zM6.7 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zM18.5 17H16v-3.8c0-1-.4-1.7-1.3-1.7-.7 0-1 .5-1.2 1-.1.2-.1.5-.1.7V17H11s.1-6.3 0-7h2.5v1c.3-.5 1-1.2 2.3-1.2 1.7 0 2.7 1.1 2.7 3.5V17z"/></svg>
+  1339→            <div class="link-text"><span class="link-label">LinkedIn</span><span class="link-desc">Daniil Kuzmichev &mdash; professional profile</span></div>
+  1340→          </a>
+  1341→          <a class="link-row" href="https://donationalerts.com/r/danku13" target="_blank" rel="noopener">
+  1342→            <svg viewBox="0 0 24 24"><path d="M12 21s-7-4.4-9.3-8.5C1 9 2.5 5 6 5c2 0 3.2 1.3 4 2.5C10.8 6.3 12 5 14 5c3.5 0 5 4 3.3 7.5C19 16.6 12 21 12 21z"/></svg>
+  1343→            <div class="link-text"><span class="link-label">Поддержать проект</span><span class="link-desc">DonationAlerts &mdash; донат на развитие</span></div>
+  1344→          </a>
+  1345→        </div>
+  1346→      </div>
+  1347→    </div>
+  1348→    <script>
+  1349→      window.__canvasdesk_openAbout = function () { var ov = document.getElementById("about-overlay"); if (ov) ov.dataset.open = "true"; };
+  1350→      window.__canvasdesk_closeAbout = function () { var ov = document.getElementById("about-overlay"); if (ov) ov.dataset.open = "false"; };
+  1351→      (function () {
+  1352→        /* Esc — закрыть */
+  1353→        document.addEventListener("keydown", function (e) {
+  1354→          if (e.key === "Escape") { var ov = document.getElementById("about-overlay"); if (ov && ov.dataset.open === "true") { e.preventDefault(); window.__canvasdesk_closeAbout(); } }
+  1355→        }, true);
+  1356→        /* Click вне панели — закрыть (click на overlay, но не на .panel) */
+  1357→        document.addEventListener("click", function (e) {
+  1358→          var ov = document.getElementById("about-overlay");
+  1359→          if (ov && ov.dataset.open === "true" && e.target === ov) {
+  1360→            window.__canvasdesk_closeAbout();
+  1361→          }
+  1362→        }, true);
+  1363→      })();
+  1364→    </script>
+  1365→
+  1366→
+  1367→    <!-- FR-028 v2 + FR-087 v2 (пикер первого запуска — единая страница):
+  1368→         показывается только при первом открытии (если в localStorage нет
+  1369→         canvasdesk.config). Скрипт в <head> ставит hidden=false на
+  1370→         DOMContentLoaded и сразу заполняет все тексты (пустых кнопок не
+  1371→         бывает). Язык — переключатель: активная кнопка залита основным
+  1372→         акцентом #D68A32, смена языка живо перерисовывает тексты роли.
+  1373→         Роль — сетка карточек: hover/focus показывает краткую информацию
+  1374→         о включаемых подсказках, клик применяет выбор (TOML в
+  1375→         localStorage + перезагрузка). «Продолжить без роли» = default.
+  1376→         Стиль — в <head>. -->
+  1377→    <div id="lang-picker-overlay" hidden>
+  1378→      <h1>CanvasDesk</h1>
+  1379→      <div class="step">
+  1380→        <p>Choose language / Выберите язык</p>
+  1381→        <div class="buttons">
+  1382→          <button type="button" data-lang="ru">Русский</button>
+  1383→          <button type="button" data-lang="en">English</button>
+  1384→        </div>
+  1385→        <p id="role-title"></p>
+  1386→        <div id="role-grid"></div>
+  1387→        <p id="role-info"></p>
+  1388→        <div class="buttons">
+  1389→          <button type="button" id="role-skip" class="secondary"></button>
+  1390→        </div>
+  1391→        <!-- FR-089: согласия телеметрии — предвыбраны (checked), меняются
+  1392→             до применения выбора (роль/пропуск). Тексты ставит render()
+  1393→             по выбранному языку (RU по умолчанию, живая смена на EN).
+  1394→             pick() пишет TOML telemetry_* в canvasdesk.config (настройки,
+  1395→             тумблеры таба «Профиль») и JSON canvasdesk.consent (рантайм
+  1396→             JS-модуля телеметрии ниже). -->
+  1397→        <div class="consent" id="consent-box">
+  1398→          <p class="consent-title" id="consent-title"></p>
+  1399→          <label>
+  1400→            <input type="checkbox" id="consent-counter" checked />
+  1401→            <span id="consent-counter-label"></span>
+  1402→          </label>
+  1403→          <label>
+  1404→            <input type="checkbox" id="consent-analytics" checked />
+  1405→            <span id="consent-analytics-label"></span>
+  1406→          </label>
+  1407→          <p class="hint" id="consent-hint"></p>
+  1408→        </div>
+  1409→      </div>
+  1410→    </div>
+  1411→
+  1412→    <!-- M8/W6: панель хранилища — листенеры вешает canvas_web::toolbar;
+  1413→         подпись «Недавние» обновляется из Rust (set_recent_label).
+  1414→         FR-028 v2 (inline tour, sdk/web-onboarding/): четвёртая кнопка
+  1415→         «Тур» открывает интерактивный онбординг (Intro.js-style overlay
+  1416→         поверх канваса). Кнопка — часть DOM-слоя (как и соседние),
+  1417→         теневого влияния на GPU-канвас не оказывает. -->
+  1418→    <div id="w6-toolbar">
+  1419→      <button id="btn-tour" title="Пройти интерактивный тур по инструментам CanvasDesk">
+  1420→        Тур
+  1421→      </button>
+  1422→      <button id="btn-open" title="Открыть .canvas с диска (автосейв в файл)">
+  1423→        Открыть с диска…
+  1424→      </button>
+  1425→      <button id="btn-recent" title="Переоткрыть последний канвас">
+  1426→        Недавние
+  1427→      </button>
+  1428→      <button id="btn-export" title="Скачать последнюю сохранённую версию (.canvas)">
+  1429→        Экспорт .canvas
+  1430→      </button>
+  1431→      <!-- FR-076: артефакт защиты (GAP-01) — офлайн-HTML со значениями -->
+  1432→      <button id="btn-export-html" title="Скачать самодостаточный HTML: снимок канваса, значения и сравнение what-if">
+  1433→        Экспорт HTML
+  1434→      </button>
+  1435→    </div>
+  1436→
+  1437→    <!-- FR-028 v2: inline-тур (sdk/web-onboarding/). Бандл — vanilla JS
+  1438→         (iife, ES2018, zero runtime deps), не требует сборщика. Источник
+  1439→         в sdk/web-onboarding/src/*.ts; пересобрать через
+  1440→         `npm run build` в sdk/web-onboarding/. Trunk copy-to-dist
+  1441→         (см. Trunk.toml) кладёт bundle в target/dist рядом с index.html;
+  1442→         путь в src — "canvasdesk-tour.js" (относительно dist-корня). -->
+  1443→    <script data-cd-tour-bundle="inline">
+  1444→/*! CanvasDesk inline onboarding engine — pre-built bundle.
+  1445→ *  Source: sdk/web-onboarding/src/*.ts (TypeScript).
+  1446→ *  Build:  npm run build  (esbuild)
+  1447→ *  Rebuild after editing the source; this file is committed for the
+  1448→ *  convenience of integrators who load via <script> tag without a
+  1449→ *  bundler (CanvasDesk web index.html does this).
+  1450→ *
+  1451→ *  Exposes `window.CanvasDeskTour = { Tour, scenarios, ... }`.
+  1452→ *
+  1453→ *  Design influences:
+  1454→ *    - Intro.js: overlay + tooltip + highlight cutout.
+  1455→ *    - Guida.js: scenario declared as plain-data JSON.
+  1456→ *    - flows.sh: step-by-step action runner with explicit waitFor gates.
+  1457→ *
+  1458→ *  Zero runtime dependencies.
+  1459→ */
+  1460→(function (global) {
+  1461→  "use strict";
+  1462→
+  1463→  // ── styles.ts ───────────────────────────────────────────────────
+  1464→  /* W-f (аудит ui-kit §6): цвета — слоты :root (--cd-*) из <head>
+  1465→   * index.html, значение каждой переменной = прежний литерал этой
+  1466→   * строки (комментарий-синхронизация: меняешь --cd-* — меняешь
+  1467→   * fallback). Fallback сохраняет переносимость бандла вне CanvasDesk
+  1468→   * (standalone-интеграторы без :root): визуал не меняется ни там,
+  1469→   * ни в shell. Паритет — scripts/web_shell_palette_parity.py. */
+  1470→  var DEFAULT_STYLES = [
+  1471→    ".cd-tour-tooltip{position:fixed;background:var(--cd-surface,#1d2128);color:var(--cd-text,#d5d9e0);",
+  1472→    "border:1px solid var(--cd-border,#333a44);border-radius:8px;",
+  1473→    "box-shadow:0 8px 24px var(--cd-shadow-pop,rgba(0,0,0,0.45));padding:14px 16px 10px;",
+  1474→    "font:13px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;",
+  1475→    "max-width:420px;min-width:280px;pointer-events:auto;",
+  1476→    "transition:opacity 180ms ease,transform 180ms ease;}",
+  1477→    ".cd-tour-tooltip__title{font-weight:600;font-size:14px;color:var(--cd-text-title,#f3f5f8);margin-bottom:4px;}",
+  1478→    ".cd-tour-tooltip__body{color:var(--cd-text-soft,#b9c0cb);white-space:normal;word-wrap:break-word;}",
+  1479→    ".cd-tour-tooltip__progress{font-size:11px;color:var(--cd-text-faint,#6b7480);margin-top:6px;}",
+  1480→    ".cd-tour-tooltip__footer{display:flex;gap:8px;justify-content:flex-end;",
+  1481→    "align-items:center;margin-top:12px;border-top:1px solid var(--cd-border-divider,#2a3138);padding-top:8px;}",
+  1482→    ".cd-tour-btn{appearance:none;font:inherit;padding:6px 12px;border-radius:6px;",
+  1483→    "border:1px solid var(--cd-border,#333a44);background:var(--cd-surface-hover,#262c35);color:var(--cd-text,#d5d9e0);cursor:pointer;",
+  1484→    "box-sizing:border-box;min-height:44px;min-width:44px;",
+  1485→    "user-select:none;-webkit-tap-highlight-color:transparent;}",
+  1486→    ".cd-tour-btn:hover{background:var(--cd-surface-raised,#2e353f);}",
+  1487→    ".cd-tour-btn:focus-visible{outline:2px solid var(--cd-focus-ring,#8ab4ff);outline-offset:1px;}",
+  1488→    ".cd-tour-btn_primary{background:var(--cd-tour-primary,#2f6fda);border-color:var(--cd-tour-primary,#2f6fda);color:var(--cd-text-on-tint,#fff);font-weight:600;}",
+  1489→    ".cd-tour-btn_primary:hover{background:var(--cd-tour-primary-hover,#3a78e0);}",
+  1490→    ".cd-tour-btn_skip{background:transparent;border-color:transparent;color:var(--cd-text-faint,#6b7480);}",
+  1491→    ".cd-tour-btn_back{background:transparent;}",
+  1492→    ".cd-tour-caret{position:absolute;width:12px;height:12px;background:var(--cd-surface,#1d2128);",
+  1493→    "border:1px solid var(--cd-border,#333a44);transform:translate(-50%,-50%) rotate(45deg);",
+  1494→    "pointer-events:none;opacity:0;transition:opacity 180ms ease;}",
+  1495→    ".cd-tour-tooltip[data-caret-dir=up] .cd-tour-caret,",
+  1496→    ".cd-tour-tooltip[data-caret-dir=down] .cd-tour-caret,",
+  1497→    ".cd-tour-tooltip[data-caret-dir=left] .cd-tour-caret,",
+  1498→    ".cd-tour-tooltip[data-caret-dir=right] .cd-tour-caret{opacity:1;}",
+  1499→    ".cd-tour-tooltip[data-caret-dir=up] .cd-tour-caret{border-bottom:none;border-right:none;}",
+  1500→    ".cd-tour-tooltip[data-caret-dir=down] .cd-tour-caret{border-top:none;border-left:none;}",
+  1501→    ".cd-tour-tooltip[data-caret-dir=left] .cd-tour-caret{border-top:none;border-right:none;}",
+  1502→    ".cd-tour-tooltip[data-caret-dir=right] .cd-tour-caret{border-bottom:none;border-left:none;}",
+  1503→    ".cd-tour-tooltip[data-caret-dir=none] .cd-tour-caret{display:none;}",
+  1504→    ".cd-tour-dim{cursor:pointer;}",
+  1505→    "@media (max-width:480px),(pointer:coarse){",
+  1506→    ".cd-tour-tooltip{min-width:0;max-width:calc(100vw - 32px);padding:12px 14px 8px;}",
+  1507→    ".cd-tour-btn{padding:10px 14px;min-height:44px;}}"
+  1508→  ].join("");
+  1509→
+  1510→  // ── positioning.ts ──────────────────────────────────────────────
+  1511→  var GAP = 12;
+  1512→  var VIEWPORT_PAD = 8;
+  1513→  var TOOLTIP_MIN_W = 280;
+  1514→  var TOOLTIP_MAX_W = 420;
+  1515→  var TOOLTIP_MIN_H = 120;
+  1516→
+  1517→  function measureTooltip(el, maxW) {
+  1518→    maxW = maxW || TOOLTIP_MAX_W;
+  1519→    var prev = el.style.cssText;
+  1520→    el.style.cssText = "position:fixed;left:-9999px;top:-9999px;width:" + maxW +
+  1521→      "px;visibility:hidden;opacity:0;";
+  1522→    var rect = el.getBoundingClientRect();
+  1523→    el.style.cssText = prev;
+  1524→    return {
+  1525→      width: Math.max(TOOLTIP_MIN_W, Math.min(maxW, Math.ceil(rect.width))),
+  1526→      height: Math.max(TOOLTIP_MIN_H, Math.ceil(rect.height))
+  1527→    };
+  1528→  }
+  1529→
+  1530→  function getElementRect(el) {
+  1531→    var r = el.getBoundingClientRect();
+  1532→    return { x: r.left, y: r.top, width: r.width, height: r.height };
+  1533→  }
+  1534→
+  1535→  var OPPOSITES = {
+  1536→    "top": "bottom", "top-start": "bottom-start", "top-end": "bottom-end",
+  1537→    "bottom": "top", "bottom-start": "top-start", "bottom-end": "top-end",
+  1538→    "left": "right", "left-start": "right-start", "left-end": "right-end",
+  1539→    "right": "left", "right-start": "left-start", "right-end": "left-end"
+  1540→  };
+  1541→
+  1542→  function orderCandidates(side) {
+  1543→    return [side, OPPOSITES[side] || side, "bottom", "top", "right", "left", "center"];
+  1544→  }
+  1545→
+  1546→  function computePlacement(side, anchor, tip, vp) {
+  1547→    vp = vp || { width: global.innerWidth, height: global.innerHeight };
+  1548→    if (side === "center" || anchor === null) {
+  1549→      return {
+  1550→        side: "center",
+  1551→        x: Math.round((vp.width - tip.width) / 2),
+  1552→        y: Math.round((vp.height - tip.height) / 2),
+  1553→        width: tip.width, height: tip.height, caret: null
+  1554→      };
+  1555→    }
+  1556→    var candidates = orderCandidates(side);
+  1557→    for (var i = 0; i < candidates.length; i++) {
+  1558→      var p = tryPlacement(candidates[i], anchor, tip, vp);
+  1559→      if (p) return p;
+  1560→    }
+  1561→    return {
+  1562→      side: "center",
+  1563→      x: Math.round((vp.width - tip.width) / 2),
+  1564→      y: Math.round((vp.height - tip.height) / 2),
+  1565→      width: tip.width, height: tip.height, caret: null
+  1566→    };
+  1567→  }
+  1568→
+  1569→  function tryPlacement(side, a, tip, vp) {
+  1570→    var x, y, caret;
+  1571→    switch (side) {
+  1572→      case "top":
+  1573→        x = a.x + (a.width - tip.width) / 2;
+  1574→        y = a.y - tip.height - GAP;
+  1575→        caret = { x: a.x + a.width / 2, y: a.y - GAP, dir: "down" };
+  1576→        break;
+  1577→      case "top-start":
+  1578→        x = a.x; y = a.y - tip.height - GAP;
+  1579→        caret = { x: a.x + 24, y: a.y - GAP, dir: "down" }; break;
+  1580→      case "top-end":
+  1581→        x = a.x + a.width - tip.width; y = a.y - tip.height - GAP;
+  1582→        caret = { x: a.x + a.width - 24, y: a.y - GAP, dir: "down" }; break;
+  1583→      case "bottom":
+  1584→        x = a.x + (a.width - tip.width) / 2;
+  1585→        y = a.y + a.height + GAP;
+  1586→        caret = { x: a.x + a.width / 2, y: a.y + a.height + GAP, dir: "up" }; break;
+  1587→      case "bottom-start":
+  1588→        x = a.x; y = a.y + a.height + GAP;
+  1589→        caret = { x: a.x + 24, y: a.y + a.height + GAP, dir: "up" }; break;
+  1590→      case "bottom-end":
+  1591→        x = a.x + a.width - tip.width; y = a.y + a.height + GAP;
+  1592→        caret = { x: a.x + a.width - 24, y: a.y + a.height + GAP, dir: "up" }; break;
+  1593→      case "left":
+  1594→        x = a.x - tip.width - GAP; y = a.y + (a.height - tip.height) / 2;
+  1595→        caret = { x: a.x - GAP, y: a.y + a.height / 2, dir: "right" }; break;
+  1596→      case "left-start":
+  1597→        x = a.x - tip.width - GAP; y = a.y;
+  1598→        caret = { x: a.x - GAP, y: a.y + 24, dir: "right" }; break;
+  1599→      case "left-end":
+  1600→        x = a.x - tip.width - GAP; y = a.y + a.height - tip.height;
+  1601→        caret = { x: a.x - GAP, y: a.y + a.height - 24, dir: "right" }; break;
+  1602→      case "right":
+  1603→        x = a.x + a.width + GAP; y = a.y + (a.height - tip.height) / 2;
+  1604→        caret = { x: a.x + a.width + GAP, y: a.y + a.height / 2, dir: "left" }; break;
+  1605→      case "right-start":
+  1606→        x = a.x + a.width + GAP; y = a.y;
+  1607→        caret = { x: a.x + a.width + GAP, y: a.y + 24, dir: "left" }; break;
+  1608→      case "right-end":
+  1609→        x = a.x + a.width + GAP; y = a.y + a.height - tip.height;
+  1610→        caret = { x: a.x + a.width + GAP, y: a.y + a.height - 24, dir: "left" }; break;
+  1611→      default: return null;
+  1612→    }
+  1613→    if (x < VIEWPORT_PAD || x + tip.width > vp.width - VIEWPORT_PAD ||
+  1614→        y < VIEWPORT_PAD || y + tip.height > vp.height - VIEWPORT_PAD) {
+  1615→      return null;
+  1616→    }
+  1617→    return { side: side, x: Math.round(x), y: Math.round(y),
+  1618→             width: tip.width, height: tip.height, caret: caret };
+  1619→  }
+  1620→
+  1621→  // ── highlight.ts ────────────────────────────────────────────────
+  1622→  /* W-f (аудит ui-kit §6): дефолт затемнения — shell-цвет, единый слот
+  1623→   * --cd-dim (блок :root в <head> index.html; значение = прежний
+  1624→   * литерал). Резолвим ОДИН раз через getComputedStyle: внутри SVG
+  1625→   * data-URI маски затемнения CSS-переменные не работают, поэтому var()
+  1626→   * здесь нельзя. Fallback = тот же литерал (standalone-встраивание
+  1627→   * бандла без :root CanvasDesk). Комментарий-синхронизация: меняя
+  1628→   * --cd-dim, меняй fallback. */
+  1629→  function cssVar(name, fallback) {
+  1630→    try {
+  1631→      var v = getComputedStyle(global.document.documentElement)
+  1632→        .getPropertyValue(name).trim();
+  1633→      return v || fallback;
+  1634→    } catch (e) { return fallback; }
+  1635→  }
+  1636→  var DIM_DEFAULTS = { padding: 8, radius: 6, dim: true,
+  1637→    dimColor: cssVar("--cd-dim", "rgba(0,0,0,0.55)"), animate: true };
+  1638→
+  1639→  function createHighlight(container, baseZIndex) {
+  1640→    var overlay = document.createElement("div");
+  1641→    overlay.className = "cd-tour-dim";
+  1642→    overlay.style.cssText = "position:fixed;inset:0;z-index:" + (baseZIndex) +
+  1643→      ";pointer-events:none;background:transparent;transition:opacity 180ms ease;opacity:0;";
+  1644→    container.appendChild(overlay);
+  1645→    var current = null;
+  1646→    var raf = null;
+  1647→
+  1648→    function paint() {
+  1649→      raf = null;
+  1650→      if (!current) {
+  1651→        overlay.style.opacity = "0";
+  1652→        overlay.style.background = "transparent";
+  1653→        overlay.style.pointerEvents = "none";
+  1654→        return;
+  1655→      }
+  1656→      var rect = current.rect, opts = current.opts;
+  1657→      if (!opts.dim) {
+  1658→        overlay.style.opacity = "0";
+  1659→        overlay.style.pointerEvents = "none";
+  1660→        overlay.style.background = "transparent";
+  1661→        return;
+  1662→      }
+  1663→      overlay.style.opacity = "1";
+  1664→      overlay.style.pointerEvents = "auto";
+  1665→      overlay.style.transition = opts.animate ? "background 180ms ease" : "none";
+  1666→      if (rect === null) {
+  1667→        overlay.style.background = opts.dimColor;
+  1668→        return;
+  1669→      }
+  1670→      var p = opts.padding;
+  1671→      var x = rect.x - p, y = rect.y - p;
+  1672→      var w = rect.width + 2 * p, h = rect.height + 2 * p;
+  1673→      var r = opts.radius;
+  1674→      var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">' +
+  1675→        '<defs><mask id="m"><rect width="100%" height="100%" fill="white"/>' +
+  1676→        '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h +
+  1677→        '" rx="' + r + '" ry="' + r + '" fill="black"/></mask></defs>' +
+  1678→        '<rect width="100%" height="100%" fill="' + escapeCss(opts.dimColor) + '" mask="url(#m)"/></svg>';
+  1679→      overlay.style.background = "url(\"data:image/svg+xml;utf8," + encodeURIComponent(svg) + '") no-repeat';
+  1680→      overlay.style.backgroundSize = "100% 100%";
+  1681→    }
+  1682→
+  1683→    function schedulePaint() {
+  1684→      if (raf !== null) return;
+  1685→      raf = requestAnimationFrame(paint);
+  1686→    }
+  1687→
+  1688→    return {
+  1689→      setAnchor: function (rect, options) {
+  1690→        var opts = Object.assign({}, DIM_DEFAULTS, options || {});
+  1691→        current = { rect: rect, opts: opts };
+  1692→        schedulePaint();
+  1693→      },
+  1694→      hide: function () { current = null; schedulePaint(); },
+  1695→      destroy: function () {
+  1696→        if (raf !== null) cancelAnimationFrame(raf);
+  1697→        overlay.remove();
+  1698→      }
+  1699→    };
+  1700→  }
+  1701→
+  1702→  function escapeCss(c) {
+  1703→    return c.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  1704→  }
+  1705→
+  1706→  // ── tooltip.ts ──────────────────────────────────────────────────
+  1707→  function escapeHtml(s) {
+  1708→    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  1709→  }
+  1710→
+  1711→  function renderDefaultTooltip(ctx) {
+  1712→    var root = document.createElement("div");
+  1713→    root.className = "cd-tour-tooltip";
+  1714→    root.setAttribute("role", "dialog");
+  1715→    root.setAttribute("aria-modal", "false");
+  1716→
+  1717→    if (ctx.step.title) {
+  1718→      var h = document.createElement("div");
+  1719→      h.className = "cd-tour-tooltip__title";
+  1720→      h.innerHTML = escapeHtml(ctx.step.title);
+  1721→      root.appendChild(h);
+  1722→    }
+  1723→    if (ctx.step.body) {
+  1724→      var b = document.createElement("div");
+  1725→      b.className = "cd-tour-tooltip__body";
+  1726→      b.innerHTML = escapeHtml(ctx.step.body);
+  1727→      root.appendChild(b);
+  1728→    }
+  1729→
+  1730→    var prog = document.createElement("div");
+  1731→    prog.className = "cd-tour-tooltip__progress";
+  1732→    prog.textContent = (ctx.index + 1) + " / " + ctx.total;
+  1733→    root.appendChild(prog);
+  1734→
+  1735→    var caret = document.createElement("div");
+  1736→    caret.className = "cd-tour-caret";
+  1737→    root.appendChild(caret);
+  1738→
+  1739→    var footer = document.createElement("div");
+  1740→    footer.className = "cd-tour-tooltip__footer";
+  1741→
+  1742→    if (ctx.skippable && !ctx.step.hideSkip) {
+  1743→      var skip = document.createElement("button");
+  1744→      skip.type = "button";
+  1745→      skip.className = "cd-tour-btn cd-tour-btn_skip";
+  1746→      skip.textContent = ctx.skipLabel;
+  1747→      skip.addEventListener("click", ctx.onSkip);
+  1748→      footer.appendChild(skip);
+  1749→    }
+  1750→
+  1751→    if (!ctx.isFirst) {
+  1752→      var back = document.createElement("button");
+  1753→      back.type = "button";
+  1754→      back.className = "cd-tour-btn cd-tour-btn_back";
+  1755→      back.textContent = ctx.backLabel;
+  1756→      back.addEventListener("click", ctx.onBack);
+  1757→      footer.appendChild(back);
+  1758→    }
+  1759→
+  1760→    var next = document.createElement("button");
+  1761→    next.type = "button";
+  1762→    next.className = "cd-tour-btn cd-tour-btn_primary";
+  1763→    next.textContent = ctx.isLast ? ctx.doneLabel : ctx.primaryLabel;
+  1764→    next.addEventListener("click", ctx.onPrimary);
+  1765→    if (ctx.step.passive) next.style.display = "none";
+  1766→    footer.appendChild(next);
+  1767→
+  1768→    root.appendChild(footer);
+  1769→    return root;
+  1770→  }
+  1771→
+  1772→  // ── actions.ts ──────────────────────────────────────────────────
+  1773→  function WaitForError(spec, message) {
+  1774→    var err = Error.call(this, message);
+  1775→    this.spec = spec;
+  1776→    this.message = message;
+  1777→    this.name = "WaitForError";
+  1778→    if (Error.captureStackTrace) Error.captureStackTrace(this, WaitForError);
+  1779→    return this;
+  1780→  }
+  1781→  WaitForError.prototype = Object.create(Error.prototype);
+  1782→
+  1783→  function resolveElement(a) {
+  1784→    if (a.target === "element" && a.element) return a.element;
+  1785→    if (a.selector) return document.querySelector(a.selector);
+  1786→    return null;
+  1787→  }
+  1788→
+  1789→  function simulateClick(el) {
+  1790→    try { el.focus && el.focus({ preventScroll: true }); } catch (e) {}
+  1791→    var opts = { bubbles: true, cancelable: true, view: global, button: 0 };
+  1792→    el.dispatchEvent(new MouseEvent("mousedown", opts));
+  1793→    el.dispatchEvent(new MouseEvent("mouseup", opts));
+  1794→    el.dispatchEvent(new MouseEvent("click", opts));
+  1795→  }
+  1796→
+  1797→  function performActions(actions, ctx) {
+  1798→    return new Promise(function (resolve, reject) {
+  1799→      var i = 0;
+  1800→      function next() {
+  1801→        if (i >= actions.length) return resolve();
+  1802→        var a = actions[i++];
+  1803→        try {
+  1804→          if (a.kind === "click") {
+  1805→            var el = resolveElement(a);
+  1806→            if (!el) return reject(new Error("click: target not found"));
+  1807→            simulateClick(el);
+  1808→            ctx.log("info", "perform: click");
+  1809→          } else if (a.kind === "focus") {
+  1810→            var el2 = a.element || (a.selector ? document.querySelector(a.selector) : null);
+  1811→            if (!el2) return reject(new Error("focus: target not found"));
+  1812→            el2.focus({ preventScroll: false });
+  1813→          } else if (a.kind === "signal") {
+  1814→            ctx.signal(a.signal, a.payload);
+  1815→          } else if (a.kind === "dispatch") {
+  1816→            var el3 = resolveElement(a);
+  1817→            if (!el3) return reject(new Error("dispatch: target not found"));
+  1818→            el3.dispatchEvent(new Event(a.eventType, a.init || {}));
+  1819→          }
+  1820→          next();
+  1821→        } catch (e) { reject(e); }
+  1822→      }
+  1823→      next();
+  1824→    });
+  1825→  }
+  1826→
+  1827→  function awaitWaitFor(spec, ctx) {
+  1828→    var cancelled = false;
+  1829→    var timer = null, poll = null, cleanup = null;
+  1830→    var timeout = spec.timeout || 10000;
+  1831→
+  1832→    var promise = new Promise(function (resolve, reject) {
+  1833→      function ok() { doCleanup(); resolve(); }
+  1834→      function err(e) { doCleanup(); reject(e); }
+  1835→      function doCleanup() {
+  1836→        if (timer) clearTimeout(timer);
+  1837→        if (poll) clearInterval(poll);
+  1838→        if (cleanup) cleanup();
+  1839→      }
+  1840→      if (cancelled) { err(new Error("waitFor cancelled")); return; }
+  1841→
+  1842→      timer = setTimeout(function () {
+  1843→        err(new WaitForError(spec, "waitFor timed out after " + timeout + "ms"));
+  1844→      }, timeout);
+  1845→
+  1846→      if (spec.kind === "selector") {
+  1847→        if (document.querySelector(spec.selector)) { ok(); return; }
+  1848→        poll = setInterval(function () {
+  1849→          if (cancelled) return err(new Error("waitFor cancelled"));
+  1850→          if (document.querySelector(spec.selector)) ok();
+  1851→        }, 60);
+  1852→      } else if (spec.kind === "predicate") {
+  1853→        if (spec.predicate()) { ok(); return; }
+  1854→        poll = setInterval(function () {
+  1855→          if (cancelled) return err(new Error("waitFor cancelled"));
+  1856→          if (spec.predicate()) ok();
+  1857→        }, 60);
+  1858→      } else if (spec.kind === "event") {
+  1859→        var target = spec.target === "document" ? document :
+  1860→                     spec.target === "window" ? global : spec.target;
+  1861→        var handler = function () { ok(); };
+  1862→        target.addEventListener(spec.eventType, handler, { once: true });
+  1863→        cleanup = function () { target.removeEventListener(spec.eventType, handler); };
+  1864→      } else if (spec.kind === "signal") {
+  1865→        if (!ctx.subscribe) { err(new Error("waitFor(signal): no bus")); return; }
+  1866→        cleanup = ctx.subscribe(spec.signals[0], function () { ok(); });
+  1867→        for (var i = 1; i < spec.signals.length; i++) {
+  1868→          ctx.subscribe(spec.signals[i], function () { ok(); });
+  1869→        }
+  1870→      }
+  1871→    });
+  1872→
+  1873→    function cancel() {
+  1874→      cancelled = true;
+  1875→      if (timer) clearTimeout(timer);
+  1876→      if (poll) clearInterval(poll);
+  1877→      if (cleanup) cleanup();
+  1878→    }
+  1879→
+  1880→    return { promise: promise, cancel: cancel };
+  1881→  }
+  1882→
+  1883→  // ── tour.ts ─────────────────────────────────────────────────────
+  1884→  var stylesInjected = false;
+  1885→  function injectStyles(container, css) {
+  1886→    if (stylesInjected) return;
+  1887→    var style = document.createElement("style");
+  1888→    style.dataset.cdTourStyles = "1";
+  1889→    style.textContent = css;
+  1890→    var root = container.getRootNode();
+  1891→    (root === document ? document.head : root).appendChild(style);
+  1892→    stylesInjected = true;
+  1893→  }
+  1894→
+  1895→  function resolveAnchor(spec, hooks) {
+  1896→    if (!spec) return null;
+  1897→    if (hooks && hooks.resolveAnchor) {
+  1898→      var r = hooks.resolveAnchor(spec);
+  1899→      if (r) return resolveAnchorRect(r);
+  1900→    }
+  1901→    return resolveAnchorRect(spec);
+  1902→  }
+  1903→
+  1904→  function resolveAnchorRect(spec) {
+  1905→    if (spec.kind === "rect") return spec.rect;
+  1906→    if (spec.kind === "element") return getElementRect(spec.element);
+  1907→    if (spec.kind === "selector") {
+  1908→      var el = document.querySelector(spec.selector);
+  1909→      return el ? getElementRect(el) : (spec.fallback || null);
+  1910→    }
+  1911→    return null;
+  1912→  }
+  1913→
+  1914→  function Tour(opts) {
+  1915→    opts = opts || {};
+  1916→    this.container = opts.container || document.body;
+  1917→    this.zIndex = opts.baseZIndex || 10000;
+  1918→    this.log = opts.log || function (lvl, msg) {
+  1919→      if (global.console && global.console[lvl]) global.console[lvl]("[tour] " + msg);
+  1920→    };
+  1921→    this.hooks = {};
+  1922→    this.storageKey = opts.storageKey === undefined ? "cd-tour:" : opts.storageKey;
+  1923→    this.highlight = createHighlight(this.container, this.zIndex + 1);
+  1924→    this.active = null;
+  1925→    this.keyHandler = null;
+  1926→    this.refreshRaf = null;
+  1927→    this.signalBus = new Set();
+  1928→    injectStyles(this.container, opts.styles || DEFAULT_STYLES);
+  1929→    Tour.instance = this;
+  1930→  }
+  1931→
+  1932→  Tour.prototype.onSignal = function (listener) {
+  1933→    var self = this;
+  1934→    this.signalBus.add(listener);
+  1935→    return function () { self.signalBus.delete(listener); };
+  1936→  };
+  1937→
+  1938→  Tour.prototype.signal = function (name, payload) {
+  1939→    this.log("info", "signal: " + name);
+  1940→    this.signalBus.forEach(function (l) { l(name, payload); });
+  1941→  };
+  1942→
+  1943→  // ── persistence ──────────────────────────────────────────────
+  1944→
+  1945→  Tour.prototype.isCompleted = function (id) {
+  1946→    return this.getCompletedAt(id) !== null;
+  1947→  };
+  1948→  Tour.prototype.getCompletedAt = function (id) {
+  1949→    var raw = this.readStorage(this.storageKey + "done:" + id);
+  1950→    if (raw === null) return null;
+  1951→    var ts = Number(raw);
+  1952→    return Number.isFinite(ts) ? ts : null;
+  1953→  };
+  1954→  Tour.prototype.markCompleted = function (id) {
+  1955→    this.writeStorage(this.storageKey + "done:" + id, String(Date.now()));
+  1956→  };
+  1957→  Tour.prototype.resetCompleted = function (id) {
+  1958→    this.removeStorage(this.storageKey + "done:" + id);
+  1959→    this.clearResume(id);
+  1960→  };
+  1961→  Tour.prototype.getResumeIndex = function (id) {
+  1962→    var raw = this.readStorage(this.storageKey + "resume:" + id);
+  1963→    if (raw === null) return null;
+  1964→    var idx = Number(raw);
+  1965→    return Number.isFinite(idx) && idx >= 0 ? idx : null;
+  1966→  };
+  1967→  Tour.prototype.clearResume = function (id) {
+  1968→    this.removeStorage(this.storageKey + "resume:" + id);
+  1969→  };
+  1970→
+  1971→  Tour.prototype.readStorage = function (key) {
+  1972→    if (!this.storageKey) return null;
+  1973→    try { return globalThis.localStorage ? globalThis.localStorage.getItem(key) : null; }
+  1974→    catch (e) { return null; }
+  1975→  };
+  1976→  Tour.prototype.writeStorage = function (key, value) {
+  1977→    if (!this.storageKey) return;
+  1978→    try { if (globalThis.localStorage) globalThis.localStorage.setItem(key, value); }
+  1979→    catch (e) { this.log("warn", "localStorage write failed for " + key); }
+  1980→  };
+  1981→  Tour.prototype.removeStorage = function (key) {
+  1982→    if (!this.storageKey) return;
+  1983→    try { if (globalThis.localStorage) globalThis.localStorage.removeItem(key); }
+  1984→    catch (e) { /* noop */ }
+  1985→  };
+  1986→
+  1987→  // ── run ───────────────────────────────────────────────────────
+  1988→
+  1989→  Tour.prototype.run = function (scenario, opts) {
+  1990→    opts = opts || {};
+  1991→    if (opts.skipIfCompleted && this.isCompleted(scenario.id)) {
+  1992→      this.log("info", "scenario already completed; skipping");
+  1993→      return null;
+  1994→    }
+  1995→    if (this.active) {
+  1996→      this.log("warn", "scenario still active; cancelling");
+  1997→      this.cancel();
+  1998→    }
+  1999→    var startIdx = opts.resume ? (this.getResumeIndex(scenario.id) || 0) : 0;
+  2000→    if (opts.resume && startIdx > 0) {
+
+[showing lines 1-2000 of 2890; use offset=2001 with limit to continue reading]

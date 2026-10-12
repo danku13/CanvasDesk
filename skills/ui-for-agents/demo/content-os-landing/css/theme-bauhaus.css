@@ -1,0 +1,192 @@
+/* ============================================================
+   Theme: Bauhaus (1919)
+   Tokens from 60-styles/bauhaus.md — primary triad + black on
+   off-white, three primitives only, black rules are structure.
+   Detail layer: dot-grid ground, primitive trio on rules,
+   shape-coded step numbers & medallions, triad band on CTA.
+   ============================================================ */
+
+html[data-style="bauhaus"] {
+  --bg: #F4F1EA;
+  --bg-soft: #ECE7DC;
+  --surface: #FFFFFF;
+  --ink: #141414;
+  --muted: #55524B;
+
+  --accent: #DA291C;        /* red = action */
+  --accent-fg: #FFFFFF;
+  --accent-ink: #B32217;    /* darkened red for small text */
+  --accent-2: #0F5CA8;      /* blue = information */
+  --accent-3: #F4C300;      /* yellow = filled shapes only */
+
+  --line: #141414;
+  --border-w: 3px;
+  --radius: 0px;
+  --chip-radius: 999px;
+
+  --font-display: 'Jost', 'Inter Tight', system-ui, sans-serif;
+  --font-body: 'Jost', 'Inter Tight', system-ui, sans-serif;
+
+  --h1-weight: 900;
+  --h1-transform: uppercase;
+  --h1-tracking: .02em;
+  --h1-lh: 1.06;
+  --h2-weight: 900;
+  --h2-transform: uppercase;
+  --h2-tracking: .03em;
+
+  --kicker-weight: 700;
+  --kicker-transform: uppercase;
+  --kicker-tracking: .2em;
+
+  --btn-weight: 700;
+  --btn-transform: uppercase;
+  --btn-tracking: .06em;
+  --btn-radius: 0px;
+  --btn-border-w: 2px;
+
+  --card-border-w: 2px;
+  --card-radius: 0px;
+
+  --focus: #141414;
+  --speed: 180ms;
+  --hero-dur: 220ms;
+
+  --title-rule: block;      /* R6: full-width rule under section heads */
+  --orn-h: 30px;
+  /* structural rule + primitive trio (circle / triangle / square) at right end */
+  --orn-bg:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 118 30'%3E%3Ccircle cx='15' cy='15' r='11' fill='%23DA291C'/%3E%3Cpolygon points='51,26 73,26 62,6' fill='%230F5CA8'/%3E%3Crect x='89' y='4' width='22' height='22' fill='%23F4C300'/%3E%3C/svg%3E") no-repeat right top / 118px 30px,
+    linear-gradient(#141414, #141414) no-repeat left top / calc(100% - 132px) 3px;
+  --brand-accent: #DA291C;
+  --sel-bg: #141414;
+  --sel-fg: #F4C300;
+}
+
+/* --- page ground: engineering dot grid --- */
+html[data-style="bauhaus"] body {
+  background-image: radial-gradient(circle, rgba(20,20,20,.085) 1.2px, transparent 1.4px);
+  background-size: 22px 22px;
+}
+
+/* focus: 2px black outline with offset (a11y watchpoints) */
+html[data-style="bauhaus"] :focus-visible {
+  outline: 2px solid #141414;
+  outline-offset: 2px;
+}
+
+/* --- header: red accent bar under the rule --- */
+html[data-style="bauhaus"] .site-header {
+  border-bottom-width: 3px;
+  background-image: linear-gradient(#DA291C, #DA291C);
+  background-repeat: no-repeat;
+  background-size: 96px 3px;
+  background-position: left bottom;
+}
+
+/* --- cards: mechanical hover + colored top-left index square --- */
+html[data-style="bauhaus"] .card { position: relative; }
+html[data-style="bauhaus"] .card:hover { transform: translateY(-3px); }
+html[data-style="bauhaus"] .card::after {
+  content: ""; position: absolute; top: 0; left: 0;
+  width: 14px; height: 14px; background: #141414;
+}
+
+/* --- medallions: white cell + primitive silhouette behind icon --- */
+html[data-style="bauhaus"] .medallion {
+  border: 2px solid #141414;
+  background: #FFFFFF;
+  overflow: hidden;
+}
+html[data-style="bauhaus"] .medallion::before {
+  content: ""; position: absolute; inset: 0; z-index: 0;
+}
+html[data-style="bauhaus"] .agent:nth-child(1) .medallion::before { background: #DA291C; border-radius: 50%; inset: 4px; }
+html[data-style="bauhaus"] .agent:nth-child(2) .medallion::before { background: #0F5CA8; }
+html[data-style="bauhaus"] .agent:nth-child(3) .medallion::before { background: #F4C300; border-radius: 50% 50% 0 0; inset: 6px 4px 0; }
+html[data-style="bauhaus"] .agent:nth-child(4) .medallion::before { background: #141414; clip-path: polygon(50% 6%, 100% 100%, 0 100%); }
+html[data-style="bauhaus"] .agent:nth-child(5) .medallion::before { background: #DA291C; border-radius: 50%; inset: 0 12px; }
+html[data-style="bauhaus"] .agent:nth-child(1) .medallion .ic,
+html[data-style="bauhaus"] .agent:nth-child(2) .medallion .ic,
+html[data-style="bauhaus"] .agent:nth-child(4) .medallion .ic { color: #FFFFFF; }
+html[data-style="bauhaus"] .agent:nth-child(3) .medallion .ic,
+html[data-style="bauhaus"] .agent:nth-child(5) .medallion .ic { color: #141414; }
+
+/* step numbers: circle / square / triangle — shape+label pairing (R8) */
+html[data-style="bauhaus"] .step__num {
+  width: 60px; height: 60px;
+  border: 0;
+  font-weight: 900;
+}
+html[data-style="bauhaus"] .step:nth-child(1) .step__num {
+  background: #F4C300; color: #141414; border-radius: 50%;
+  border: 2px solid #141414;
+}
+html[data-style="bauhaus"] .step:nth-child(2) .step__num {
+  background: #0F5CA8; color: #FFFFFF;
+}
+html[data-style="bauhaus"] .step:nth-child(3) .step__num {
+  width: 68px; height: 62px;
+  background: #DA291C; color: #FFFFFF;
+  clip-path: polygon(50% 0, 0 100%, 100% 100%);
+  padding-top: 1.1rem;
+}
+
+/* step corner icon in a black cell */
+html[data-style="bauhaus"] .step__ic {
+  width: 30px; height: 30px; padding: 6px;
+  background: #141414; color: #F4C300; opacity: 1;
+  top: 1.2rem; right: 1.2rem;
+}
+
+/* links stay blue (R2: blue = information) */
+html[data-style="bauhaus"] a { color: #0F5CA8; }
+html[data-style="bauhaus"] .kicker { color: #B32217; }
+
+/* stats: primitive glyph before each value */
+html[data-style="bauhaus"] .stat { border-top: 3px solid #141414; padding-top: 1.2rem; }
+html[data-style="bauhaus"] .stat__ic {
+  width: 34px; height: 34px; padding: 7px;
+  color: #FFFFFF; opacity: 1;
+  background: #141414;
+}
+html[data-style="bauhaus"] .stat:nth-child(1) .stat__ic { background: #DA291C; border-radius: 50%; }
+html[data-style="bauhaus"] .stat:nth-child(2) .stat__ic { background: #0F5CA8; }
+html[data-style="bauhaus"] .stat:nth-child(3) .stat__ic { background: #141414; clip-path: polygon(50% 4%, 100% 100%, 0 100%); padding-block: 10px; }
+html[data-style="bauhaus"] .stat:nth-child(4) .stat__ic { background: #F4C300; color: #141414; border-radius: 0 0 999px 999px; }
+
+/* calendar: structural black rules, yellow day underline, pill chips */
+html[data-style="bauhaus"] .cal { background: transparent; }
+html[data-style="bauhaus"] .cal__row {
+  border-top: 2px solid #141414;
+  padding-block: 6px;
+}
+html[data-style="bauhaus"] .cal__head { border-top: 0; }
+html[data-style="bauhaus"] .cal__day {
+  border-bottom: 6px solid #F4C300;
+  padding-bottom: .35rem;
+}
+html[data-style="bauhaus"] .cal__corner { border-bottom: 6px solid #141414; }
+html[data-style="bauhaus"] .cal__cell { min-height: 50px; }
+html[data-style="bauhaus"] .chip--s { background: #DA291C; color: #FFFFFF; }
+html[data-style="bauhaus"] .chip--c { background: #0F5CA8; color: #FFFFFF; }
+html[data-style="bauhaus"] .chip--a { background: #F4C300; color: #141414; }
+html[data-style="bauhaus"] .chip--d { background: #141414; color: #FFFFFF; }
+
+/* legend dots: primitive-coded */
+html[data-style="bauhaus"] .dot.chip--s { border-radius: 50%; background: #DA291C; }
+html[data-style="bauhaus"] .dot.chip--c { border-radius: 0; background: #0F5CA8; }
+html[data-style="bauhaus"] .dot.chip--a { border-radius: 50% 50% 0 0; background: #F4C300; }
+html[data-style="bauhaus"] .dot.chip--d { border-radius: 0; background: #141414; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+
+/* CTA: ink block + triad band on top, red action carries over */
+html[data-style="bauhaus"] .cta { background: #141414; position: relative; padding-top: 90px; }
+html[data-style="bauhaus"] .cta::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 14px;
+  background: repeating-linear-gradient(90deg,
+    #DA291C 0 60px, #141414 60px 76px,
+    #F4C300 76px 136px, #141414 136px 152px,
+    #0F5CA8 152px 212px, #141414 212px 228px);
+}
+html[data-style="bauhaus"] .cta .btn--primary { border: 2px solid #F4C300; }
+html[data-style="bauhaus"] .cta .btn--primary:hover { background: #DA291C; }

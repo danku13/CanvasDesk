@@ -1,0 +1,999 @@
+     1→//! FR-049 (PRD-0008 T3): галерея шаблонов готовых схем + empty-state
+     2→//! пустого канваса.
+     3→//!
+     4→//! Модальная screen-space панель по паттернам репозитория (палитра
+     5→//! `template_ui`, модалка настроек FR-039): раскладка — чистые функции
+     6→//! от вьюпорта и списка строк; состояние — [`SchemeGalleryState`] без
+     7→//! I/O; отрисовка (квады/тексты из слотов `ThemeColors`, правило потока
+     8→//! PRD-0006 §7.1) — в `app.rs`. Клавиатура: ↑/↓ — выбор, Enter — открыть,
+     9→//! Esc — закрыть, печатаемый символ — фильтр. Инвариант 320×240: панель
+    10→//! клампится к вьюпорту, строки скроллятся окном видимости.
+    11→//!
+    12→//! Empty-state (US-1 PRD-0008): карточка по центру при пустом канвасе —
+    13→//! «Начните с шаблона» + «Пустой холст» (скрыть до следующего опустошения).
+    14→//!
+    15→//! FR-053 (U3 PRD-0009, пилот G4/G5): раскладка собрана примитивами
+    16→//! `canvas-ui::layout` (панель — [`stack`]/[`constrain`], вертикальный
+    17→//! ритм — [`Column`], чипы — [`Row`] с политикой `Fit` — бывший
+    18→//! `break`-кламп удалён: переполнение стало тестируемым, молчаливый срез
+    19→//! невозможен), поля — spacing-scale `canvas_core::tokens::SPACING_*`;
+    20→//! подписи строк — измеренный Ellipsis ([`row_labels`]: заголовок/описание
+    21→//! усекаются по фактической ширине строки — текст больше не переливается
+    22→//! на соседнюю строку, screen-тексты рендера не переносятся).
+    23→
+    24→use canvas_core::schemes::{SchemeManifest, SchemeRegistry};
+    25→use canvas_ui::geometry::{EdgeInsets, UiRect, UiVec2};
+    26→use canvas_ui::kit;
+    27→use canvas_ui::layout::{
+    28→    constrain, pad, stack, Column, CrossAlign, HAlign, MeasuredItem, Row, VAlign,
+    29→};
+    30→use canvas_ui::measure::TextMeasurer;
+    31→
+    32→/// Семейство измерения = семейство screen-текстов рендера (parity метрик).
+    33→const FAMILY: &str = canvas_render::text::SANS_FAMILY;
+    34→
+    35→/// Ширина панели галереи (логические px). Аудит CI 2026-09-29: каталог
+    36→/// вырос до 5 категорий (framework, коммит f305ec7) — ряд чипов
+    37→/// 56 + 5×(108+6) = 626 не влезал в прежнюю внутреннюю ширину 536;
+    38→/// PANEL_W 660 даёт внутренние 636 с запасом 10 px и помещается в
+    39→/// минимальный G4-вьюпорт 800 (800 − SPACING_XL = 776).
+    40→pub const PANEL_W: f32 = 660.0;
+    41→/// Высота шапки.
+    42→// TODO: migrate to PANEL_HEADER_H_M=38 (FR-046 W-d аудит §4) — текущее
+    43→// значение 40 на 2px отличается от medium-варианта шкалы; оставлено как
+    44→// отклонение до полного аудита геометрии (визуальный скачок при смене
+    45→// 40→38 нежелателен в W-d-волне, I-1: ноль скачка).
+    46→pub const HEADER_H: f32 = 40.0;
+    47→/// Высота поля фильтра.
+    48→pub const INPUT_H: f32 = 34.0;
+    49→/// Высота чипа категории.
+    50→///
+    51→/// M1 (FR-UI-CHIP-STRIP): мигрировано на `kit::chip_strip` — высота
+    52→/// каноническая кита `CHIP_HEIGHT = 24` (прежний локальный литерал 28
+    53→/// заменён на реэкспорт кита — single source of truth, AGENTS.md §4).
+    54→/// Визуальное следствие: полоса чипов на 4 px ниже — acceptable
+    55→/// canonicalization (audit §6.1, I-1 FR-046 — канонизация к kit-токенам
+    56→/// явно желаема аудит-отчётом).
+    57→pub use canvas_ui::kit::CHIP_HEIGHT as CHIP_H;
+    58→/// Полный шаг строки списка (строка + зазор).
+    59→pub const ROW_H: f32 = 62.0;
+    60→/// Высота видимой части строки (шаг минус зазор `SPACING_S`).
+    61→pub const ROW_INNER_H: f32 = ROW_H - canvas_core::tokens::SPACING_S;
+    62→/// Высота футера.
+    63→pub const FOOTER_H: f32 = 26.0;
+    64→/// Внутренние поля панели (spacing-scale).
+    65→pub const PANEL_PAD: f32 = canvas_core::tokens::SPACING_LG;
+    66→// M1 (FR-UI-CHIP-STRIP): `CHIP_W`/`CHIP_ALL_W` (108/56) удалены — ширина
+    67→// чипов измеряется через `kit::chip_strip` (`MeasuredItem::Text` с
+    68→// `pad_x = 2*CHIP_PAD_H = 16`), а не фиксируется литералом. Полный ряд
+    69→// чипов «Все» + N категорий по-прежнему помещается в PANEL_W=660
+    70→// (внутренняя ширина 636 — измеренный ряд ≤ ~280 при 6 категориях).
+    71→/// Кегль заголовка строки.
+    72→// FR-046 W-d аудит §4: токен-источник `FONT_BODY` (13 — body вариант
+    73→// типографической шкалы UI-оверлеев). Прежний локальный литерал 13.0
+    74→// заменён реэкспортом токена — ноль визуального скачка (I-1).
+    75→pub use canvas_core::tokens::FONT_BODY as ROW_FONT;
+    76→/// Кегль описания строки.
+    77→// FR-046 W-d аудит §4: токен-источник `FONT_CAPTION` (11 — caption
+    78→// вариант типографической шкалы UI-оверлеев).
+    79→pub use canvas_core::tokens::FONT_CAPTION as ROW_DESC_FONT;
+    80→/// Поле текста внутри строки (spacing-scale).
+    81→pub const ROW_TEXT_PAD: f32 = canvas_core::tokens::SPACING_MD;
+    82→/// Высота кнопки empty-state.
+    83→pub const EMPTY_BTN_H: f32 = 34.0;
+    84→
+    85→/// Состояние галереи схем (модальная; `None`-подобие — `open == false`).
+    86→#[derive(Debug, Clone, Default, PartialEq)]
+    87→pub struct SchemeGalleryState {
+    88→    pub open: bool,
+    89→    /// Ординал выбранной строки среди отфильтрованных.
+    90→    pub selected: usize,
+    91→    /// Активная категория (`None` — «Все»).
+    92→    pub category: Option<String>,
+    93→    /// Фильтр по названию/описанию (без регистрозависимости).
+    94→    pub filter: String,
+    95→    /// Верх строки окна видимости (индекс в отфильтрованном списке).
+    96→    pub scroll_top: usize,
+    97→}
+    98→
+    99→impl SchemeGalleryState {
+   100→    pub fn open(&mut self) {
+   101→        self.open = true;
+   102→        self.selected = 0;
+   103→        self.scroll_top = 0;
+   104→    }
+   105→
+   106→    pub fn close(&mut self) {
+   107→        self.open = false;
+   108→        self.filter.clear();
+   109→        self.category = None;
+   110→        self.selected = 0;
+   111→        self.scroll_top = 0;
+   112→    }
+   113→}
+   114→
+   115→/// Отфильтрованные строки: категория-чип + подстрока фильтра
+   116→/// (название RU/EN, описание RU/EN, категория).
+   117→///
+   118→/// FR-087 (роль/класс): `visible` — allow-list raw-токенов категорий
+   119→/// схем (`App::visible_scheme_categories`: ручной фильтр настроек >
+   120→/// дефолт роли > все; `onboarding` виден всегда — добавляется
+   121→/// вызывающим). Поиск ведётся только по видимым категориям.
+   122→pub fn rows<'a>(
+   123→    registry: &'a SchemeRegistry,
+   124→    state: &SchemeGalleryState,
+   125→    visible: &[String],
+   126→) -> Vec<&'a SchemeManifest> {
+   127→    let filter = state.filter.to_lowercase();
+   128→    registry
+   129→        .list()
+   130→        .iter()
+   131→        .filter(|s| visible.iter().any(|v| v == &s.category))
+   132→        .filter(|s| match &state.category {
+   133→            Some(cat) => s.category == *cat,
+   134→            None => true,
+   135→        })
+   136→        .filter(|s| {
+   137→            filter.is_empty()
+   138→                || s.name_ru.to_lowercase().contains(&filter)
+   139→                || s.name_en.to_lowercase().contains(&filter)
+   140→                || s.description_ru.to_lowercase().contains(&filter)
+   141→                || s.description_en.to_lowercase().contains(&filter)
+   142→                || s.category.to_lowercase().contains(&filter)
+   143→        })
+   144→        .collect()
+   145→}
+   146→
+   147→/// Уникальные категории реестра в стабильном порядке (чипы «Все» + N).
+   148→/// FR-087: только видимые категории (роль/ручной фильтр) — чип скрытой
+   149→/// категории не рисуется и не кликается.
+   150→pub fn categories(registry: &SchemeRegistry, visible: &[String]) -> Vec<(String, String, String)> {
+   151→    let mut out: Vec<(String, String, String)> = Vec::new();
+   152→    for scheme in registry.list() {
+   153→        if !visible.iter().any(|v| v == &scheme.category) {
+   154→            continue;
+   155→        }
+   156→        if !out.iter().any(|(key, _, _)| *key == scheme.category) {
+   157→            out.push((
+   158→                scheme.category.clone(),
+   159→                scheme.category_ru.clone(),
+   160→                scheme.category_en.clone(),
+   161→            ));
+   162→        }
+   163→    }
+   164→    out
+   165→}
+   166→
+   167→/// Сдвинуть окно видимости так, чтобы выбранная строка была видна.
+   168→pub fn clamp_scroll(state: &mut SchemeGalleryState, visible: usize) {
+   169→    if visible == 0 {
+   170→        state.scroll_top = 0;
+   171→        return;
+   172→    }
+   173→    if state.selected < state.scroll_top {
+   174→        state.scroll_top = state.selected;
+   175→    } else if state.selected >= state.scroll_top + visible {
+   176→        state.scroll_top = state.selected + 1 - visible;
+   177→    }
+   178→    // Кламп скролла к размеру списка — вызывающий передаёт rows.len().
+   179→}
+   180→
+   181→/// W-a (аудит §8 п.4): шаг колесa каталога — строк на щелчок колеса
+   182→/// (паритет с шаблонным доком `template_ui::PANEL_WHEEL_LINES`).
+   183→pub const WHEEL_ROWS_PER_LINE: f32 = 3.0;
+   184→
+   185→/// W-a (аудит §8 п.4): верх окна видимости после колес-скролла —
+   186→/// `scroll_top + delta_rows` (строки), кламп на `0..=max_top`, где
+   187→/// `max_top = список − окно видимости`: хвост каталога достижим,
+   188→/// пустого окна нет (при пустом списке/окне — 0). Выбор не двигается
+   189→/// (прецедент веток wheel-скролла input.rs); связка с [`clamp_scroll`]
+   190→/// сохраняется — следующая клавиатурная навигация возвращает окно
+   191→/// к выбранной строке.
+   192→pub fn wheel_scroll_top(current: usize, delta_rows: f32, list_len: usize, visible: usize) -> usize {
+   193→    let visible = visible.max(1);
+   194→    let max_top = list_len.saturating_sub(visible);
+   195→    // Округление суммы (не дельты): мелкие тачпад-шаги накапливаются,
+   196→    // пока не наберут строку.
+   197→    let next = (current as f32 + delta_rows).round();
+   198→    if next <= 0.0 {
+   199→        0
+   200→    } else if next >= max_top as f32 {
+   201→        max_top
+   202→    } else {
+   203→        next as usize
+   204→    }
+   205→}
+   206→
+   207→/// Раскладка галереи: панель по центру, шапка, фильтр, чипы, строки.
+   208→#[derive(Debug, Clone, PartialEq)]
+   209→pub struct GalleryLayout {
+   210→    pub panel_rect: [f32; 4],
+   211→    pub header_rect: [f32; 4],
+   212→    pub close_rect: [f32; 4],
+   213→    pub input_rect: [f32; 4],
+   214→    /// Чипы: (rect, категория-ключ; `None` — «Все»).
+   215→    pub chip_rects: Vec<([f32; 4], Option<String>)>,
+   216→    /// Rect строк окна видимости (параллелен `visible_rows`).
+   217→    pub row_rects: Vec<[f32; 4]>,
+   218→    /// Индексы строк в общем отфильтрованном списке.
+   219→    pub visible_rows: Vec<usize>,
+   220→    pub footer_rect: [f32; 4],
+   221→}
+   222→
+   223→/// Раскладка галереи (чистая функция; кламп к вьюпорту — инвариант
+   224→/// 320×240, строки скроллятся окном видимости). FR-053: собрана
+   225→/// примитивами `canvas-ui::layout` — вертикальный ритм дословно прежний
+   226→/// (зазоры header→input 0, input→chips `SPACING_S`, chips→rows
+   227→/// `SPACING_S`, строки примыкают к футеру), позиция панели/размер —
+   228→/// Stack/Constrain. W3.2 (каталог `docs/plans/fr-068-w3-consumer-migration.md`):
+   229→/// дети скелета/чипов/строк выражаются [`MeasuredItem`] —
+   230→/// `Row/Column::lay_out_measured` без ручных фиксированных детей.
+   231→///
+   232→/// M1 (FR-UI-CHIP-STRIP): `ru` — выбор языка подписи чипа для замера
+   233→/// ширины (кит `chip_strip` измеряет текст — нужна конкретная подпись).
+   234→/// Сам язык строки (RU/EN) сохранён в `chip_rects` как `Option<String>`
+   235→/// (ключ категории; подпись рендера выбирается по языку пользователя).
+   236→pub fn layout(
+   237→    viewport: [f32; 2],
+   238→    list: &[&SchemeManifest],
+   239→    state: &SchemeGalleryState,
+   240→    ru: bool,
+   241→    visible_cats: &[String],
+   242→) -> GalleryLayout {
+   243→    // W3.2: замерщик — канонические shared-точки на вызов (Text-детей
+   244→    // нет — замерщик геометрию не читает).
+   245→    let mut m = TextMeasurer::new();
+   246→    let mut fs = canvas_render::text::measure_font_system();
+   247→    layout_with(viewport, list, state, ru, &mut m, &mut fs, visible_cats)
+   248→}
+   249→
+   250→/// То же с ЯВНЫМ замерщиком (для потребителей, уже держащих
+   251→/// `measure_font_system` — двойной лок глобального FontSystem невозможен).
+   252→/// FR-087: `visible` — allow-list категорий схем (роль/ручной фильтр) —
+   253→/// чипы категорий строятся только из видимых.
+   254→///
+   255→/// M1 (FR-UI-CHIP-STRIP): `ru` — выбор языка подписи чипа для замера
+   256→/// ширины через `kit::chip_strip`. См. [`layout`].
+   257→pub fn layout_with(
+   258→    viewport: [f32; 2],
+   259→    list: &[&SchemeManifest],
+   260→    state: &SchemeGalleryState,
+   261→    ru: bool,
+   262→    m: &mut TextMeasurer,
+   263→    fs: &mut cosmic_text::FontSystem,
+   264→    visible_cats: &[String],
+   265→) -> GalleryLayout {
+   266→    let max_w = (viewport[0] - canvas_core::tokens::SPACING_XL).max(280.0);
+   267→    let panel_w = PANEL_W.min(max_w);
+   268→    // Сколько строк влезает: высота панели — от вьюпорта. Маржа XL
+   269→    // учитывается С ОБЕИХ сторон (панель центрируется по вертикали:
+   270→    // иначе при ROW_H 62 панель 536 в 560-окне давала y=12 < маржи —
+   271→    // поймано G4-линтом после wasm-аудита 2026-09-25).
+   272→    let chrome = HEADER_H + INPUT_H + CHIP_H + FOOTER_H + PANEL_PAD * 3.0;
+   273→    let max_h = (viewport[1] - canvas_core::tokens::SPACING_XL * 2.0).max(160.0);
+   274→    // Панель растёт под список, но не выше вьюпорта (строки скроллятся).
+   275→    let panel_h = max_h.min(chrome + ROW_H * list.len().max(1) as f32);
+   276→    let avail_rows_h = (panel_h - chrome).max(0.0);
+   277→    let visible = ((avail_rows_h / ROW_H).floor() as usize).max(1);
+   278→    let shown = visible.min(list.len().saturating_sub(state.scroll_top));
+   279→
+   280→    // Панель — Stack по центру вьюпорта (позиция = (vw−w)/2, (vh−h)/2).
+   281→    let panel = stack(
+   282→        UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
+   283→        UiVec2::new(panel_w, panel_h),
+   284→        HAlign::Center,
+   285→        VAlign::Center,
+   286→    );
+   287→    let inner = pad(panel, EdgeInsets::uniform(PANEL_PAD));
+   288→    let inner_w = panel_w - PANEL_PAD * 2.0;
+   289→
+   290→    // Вертикальный ритм панели: Column без базового зазора + явные
+   291→    // распорки `SPACING_S` там, где прежняя геометрия имела зазор
+   292→    // (header→input 0, input→chips 6, chips→rows 6, rows→footer 0 —
+   293→    // ноль визуального скачка). W3.2: дети — MeasuredItem (Fixed/Spacer);
+   294→    // Семантика Spacer в колонке — нулевая высота (main-ось — высота;
+   295→    // см. оракул measured_column_matches_manual_fixed_oracle) — бит-в-бит
+   296→    // с прежней проводкой.
+   297→    let items = vec![
+   298→        // Шапка: место под заголовок (кнопка «×» — в правом крае панели).
+   299→        MeasuredItem::Fixed {
+   300→            w: inner_w - 32.0,
+   301→            h: HEADER_H,
+   302→        },
+   303→        MeasuredItem::Fixed {
+   304→            w: inner_w,
+   305→            h: INPUT_H,
+   306→        },
+   307→        MeasuredItem::Spacer(canvas_core::tokens::SPACING_S),
+   308→        MeasuredItem::Fixed {
+   309→            w: inner_w,
+   310→            h: CHIP_H,
+   311→        },
+   312→        MeasuredItem::Spacer(canvas_core::tokens::SPACING_S),
+   313→        MeasuredItem::Fixed {
+   314→            w: inner_w,
+   315→            h: avail_rows_h,
+   316→        },
+   317→        MeasuredItem::Fixed {
+   318→            w: inner_w,
+   319→            h: FOOTER_H,
+   320→        },
+   321→    ];
+   322→    let col = Column {
+   323→        gap: 0.0,
+   324→        cross: CrossAlign::Start,
+   325→        ..Column::default()
+   326→    }
+   327→    .lay_out_measured(inner, &items, m, fs, FAMILY, 12.0);
+   328→    let as_rect = |r: &UiRect| [r.x, r.y, r.w, r.h];
+   329→    let header_rect = as_rect(&col[0]);
+   330→    let input_rect = as_rect(&col[1]);
+   331→    let chips_slot = col[3];
+   332→    let rows_slot = col[5];
+   333→    let footer_rect = as_rect(&col[6]);
+   334→
+   335→    // FR-070: каноническая «×» в правом-верхнем углу панели —
+   336→    // kit::stage_close_button (audit §6.1 — бывшая раскладка через
+   337→    // `stack(inner, 24×24, End, Start)` с офсетом +4; size 24 →
+   338→    // ICON_BUTTON_SIZE 26, inset 6 (через inner+4) → SPACING_SM 8 от panel —
+   339→    // single source of truth, смещение ≈ 2px вправо/вниз — допустимо по
+   340→    // AGENTS.md §«UI-кит»; кнопка переезжает из шапки в угол панели
+   341→    // (канонический паттерн «× в углу модали»).
+   342→    let close = canvas_ui::kit::stage_close_button(panel);
+   343→
+   344→    // Чипы: «Все» + категории — M1 (FR-UI-CHIP-STRIP): мигрировано на
+   345→    // `kit::chip_strip`. Кит измеряет подпись (CHIP_FAMILY = SANS_FAMILY,
+   346→    // CHIP_FONT_SIZE = 12 — паритет метрик рендера), ширина чипа =
+   347→    // text_w + 2·CHIP_PAD_H (16), высота = CHIP_HEIGHT = 24, зазор =
+   348→    // CHIP_GAP = SPACING_S — single source of truth (AGENTS.md §4).
+   349→    // squeeze=false → RowPolicy::Fit (паритет прежней ручной Row(Fit):
+   350→    // переполнение НЕ маскируется — ловится G4-линтом; прежний молчаливый
+   351→    // `break`-кламп удалён). Канонизация: высота чипа 28→24 (4px короче
+   352→    // — panel chrome ниже, shifts everything below by 4px; acceptable per
+   353→    // audit §6.1, I-1 FR-046 — canonicalization to kit tokens desired).
+   354→    //
+   355→    // Язык подписи (`ru`) выбирает «Все»/«All» + category_ru/category_en
+   356→    // для ЗАМЕРА ширины; сам ключ категории сохранён отдельно
+   357→    // (`chip_keys: Option<String>`, None для «Все») — рендер в overlays.rs
+   358→    // выбирает подпись по языку пользователя.
+   359→    let all_label = if ru { "Все" } else { "All" };
+   360→    let cats = categories(SchemeRegistry::embedded(), visible_cats);
+   361→    let mut chip_labels: Vec<String> = vec![all_label.to_owned()];
+   362→    let mut chip_keys: Vec<Option<String>> = vec![None];
+   363→    for (key, cat_ru, cat_en) in &cats {
+   364→        chip_labels.push(if ru { cat_ru.clone() } else { cat_en.clone() });
+   365→        chip_keys.push(Some(key.clone()));
+   366→    }
+   367→    let labels_ref: Vec<&str> = chip_labels.iter().map(|s| s.as_str()).collect();
+   368→    let chips = kit::chip_strip(chips_slot, &labels_ref, false, m, fs);
+   369→    // Порядок items сохранён kit'ом (документировано в chip_strip): result[i]
+   370→    // ↔ items[i]. Zip с chip_keys для проброса ключа категории в рендер.
+   371→    let chip_rects: Vec<([f32; 4], Option<String>)> = chips
+   372→        .iter()
+   373→        .zip(chip_keys)
+   374→        .map(|((r, _), key)| ([r.x, r.y, r.w, r.h], key))
+   375→        .collect();
+   376→
+   377→    // Строки окна видимости: Column с зазором `SPACING_S`, видимая часть
+   378→    // строки `ROW_INNER_H` (полный шаг ROW_H — дословно прежний ритм).
+   379→    let row_children: Vec<MeasuredItem> = (0..shown)
+   380→        .map(|_| MeasuredItem::Fixed {
+   381→            w: inner_w,
+   382→            h: ROW_INNER_H,
+   383→        })
+   384→        .collect();
+   385→    let row_layout = Column {
+   386→        gap: canvas_core::tokens::SPACING_S,
+   387→        cross: CrossAlign::Start,
+   388→        ..Column::default()
+   389→    }
+   390→    .lay_out_measured(rows_slot, &row_children, m, fs, FAMILY, 12.0);
+   391→    let mut row_rects = Vec::with_capacity(shown);
+   392→    let mut visible_rows = Vec::with_capacity(shown);
+   393→    // Инвариант: `shown <= list.len() - scroll_top` (кламп выше), поэтому
+   394→    // scroll_top + i < list.len() для всех i < shown — клампов в цикле нет.
+   395→    for (i, r) in row_layout.iter().enumerate() {
+   396→        let index = state.scroll_top + i;
+   397→        row_rects.push(as_rect(r));
+   398→        visible_rows.push(index);
+   399→    }
+   400→
+   401→    GalleryLayout {
+   402→        panel_rect: [panel.x, panel.y, panel.w, panel.h],
+   403→        header_rect,
+   404→        close_rect: [close.x, close.y, close.w, close.h],
+   405→        input_rect,
+   406→        chip_rects,
+   407→        row_rects,
+   408→        visible_rows,
+   409→        footer_rect,
+   410→    }
+   411→}
+   412→
+   413→/// Подписи строк окна видимости (FR-053): заголовок и описание,
+   414→/// усечённые Ellipsis-политикой по фактической ширине строки минус
+   415→/// поля `ROW_TEXT_PAD` (screen-тексты рендера не переносятся — без
+   416→/// усечения длинное описание переливалось на соседнюю строку).
+   417→#[derive(Debug, Clone, PartialEq)]
+   418→pub struct RowLabel {
+   419→    pub title: String,
+   420→    pub desc: String,
+   421→}
+   422→
+   423→/// Измеренные подписи строк (параллелен `GalleryLayout.row_rects`).
+   424→///
+   425→/// Контракт W3.2: вызывающий держит guard `measure_font_system` (передаёт
+   426→/// `fs` явно) — внутренняя раскладка обязана брать `layout_with`, а НЕ
+   427→/// лочащую `layout`. Прецедент бага 2026-09-26: вызов `layout` здесь давал
+   428→/// второй лок того же глобального FontSystem — wasm падал паникой
+   429→/// «cannot recursively acquire mutex» (std no_threads Mutex), натив —
+   430→/// дедлоком кадра RedrawRequested (галерея схем открыта → кадр стоит
+   431→/// навсегда). `layout_with` даёт бит-в-бит ту же геометрию (то же тело
+   432→/// функции), замерщик переиспользуется.
+   433→/// FR-087: `visible` — проброс allow-list категорий в [`layout_with`]
+   434→/// (чипы не влияют на геометрию строк — колонка держит один слот CHIP_H,
+   435→/// но передаем тот же список для консистентности с рендером).
+   436→pub fn row_labels(
+   437→    viewport: [f32; 2],
+   438→    list: &[&SchemeManifest],
+   439→    state: &SchemeGalleryState,
+   440→    ru: bool,
+   441→    measurer: &mut TextMeasurer,
+   442→    fs: &mut cosmic_text::FontSystem,
+   443→    visible_cats: &[String],
+   444→) -> Vec<RowLabel> {
+   445→    let lay = layout_with(viewport, list, state, ru, measurer, fs, visible_cats);
+   446→    let max_w = (lay.row_rects.first().map(|r| r[2]).unwrap_or(0.0) - ROW_TEXT_PAD * 2.0).max(0.0);
+   447→    lay.visible_rows
+   448→        .iter()
+   449→        .map(|&index| {
+   450→            let Some(scheme) = list.get(index) else {
+   451→                return RowLabel {
+   452→                    title: String::new(),
+   453→                    desc: String::new(),
+   454→                };
+   455→            };
+   456→            RowLabel {
+   457→                title: measurer.ellipsis(fs, scheme.display_name(ru), FAMILY, ROW_FONT, max_w),
+   458→                desc: measurer.ellipsis(
+   459→                    fs,
+   460→                    if ru {
+   461→                        &scheme.description_ru
+   462→                    } else {
+   463→                        &scheme.description_en
+   464→                    },
+   465→                    FAMILY,
+   466→                    ROW_DESC_FONT,
+   467→                    max_w,
+   468→                ),
+   469→            }
+   470→        })
+   471→        .collect()
+   472→}
+   473→
+   474→/// Hit-test строки галереи (индекс в отфильтрованном списке).
+   475→pub fn row_at(lay: &GalleryLayout, point: [f32; 2]) -> Option<usize> {
+   476→    for (rect, index) in lay.row_rects.iter().zip(lay.visible_rows.iter()) {
+   477→        if point_in_rect(*rect, point) {
+   478→            return Some(*index);
+   479→        }
+   480→    }
+   481→    None
+   482→}
+   483→
+   484→/// Hit-test чипа категории.
+   485→pub fn chip_at(lay: &GalleryLayout, point: [f32; 2]) -> Option<Option<String>> {
+   486→    for (rect, category) in &lay.chip_rects {
+   487→        if point_in_rect(*rect, point) {
+   488→            return Some(category.clone());
+   489→        }
+   490→    }
+   491→    None
+   492→}
+   493→
+   494→/// Rect карточки empty-state `[x, y, w, h]` (по центру вьюпорта).
+   495→/// FR-053: размер — Constrain (desired 380×190, min 240×150, max —
+   496→/// вьюпорт минус маржа `SPACING_XL`), позиция — Stack по центру.
+   497→pub fn empty_card_rect(viewport: [f32; 2]) -> [f32; 4] {
+   498→    let size = constrain(
+   499→        UiVec2::new(240.0, 150.0),
+   500→        UiVec2::new(
+   501→            (viewport[0] - canvas_core::tokens::SPACING_XL).max(240.0),
+   502→            (viewport[1] - canvas_core::tokens::SPACING_XL).max(150.0),
+   503→        ),
+   504→        UiVec2::new(380.0, 190.0),
+   505→    );
+   506→    let card = stack(
+   507→        UiRect::new(0.0, 0.0, viewport[0], viewport[1]),
+   508→        size,
+   509→        HAlign::Center,
+   510→        VAlign::Center,
+   511→    );
+   512→    [card.x, card.y, card.w, card.h]
+   513→}
+   514→
+   515→/// Кнопки empty-state: (rect «Открыть галерею», rect «Пустой холст»).
+   516→/// FR-053: слот кнопок — поля `SPACING_MD` к бокам и низу карточки,
+   517→/// прижим к низу (cross End), ширина каждой — половина слота минус
+   518→/// зазор `SPACING_MD` (дословно прежняя геометрия).
+   519→pub fn empty_buttons(card: [f32; 4]) -> ([f32; 4], [f32; 4]) {
+   520→    // W3.2: замерщик — канонические shared-точки на вызов.
+   521→    let mut m = TextMeasurer::new();
+   522→    let mut fs = canvas_render::text::measure_font_system();
+   523→    empty_buttons_with(card, &mut m, &mut fs)
+   524→}
+   525→
+   526→/// То же с ЯВНЫМ замерщиком (см. [`empty_buttons`]).
+   527→pub fn empty_buttons_with(
+   528→    card: [f32; 4],
+   529→    m: &mut TextMeasurer,
+   530→    fs: &mut cosmic_text::FontSystem,
+   531→) -> ([f32; 4], [f32; 4]) {
+   532→    let slot = UiRect::new(card[0], card[1], card[2], card[3]).inset(&EdgeInsets {
+   533→        left: canvas_core::tokens::SPACING_MD,
+   534→        top: 0.0,
+   535→        right: canvas_core::tokens::SPACING_MD,
+   536→        bottom: canvas_core::tokens::SPACING_MD,
+   537→    });
+   538→    let btn_w = (slot.w - canvas_core::tokens::SPACING_MD) / 2.0;
+   539→    let rects = Row {
+   540→        gap: canvas_core::tokens::SPACING_MD,
+   541→        cross: CrossAlign::End,
+   542→        ..Row::default()
+   543→    }
+   544→    .lay_out_measured(
+   545→        slot,
+   546→        &[
+   547→            MeasuredItem::Fixed {
+   548→                w: btn_w,
+   549→                h: EMPTY_BTN_H,
+   550→            },
+   551→            MeasuredItem::Fixed {
+   552→                w: btn_w,
+   553→                h: EMPTY_BTN_H,
+   554→            },
+   555→        ],
+   556→        m,
+   557→        fs,
+   558→        FAMILY,
+   559→        12.0,
+   560→    );
+   561→    let as_rect = |r: &UiRect| [r.x, r.y, r.w, r.h];
+   562→    (as_rect(&rects[0]), as_rect(&rects[1]))
+   563→}
+   564→
+   565→/// Точка в прямоугольнике `[x, y, w, h]` (общий хелпер модуля).
+   566→pub fn point_in_rect(rect: [f32; 4], point: [f32; 2]) -> bool {
+   567→    point[0] >= rect[0]
+   568→        && point[0] <= rect[0] + rect[2]
+   569→        && point[1] >= rect[1]
+   570→        && point[1] <= rect[1] + rect[3]
+   571→}
+   572→
+   573→#[cfg(test)]
+   574→mod tests {
+   575→    use super::*;
+   576→
+   577→    fn state() -> SchemeGalleryState {
+   578→        SchemeGalleryState {
+   579→            open: true,
+   580→            ..Default::default()
+   581→        }
+   582→    }
+   583→
+   584→    /// FR-087: allow-list «все категории реестра» (в тестах = без фильтра),
+   585→    /// порядок — реестра (как `categories` без фильтра).
+   586→    fn all_visible(registry: &SchemeRegistry) -> Vec<String> {
+   587→        let mut out: Vec<String> = Vec::new();
+   588→        for scheme in registry.list() {
+   589→            if !out.contains(&scheme.category) {
+   590→                out.push(scheme.category.clone());
+   591→            }
+   592→        }
+   593→        out
+   594→    }
+   595→
+   596→    /// FR-087: allow-list заданных категорий (тест фильтра роли).
+   597→    fn only(categories: &[&str]) -> Vec<String> {
+   598→        categories.iter().map(|c| (*c).to_owned()).collect()
+   599→    }
+   600→
+   601→    /// Детерминированный FontSystem тестов: вшитый рендером шрифт.
+   602→    fn font_system() -> cosmic_text::FontSystem {
+   603→        let mut fs = cosmic_text::FontSystem::new();
+   604→        const FONT: &[u8] = include_bytes!("../../../assets/fonts/NotoSansDisplay-Medium.ttf");
+   605→        fs.db_mut().load_font_data(FONT.to_vec());
+   606→        fs
+   607→    }
+   608→
+   609→    #[test]
+   610→    fn rows_list_all_and_filter() {
+   611→        let registry = SchemeRegistry::embedded();
+   612→        let st = state();
+   613→        assert_eq!(
+   614→            rows(registry, &st, &all_visible(registry)).len(),
+   615→            registry.list().len()
+   616→        );
+   617→        let mut filtered = st.clone();
+   618→        filtered.filter = "смета".into();
+   619→        let r = rows(registry, &filtered, &all_visible(registry));
+   620→        assert!(!r.is_empty(), "фильтр по русскому названию находит");
+   621→        assert!(r.iter().all(|s| s.category == "planning"));
+   622→        let mut cat = st.clone();
+   623→        cat.category = Some("onboarding".into());
+   624→        assert_eq!(
+   625→            rows(registry, &cat, &all_visible(registry)).len(),
+   626→            2,
+   627→            "две онбординг-схемы"
+   628→        );
+   629→    }
+   630→
+   631→    #[test]
+   632→    fn categories_unique() {
+   633→        let registry = SchemeRegistry::embedded();
+   634→        let cats = categories(registry, &all_visible(registry));
+   635→        assert!(cats.len() >= 3, "G2: ≥ 3 категории");
+   636→        let mut keys: Vec<&String> = cats.iter().map(|(k, _, _)| k).collect();
+   637→        keys.sort();
+   638→        keys.dedup();
+   639→        assert_eq!(keys.len(), cats.len());
+   640→    }
+   641→
+   642→    #[test]
+   643→    fn layout_clamps_to_small_viewport() {
+   644→        let registry = SchemeRegistry::embedded();
+   645→        let st = state();
+   646→        let list = rows(registry, &st, &all_visible(registry));
+   647→        // Инвариант 320×240: панель помещается, хотя бы одна строка видна.
+   648→        let lay = layout([320.0, 240.0], &list, &st, true, &all_visible(registry));
+   649→        assert!(lay.panel_rect[2] <= 320.0);
+   650→        assert!(lay.panel_rect[3] <= 240.0);
+   651→        assert_eq!(lay.visible_rows.len(), 1, "одна строка в окне");
+   652→        // Стандартный вьюпорт: панель помещается целиком; каталог из 10
+   653→        // схем (аудит 2026-09: 6 → 10) выше окна — окно видимости
+   654→        // показывает вместившиеся строки, остальное добирает скролл
+   655→        // (clamp_scroll приводит последнюю схему в видимость).
+   656→        let lay = layout([1280.0, 800.0], &list, &st, true, &all_visible(registry));
+   657→        assert!(
+   658→            !lay.visible_rows.is_empty() && lay.visible_rows.len() <= list.len(),
+   659→            "окно видимости непустое и не больше списка"
+   660→        );
+   661→        assert!(
+   662→            lay.visible_rows.len() < list.len(),
+   663→            "10 строк по {}px выше вьюпорта 800 — скролл обязан существовать",
+   664→            ROW_H
+   665→        );
+   666→        let mut scrolled = st.clone();
+   667→        scrolled.selected = list.len() - 1;
+   668→        clamp_scroll(&mut scrolled, lay.visible_rows.len());
+   669→        let lay2 = layout(
+   670→            [1280.0, 800.0],
+   671→            &list,
+   672→            &scrolled,
+   673→            true,
+   674→            &all_visible(registry),
+   675→        );
+   676→        assert!(
+   677→            lay2.visible_rows.contains(&(list.len() - 1)),
+   678→            "последняя схема доступна прокруткой"
+   679→        );
+   680→    }
+   681→
+   682→    /// D2 CJM: полный ряд «Все» + N категорий обязан раскладываться на
+   683→    /// стандартном и компактном десктопе; FR-053: `break`-кламп удалён —
+   684→    /// Row(Fit) раскладывает ВСЕ чипы, и тест фиксирует переполнение,
+   685→    /// если оно появится (молчаливый срез невозможен).
+   686→    #[test]
+   687→    fn chips_all_categories_fit() {
+   688→        let registry = SchemeRegistry::embedded();
+   689→        let st = state();
+   690→        let list = rows(registry, &st, &all_visible(registry));
+   691→        // M1 (FR-UI-CHIP-STRIP): чипы измеряются kit::chip_strip — замер
+   692→        // тот же (TextMeasurer + SANS_FAMILY + CHIP_FONT_SIZE=12). Тест
+   693→        // повторяет замер и проверяет, что измеренный ряд помещается в
+   694→        // слот (без переполнения — RowPolicy::Fit НЕ маскирует).
+   695→        //
+   696→        // ВАЖНО: используется `layout_with` с локальным FontSystem (а не
+   697→        // `layout` с глобальным `measure_font_system()`) — иначе двойной
+   698→        // лок глобального мьютекса (контракт W3.2, прецедент 2026-09-26).
+   699→        let mut m = TextMeasurer::new();
+   700→        let mut fs = font_system();
+   701→        for viewport in [[1280.0, 800.0], [1024.0, 768.0], [800.0, 600.0]] {
+   702→            let lay = layout_with(
+   703→                viewport,
+   704→                &list,
+   705→                &st,
+   706→                true,
+   707→                &mut m,
+   708→                &mut fs,
+   709→                &all_visible(registry),
+   710→            );
+   711→            assert_eq!(
+   712→                lay.chip_rects.len(),
+   713→                1 + categories(registry, &all_visible(registry)).len(),
+   714→                "все категории в ряду при {:?}",
+   715→                viewport
+   716→            );
+   717→            // Полный ряд реально помещается в слот чипов (без переполнения).
+   718→            // Замер: каждый чип = text_w + 2·CHIP_PAD_H; зазор = SPACING_S
+   719→            // (= CHIP_GAP). Повторяет формулу kit::chip_strip.
+   720→            let pad2 = 2.0 * canvas_ui::kit::CHIP_PAD_H;
+   721→            let gap = canvas_ui::kit::CHIP_GAP;
+   722→            let mut chips_w = m.width_of(
+   723→                &mut fs,
+   724→                "Все",
+   725→                canvas_render::text::SANS_FAMILY,
+   726→                canvas_ui::kit::CHIP_FONT_SIZE,
+   727→            ) + pad2;
+   728→            for (_, ru_label, _) in categories(registry, &all_visible(registry)) {
+   729→                let w = m.width_of(
+   730→                    &mut fs,
+   731→                    &ru_label,
+   732→                    canvas_render::text::SANS_FAMILY,
+   733→                    canvas_ui::kit::CHIP_FONT_SIZE,
+   734→                ) + pad2;
+   735→                chips_w += gap + w;
+   736→            }
+   737→            let inner_w = lay.panel_rect[2] - PANEL_PAD * 2.0;
+   738→            assert!(
+   739→                chips_w <= inner_w + 0.01,
+   740→                "ряд чипов {chips_w} шире слота {inner_w} при {:?}",
+   741→                viewport
+   742→            );
+   743→            // Дополнительно: правый край последнего чипа — внутри слота
+   744→            // (поведенческий ассерт, не завязенный на формулу ширины).
+   745→            if let Some((last_rect, _)) = lay.chip_rects.last() {
+   746→                assert!(
+   747→                    last_rect[0] + last_rect[2] <= lay.panel_rect[0] + inner_w + 0.01,
+   748→                    "последний чип выходит за слот при {:?}",
+   749→                    viewport
+   750→                );
+   751→            }
+   752→        }
+   753→    }
+   754→
+   755→    #[test]
+   756→    fn clamp_scroll_follows_selection() {
+   757→        let mut st = state();
+   758→        st.selected = 5;
+   759→        clamp_scroll(&mut st, 3);
+   760→        assert_eq!(st.scroll_top, 3, "выбранная строка видна снизу");
+   761→        st.selected = 1;
+   762→        clamp_scroll(&mut st, 3);
+   763→        assert_eq!(st.scroll_top, 1, "выбранная строка видна сверху");
+   764→    }
+   765→
+   766→    /// W-a (аудит §8 п.4): wheel_scroll_top клампит верх окна на
+   767→    /// 0..=max_top (max_top = список − окно видимости); щелчок колеса —
+   768→    /// WHEEL_ROWS_PER_LINE строк, тачпад — доля строки.
+   769→    #[test]
+   770→    fn wheel_scroll_top_grows_and_clamps() {
+   771→        let (list_len, visible) = (10, 4);
+   772→        let max_top = list_len - visible;
+   773→        // Колесо от себя (y < 0 → delta_rows > 0): окно уходит вниз…
+   774→        assert_eq!(
+   775→            wheel_scroll_top(0, 1.0 * WHEEL_ROWS_PER_LINE, list_len, visible),
+   776→            3
+   777→        );
+   778→        assert_eq!(wheel_scroll_top(3, 3.0, list_len, visible), 6);
+   779→        // …и клампится на max_top: пустого окна и перелёта нет.
+   780→        assert_eq!(wheel_scroll_top(6, 3.0, list_len, visible), max_top);
+   781→        assert_eq!(wheel_scroll_top(6, 100.0, list_len, visible), max_top);
+   782→        // Колесо на себя (y > 0 → delta_rows < 0): окно возвращается…
+   783→        assert_eq!(
+   784→            wheel_scroll_top(max_top, -3.0, list_len, visible),
+   785→            max_top - 3
+   786→        );
+   787→        // …и клампится на 0.
+   788→        assert_eq!(wheel_scroll_top(1, -100.0, list_len, visible), 0);
+   789→        // Тачпад: доля строки накапливается округлением суммы (0.6 → 1).
+   790→        assert_eq!(wheel_scroll_top(0, 0.6, list_len, visible), 1);
+   791→        // Деградация: пустой каталог / окно ≥ списка — скролла нет.
+   792→        assert_eq!(wheel_scroll_top(0, 3.0, 0, 1), 0);
+   793→        assert_eq!(wheel_scroll_top(0, 3.0, 3, 10), 0);
+   794→    }
+   795→
+   796→    /// W-a (аудит §8 п.4): на 800×560 каталог из 10 схем достижим до
+   797→    /// конца колесом (вниз — до последней строки, вверх — до первой),
+   798→    /// связка с clamp_scroll сохраняется: клавиатурная навигация
+   799→    /// возвращает окно к выбранной строке.
+   800→    #[test]
+   801→    fn wheel_reaches_catalog_end_on_800x560() {
+   802→        let registry = SchemeRegistry::embedded();
+   803→        let mut st = state();
+   804→        let list = rows(registry, &st, &all_visible(registry));
+   805→        assert!(list.len() >= 10, "каталог 10+ схем (аудит 2026-09)");
+   806→        let lay = layout([800.0, 560.0], &list, &st, true, &all_visible(registry));
+   807→        let visible = lay.visible_rows.len();
+   808→        assert!(visible < list.len(), "окно меньше списка — скролл нужен");
+   809→        // Колесо вниз до упора: щелчок = −y · WHEEL_ROWS_PER_LINE.
+   810→        let mut guard = 0;
+   811→        loop {
+   812→            let next = wheel_scroll_top(st.scroll_top, WHEEL_ROWS_PER_LINE, list.len(), visible);
+   813→            if next == st.scroll_top {
+   814→                break;
+   815→            }
+   816→            st.scroll_top = next;
+   817→            guard += 1;
+   818→            assert!(guard <= list.len(), "скролл обязан сойтись");
+   819→        }
+   820→        let lay_end = layout([800.0, 560.0], &list, &st, true, &all_visible(registry));
+   821→        assert_eq!(
+   822→            st.scroll_top,
+   823→            list.len() - visible,
+   824→            "кламп на хвост каталога"
+   825→        );
+   826→        assert!(
+   827→            lay_end.visible_rows.contains(&(list.len() - 1)),
+   828→            "последняя схема видна"
+   829→        );
+   830→        // Колесо вверх до упора — обратно к началу.
+   831→        let mut guard = 0;
+   832→        loop {
+   833→            let next = wheel_scroll_top(st.scroll_top, -WHEEL_ROWS_PER_LINE, list.len(), visible);
+   834→            if next == st.scroll_top {
+   835→                break;
+   836→            }
+   837→            st.scroll_top = next;
+   838→            guard += 1;
+   839→            assert!(guard <= list.len(), "скролл обязан сойтись");
+   840→        }
+   841→        assert_eq!(st.scroll_top, 0, "окно вернулось к началу");
+   842→        // Связка с clamp_scroll: колесо не ломает клавиатурную семантику —
+   843→        // после wheel-скролла окно следует за выбранной строкой.
+   844→        st.scroll_top = list.len() - visible;
+   845→        st.selected = 0;
+   846→        clamp_scroll(&mut st, visible);
+   847→        let lay_sel = layout([800.0, 560.0], &list, &st, true, &all_visible(registry));
+   848→        assert!(
+   849→            lay_sel.visible_rows.contains(&0),
+   850→            "clamp_scroll вернул выбранную строку в окно"
+   851→        );
+   852→    }
+   853→
+   854→    #[test]
+   855→    fn hit_tests_rows_chips_and_empty_buttons() {
+   856→        let registry = SchemeRegistry::embedded();
+   857→        let st = state();
+   858→        let list = rows(registry, &st, &all_visible(registry));
+   859→        let lay = layout([1280.0, 800.0], &list, &st, true, &all_visible(registry));
+   860→        let rect = lay.row_rects[0];
+   861→        assert_eq!(
+   862→            row_at(&lay, [rect[0] + 4.0, rect[1] + 4.0]),
+   863→            Some(0),
+   864→            "клик по первой строке"
+   865→        );
+   866→        assert_eq!(row_at(&lay, [0.0, 0.0]), None, "мимо строк");
+   867→        let (chip_rect, chip_cat) = lay.chip_rects[0].clone();
+   868→        assert_eq!(
+   869→            chip_at(&lay, [chip_rect[0] + 2.0, chip_rect[1] + 2.0]),
+   870→            Some(None),
+   871→            "чип «Все»"
+   872→        );
+   873→        assert!(chip_cat.is_none());
+   874→        // Empty-state: кнопки внутри карточки, не пересекаются.
+   875→        let card = empty_card_rect([1280.0, 800.0]);
+   876→        let (open_btn, dismiss_btn) = empty_buttons(card);
+   877→        assert!(point_in_rect(card, [open_btn[0] + 2.0, open_btn[1] + 2.0]));
+   878→        assert!(point_in_rect(
+   879→            card,
+   880→            [dismiss_btn[0] + 2.0, dismiss_btn[1] + 2.0]
+   881→        ));
+   882→        assert!(
+   883→            open_btn[0] + open_btn[2] <= dismiss_btn[0],
+   884→            "кнопки не пересекаются"
+   885→        );
+   886→    }
+   887→
+   888→    /// FR-053 (G4-линт пилота): вьюпорты 1280×800 / 1024×640 / 800×560 ×
+   889→    /// RU/EN — панель в вьюпорте (маржа xl), все элементы внутри панели,
+   890→    /// чипы/строки попарно не пересекаются; измеренные подписи строк
+   891→    /// укладываются в ширину строки.
+   892→    #[test]
+   893→    fn g4_lint_viewports_and_languages() {
+   894→        let registry = SchemeRegistry::embedded();
+   895→        let st = state();
+   896→        let list = rows(registry, &st, &all_visible(registry));
+   897→        let viewports = [[1280.0, 800.0], [1024.0, 640.0], [800.0, 560.0]];
+   898→        for ru in [true, false] {
+   899→            for vp in viewports {
+   900→                let lay = layout(vp, &list, &st, ru, &all_visible(registry));
+   901→                // Панель внутри вьюпорта (маржа xl).
+   902→                assert!(
+   903→                    lay.panel_rect[0] >= canvas_core::tokens::SPACING_XL - 0.01,
+   904→                    "{vp:?}"
+   905→                );
+   906→                assert!(
+   907→                    lay.panel_rect[0] + lay.panel_rect[2]
+   908→                        <= vp[0] - canvas_core::tokens::SPACING_XL + 0.01,
+   909→                    "{vp:?}"
+   910→                );
+   911→                assert!(
+   912→                    lay.panel_rect[1] >= canvas_core::tokens::SPACING_XL - 0.01,
+   913→                    "{vp:?}"
+   914→                );
+   915→                // Элементы внутри панели.
+   916→                for r in lay
+   917→                    .row_rects
+   918→                    .iter()
+   919→                    .chain(lay.chip_rects.iter().map(|(r, _)| r))
+   920→                    .chain([&lay.input_rect, &lay.footer_rect])
+   921→                {
+   922→                    assert!(r[0] >= lay.panel_rect[0] - 0.01, "левее панели {vp:?}");
+   923→                    assert!(
+   924→                        r[0] + r[2] <= lay.panel_rect[0] + lay.panel_rect[2] + 0.01,
+   925→                        "за правым краем панели {vp:?}"
+   926→                    );
+   927→                    assert!(r[1] >= lay.panel_rect[1] - 0.01, "выше панели {vp:?}");
+   928→                    assert!(
+   929→                        r[1] + r[3] <= lay.panel_rect[1] + lay.panel_rect[3] + 0.01,
+   930→                        "ниже панели {vp:?}"
+   931→                    );
+   932→                }
+   933→                // Чипы и строки попарно не пересекаются.
+   934→                let chips: Vec<[f32; 4]> = lay.chip_rects.iter().map(|(r, _)| *r).collect();
+   935→                for group in [chips, lay.row_rects.clone()] {
+   936→                    for i in 0..group.len() {
+   937→                        for j in i + 1..group.len() {
+   938→                            let a = UiRect::new(group[i][0], group[i][1], group[i][2], group[i][3]);
+   939→                            let b = UiRect::new(group[j][0], group[j][1], group[j][2], group[j][3]);
+   940→                            assert!(!a.intersects(&b), "пересечение {i}×{j} при {vp:?}");
+   941→                        }
+   942→                    }
+   943→                }
+   944→                // Измеренные подписи строк укладываются в ширину строки.
+   945→                let mut fs = font_system();
+   946→                let mut m = TextMeasurer::new();
+   947→                let labels =
+   948→                    row_labels(vp, &list, &st, ru, &mut m, &mut fs, &all_visible(registry));
+   949→                assert_eq!(labels.len(), lay.row_rects.len());
+   950→                for (label, rect) in labels.iter().zip(lay.row_rects.iter()) {
+   951→                    let inner = rect[2] - ROW_TEXT_PAD * 2.0;
+   952→                    assert!(
+   953→                        m.width_of(&mut fs, &label.title, FAMILY, ROW_FONT) <= inner + 0.05,
+   954→                        "заголовок шире строки при {vp:?}"
+   955→                    );
+   956→                    assert!(
+   957→                        m.width_of(&mut fs, &label.desc, FAMILY, ROW_DESC_FONT) <= inner + 0.05,
+   958→                        "описание шире строки при {vp:?}"
+   959→                    );
+   960→                }
+   961→            }
+   962→        }
+   963→    }
+   964→
+   965→    /// FR-087 (роль/класс): фильтр галереи по allow-list категорий —
+   966→    /// строки и чипы только видимых; onboarding не теряется при фильтре
+   967→    /// (его всегда добавляет App-хелпер; здесь — поведение чистых функций).
+   968→    #[test]
+   969→    fn role_filter_hides_categories_in_rows_and_chips() {
+   970→        let registry = SchemeRegistry::embedded();
+   971→        let st = state();
+   972→        // «Роль продакт-менеджера»: business + framework (+ onboarding).
+   973→        let visible = only(&["business", "framework", "onboarding"]);
+   974→        let list = rows(registry, &st, &visible);
+   975→        assert!(!list.is_empty());
+   976→        assert!(
+   977→            list.iter().all(|s| visible.contains(&s.category)),
+   978→            "скрытые категории не всплывают в списке"
+   979→        );
+   980→        // Поиск по скрытой категории ничего не находит (шум роли убран).
+   981→        let mut filtered = st.clone();
+   982→        filtered.filter = "смета".into(); // планирование (planning) — скрыто
+   983→        assert!(rows(registry, &filtered, &visible).is_empty());
+   984→        // Чипы — только видимые категории (business + framework +
+   985→        // onboarding, который App-хелпер добавляет поверх фильтра роли).
+   986→        let cats = categories(registry, &visible);
+   987→        assert_eq!(cats.len(), 3, "business + framework + onboarding");
+   988→        let lay = layout([1280.0, 800.0], &list, &st, true, &visible);
+   989→        assert_eq!(lay.chip_rects.len(), 4, "«Все» + 3 видимых чипа");
+   990→        // Без onboarding в списке — он не появляется сам (чистая функция
+   991→        // добавляет только App-хелпер `visible_scheme_categories`).
+   992→        let no_onboarding = only(&["business", "framework"]);
+   993→        assert_eq!(categories(registry, &no_onboarding).len(), 2);
+   994→        // Пустой allow-list — вырожденный случай: ничего не видно.
+   995→        assert!(rows(registry, &st, &[]).is_empty());
+   996→        assert!(categories(registry, &[]).is_empty());
+   997→    }
+   998→}
+   999→

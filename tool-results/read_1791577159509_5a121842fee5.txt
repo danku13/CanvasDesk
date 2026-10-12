@@ -1,0 +1,1447 @@
+     1→//! FR-010 v2: авто-раскладка связанных карточек — Sugiyama-lite над
+     2→//! моделью канваса (без GPU/ОС, тестируется везде; wasm-гейт ADR-0011).
+     3→//!
+     4→//! **v1 → v2.** v1 — BFS со знаковой глубиной: каждая нода получала ОДИН
+     5→//! уровень (первый BFS-визит), что ломало DAG (merge-point с двумя путями
+     6→//! терял топологию), не минимизировало пересечения рёбер с нодами и не
+     7→//! группировало смысловые соседи. v2 переиспользует движок Sugiyama-lite
+     8→//! из FR-071 (`scheme_layout.rs`): знаковое longest-path слоение (DAG
+     9→//! корректен — merge-point получает максимальный уровень по всем путям),
+    10→//! barycenter-упорядочивание (смысловая группировка), минимизация
+    11→//! пересечений «ребро × нода» (swap + shift + insertion). Геометрия
+    12→//! переиспользуется из `scheme_layout` (`right_center`/`left_center`/
+    13→//! `seg_len`/`seg_intersects_rect`).
+    14→//!
+    15→//! **Контракт сохранён** (образец v1): `plan_related_layout(canvas, seed,
+    16→//! mode) -> LayoutPlan`, 3 режима `LayoutMode`, семя-якорь (не двигается),
+    17→//! группы едут с детьми, ноды без связи с семенем не трогаются.
+    18→//!
+    19→//! **Слоение со знаком.** Из семени строятся две половины графа: прямая
+    20→//! (по исходящим рёбрам — потомки) и обратная (по входящим — предки).
+    21→//! longest-path (Kahn, образец `scheme_layout::layout_cluster`) даёт
+    22→//! `forward_level` (≥0, путь от семени) и `backward_level` (≥0, путь к
+    23→//! семени). Знаковый уровень = `forward_level − backward_level`: потомки
+    24→//! на +1..+N (справа/снизу), предки на −1..−N (слева/сверху), семя = 0.
+    25→//! DAG merge-point: нода с двумя путями от семени получает максимум
+    26→//! (топология сохранена). Циклы — детерминированный фолбэк (Kahn-остаток).
+    27→//!
+    28→//! **Radial v2.** v1 делил кольца между родителями и потомками по
+    29→//! `|level|` — наложение. v2 разводит их по половинам: потомки (level>0) —
+    30→//! на правой полуокружности (−90°…+90°), предки (level<0) — на левой
+    31→//! (+90°…+270°); радиус = `|level|·RADIAL_RING_STEP`. Конвенция потока
+    32→//! слева→справа сохранена, наложения устранены.
+    33→//!
+    34→//! **Минимизация пересечений** (TreeH/TreeV): swap соседей в колонке +
+    35→//! вертикальные сдвиги колонок целиком + переносы на другую строку
+    36→//! (образец `scheme_layout::refine_*`); ход — строгое падение стоимости
+    37→//! (пересечения, тай-брейк — суммарная длина отрезков). Колонка семени
+    38→//! (level 0) иммунна к сдвигам — якорь. Radial — угловой barycenter
+    39→//! (эстетика), без swap/shift (кольца, не сетка).
+    40→//!
+    41→//! Детерминизм (образец v1/FR-071): сортировка по `id`/индексу, стабильные
+    42→//! сортировки, никаких итераций по `HashMap` в порядковых решениях.
+    43→
+    44→use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+    45→
+    46→use crate::model::{group_children, Canvas, NodeKind};
+    47→use crate::scheme_layout::{seg_intersects_rect, seg_len};
+    48→
+    49→/// Схема раскладки связанных карточек (уточнение владельца FR-010).
+    50→#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    51→pub enum LayoutMode {
+    52→    /// Уровни — колонками: родители слева от семени, дети справа.
+    53→    TreeHorizontal,
+    54→    /// Уровни — строками: родители сверху, дети снизу.
+    55→    TreeVertical,
+    56→    /// Корень в центре, уровни — по кругу (радиус по модулю уровня;
+    57→    /// родители — левая полуокружность, дети — правая).
+    58→    Radial,
+    59→}
+    60→
+    61→/// Зазор между колонками/строками уровней (world px).
+    62→pub const LEVEL_GAP: f32 = 80.0;
+    63→/// Зазор между соседями одного уровня (world px).
+    64→pub const SIBLING_GAP: f32 = 32.0;
+    65→/// Шаг радиуса за уровень глубины в radial-режиме (world px).
+    66→pub const RADIAL_RING_STEP: f32 = 260.0;
+    67→
+    68→/// Инфляция bbox нод при подсчёте пересечений «ребро × нода» (world px) —
+    69→/// образец `scheme_layout::CROSSING_MARGIN` / `edgegeom::AVOID_MARGIN`.
+    70→const CROSSING_MARGIN: f32 = 12.0;
+    71→/// Максимум проходов swap/insertion-оптимизации пересечений.
+    72→const MAX_REFINE_PASSES: usize = 8;
+    73→/// Максимум проходов оптимизации сдвигами колонок.
+    74→const MAX_SHIFT_PASSES: usize = 2;
+    75→/// Диапазон сдвига колонки в шагах `SIBLING_GAP` (±4 шага).
+    76→const SHIFT_STEPS: i32 = 4;
+    77→
+    78→/// План раскладки: целевые top-left позиции нод (индекс → позиция).
+    79→/// Семя в план не входит (остаётся на месте — якорь).
+    80→pub type LayoutPlan = Vec<(usize, [f32; 2])>;
+    81→
+    82→/// Прямоугольник [x, y, width, height] — образец `scheme_layout::Rect`.
+    83→type Rect = [f32; 4];
+    84→
+    85→/// Построить план авто-раскладки связанной окрестности `seed` (Sugiyama-lite).
+    86→/// Ноды без связи с семенем не затрагиваются; невалидный seed/изолированная
+    87→/// нода — пустой план. Детерминирован: обход, слоение и порядок внутри
+    88→/// уровней фиксированы (сортировка по `id`/индексу, стабильные сортировки).
+    89→pub fn plan_related_layout(canvas: &Canvas, seed: usize, mode: LayoutMode) -> LayoutPlan {
+    90→    let Some(seed_node) = canvas.nodes.get(seed) else {
+    91→        return Vec::new();
+    92→    };
+    93→
+    94→    // id → индекс (для рёбер; висячие концы игнорируются)
+    95→    let index_of: HashMap<&str, usize> = canvas
+    96→        .nodes
+    97→        .iter()
+    98→        .enumerate()
+    99→        .map(|(i, n)| (n.id.as_str(), i))
+   100→        .collect();
+   101→
+   102→    // Направленные списки смежности: out — исходящие рёбра (дети),
+   103→    // in — входящие (родители). Сортировка по id — детерминизм.
+   104→    let mut outgoing: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+   105→    let mut incoming: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+   106→    for edge in &canvas.edges {
+   107→        let (Some(from), Some(to)) = (
+   108→            index_of.get(edge.from_node.as_str()),
+   109→            index_of.get(edge.to_node.as_str()),
+   110→        ) else {
+   111→            continue;
+   112→        };
+   113→        if from == to {
+   114→            continue;
+   115→        }
+   116→        outgoing.entry(*from).or_default().insert(*to);
+   117→        incoming.entry(*to).or_default().insert(*from);
+   118→    }
+   119→
+   120→    // --- Достижимость от семени (оба направления): потомки + предки.
+   121→    // BFS по ненаправленному графу (по рёбрам обеих сторон) — кто достижим.
+   122→    let reachable: BTreeSet<usize> = {
+   123→        let mut seen: BTreeSet<usize> = BTreeSet::new();
+   124→        let mut q: VecDeque<usize> = VecDeque::new();
+   125→        seen.insert(seed);
+   126→        q.push_back(seed);
+   127→        while let Some(u) = q.pop_front() {
+   128→            for &w in outgoing.get(&u).into_iter().flatten() {
+   129→                if seen.insert(w) {
+   130→                    q.push_back(w);
+   131→                }
+   132→            }
+   133→            for &w in incoming.get(&u).into_iter().flatten() {
+   134→                if seen.insert(w) {
+   135→                    q.push_back(w);
+   136→                }
+   137→            }
+   138→        }
+   139→        seen
+   140→    };
+   141→    // Изолированное семя (без связей) — раскладывать нечего
+   142→    if reachable.len() == 1 {
+   143→        return Vec::new();
+   144→    }
+   145→
+   146→    // --- Знаковое longest-path слоение относительно семени.
+   147→    // forward_level: longest path ОТ семени по исходящим (потомки, ≥0).
+   148→    // backward_level: longest path К семени по входящим, т.е. от семени по
+   149→    // обращённому графу (предки, ≥0). Знаковый уровень = f − b.
+   150→    let forward_level = longest_path_from(seed, &reachable, &outgoing);
+   151→    let backward_level = longest_path_from(seed, &reachable, &incoming);
+   152→    let mut level: HashMap<usize, i32> = HashMap::new();
+   153→    for &v in &reachable {
+   154→        let f = forward_level.get(&v).copied().unwrap_or(0);
+   155→        let b = backward_level.get(&v).copied().unwrap_or(0);
+   156→        level.insert(v, f as i32 - b as i32);
+   157→    }
+   158→    // Семя — гарантированно 0 (f=0, b=0)
+   159→    level.insert(seed, 0);
+   160→
+   161→    // --- Колонки: знаковый уровень → порядок. Seed-порядок — текущие
+   162→    // координаты (ручные подсказки пользователя), тай-брейк по id.
+   163→    let mut columns: BTreeMap<i32, Vec<usize>> = BTreeMap::new();
+   164→    for &v in &reachable {
+   165→        columns.entry(level[&v]).or_default().push(v);
+   166→    }
+   167→    for col in columns.values_mut() {
+   168→        col.sort_by(|&a, &b| seed_order(canvas, a, b));
+   169→    }
+   170→
+   171→    // --- Barycenter: 2 свипа (по предкам, по потомкам) — ноды с общим
+   172→    // родителем собираются рядом (смысловая группировка).
+   173→    for _ in 0..2 {
+   174→        barycenter_pass(&reachable, &incoming, &mut columns);
+   175→        barycenter_pass(&reachable, &outgoing, &mut columns);
+   176→    }
+   177→
+   178→    let (seed_cx, seed_cy) = (
+   179→        seed_node.x + seed_node.width / 2.0,
+   180→        seed_node.y + seed_node.height / 2.0,
+   181→    );
+   182→
+   183→    // --- Позиции по режиму. Семя — якорь (не в плане, не двигается).
+   184→    let mut target: HashMap<usize, [f32; 2]> = HashMap::new();
+   185→    let mut rects: HashMap<usize, Rect> = HashMap::new();
+   186→    match mode {
+   187→        LayoutMode::TreeHorizontal => {
+   188→            place_tree_columns(
+   189→                canvas,
+   190→                seed,
+   191→                &columns,
+   192→                seed_cy,
+   193→                true,
+   194→                &mut target,
+   195→                &mut rects,
+   196→            );
+   197→            refine_crossings(&reachable, &outgoing, true, &mut columns, &mut rects);
+   198→            sync_targets(&rects, &mut target);
+   199→        }
+   200→        LayoutMode::TreeVertical => {
+   201→            place_tree_columns(
+   202→                canvas,
+   203→                seed,
+   204→                &columns,
+   205→                seed_cx,
+   206→                false,
+   207→                &mut target,
+   208→                &mut rects,
+   209→            );
+   210→            refine_crossings(&reachable, &outgoing, false, &mut columns, &mut rects);
+   211→            sync_targets(&rects, &mut target);
+   212→        }
+   213→        LayoutMode::Radial => {
+   214→            place_radial(
+   215→                canvas,
+   216→                seed,
+   217→                &columns,
+   218→                seed_cx,
+   219→                seed_cy,
+   220→                &mut target,
+   221→                &mut rects,
+   222→            );
+   223→        }
+   224→    }
+   225→
+   226→    // --- Группы в плане едут вместе с геометрическими детьми (translate_group
+   227→    // без мутации): дельта группы распространяется на детей, не вошедших в
+   228→    // план по рёбрам. Вложенные группы — очередью, каждая нода один раз.
+   229→    let mut queue: VecDeque<usize> = target.keys().copied().collect();
+   230→    while let Some(node) = queue.pop_front() {
+   231→        if canvas.nodes.get(node).map(|n| n.kind()) != Some(NodeKind::Group) {
+   232→            continue;
+   233→        }
+   234→        let (Some(old), Some(&new)) = (
+   235→            canvas.nodes.get(node).map(|n| [n.x, n.y]),
+   236→            target.get(&node),
+   237→        ) else {
+   238→            continue;
+   239→        };
+   240→        let delta = [new[0] - old[0], new[1] - old[1]];
+   241→        for child in group_children(canvas, node) {
+   242→            if target.contains_key(&child) || child == seed {
+   243→                continue;
+   244→            }
+   245→            let Some(c) = canvas.nodes.get(child) else {
+   246→                continue;
+   247→            };
+   248→            target.insert(child, [c.x + delta[0], c.y + delta[1]]);
+   249→            queue.push_back(child);
+   250→        }
+   251→    }
+   252→
+   253→    // Стабильный порядок применения — по индексу ноды
+   254→    let mut plan: LayoutPlan = target.into_iter().collect();
+   255→    plan.sort_by_key(|(index, _)| *index);
+   256→    plan
+   257→}
+   258→
+   259→// ===========================================================================
+   260→// Слоение (longest-path от семени, Kahn + фолбэк для циклов)
+   261→// ===========================================================================
+   262→
+   263→/// Longest-path от `seed` по рёбрам `adj` (исходящие для потомков, входящие
+   264→/// для предков): `level[seed]=0`, `level[v]=max(level[u]+1)` по всем
+   265→/// рёбрам `u→v` внутри `verts`. Циклы — детерминированный фолбэк (образец
+   266→/// `scheme_layout::layout_cluster`). Возвращает уровень только достижимых
+   267→/// от seed вершин (остальных нет в карте).
+   268→fn longest_path_from(
+   269→    seed: usize,
+   270→    verts: &BTreeSet<usize>,
+   271→    adj: &BTreeMap<usize, BTreeSet<usize>>,
+   272→) -> HashMap<usize, usize> {
+   273→    // Рёбра подграфа (оба конца в verts)
+   274→    let mut edges: Vec<(usize, usize)> = Vec::new();
+   275→    for &u in verts {
+   276→        if let Some(ts) = adj.get(&u) {
+   277→            for &v in ts {
+   278→                if verts.contains(&v) {
+   279→                    edges.push((u, v));
+   280→                }
+   281→            }
+   282→        }
+   283→    }
+   284→    // Направленная достижимость от семени (BFS по adj) — только эти вершины
+   285→    // получают уровень. Вершины вне достижимости (например, предок `a` при
+   286→    // прямом обходе от семени-потомка) НЕ попадают в карту — их знак
+   287→    // определяется другой половиной (backward_level).
+   288→    let mut directed_reach: BTreeSet<usize> = BTreeSet::new();
+   289→    directed_reach.insert(seed);
+   290→    let mut rq: VecDeque<usize> = VecDeque::new();
+   291→    rq.push_back(seed);
+   292→    while let Some(u) = rq.pop_front() {
+   293→        if let Some(ts) = adj.get(&u) {
+   294→            for &w in ts {
+   295→                if verts.contains(&w) && directed_reach.insert(w) {
+   296→                    rq.push_back(w);
+   297→                }
+   298→            }
+   299→        }
+   300→    }
+   301→    if directed_reach.len() == 1 {
+   302→        // Только семя достижимо в этом направлении — никаких потомков/предков
+   303→        return HashMap::from([(seed, 0)]);
+   304→    }
+   305→
+   306→    // in-degree внутри направленно-достижимого подграфа
+   307→    let mut in_deg: HashMap<usize, usize> = directed_reach.iter().map(|&v| (v, 0usize)).collect();
+   308→    for &(_, v) in &edges {
+   309→        if directed_reach.contains(&v) {
+   310→            if let Some(d) = in_deg.get_mut(&v) {
+   311→                *d += 1;
+   312→            }
+   313→        }
+   314→    }
+   315→
+   316→    let mut level: HashMap<usize, usize> = HashMap::new();
+   317→    let mut processed: BTreeSet<usize> = BTreeSet::new();
+   318→    let mut queued: BTreeSet<usize> = BTreeSet::new();
+   319→    let mut queue: VecDeque<usize> = VecDeque::new();
+   320→
+   321→    // Семя — стартовый слой 0. Если у семени есть входящие рёбра внутри
+   322→    // подграфа (цикл через семя), принудительно разрываем: семя всё равно
+   323→    // корень раскладки (пути считаются ОТ него).
+   324→    level.insert(seed, 0);
+   325→    in_deg.insert(seed, 0);
+   326→    queued.insert(seed);
+   327→    queue.push_back(seed);
+   328→
+   329→    while let Some(u) = queue.pop_front() {
+   330→        processed.insert(u);
+   331→        let lu = level.get(&u).copied().unwrap_or(0);
+   332→        if let Some(ts) = adj.get(&u) {
+   333→            for &w in ts {
+   334→                if !directed_reach.contains(&w) {
+   335→                    continue;
+   336→                }
+   337→                let lw = level.get(&w).copied().unwrap_or(0).max(lu + 1);
+   338→                level.insert(w, lw);
+   339→                if let Some(d) = in_deg.get_mut(&w) {
+   340→                    *d = d.saturating_sub(1);
+   341→                    if *d == 0 && !queued.contains(&w) {
+   342→                        queued.insert(w);
+   343→                        queue.push_back(w);
+   344→                    }
+   345→                }
+   346→            }
+   347→        }
+   348→    }
+   349→
+   350→    // Фолбэк для циклов (достижимые, но вне Кана): слой = max(слои
+   351→    // назначенных предков) + 1; чистый цикл — минимальная вершина (FR-071).
+   352→    let mut pending: BTreeSet<usize> = directed_reach
+   353→        .iter()
+   354→        .copied()
+   355→        .filter(|&v| !processed.contains(&v))
+   356→        .collect();
+   357→    // предки по adj (для фолбэка нужен обратный обход: кто указывает на v)
+   358→    let rev: HashMap<usize, Vec<usize>> = {
+   359→        let mut m: HashMap<usize, Vec<usize>> = HashMap::new();
+   360→        for &(u, v) in &edges {
+   361→            m.entry(v).or_default().push(u);
+   362→        }
+   363→        m
+   364→    };
+   365→    while !pending.is_empty() {
+   366→        let mut to_assign: Vec<(usize, usize)> = Vec::new();
+   367→        for &v in &pending {
+   368→            let preds: Vec<usize> = rev
+   369→                .get(&v)
+   370→                .into_iter()
+   371→                .flatten()
+   372→                .copied()
+   373→                .filter(|&p| directed_reach.contains(&p))
+   374→                .collect();
+   375→            if preds.iter().all(|&p| processed.contains(&p)) {
+   376→                let lv = preds
+   377→                    .iter()
+   378→                    .map(|&p| level.get(&p).copied().unwrap_or(0))
+   379→                    .max()
+   380→                    .unwrap_or(0)
+   381→                    + 1;
+   382→                to_assign.push((v, lv));
+   383→            }
+   384→        }
+   385→        if to_assign.is_empty() {
+   386→            if let Some(&v) = pending.iter().next() {
+   387→                let lv = rev
+   388→                    .get(&v)
+   389→                    .into_iter()
+   390→                    .flatten()
+   391→                    .copied()
+   392→                    .filter(|&p| directed_reach.contains(&p))
+   393→                    .map(|p| level.get(&p).copied().unwrap_or(0))
+   394→                    .max()
+   395→                    .unwrap_or(0)
+   396→                    + 1;
+   397→                to_assign.push((v, lv));
+   398→            }
+   399→        }
+   400→        if to_assign.is_empty() {
+   401→            break;
+   402→        }
+   403→        for (v, lv) in to_assign {
+   404→            level.insert(v, lv);
+   405→            processed.insert(v);
+   406→            pending.remove(&v);
+   407→        }
+   408→    }
+   409→
+   410→    level
+   411→}
+   412→
+   413→// ===========================================================================
+   414→// Barycenter (образец scheme_layout::barycenter_pass)
+   415→// ===========================================================================
+   416→
+   417→/// Один barycenter-проход: упорядочить каждую колонку по среднему индексу
+   418→/// соседей (предков для `incoming`, потомков для `outgoing`). Ноды без
+   419→/// соседей сохраняют позицию (stable sort по (bary, старый индекс)).
+   420→fn barycenter_pass(
+   421→    verts: &BTreeSet<usize>,
+   422→    neighbors: &BTreeMap<usize, BTreeSet<usize>>,
+   423→    columns: &mut BTreeMap<i32, Vec<usize>>,
+   424→) {
+   425→    let mut pos: HashMap<usize, usize> = HashMap::new();
+   426→    for col in columns.values() {
+   427→        for (k, &v) in col.iter().enumerate() {
+   428→            pos.insert(v, k);
+   429→        }
+   430→    }
+   431→    let keys: Vec<(i32, Vec<(f32, usize)>)> = columns
+   432→        .iter()
+   433→        .map(|(&lv, col)| {
+   434→            let keyed = col
+   435→                .iter()
+   436→                .enumerate()
+   437→                .map(|(k, &v)| {
+   438→                    let (mut sum, mut cnt) = (0.0f32, 0usize);
+   439→                    if let Some(ns) = neighbors.get(&v) {
+   440→                        for &n in ns {
+   441→                            if !verts.contains(&n) {
+   442→                                continue;
+   443→                            }
+   444→                            if let Some(&p) = pos.get(&n) {
+   445→                                sum += p as f32;
+   446→                                cnt += 1;
+   447→                            }
+   448→                        }
+   449→                    }
+   450→                    if cnt == 0 {
+   451→                        (k as f32, k)
+   452→                    } else {
+   453→                        (sum / cnt as f32, k)
+   454→                    }
+   455→                })
+   456→                .collect();
+   457→            (lv, keyed)
+   458→        })
+   459→        .collect();
+   460→    for (lv, keyed) in keys {
+   461→        let Some(col) = columns.get_mut(&lv) else {
+   462→            continue;
+   463→        };
+   464→        let mut paired: Vec<(f32, usize, usize)> = col
+   465→            .iter()
+   466→            .zip(keyed)
+   467→            .map(|(&v, (bary, old_k))| (bary, old_k, v))
+   468→            .collect();
+   469→        paired.sort_by(|a, b| {
+   470→            a.0.partial_cmp(&b.0)
+   471→                .unwrap_or(std::cmp::Ordering::Equal)
+   472→                .then(a.1.cmp(&b.1))
+   473→        });
+   474→        *col = paired.into_iter().map(|(_, _, v)| v).collect();
+   475→    }
+   476→}
+   477→
+   478→// ===========================================================================
+   479→// Позиционирование колонок (TreeHorizontal / TreeVertical) + Radial
+   480→// ===========================================================================
+   481→
+   482→/// Расставить колонки деревом: `horizontal=true` — уровни по X (колонки),
+   483→/// ряды по Y; `false` — уровни по Y (строки), ряды по X. Семя (колонка 0) —
+   484→/// якорь: его координаты не меняются. Положительные уровни — от семени в
+   485→/// сторону роста, отрицательные — в обратную; колонки центрируются на
+   486→/// `anchor_cross` (seed_cy для H, seed_cx для V) либо на среднем центре
+   487→/// размещённых предков (компактный поток, образец FR-071).
+   488→fn place_tree_columns(
+   489→    canvas: &Canvas,
+   490→    seed: usize,
+   491→    columns: &BTreeMap<i32, Vec<usize>>,
+   492→    anchor_cross: f32,
+   493→    horizontal: bool,
+   494→    target: &mut HashMap<usize, [f32; 2]>,
+   495→    rects: &mut HashMap<usize, Rect>,
+   496→) {
+   497→    let seed_node = &canvas.nodes[seed];
+   498→    let max_level = *columns.keys().max().unwrap_or(&0);
+   499→    let min_level = *columns.keys().min().unwrap_or(&0);
+   500→
+   501→    // Кумулятивные смещения уровней по главной оси.
+   502→    // Положительные — от семени в сторону роста, отрицательные — обратно.
+   503→    let mut offsets: HashMap<i32, f32> = HashMap::new();
+   504→    if horizontal {
+   505→        let mut x_right = seed_node.x + seed_node.width + LEVEL_GAP;
+   506→        for lv in 1..=max_level {
+   507→            offsets.insert(lv, x_right);
+   508→            let w = col_extent(canvas, columns.get(&lv), true);
+   509→            x_right += w + LEVEL_GAP;
+   510→        }
+   511→        let mut x_left = seed_node.x - LEVEL_GAP;
+   512→        for lv in (min_level..=-1).rev() {
+   513→            x_left -= col_extent(canvas, columns.get(&lv), true);
+   514→            offsets.insert(lv, x_left);
+   515→            x_left -= LEVEL_GAP;
+   516→        }
+   517→    } else {
+   518→        let mut y_down = seed_node.y + seed_node.height + LEVEL_GAP;
+   519→        for lv in 1..=max_level {
+   520→            offsets.insert(lv, y_down);
+   521→            let h = col_extent(canvas, columns.get(&lv), false);
+   522→            y_down += h + LEVEL_GAP;
+   523→        }
+   524→        let mut y_up = seed_node.y - LEVEL_GAP;
+   525→        for lv in (min_level..=-1).rev() {
+   526→            y_up -= col_extent(canvas, columns.get(&lv), false);
+   527→            offsets.insert(lv, y_up);
+   528→            y_up -= LEVEL_GAP;
+   529→        }
+   530→    }
+   531→
+   532→    // Расстановка: главная ось — offset[level], поперечная — стек с
+   533→    // SIBLING_GAP, центрированный на anchor_cross либо на среднем центре
+   534→    // размещённых предков (компактный поток).
+   535→    for (&lv, col) in columns {
+   536→        if lv == 0 {
+   537→            // Колонка семени: семя не двигается; прочие (цикл-0) — под семенем
+   538→            let mut y = seed_node.y + seed_node.height + SIBLING_GAP;
+   539→            let mut x = seed_node.x + seed_node.width + SIBLING_GAP;
+   540→            for &v in col {
+   541→                if v == seed {
+   542→                    continue;
+   543→                }
+   544→                let n = &canvas.nodes[v];
+   545→                let pos = if horizontal {
+   546→                    [seed_node.x, y]
+   547→                } else {
+   548→                    [x, seed_node.y]
+   549→                };
+   550→                target.insert(v, pos);
+   551→                rects.insert(v, [pos[0], pos[1], n.width, n.height]);
+   552→                if horizontal {
+   553→                    y += n.height + SIBLING_GAP;
+   554→                } else {
+   555→                    x += n.width + SIBLING_GAP;
+   556→                }
+   557→            }
+   558→            continue;
+   559→        }
+   560→        let main = offsets[&lv];
+   561→        // поперечная центровка: средний центр размещённых соседей (предков
+   562→        // для положительных уровней, потомков для отрицательных), иначе anchor
+   563→        let cross_target = avg_neighbor_cross(canvas, col, lv, rects, horizontal, anchor_cross);
+   564→        let total: f32 = col
+   565→            .iter()
+   566→            .map(|&v| {
+   567→                let n = &canvas.nodes[v];
+   568→                if horizontal {
+   569→                    n.height
+   570→                } else {
+   571→                    n.width
+   572→                }
+   573→            })
+   574→            .sum::<f32>()
+   575→            + SIBLING_GAP * col.len().saturating_sub(1) as f32;
+   576→        let mut cross = cross_target - total / 2.0;
+   577→        for &v in col {
+   578→            let n = &canvas.nodes[v];
+   579→            let pos = if horizontal {
+   580→                [main, cross]
+   581→            } else {
+   582→                [cross, main]
+   583→            };
+   584→            target.insert(v, pos);
+   585→            rects.insert(v, [pos[0], pos[1], n.width, n.height]);
+   586→            cross += if horizontal {
+   587→                n.height + SIBLING_GAP
+   588→            } else {
+   589→                n.width + SIBLING_GAP
+   590→            };
+   591→        }
+   592→    }
+   593→}
+   594→
+   595→/// Максимальный размер колонки по главной оси (width для H, height для V).
+   596→fn col_extent(canvas: &Canvas, col: Option<&Vec<usize>>, horizontal: bool) -> f32 {
+   597→    col.into_iter()
+   598→        .flatten()
+   599→        .map(|&v| {
+   600→            let n = &canvas.nodes[v];
+   601→            if horizontal {
+   602→                n.width
+   603→            } else {
+   604→                n.height
+   605→            }
+   606→        })
+   607→        .fold(0.0f32, f32::max)
+   608→}
+   609→
+   610→/// Средний центр соседей (предков для lvl>0, потомков для lvl<0) по
+   611→/// поперечной оси — для компактной центровки колонки. Нет размещённых —
+   612→/// `fallback` (anchor_cross).
+   613→fn avg_neighbor_cross(
+   614→    canvas: &Canvas,
+   615→    col: &[usize],
+   616→    lvl: i32,
+   617→    rects: &HashMap<usize, Rect>,
+   618→    horizontal: bool,
+   619→    fallback: f32,
+   620→) -> f32 {
+   621→    // Соседи по противоположному направлению: для потомков (lvl>0) — предки
+   622→    // (incoming), для предков (lvl<0) — потомки (outgoing). Это rebuild
+   623→    // без передачи adj — используем canvas.edges напрямую.
+   624→    let index_of: HashMap<&str, usize> = canvas
+   625→        .nodes
+   626→        .iter()
+   627→        .enumerate()
+   628→        .map(|(i, n)| (n.id.as_str(), i))
+   629→        .collect();
+   630→    let want_parent = lvl > 0;
+   631→    let mut centers: Vec<f32> = Vec::new();
+   632→    for &v in col {
+   633→        for e in &canvas.edges {
+   634→            let (Some(&a), Some(&b)) = (
+   635→                index_of.get(e.from_node.as_str()),
+   636→                index_of.get(e.to_node.as_str()),
+   637→            ) else {
+   638→                continue;
+   639→            };
+   640→            let (nb, me) = if want_parent { (a, b) } else { (b, a) };
+   641→            if me == v && rects.contains_key(&nb) {
+   642→                let r = rects[&nb];
+   643→                let c = if horizontal {
+   644→                    r[1] + r[3] / 2.0
+   645→                } else {
+   646→                    r[0] + r[2] / 2.0
+   647→                };
+   648→                centers.push(c);
+   649→            }
+   650→        }
+   651→    }
+   652→    if centers.is_empty() {
+   653→        fallback
+   654→    } else {
+   655→        centers.iter().sum::<f32>() / centers.len() as f32
+   656→    }
+   657→}
+   658→
+   659→/// Radial: кольца по |level|, родители (level<0) — левая полуокружность
+   660→/// (+90°…+270°), потомки (level>0) — правая (−90°…+90°); семя — центр.
+   661→/// Угловой barycenter (порядок по среднему углу соседей) для эстетики.
+   662→fn place_radial(
+   663→    canvas: &Canvas,
+   664→    seed: usize,
+   665→    columns: &BTreeMap<i32, Vec<usize>>,
+   666→    seed_cx: f32,
+   667→    seed_cy: f32,
+   668→    target: &mut HashMap<usize, [f32; 2]>,
+   669→    rects: &mut HashMap<usize, Rect>,
+   670→) {
+   671→    // Раздельные кольца для родителей и потомков: ключ (|level|, side).
+   672→    // side: 0 — потомки (правая полуокружность), 1 — предки (левая).
+   673→    let mut rings: BTreeMap<(u32, u8), Vec<usize>> = BTreeMap::new();
+   674→    for (&lv, col) in columns {
+   675→        if lv == 0 {
+   676→            continue;
+   677→        }
+   678→        let side: u8 = if lv < 0 { 1 } else { 0 };
+   679→        rings
+   680→            .entry((lv.unsigned_abs(), side))
+   681→            .or_default()
+   682→            .extend(col);
+   683→    }
+   684→
+   685→    // Угловой barycenter: упорядочить каждое кольцо по среднему углу соседей.
+   686→    // Соседи — по canvas.edges (ненаправленно, в пределах reachable).
+   687→    let placed_angle = |v: usize, rects: &HashMap<usize, Rect>| -> Option<f32> {
+   688→        let r = rects.get(&v)?;
+   689→        let cx = r[0] + r[2] / 2.0 - seed_cx;
+   690→        let cy = r[1] + r[3] / 2.0 - seed_cy;
+   691→        Some(cy.atan2(cx))
+   692→    };
+   693→    for _ in 0..2 {
+   694→        for ((depth, side), ring) in rings.clone() {
+   695→            let mut keyed: Vec<(f32, usize)> = ring
+   696→                .iter()
+   697→                .enumerate()
+   698→                .map(|(k, &v)| {
+   699→                    let ns = neighbors_of(canvas, v);
+   700→                    let mut sum = 0.0f32;
+   701→                    let mut cnt = 0usize;
+   702→                    for n in ns {
+   703→                        if let Some(a) = placed_angle(n, rects) {
+   704→                            sum += a;
+   705→                            cnt += 1;
+   706→                        }
+   707→                    }
+   708→                    let bary = if cnt == 0 { k as f32 } else { sum / cnt as f32 };
+   709→                    (bary, v)
+   710→                })
+   711→                .collect();
+   712→            keyed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+   713→            rings.insert((depth, side), keyed.into_iter().map(|(_, v)| v).collect());
+   714→        }
+   715→    }
+   716→
+   717→    // Расстановка по полуокружностям с центрированием на середине стороны:
+   718→    // потомки — вокруг 0° (справа), предки — вокруг 180° (слева). Каждая
+   719→    // сторона занимает инсет-SPAN (< π) — гарантированный зазор на вертикалях
+   720→    // (±90°), ноды разных сторон не сливаются. Одиночная нода — в центре
+   721→    // стороны (0° / 180°), не на границе.
+   722→    let _ = seed; // семя не двигается (не в target)
+   723→    const SPAN: f32 = std::f32::consts::PI * 0.84; // инсет ~8% с каждого края
+   724→    for ((depth, side), ring) in &rings {
+   725→        let radius = *depth as f32 * RADIAL_RING_STEP;
+   726→        let count = ring.len() as f32;
+   727→        if count == 0.0 {
+   728→            continue;
+   729→        }
+   730→        let center = if *side == 0 {
+   731→            0.0f32
+   732→        } else {
+   733→            std::f32::consts::PI
+   734→        };
+   735→        let step = if count > 1.0 {
+   736→            SPAN / (count - 1.0)
+   737→        } else {
+   738→            0.0
+   739→        };
+   740→        let start = center - SPAN / 2.0;
+   741→        for (k, &v) in ring.iter().enumerate() {
+   742→            // Одиночная нода — в центре стороны (0° / 180°); несколько —
+   743→            // равномерно по [center-SPAN/2, center+SPAN/2].
+   744→            let angle = if count <= 1.0 {
+   745→                center
+   746→            } else {
+   747→                start + k as f32 * step
+   748→            };
+   749→            let cx = seed_cx + angle.cos() * radius;
+   750→            let cy = seed_cy + angle.sin() * radius;
+   751→            let n = &canvas.nodes[v];
+   752→            target.insert(v, [cx - n.width / 2.0, cy - n.height / 2.0]);
+   753→            rects.insert(
+   754→                v,
+   755→                [cx - n.width / 2.0, cy - n.height / 2.0, n.width, n.height],
+   756→            );
+   757→        }
+   758→    }
+   759→}
+   760→
+   761→/// Соседи ноды по рёбрам (ненаправленно, оба направления).
+   762→fn neighbors_of(canvas: &Canvas, v: usize) -> Vec<usize> {
+   763→    let index_of: HashMap<&str, usize> = canvas
+   764→        .nodes
+   765→        .iter()
+   766→        .enumerate()
+   767→        .map(|(i, n)| (n.id.as_str(), i))
+   768→        .collect();
+   769→    let mut out: Vec<usize> = Vec::new();
+   770→    for e in &canvas.edges {
+   771→        let (Some(&a), Some(&b)) = (
+   772→            index_of.get(e.from_node.as_str()),
+   773→            index_of.get(e.to_node.as_str()),
+   774→        ) else {
+   775→            continue;
+   776→        };
+   777→        if a == v {
+   778→            out.push(b);
+   779→        } else if b == v {
+   780→            out.push(a);
+   781→        }
+   782→    }
+   783→    out
+   784→}
+   785→
+   786→// ===========================================================================
+   787→// Минимизация пересечений «ребро × нода» (swap + shift + insertion)
+   788→// ===========================================================================
+   789→
+   790→/// Сбросить top-left позиции из rects в target (после refine).
+   791→fn sync_targets(rects: &HashMap<usize, Rect>, target: &mut HashMap<usize, [f32; 2]>) {
+   792→    for (v, r) in rects {
+   793→        target.insert(*v, [r[0], r[1]]);
+   794→    }
+   795→}
+   796→
+   797→/// Оптимизация пересечений: swap соседей в колонке + поперечные сдвиги
+   798→/// колонок + переносы на другую строку. Колонка семени (level 0) иммунна к
+   799→/// сдвигам (якорь). Ход — строгое падение (пересечения, тай-брейк — длина).
+   800→/// `horizontal` — направление поперечного сдвига: true → по Y (TreeH),
+   801→/// false → по X (TreeV).
+   802→fn refine_crossings(
+   803→    verts: &BTreeSet<usize>,
+   804→    outgoing: &BTreeMap<usize, BTreeSet<usize>>,
+   805→    horizontal: bool,
+   806→    columns: &mut BTreeMap<i32, Vec<usize>>,
+   807→    rects: &mut HashMap<usize, Rect>,
+   808→) {
+   809→    // Рёбра подграфа (дедуп BTreeSet-смежностью)
+   810→    let mut edges: Vec<(usize, usize)> = Vec::new();
+   811→    for &u in verts {
+   812→        if let Some(ts) = outgoing.get(&u) {
+   813→            for &v in ts {
+   814→                if verts.contains(&v) {
+   815→                    edges.push((u, v));
+   816→                }
+   817→            }
+   818→        }
+   819→    }
+   820→    refine_by_swaps(&edges, columns, rects);
+   821→    refine_by_column_shifts(&edges, horizontal, columns, rects);
+   822→    refine_by_swaps(&edges, columns, rects);
+   823→    refine_by_insertions(&edges, columns, rects);
+   824→}
+   825→
+   826→/// Центр прямоугольника (для direction-agnostic модели пересечений).
+   827→fn center(r: Rect) -> [f32; 2] {
+   828→    [r[0] + r[2] / 2.0, r[1] + r[3] / 2.0]
+   829→}
+   830→
+   831→/// Стоимость колонки: пересечения всех рёбер с её прямоугольниками (старое
+   832→/// `rects` vs гипотетическое `new_rects`) + суммарная длина инцидентных
+   833→/// отрезков. Концы ребра (u,v) исключаются из проверки (сегмент центр→центр
+   834→/// всегда «пересекает» свои концы). Образец `scheme_layout::column_state_cost`.
+   835→fn column_state_cost(
+   836→    edges: &[(usize, usize)],
+   837→    col: &[usize],
+   838→    rects: &HashMap<usize, Rect>,
+   839→    new_rects: &HashMap<usize, Rect>,
+   840→) -> (u32, u32, f32, f32) {
+   841→    let rect_of = |node: usize, new: bool| -> Rect {
+   842→        if new {
+   843→            new_rects
+   844→                .get(&node)
+   845→                .copied()
+   846→                .unwrap_or_else(|| rects.get(&node).copied().unwrap_or([0.0; 4]))
+   847→        } else {
+   848→            rects.get(&node).copied().unwrap_or([0.0; 4])
+   849→        }
+   850→    };
+   851→    let (mut cross_old, mut cross_new) = (0u32, 0u32);
+   852→    let (mut len_old, mut len_new) = (0.0f32, 0.0f32);
+   853→    for &(u, v) in edges {
+   854→        let seg_old = (center(rect_of(u, false)), center(rect_of(v, false)));
+   855→        let seg_new = (center(rect_of(u, true)), center(rect_of(v, true)));
+   856→        for &idx in col {
+   857→            if idx != u && idx != v {
+   858→                if seg_intersects_rect(seg_old.0, seg_old.1, rect_of(idx, false), CROSSING_MARGIN) {
+   859→                    cross_old += 1;
+   860→                }
+   861→                if seg_intersects_rect(seg_new.0, seg_new.1, rect_of(idx, true), CROSSING_MARGIN) {
+   862→                    cross_new += 1;
+   863→                }
+   864→            }
+   865→        }
+   866→        if col.contains(&u) || col.contains(&v) {
+   867→            len_old += seg_len(seg_old.0, seg_old.1);
+   868→            len_new += seg_len(seg_new.0, seg_new.1);
+   869→        }
+   870→    }
+   871→    (cross_old, cross_new, len_old, len_new)
+   872→}
+   873→
+   874→/// Пере-стек колонки от текущего верха (порядок `order`) — гипотетические
+   875→/// прямоугольники с накопительным `SIBLING_GAP`. Образец
+   876→/// `scheme_layout::restacked_column`.
+   877→fn restacked_column(col: &[usize], rects: &HashMap<usize, Rect>) -> HashMap<usize, Rect> {
+   878→    let mut out = HashMap::new();
+   879→    if let Some(&first) = col.first() {
+   880→        let (x, top) = match rects.get(&first) {
+   881→            Some(r) => (r[0], r[1]),
+   882→            None => (0.0, 0.0),
+   883→        };
+   884→        let mut y = top;
+   885→        for &v in col {
+   886→            let (w, h) = match rects.get(&v) {
+   887→                Some(r) => (r[2], r[3]),
+   888→                None => (0.0, 0.0),
+   889→            };
+   890→            out.insert(v, [x, y, w, h]);
+   891→            y += h + SIBLING_GAP;
+   892→        }
+   893→    }
+   894→    out
+   895→}
+   896→
+   897→/// Swap соседних нод в колонке. Пере-стек всей колонки; ход при строгом
+   898→/// падении (пересечения, тай-брейк — длина). Ограничено `MAX_REFINE_PASSES`.
+   899→fn refine_by_swaps(
+   900→    edges: &[(usize, usize)],
+   901→    columns: &mut BTreeMap<i32, Vec<usize>>,
+   902→    rects: &mut HashMap<usize, Rect>,
+   903→) {
+   904→    for _pass in 0..MAX_REFINE_PASSES {
+   905→        let mut changed = false;
+   906→        let levels: Vec<i32> = columns.keys().copied().collect();
+   907→        for lv in levels {
+   908→            let col = columns.get(&lv).cloned().unwrap_or_default();
+   909→            for pair in col.windows(2) {
+   910→                let (a, b) = (pair[0], pair[1]);
+   911→                if rects.get(&a).is_none() || rects.get(&b).is_none() {
+   912→                    continue;
+   913→                }
+   914→                let mut swapped = col.clone();
+   915→                if let (Some(pa), Some(pb)) = (
+   916→                    swapped.iter().position(|&x| x == a),
+   917→                    swapped.iter().position(|&x| x == b),
+   918→                ) {
+   919→                    swapped.swap(pa, pb);
+   920→                }
+   921→                let new_rects = restacked_column(&swapped, rects);
+   922→                let (cross_old, cross_new, len_old, len_new) =
+   923→                    column_state_cost(edges, &col, rects, &new_rects);
+   924→                let improves =
+   925→                    cross_new < cross_old || (cross_new == cross_old && len_new < len_old);
+   926→                if improves {
+   927→                    if let Some(c) = columns.get_mut(&lv) {
+   928→                        if let (Some(pa), Some(pb)) = (
+   929→                            c.iter().position(|&x| x == a),
+   930→                            c.iter().position(|&x| x == b),
+   931→                        ) {
+   932→                            c.swap(pa, pb);
+   933→                        }
+   934→                    }
+   935→                    for (v, r) in new_rects {
+   936→                        rects.insert(v, r);
+   937→                    }
+   938→                    changed = true;
+   939→                }
+   940→            }
+   941→        }
+   942→        if !changed {
+   943→            break;
+   944→        }
+   945→    }
+   946→}
+   947→
+   948→/// Перенос ноды на другую строку колонки (обобщение swap). Строгое
+   949→/// улучшение против текущего состояния. Ограничено `MAX_REFINE_PASSES`.
+   950→fn refine_by_insertions(
+   951→    edges: &[(usize, usize)],
+   952→    columns: &mut BTreeMap<i32, Vec<usize>>,
+   953→    rects: &mut HashMap<usize, Rect>,
+   954→) {
+   955→    for _pass in 0..MAX_REFINE_PASSES {
+   956→        let mut changed = false;
+   957→        let levels: Vec<i32> = columns.keys().copied().collect();
+   958→        for lv in levels {
+   959→            let col = columns.get(&lv).cloned().unwrap_or_default();
+   960→            if col.len() < 2 {
+   961→                continue;
+   962→            }
+   963→            'node: for &v in &col {
+   964→                if rects.get(&v).is_none() {
+   965→                    continue;
+   966→                }
+   967→                let from = match col.iter().position(|&x| x == v) {
+   968→                    Some(p) => p,
+   969→                    None => continue,
+   970→                };
+   971→                let (cross_old, _, _, _) = column_state_cost(edges, &col, rects, rects);
+   972→                let mut best: Option<InsertionMove> = None;
+   973→                for to in 0..col.len() {
+   974→                    if to == from {
+   975→                        continue;
+   976→                    }
+   977→                    let mut order = col.clone();
+   978→                    order.remove(from);
+   979→                    order.insert(to, v);
+   980→                    let new_rects = restacked_column(&order, rects);
+   981→                    let (_, cross_new, _, len_new) =
+   982→                        column_state_cost(edges, &col, rects, &new_rects);
+   983→                    let cur = (cross_old, total_len(edges, &col, rects));
+   984→                    let cand = (cross_new, len_new);
+   985→                    if cand >= cur {
+   986→                        continue;
+   987→                    }
+   988→                    let better = match &best {
+   989→                        None => true,
+   990→                        Some(InsertionMove { cost, len, .. }) => cand < (*cost, *len),
+   991→                    };
+   992→                    if better {
+   993→                        best = Some(InsertionMove {
+   994→                            cost: cross_new,
+   995→                            len: len_new,
+   996→                            order,
+   997→                            rects: new_rects,
+   998→                        });
+   999→                    }
+  1000→                }
+  1001→                if let Some(InsertionMove {
+  1002→                    order,
+  1003→                    rects: new_rects,
+  1004→                    ..
+  1005→                }) = best
+  1006→                {
+  1007→                    if let Some(c) = columns.get_mut(&lv) {
+  1008→                        *c = order;
+  1009→                    }
+  1010→                    for (u, r) in new_rects {
+  1011→                        rects.insert(u, r);
+  1012→                    }
+  1013→                    changed = true;
+  1014→                    continue 'node;
+  1015→                }
+  1016→            }
+  1017→        }
+  1018→        if !changed {
+  1019→            break;
+  1020→        }
+  1021→    }
+  1022→}
+  1023→
+  1024→struct InsertionMove {
+  1025→    cost: u32,
+  1026→    len: f32,
+  1027→    order: Vec<usize>,
+  1028→    rects: HashMap<usize, Rect>,
+  1029→}
+  1030→
+  1031→/// Суммарная длина инцидентных колонке отрезков (тай-брейк).
+  1032→fn total_len(edges: &[(usize, usize)], col: &[usize], rects: &HashMap<usize, Rect>) -> f32 {
+  1033→    let mut length = 0.0f32;
+  1034→    for &(u, v) in edges {
+  1035→        if !col.contains(&u) && !col.contains(&v) {
+  1036→            continue;
+  1037→        }
+  1038→        let (Some(&ru), Some(&rv)) = (rects.get(&u), rects.get(&v)) else {
+  1039→            continue;
+  1040→        };
+  1041→        length += seg_len(center(ru), center(rv));
+  1042→    }
+  1043→    length
+  1044→}
+  1045→
+  1046→/// Вертикальные/горизонтальные сдвиги колонок целиком (шаг `SIBLING_GAP`,
+  1047→/// ±`SHIFT_STEPS`). Колонка level 0 (семя) НЕ сдвигается — якорь.
+  1048→/// `horizontal=true` → сдвиг по Y (TreeH), `false` → по X (TreeV). Полная
+  1049→/// стоимость всех рёбер против всех вершин; строгое улучшение (тай-брейк — длина).
+  1050→fn refine_by_column_shifts(
+  1051→    edges: &[(usize, usize)],
+  1052→    horizontal: bool,
+  1053→    columns: &mut BTreeMap<i32, Vec<usize>>,
+  1054→    rects: &mut HashMap<usize, Rect>,
+  1055→) {
+  1056→    let verts: BTreeSet<usize> = columns.values().flatten().copied().collect();
+  1057→    let total_cost = |rects: &HashMap<usize, Rect>| -> (u32, f32) {
+  1058→        let (mut crossings, mut length) = (0u32, 0.0f32);
+  1059→        for &(u, v) in edges {
+  1060→            let (Some(&ru), Some(&rv)) = (rects.get(&u), rects.get(&v)) else {
+  1061→                continue;
+  1062→            };
+  1063→            let p0 = center(ru);
+  1064→            let p1 = center(rv);
+  1065→            length += seg_len(p0, p1);
+  1066→            for &w in &verts {
+  1067→                if w == u || w == v {
+  1068→                    continue;
+  1069→                }
+  1070→                let Some(&rw) = rects.get(&w) else {
+  1071→                    continue;
+  1072→                };
+  1073→                if seg_intersects_rect(p0, p1, rw, CROSSING_MARGIN) {
+  1074→                    crossings += 1;
+  1075→                }
+  1076→            }
+  1077→        }
+  1078→        (crossings, length)
+  1079→    };
+  1080→    // Главная ось определяется режимом: TreeH — сдвиг по Y, TreeV — по X.
+  1081→    for _pass in 0..MAX_SHIFT_PASSES {
+  1082→        let mut changed = false;
+  1083→        let levels: Vec<i32> = columns.keys().copied().collect();
+  1084→        for lv in levels {
+  1085→            if lv == 0 {
+  1086→                continue; // колонка семени — якорь
+  1087→            }
+  1088→            let Some(col) = columns.get(&lv).cloned() else {
+  1089→                continue;
+  1090→            };
+  1091→            if col.is_empty() {
+  1092→                continue;
+  1093→            }
+  1094→            let (mut best_shift, mut best_cost) = (0.0f32, total_cost(rects));
+  1095→            for step in -SHIFT_STEPS..=SHIFT_STEPS {
+  1096→                if step == 0 {
+  1097→                    continue;
+  1098→                }
+  1099→                let shift = step as f32 * SIBLING_GAP;
+  1100→                let mut trial = rects.clone();
+  1101→                for &v in &col {
+  1102→                    if let Some(r) = trial.get_mut(&v) {
+  1103→                        if horizontal {
+  1104→                            r[1] += shift;
+  1105→                        } else {
+  1106→                            r[0] += shift;
+  1107→                        }
+  1108→                    }
+  1109→                }
+  1110→                let cost = total_cost(&trial);
+  1111→                if cost.0 < best_cost.0 || (cost.0 == best_cost.0 && cost.1 < best_cost.1) {
+  1112→                    best_cost = cost;
+  1113→                    best_shift = shift;
+  1114→                }
+  1115→            }
+  1116→            if best_shift != 0.0 {
+  1117→                for &v in &col {
+  1118→                    if let Some(r) = rects.get_mut(&v) {
+  1119→                        if horizontal {
+  1120→                            r[1] += best_shift;
+  1121→                        } else {
+  1122→                            r[0] += best_shift;
+  1123→                        }
+  1124→                    }
+  1125→                }
+  1126→                changed = true;
+  1127→            }
+  1128→        }
+  1129→        if !changed {
+  1130→            break;
+  1131→        }
+  1132→    }
+  1133→}
+  1134→
+  1135→// ===========================================================================
+  1136→// Утилиты
+  1137→// ===========================================================================
+  1138→
+  1139→/// Seed-порядок: текущие координаты (ручные подсказки пользователя),
+  1140→/// тай-брейк по id — детерминизм (образец `scheme_layout::seed_order`).
+  1141→fn seed_order(canvas: &Canvas, a: usize, b: usize) -> std::cmp::Ordering {
+  1142→    let (na, nb) = (&canvas.nodes[a], &canvas.nodes[b]);
+  1143→    na.x.partial_cmp(&nb.x)
+  1144→        .unwrap_or(std::cmp::Ordering::Equal)
+  1145→        .then(na.y.partial_cmp(&nb.y).unwrap_or(std::cmp::Ordering::Equal))
+  1146→        .then(na.id.cmp(&nb.id))
+  1147→}
+  1148→
+  1149→#[cfg(test)]
+  1150→mod tests {
+  1151→    use super::*;
+  1152→    use crate::model::{Edge, Node};
+  1153→
+  1154→    fn chain_canvas() -> Canvas {
+  1155→        // a — b — c, ветвь b — d; e — без связей (не должен двигаться)
+  1156→        let mut canvas = Canvas::default();
+  1157→        canvas.nodes.push(Node::text("a", "a", 0.0, 0.0));
+  1158→        canvas.nodes.push(Node::text("b", "b", 300.0, 300.0));
+  1159→        canvas.nodes.push(Node::text("c", "c", 900.0, 900.0));
+  1160→        canvas.nodes.push(Node::text("d", "d", 1200.0, 0.0));
+  1161→        canvas.nodes.push(Node::text("e", "e", 1500.0, 1500.0));
+  1162→        canvas.edges.push(Edge::new("e1", "a", None, "b", None));
+  1163→        canvas.edges.push(Edge::new("e2", "b", None, "c", None));
+  1164→        // Ветвление b–d (по примеру проверки FR-010: d — справа/снизу)
+  1165→        canvas.edges.push(Edge::new("e3", "b", None, "d", None));
+  1166→        canvas
+  1167→    }
+  1168→
+  1169→    fn overlaps(canvas: &Canvas, plan: &LayoutPlan) -> bool {
+  1170→        let rects: Vec<[f32; 4]> = plan
+  1171→            .iter()
+  1172→            .filter_map(|(i, [x, y])| canvas.nodes.get(*i).map(|n| [*x, *y, n.width, n.height]))
+  1173→            .collect();
+  1174→        for i in 0..rects.len() {
+  1175→            for j in (i + 1)..rects.len() {
+  1176→                let [ax, ay, aw, ah] = rects[i];
+  1177→                let [bx, by, bw, bh] = rects[j];
+  1178→                if ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah {
+  1179→                    return true;
+  1180→                }
+  1181→            }
+  1182→        }
+  1183→        false
+  1184→    }
+  1185→
+  1186→    #[test]
+  1187→    fn tree_horizontal_chain() {
+  1188→        let canvas = chain_canvas();
+  1189→        let plan = plan_related_layout(&canvas, 1, LayoutMode::TreeHorizontal);
+  1190→        // e не связан с b — в плане нет; семя b не двигается
+  1191→        assert_eq!(plan.len(), 3, "{plan:?}");
+  1192→        assert!(plan.iter().all(|(i, _)| *i != 1 && *i != 4));
+  1193→        let by_id: HashMap<usize, [f32; 2]> = plan.iter().copied().collect();
+  1194→        let b = &canvas.nodes[1];
+  1195→        let (a, c, d) = (by_id[&0], by_id[&2], by_id[&3]);
+  1196→        // a — колонка слева от семени, c и d — справа
+  1197→        assert!(a[0] < b.x, "a левее b");
+  1198→        assert!(c[0] > b.x + b.width, "c правее b");
+  1199→        assert!(d[0] > b.x + b.width, "d правее b");
+  1200→        // c и d в одной колонке
+  1201→        assert!((c[0] - d[0]).abs() < f32::EPSILON);
+  1202→        // Без пересечений bbox
+  1203→        assert!(!overlaps(&canvas, &plan), "{plan:?}");
+  1204→    }
+  1205→
+  1206→    #[test]
+  1207→    fn tree_vertical_chain() {
+  1208→        let canvas = chain_canvas();
+  1209→        let plan = plan_related_layout(&canvas, 1, LayoutMode::TreeVertical);
+  1210→        let by_id: HashMap<usize, [f32; 2]> = plan.iter().copied().collect();
+  1211→        let b = &canvas.nodes[1];
+  1212→        let (a, c, d) = (by_id[&0], by_id[&2], by_id[&3]);
+  1213→        assert!(a[1] < b.y, "a выше b");
+  1214→        assert!(c[1] > b.y + b.height, "c ниже b");
+  1215→        assert!((c[1] - d[1]).abs() < f32::EPSILON, "c и d в одной строке");
+  1216→        assert!(!overlaps(&canvas, &plan));
+  1217→    }
+  1218→
+  1219→    #[test]
+  1220→    fn radial_rings() {
+  1221→        let canvas = chain_canvas();
+  1222→        let plan = plan_related_layout(&canvas, 1, LayoutMode::Radial);
+  1223→        let by_id: HashMap<usize, [f32; 2]> = plan.iter().copied().collect();
+  1224→        let b = &canvas.nodes[1];
+  1225→        let b_c = [b.x + b.width / 2.0, b.y + b.height / 2.0];
+  1226→        // Все соседи на первом кольце: одинаковое расстояние центров от семени
+  1227→        let center_dist = |i: usize| -> f32 {
+  1228→            let [x, y] = by_id[&i];
+  1229→            let n = &canvas.nodes[i];
+  1230→            let cx = x + n.width / 2.0;
+  1231→            let cy = y + n.height / 2.0;
+  1232→            ((cx - b_c[0]).powi(2) + (cy - b_c[1]).powi(2)).sqrt()
+  1233→        };
+  1234→        let (da, dc, dd) = (center_dist(0), center_dist(2), center_dist(3));
+  1235→        assert!(
+  1236→            (da - RADIAL_RING_STEP).abs() < 1.0,
+  1237→            "a на первом кольце: {da}"
+  1238→        );
+  1239→        assert!(
+  1240→            (dc - da).abs() < 1.0 && (dd - da).abs() < 1.0,
+  1241→            "одно кольцо"
+  1242→        );
+  1243→        assert!(!overlaps(&canvas, &plan));
+  1244→    }
+  1245→
+  1246→    #[test]
+  1247→    fn radial_parent_child_separated() {
+  1248→        // Семя b с родителем a (level −1) и ребёнком c (level +1): родители
+  1249→        // и потомки на разных полуокружностях → не накладываются.
+  1250→        let mut canvas = Canvas::default();
+  1251→        canvas.nodes.push(Node::text("a", "a", 0.0, 0.0));
+  1252→        canvas.nodes.push(Node::text("b", "b", 400.0, 0.0));
+  1253→        canvas.nodes.push(Node::text("c", "c", 800.0, 0.0));
+  1254→        canvas.nodes.push(Node::text("d", "d", 1200.0, 0.0));
+  1255→        canvas.edges.push(Edge::new("e1", "a", None, "b", None));
+  1256→        canvas.edges.push(Edge::new("e2", "b", None, "c", None));
+  1257→        canvas.edges.push(Edge::new("e3", "b", None, "d", None));
+  1258→        let plan = plan_related_layout(&canvas, 1, LayoutMode::Radial);
+  1259→        let by_id: HashMap<usize, [f32; 2]> = plan.iter().copied().collect();
+  1260→        let b = &canvas.nodes[1];
+  1261→        let b_c = [b.x + b.width / 2.0, b.y + b.height / 2.0];
+  1262→        // a (предок) — слева от семени (x < b_c[0]); c,d (потомки) — справа
+  1263→        let a_c = by_id[&0][0] + canvas.nodes[0].width / 2.0;
+  1264→        let c_c = by_id[&2][0] + canvas.nodes[2].width / 2.0;
+  1265→        let d_c = by_id[&3][0] + canvas.nodes[3].width / 2.0;
+  1266→        assert!(
+  1267→            a_c < b_c[0],
+  1268→            "предок a слева от семени: a_c={a_c} b_c={}",
+  1269→            b_c[0]
+  1270→        );
+  1271→        assert!(c_c > b_c[0], "потомок c справа: c_c={c_c}");
+  1272→        assert!(d_c > b_c[0], "потомок d справа: d_c={d_c}");
+  1273→        assert!(!overlaps(&canvas, &plan), "без наложений bbox");
+  1274→    }
+  1275→
+  1276→    #[test]
+  1277→    fn cycles_terminate() {
+  1278→        let mut canvas = Canvas::default();
+  1279→        canvas.nodes.push(Node::text("a", "a", 0.0, 0.0));
+  1280→        canvas.nodes.push(Node::text("b", "b", 300.0, 300.0));
+  1281→        canvas.edges.push(Edge::new("e1", "a", None, "b", None));
+  1282→        canvas.edges.push(Edge::new("e2", "b", None, "a", None));
+  1283→        let plan = plan_related_layout(&canvas, 0, LayoutMode::TreeHorizontal);
+  1284→        assert_eq!(plan.len(), 1, "цикл a↔b не зависает, b в плане");
+  1285→    }
+  1286→
+  1287→    #[test]
+  1288→    fn invalid_seed_and_isolated() {
+  1289→        let canvas = chain_canvas();
+  1290→        assert!(plan_related_layout(&canvas, 99, LayoutMode::Radial).is_empty());
+  1291→        // Изолированная нода — пустой план
+  1292→        assert!(plan_related_layout(&canvas, 4, LayoutMode::Radial).is_empty());
+  1293→    }
+  1294→
+  1295→    #[test]
+  1296→    fn determinism() {
+  1297→        let canvas = chain_canvas();
+  1298→        let p1 = plan_related_layout(&canvas, 1, LayoutMode::TreeHorizontal);
+  1299→        let p2 = plan_related_layout(&canvas, 1, LayoutMode::TreeHorizontal);
+  1300→        assert_eq!(p1, p2);
+  1301→    }
+  1302→
+  1303→    #[test]
+  1304→    fn group_moves_children_once() {
+  1305→        // b — группа с геометрическим ребёнком kid; группа связана с a
+  1306→        let mut canvas = Canvas::default();
+  1307→        canvas.nodes.push(Node::text("a", "a", 0.0, 0.0));
+  1308→        canvas
+  1309→            .nodes
+  1310→            .push(Node::group("b", 300.0, 300.0, 400.0, 300.0));
+  1311→        canvas.nodes.push(Node::text("kid", "kid", 350.0, 350.0));
+  1312→        canvas.nodes.push(Node::text("far", "far", 2000.0, 2000.0));
+  1313→        canvas.edges.push(Edge::new("e1", "a", None, "b", None));
+  1314→        let plan = plan_related_layout(&canvas, 0, LayoutMode::TreeHorizontal);
+  1315→        let by_id: HashMap<usize, [f32; 2]> = plan.iter().copied().collect();
+  1316→        // kid в плане вместе с группой (тот же дельта-вектор)
+  1317→        assert_eq!(
+  1318→            by_id[&2][0] - 350.0,
+  1319→            by_id[&1][0] - 300.0,
+  1320→            "kid едет с группой"
+  1321→        );
+  1322→        assert_eq!(by_id[&2][1] - 350.0, by_id[&1][1] - 300.0);
+  1323→        assert!(!by_id.contains_key(&3), "far не тронут");
+  1324→    }
+  1325→
+  1326→    /// DAG merge-point: d достижима через b→d и b→c→d; v1 давала 1 уровень,
+  1327→    /// v2 (longest-path) — корректный макс. Проверяем: d на уровне c+1.
+  1328→    #[test]
+  1329→    fn dag_merge_point_levels() {
+  1330→        // a → b → c → d, и b → d (два пути к d). Сея a.
+  1331→        let mut canvas = Canvas::default();
+  1332→        canvas.nodes.push(Node::text("a", "a", 0.0, 0.0));
+  1333→        canvas.nodes.push(Node::text("b", "b", 300.0, 0.0));
+  1334→        canvas.nodes.push(Node::text("c", "c", 600.0, 0.0));
+  1335→        canvas.nodes.push(Node::text("d", "d", 900.0, 0.0));
+  1336→        canvas.edges.push(Edge::new("e1", "a", None, "b", None));
+  1337→        canvas.edges.push(Edge::new("e2", "b", None, "c", None));
+  1338→        canvas.edges.push(Edge::new("e3", "c", None, "d", None));
+  1339→        canvas.edges.push(Edge::new("e4", "b", None, "d", None));
+  1340→        let plan = plan_related_layout(&canvas, 0, LayoutMode::TreeHorizontal);
+  1341→        let by_id: HashMap<usize, [f32; 2]> = plan.iter().copied().collect();
+  1342→        // a (семя) не двигается; b уровень 1, c уровень 2, d уровень 3 (max)
+  1343→        let (a, b, c, d) = (
+  1344→            canvas.nodes[0].x + canvas.nodes[0].width,
+  1345→            by_id[&1][0],
+  1346→            by_id[&2][0],
+  1347→            by_id[&3][0],
+  1348→        );
+  1349→        assert!(b > a, "b правее a");
+  1350→        assert!(c > b, "c правее b");
+  1351→        assert!(d > c, "d (merge) правее c — longest-path уровень 3, не 2");
+  1352→        assert!(!overlaps(&canvas, &plan), "без пересечений bbox");
+  1353→    }
+  1354→
+  1355→    /// Barycenter: ноды с общим родителем стоят рядом в колонке.
+  1356→    #[test]
+  1357→    fn barycenter_groups_siblings() {
+  1358→        // a → {b, c, d}; e → {b, d} (перекрёстные рёбра). После barycenter
+  1359→        // b и d (общий родитель e) стремятся рядом, минимизируя пересечения.
+  1360→        let mut canvas = Canvas::default();
+  1361→        canvas.nodes.push(Node::text("a", "a", 0.0, 0.0));
+  1362→        canvas.nodes.push(Node::text("e", "e", 0.0, 400.0));
+  1363→        canvas.nodes.push(Node::text("b", "b", 400.0, 0.0));
+  1364→        canvas.nodes.push(Node::text("c", "c", 400.0, 200.0));
+  1365→        canvas.nodes.push(Node::text("d", "d", 400.0, 400.0));
+  1366→        canvas.edges.push(Edge::new("e1", "a", None, "b", None));
+  1367→        canvas.edges.push(Edge::new("e2", "a", None, "c", None));
+  1368→        canvas.edges.push(Edge::new("e3", "a", None, "d", None));
+  1369→        canvas.edges.push(Edge::new("e4", "e", None, "b", None));
+  1370→        canvas.edges.push(Edge::new("e5", "e", None, "d", None));
+  1371→        let plan = plan_related_layout(&canvas, 0, LayoutMode::TreeHorizontal);
+  1372→        // b и d (общий предок e) стоят рядом по y
+  1373→        let by_id: HashMap<usize, [f32; 2]> = plan.iter().copied().collect();
+  1374→        let (yb, yc, yd) = (by_id[&2][1], by_id[&3][1], by_id[&4][1]);
+  1375→        let bd_adjacent = (yb - yc).abs() < f32::EPSILON || (yd - yc).abs() < f32::EPSILON;
+  1376→        assert!(
+  1377→            (yb - yd).abs() < (yb - yc).abs() + f32::EPSILON * 10.0
+  1378→                || (yb - yd).abs() < (yc - yd).abs() + f32::EPSILON * 10.0
+  1379→                || bd_adjacent,
+  1380→            "b и d (общий предок e) стремятся рядом: yb={yb} yc={yc} yd={yd}"
+  1381→        );
+  1382→        assert!(!overlaps(&canvas, &plan));
+  1383→    }
+  1384→
+  1385→    /// Минимизация пересечений edge×node: длинная диагональ через среднюю
+  1386→    /// колонку устраняется swap/shift-оптимизацией.
+  1387→    #[test]
+  1388→    fn crossing_minimization_diagonal() {
+  1389→        // a → c (длинная диагональ через колонку b); b — отдельная ветка.
+  1390→        // Без оптимизации отрезок a→c прошивает b. После refine — 0 пересечений.
+  1391→        let mut canvas = Canvas::default();
+  1392→        canvas.nodes.push(Node::text("a", "a", 0.0, 0.0));
+  1393→        canvas.nodes.push(Node::text("b", "b", 400.0, 0.0));
+  1394→        canvas.nodes.push(Node::text("c", "c", 800.0, 400.0));
+  1395→        canvas.nodes.push(Node::text("x", "x", 400.0, 400.0));
+  1396→        canvas.edges.push(Edge::new("e1", "a", None, "b", None));
+  1397→        canvas.edges.push(Edge::new("e2", "a", None, "x", None));
+  1398→        canvas.edges.push(Edge::new("e3", "b", None, "c", None));
+  1399→        canvas.edges.push(Edge::new("e4", "x", None, "c", None));
+  1400→        let plan = plan_related_layout(&canvas, 0, LayoutMode::TreeHorizontal);
+  1401→        // 0 пересечений edge×node (центр→центр, инфляция CROSSING_MARGIN)
+  1402→        assert_eq!(count_crossings(&canvas, &plan), 0, "диагональ устранена");
+  1403→        assert!(!overlaps(&canvas, &plan));
+  1404→    }
+  1405→
+  1406→    /// Счётчик пересечений edge×node для тестов (центр→центр, инфляция
+  1407→    /// CROSSING_MARGIN; концы ребра исключаются).
+  1408→    fn count_crossings(canvas: &Canvas, plan: &LayoutPlan) -> usize {
+  1409→        let index_of: HashMap<&str, usize> = canvas
+  1410→            .nodes
+  1411→            .iter()
+  1412→            .enumerate()
+  1413→            .map(|(i, n)| (n.id.as_str(), i))
+  1414→            .collect();
+  1415→        let pos: HashMap<usize, [f32; 2]> = plan.iter().copied().collect();
+  1416→        // включая семя (не в плане) — его текущая позиция
+  1417→        let mut rects: HashMap<usize, Rect> = HashMap::new();
+  1418→        for (i, n) in canvas.nodes.iter().enumerate() {
+  1419→            let p = pos.get(&i).copied().unwrap_or([n.x, n.y]);
+  1420→            rects.insert(i, [p[0], p[1], n.width, n.height]);
+  1421→        }
+  1422→        let mut count = 0usize;
+  1423→        for e in &canvas.edges {
+  1424→            let (Some(&u), Some(&v)) = (
+  1425→                index_of.get(e.from_node.as_str()),
+  1426→                index_of.get(e.to_node.as_str()),
+  1427→            ) else {
+  1428→                continue;
+  1429→            };
+  1430→            let (Some(&ru), Some(&rv)) = (rects.get(&u), rects.get(&v)) else {
+  1431→                continue;
+  1432→            };
+  1433→            let p0 = center(ru);
+  1434→            let p1 = center(rv);
+  1435→            for (&w, &rw) in &rects {
+  1436→                if w == u || w == v {
+  1437→                    continue;
+  1438→                }
+  1439→                if seg_intersects_rect(p0, p1, rw, CROSSING_MARGIN) {
+  1440→                    count += 1;
+  1441→                }
+  1442→            }
+  1443→        }
+  1444→        count
+  1445→    }
+  1446→}
+  1447→

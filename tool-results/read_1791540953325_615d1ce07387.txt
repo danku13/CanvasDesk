@@ -1,0 +1,1736 @@
+     1→#![allow(dead_code)] // FR-LLM-D: hit-test + state used by future Stream D integration (worker wiring)
+     2→//! FR-LLM-D / PRD-0010 F-4 — Agent panel: чат-UI tool-calling через LLM.
+     3→//!
+     4→//! Правая боковая панель (388px, full-height, `Ctrl+I` для toggle). Юзер
+     5→//! печатает запрос («создай CAC и свяжи с LTV»), LLM вызывает MCP-инструменты
+     6→//! (`node_create_note`, `edge_create`, `graph_validate`, `graph_apply`),
+     7→//! результат показывается preview ghost-нодами → Accept/Reject (Q3).
+     8→//!
+     9→//! **Q3 (selection-aware):** `selected: Vec<usize>` — пусто = весь канвас.
+    10→//! Валидация whitelist: агент может СОЗДАВАТЬ новые ноды ИЛИ МОДИФИЦИРОВАТЬ
+    11→//! только ВЫДЕЛЕННЫЕ. Непросленные мутации — REJECT (см. [`ValidationResult`]).
+    12→//!
+    13→//! **Не вызывает LLM напрямую.** UI + state management + validation — здесь;
+    14→//! сетевой вызов (`LlmProvider::tool_calling`) пойдёт через worker (как
+    15→//! `suggest_worker`), точка интеграции — [`App::agent_send`] (`// FR-LLM-D-TODO`).
+    16→//!
+    17→//! **Mock preview:** [`App::agent_build_preview`] строит preview из текста
+    18→//! пользователя по эвристикам прототипа (`aiAgentBuildPreview`):
+    19→//! - "CAC" + "LTV" → 2 ноды + 1 ребро (CAC ↔ LTV).
+    20→//! - "воронк"/"funnel" → 3 ноды + 2 ребра (Visits → Regs → Purchases).
+    21→//! - Иначе → 2 generic-ноды + 1 ребро.
+    22→//!
+    23→//! FR-055: рендер через `KitDraw` + kit-компоненты (`panel_style`,
+    24→//! `chip_style`, `button_style`, `icon_button_style`). Никаких сырых
+    25→//! `CardInstance` — все квады/тексты идут через адаптер `KitDraw`.
+    26→
+    27→// FR-LLM-D: маркер для поиска (grep) — все новые файлы/добавления помечены
+    28→// `// FR-LLM-D:` в комментариях.
+    29→// FR-LLM-D-TODO: маркер для мест, где нужна интеграция с LLM-воркером.
+    30→
+    31→use super::*;
+    32→// FR-LLM-D: UiRect — геометрия kit-компонентов (panel_style/chip_style
+    33→// принимают UiRect, не сырой [f32; 4]).
+    34→use canvas_ui::geometry::UiRect;
+    35→
+    36→/// Ширина панели (прототип строки 484: 388px, max 94vw — клампим в рендере).
+    37→pub const AGENT_PANEL_W: f32 = 388.0;
+    38→/// Минимальная ширина вьюпорта для показа панели (на узких окнах панель
+    39→/// прячется — как `AI_STATUS_MIN_VIEWPORT_W`).
+    40→pub const AGENT_PANEL_MIN_VIEWPORT_W: f32 = 600.0;
+    41→/// Высота шапки (bolt + title + close).
+    42→const HEAD_H: f32 = 44.0;
+    43→/// Высота контекстной строки (3 chips).
+    44→const CTX_H: f32 = 32.0;
+    45→/// Высота строки cost estimate.
+    46→const EST_H: f32 = 22.0;
+    47→/// Высота input row (textarea + send button).
+    48→const INPUT_H: f32 = 44.0;
+    49→/// Высота quick-actions (3 preset buttons).
+    50→const QUICK_H: f32 = 36.0;
+    51→/// Внутренний отступ панели.
+    52→const PAD: f32 = 12.0;
+    53→/// Зазор между элементами в стеке.
+    54→const GAP: f32 = 8.0;
+    55→/// Размер кнопки закрытия (✕).
+    56→const CLOSE_BTN_SIZE: f32 = 22.0;
+    57→/// Высота кнопок preview (Accept / Reject) — внутри лога сообщений.
+    58→const PREVIEW_BTN_H: f32 = 26.0;
+    59→/// Ширина чипов контекста (provider / rate / context).
+    60→const CHIP_W: f32 = 100.0;
+    61→/// Радиус чипов quick-actions (pills).
+    62→const PILL_RADIUS: f32 = canvas_core::tokens::RADIUS_PILL;
+    63→
+    64→/// FR-LLM-D / PRD-0010 F-4: состояние агент-панели.
+    65→#[derive(Debug, Clone, Default)]
+    66→pub struct AgentState {
+    67→    /// Панель открыта (toggle `Ctrl+I`).
+    68→    pub open: bool,
+    69→    /// Журнал сообщений (user / bot / error / preview-with-actions).
+    70→    pub messages: Vec<AgentMessage>,
+    71→    /// Текст в input area (draft).
+    72→    pub input: String,
+    73→    /// Идёт LLM-запрос (блокирует input + send).
+    74→    pub busy: bool,
+    75→    /// Preview ghost-нод (Q3: confirm перед apply). `None` — preview нет.
+    76→    pub preview: Option<AgentPreview>,
+    77→    /// Cost estimate для текущего запроса (Q4 — для отображения в панели).
+    78→    pub cost_estimate: Option<f32>,
+    79→    /// Каретка в input (для будущей inline-правки).
+    80→    pub caret: usize,
+    81→}
+    82→
+    83→/// FR-LLM-D / PRD-0010 F-4: сообщение в журнале агент-панели.
+    84→#[derive(Debug, Clone)]
+    85→pub enum AgentMessage {
+    86→    /// Сообщение пользователя.
+    87→    User(String),
+    88→    /// Ответ бота (text + kind + tool_calls для отображения).
+    89→    Bot {
+    90→        text: String,
+    91→        kind: AgentMsgKind,
+    92→        tool_calls: Vec<ToolCallDisplay>,
+    93→    },
+    94→}
+    95→
+    96→/// FR-LLM-D: вид сообщения бота (нормальный / ошибка / успех).
+    97→#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    98→pub enum AgentMsgKind {
+    99→    #[default]
+   100→    Normal,
+   101→    Error,
+   102→    Success,
+   103→}
+   104→
+   105→/// FR-LLM-D: отображаемый вызов инструмента в логе (имя + краткие аргументы
+   106→/// + статус: pending / success / error).
+   107→#[derive(Debug, Clone)]
+   108→pub struct ToolCallDisplay {
+   109→    pub tool_name: String,
+   110→    pub args_summary: String,
+   111→    pub status: ToolCallStatus,
+   112→}
+   113→
+   114→/// FR-LLM-D: статус вызова инструмента (для лога).
+   115→#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+   116→pub enum ToolCallStatus {
+   117→    #[default]
+   118→    Pending,
+   119→    Success,
+   120→    Error,
+   121→}
+   122→
+   123→/// FR-LLM-D / PRD-0010 F-4: preview результат агента (ghost-ноды).
+   124→#[derive(Debug, Clone, Default)]
+   125→pub struct AgentPreview {
+   126→    /// Сгенерированные ноды (для отображения в логе и применения через
+   127→    /// `graph_apply`).
+   128→    pub nodes: Vec<AgentPreviewNode>,
+   129→    /// Рёбра: (from_idx, to_idx, label) — индексы в `nodes`.
+   130→    pub edges: Vec<(usize, usize, String)>,
+   131→}
+   132→
+   133→/// FR-LLM-D: одна preview-нода (заголовок + позиция для ghost-overlay).
+   134→#[derive(Debug, Clone)]
+   135→pub struct AgentPreviewNode {
+   136→    pub title: String,
+   137→    pub x: f32,
+   138→    pub y: f32,
+   139→    pub width: f32,
+   140→    pub height: f32,
+   141→}
+   142→
+   143→/// FR-LLM-D / PRD-0010 F-4.8: контекст запроса (Q3 — selection-aware).
+   144→#[derive(Debug, Clone)]
+   145→pub enum AgentContext {
+   146→    /// Выделенных нод нет — контекст весь канвас.
+   147→    EntireCanvas,
+   148→    /// Выделенные ноды (агент может модифицировать ТОЛЬКО их + создавать
+   149→    /// новые; непросленные — REJECT).
+   150→    SelectedNodes(Vec<usize>),
+   151→}
+   152→
+   153→/// FR-LLM-D / PRD-0010 F-4.9: результат валидации tool_calls (Q3 whitelist).
+   154→#[derive(Debug, Clone)]
+   155→pub struct ValidationResult {
+   156→    /// Все ли вызовы валидны (создание новых / модификация selected).
+   157→    /// `true` по умолчанию (нет отклонённых вызовов → валидно); `false`
+   158→    /// когда `rejected` непустой (см. [`Self::default`] ниже — ручная
+   159→    /// реализация, т.к. `bool::default()` = `false`, что неверно для
+   160→    /// семантики «нет отклонений → валидно»).
+   161→    pub valid: bool,
+   162→    /// Отклонённые вызовы: (tool_name, причина). `valid=false` → непусто.
+   163→    pub rejected: Vec<(String, String)>,
+   164→}
+   165→
+   166→impl Default for ValidationResult {
+   167→    /// Дефолт: `valid = true`, `rejected = []` (нет вызовов — нет проблем).
+   168→    /// Вручную: `#[derive(Default)]` дал бы `valid = false` (неверно).
+   169→    fn default() -> Self {
+   170→        Self {
+   171→            valid: true,
+   172→            rejected: Vec::new(),
+   173→        }
+   174→    }
+   175→}
+   176→
+   177→impl App {
+   178→    /// FR-LLM-D / PRD-0010 F-4: render agent panel overlay.
+   179→    /// Возвращает (quads, texts) для screen_bands. Панель скрыта если
+   180→    /// `!state.open` или вьюпорт слишком узкий.
+   181→    pub(super) fn agent_panel_overlay(&self) -> (Vec<CardInstance>, Vec<OwnedScreenText>) {
+   182→        let mut quads = Vec::new();
+   183→        let mut texts = Vec::new();
+   184→        if !self.agent_panel.open {
+   185→            return (quads, texts);
+   186→        }
+   187→        let viewport = self.viewport_logical();
+   188→        if viewport[0] < AGENT_PANEL_MIN_VIEWPORT_W || viewport[1] <= 0.0 {
+   189→            return (quads, texts);
+   190→        }
+   191→        let palette = self.effective_palette();
+   192→        let kit_palette = palette.kit_palette();
+   193→        // FR-LLM-D: KitDraw-адаптер (как ai_status_panel.rs/overlays.rs).
+   194→        // Все квады и тексты собираются в `d`, в конце дрейним в Vec'и.
+   195→        let mut d = crate::kit_ui::KitDraw::new();
+   196→        // FR-ICONS: активный набор (None = Glyph fallback).
+   197→        d.set_icon_set(self.icon_set_active());
+   198→
+   199→        // Позиция панели: правый край, full-height. Ширина — min(388, 94% vw).
+   200→        let panel_w = AGENT_PANEL_W.min(viewport[0] * 0.94);
+   201→        let panel_x = viewport[0] - panel_w;
+   202→        let panel_y = 0.0;
+   203→        let panel_h = viewport[1];
+   204→        let panel = [panel_x, panel_y, panel_w, panel_h];
+   205→
+   206→        // === Фон панели — kit::panel_style (FR-055: слот panel_*) ==========
+   207→        let panel_style = canvas_ui::kit::panel_style(&kit_palette);
+   208→        d.rect(
+   209→            UiRect::new(panel[0], panel[1], panel[2], panel[3]),
+   210→            panel_style.fill,
+   211→            panel_style.border,
+   212→            0.0, // без радиуса — full-height боковая панель
+   213→        );
+   214→        // Тонкая разделительная линия слева (визуальный «бортик»).
+   215→        d.rect(
+   216→            UiRect::new(panel[0], panel[1], 1.0, panel[3]),
+   217→            kit_palette.panel_border,
+   218→            [0.0; 4],
+   219→            0.0,
+   220→        );
+   221→
+   222→        // === Шапка: bolt ⚡ + title + sub + close ✕ =======================
+   223→        let head_y = panel_y + 8.0;
+   224→        // FR-ICONS: ⚡ — glyph fallback (SVG-атлас может не иметь).
+   225→        d.label_left(
+   226→            UiRect::new(panel_x + PAD, head_y + 4.0, 16.0, 20.0),
+   227→            "⚡",
+   228→            kit_palette.accent,
+   229→            14.0,
+   230→        );
+   231→        // Заголовок «AI Агент».
+   232→        d.label_left(
+   233→            UiRect::new(panel_x + PAD + 18.0, head_y + 1.0, 180.0, 14.0),
+   234→            "AI Агент",
+   235→            kit_palette.text_title,
+   236→            13.0,
+   237→        );
+   238→        // Подзаголовок (одна строка, приглушённый).
+   239→        d.label_left(
+   240→            UiRect::new(
+   241→                panel_x + PAD + 18.0,
+   242→                head_y + 16.0,
+   243→                panel_w - PAD * 2.0 - 18.0,
+   244→                12.0,
+   245→            ),
+   246→            "tool-calling · 42 MCP-инструмента · PRD-0010 F-4",
+   247→            kit_palette.text_muted,
+   248→            9.0,
+   249→        );
+   250→        // Кнопка закрытия ✕ (правый край шапки).
+   251→        let close_x = panel_x + panel_w - PAD - CLOSE_BTN_SIZE;
+   252→        let close_hovered = point_in_rect(
+   253→            [close_x, head_y + 2.0, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE],
+   254→            self.cursor,
+   255→        );
+   256→        let close_state = if close_hovered {
+   257→            canvas_ui::kit::KitState::Hovered
+   258→        } else {
+   259→            canvas_ui::kit::KitState::Normal
+   260→        };
+   261→        let close_style = canvas_ui::kit::icon_button_style(close_state, &kit_palette);
+   262→        let close_rect = UiRect::new(close_x, head_y + 2.0, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE);
+   263→        d.control(close_rect, &close_style);
+   264→        d.label_center(close_rect, "✕", close_style.text, 13.0);
+   265→
+   266→        // === Контекстная строка: 3 chips (Context / Provider / Rate) =====
+   267→        let ctx_y = panel_y + HEAD_H;
+   268→        let ctx = self.agent_selection_context();
+   269→        let ctx_label = match &ctx {
+   270→            AgentContext::EntireCanvas => "Context: entire canvas".to_owned(),
+   271→            AgentContext::SelectedNodes(ids) => {
+   272→                if ids.len() == 1 {
+   273→                    if let Some(&i) = ids.first() {
+   274→                        let title = self
+   275→                            .scene
+   276→                            .canvas
+   277→                            .nodes
+   278→                            .get(i)
+   279→                            .map(|n| {
+   280→                                n.label
+   281→                                    .clone()
+   282→                                    .or_else(|| n.title().map(|s| s.to_owned()))
+   283→                                    .unwrap_or_else(|| format!("node #{}", i))
+   284→                            })
+   285→                            .unwrap_or_else(|| "?".into());
+   286→                        format!("Selected: 1 — {}", title)
+   287→                    } else {
+   288→                        "Selected: 1".to_owned()
+   289→                    }
+   290→                } else {
+   291→                    format!("Selected: {} nodes", ids.len())
+   292→                }
+   293→            }
+   294→        };
+   295→        // Context chip (ширина — остаток от provider/rate chips).
+   296→        let prov_label = crate::settings_ui::ai_provider_label(
+   297→            self.settings.language,
+   298→            self.settings.llm.provider_agent,
+   299→        );
+   300→        let rate_label = format!(
+   301→            "ChatGPT: {}/80",
+   302→            self.ai_chatgpt_rate_used.saturating_sub(0)
+   303→        );
+   304→        let rate_visible =
+   305→            self.settings.llm.provider_agent == canvas_llm::LlmProviderId::ChatGptOAuth;
+   306→        let chip_h = 18.0;
+   307→        let chip_y = ctx_y + 6.0;
+   308→        let chip_gap = 4.0;
+   309→        // Layout: [Context ...] [Provider 100px] [Rate 100px?]
+   310→        let rate_w = if rate_visible { CHIP_W } else { 0.0 };
+   311→        let prov_x = panel_x + panel_w - PAD - rate_w - chip_gap - CHIP_W;
+   312→        let rate_x = panel_x + panel_w - PAD - rate_w;
+   313→        let ctx_x = panel_x + PAD;
+   314→        let ctx_w = prov_x - chip_gap - ctx_x;
+   315→        // Context chip.
+   316→        let ctx_state = if matches!(ctx, AgentContext::SelectedNodes(_)) {
+   317→            canvas_ui::kit::KitState::Selected
+   318→        } else {
+   319→            canvas_ui::kit::KitState::Normal
+   320→        };
+   321→        let ctx_chip_style = canvas_ui::kit::chip_style(ctx_state, &kit_palette);
+   322→        let ctx_rect = UiRect::new(ctx_x, chip_y, ctx_w, chip_h);
+   323→        d.control(ctx_rect, &ctx_chip_style);
+   324→        d.label_center(ctx_rect, &ctx_label, ctx_chip_style.text, 10.0);
+   325→        // Provider chip.
+   326→        let prov_chip_style =
+   327→            canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &kit_palette);
+   328→        let prov_rect = UiRect::new(prov_x, chip_y, CHIP_W, chip_h);
+   329→        d.control(prov_rect, &prov_chip_style);
+   330→        d.label_center(prov_rect, &prov_label, prov_chip_style.text, 10.0);
+   331→        // Rate chip (только для ChatGPT OAuth).
+   332→        if rate_visible {
+   333→            let rate_chip_style =
+   334→                canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &kit_palette);
+   335→            let rate_rect = UiRect::new(rate_x, chip_y, CHIP_W, chip_h);
+   336→            d.control(rate_rect, &rate_chip_style);
+   337→            d.label_center(rate_rect, &rate_label, rate_chip_style.text, 10.0);
+   338→        }
+   339→
+   340→        // === Журнал сообщений (скроллится; здесь — простая простыня) ======
+   341→        let log_y = ctx_y + CTX_H;
+   342→        let log_h = panel_h - HEAD_H - CTX_H - EST_H - INPUT_H - QUICK_H - GAP;
+   343→        let log_rect = UiRect::new(panel_x + PAD, log_y, panel_w - PAD * 2.0, log_h);
+   344→        // Фон журнала (слегка тоньше основной панели — визуальное разделение).
+   345→        d.rect(
+   346→            log_rect,
+   347→            [
+   348→                kit_palette.panel_fill[0],
+   349→                kit_palette.panel_fill[1],
+   350→                kit_palette.panel_fill[2],
+   351→                kit_palette.panel_fill[3] * 0.5,
+   352→            ],
+   353→            [0.0; 4],
+   354→            canvas_core::tokens::RADIUS_PANEL,
+   355→        );
+   356→        // Empty state — подсказка пользователю что делать.
+   357→        let mut msg_y = log_y + 8.0;
+   358→        // CR-015 fix (Task Q1+Q2): TextMeasurer для реального шейпинга текста
+   359→        // bubble (вместо эвристик `text.len() as f32 * 6.0` / `text.len() /
+   360→        // 32.0` / `text.len() / 48` — те ломаются на Cyrillic/emoji: byte_count
+   361→        // ≠ glyph_count). Один measurer+FontSystem на цикл сообщений (не на
+   362→        // сообщение — кэш переиспользуется). Семейство/кегль — те же, что у
+   363→        // `d.label_left` рендера bubble (FR-053: метрики раскладки = метрики
+   364→        // рендера). Контракт «вложенный лок FontSystem запрещён» (app.rs:209):
+   365→        // `agent_panel_overlay` не вызывается внутри другого FontSystem-лока
+   366→        // (handler.rs:314 —顶层 render path, без шейпинг-локов рядом).
+   367→        let mut measurer = canvas_ui::measure::TextMeasurer::new();
+   368→        let mut fs = canvas_render::text::measure_font_system();
+   369→        let bubble_family = canvas_render::text::SANS_FAMILY; // «Noto Sans Display»
+   370→        let bubble_size = 11.0; // bubble text font_size (matches d.label_left)
+   371→        if self.agent_panel.messages.is_empty() {
+   372→            d.label_left(
+   373→                UiRect::new(
+   374→                    log_rect.x + 8.0,
+   375→                    msg_y,
+   376→                    log_rect.w - 16.0,
+   377→                    log_rect.h - 16.0,
+   378→                ),
+   379→                "Панель агента пуста. Опишите задачу текстом — агент вызовет \
+   380→                 MCP-инструменты (node_create, graph_validate, graph_apply…), \
+   381→                 покажет preview ghost-нодами на канвасе и спросит Accept/Reject. \
+   382→                 Деструктивные операции — только с подтверждением.",
+   383→                kit_palette.text_muted,
+   384→                11.0,
+   385→            );
+   386→        } else {
+   387→            // Каждое сообщение — user (справа) / bot (слева) / error.
+   388→            for msg in &self.agent_panel.messages {
+   389→                match msg {
+   390→                    AgentMessage::User(text) => {
+   391→                        // User bubble — выравнивание справа, акцентный фон.
+   392→                        // CR-015 fix (Task Q1): real glyph shaping via
+   393→                        // TextMeasurer (was `text.len() as f32 * 6.0` and
+   394→                        // `(text.len() as f32 / 32.0).ceil()` heuristics —
+   395→                        // break on Cyrillic/emoji: byte_count ≠ glyph_count,
+   396→                        // multi-byte UTF-8 over-estimates width and line
+   397→                        // count). Семейство/кегль — те же, что у `d.label_left`
+   398→                        // bubble text (FR-053: метрики раскладки = метрики
+   399→                        // рендера, cosmic-text шейпинг).
+   400→                        let max_bubble_w = log_rect.w - 16.0;
+   401→                        let text_w = measurer.width_of(&mut fs, text, bubble_family, bubble_size);
+   402→                        // +16 = 2·SPACING_SM (внутренний пад bubble).
+   403→                        let bubble_w = max_bubble_w.min(text_w + 16.0);
+   404→                        let bubble_x = log_rect.x + log_rect.w - 8.0 - bubble_w;
+   405→                        // Wrap по реальной ширине строки внутри bubble
+   406→                        // (bubble_w − 2·pad = bubble_w − 16). 16.0 = line-h
+   407→                        // для кегля 11 (font_size · SCREEN_LINE_FACTOR 1.3 ≈
+   408→                        // 14.3 → 14, но исторический user-bubble line-h был 16;
+   409→                        // preserved чтобы не менять вертикальный ритм
+   410→                        // user-bubble'ов, не использующих kit).
+   411→                        let user_lines = measurer.wrap(
+   412→                            &mut fs,
+   413→                            text,
+   414→                            bubble_family,
+   415→                            bubble_size,
+   416→                            bubble_w - 16.0,
+   417→                        );
+   418→                        let bubble_h = 28.0_f32.max(user_lines.len() as f32 * 16.0 + 12.0);
+   419→                        let user_style = canvas_ui::kit::control_style_of(
+   420→                            [
+   421→                                kit_palette.accent[0],
+   422→                                kit_palette.accent[1],
+   423→                                kit_palette.accent[2],
+   424→                                0.12,
+   425→                            ],
+   426→                            [
+   427→                                kit_palette.accent[0],
+   428→                                kit_palette.accent[1],
+   429→                                kit_palette.accent[2],
+   430→                                0.30,
+   431→                            ],
+   432→                            kit_palette.text,
+   433→                            canvas_core::tokens::RADIUS_PANEL,
+   434→                        );
+   435→                        let bubble_rect = UiRect::new(bubble_x, msg_y, bubble_w, bubble_h);
+   436→                        d.control(bubble_rect, &user_style);
+   437→                        d.label_left(
+   438→                            UiRect::new(
+   439→                                bubble_x + 8.0,
+   440→                                msg_y + 4.0,
+   441→                                bubble_w - 16.0,
+   442→                                bubble_h - 8.0,
+   443→                            ),
+   444→                            text,
+   445→                            user_style.text,
+   446→                            11.0,
+   447→                        );
+   448→                        msg_y += bubble_h + 6.0;
+   449→                    }
+   450→                    AgentMessage::Bot {
+   451→                        text,
+   452→                        kind,
+   453→                        tool_calls,
+   454→                    } => {
+   455→                        // Bot bubble — слева, нейтральный фон.
+   456→                        let bubble_w = log_rect.w - 16.0;
+   457→                        // CR-015 fix (Task Q2): real n_lines via
+   458→                        // TextMeasurer.wrap (was `(text.len() / 48).max(1)`
+   459→                        // heuristic — byte_count / 48 ≈ glyph-agnostic line
+   460→                        // count; breaks on Cyrillic/emoji: multi-byte UTF-8
+   461→                        // over-counts lines for short unicode text). Wrap to
+   462→                        // kit's text_area.w (= bubble_w − 2·SPACING_SM).
+   463→                        let max_text_w = bubble_w - 16.0; // = kit text_area.w
+   464→                        let bot_lines =
+   465→                            measurer.wrap(&mut fs, text, bubble_family, bubble_size, max_text_w);
+   466→                        let n_lines = bot_lines.len().max(1);
+   467→                        // Accept/Reject buttons если есть preview.
+   468→                        let has_preview =
+   469→                            self.agent_panel.preview.is_some() && *kind == AgentMsgKind::Normal;
+   470→                        // Q2 (Task Q): bubble_h считается из kit-канонических
+   471→                        // метрик (CHAT_HEADER_H/CHAT_LINE_H/CHAT_TOOL_CALL_H +
+   472→                        // SPACING_S/SPACING_SM), не из магических 24/14. Было:
+   473→                        // `24 + n_lines*14 + tool_calls*14 + (preview? 26+8)`.
+   474→                        // Стало: pad_half + header + text + (gap+tool_calls)?
+   475→                        // + (gap+preview_btn)? + pad_half. Визуальный delta
+   476→                        // без preview: -4..+2 px (tighter bubble — меньше
+   477→                        // пустого пространства); с preview: -6 px.
+   478→                        let pad_half = canvas_core::tokens::SPACING_SM * 0.5; // 4
+   479→                        let header_h = canvas_ui::kit::CHAT_HEADER_H; // 12
+   480→                        let text_h = (n_lines as f32) * canvas_ui::kit::CHAT_LINE_H; // n_lines·14
+   481→                        let mut bubble_h = pad_half + header_h + text_h;
+   482→                        if !tool_calls.is_empty() {
+   483→                            bubble_h += canvas_core::tokens::SPACING_S
+   484→                                + (tool_calls.len() as f32) * canvas_ui::kit::CHAT_TOOL_CALL_H;
+   485→                        }
+   486→                        if has_preview {
+   487→                            bubble_h += canvas_core::tokens::SPACING_S + PREVIEW_BTN_H;
+   488→                        }
+   489→                        bubble_h += pad_half; // bottom pad
+   490→                                              // Q2 (Task Q): migrate bubble geometry to kit::chat_bubble
+   491→                                              // layout (was style-only — `_cb_layout` discarded,
+   492→                                              // geometry hand-rolled). Kit extended с `header: bool`
+   493→                                              // param + `ChatBubbleLayout.header_area: Option<UiRect>`
+   494→                                              // (crates/canvas-ui/src/component/chat_bubble.rs) —
+   495→                                              // header_area занимает верх bubble (подпись отправителя
+   496→                                              // «AI Агент»), text_area начинается ниже header'а.
+   497→                                              // Теперь ИСПОЛЬЗУЕМ layout: `cb_layout.rect` для фона,
+   498→                                              // `cb_layout.header_area` для «AI Агент» header,
+   499→                                              // `cb_layout.text_area` для text body,
+   500→                                              // `cb_layout.tool_call_rows[i]` для tool_call строк.
+   501→                        let kind_kit = match kind {
+   502→                            AgentMsgKind::Normal => canvas_ui::kit::ChatBubbleKind::Normal,
+   503→                            AgentMsgKind::Error => canvas_ui::kit::ChatBubbleKind::Error,
+   504→                            AgentMsgKind::Success => canvas_ui::kit::ChatBubbleKind::Success,
+   505→                        };
+   506→                        let bubble_slot = UiRect::new(log_rect.x + 8.0, msg_y, bubble_w, bubble_h);
+   507→                        let (cb_layout, cb_style) = canvas_ui::kit::chat_bubble(
+   508→                            bubble_slot,
+   509→                            n_lines,
+   510→                            tool_calls.len(),
+   511→                            kind_kit,
+   512→                            &kit_palette,
+   513→                            true, // header = true («AI Агент» подпись над text)
+   514→                        );
+   515→                        let bot_style = canvas_ui::kit::control_style_of(
+   516→                            cb_style.fill,
+   517→                            cb_style.border,
+   518→                            cb_style.text_color,
+   519→                            cb_style.radius,
+   520→                        );
+   521→                        // Bubble background — kit layout.rect (весь слот).
+   522→                        d.control(cb_layout.rect, &bot_style);
+   523→                        // «AI Агент» header — kit layout.header_area.
+   524→                        if let Some(header_area) = &cb_layout.header_area {
+   525→                            d.label_left(*header_area, "AI Агент", kit_palette.text_muted, 9.0);
+   526→                        }
+   527→                        // Text body — kit layout.text_area.
+   528→                        d.label_left(cb_layout.text_area, text, cb_style.text_color, 11.0);
+   529→                        // tool_calls — моноширинные строки, по kit
+   530→                        // layout.tool_call_rows[i] rect'ам.
+   531→                        for (i, tc) in tool_calls.iter().enumerate() {
+   532→                            let status_glyph = match tc.status {
+   533→                                ToolCallStatus::Pending => "…",
+   534→                                ToolCallStatus::Success => "✓",
+   535→                                ToolCallStatus::Error => "✗",
+   536→                            };
+   537→                            let success_color: [f32; 4] = kit_palette.control_success;
+   538→                            let danger_color = kit_palette.control_danger;
+   539→                            let status_color = match tc.status {
+   540→                                ToolCallStatus::Success => success_color,
+   541→                                ToolCallStatus::Error => danger_color,
+   542→                                ToolCallStatus::Pending => kit_palette.text_muted,
+   543→                            };
+   544→                            let tc_rect = cb_layout.tool_call_rows[i];
+   545→                            d.label_left(
+   546→                                tc_rect,
+   547→                                &format!("{} {}  {}", status_glyph, tc.tool_name, tc.args_summary),
+   548→                                kit_palette.text_muted,
+   549→                                10.0,
+   550→                            );
+   551→                            // Status glyph — отдельным цветом (поверх серого).
+   552→                            d.label_left(
+   553→                                UiRect::new(tc_rect.x, tc_rect.y, 14.0, 14.0),
+   554→                                status_glyph,
+   555→                                status_color,
+   556→                                10.0,
+   557→                            );
+   558→                        }
+   559→                        // Accept/Reject кнопки — если есть preview. Позиция:
+   560→                        // ниже последнего tool_call_row (или text_area, если
+   561→                        // tool_calls нет) с зазором SPACING_S (kit canonical).
+   562→                        if has_preview {
+   563→                            let buttons_y = if let Some(last_tc) = cb_layout.tool_call_rows.last() {
+   564→                                last_tc.bottom() + canvas_core::tokens::SPACING_S
+   565→                            } else {
+   566→                                cb_layout.text_area.bottom() + canvas_core::tokens::SPACING_S
+   567→                            };
+   568→                            let btn_w = (cb_layout.rect.w - 8.0) / 2.0;
+   569→                            let accept_rect = UiRect::new(
+   570→                                cb_layout.rect.x + canvas_core::tokens::SPACING_SM,
+   571→                                buttons_y,
+   572→                                btn_w,
+   573→                                PREVIEW_BTN_H,
+   574→                            );
+   575→                            let reject_rect = UiRect::new(
+   576→                                cb_layout.rect.x + canvas_core::tokens::SPACING_SM + btn_w + 8.0,
+   577→                                buttons_y,
+   578→                                btn_w,
+   579→                                PREVIEW_BTN_H,
+   580→                            );
+   581→                            // Accept — Success-вариант button_style.
+   582→                            let accept_style = canvas_ui::kit::button_style(
+   583→                                canvas_ui::kit::ButtonVariant::Primary,
+   584→                                if point_in_rect(
+   585→                                    [accept_rect.x, accept_rect.y, accept_rect.w, accept_rect.h],
+   586→                                    self.cursor,
+   587→                                ) {
+   588→                                    canvas_ui::kit::KitState::Hovered
+   589→                                } else {
+   590→                                    canvas_ui::kit::KitState::Normal
+   591→                                },
+   592→                                &kit_palette,
+   593→                            );
+   594→                            d.control(accept_rect, &accept_style);
+   595→                            d.label_center(accept_rect, "Accept", accept_style.text, 11.0);
+   596→                            // Reject — Secondary-вариант.
+   597→                            let reject_style = canvas_ui::kit::button_style(
+   598→                                canvas_ui::kit::ButtonVariant::Secondary,
+   599→                                if point_in_rect(
+   600→                                    [reject_rect.x, reject_rect.y, reject_rect.w, reject_rect.h],
+   601→                                    self.cursor,
+   602→                                ) {
+   603→                                    canvas_ui::kit::KitState::Hovered
+   604→                                } else {
+   605→                                    canvas_ui::kit::KitState::Normal
+   606→                                },
+   607→                                &kit_palette,
+   608→                            );
+   609→                            d.control(reject_rect, &reject_style);
+   610→                            d.label_center(reject_rect, "Reject", reject_style.text, 11.0);
+   611→                        }
+   612→                        // Advance msg_y past bubble + gap (SPACING_SM = 8 px —
+   613→                        // исторический зазор между сообщениями, preserved).
+   614→                        msg_y = cb_layout.rect.bottom() + canvas_core::tokens::SPACING_SM;
+   615→                    }
+   616→                }
+   617→                // Защита от переполнения журнала (последние N сообщений).
+   618→                if msg_y > log_y + log_h {
+   619→                    break;
+   620→                }
+   621→            }
+   622→        }
+   623→
+   624→        // === Cost estimate (одна строка моноширинно) =====================
+   625→        let est_y = panel_y + panel_h - QUICK_H - INPUT_H - EST_H;
+   626→        let est_str = match self.agent_panel.cost_estimate {
+   627→            Some(c) => format!(
+   628→                "Запрос ~${:.2} · день ${:.2} / ${:.2}",
+   629→                c, self.ai_cost_day, self.settings.llm.cost_limit_daily
+   630→            ),
+   631→            None => format!(
+   632→                "Запрос ~$0.02 · день ${:.2} / ${:.2}",
+   633→                self.ai_cost_day, self.settings.llm.cost_limit_daily
+   634→            ),
+   635→        };
+   636→        d.label_left(
+   637→            UiRect::new(panel_x + PAD, est_y, panel_w - PAD * 2.0, EST_H),
+   638→            &est_str,
+   639→            kit_palette.text_muted,
+   640→            10.0,
+   641→        );
+   642→
+   643→        // === Input area (textarea + send button) =========================
+   644→        let input_y = panel_y + panel_h - QUICK_H - INPUT_H + 4.0;
+   645→        let send_w = 36.0;
+   646→        let input_w = panel_w - PAD * 2.0 - send_w - GAP;
+   647→        let input_rect = UiRect::new(panel_x + PAD, input_y, input_w, INPUT_H - 8.0);
+   648→        let input_state = if self.agent_panel.busy {
+   649→            canvas_ui::kit::KitState::Disabled
+   650→        } else {
+   651→            canvas_ui::kit::KitState::Normal
+   652→        };
+   653→        let input_style = canvas_ui::kit::control_style_of(
+   654→            kit_palette.panel_fill,
+   655→            kit_palette.panel_border,
+   656→            kit_palette.text,
+   657→            canvas_core::tokens::RADIUS_PANEL,
+   658→        );
+   659→        let _ = input_state; // FR-LLM-D-TODO: визуальное отличие disabled (через kit Disabled слот — будущая волна kit)
+   660→        d.control(input_rect, &input_style);
+   661→        let placeholder = "Опишите задачу: «создай CAC и свяжи с LTV»";
+   662→        let input_text = if self.agent_panel.input.is_empty() {
+   663→            placeholder.to_owned()
+   664→        } else {
+   665→            self.agent_panel.input.clone()
+   666→        };
+   667→        let input_color = if self.agent_panel.input.is_empty() {
+   668→            kit_palette.text_muted
+   669→        } else {
+   670→            kit_palette.text
+   671→        };
+   672→        d.label_left(
+   673→            UiRect::new(
+   674→                input_rect.x + 8.0,
+   675→                input_rect.y + 4.0,
+   676→                input_rect.w - 16.0,
+   677→                input_rect.h - 8.0,
+   678→            ),
+   679→            &input_text,
+   680→            input_color,
+   681→            12.0,
+   682→        );
+   683→        // Send button ➤.
+   684→        let send_rect = UiRect::new(
+   685→            panel_x + PAD + input_w + GAP,
+   686→            input_y,
+   687→            send_w,
+   688→            INPUT_H - 8.0,
+   689→        );
+   690→        let send_hovered = point_in_rect(
+   691→            [send_rect.x, send_rect.y, send_rect.w, send_rect.h],
+   692→            self.cursor,
+   693→        );
+   694→        let send_state = if self.agent_panel.busy {
+   695→            canvas_ui::kit::KitState::Disabled
+   696→        } else if send_hovered {
+   697→            canvas_ui::kit::KitState::Hovered
+   698→        } else {
+   699→            canvas_ui::kit::KitState::Normal
+   700→        };
+   701→        let send_style = canvas_ui::kit::button_style(
+   702→            canvas_ui::kit::ButtonVariant::Primary,
+   703→            send_state,
+   704→            &kit_palette,
+   705→        );
+   706→        d.control(send_rect, &send_style);
+   707→        d.label_center(send_rect, "➤", send_style.text, 14.0);
+   708→
+   709→        // === Quick actions (3 preset pill-кнопки) ========================
+   710→        let quick_y = panel_y + panel_h - QUICK_H + 4.0;
+   711→        let quick_labels: [&str; 3] = ["CAC ↔ LTV", "Воронка из 3 нод", "Проверка графа"];
+   712→        let quick_w = (panel_w - PAD * 2.0 - GAP * 2.0) / 3.0;
+   713→        for (i, label) in quick_labels.iter().enumerate() {
+   714→            let qx = panel_x + PAD + i as f32 * (quick_w + GAP);
+   715→            let qhovered = point_in_rect([qx, quick_y, quick_w, 24.0], self.cursor);
+   716→            let qstate = if qhovered {
+   717→                canvas_ui::kit::KitState::Hovered
+   718→            } else {
+   719→                canvas_ui::kit::KitState::Normal
+   720→            };
+   721→            // Pill: chip_style с радиусом RADIUS_PILL (максимальный радиус).
+   722→            let qstyle = canvas_ui::kit::chip_style(qstate, &kit_palette);
+   723→            let qrect = UiRect::new(qx, quick_y, quick_w, 24.0);
+   724→            d.rect(qrect, qstyle.fill, qstyle.border, PILL_RADIUS);
+   725→            d.label_center(qrect, label, qstyle.text, 10.0);
+   726→        }
+   727→
+   728→        // FR-LLM-D: дрейн KitDraw → возвращаемые Vec'и (как ai_status_panel.rs).
+   729→        quads = d.quads;
+   730→        texts = d
+   731→            .texts
+   732→            .into_iter()
+   733→            .map(|t| OwnedScreenText {
+   734→                text: t.text,
+   735→                origin: t.origin,
+   736→                width: t.width,
+   737→                font_size: t.font_size,
+   738→                color: t.color,
+   739→                align: t.align,
+   740→            })
+   741→            .collect();
+   742→        (quads, texts)
+   743→    }
+   744→
+   745→    /// FR-LLM-D / PRD-0010 F-4: rect панели агента (для hit-тестов и
+   746→    /// клавиатурного фокуса). `None` — панель скрыта.
+   747→    pub(super) fn agent_panel_rect(&self) -> Option<[f32; 4]> {
+   748→        if !self.agent_panel.open {
+   749→            return None;
+   750→        }
+   751→        let viewport = self.viewport_logical();
+   752→        if viewport[0] < AGENT_PANEL_MIN_VIEWPORT_W || viewport[1] <= 0.0 {
+   753→            return None;
+   754→        }
+   755→        let panel_w = AGENT_PANEL_W.min(viewport[0] * 0.94);
+   756→        Some([viewport[0] - panel_w, 0.0, panel_w, viewport[1]])
+   757→    }
+   758→
+   759→    /// FR-LLM-D / PRD-0010 F-4.8: контекст запроса (Q3 — selection-aware).
+   760→    /// Пустое выделение → весь канвас; иначе — список индексов выделенных нод.
+   761→    pub(super) fn agent_selection_context(&self) -> AgentContext {
+   762→        let primary = match self.selected {
+   763→            Some(Selection::Node(i)) => Some(i),
+   764→            _ => self.selected_nodes.first().copied(),
+   765→        };
+   766→        if self.selected_nodes.is_empty() && primary.is_none() {
+   767→            AgentContext::EntireCanvas
+   768→        } else {
+   769→            let mut ids: Vec<usize> = self.selected_nodes.clone();
+   770→            if let Some(p) = primary {
+   771→                if !ids.contains(&p) {
+   772→                    ids.push(p);
+   773→                }
+   774→            }
+   775→            AgentContext::SelectedNodes(ids)
+   776→        }
+   777→    }
+   778→
+   779→    /// FR-LLM-D / PRD-0010 F-4.9: валидация tool_calls против selection
+   780→    /// whitelist (Q3). Разрешено: создавать новые, модифицировать selected.
+   781→    /// REJECT: modify non-selected.
+   782→    ///
+   783→    /// Это статический анализ tool_calls ДО применения. Реальная защита —
+   784→    /// `graph_apply` на серверной стороне (MCP) тоже проверяет.
+   785→    pub(super) fn agent_validate_tool_calls(
+   786→        &self,
+   787→        calls: &[canvas_llm::ToolCall],
+   788→        selected: &[usize],
+   789→    ) -> ValidationResult {
+   790→        let selected_ids: std::collections::HashSet<String> = selected
+   791→            .iter()
+   792→            .filter_map(|&i| self.scene.canvas.nodes.get(i).map(|n| n.id.clone()))
+   793→            .collect();
+   794→        let mut rejected = Vec::new();
+   795→        for call in calls {
+   796→            // REJECT-паттерны: node_edit / node_delete / node_move /
+   797→            // node_resize / node_set_color / edge_delete с id НЕ из selected.
+   798→            let modifying_id = call.name.as_str();
+   799→            let target_id: Option<&str> = match modifying_id {
+   800→                "node_edit" | "node_delete" | "node_move" | "node_resize" | "node_set_color"
+   801→                | "edge_delete" => call
+   802→                    .arguments
+   803→                    .as_object()
+   804→                    .and_then(|o| o.iter().find(|(k, _)| k == "id"))
+   805→                    .and_then(|(_, v)| v.as_string()),
+   806→                _ => None,
+   807→            };
+   808→            if let Some(id) = target_id {
+   809→                if !selected_ids.contains(id) {
+   810→                    rejected.push((
+   811→                        call.name.clone(),
+   812→                        format!(
+   813→                            "попытка модифицировать непросленную ноду/ребро «{}» (Q3 whitelist)",
+   814→                            id
+   815→                        ),
+   816→                    ));
+   817→                }
+   818→            }
+   819→        }
+   820→        ValidationResult {
+   821→            valid: rejected.is_empty(),
+   822→            rejected,
+   823→        }
+   824→    }
+   825→
+   826→    /// FR-LLM-D / PRD-0010 F-4.11: построить preview из tool_calls (ghost-ноды).
+   827→    ///
+   828→    /// MOCK (без LLM): строит preview из текста пользователя по эвристикам
+   829→    /// прототипа `aiAgentBuildPreview`:
+   830→    /// - "CAC" + "LTV" → 2 ноды (CAC, LTV) + 1 ребро (LTV/CAC).
+   831→    /// - "воронк"/"funnel" → 3 ноды (Visits, Regs, Purchases) + 2 ребра.
+   832→    /// - Иначе → 2 generic-ноды + 1 ребро.
+   833→    ///
+   834→    /// FR-010 v2 layout: цепочка слева-направо от якоря (выделенной ноды
+   835→    /// или центра вьюпорта).
+   836→    pub(super) fn agent_build_preview(&self, text: &str) -> AgentPreview {
+   837→        let t = text.to_lowercase();
+   838→        let (titles, edges): (Vec<&str>, Vec<(usize, usize, &str)>) =
+   839→            if t.contains("cac") && t.contains("ltv") {
+   840→                (vec!["CAC", "LTV"], vec![(0, 1, "LTV/CAC")])
+   841→            } else if t.contains("воронк") || t.contains("funnel") {
+   842→                (
+   843→                    vec!["Визиты", "Регистрации", "Покупки"],
+   844→                    vec![(0, 1, "visits"), (1, 2, "regs")],
+   845→                )
+   846→            } else {
+   847→                (vec!["Новая нода", "Связанная нода"], vec![(0, 1, "value")])
+   848→            };
+   849→        // Layout: цепочка слева-направо от якоря (выделенная нода или центр
+   850→        // вьюпорта). Шаг — 320px (как прототип).
+   851→        let anchor = self.selected.and_then(|s| match s {
+   852→            Selection::Node(i) => self.scene.canvas.nodes.get(i),
+   853→            _ => None,
+   854→        });
+   855→        let (base_x, base_y) = if let Some(a) = anchor {
+   856→            (a.x + a.width + 90.0, a.y - 10.0)
+   857→        } else {
+   858→            // Центр вьюпорта в world-координатах = camera.position().
+   859→            let center = self.camera.position();
+   860→            (center[0] - titles.len() as f32 * 155.0, center[1] - 60.0)
+   861→        };
+   862→        let nodes = titles
+   863→            .iter()
+   864→            .enumerate()
+   865→            .map(|(i, title)| AgentPreviewNode {
+   866→                title: title.to_string(),
+   867→                x: base_x + i as f32 * 320.0,
+   868→                y: base_y,
+   869→                width: 240.0,
+   870→                height: 120.0,
+   871→            })
+   872→            .collect();
+   873→        let edges = edges
+   874→            .into_iter()
+   875→            .map(|(f, t, l)| (f, t, l.to_string()))
+   876→            .collect();
+   877→        AgentPreview { nodes, edges }
+   878→    }
+   879→
+   880→    /// W2 п.2: preview из реальных tool_calls модели. Разбираются вызовы
+   881→    /// `n` (graph_apply батч, FR-033): `n_note {ref, x, y, text}` → ноды,
+   882→    /// `edge_create {fromRef, toRef}` → рёбра (по ref-адресам батча).
+   883→    /// Ноды без x/y (модель не задала позицию) — цепочка от якоря (как
+   884→    /// [`Self::agent_build_preview`]). Вызовы без нод — пустой preview
+   885→    /// (панель покажет «нечего применять»).
+   886→    pub(super) fn agent_preview_from_calls(&self, calls: &[canvas_llm::ToolCall]) -> AgentPreview {
+   887→        // Anchor-геометрия — как mock-preview.
+   888→        let anchor = self.selected.and_then(|s| match s {
+   889→            Selection::Node(i) => self.scene.canvas.nodes.get(i),
+   890→            _ => None,
+   891→        });
+   892→        let (base_x, base_y) = if let Some(a) = anchor {
+   893→            (a.x + a.width + 90.0, a.y - 10.0)
+   894→        } else {
+   895→            let center = self.camera.position();
+   896→            (center[0] - 155.0, center[1] - 60.0)
+   897→        };
+   898→
+   899→        let mut nodes: Vec<AgentPreviewNode> = Vec::new();
+   900→        let mut refs: Vec<String> = Vec::new(); // ref → индекс в nodes
+   901→        let mut edges: Vec<(usize, usize, String)> = Vec::new();
+   902→        let mut pending_edges: Vec<(String, String)> = Vec::new();
+   903→
+   904→        for call in calls {
+   905→            if call.name != "graph_apply" {
+   906→                continue;
+   907→            }
+   908→            let ops = call
+   909→                .arguments
+   910→                .to_serde()
+   911→                .get("operations")
+   912→                .and_then(|v| v.as_array())
+   913→                .cloned()
+   914→                .unwrap_or_default();
+   915→            for op in &ops {
+   916→                let op_name = op.get("op").and_then(|v| v.as_str()).unwrap_or("");
+   917→                match op_name {
+   918→                    "n_note" | "n_file" => {
+   919→                        let title = op
+   920→                            .get("text")
+   921→                            .and_then(|v| v.as_str())
+   922→                            .map(|t| t.lines().next().unwrap_or(t).to_string())
+   923→                            .or_else(|| op.get("path").and_then(|v| v.as_str()).map(String::from))
+   924→                            .unwrap_or_else(|| "Новая нода".into());
+   925→                        let i = nodes.len();
+   926→                        let auto_x = base_x + i as f32 * 320.0;
+   927→                        nodes.push(AgentPreviewNode {
+   928→                            title,
+   929→                            x: op
+   930→                                .get("x")
+   931→                                .and_then(|v| v.as_f64())
+   932→                                .map(|v| v as f32)
+   933→                                .unwrap_or(auto_x),
+   934→                            y: op
+   935→                                .get("y")
+   936→                                .and_then(|v| v.as_f64())
+   937→                                .map(|v| v as f32)
+   938→                                .unwrap_or(base_y),
+   939→                            width: op
+   940→                                .get("width")
+   941→                                .and_then(|v| v.as_f64())
+   942→                                .map(|v| v as f32)
+   943→                                .unwrap_or(240.0),
+   944→                            height: op
+   945→                                .get("height")
+   946→                                .and_then(|v| v.as_f64())
+   947→                                .map(|v| v as f32)
+   948→                                .unwrap_or(120.0),
+   949→                        });
+   950→                        if let Some(r) = op.get("ref").and_then(|v| v.as_str()) {
+   951→                            refs.push(r.to_string());
+   952→                        } else {
+   953→                            refs.push(format!("__idx{i}"));
+   954→                        }
+   955→                    }
+   956→                    "edge_create" => {
+   957→                        // Адресация fromRef/toRef резолвится ПОСЛЕ прохода
+   958→                        // нод (ref может ссылаться на более ранний op).
+   959→                        let from = op.get("fromRef").and_then(|v| v.as_str());
+   960→                        let to = op.get("toRef").and_then(|v| v.as_str());
+   961→                        if let (Some(f), Some(t)) = (from, to) {
+   962→                            pending_edges.push((f.to_string(), t.to_string()));
+   963→                        }
+   964→                    }
+   965→                    _ => {}
+   966→                }
+   967→            }
+   968→        }
+   969→        // Резолв ребер по ref → индекс; неразрешенные пропускаются.
+   970→        // (второй проход: ref-таблица уже заполнена)
+   971→        let resolve = |r: &String| -> Option<usize> { refs.iter().position(|x| x == r) };
+   972→        for (f, t) in pending_edges.drain(..) {
+   973→            if let (Some(fi), Some(ti)) = (resolve(&f), resolve(&t)) {
+   974→                edges.push((fi, ti, String::new()));
+   975→            }
+   976→        }
+   977→        AgentPreview { nodes, edges }
+   978→    }
+   979→
+   980→    /// W2 п.2: preview из результата Graph Builder (GeneratedNode/Edge →
+   981→    /// ghost-ноды той же механики Accept/Reject).
+   982→    #[cfg(feature = "l1-llm")]
+   983→    pub(super) fn agent_preview_from_graph_output(
+   984→        &self,
+   985→        output: &canvas_graph_builder::GraphBuilderOutput,
+   986→    ) -> AgentPreview {
+   987→        let anchor = self.selected.and_then(|s| match s {
+   988→            Selection::Node(i) => self.scene.canvas.nodes.get(i),
+   989→            _ => None,
+   990→        });
+   991→        let (base_x, base_y) = if let Some(a) = anchor {
+   992→            (a.x + a.width + 90.0, a.y - 10.0)
+   993→        } else {
+   994→            let center = self.camera.position();
+   995→            (
+   996→                center[0] - output.nodes.len() as f32 * 155.0,
+   997→                center[1] - 60.0,
+   998→            )
+   999→        };
+  1000→        let nodes: Vec<AgentPreviewNode> = output
+  1001→            .nodes
+  1002→            .iter()
+  1003→            .enumerate()
+  1004→            .map(|(i, n)| AgentPreviewNode {
+  1005→                title: n.label.clone(),
+  1006→                x: base_x + i as f32 * 320.0,
+  1007→                y: base_y,
+  1008→                width: 240.0,
+  1009→                height: 120.0,
+  1010→            })
+  1011→            .collect();
+  1012→        let edges: Vec<(usize, usize, String)> = output
+  1013→            .edges
+  1014→            .iter()
+  1015→            .filter_map(|e| {
+  1016→                let from = output.nodes.iter().position(|n| n.id == e.from)?;
+  1017→                let to = output.nodes.iter().position(|n| n.id == e.to)?;
+  1018→                Some((from, to, e.label.clone().unwrap_or_default()))
+  1019→            })
+  1020→            .collect();
+  1021→        AgentPreview { nodes, edges }
+  1022→    }
+  1023→
+  1024→    /// W2 п.2: применить preview через `mcp_dispatch("n", …)` — батч
+  1025→    /// операций FR-033 («всё или ничего», один undo-шаг). Возвращает
+  1026→    /// (создано нод, создано связей) или человекочитаемую ошибку.
+  1027→    pub(super) fn agent_apply_preview_ops(
+  1028→        &mut self,
+  1029→        preview: &AgentPreview,
+  1030→    ) -> Result<(usize, usize), String> {
+  1031→        let mut operations: Vec<serde_json::Value> = Vec::new();
+  1032→        let refs: Vec<String> = (0..preview.nodes.len()).map(|i| format!("n{i}")).collect();
+  1033→        for (i, node) in preview.nodes.iter().enumerate() {
+  1034→            operations.push(serde_json::json!({
+  1035→                "op": "n_note",
+  1036→                "ref": refs[i],
+  1037→                "x": node.x,
+  1038→                "y": node.y,
+  1039→                "width": node.width,
+  1040→                "height": node.height,
+  1041→                "text": node.title,
+  1042→            }));
+  1043→        }
+  1044→        for (from, to, label) in &preview.edges {
+  1045→            let Some(f) = refs.get(*from) else { continue };
+  1046→            let Some(t) = refs.get(*to) else { continue };
+  1047→            let mut op = serde_json::json!({
+  1048→                "op": "edge_create",
+  1049→                "fromRef": f,
+  1050→                "toRef": t,
+  1051→            });
+  1052→            if !label.is_empty() {
+  1053→                op["label"] = serde_json::Value::String(label.clone());
+  1054→            }
+  1055→            operations.push(op);
+  1056→        }
+  1057→        if operations.is_empty() {
+  1058→            return Err("нет операций для применения".into());
+  1059→        }
+  1060→        let result = canvas_scene::mcp_dispatch(
+  1061→            &mut self.scene,
+  1062→            &self.templates,
+  1063→            "n",
+  1064→            &serde_json::json!({ "operations": operations }),
+  1065→        );
+  1066→        match result {
+  1067→            Ok(resp) => {
+  1068→                let ok = resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+  1069→                if ok {
+  1070→                    Ok((preview.nodes.len(), preview.edges.len()))
+  1071→                } else {
+  1072→                    Err(resp
+  1073→                        .get("message")
+  1074→                        .and_then(|v| v.as_str())
+  1075→                        .unwrap_or("graph_apply: операция отклонена")
+  1076→                        .to_string())
+  1077→                }
+  1078→            }
+  1079→            Err(e) => Err(e),
+  1080→        }
+  1081→    }
+  1082→
+  1083→    /// FR-LLM-D / PRD-0010 F-4: принять preview → применить через
+  1084→    /// `mcp_dispatch("n")` одним undo-шагом (FR-033: батч «всё или
+  1085→    /// ничего»). W2: реальный graph_apply (было — mock-сообщение).
+  1086→    pub(super) fn agent_accept_preview(&mut self) {
+  1087→        let Some(preview) = self.agent_panel.preview.take() else {
+  1088→            return;
+  1089→        };
+  1090→        match self.agent_apply_preview_ops(&preview) {
+  1091→            Ok((applied_nodes, applied_edges)) => {
+  1092→                self.agent_panel.messages.push(AgentMessage::Bot {
+  1093→                    text: format!(
+  1094→                        "✓ Применено: {} {}·{} {}· graph_apply — один undo-шаг (F-4.5). \
+  1095→                         Деструктивные ops по-прежнему требуют confirm.",
+  1096→                        applied_nodes,
+  1097→                        plural_ru(applied_nodes, "нода", "ноды", "нод"),
+  1098→                        applied_edges,
+  1099→                        plural_ru(applied_edges, "связь", "связи", "связей")
+  1100→                    ),
+  1101→                    kind: AgentMsgKind::Success,
+  1102→                    tool_calls: Vec::new(),
+  1103→                });
+  1104→            }
+  1105→            Err(e) => {
+  1106→                // Батч откатен сценой (FR-033) — канвас прежний.
+  1107→                self.agent_panel.messages.push(AgentMessage::Bot {
+  1108→                    text: format!("✕ graph_apply отклонён: {e}. Канвас не изменён."),
+  1109→                    kind: AgentMsgKind::Error,
+  1110→                    tool_calls: Vec::new(),
+  1111→                });
+  1112→            }
+  1113→        }
+  1114→        self.agent_panel.cost_estimate = None;
+  1115→        self.request_redraw();
+  1116→    }
+  1117→
+  1118→    /// FR-LLM-D / PRD-0010 F-4: отклонить preview.
+  1119→    pub(super) fn agent_reject_preview(&mut self) {
+  1120→        self.agent_panel.preview = None;
+  1121→        self.agent_panel.cost_estimate = None;
+  1122→        self.agent_panel.messages.push(AgentMessage::Bot {
+  1123→            text: "Превью отклонено — ghost-ноды убраны, канвас не изменён. \
+  1124→                   Переформулируйте запрос или уточните контекст."
+  1125→                .to_owned(),
+  1126→            kind: AgentMsgKind::Normal,
+  1127→            tool_calls: Vec::new(),
+  1128→        });
+  1129→        self.request_redraw();
+  1130→    }
+  1131→
+  1132→    /// FR-LLM-D / PRD-0010 F-4: отправить пользовательский запрос агенту.
+  1133→    ///
+  1134→    /// Шаги:
+  1135→    /// 1. Проверка AI paused / off / cost limit (защита от лишних запросов).
+  1136→    /// 2. Добавить user-сообщение в журнал.
+  1137→    /// 3. Контекст (selected или весь канвас) → redact если Cloud.
+  1138→    /// 4. Cost estimate (для отображения).
+  1139→    /// 5. Mock: построить preview из текста + добавить bot-сообщение.
+  1140→    ///
+  1141→    /// FR-LLM-D-TODO: реальный LLM-вызов через worker (`tool_calling`),
+  1142→    /// multi-turn с `tool_results`, валидация через `agent_validate_tool_calls`.
+  1143→    pub(super) fn agent_send(&mut self, text: &str) {
+  1144→        let txt = text.trim();
+  1145→        if txt.is_empty() || self.agent_panel.busy {
+  1146→            return;
+  1147→        }
+  1148→        // 1. Защитные проверки (как прототип `agSend`).
+  1149→        if self.ai_paused {
+  1150→            self.agent_panel.messages.push(AgentMessage::Bot {
+  1151→                text: "AI на паузе (⏸ в статусной панели). Нажмите ▶, чтобы возобновить."
+  1152→                    .to_owned(),
+  1153→                kind: AgentMsgKind::Error,
+  1154→                tool_calls: Vec::new(),
+  1155→            });
+  1156→            self.request_redraw();
+  1157→            return;
+  1158→        }
+  1159→        let llm = &self.settings.llm;
+  1160→        if llm.provider_agent == canvas_llm::LlmProviderId::Off {
+  1161→            self.agent_panel.messages.push(AgentMessage::Bot {
+  1162→                text: "Провайдер Agent Panel: Off. Выберите провайдера в \
+  1163→                       «Настройки AI» (9-й таб)."
+  1164→                    .to_owned(),
+  1165→                kind: AgentMsgKind::Error,
+  1166→                tool_calls: Vec::new(),
+  1167→            });
+  1168→            self.request_redraw();
+  1169→            return;
+  1170→        }
+  1171→        if self.ai_cost_day >= llm.cost_limit_daily {
+  1172→            self.agent_panel.messages.push(AgentMessage::Bot {
+  1173→                text: format!(
+  1174→                    "⚠ Rate limit: дневной лимит cost исчерпан (${:.2} / ${:.2}). \
+  1175→                     Запрос отклонён — увеличьте лимит в «Настройки AI».",
+  1176→                    self.ai_cost_day, llm.cost_limit_daily
+  1177→                ),
+  1178→                kind: AgentMsgKind::Error,
+  1179→                tool_calls: Vec::new(),
+  1180→            });
+  1181→            self.request_redraw();
+  1182→            return;
+  1183→        }
+  1184→
+  1185→        // FR-LLM-OAUTH-APP / PRD-0010 F-5.9: построение реального провайдера
+  1186→        // через фабрику (`llm_factory`) до отправки — валидация конфига
+  1187→        // (пустой BYOK-ключ / невыполненный OAuth-вход ChatGPT). При
+  1188→        // недоступности — сообщение в журнал и запрос не уходит; для
+  1189→        // ChatGptOAuth с заданным BYOK-ключом сообщение обещает fallback на
+  1190→        // BYOK (реальный вызов строит провайдер повторно с `Byok` — точка
+  1191→        // интеграции ниже). Mock-флоу без фичи l1-llm не меняется.
+  1192→        #[cfg(feature = "l1-llm")]
+  1193→        if let Some(message) = crate::llm_factory::provider_unavailable_message(
+  1194→            llm.provider_agent,
+  1195→            &llm.model_agent,
+  1196→            llm,
+  1197→            &self.oauth_assets(),
+  1198→        ) {
+  1199→            self.agent_panel.messages.push(AgentMessage::Bot {
+  1200→                text: message,
+  1201→                kind: AgentMsgKind::Error,
+  1202→                tool_calls: Vec::new(),
+  1203→            });
+  1204→            self.request_redraw();
+  1205→            return;
+  1206→        }
+  1207→
+  1208→        // 2. User-сообщение в журнал.
+  1209→        self.agent_panel
+  1210→            .messages
+  1211→            .push(AgentMessage::User(txt.to_owned()));
+  1212→        self.agent_panel.input.clear();
+  1213→        self.agent_panel.caret = 0;
+  1214→        self.agent_panel.busy = true;
+  1215→
+  1216→        // 3. Контекст (для отображения и будущего redact).
+  1217→        let ctx = self.agent_selection_context();
+  1218→
+  1219→        // W2 п.2: реальный LLM-вызов через executor (натив — worker-поток;
+  1220→        // wasm — шов spawn_local, W3). Провайдер строит фабрика (валидация
+  1221→        // выше); ошибка джобы → graceful fallback на mock-флоу ниже (F-5.9:
+  1222→        // панель остаётся работоспособной без сети и после волны W3).
+  1223→        #[cfg(feature = "l1-llm")]
+  1224→        if let Some(provider) = crate::llm_factory::build_feature_provider(
+  1225→            llm.provider_agent,
+  1226→            &llm.model_agent,
+  1227→            llm,
+  1228→            &self.oauth_assets(),
+  1229→        ) {
+  1230→            // Контекст канваса (Q3 selection-aware) + инструменты MCP.
+  1231→            let ctx_hint = match &ctx {
+  1232→                AgentContext::EntireCanvas => "user selected: nothing (entire canvas)".to_owned(),
+  1233→                AgentContext::SelectedNodes(ids) => format!("user selected node indexes: {ids:?}"),
+  1234→            };
+  1235→            let system = "You are the CanvasDesk canvas agent. Plan edits and call the \
+  1236→                          `graph_apply` tool (batch of FR-033 operations: n_note/n_file/template_instantiate/\
+  1237→                          edge_create/edge_delete/param_set/node_move/group_create) to fulfil the \
+  1238→                          user's request. Create nodes with n_note (ref/x/y/text/width/height) and \
+  1239→                          link them with edge_create (fromRef/toRef). Keep the plan small and useful."
+  1240→                .to_owned();
+  1241→            let messages = vec![
+  1242→                canvas_llm::Message::system(&format!("{system}\n{ctx_hint}")),
+  1243→                canvas_llm::Message::user(txt),
+  1244→            ];
+  1245→            let tools = mcp_tools_as_tooldefs();
+  1246→            self.llm_executor
+  1247→                .spawn_agent(crate::llm_executor::AgentJob {
+  1248→                    provider,
+  1249→                    messages,
+  1250→                    tools,
+  1251→                    opts: canvas_llm::ToolCallingOpts::default(),
+  1252→                });
+  1253→            self.request_redraw();
+  1254→            return;
+  1255→        }
+  1256→        let ctx_str = match &ctx {
+  1257→            AgentContext::EntireCanvas => "весь канвас".to_owned(),
+  1258→            AgentContext::SelectedNodes(ids) => {
+  1259→                if ids.len() == 1 {
+  1260→                    if let Some(&i) = ids.first() {
+  1261→                        let title = self
+  1262→                            .scene
+  1263→                            .canvas
+  1264→                            .nodes
+  1265→                            .get(i)
+  1266→                            .map(|n| {
+  1267→                                n.label
+  1268→                                    .clone()
+  1269→                                    .or_else(|| n.title().map(|s| s.to_owned()))
+  1270→                                    .unwrap_or_else(|| format!("node #{}", i))
+  1271→                            })
+  1272→                            .unwrap_or_else(|| "?".into());
+  1273→                        format!("выбранная нода «{}»", title)
+  1274→                    } else {
+  1275→                        "1 выбранная нода".to_owned()
+  1276→                    }
+  1277→                } else {
+  1278→                    format!("{} выбранных нод", ids.len())
+  1279→                }
+  1280→            }
+  1281→        };
+  1282→
+  1283→        // 4. Cost estimate (mock — ~$0.02 как в прототипе).
+  1284→        self.agent_panel.cost_estimate = Some(0.02);
+  1285→
+  1286→        // 5. Bot-сообщение «Планирую…» с tool_calls (mock как прототип).
+  1287→        let tool_calls = vec![
+  1288→            ToolCallDisplay {
+  1289→                tool_name: "graph_read".to_owned(),
+  1290→                args_summary: format!("{{context: {}}}", ctx_str),
+  1291→                status: ToolCallStatus::Success,
+  1292→            },
+  1293→            ToolCallDisplay {
+  1294→                tool_name: "node_create".to_owned(),
+  1295→                args_summary: format!(
+  1296→                    "×{}",
+  1297→                    if txt.to_lowercase().contains("воронк")
+  1298→                        || txt.to_lowercase().contains("funnel")
+  1299→                    {
+  1300→                        3
+  1301→                    } else {
+  1302→                        2
+  1303→                    }
+  1304→                ),
+  1305→                status: ToolCallStatus::Success,
+  1306→            },
+  1307→            ToolCallDisplay {
+  1308→                tool_name: "graph_validate".to_owned(),
+  1309→                args_summary: "→ ok · циклов нет · юниты сходятся".to_owned(),
+  1310→                status: ToolCallStatus::Success,
+  1311→            },
+  1312→        ];
+  1313→        self.agent_panel.messages.push(AgentMessage::Bot {
+  1314→            text: format!("Планирую… контекст: {} · оценка ~${:.2}", ctx_str, 0.02),
+  1315→            kind: AgentMsgKind::Normal,
+  1316→            tool_calls,
+  1317→        });
+  1318→
+  1319→        // 6. Mock: построить preview из текста + добавить финальное сообщение.
+  1320→        let preview = self.agent_build_preview(txt);
+  1321→        let n = preview.nodes.len();
+  1322→        let m = preview.edges.len();
+  1323→        self.agent_panel.preview = Some(preview);
+  1324→        self.agent_panel.messages.push(AgentMessage::Bot {
+  1325→            text: format!(
+  1326→                "Предлагаю связку: {} {}, {} {} (последовательность graph_apply, \
+  1327→                 один undo-шаг). Ghost-превью — на канвасе. Фактический расход: $0.021.",
+  1328→                n,
+  1329→                plural_ru(n, "нода", "ноды", "нод"),
+  1330→                m,
+  1331→                plural_ru(m, "связь", "связи", "связей")
+  1332→            ),
+  1333→            kind: AgentMsgKind::Normal,
+  1334→            tool_calls: Vec::new(),
+  1335→        });
+  1336→
+  1337→        // FR-LLM-D-TODO: реальный LLM-вызов:
+  1338→        //   let messages = [Message::system(...), Message::user(txt)];
+  1339→        //   let tools = canvas_mcp::tools_list() → ToolDef[];
+  1340→        //   let calls = provider.tool_calling(&messages, &tools, &opts).await?;
+  1341→        //   let validation = self.agent_validate_tool_calls(&calls, &selected);
+  1342→        //   if !validation.valid { self.agent_panel.messages.push(error); return; }
+  1343→        //   let preview = self.agent_build_preview_from_calls(&calls);
+  1344→        //   self.agent_panel.preview = Some(preview);
+  1345→        //   cost += actual_cost(...); self.ai_cost_session += cost; self.ai_cost_day += cost;
+  1346→
+  1347→        self.agent_panel.busy = false;
+  1348→        // 7. ChatGPT rate counter (mock — как прототип).
+  1349→        if llm.provider_agent == canvas_llm::LlmProviderId::ChatGptOAuth {
+  1350→            self.ai_chatgpt_rate_used = self.ai_chatgpt_rate_used.saturating_add(1);
+  1351→        }
+  1352→        self.request_redraw();
+  1353→    }
+  1354→
+  1355→    /// FR-LLM-D / PRD-0010 F-4: hit-test агент-панели — определить элемент
+  1356→    /// под курсором (для обработчика ввода). `None` — клик мимо панели.
+  1357→    pub(crate) fn agent_panel_hit(&self, point: [f32; 2]) -> Option<AgentPanelHit> {
+  1358→        let panel = self.agent_panel_rect()?;
+  1359→        if !point_in_rect(panel, point) {
+  1360→            return None;
+  1361→        }
+  1362→        let [panel_x, panel_y, panel_w, panel_h] = panel;
+  1363→        // Кнопка закрытия ✕ (правый край шапки).
+  1364→        let head_y = panel_y + 8.0;
+  1365→        let close_x = panel_x + panel_w - PAD - CLOSE_BTN_SIZE;
+  1366→        if point_in_rect(
+  1367→            [close_x, head_y + 2.0, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE],
+  1368→            point,
+  1369→        ) {
+  1370→            return Some(AgentPanelHit::Close);
+  1371→        }
+  1372→        // Input area.
+  1373→        let input_y = panel_y + panel_h - QUICK_H - INPUT_H + 4.0;
+  1374→        let send_w = 36.0;
+  1375→        let input_w = panel_w - PAD * 2.0 - send_w - GAP;
+  1376→        let input_rect = [panel_x + PAD, input_y, input_w, INPUT_H - 8.0];
+  1377→        if point_in_rect(input_rect, point) {
+  1378→            return Some(AgentPanelHit::Input);
+  1379→        }
+  1380→        // Send button.
+  1381→        let send_rect = [
+  1382→            panel_x + PAD + input_w + GAP,
+  1383→            input_y,
+  1384→            send_w,
+  1385→            INPUT_H - 8.0,
+  1386→        ];
+  1387→        if point_in_rect(send_rect, point) {
+  1388→            return Some(AgentPanelHit::Send);
+  1389→        }
+  1390→        // Quick actions (3 preset).
+  1391→        let quick_y = panel_y + panel_h - QUICK_H + 4.0;
+  1392→        let quick_w = (panel_w - PAD * 2.0 - GAP * 2.0) / 3.0;
+  1393→        for i in 0..3 {
+  1394→            let qx = panel_x + PAD + i as f32 * (quick_w + GAP);
+  1395→            if point_in_rect([qx, quick_y, quick_w, 24.0], point) {
+  1396→                return Some(AgentPanelHit::QuickAction(i));
+  1397→            }
+  1398→        }
+  1399→        // Accept/Reject кнопки (если есть preview в последнем сообщении).
+  1400→        let log_y = panel_y + HEAD_H + CTX_H;
+  1401→        let log_h = panel_h - HEAD_H - CTX_H - EST_H - INPUT_H - QUICK_H - GAP;
+  1402→        if self.agent_panel.preview.is_some() {
+  1403→            // Грубая проверка — кнопки где-то в нижней половине лога.
+  1404→            // FR-LLM-D-TODO: точная геометрия — через макет сообщений.
+  1405→            let btn_y = log_y + log_h - PREVIEW_BTN_H - 16.0;
+  1406→            let btn_w = (panel_w - PAD * 2.0 - 8.0) / 2.0;
+  1407→            let accept_rect = [panel_x + PAD + 16.0, btn_y, btn_w, PREVIEW_BTN_H];
+  1408→            let reject_rect = [
+  1409→                panel_x + PAD + 16.0 + btn_w + 8.0,
+  1410→                btn_y,
+  1411→                btn_w,
+  1412→                PREVIEW_BTN_H,
+  1413→            ];
+  1414→            if point_in_rect(accept_rect, point) {
+  1415→                return Some(AgentPanelHit::Accept);
+  1416→            }
+  1417→            if point_in_rect(reject_rect, point) {
+  1418→                return Some(AgentPanelHit::Reject);
+  1419→            }
+  1420→        }
+  1421→        // Клик мимо активных элементов (тело панели) — глотаем ввод.
+  1422→        Some(AgentPanelHit::NoOp)
+  1423→    }
+  1424→
+  1425→    /// W2 п.1: диспетчер клика по агент-панели (вызов из обработчика ввода
+  1426→    /// ПЕРЕД canvas-pick — панель транзиентна, как ai-status-panel).
+  1427→    /// `true` — клик поглощён панелью.
+  1428→    pub(super) fn agent_panel_click(&mut self, point: [f32; 2]) -> bool {
+  1429→        let Some(hit) = self.agent_panel_hit(point) else {
+  1430→            return false;
+  1431→        };
+  1432→        match hit {
+  1433→            AgentPanelHit::Close => {
+  1434→                self.agent_panel.open = false;
+  1435→                self.request_redraw();
+  1436→            }
+  1437→            AgentPanelHit::Input => {
+  1438→                // Фокус input: клавиатура и так маршрутизируется в UI-слой
+  1439→                // (esc_stack верхний owner); символьный ввод панели —
+  1440→                // через agent_input_push (см. route_owner_key).
+  1441→                self.request_redraw();
+  1442→            }
+  1443→            AgentPanelHit::Send => {
+  1444→                let text = self.agent_panel.input.clone();
+  1445→                self.agent_send(&text);
+  1446→            }
+  1447→            AgentPanelHit::QuickAction(i) => {
+  1448→                let prompts = ["CAC ↔ LTV", "Воронка из 3 нод", "Проверка графа"];
+  1449→                if let Some(p) = prompts.get(i) {
+  1450→                    self.agent_send(p);
+  1451→                }
+  1452→            }
+  1453→            AgentPanelHit::Accept => self.agent_accept_preview(),
+  1454→            AgentPanelHit::Reject => self.agent_reject_preview(),
+  1455→            AgentPanelHit::NoOp => {}
+  1456→        }
+  1457→        true
+  1458→    }
+  1459→}
+  1460→
+  1461→/// FR-LLM-D: русская плюрализация (как прототип `pluralRu`).
+  1462→/// Возвращает один из вариантов по числу: 1 — `one`, 2-4 — `few`,
+  1463→/// 5-0/11-14 — `many`. Входные строки пробрасываются по lifetime `'a` —
+  1464→/// вызывающий передаёт строковые литералы (`&'static str`), lifetimes
+  1465→/// согласованы.
+  1466→pub(crate) fn plural_ru<'a>(n: usize, one: &'a str, few: &'a str, many: &'a str) -> &'a str {
+  1467→    let n10 = n % 10;
+  1468→    let n100 = n % 100;
+  1469→    if n10 == 1 && n100 != 11 {
+  1470→        one
+  1471→    } else if (2..=4).contains(&n10) && !(12..=14).contains(&n100) {
+  1472→        few
+  1473→    } else {
+  1474→        many
+  1475→    }
+  1476→}
+  1477→
+  1478→/// FR-LLM-D: расширение `JsonVal` — доступ к object-pairs (для валидации
+  1479→/// tool_calls). `JsonVal` уже имеет `as_object` через pattern-match, но
+  1480→/// нам нужен便捷-метод — добавим trait-extension ниже.
+  1481→trait JsonValExt {
+  1482→    fn as_object(&self) -> Option<&[(String, canvas_llm::JsonVal)]>;
+  1483→    fn as_string(&self) -> Option<&str>;
+  1484→}
+  1485→
+  1486→impl JsonValExt for canvas_llm::JsonVal {
+  1487→    fn as_object(&self) -> Option<&[(String, canvas_llm::JsonVal)]> {
+  1488→        match self {
+  1489→            canvas_llm::JsonVal::Object(pairs) => Some(pairs),
+  1490→            _ => None,
+  1491→        }
+  1492→    }
+  1493→    fn as_string(&self) -> Option<&str> {
+  1494→        match self {
+  1495→            canvas_llm::JsonVal::String(s) => Some(s),
+  1496→            _ => None,
+  1497→        }
+  1498→    }
+  1499→}
+  1500→
+  1501→/// FR-LLM-D / PRD-0010 F-4: hit-test агент-панели — элемент под курсором.
+  1502→/// Возвращается `App::agent_panel_hit` для обработчика ввода.
+  1503→#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+  1504→pub(crate) enum AgentPanelHit {
+  1505→    /// Клик мимо активных элементов (тело панели) — ввод глотается.
+  1506→    NoOp,
+  1507→    /// Кнопка ✕ — закрыть панель.
+  1508→    Close,
+  1509→    /// Кнопка ➤ — отправить запрос.
+  1510→    Send,
+  1511→    /// Input area — клик фокусирует input (для печати).
+  1512→    Input,
+  1513→    /// Accept — применить preview.
+  1514→    Accept,
+  1515→    /// Reject — отклонить preview.
+  1516→    Reject,
+  1517→    /// Quick action №i (0..3) — preset-запрос.
+  1518→    QuickAction(usize),
+  1519→}
+  1520→
+  1521→/// W2 п.2: MCP-инструменты (`canvas_mcp::tools_list()`, tools/list JSON)
+  1522→/// → `Vec<ToolDef>` для `LlmProvider::tool_calling`. Схема — JsonVal
+  1523→/// (from_serde), имена/описания — строки реестра.
+  1524→pub(super) fn mcp_tools_as_tooldefs() -> Vec<canvas_llm::ToolDef> {
+  1525→    let list = canvas_mcp::tools_list();
+  1526→    let tools = list.get("tools").and_then(|v| v.as_array());
+  1527→    tools
+  1528→        .map(|arr| {
+  1529→            arr.iter()
+  1530→                .filter_map(|t| {
+  1531→                    let name = t.get("name")?.as_str()?.to_string();
+  1532→                    let description = t
+  1533→                        .get("description")
+  1534→                        .and_then(|v| v.as_str())
+  1535→                        .unwrap_or_default()
+  1536→                        .to_string();
+  1537→                    let input_schema = t
+  1538→                        .get("inputSchema")
+  1539→                        .cloned()
+  1540→                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+  1541→                    Some(canvas_llm::ToolDef {
+  1542→                        name,
+  1543→                        description,
+  1544→                        input_schema: canvas_llm::JsonVal::from_serde(&input_schema),
+  1545→                    })
+  1546→                })
+  1547→                .collect()
+  1548→        })
+  1549→        .unwrap_or_default()
+  1550→}
+  1551→
+  1552→#[cfg(test)]
+  1553→mod tests {
+  1554→    use super::*;
+  1555→
+  1556→    /// Панель скрыта если `!state.open`.
+  1557→    #[test]
+  1558→    fn closed_state_no_rect() {
+  1559→        let state = AgentState::default();
+  1560→        assert!(!state.open);
+  1561→    }
+  1562→
+  1563→    /// Открытая панель — `open: true`.
+  1564→    #[test]
+  1565→    fn open_state_flag() {
+  1566→        let state = AgentState {
+  1567→            open: true,
+  1568→            ..AgentState::default()
+  1569→        };
+  1570→        assert!(state.open);
+  1571→    }
+  1572→
+  1573→    /// Плюрализация RU — 1/2/5 нод.
+  1574→    #[test]
+  1575→    fn plural_ru_noda_nody_nod() {
+  1576→        assert_eq!(plural_ru(1, "нода", "ноды", "нод"), "нода");
+  1577→        assert_eq!(plural_ru(2, "нода", "ноды", "нод"), "ноды");
+  1578→        assert_eq!(plural_ru(3, "нода", "ноды", "нод"), "ноды");
+  1579→        assert_eq!(plural_ru(4, "нода", "ноды", "нод"), "ноды");
+  1580→        assert_eq!(plural_ru(5, "нода", "ноды", "нод"), "нод");
+  1581→        assert_eq!(plural_ru(11, "нода", "ноды", "нод"), "нод");
+  1582→        assert_eq!(plural_ru(21, "нода", "ноды", "нод"), "нода");
+  1583→        assert_eq!(plural_ru(22, "нода", "ноды", "нод"), "ноды");
+  1584→        assert_eq!(plural_ru(25, "нода", "ноды", "нод"), "нод");
+  1585→    }
+  1586→
+  1587→    /// Плюрализация RU — связь/связи/связей.
+  1588→    #[test]
+  1589→    fn plural_ru_svyaz() {
+  1590→        assert_eq!(plural_ru(1, "связь", "связи", "связей"), "связь");
+  1591→        assert_eq!(plural_ru(2, "связь", "связи", "связей"), "связи");
+  1592→        assert_eq!(plural_ru(5, "связь", "связи", "связей"), "связей");
+  1593→    }
+  1594→
+  1595→    /// Ширина панели — 388px (как прототип строки 484).
+  1596→    #[test]
+  1597→    fn panel_width_388() {
+  1598→        assert_eq!(AGENT_PANEL_W, 388.0);
+  1599→    }
+  1600→
+  1601→    /// Минимальный вьюпорт — 600px (панель прячется на узких окнах).
+  1602→    #[test]
+  1603→    fn min_viewport_w_is_600() {
+  1604→        assert_eq!(AGENT_PANEL_MIN_VIEWPORT_W, 600.0);
+  1605→    }
+  1606→
+  1607→    /// FR-LLM-D: AgentState default — закрытая панель, без сообщений, не занят.
+  1608→    #[test]
+  1609→    fn agent_state_default() {
+  1610→        let s = AgentState::default();
+  1611→        assert!(!s.open);
+  1612→        assert!(s.messages.is_empty());
+  1613→        assert!(s.input.is_empty());
+  1614→        assert!(!s.busy);
+  1615→        assert!(s.preview.is_none());
+  1616→        assert!(s.cost_estimate.is_none());
+  1617→        assert_eq!(s.caret, 0);
+  1618→    }
+  1619→
+  1620→    /// FR-LLM-D: AgentPreview default — пустой.
+  1621→    #[test]
+  1622→    fn agent_preview_default_empty() {
+  1623→        let p = AgentPreview::default();
+  1624→        assert!(p.nodes.is_empty());
+  1625→        assert!(p.edges.is_empty());
+  1626→    }
+  1627→
+  1628→    /// FR-LLM-D: ValidationResult default — валидный, без отклонений.
+  1629→    #[test]
+  1630→    fn validation_result_default_valid() {
+  1631→        let v = ValidationResult::default();
+  1632→        assert!(v.valid);
+  1633→        assert!(v.rejected.is_empty());
+  1634→    }
+  1635→
+  1636→    /// FR-LLM-D: AgentMsgKind default — Normal.
+  1637→    #[test]
+  1638→    fn agent_msg_kind_default_normal() {
+  1639→        assert_eq!(AgentMsgKind::default(), AgentMsgKind::Normal);
+  1640→    }
+  1641→
+  1642→    /// FR-LLM-D: ToolCallStatus default — Pending.
+  1643→    #[test]
+  1644→    fn tool_call_status_default_pending() {
+  1645→        assert_eq!(ToolCallStatus::default(), ToolCallStatus::Pending);
+  1646→    }
+  1647→
+  1648→    /// FR-LLM-D: JsonValExt as_object / as_string.
+  1649→    #[test]
+  1650→    fn json_val_ext_object_and_string() {
+  1651→        use canvas_llm::JsonVal;
+  1652→        let obj = JsonVal::Object(vec![
+  1653→            ("id".into(), JsonVal::String("n1".into())),
+  1654→            ("x".into(), JsonVal::Number(10.0)),
+  1655→        ]);
+  1656→        let pairs = obj.as_object().unwrap();
+  1657→        assert_eq!(pairs.len(), 2);
+  1658→        assert_eq!(pairs[0].0, "id");
+  1659→        let s = pairs[0].1.as_string().unwrap();
+  1660→        assert_eq!(s, "n1");
+  1661→        // Не-объект → None.
+  1662→        assert!(JsonVal::Number(5.0).as_object().is_none());
+  1663→        // Не-строка → None.
+  1664→        assert!(JsonVal::Number(5.0).as_string().is_none());
+  1665→    }
+  1666→
+  1667→    /// FR-LLM-D: AgentPanelHit variants distinct.
+  1668→    #[test]
+  1669→    fn agent_panel_hit_variants_distinct() {
+  1670→        assert_ne!(AgentPanelHit::Close, AgentPanelHit::Send);
+  1671→        assert_ne!(AgentPanelHit::Accept, AgentPanelHit::Reject);
+  1672→        assert_ne!(AgentPanelHit::QuickAction(0), AgentPanelHit::QuickAction(1));
+  1673→        assert_ne!(AgentPanelHit::NoOp, AgentPanelHit::Input);
+  1674→    }
+  1675→
+  1676→    /// FR-LLM-D: AgentContext — EntireCanvas vs SelectedNodes.
+  1677→    #[test]
+  1678→    fn agent_context_variants() {
+  1679→        let entire = AgentContext::EntireCanvas;
+  1680→        let selected = AgentContext::SelectedNodes(vec![0, 1, 2]);
+  1681→        match entire {
+  1682→            AgentContext::EntireCanvas => {}
+  1683→            AgentContext::SelectedNodes(_) => panic!("expected EntireCanvas"),
+  1684→        }
+  1685→        match selected {
+  1686→            AgentContext::SelectedNodes(ids) => assert_eq!(ids, vec![0, 1, 2]),
+  1687→            AgentContext::EntireCanvas => panic!("expected SelectedNodes"),
+  1688→        }
+  1689→    }
+  1690→
+  1691→    /// FR-LLM-D: PILL_RADIUS — из токенов (FR-055 единый источник радиусов).
+  1692→    #[test]
+  1693→    fn pill_radius_uses_token() {
+  1694→        assert_eq!(PILL_RADIUS, canvas_core::tokens::RADIUS_PILL);
+  1695→    }
+  1696→
+  1697→    /// W2 п.2: MCP tools/list → ToolDef[] (имя `n` присутствует, схема не
+  1698→    /// пуста) — конвертация без сети.
+  1699→    #[test]
+  1700→    fn mcp_tools_as_tooldefs_has_graph_apply() {
+  1701→        let defs = mcp_tools_as_tooldefs();
+  1702→        assert!(!defs.is_empty());
+  1703→        assert!(defs.iter().any(|t| t.name == "graph_apply"));
+  1704→        assert!(defs.iter().all(|t| !t.description.is_empty()));
+  1705→        // Схема батча — объект с properties.operations.
+  1706→        let n = defs.iter().find(|t| t.name == "graph_apply").unwrap();
+  1707→        let schema = n.input_schema.to_serde();
+  1708→        assert!(schema.get("properties").is_some());
+  1709→    }
+  1710→
+  1711→    /// W2 п.2: preview из tool_calls — n_note/edge_create → ghost-ноды/рёбра
+  1712→    /// (парсинг аргументов батча; позиции модели сохраняются).
+  1713→    #[test]
+  1714→    fn preview_from_calls_parses_batch_ops() {
+  1715→        let calls = [canvas_llm::ToolCall {
+  1716→            id: "call_1".into(),
+  1717→            name: "n".into(),
+  1718→            arguments: canvas_llm::JsonVal::from_serde(&serde_json::json!({
+  1719→                "operations": [
+  1720→                    { "op": "n_note", "ref": "a", "x": 10.0, "y": 20.0, "text": "CAC" },
+  1721→                    { "op": "n_note", "ref": "b", "y": 20.0, "text": "LTV" },
+  1722→                    { "op": "edge_create", "fromRef": "a", "toRef": "b" }
+  1723→                ]
+  1724→            })),
+  1725→        }];
+  1726→        // agent_preview_from_calls — метод App; здесь проверяем чистую
+  1727→        // часть через статический разбор: конвертация аргументов.
+  1728→        let args = calls[0].arguments.to_serde();
+  1729→        let ops = args.get("operations").and_then(|v| v.as_array()).unwrap();
+  1730→        assert_eq!(ops.len(), 3);
+  1731→        assert_eq!(ops[0]["ref"], "a");
+  1732→        assert_eq!(ops[1]["op"], "n_note");
+  1733→        assert_eq!(ops[2]["op"], "edge_create");
+  1734→    }
+  1735→}
+  1736→

@@ -1,0 +1,140 @@
+== components ==
+h = 982
+header "kit.state.normal" y=60
+header "kit.state.hover" y=60
+header "kit.state.selected" y=60
+header "kit.state.pressed" y=60
+header "kit.state.disabled" y=60
+header "kit.state.focused" y=60
+header "kit.state.normal" y=312
+header "kit.state.focused" y=364
+header "admin.state.error" y=416
+header "kit.state.disabled" y=468
+header "admin.matrix.dropdown" y=560
+header "admin.matrix.tooltip" y=706
+header "admin.matrix.toast" y=760
+header "admin.matrix.list" y=812
+header "admin.matrix.rows" y=930
+btnrow Primary slot_y=82
+btnrow Secondary slot_y=120
+btnrow Ghost slot_y=158
+btnrow Danger slot_y=196
+icon y=240
+icon y=240
+icon y=240
+icon y=240
+icon y=240
+chip y=276
+chip y=276
+chip y=276
+chip y=276
+chip y=276
+chip y=276
+field Normal y=328
+field Focused y=380
+field Error y=432
+field Disabled y=484
+switch y=526
+switch y=526
+switch y=526
+switch y=526
+switch y=526
+switch y=526
+dd_closed y=576
+dd_open anchor_y=576 menu_y=610
+tooltip anchor_y=722 bubble_y=744
+toast y=776
+== fill detail ==
+f.header "admin.fill.empty" y=60
+f.header "admin.fill.medium" y=60
+f.header "admin.fill.full" y=60
+f.row "admin.row.list" slot_y=82
+f.row "admin.row.card" slot_y=184
+f.row "admin.row.field" slot_y=286
+f.row "admin.row.chips" slot_y=354
+f.row "admin.row.dropdown" slot_y=414
+f.row "admin.row.rows" slot_y=590
+f.row "admin.row.toast" slot_y=730
+f.row "admin.row.palette" slot_y=788
+f.row "admin.row.wheel" slot_y=890
+f.field Empty y=302
+f.field Medium y=302
+f.field Full y=302
+f.chip Medium y=354
+f.chip Medium y=354
+f.chip Full y=354
+f.chip Full y=354
+f.chip Full y=354
+f.chip Full y=354
+f.chip Full y=354
+f.dd Empty anchor_y=414 menu_y=448
+f.dd Medium anchor_y=414 menu_y=448
+f.dd Full anchor_y=414 menu_y=448
+f.table Medium y=590
+f.table Medium y=618
+f.table Full y=590
+f.table Full y=618
+f.table Full y=646
+f.table Full y=674
+== canvas detail ==
+c.node "admin.node.normal" y=60
+c.node "admin.node.selected" y=122
+c.node "admin.node.broken" y=184
+c.node "admin.node.group" y=246
+c.edge "admin.edge.default" y=316
+c.edge "admin.edge.flow" y=344
+c.edge "admin.edge.draft" y=372
+c.edge "admin.edge.dimmed" y=400
+c.port "admin.port.idle" y=436
+c.port "admin.port.hover" y=484
+c.port "admin.port.active" y=532
+c.table card_y=588 header_y=588
+== tokens detail ==
+t.group "admin.tok.group_slots"
+t.row "" y=60
+t.row "panel_fill" y=80
+t.row "panel_border" y=102
+t.row "control_fill" y=124
+t.row "control_border" y=146
+t.row "control_primary" y=168
+t.row "control_danger" y=190
+t.row "hover_fill" y=212
+t.row "primary_hover_fill" y=234
+t.row "selected_fill" y=256
+t.row "text" y=278
+t.row "text_title" y=300
+t.row "text_muted" y=322
+t.row "disabled_text" y=344
+t.row "accent" y=366
+t.group "admin.tok.group_dims"
+t.row "" y=398
+t.row "spacing.s" y=418
+t.row "spacing.sm" y=440
+t.row "spacing.md" y=462
+t.row "spacing.lg" y=484
+t.row "spacing.xl" y=506
+t.row "radius.chip" y=528
+t.row "radius.card" y=550
+t.row "radius.panel" y=572
+t.row "radius.pill" y=594
+t.row "card.header_h" y=616
+t.row "button.h" y=638
+t.row "field.h" y=660
+t.group "admin.tok.group_type"
+t.row "" y=692
+t.row "title.size" y=712
+t.row "body.size" y=734
+t.row "result.size" y=756
+t.row "badge.size" y=778
+t.group "admin.tok.group_motion"
+t.row "" y=810
+t.row "focus_fade_ms" y=830
+t.row "camera_flight_ms" y=852
+t.row "tooltip_delay_ms" y=874
+t.row "result_pulse_ms" y=896
+== fill ==
+h = 932
+== canvas ==
+h = 656
+== tokens ==
+h = 868

@@ -1,0 +1,1664 @@
+     1→//! FR-053 (U3 PRD-0009, F-7): layout-примитивы — immediate-mode функции
+     2→//! раскладки от слота родителя (PRD-0009 §7.4 V-5).
+     3→//!
+     4→//! Ничего не рисуют и не хранят состояния: каждый кадр потребитель
+     5→//! передаёт слот (родительский rect) и список детей — примитивы
+     6→//! возвращают вычисленные rect'ы. Интерфейс (слоты/constraints/align)
+     7→//! выбран совместимым со слотами taffy (PRD-0009 §7.4: эскалация на
+     8→//! taffy в v2 возможна без переписывания потребителей).
+     9→//!
+    10→//! # Политики переполнения
+    11→//!
+    12→//! `RowPolicy::Fit` — контент занимает слот; переполнение НЕ маскируется
+    13→//! (rect'ы выходят за слот) и ловится линтом/тестом G4 — молчаливый срез
+    14→//! (бывший `break`-кламп чипов галереи) становится видимым.
+    15→//!
+    16→//! `RowPolicy::SqueezeTail` — именованная деградация узкого слота: дети
+    17→//! получают `min(desired, остаток)`, хвост сжимается до нулевой ширины.
+    18→//! Вырожденные rect'ы невидимы и не пикаются (`UiRect::contains`
+    19→//! half-open) — дословная семантика бывшего замыкания `take` what-if
+    20→//! бара (FR-017/CR-015), вынесенная в именованную политику.
+    21→//!
+    22→//! `RowPolicy::Wrap { max_rows }` (FR-062 F-15) — жадная упаковка детей
+    23→//! по строкам слота: ребёнок не влез в строку — перенос; высота строки =
+    24→//! max высот детей строки; строк сверх `max_rows` НЕ маскируются —
+    25→//! выходят за нижний край слота (ловится линтом G4), как `Fit`.
+    26→//!
+    27→//! # Flex-факторы (FR-062 F-14)
+    28→//!
+    29→//! `Child.grow` — доля свободного места слота (после фиксированных
+    30→//! детей, базовых размеров flex-детей и зазоров), распределяемая
+    31→//! пропорционально `grow` (CSS flex-grow при flex-basis = базовый
+    32→//! размер). `MainAlign::End` — дети прижаты к концу главной оси.
+    33→//! Приоритеты: деградация `SqueezeTail` побеждает распределение (grow
+    34→//! игнорируется); grow поглощает свободное место — при Σgrow > 0 и
+    35→//! свободном месте `SpaceBetween`/`End` деградируют к `Start`/базовому
+    36→//! gap. `0.0` — фиксированный ребёнок (байт-в-байт прежнее поведение).
+    37→//!
+    38→//! # Measured-дети (FR-062 F-13)
+    39→//!
+    40→//! [`MeasuredItem`] — размер от контента внутри раскладки: ширина/высота
+    41→//! текстового ребёнка берутся из [`crate::measure::TextMeasurer`] (тот
+    42→//! же шейпинг, что у рендера) — ручная проводка `width_of →
+    43→//! Child::fixed` не нужна. Переполнение НЕ маскируется (наследует
+    44→//! политику ряда); молчаливого клампа в остаток слота нет — ограничение
+    45→//! ширины задаёт вызов явно (`max_w`), отрисовка усечения — ellipsis
+    46→//! потребителя (класс CR-015 защищён по построению: ширина не может
+    47→//! быть эвристикой — measurer в сигнатуре).
+    48→
+    49→use crate::geometry::{EdgeInsets, UiRect, UiVec2};
+    50→use crate::measure::TextMeasurer;
+    51→
+    52→// FR-068 W1: подмодули backend'ов вёрстки. `scene` — нейтральное к backend'ам
+    53→// дерево расширенной сцены (percent/aspect/position/overflow — за пределами
+    54→// V-5 примитивов).
+    55→// FR-068 W2: `flex` — собственный движок `FlexLayoutEngine` (0 deps,
+    56→// встроен в крейт; маркер-фича `flex-engine` в default, §Контракт-2).
+    57→// FR-068 W4: `taffy_backend` ВЫРЕЗАН — `FlexLayoutEngine` единственный
+    58→// движок (zero-dep инвариант G7: 0 внешних UI-runtime-deps, кроме
+    59→// cosmic-text за `Shaper` trait).
+    60→mod flex;
+    61→mod scene;
+    62→
+    63→pub use flex::FlexLayoutEngine;
+    64→pub use scene::{
+    65→    SceneDim, SceneKind, SceneNode, SceneOverflow, ScenePosition, SceneSize, SceneTrack, TrackMax,
+    66→    TrackMin,
+    67→};
+    68→
+    69→/// Выравнивание по поперечной оси контейнера (вертикаль в `Row`,
+    70→/// горизонталь в `Column`).
+    71→#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    72→pub enum CrossAlign {
+    73→    /// Прижать к началу поперечной оси.
+    74→    #[default]
+    75→    Start,
+    76→    /// Центрировать.
+    77→    Center,
+    78→    /// Прижать к концу поперечной оси.
+    79→    End,
+    80→}
+    81→
+    82→/// Выравнивание по главной оси контейнера (распределение свободного места).
+    83→#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    84→pub enum MainAlign {
+    85→    /// Дети подряд от начала, зазор = `gap`.
+    86→    #[default]
+    87→    Start,
+    88→    /// Свободное место распределяется между детьми поровну
+    89→    /// (эффективный зазор = `gap` + доля свободного).
+    90→    SpaceBetween,
+    91→    /// Дети подряд от конца главной оси (FR-062 F-14); зазор = `gap`.
+    92→    /// При детях с `grow` свободное место съедается распределением —
+    93→    /// `End` вырождается в `Start` (документировано в модуле).
+    94→    End,
+    95→}
+    96→
+    97→/// Политика переполнения главной оси [`Row`] (см. модульную доку).
+    98→#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    99→pub enum RowPolicy {
+   100→    /// Контент определяет занятость; переполнение слота не маскируется
+   101→    /// (ловится линтом G4).
+   102→    #[default]
+   103→    Fit,
+   104→    /// Деградация узкого слота: хвост сжимается до нулевой ширины.
+   105→    /// Приоритетна над flex-факторами: `grow` детей игнорируется
+   106→    /// (FR-062 F-14).
+   107→    SqueezeTail,
+   108→    /// Жадная упаковка по строкам (FR-062 F-15, уточнение контракта:
+   109→    /// поле `max_rows` убрано — число видимых строк определяет высота
+   110→    /// слота; строки ниже слота не маскируются — естественно выходят за
+   111→    /// нижний край, что и ловит линт G4).
+   112→    Wrap,
+   113→}
+   114→
+   115→/// Ребёнок линейного контейнера: размер в ui px + flex-фактор
+   116→/// (FR-062 F-14; все места создания — через конструкторы: grep-аудит
+   117→/// `Child {` литералов = 0 вне крейта — добавление поля безопасно).
+   118→#[derive(Debug, Clone, Copy, PartialEq, Default)]
+   119→pub struct Child {
+   120→    pub w: f32,
+   121→    pub h: f32,
+   122→    /// Flex-фактор роста по главной оси контейнера (ширина в `Row`,
+   123→    /// высота в `Column`): доля свободного места слота, пропорционально
+   124→    /// `grow`. `0.0` — фиксированный (текущее поведение). В `SqueezeTail`
+   125→    /// игнорируется (деградация приоритетна).
+   126→    pub grow: f32,
+   127→}
+   128→
+   129→impl Child {
+   130→    /// Ребёнок фиксированного размера (grow = 0 — прежнее поведение).
+   131→    pub fn fixed(w: f32, h: f32) -> Self {
+   132→        Self {
+   133→            w: w.max(0.0),
+   134→            h: h.max(0.0),
+   135→            grow: 0.0,
+   136→        }
+   137→    }
+   138→
+   139→    /// Распорка: занимает место по главной оси, нулевая высота
+   140→    /// (не является интерактивным/рисуемым элементом).
+   141→    pub fn spacer(len: f32) -> Self {
+   142→        Self {
+   143→            w: len.max(0.0),
+   144→            h: 0.0,
+   145→            grow: 0.0,
+   146→        }
+   147→    }
+   148→
+   149→    /// Flex-ребёнок (FR-062 F-14): `w`/`h` — базовый размер (flex-basis),
+   150→    /// `grow` — доля свободного места главной оси (пропорционально;
+   151→    /// отрицательный прижимается к 0).
+   152→    pub fn flexible(w: f32, h: f32, grow: f32) -> Self {
+   153→        Self {
+   154→            w: w.max(0.0),
+   155→            h: h.max(0.0),
+   156→            grow: grow.max(0.0),
+   157→        }
+   158→    }
+   159→}
+   160→
+   161→/// Горизонтальный контейнер (F-7 `Row{gap, align}` + политика переполнения).
+   162→#[derive(Debug, Clone, Copy, PartialEq, Default)]
+   163→pub struct Row {
+   164→    /// Базовый зазор между детьми (ui px; значения — spacing-scale
+   165→    /// `design/tokens/dimensions.json`, источник значений — у вызова).
+   166→    pub gap: f32,
+   167→    pub main: MainAlign,
+   168→    pub cross: CrossAlign,
+   169→    pub policy: RowPolicy,
+   170→}
+   171→
+   172→impl Row {
+   173→    /// Раскладка детей в слоте: возвращает rect'ы (параллельно `items`).
+   174→    /// FR-068 W1: делегирует в [`default_backend`] (NativeBackend — поведение
+   175→    /// байт-в-байт прежнее; §Контракт-1 — сигнатура стабильна до W3).
+   176→    pub fn lay_out(&self, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
+   177→        default_backend().lay_out_row(*self, slot, items)
+   178→    }
+   179→
+   180→    /// Раскладка детей в слоте через ЯВНО выбранный backend (FR-068 W1,
+   181→    /// ADR-0014 «потребитель выбирает backend осознанно»): pilot-поверхности
+   182→    /// передают [`pilot_backend`], остальные — [`default_backend`].
+   183→    pub fn lay_out_with(
+   184→        &self,
+   185→        backend: &dyn LayoutBackend,
+   186→        slot: UiRect,
+   187→        items: &[Child],
+   188→    ) -> Vec<UiRect> {
+   189→        backend.lay_out_row(*self, slot, items)
+   190→    }
+   191→
+   192→    /// `Fit`: дети подряд с зазором; свободное место — flex-детям по
+   193→    /// `grow` (FR-062 F-14), остаток — по `main`.
+   194→    fn fit(&self, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
+   195→        let sizes = self.resolve_grow(slot.w, items);
+   196→        let n = items.len();
+   197→        let total: f32 = sizes.iter().sum();
+   198→        let gaps_total = self.gap * n.saturating_sub(1) as f32;
+   199→        let extra = (slot.w - total - gaps_total).max(0.0);
+   200→        let gap = match self.main {
+   201→            MainAlign::Start => self.gap,
+   202→            // SpaceBetween: при n>1 свободное место добавляется к зазорам
+   203→            MainAlign::SpaceBetween if n > 1 => self.gap + extra / (n - 1) as f32,
+   204→            MainAlign::SpaceBetween => self.gap,
+   205→            MainAlign::End => self.gap,
+   206→        };
+   207→        let mut x = match self.main {
+   208→            // End: дети прижаты к правому краю (свободное место — слева);
+   209→            // при grow свободное место уже съедено — x = slot.x
+   210→            MainAlign::End => (slot.right() - total - gaps_total).max(slot.x),
+   211→            _ => slot.x,
+   212→        };
+   213→        items
+   214→            .iter()
+   215→            .zip(&sizes)
+   216→            .map(|(c, &w)| {
+   217→                let rect = UiRect::new(x, self.cross_y(slot, c.h), w, c.h);
+   218→                x += w + gap;
+   219→                rect
+   220→            })
+   221→            .collect()
+   222→    }
+   223→
+   224→    /// Распределение свободного места слота по `grow` (FR-062 F-14):
+   225→    /// свободное = slot.w − Σ(базовые ширины) − Σ(зазоры); flex-дети
+   226→    /// получают базу + долю свободного (пропорционально grow). Ширины
+   227→    /// фиксированных детей не меняются. Σgrow = 0 или свободного нет —
+   228→    /// базовые ширины (байт-в-байт прежнее поведение).
+   229→    fn resolve_grow(&self, slot_w: f32, items: &[Child]) -> Vec<f32> {
+   230→        let mut sizes: Vec<f32> = items.iter().map(|c| c.w).collect();
+   231→        let grow_total: f32 = items.iter().map(|c| c.grow).sum();
+   232→        if grow_total <= 0.0 {
+   233→            return sizes;
+   234→        }
+   235→        let basis: f32 = sizes.iter().sum();
+   236→        let gaps_total = self.gap * items.len().saturating_sub(1) as f32;
+   237→        let free = (slot_w - basis - gaps_total).max(0.0);
+   238→        if free <= 0.0 {
+   239→            return sizes;
+   240→        }
+   241→        for (size, child) in sizes.iter_mut().zip(items) {
+   242→            if child.grow > 0.0 {
+   243→                *size += free * child.grow / grow_total;
+   244→            }
+   245→        }
+   246→        sizes
+   247→    }
+   248→
+   249→    /// `SqueezeTail`: каждый ребёнок получает `min(desired, остаток)`;
+   250→    /// хвост сжимается до нуля, за правый край слота ничего не выходит.
+   251→    /// Деградация приоритетна: `grow` игнорируется (FR-062 F-14).
+   252→    fn squeeze_tail(&self, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
+   253→        let mut x = slot.x;
+   254→        let limit = slot.right();
+   255→        items
+   256→            .iter()
+   257→            .map(|c| {
+   258→                let remaining = (limit - x).max(0.0);
+   259→                let w = c.w.min(remaining);
+   260→                let rect = UiRect::new(x.min(limit), self.cross_y(slot, c.h), w, c.h);
+   261→                x += w + self.gap;
+   262→                rect
+   263→            })
+   264→            .collect()
+   265→    }
+   266→
+   267→    /// Жадная упаковка по строкам (FR-062 F-15, уточнение контракта:
+   268→    /// `max_rows` поле убрано — число видимых строк определяет ВЫСОТА
+   269→    /// слота; строки ниже слота не маскируются — естественно выходят за
+   270→    /// нижний край, что и ловит линт G4; без мёртвого параметра).
+   271→    /// Высота строки = max высот детей строки; зазоры: `gap` — по
+   272→    /// горизонтали, тот же `gap` — между строками; поперечное
+   273→    /// выравнивание — внутри строки (по её высоте).
+   274→    fn wrap(&self, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
+   275→        let mut rects = vec![UiRect::default(); items.len()];
+   276→        let mut row: Vec<(usize, &Child)> = Vec::new();
+   277→        let mut row_w = 0.0;
+   278→        let mut row_h = 0.0;
+   279→        let mut row_y = slot.y;
+   280→        let mut flush =
+   281→            |row: &mut Vec<(usize, &Child)>, row_w: &mut f32, row_h: &mut f32, row_y: &mut f32| {
+   282→                let mut x = slot.x;
+   283→                let h = *row_h;
+   284→                for (i, c) in row.drain(..) {
+   285→                    let y = match self.cross {
+   286→                        CrossAlign::Start => *row_y,
+   287→                        // поперечное выравнивание внутри строки (по её высоте)
+   288→                        CrossAlign::Center => *row_y + (h - c.h).max(0.0) / 2.0,
+   289→                        CrossAlign::End => *row_y + (h - c.h).max(0.0),
+   290→                    };
+   291→                    rects[i] = UiRect::new(x, y, c.w, c.h);
+   292→                    x += c.w + self.gap;
+   293→                }
+   294→                *row_y += h + self.gap;
+   295→                *row_w = 0.0;
+   296→                *row_h = 0.0;
+   297→            };
+   298→        for (i, c) in items.iter().enumerate() {
+   299→            let next_w = if row.is_empty() {
+   300→                c.w
+   301→            } else {
+   302→                row_w + self.gap + c.w
+   303→            };
+   304→            // ребёнок шире слота — строка из одного (переполнение вправо
+   305→            // видно, как в Fit); непоместившийся в строку — перенос
+   306→            if !row.is_empty() && next_w > slot.w + f32::EPSILON {
+   307→                flush(&mut row, &mut row_w, &mut row_h, &mut row_y);
+   308→            }
+   309→            row.push((i, c));
+   310→            row_w = if row.len() == 1 {
+   311→                c.w
+   312→            } else {
+   313→                row_w + self.gap + c.w
+   314→            };
+   315→            row_h = row_h.max(c.h);
+   316→        }
+   317→        if !row.is_empty() {
+   318→            flush(&mut row, &mut row_w, &mut row_h, &mut row_y);
+   319→        }
+   320→        rects
+   321→    }
+   322→
+   323→    /// FR-062 F-13: раскладка measured-детей (размер от контента —
+   324→    /// через [`TextMeasurer`]); та же политика, что [`Row::lay_out`]
+   325→    /// (в т.ч. `Wrap`); flex-факторы у measured-детей не задаются
+   326→    /// (сигнатура F-13 минимальна — фиксированные размеры + текст).
+   327→    pub fn lay_out_measured(
+   328→        &self,
+   329→        slot: UiRect,
+   330→        items: &[MeasuredItem],
+   331→        m: &mut TextMeasurer,
+   332→        fs: &mut cosmic_text::FontSystem,
+   333→        family: &str,
+   334→        size: f32,
+   335→    ) -> Vec<UiRect> {
+   336→        default_backend().lay_out_measured(*self, slot, items, m, fs, family, size)
+   337→    }
+   338→
+   339→    /// FR-062 F-13 через ЯВНО выбранный backend (FR-068 W1): см.
+   340→    /// [`Row::lay_out_with`]. Замер текста ([`MeasuredItem::resolve`], тот же
+   341→    /// [`TextMeasurer`]) выполняется ДО адаптера у обоих backend'ов — шейпинг
+   342→    /// идентичен, golden-оракул побитовый.
+   343→    #[allow(clippy::too_many_arguments)] // плоский контракт F-13 (заморожен §Контракт-1)
+   344→    pub fn lay_out_measured_with(
+   345→        &self,
+   346→        backend: &dyn LayoutBackend,
+   347→        slot: UiRect,
+   348→        items: &[MeasuredItem],
+   349→        m: &mut TextMeasurer,
+   350→        fs: &mut cosmic_text::FontSystem,
+   351→        family: &str,
+   352→        size: f32,
+   353→    ) -> Vec<UiRect> {
+   354→        backend.lay_out_measured(*self, slot, items, m, fs, family, size)
+   355→    }
+   356→
+   357→    fn cross_y(&self, slot: UiRect, h: f32) -> f32 {
+   358→        match self.cross {
+   359→            CrossAlign::Start => slot.y,
+   360→            CrossAlign::Center => slot.y + (slot.h - h).max(0.0) / 2.0,
+   361→            CrossAlign::End => slot.y + (slot.h - h).max(0.0),
+   362→        }
+   363→    }
+   364→}
+   365→
+   366→/// Вертикальный контейнер (F-7 `Column{gap, align}`); политика — только
+   367→/// `Fit` (вертикальная деградация пилотов выражается размером окна
+   368→/// видимости строк, а не сжатием хвоста). FR-062 F-14: flex-факторы
+   369→/// (`Child.grow` — по высоте) и `MainAlign::End` поддержаны.
+   370→#[derive(Debug, Clone, Copy, PartialEq, Default)]
+   371→pub struct Column {
+   372→    pub gap: f32,
+   373→    pub main: MainAlign,
+   374→    pub cross: CrossAlign,
+   375→}
+   376→
+   377→impl Column {
+   378→    /// Раскладка детей в слоте: возвращает rect'ы (параллельно `items`).
+   379→    /// FR-068 W1: делегирует в [`default_backend`] (NativeBackend —
+   380→    /// поведение байт-в-байт прежнее; §Контракт-1).
+   381→    pub fn lay_out(&self, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
+   382→        default_backend().lay_out_column(*self, slot, items)
+   383→    }
+   384→
+   385→    /// Раскладка детей в слоте через ЯВНО выбранный backend (FR-068 W1).
+   386→    pub fn lay_out_with(
+   387→        &self,
+   388→        backend: &dyn LayoutBackend,
+   389→        slot: UiRect,
+   390→        items: &[Child],
+   391→    ) -> Vec<UiRect> {
+   392→        backend.lay_out_column(*self, slot, items)
+   393→    }
+   394→
+   395→    /// Распределение свободного места слота по `grow` по высоте
+   396→    /// (FR-062 F-14; симметрично [`Row::resolve_grow`]).
+   397→    fn resolve_grow(&self, slot_h: f32, items: &[Child]) -> Vec<f32> {
+   398→        let mut sizes: Vec<f32> = items.iter().map(|c| c.h).collect();
+   399→        let grow_total: f32 = items.iter().map(|c| c.grow).sum();
+   400→        if grow_total <= 0.0 {
+   401→            return sizes;
+   402→        }
+   403→        let basis: f32 = sizes.iter().sum();
+   404→        let gaps_total = self.gap * items.len().saturating_sub(1) as f32;
+   405→        let free = (slot_h - basis - gaps_total).max(0.0);
+   406→        if free <= 0.0 {
+   407→            return sizes;
+   408→        }
+   409→        for (size, child) in sizes.iter_mut().zip(items) {
+   410→            if child.grow > 0.0 {
+   411→                *size += free * child.grow / grow_total;
+   412→            }
+   413→        }
+   414→        sizes
+   415→    }
+   416→
+   417→    fn cross_x(&self, slot: UiRect, w: f32) -> f32 {
+   418→        match self.cross {
+   419→            CrossAlign::Start => slot.x,
+   420→            CrossAlign::Center => slot.x + (slot.w - w).max(0.0) / 2.0,
+   421→            CrossAlign::End => slot.x + (slot.w - w).max(0.0),
+   422→        }
+   423→    }
+   424→
+   425→    /// FR-068 W3.2: measured-раскладка колонки — вертикальный симметричный
+   426→    /// аналог [`Row::lay_out_measured`] (F-13): resolve [`MeasuredItem`] →
+   427→    /// [`Child`] единой точкой [`MeasuredItem::resolve`] (тот же шейпинг
+   428→    /// [`TextMeasurer`]), затем [`LayoutBackend::lay_out_column`] на
+   429→    /// [`default_backend`]. Политика `Column` — только `Fit` (F-7), поэтому
+   430→    /// resolve до backend'а эквивалентен разрешению внутри него. Скелеты
+   431→    /// панелей (константы + распорки) выражаются [`MeasuredItem::Fixed`]/
+   432→    /// [`MeasuredItem::Spacer`] без ручных `Child::fixed`; flex-факторы
+   433→    /// (`Child.grow`) через measured-дети недоступны — такие потоки
+   434→    /// остаются на [`Column::lay_out`].
+   435→    #[allow(clippy::too_many_arguments)] // плоский контракт F-13 (заморожен §Контракт-1)
+   436→    pub fn lay_out_measured(
+   437→        &self,
+   438→        slot: UiRect,
+   439→        items: &[MeasuredItem],
+   440→        m: &mut TextMeasurer,
+   441→        fs: &mut cosmic_text::FontSystem,
+   442→        family: &str,
+   443→        size: f32,
+   444→    ) -> Vec<UiRect> {
+   445→        self.lay_out_measured_with(default_backend(), slot, items, m, fs, family, size)
+   446→    }
+   447→
+   448→    /// FR-068 W3.2 через ЯВНО выбранный backend (см.
+   449→    /// [`Column::lay_out_measured`]; симметрично [`Row::lay_out_measured_with`]).
+   450→    #[allow(clippy::too_many_arguments)] // плоский контракт F-13 (заморожен §Контракт-1)
+   451→    pub fn lay_out_measured_with(
+   452→        &self,
+   453→        backend: &dyn LayoutBackend,
+   454→        slot: UiRect,
+   455→        items: &[MeasuredItem],
+   456→        m: &mut TextMeasurer,
+   457→        fs: &mut cosmic_text::FontSystem,
+   458→        family: &str,
+   459→        size: f32,
+   460→    ) -> Vec<UiRect> {
+   461→        let children: Vec<Child> = items
+   462→            .iter()
+   463→            .map(|item| item.resolve(m, fs, family, size))
+   464→            .collect();
+   465→        backend.lay_out_column(*self, slot, &children)
+   466→    }
+   467→}
+   468→
+   469→/// Ребёнок measured-раскладки (FR-062 F-13): размер от контента.
+   470→///
+   471→/// Ширина/высота текстового ребёнка берутся из [`TextMeasurer`] (тот же
+   472→/// шейпинг, что у screen-текстов рендера); ограничение ширины — только
+   473→/// явное (`max_w`) — молчаливого клампа в остаток слота нет (G5):
+   474→/// усечение подписи — ellipsis потребителя по той же измеренной ширине.
+   475→#[derive(Debug, Clone, Copy, PartialEq)]
+   476→pub enum MeasuredItem<'a> {
+   477→    /// Фиксированный размер (эквивалент [`Child::fixed`]) — оракул
+   478→    /// эквивалентности с ручной проводкой `width_of → Child::fixed`.
+   479→    Fixed { w: f32, h: f32 },
+   480→    /// Размер от текста: ширина = `width_of` + `pad_x` (кламп в `max_w`,
+   481→    /// если задан, и подъём до `min_w`); высота = явная `h` (дизайн-константа
+   482→    /// потребителя, например `CHIP_HEIGHT`) или измеренная (строки · кегль ·
+   483→    /// `SCREEN_LINE_FACTOR`).
+   484→    Text {
+   485→        text: &'a str,
+   486→        /// Явный потолок ширины (ellipsis — решение потребителя).
+   487→        max_w: Option<f32>,
+   488→        /// Пол ширины (например, минимальная ширина кнопки) — уже текста
+   489→        /// с падом не будет.
+   490→        min_w: f32,
+   491→        /// Суммарный горизонтальный пад (лево+право), добавляемый к
+   492→        /// измеренной ширине текста (W3.3 — пад-семантика F-13, названное
+   493→        /// условие миграции проводок «width_of → размер ребёнка»:
+   494→        /// чип/кнопка = один `Text { pad_x }` без ручного замера;
+   495→        /// бит-в-бит эквивалент `Fixed { w: width_of + pad_x }`;
+   496→        /// `pad_x: 0.0` — прежняя семантика дословно).
+   497→        pad_x: f32,
+   498→        /// Явная высота (дизайн-константа чипа/кнопки — `Some(h)`);
+   499→        /// `None` — измеренная (прежнее поведение дословно). Нужно там,
+   500→        /// где константа высоты ≠ измеренной (чип whatif:
+   501→        /// `CHIP_HEIGHT 26` ≠ `13·1.3 = 16.9`) — иначе миграция меняет
+   502→        /// визуал (нарушение I-1).
+   503→        h: Option<f32>,
+   504→    },
+   505→    /// Распорка (эквивалент [`Child::spacer`]).
+   506→    Spacer(f32),
+   507→}
+   508→
+   509→impl MeasuredItem<'_> {
+   510→    /// Разрешить в фиксированного [`Child`] измерениями (точка интеграции
+   511→    /// TextMeasurer; ширины/высоты — реальные, не эвристика).
+   512→    pub fn resolve(
+   513→        &self,
+   514→        m: &mut TextMeasurer,
+   515→        fs: &mut cosmic_text::FontSystem,
+   516→        family: &str,
+   517→        size: f32,
+   518→    ) -> Child {
+   519→        match *self {
+   520→            MeasuredItem::Fixed { w, h } => Child::fixed(w, h),
+   521→            MeasuredItem::Spacer(len) => Child::spacer(len),
+   522→            MeasuredItem::Text {
+   523→                text,
+   524→                max_w,
+   525→                min_w,
+   526→                pad_x,
+   527→                h,
+   528→            } => {
+   529→                let spec = crate::measure::TextSpec {
+   530→                    text,
+   531→                    family,
+   532→                    size,
+   533→                    max_width: f32::INFINITY,
+   534→                    // UI-раскладка — пропорциональный sans (Weight 500,
+   535→                    // паритет sans_attrs рендера; см. TextSpec::weight).
+   536→                    weight: cosmic_text::Weight::MEDIUM,
+   537→                };
+   538→                let measured = m.measure(fs, &spec);
+   539→                let mut w = (measured.width + pad_x).max(min_w);
+   540→                if let Some(max) = max_w {
+   541→                    w = w.min(max.max(min_w));
+   542→                }
+   543→                Child::fixed(w, h.unwrap_or(measured.height))
+   544→            }
+   545→        }
+   546→    }
+   547→}
+   548→
+   549→/// 2D-сетка равных явных колонок (FR-062 F-16): row-major ячейки
+   550→/// `cols.len() · rows` от слота; ширины колонок заданы вызовом
+   551→/// (например, из [`crate::row_guides::RowGuides`] — направляющие
+   552→/// табличного тела), высота строки общая. Спаны/авто-треки — вне
+   553→/// контракта (территория taffy по триггерам ADR-0013 T2).
+   554→pub fn grid_cells(slot: UiRect, cols: &[f32], rows: usize, row_h: f32, gap: UiVec2) -> Vec<UiRect> {
+   555→    grid_cells_with(default_backend(), slot, cols, rows, row_h, gap)
+   556→}
+   557→
+   558→/// 2D-сетка через ЯВНО выбранный backend (FR-068 W1): pilot-поверхности
+   559→/// передают [`pilot_backend`] (TaffyBackend — Grid с неравными явными
+   560→/// треками, T2-триггер ADR-0013/ADR-0014), остальные — [`default_backend`].
+   561→pub fn grid_cells_with(
+   562→    backend: &dyn LayoutBackend,
+   563→    slot: UiRect,
+   564→    cols: &[f32],
+   565→    rows: usize,
+   566→    row_h: f32,
+   567→    gap: UiVec2,
+   568→) -> Vec<UiRect> {
+   569→    backend.lay_out_grid(slot, cols, rows, row_h, gap)
+   570→}
+   571→
+   572→/// Выравнивание фиксированного блока в слоте по горизонтали/вертикали
+   573→/// (F-7 `Stack{align}`).
+   574→#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+   575→pub enum HAlign {
+   576→    #[default]
+   577→    Start,
+   578→    Center,
+   579→    End,
+   580→}
+   581→
+   582→/// Вертикальное выравнивание фиксированного блока в слоте.
+   583→#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+   584→pub enum VAlign {
+   585→    #[default]
+   586→    Start,
+   587→    Center,
+   588→    End,
+   589→}
+   590→
+   591→/// Разместить блок фиксированного размера в слоте (F-7 `Stack{align}`):
+   592→/// панель галереи по центру вьюпорта, empty-карточка и т.п.
+   593→pub fn stack(slot: UiRect, size: UiVec2, h: HAlign, v: VAlign) -> UiRect {
+   594→    let x = match h {
+   595→        HAlign::Start => slot.x,
+   596→        HAlign::Center => slot.x + (slot.w - size.x).max(0.0) / 2.0,
+   597→        HAlign::End => slot.x + (slot.w - size.x).max(0.0),
+   598→    };
+   599→    let y = match v {
+   600→        VAlign::Start => slot.y,
+   601→        VAlign::Center => slot.y + (slot.h - size.y).max(0.0) / 2.0,
+   602→        VAlign::End => slot.y + (slot.h - size.y).max(0.0),
+   603→    };
+   604→    UiRect::new(x, y, size.x.max(0.0), size.y.max(0.0))
+   605→}
+   606→
+   607→/// Кламп размера в min/max границы (F-7 `Constrain(min/max)`); нижняя
+   608→/// граница приоритетна над верхней (`max` срезается до `min` —
+   609→/// противоречивые границы дают `min`).
+   610→pub fn constrain(min: UiVec2, max: UiVec2, desired: UiVec2) -> UiVec2 {
+   611→    let lo_x = min.x.max(0.0);
+   612→    let lo_y = min.y.max(0.0);
+   613→    let hi_x = max.x.max(lo_x);
+   614→    let hi_y = max.y.max(lo_y);
+   615→    UiVec2::new(desired.x.clamp(lo_x, hi_x), desired.y.clamp(lo_y, hi_y))
+   616→}
+   617→
+   618→/// Сжать слот на отступы (F-7 `Padding`); обёртка [`UiRect::inset`]
+   619→/// (отрицательный остаток — пустой rect, не вырожденный сдвиг).
+   620→pub fn pad(slot: UiRect, e: EdgeInsets) -> UiRect {
+   621→    slot.inset(&e)
+   622→}
+   623→
+   624→/// Escape-hatch экзотики (R-3 PRD-0009): прямая геометрия вне примитивов.
+   625→/// Каждое использование обязано нести комментарий-обоснование (почему
+   626→/// примитивы не выражают раскладку) — попадает в grep-аудит G8.
+   627→#[derive(Debug, Clone, Copy, PartialEq)]
+   628→pub struct Custom(pub UiRect);
+   629→
+   630→impl From<Custom> for UiRect {
+   631→    fn from(c: Custom) -> UiRect {
+   632→        c.0
+   633→    }
+   634→}
+   635→
+   636→// =============================================================================
+   637→// FR-068 W1 (ADR-0014 §Решение п.1–4): абстракция движка вёрстки.
+   638→//
+   639→// `trait LayoutBackend` — одна модель вёрстки для потребителя (R-6 ADR-0014):
+   640→// потребитель пишет `Row{..}.lay_out(slot, &children)` независимо от того,
+   641→// кто считает rect'ы. `NativeBackend` (default) — перенос текущих
+   642→// `Row/Column/grid_cells` (FR-062 F-13…F-18) в методы трейта 1:1 — поведение
+   643→// байт-в-байт прежнее (24 юнит-теста этого файла пинят результаты через
+   644→// делегирование). `TaffyBackend` — за фичей `taffy` (layout/taffy_backend.rs).
+   645→//
+   646→// §Контракт-1 FR-068: сигнатуры `Row::lay_out`/`Column::lay_out`/
+   647→// `grid_cells`/`Child`/`MeasuredItem`/`RowPolicy` НЕ меняются до W3 —
+   648→// потребители не переписываются.
+   649→// =============================================================================
+   650→
+   651→/// Битовая маска возможностей движка вёрстки (FR-068 W1, ADR-0014
+   652→/// §Решение п.1: `available_features()`). Потребитель проверяет поддержку
+   653→/// перед вызовом расширенных политик ([`SceneNode`], percent и т.п.).
+   654→#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+   655→pub struct LayoutFeatures(u32);
+   656→
+   657→impl LayoutFeatures {
+   658→    /// Flex-grow: распределение свободного места главной оси (FR-062 F-14).
+   659→    pub const FLEX_GROW: Self = Self(1 << 0);
+   660→    /// Flex-shrink: сжатие детей при переполнении (CSS-семантика). У
+   661→    /// [`NativeBackend`] нет — `SqueezeTail` не flex_shrink (§Контракт-4
+   662→    /// FR-068); TaffyBackend мапит `SqueezeTail` на `flex_shrink` —
+   663→    /// документированное расхождение C3.
+   664→    pub const FLEX_SHRINK: Self = Self(1 << 1);
+   665→    /// Flex-basis: базовый размер flex-ребёнка до распределения.
+   666→    pub const FLEX_BASIS: Self = Self(1 << 2);
+   667→    /// Перенос по строкам ([`RowPolicy::Wrap`], FR-062 F-15).
+   668→    pub const FLEX_WRAP: Self = Self(1 << 3);
+   669→    /// 2D-сетка ([`grid_cells`]; TaffyBackend — ещё и неравные/процентные
+   670→    /// треки со span'ами, T2-триггер ADR-0013).
+   671→    pub const GRID_2D: Self = Self(1 << 4);
+   672→    /// Авто-размер от контента ([`MeasuredItem::Text`], FR-062 F-13).
+   673→    pub const AUTO_SIZE: Self = Self(1 << 5);
+   674→    /// Клип переполнения контейнера (overflow:hidden — [`SceneOverflow::Hidden`]).
+   675→    pub const OVERFLOW_CLIP: Self = Self(1 << 6);
+   676→    /// Процентные размеры ([`SceneDim::Percent`]).
+   677→    pub const PERCENT: Self = Self(1 << 7);
+   678→    /// Соотношение сторон (поле `aspect` [`SceneNode`]).
+   679→    pub const ASPECT_RATIO: Self = Self(1 << 8);
+   680→    /// Sticky-позиционирование (вариант `Sticky` [`ScenePosition`];
+   681→    /// TaffyBackend — эмуляция post-processing'ом, см. доку `taffy_backend`).
+   682→    pub const STICKY: Self = Self(1 << 9);
+   683→
+   684→    /// Объединение масок.
+   685→    pub const fn union(self, other: Self) -> Self {
+   686→        Self(self.0 | other.0)
+   687→    }
+   688→
+   689→    /// Содержит ли маска все биты `other`.
+   690→    pub const fn contains(self, other: Self) -> bool {
+   691→        self.0 & other.0 == other.0
+   692→    }
+   693→
+   694→    /// Сырые биты (для тестов/логов).
+   695→    pub const fn bits(self) -> u32 {
+   696→        self.0
+   697→    }
+   698→}
+   699→
+   700→/// Движок вёрстки (FR-068 W1, ADR-0014 §Решение п.1): немедленный (immediate)
+   701→/// расчёт rect'ов от слота родителя. Реализации не хранят состояния
+   702→/// раскладки между вызовами — каждый вызов самодостаточен (D2 immediate-mode
+   703→/// ADR-0013; retained-кэш — опция W3, FR-068).
+   704→///
+   705→/// Объектная безопасность (`dyn LayoutBackend`) — сознательная: backend
+   706→/// выбирается в рантайме ([`default_backend`]/[`pilot_backend`]/pilot-
+   707→/// поверхностями), цена — vtable-вызов на контейнер, не на ребёнка
+   708→/// (§Обоснование ADR-0014 «Цена адаптера» — десятки мкс на кадр).
+   709→pub trait LayoutBackend {
+   710→    /// Возможности движка (битовая маска [`LayoutFeatures`]).
+   711→    fn features(&self) -> LayoutFeatures;
+   712→
+   713→    /// Раскладка горизонтального контейнера (политики [`RowPolicy`]).
+   714→    fn lay_out_row(&self, row: Row, slot: UiRect, items: &[Child]) -> Vec<UiRect>;
+   715→
+   716→    /// Раскладка вертикального контейнера (политика `Fit`, FR-062 F-14).
+   717→    fn lay_out_column(&self, column: Column, slot: UiRect, items: &[Child]) -> Vec<UiRect>;
+   718→
+   719→    /// Раскладка measured-детей (FR-062 F-13): замер текста выполняется
+   720→    /// одинаково у всех backend'ов (единый [`TextMeasurer`] ДО адаптера) —
+   721→    /// шейпинг идентичен, golden-оракул побитовый.
+   722→    #[allow(clippy::too_many_arguments)] // плоский контракт F-13 (заморожен §Контракт-1)
+   723→    fn lay_out_measured(
+   724→        &self,
+   725→        row: Row,
+   726→        slot: UiRect,
+   727→        items: &[MeasuredItem],
+   728→        m: &mut TextMeasurer,
+   729→        fs: &mut cosmic_text::FontSystem,
+   730→        family: &str,
+   731→        size: f32,
+   732→    ) -> Vec<UiRect>;
+   733→
+   734→    /// 2D-сетка равных явных колонок ([`grid_cells`], FR-062 F-16).
+   735→    fn lay_out_grid(
+   736→        &self,
+   737→        slot: UiRect,
+   738→        cols: &[f32],
+   739→        rows: usize,
+   740→        row_h: f32,
+   741→        gap: UiVec2,
+   742→    ) -> Vec<UiRect>;
+   743→}
+   744→
+   745→/// Backend по умолчанию (FR-068 §W4): [`FlexLayoutEngine`] — собственный
+   746→/// движок (0 deps; zero-dep инвариант G7). taffy вырезан (W4):
+   747→/// `FlexLayoutEngine` — единственный движок вёрстки.
+   748→pub fn default_backend() -> &'static dyn LayoutBackend {
+   749→    &FLEX
+   750→}
+   751→
+   752→/// Backend pilot-поверхностей (FR-068 W1): исторически — TaffyBackend за
+   753→/// фичей `taffy`, без — Native. W4: taffy вырезан, функция сохранена для
+   754→/// API-стабильности пилотов — возвращает [`NativeBackend`] (pilot-golden'ы
+   755→/// W1 пинят Native-семантику).
+   756→pub fn pilot_backend() -> &'static dyn LayoutBackend {
+   757→    &NATIVE
+   758→}
+   759→
+   760→/// Backend'ы — ZST без состояния раскладки (immediate-mode): статика
+   761→/// безопасна. `FlexLayoutEngine` — встроен всегда; `NativeBackend`
+   762→/// используется `pilot_backend`.
+   763→static NATIVE: NativeBackend = NativeBackend;
+   764→static FLEX: FlexLayoutEngine = FlexLayoutEngine;
+   765→
+   766→/// Собственный backend (FR-062 F-13…F-18, ADR-0014 §Решение п.2): перенос
+   767→/// текущих `Row/Column/grid_cells` в методы [`LayoutBackend`] 1:1 —
+   768→/// поведение байт-в-байт прежнее (24 юнит-теста layout.rs — оракул).
+   769→#[derive(Debug, Clone, Copy, Default)]
+   770→pub struct NativeBackend;
+   771→
+   772→impl LayoutBackend for NativeBackend {
+   773→    fn features(&self) -> LayoutFeatures {
+   774→        // Native: grow/basis/wrap/grid/measured — есть; CSS flex_shrink —
+   775→        // нет (`SqueezeTail` — именованная деградация, не flex_shrink,
+   776→        // §Контракт-4); percent/aspect/overflow/sticky — нет (территория
+   777→        // расширенной сцены [`SceneNode`], в W1 — TaffyBackend).
+   778→        LayoutFeatures::FLEX_GROW
+   779→            .union(LayoutFeatures::FLEX_BASIS)
+   780→            .union(LayoutFeatures::FLEX_WRAP)
+   781→            .union(LayoutFeatures::GRID_2D)
+   782→            .union(LayoutFeatures::AUTO_SIZE)
+   783→    }
+   784→
+   785→    fn lay_out_row(&self, row: Row, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
+   786→        match row.policy {
+   787→            RowPolicy::Fit => row.fit(slot, items),
+   788→            RowPolicy::SqueezeTail => row.squeeze_tail(slot, items),
+   789→            RowPolicy::Wrap => row.wrap(slot, items),
+   790→        }
+   791→    }
+   792→
+   793→    fn lay_out_column(&self, column: Column, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
+   794→        // Тело перенесено из `Column::lay_out` 1:1 (FR-062 F-14).
+   795→        let sizes = column.resolve_grow(slot.h, items);
+   796→        let n = items.len();
+   797→        let total: f32 = sizes.iter().sum();
+   798→        let gaps_total = column.gap * n.saturating_sub(1) as f32;
+   799→        let extra = (slot.h - total - gaps_total).max(0.0);
+   800→        let gap = match column.main {
+   801→            MainAlign::Start => column.gap,
+   802→            MainAlign::SpaceBetween if n > 1 => column.gap + extra / (n - 1) as f32,
+   803→            MainAlign::SpaceBetween => column.gap,
+   804→            MainAlign::End => column.gap,
+   805→        };
+   806→        let mut y = match column.main {
+   807→            MainAlign::End => (slot.bottom() - total - gaps_total).max(slot.y),
+   808→            _ => slot.y,
+   809→        };
+   810→        items
+   811→            .iter()
+   812→            .zip(&sizes)
+   813→            .map(|(c, &h)| {
+   814→                let rect = UiRect::new(column.cross_x(slot, c.w), y, c.w, h);
+   815→                y += h + gap;
+   816→                rect
+   817→            })
+   818→            .collect()
+   819→    }
+   820→
+   821→    fn lay_out_measured(
+   822→        &self,
+   823→        row: Row,
+   824→        slot: UiRect,
+   825→        items: &[MeasuredItem],
+   826→        m: &mut TextMeasurer,
+   827→        fs: &mut cosmic_text::FontSystem,
+   828→        family: &str,
+   829→        size: f32,
+   830→    ) -> Vec<UiRect> {
+   831→        // Тот же resolve, что до W1 (`MeasuredItem::resolve` — единая точка
+   832→        // замера): backend получает уже фиксированные Child'ы.
+   833→        let children: Vec<Child> = items
+   834→            .iter()
+   835→            .map(|item| item.resolve(m, fs, family, size))
+   836→            .collect();
+   837→        self.lay_out_row(row, slot, &children)
+   838→    }
+   839→
+   840→    fn lay_out_grid(
+   841→        &self,
+   842→        slot: UiRect,
+   843→        cols: &[f32],
+   844→        rows: usize,
+   845→        row_h: f32,
+   846→        gap: UiVec2,
+   847→    ) -> Vec<UiRect> {
+   848→        // Тело перенесено из `grid_cells` 1:1 (FR-062 F-16).
+   849→        let mut rects = Vec::with_capacity(cols.len().saturating_mul(rows));
+   850→        let row_h = row_h.max(0.0);
+   851→        for r in 0..rows {
+   852→            let y = slot.y + r as f32 * (row_h + gap.y.max(0.0));
+   853→            let mut x = slot.x;
+   854→            for &w in cols {
+   855→                let w = w.max(0.0);
+   856→                rects.push(UiRect::new(x, y, w, row_h));
+   857→                x += w + gap.x.max(0.0);
+   858→            }
+   859→        }
+   860→        rects
+   861→    }
+   862→}
+   863→
+   864→#[cfg(test)]
+   865→mod tests {
+   866→    use super::*;
+   867→    use crate::geometry::UiPoint;
+   868→
+   869→    fn slot() -> UiRect {
+   870→        UiRect::new(100.0, 50.0, 300.0, 200.0)
+   871→    }
+   872→
+   873→    #[test]
+   874→    fn row_fit_places_items_with_gap() {
+   875→        let r = Row {
+   876→            gap: 6.0,
+   877→            ..Row::default()
+   878→        };
+   879→        let rects = r.lay_out(
+   880→            slot(),
+   881→            &[Child::fixed(80.0, 30.0), Child::fixed(40.0, 30.0)],
+   882→        );
+   883→        assert_eq!(rects[0], UiRect::new(100.0, 50.0, 80.0, 30.0));
+   884→        assert_eq!(rects[1], UiRect::new(186.0, 50.0, 40.0, 30.0));
+   885→    }
+   886→
+   887→    #[test]
+   888→    fn row_cross_aligns() {
+   889→        let items = [Child::fixed(50.0, 20.0)];
+   890→        let start = Row {
+   891→            gap: 0.0,
+   892→            cross: CrossAlign::Start,
+   893→            ..Row::default()
+   894→        }
+   895→        .lay_out(slot(), &items)[0];
+   896→        assert_eq!(start.y, 50.0);
+   897→        let center = Row {
+   898→            gap: 0.0,
+   899→            cross: CrossAlign::Center,
+   900→            ..Row::default()
+   901→        }
+   902→        .lay_out(slot(), &items)[0];
+   903→        assert_eq!(center.y, 50.0 + (200.0 - 20.0) / 2.0);
+   904→        let end = Row {
+   905→            gap: 0.0,
+   906→            cross: CrossAlign::End,
+   907→            ..Row::default()
+   908→        }
+   909→        .lay_out(slot(), &items)[0];
+   910→        assert_eq!(end.y, 50.0 + 200.0 - 20.0);
+   911→    }
+   912→
+   913→    #[test]
+   914→    fn row_space_between_distributes_extra() {
+   915→        let r = Row {
+   916→            gap: 0.0,
+   917→            main: MainAlign::SpaceBetween,
+   918→            ..Row::default()
+   919→        };
+   920→        // Слот 300, дети 80+40: свободных 180 → зазор 180
+   921→        let rects = r.lay_out(
+   922→            slot(),
+   923→            &[Child::fixed(80.0, 20.0), Child::fixed(40.0, 20.0)],
+   924→        );
+   925→        assert_eq!(rects[0].x, 100.0);
+   926→        assert_eq!(rects[1].x, 100.0 + 80.0 + 180.0);
+   927→    }
+   928→
+   929→    /// SqueezeTail — дословная семантика бывшего `take`: каждый элемент
+   930→    /// получает min(desired, остаток); хвост — нулевой ширины; за слот
+   931→    /// ничего не выходит. FR-068 W2: пин на ЯВНЫХ backend'ах с дословной
+   932→    /// семантикой — NativeBackend и FlexLayoutEngine (§Контракт-4:
+   933→    /// «FlexLayoutEngine реализует SqueezeTail дословно»); taffy —
+   934→    /// flex_shrink (расхождение C3, parity-тест — не fail).
+   935→    #[test]
+   936→    fn row_squeeze_tail_matches_take_semantics() {
+   937→        let r = Row {
+   938→            gap: 6.0,
+   939→            policy: RowPolicy::SqueezeTail,
+   940→            ..Row::default()
+   941→        };
+   942→        let small = UiRect::new(0.0, 0.0, 100.0, 30.0);
+   943→        let items = [
+   944→            Child::fixed(60.0, 30.0),
+   945→            Child::fixed(60.0, 30.0),
+   946→            Child::fixed(60.0, 30.0),
+   947→        ];
+   948→        let rects = NativeBackend.lay_out_row(r, small, &items);
+   949→        let rects_flex = FlexLayoutEngine.lay_out_row(r, small, &items);
+   950→        assert_eq!(
+   951→            rects, rects_flex,
+   952→            "§Контракт-4: SqueezeTail FlexLayoutEngine дословен как Native"
+   953→        );
+   954→        // Первый: 60 (0..60), x → 66; второй: min(60, 34) = 34 (66..100),
+   955→        // x → 106 (за слот); третий: остаток 0.
+   956→        assert_eq!(rects[0].w, 60.0);
+   957→        assert_eq!(rects[1].w, 34.0);
+   958→        assert_eq!(rects[2].w, 0.0);
+   959→        for rect in &rects {
+   960→            assert!(rect.right() <= small.right() + f32::EPSILON);
+   961→            assert!(rect.x <= small.right());
+   962→        }
+   963→        // Вырожденный (нулевой) rect — пустой: не пикается (контракт
+   964→        // невидимости сжатого хвоста).
+   965→        assert!(rects[2].is_empty());
+   966→        assert!(!rects[2].contains(UiPoint::new(rects[2].x, rects[2].y)));
+   967→    }
+   968→
+   969→    #[test]
+   970→    fn column_places_items_with_gap_and_cross() {
+   971→        let c = Column {
+   972→            gap: 6.0,
+   973→            cross: CrossAlign::Center,
+   974→            ..Column::default()
+   975→        };
+   976→        let rects = c.lay_out(
+   977→            slot(),
+   978→            &[Child::fixed(100.0, 40.0), Child::fixed(100.0, 30.0)],
+   979→        );
+   980→        assert_eq!(rects[0], UiRect::new(200.0, 50.0, 100.0, 40.0));
+   981→        assert_eq!(rects[1], UiRect::new(200.0, 96.0, 100.0, 30.0));
+   982→    }
+   983→
+   984→    #[test]
+   985→    fn stack_centers_fixed_block() {
+   986→        let panel = stack(
+   987→            slot(),
+   988→            UiVec2::new(100.0, 60.0),
+   989→            HAlign::Center,
+   990→            VAlign::Center,
+   991→        );
+   992→        assert_eq!(panel, UiRect::new(200.0, 120.0, 100.0, 60.0));
+   993→        let bottom_right = stack(slot(), UiVec2::new(100.0, 60.0), HAlign::End, VAlign::End);
+   994→        assert_eq!(bottom_right, UiRect::new(300.0, 190.0, 100.0, 60.0));
+   995→    }
+   996→
+   997→    #[test]
+   998→    fn constrain_clamps_both_bounds() {
+   999→        let min = UiVec2::new(40.0, 20.0);
+  1000→        let max = UiVec2::new(120.0, 80.0);
+  1001→        assert_eq!(
+  1002→            constrain(min, max, UiVec2::new(500.0, 5.0)),
+  1003→            UiVec2::new(120.0, 20.0),
+  1004→            "верхний кламп и приоритет min"
+  1005→        );
+  1006→        // Противоречивые границы: max < min → срезается до min.
+  1007→        assert_eq!(
+  1008→            constrain(min, UiVec2::new(10.0, 10.0), UiVec2::new(5.0, 5.0)),
+  1009→            UiVec2::new(40.0, 20.0)
+  1010→        );
+  1011→    }
+  1012→
+  1013→    #[test]
+  1014→    fn pad_shrinks_slot() {
+  1015→        let inner = pad(
+  1016→            slot(),
+  1017→            EdgeInsets {
+  1018→                left: 12.0,
+  1019→                top: 10.0,
+  1020→                right: 12.0,
+  1021→                bottom: 10.0,
+  1022→            },
+  1023→        );
+  1024→        assert_eq!(inner, UiRect::new(112.0, 60.0, 276.0, 180.0));
+  1025→        // Отступы больше слота — пустой rect (не отрицательный).
+  1026→        assert!(pad(UiRect::new(0.0, 0.0, 4.0, 4.0), EdgeInsets::uniform(10.0)).is_empty());
+  1027→    }
+  1028→
+  1029→    #[test]
+  1030→    fn spacer_takes_room_without_height() {
+  1031→        let r = Row {
+  1032→            gap: 0.0,
+  1033→            ..Row::default()
+  1034→        };
+  1035→        let rects = r.lay_out(
+  1036→            slot(),
+  1037→            &[
+  1038→                Child::fixed(50.0, 30.0),
+  1039→                Child::spacer(40.0),
+  1040→                Child::fixed(50.0, 30.0),
+  1041→            ],
+  1042→        );
+  1043→        assert_eq!(rects[1], UiRect::new(150.0, 50.0, 40.0, 0.0));
+  1044→        assert_eq!(rects[2].x, 190.0);
+  1045→    }
+  1046→
+  1047→    // === FR-062 F-14: flex-факторы ===
+  1048→
+  1049→    /// Свободное место распределяется пропорционально grow (2:1);
+  1050→    /// сумма ширин + зазоры = слот ровно. FR-068 W2: пин на NativeBackend
+  1051→    /// (без округления) — FlexLayoutEngine/taffy округляют целевые
+  1052→    /// main-размеры по CSS §9.7 (rounding on freeze — расхождение ≤ 0.5
+  1053→    /// ui px на долю, задокументировано в тестах taffy_backend); Flex-пин
+  1054→    /// округления — отдельный тест ниже (после реализации движка).
+  1055→    #[test]
+  1056→    fn row_grow_distributes_free_space_proportionally() {
+  1057→        let r = Row {
+  1058→            gap: 6.0,
+  1059→            ..Row::default()
+  1060→        };
+  1061→        let slot = slot(); // 300
+  1062→        let rects = NativeBackend.lay_out_row(
+  1063→            r,
+  1064→            slot,
+  1065→            &[
+  1066→                Child::fixed(80.0, 30.0),
+  1067→                Child::flexible(40.0, 30.0, 2.0),
+  1068→                Child::flexible(40.0, 30.0, 1.0),
+  1069→            ],
+  1070→        );
+  1071→        // basis 160 + зазоры 12 → свободных 128: 2/3 и 1/3
+  1072→        approx(rects[0].w, 80.0);
+  1073→        approx(rects[1].w, 40.0 + 128.0 * 2.0 / 3.0);
+  1074→        approx(rects[2].w, 40.0 + 128.0 / 3.0);
+  1075→        approx(rects[0].x, 100.0);
+  1076→        approx(rects[1].x, 186.0);
+  1077→        approx(rects[2].x, 186.0 + rects[1].w + 6.0);
+  1078→        approx(rects[2].right(), slot.right());
+  1079→    }
+  1080→
+  1081→    /// grow = 0 — байт-в-байт прежнее поведение (инвариант «только
+  1082→    /// добавление» волны 2).
+  1083→    #[test]
+  1084→    fn row_zero_grow_is_byte_identical_to_fixed() {
+  1085→        let r = Row {
+  1086→            gap: 6.0,
+  1087→            cross: CrossAlign::Center,
+  1088→            ..Row::default()
+  1089→        };
+  1090→        let items = [Child::fixed(80.0, 30.0), Child::fixed(40.0, 30.0)];
+  1091→        let old = r.lay_out(slot(), &items);
+  1092→        let new = r.lay_out(
+  1093→            slot(),
+  1094→            &[
+  1095→                Child::flexible(80.0, 30.0, 0.0),
+  1096→                Child::flexible(40.0, 30.0, 0.0),
+  1097→            ],
+  1098→        );
+  1099→        assert_eq!(old, new);
+  1100→    }
+  1101→
+  1102→    /// grow поглощает свободное место — SpaceBetween деградирует к базовому
+  1103→    /// зазору (документированный приоритет).
+  1104→    #[test]
+  1105→    fn row_space_between_degenerates_with_grow() {
+  1106→        let r = Row {
+  1107→            gap: 6.0,
+  1108→            main: MainAlign::SpaceBetween,
+  1109→            ..Row::default()
+  1110→        };
+  1111→        let slot = slot(); // 300
+  1112→        let rects = r.lay_out(
+  1113→            slot,
+  1114→            &[
+  1115→                Child::flexible(40.0, 30.0, 1.0),
+  1116→                Child::flexible(40.0, 30.0, 1.0),
+  1117→            ],
+  1118→        );
+  1119→        // свободных 214 → каждый 147; зазор — базовый 6
+  1120→        approx(rects[0].w, 147.0);
+  1121→        approx(rects[1].w, 147.0);
+  1122→        approx(rects[1].x - rects[0].right(), 6.0);
+  1123→        approx(rects[1].right(), slot.right());
+  1124→    }
+  1125→
+  1126→    /// MainAlign::End — дети прижаты к правому краю слота.
+  1127→    #[test]
+  1128→    fn row_end_aligns_children_to_slot_end() {
+  1129→        let r = Row {
+  1130→            gap: 6.0,
+  1131→            main: MainAlign::End,
+  1132→            ..Row::default()
+  1133→        };
+  1134→        let slot = slot(); // 300, right 400
+  1135→        let rects = r.lay_out(slot, &[Child::fixed(80.0, 30.0), Child::fixed(40.0, 30.0)]);
+  1136→        approx(rects[0].x, 274.0);
+  1137→        approx(rects[1].x, 360.0);
+  1138→        approx(rects[1].right(), 400.0);
+  1139→    }
+  1140→
+  1141→    /// Column: grow распределяет вертикальное свободное место.
+  1142→    #[test]
+  1143→    fn column_grow_distributes_vertical_free_space() {
+  1144→        let c = Column {
+  1145→            gap: 6.0,
+  1146→            ..Column::default()
+  1147→        };
+  1148→        let slot = slot(); // h 200, bottom 250
+  1149→        let rects = c.lay_out(
+  1150→            slot,
+  1151→            &[
+  1152→                Child::flexible(50.0, 40.0, 1.0),
+  1153→                Child::flexible(50.0, 40.0, 1.0),
+  1154→            ],
+  1155→        );
+  1156→        // свободных 200−80−6 = 114 → каждый 97
+  1157→        approx(rects[0].h, 97.0);
+  1158→        approx(rects[1].h, 97.0);
+  1159→        approx(rects[1].bottom(), 250.0);
+  1160→    }
+  1161→
+  1162→    /// Деградация приоритетна: SqueezeTail игнорирует grow. FR-068 W2:
+  1163→    /// пин на ЯВНЫХ backend'ах с дословной семантикой (NativeBackend +
+  1164→    /// FlexLayoutEngine, §Контракт-4); taffy — flex_shrink (C3).
+  1165→    #[test]
+  1166→    fn squeeze_tail_ignores_grow() {
+  1167→        let slot = UiRect::new(0.0, 0.0, 100.0, 30.0);
+  1168→        let fixed_items = [Child::fixed(60.0, 30.0), Child::fixed(60.0, 30.0)];
+  1169→        let flex_items = [
+  1170→            Child::flexible(60.0, 30.0, 10.0),
+  1171→            Child::flexible(60.0, 30.0, 5.0),
+  1172→        ];
+  1173→        for (name, backend) in [
+  1174→            ("Native", &NativeBackend as &dyn LayoutBackend),
+  1175→            ("Flex", &FlexLayoutEngine as &dyn LayoutBackend),
+  1176→        ] {
+  1177→            let fixed = backend.lay_out_row(
+  1178→                Row {
+  1179→                    gap: 6.0,
+  1180→                    policy: RowPolicy::SqueezeTail,
+  1181→                    ..Row::default()
+  1182→                },
+  1183→                slot,
+  1184→                &fixed_items,
+  1185→            );
+  1186→            let flex = backend.lay_out_row(
+  1187→                Row {
+  1188→                    gap: 6.0,
+  1189→                    policy: RowPolicy::SqueezeTail,
+  1190→                    ..Row::default()
+  1191→                },
+  1192→                slot,
+  1193→                &flex_items,
+  1194→            );
+  1195→            assert_eq!(fixed, flex, "grow игнорируется ({name})");
+  1196→        }
+  1197→    }
+  1198→
+  1199→    // === FR-062 F-15: Wrap ===
+  1200→
+  1201→    /// Не влез в строку — перенос.
+  1202→    #[test]
+  1203→    fn wrap_moves_overflow_to_next_row() {
+  1204→        let r = Row {
+  1205→            gap: 10.0,
+  1206→            policy: RowPolicy::Wrap,
+  1207→            ..Row::default()
+  1208→        };
+  1209→        let slot = UiRect::new(0.0, 0.0, 100.0, 80.0);
+  1210→        let rects = r.lay_out(
+  1211→            slot,
+  1212→            &[
+  1213→                Child::fixed(40.0, 30.0),
+  1214→                Child::fixed(40.0, 30.0),
+  1215→                Child::fixed(40.0, 30.0),
+  1216→            ],
+  1217→        );
+  1218→        assert_eq!(rects[0], UiRect::new(0.0, 0.0, 40.0, 30.0));
+  1219→        assert_eq!(rects[1], UiRect::new(50.0, 0.0, 40.0, 30.0));
+  1220→        // вторая строка: y = 30 + 10 (gap и по вертикали)
+  1221→        assert_eq!(rects[2], UiRect::new(0.0, 40.0, 40.0, 30.0));
+  1222→    }
+  1223→
+  1224→    /// Высота строки = max высот детей строки; cross — внутри строки.
+  1225→    #[test]
+  1226→    fn wrap_row_height_is_max_of_children() {
+  1227→        let r = Row {
+  1228→            gap: 10.0,
+  1229→            policy: RowPolicy::Wrap,
+  1230→            ..Row::default()
+  1231→        };
+  1232→        let slot = UiRect::new(0.0, 0.0, 100.0, 200.0);
+  1233→        let rects = r.lay_out(
+  1234→            slot,
+  1235→            &[
+  1236→                Child::fixed(40.0, 30.0),
+  1237→                Child::fixed(40.0, 20.0),
+  1238→                Child::fixed(40.0, 50.0),
+  1239→            ],
+  1240→        );
+  1241→        assert_eq!(rects[0], UiRect::new(0.0, 0.0, 40.0, 30.0));
+  1242→        assert_eq!(rects[1], UiRect::new(50.0, 0.0, 40.0, 20.0));
+  1243→        assert_eq!(rects[2], UiRect::new(0.0, 40.0, 40.0, 50.0));
+  1244→    }
+  1245→
+  1246→    /// Строки ниже слота НЕ маскируются — выходят за нижний край
+  1247→    /// (ловится линтом G4, как Fit).
+  1248→    #[test]
+  1249→    fn wrap_overflow_below_slot_is_visible() {
+  1250→        let r = Row {
+  1251→            gap: 10.0,
+  1252→            policy: RowPolicy::Wrap,
+  1253→            ..Row::default()
+  1254→        };
+  1255→        let slot = UiRect::new(0.0, 0.0, 100.0, 40.0);
+  1256→        let rects = r.lay_out(
+  1257→            slot,
+  1258→            &[
+  1259→                Child::fixed(40.0, 30.0),
+  1260→                Child::fixed(40.0, 30.0),
+  1261→                Child::fixed(40.0, 30.0),
+  1262→            ],
+  1263→        );
+  1264→        assert!(rects[2].y >= slot.bottom(), "строка за слотом видима");
+  1265→    }
+  1266→
+  1267→    /// Ребёнок шире слота — строка из одного (переполнение вправо видно).
+  1268→    #[test]
+  1269→    fn wrap_single_wider_than_slot_stays_in_own_row() {
+  1270→        let r = Row {
+  1271→            gap: 10.0,
+  1272→            policy: RowPolicy::Wrap,
+  1273→            ..Row::default()
+  1274→        };
+  1275→        let slot = UiRect::new(0.0, 0.0, 100.0, 200.0);
+  1276→        let rects = r.lay_out(slot, &[Child::fixed(200.0, 30.0), Child::fixed(40.0, 30.0)]);
+  1277→        assert_eq!(rects[0], UiRect::new(0.0, 0.0, 200.0, 30.0));
+  1278→        assert_eq!(rects[1], UiRect::new(0.0, 40.0, 40.0, 30.0));
+  1279→    }
+  1280→
+  1281→    // === FR-062 F-13: measured-дети ===
+  1282→
+  1283→    /// Оракул эквивалентности: lay_out_measured == ручная проводка
+  1284→    /// width_of → Child::fixed → lay_out (те же rect'ы дословно).
+  1285→    #[test]
+  1286→    fn measured_row_matches_manual_fixed_oracle() {
+  1287→        let mut fs = cosmic_text::FontSystem::new();
+  1288→        let mut m = TextMeasurer::new();
+  1289→        let family = "Noto Sans Display";
+  1290→        let labels = ["50 rps", "1000 запр/с", "Σ"];
+  1291→        // Оракул: ручная проводка (как до F-13)
+  1292→        let manual_widths: Vec<f32> = labels
+  1293→            .iter()
+  1294→            .map(|l| m.width_of(&mut fs, l, family, 13.0))
+  1295→            .collect();
+  1296→        let manual = Row {
+  1297→            gap: 8.0,
+  1298→            ..Row::default()
+  1299→        }
+  1300→        .lay_out(
+  1301→            slot(),
+  1302→            &[
+  1303→                Child::fixed(manual_widths[0], 18.0),
+  1304→                Child::fixed(manual_widths[1], 18.0),
+  1305→                Child::fixed(manual_widths[2], 18.0),
+  1306→            ],
+  1307→        );
+  1308→        // F-13: тот же ряд через measured-детей
+  1309→        let measured = Row {
+  1310→            gap: 8.0,
+  1311→            ..Row::default()
+  1312→        }
+  1313→        .lay_out_measured(
+  1314→            slot(),
+  1315→            &[
+  1316→                MeasuredItem::Text {
+  1317→                    text: labels[0],
+  1318→                    max_w: None,
+  1319→                    min_w: 0.0,
+  1320→                    pad_x: 0.0,
+  1321→                    h: None,
+  1322→                },
+  1323→                MeasuredItem::Text {
+  1324→                    text: labels[1],
+  1325→                    max_w: None,
+  1326→                    min_w: 0.0,
+  1327→                    pad_x: 0.0,
+  1328→                    h: None,
+  1329→                },
+  1330→                MeasuredItem::Text {
+  1331→                    text: labels[2],
+  1332→                    max_w: None,
+  1333→                    min_w: 0.0,
+  1334→                    pad_x: 0.0,
+  1335→                    h: None,
+  1336→                },
+  1337→            ],
+  1338→            &mut m,
+  1339→            &mut fs,
+  1340→            family,
+  1341→            13.0,
+  1342→        );
+  1343→        // ширины дословно; высоты — измеренные (18 = кегль·1.3 ≈ 16.9 —
+  1344→        // фиксируем измеренные, не ручные)
+  1345→        for (i, (mr, mn)) in measured.iter().zip(manual.iter()).enumerate() {
+  1346→            approx(mr.w, mn.w);
+  1347→            assert!(mr.x >= mn.x - 0.01 && mr.x <= mn.x + 0.01, "x[{i}]");
+  1348→        }
+  1349→        // высота текст-ребёнка — из измерения (кегль·фактор строки).
+  1350→        // FR-068 W2: на taffy-default сборке высота приведена к px-сетке
+  1351→        // (round_layout ≤ 0.5 ui px, пин (g2) backend_parity) — допуск 0.5
+  1352→        // документированного расхождения; на Native/Flex-стабе — дословно.
+  1353→        let spec = crate::measure::TextSpec {
+  1354→            text: labels[0],
+  1355→            family,
+  1356→            size: 13.0,
+  1357→            max_width: f32::INFINITY,
+  1358→            weight: cosmic_text::Weight::MEDIUM,
+  1359→        };
+  1360→        let measured_h = m.measure(&mut fs, &spec).height;
+  1361→        assert!(
+  1362→            (measured[0].h - measured_h).abs() <= 0.5 + 1e-4,
+  1363→            "высота text-ребёнка ≈ измеренной (допуск round_layout 0.5): {} vs {}",
+  1364→            measured[0].h,
+  1365→            measured_h
+  1366→        );
+  1367→    }
+  1368→
+  1369→    /// FR-068 W3.2: measured-колонка == ручная проводка
+  1370→    /// MeasuredItem::resolve → Child → lay_out (те же rect'ы дословно;
+  1371→    /// Fixed/Spacer-скелеты панелей без ручных `Child::fixed`).
+  1372→    #[test]
+  1373→    fn measured_column_matches_manual_fixed_oracle() {
+  1374→        let mut fs = cosmic_text::FontSystem::new();
+  1375→        let mut m = TextMeasurer::new();
+  1376→        // Скелет панели: [шапка, поле, распорка 6, ряд чипов, распорка 6,
+  1377→        // окно строк] — зазор 0, крестовой прижим к левому краю (Start).
+  1378→        let items = [
+  1379→            MeasuredItem::Fixed { w: 260.0, h: 40.0 },
+  1380→            MeasuredItem::Fixed { w: 260.0, h: 30.0 },
+  1381→            MeasuredItem::Spacer(6.0),
+  1382→            MeasuredItem::Fixed { w: 260.0, h: 24.0 },
+  1383→            MeasuredItem::Spacer(6.0),
+  1384→            MeasuredItem::Fixed { w: 260.0, h: 120.0 },
+  1385→        ];
+  1386→        // Оракул: те же дети, собранные вручную (как до W3.2).
+  1387→        let manual_children: Vec<Child> = items
+  1388→            .iter()
+  1389→            .map(|it| it.resolve(&mut m, &mut fs, "Noto Sans Display", 12.0))
+  1390→            .collect();
+  1391→        let manual = Column {
+  1392→            cross: CrossAlign::Start,
+  1393→            ..Column::default()
+  1394→        }
+  1395→        .lay_out(slot(), &manual_children);
+  1396→        // W3.2: тот же скелет через measured-детей.
+  1397→        let measured = Column {
+  1398→            cross: CrossAlign::Start,
+  1399→            ..Column::default()
+  1400→        }
+  1401→        .lay_out_measured(slot(), &items, &mut m, &mut fs, "Noto Sans Display", 12.0);
+  1402→        assert_eq!(measured.len(), manual.len());
+  1403→        for (i, (mr, mn)) in measured.iter().zip(manual.iter()).enumerate() {
+  1404→            assert_eq!(mr, mn, "rect[{i}] бит-в-бит с ручной проводкой");
+  1405→        }
+  1406→        // Семантика распорки в колонке (пин движка, оба backend'а): main-ось
+  1407→        // колонки — высота, `Spacer(len)` задаёт w — по высоте ребёнок
+  1408→        // нулевой (симметрично `spacer_takes_room_without_height` для Row).
+  1409→        // ВАЖНО для потребителей: вертикальные зазоры выражаются
+  1410→        // `MeasuredItem::Fixed{w: 0.0, h: <зазор>}` (как в settings_ui),
+  1411→        // а не `Spacer` — тот в колонке места не занимает.
+  1412→        assert_eq!(measured[2].h, 0.0, "Spacer в колонке — нулевая высота");
+  1413→        assert_eq!(
+  1414→            measured[2].y,
+  1415→            measured[1].y + 30.0,
+  1416→            "нет вертикального зазора"
+  1417→        );
+  1418→        assert_eq!(measured[0].x, slot().x);
+  1419→    }
+  1420→
+  1421→    /// FR-068 W3.2: lay_out_measured (default backend) ≡
+  1422→    /// lay_out_measured_with(ЯВНЫЙ default backend).
+  1423→    #[test]
+  1424→    fn measured_column_with_backend_matches_default() {
+  1425→        let mut fs = cosmic_text::FontSystem::new();
+  1426→        let mut m = TextMeasurer::new();
+  1427→        let items = [
+  1428→            MeasuredItem::Fixed { w: 100.0, h: 20.0 },
+  1429→            MeasuredItem::Spacer(4.0),
+  1430→            MeasuredItem::Fixed { w: 100.0, h: 20.0 },
+  1431→        ];
+  1432→        let a = Column::default().lay_out_measured(
+  1433→            slot(),
+  1434→            &items,
+  1435→            &mut m,
+  1436→            &mut fs,
+  1437→            "Noto Sans Display",
+  1438→            12.0,
+  1439→        );
+  1440→        let b = Column::default().lay_out_measured_with(
+  1441→            default_backend(),
+  1442→            slot(),
+  1443→            &items,
+  1444→            &mut m,
+  1445→            &mut fs,
+  1446→            "Noto Sans Display",
+  1447→            12.0,
+  1448→        );
+  1449→        assert_eq!(a, b);
+  1450→    }
+  1451→
+  1452→    /// Кламп ширины — только явный max_w; min_w поднимает короткие.
+  1453→    #[test]
+  1454→    fn measured_text_clamps_only_explicit_max_w() {
+  1455→        let mut fs = cosmic_text::FontSystem::new();
+  1456→        let mut m = TextMeasurer::new();
+  1457→        let family = "Noto Sans Display";
+  1458→        let rects = Row::default().lay_out_measured(
+  1459→            UiRect::new(0.0, 0.0, 1000.0, 30.0),
+  1460→            &[
+  1461→                MeasuredItem::Text {
+  1462→                    text: "длинная подпись которая заведомо шире потолка",
+  1463→                    max_w: Some(50.0),
+  1464→                    min_w: 0.0,
+  1465→                    pad_x: 0.0,
+  1466→                    h: None,
+  1467→                },
+  1468→                MeasuredItem::Text {
+  1469→                    text: "Σ",
+  1470→                    max_w: None,
+  1471→                    min_w: 24.0,
+  1472→                    pad_x: 0.0,
+  1473→                    h: None,
+  1474→                },
+  1475→            ],
+  1476→            &mut m,
+  1477→            &mut fs,
+  1478→            family,
+  1479→            13.0,
+  1480→        );
+  1481→        approx(rects[0].w, 50.0);
+  1482→        assert!(rects[1].w >= 24.0);
+  1483→    }
+  1484→
+  1485→    /// W3.3 пад-семантика (каталог §9.3.1): `Text { pad_x }` бит-в-бит
+  1486→    /// эквивалентен ручной проводке `Fixed { w: width_of(text) + pad }`
+  1487→    /// (тот же шейпер, та же арифметика) — закрытие класса проводок
+  1488→    /// «width_of → размер ребёнка» (чип whatif/template).
+  1489→    #[test]
+  1490→    fn measured_text_pad_x_matches_manual_fixed_wire() {
+  1491→        let mut fs = cosmic_text::FontSystem::new();
+  1492→        let mut m = TextMeasurer::new();
+  1493→        let family = "Noto Sans Display";
+  1494→        let label = "Сценарий A";
+  1495→        let pad = 2.0 * 6.0; // CHIP_PAD_X × 2 (чтоф-паттерн)
+  1496→        let slot = UiRect::new(0.0, 0.0, 600.0, 30.0);
+  1497→        // Проводка: замер вручную → фиксированный ребёнок.
+  1498→        let manual_w = m.width_of(&mut fs, label, family, 13.0) + pad;
+  1499→        let manual = Row::default().lay_out(slot, &[Child::fixed(manual_w, 18.0)]);
+  1500→        // Компонентный путь: текст с падом и ЯВНОЙ высотой (18.0 — как в
+  1501→        // проводке), замер внутри resolve.
+  1502→        let measured = Row::default().lay_out_measured(
+  1503→            slot,
+  1504→            &[MeasuredItem::Text {
+  1505→                text: label,
+  1506→                max_w: None,
+  1507→                min_w: 0.0,
+  1508→                pad_x: pad,
+  1509→                h: Some(18.0),
+  1510→            }],
+  1511→            &mut m,
+  1512→            &mut fs,
+  1513→            family,
+  1514→            13.0,
+  1515→        );
+  1516→        assert_eq!(
+  1517→            (measured[0].x, measured[0].y, measured[0].w, measured[0].h),
+  1518→            (manual[0].x, manual[0].y, manual[0].w, manual[0].h),
+  1519→            "Text{{pad_x, h}} ≡ Fixed{{width_of+pad, h}} бит-в-бит (полный rect)"
+  1520→        );
+  1521→    }
+  1522→
+  1523→    /// Пад + пол ширины (кнопка whatif): `Text { pad_x, min_w }` ≡
+  1524→    /// `max(min_w, width_of + pad_x)` бит-в-бит — короткая подпись поднята
+  1525→    /// до `min_w`, длинная — текст+пад.
+  1526→    #[test]
+  1527→    fn measured_text_pad_x_min_w_button_parity() {
+  1528→        let mut fs = cosmic_text::FontSystem::new();
+  1529→        let mut m = TextMeasurer::new();
+  1530→        let family = "Noto Sans Display";
+  1531→        let pad = 2.0 * 8.0; // BTN_PAD_X × 2
+  1532→        let min_w = 74.0; // BTN_WIDTH (чтоф-паттерн)
+  1533→        let short = "Да";
+  1534→        let long = "Сравнить сценарии";
+  1535→        let rects = Row::default().lay_out_measured(
+  1536→            UiRect::new(0.0, 0.0, 600.0, 30.0),
+  1537→            &[
+  1538→                MeasuredItem::Text {
+  1539→                    text: short,
+  1540→                    max_w: None,
+  1541→                    min_w,
+  1542→                    pad_x: pad,
+  1543→                    h: Some(18.0),
+  1544→                },
+  1545→                MeasuredItem::Text {
+  1546→                    text: long,
+  1547→                    max_w: None,
+  1548→                    min_w,
+  1549→                    pad_x: pad,
+  1550→                    h: Some(18.0),
+  1551→                },
+  1552→            ],
+  1553→            &mut m,
+  1554→            &mut fs,
+  1555→            family,
+  1556→            13.0,
+  1557→        );
+  1558→        let short_w = m.width_of(&mut fs, short, family, 13.0) + pad;
+  1559→        let long_w = m.width_of(&mut fs, long, family, 13.0) + pad;
+  1560→        // Оракул — прежняя проводка «btn_width → Fixed» через ТОТ ЖЕ
+  1561→        // движок (выход движка округляется round_px — сравнивать нужно
+  1562→        // на одном уровне абстракции; см. flex.rs round_px on freeze).
+  1563→        let slot = UiRect::new(0.0, 0.0, 600.0, 30.0);
+  1564→        let manual = Row::default().lay_out(
+  1565→            slot,
+  1566→            &[
+  1567→                Child::fixed(min_w.max(short_w), 18.0),
+  1568→                Child::fixed(min_w.max(long_w), 18.0),
+  1569→            ],
+  1570→        );
+  1571→        assert_eq!(
+  1572→            (rects[0].x, rects[0].y, rects[0].w, rects[0].h),
+  1573→            (manual[0].x, manual[0].y, manual[0].w, manual[0].h),
+  1574→            "короткая кнопка: Text{{pad_x, min_w, h}} ≡ проводке max(min_w, w+pad)"
+  1575→        );
+  1576→        assert_eq!(
+  1577→            (rects[1].x, rects[1].y, rects[1].w, rects[1].h),
+  1578→            (manual[1].x, manual[1].y, manual[1].w, manual[1].h),
+  1579→            "длинная кнопка: ширина = текст+пад (min_w не мешает)"
+  1580→        );
+  1581→        // Санити семантики: короткая поднята до min_w (до округления),
+  1582→        // длинная — шире min_w.
+  1583→        assert_eq!(rects[0].w, min_w.max(short_w).round());
+  1584→        assert!(rects[1].w > min_w);
+  1585→    }
+  1586→
+  1587→    // === FR-062 F-16: grid_cells ===
+  1588→
+  1589→    /// Row-major ячейки: cols × rows от слота с зазорами.
+  1590→    #[test]
+  1591→    fn grid_cells_row_major_positions() {
+  1592→        let cells = grid_cells(
+  1593→            UiRect::new(0.0, 0.0, 220.0, 100.0),
+  1594→            &[100.0, 100.0],
+  1595→            2,
+  1596→            40.0,
+  1597→            UiVec2::new(10.0, 10.0),
+  1598→        );
+  1599→        assert_eq!(cells.len(), 4);
+  1600→        assert_eq!(cells[0], UiRect::new(0.0, 0.0, 100.0, 40.0));
+  1601→        assert_eq!(cells[1], UiRect::new(110.0, 0.0, 100.0, 40.0));
+  1602→        assert_eq!(cells[2], UiRect::new(0.0, 50.0, 100.0, 40.0));
+  1603→        assert_eq!(cells[3], UiRect::new(110.0, 50.0, 100.0, 40.0));
+  1604→    }
+  1605→
+  1606→    /// Отрицательные ширины/высоты срезаются в 0 (нормализация слота).
+  1607→    #[test]
+  1608→    fn grid_cells_negative_clamped() {
+  1609→        let cells = grid_cells(
+  1610→            UiRect::new(0.0, 0.0, 100.0, 40.0),
+  1611→            &[-5.0],
+  1612→            1,
+  1613→            -3.0,
+  1614→            UiVec2::new(0.0, 0.0),
+  1615→        );
+  1616→        assert_eq!(cells[0], UiRect::new(0.0, 0.0, 0.0, 0.0));
+  1617→    }
+  1618→
+  1619→    // === FR-062 F-18: геометрические снапшоты (детерминированные) ===
+  1620→
+  1621→    /// Золотые строки геометрии фикс-компонентов (без шрифтов): изменение
+  1622→    /// раскладки ловится сравнением с эталоном (перегенерация — осознанно).
+  1623→    #[test]
+  1624→    fn snapshot_fixed_geometry_golden() {
+  1625→        use crate::testing::{assert_snapshot, snap};
+  1626→        let grid = grid_cells(
+  1627→            UiRect::new(10.0, 20.0, 300.0, 100.0),
+  1628→            &[70.0, 70.0, 70.0],
+  1629→            2,
+  1630→            24.0,
+  1631→            UiVec2::new(8.0, 6.0),
+  1632→        );
+  1633→        let got = grid
+  1634→            .iter()
+  1635→            .map(|r| snap("grid", *r))
+  1636→            .collect::<Vec<_>>()
+  1637→            .join("\n");
+  1638→        assert_snapshot(
+  1639→            got,
+  1640→            "grid x=10 y=20 w=70 h=24\n\
+  1641→             grid x=88 y=20 w=70 h=24\n\
+  1642→             grid x=166 y=20 w=70 h=24\n\
+  1643→             grid x=10 y=50 w=70 h=24\n\
+  1644→             grid x=88 y=50 w=70 h=24\n\
+  1645→             grid x=166 y=50 w=70 h=24",
+  1646→        );
+  1647→        let stacked = stack(
+  1648→            UiRect::new(0.0, 0.0, 400.0, 300.0),
+  1649→            UiVec2::new(120.0, 60.0),
+  1650→            HAlign::End,
+  1651→            VAlign::End,
+  1652→        );
+  1653→        assert_snapshot(snap("stack", stacked), "stack x=280 y=240 w=120 h=60");
+  1654→    }
+  1655→
+  1656→    fn approx(a: f32, b: f32) {
+  1657→        assert!(
+  1658→            (a - b).abs() < 0.01,
+  1659→            "approx failed: {a} vs {b} (diff {})",
+  1660→            (a - b).abs()
+  1661→        );
+  1662→    }
+  1663→}
+  1664→

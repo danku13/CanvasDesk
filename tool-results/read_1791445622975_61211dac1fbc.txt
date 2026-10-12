@@ -1,0 +1,851 @@
+     1→//! FR-045 R-5 (приоритет владельца, сессия 2026-09-21) — квалифицированная
+     2→//! адресация «Объект.Поле»: **единственная точка** сборки отображаемых
+     3→//! путей входных параметров. FR-044 (§Changes-1) переиспользует этот модуль
+     4→//! для пилюль веера main stage и панели «Как считается» — определение
+     5→//! `QualifiedRef` живёт здесь, а не в `bundles.rs` (сметчивание 2026-09-21).
+     6→//!
+     7→//! Правила (FR-045 §Решения Р-5, проверены на прототипе):
+     8→//! - объект = имя ноды-истока ([`node_display_name`]; data-нода FR-045 R-2 —
+     9→//!   имя ноды-объекта, колонка приходит через `fromOutput`);
+    10→//! - поле = имя выхода (`fromOutput`) | «строка N» (`fromLine`, 1-based для
+    11→//!   отображения; полный текст — в `tooltip`) | fallback `edge.id`
+    12→//!   (ребро без адресации — значение ноды целиком);
+    13→//! - имена отображаются **дословно** (нормализация/транслитерация не
+    14→//!   выполняются); коллизия имён нод — fallback «Имя (node_id)» (§Q2);
+    15→//! - display-level: легаси-синтаксис (`$1`, `$параметр`) при отображении
+    16→//!   подставляется путями ([`formula_displays`]); именованный синтаксис
+    17→//!   Numi «Объект.Поле» — в исходнике с FR-050 Р-6 (решение владельца
+    18→//!   «сразу вариант Б», FR-044 §Q1 закрыт): пути резолвит вычислитель
+    19→//!   (`Env.qualified`), а [`formula_displays`] читает их же для
+    20→//!   рёбер-операндов подсветки (FR-044 Р-5).
+    21→//!
+    22→//! Чистый Rust, без I/O и глобального состояния; wasm-гейт (ADR-0011).
+    23→
+    24→use std::collections::BTreeMap;
+    25→
+    26→use crate::expr::NumiLineKind;
+    27→#[cfg(test)]
+    28→use crate::model::CanvasdeskExt;
+    29→use crate::model::{Canvas, Edge};
+    30→
+    31→/// Квалифицированный путь «Объект.Поле» (FR-045 Р-5, FR-044 Р-3).
+    32→#[derive(Debug, Clone, PartialEq, Eq)]
+    33→pub struct QualifiedRef {
+    34→    /// Объект — имя ноды-истока (дословно; коллизия — «Имя (node_id)»).
+    35→    pub obj: String,
+    36→    /// Поле — выход (`fromOutput`), «строка N» (`fromLine`) или `edge.id`.
+    37→    pub field: String,
+    38→    /// Дополнительные данные для тултипа (FR-044 §Проверка: `fromLine` →
+    39→    /// полное «строка N»; короткая форма на канвасе — полный путь).
+    40→    pub tooltip: Option<String>,
+    41→}
+    42→
+    43→impl QualifiedRef {
+    44→    /// Полный путь `Объект.Поле` — для stage, формул и тултипов (FR-044 Р-3).
+    45→    pub fn path(&self) -> String {
+    46→        format!("{}.{}", self.obj, self.field)
+    47→    }
+    48→
+    49→    /// Короткая форма «Поле» — для плотного канваса вне stage (компромисс
+    50→    /// FR-044 Р-3: полный путь — в [`QualifiedRef::path`]/тултипе).
+    51→    pub fn short(&self) -> &str {
+    52→        &self.field
+    53→    }
+    54→}
+    55→
+    56→/// Отображаемое имя ноды (дословно, FR-045 Р-5): `label` (программное имя —
+    57→/// по нему формулы ссылаются на объект, MUST быть первым) → явный заголовок
+    58→/// (FR-072, волна 1) → имя снимка шаблона → первая непустая строка текста →
+    59→/// `id`. Детерминировано, без нормализации.
+    60→pub fn node_display_name(canvas: &Canvas, node_id: &str) -> String {
+    61→    let Some(node) = canvas.node(node_id) else {
+    62→        return node_id.to_owned();
+    63→    };
+    64→    // Волна 1 (решение владельца): явный заголовок (FR-072) — ВТОРОЙ в
+    65→    // цепочке (после label): qualified-пути тултипов показывают то же имя,
+    66→    // что шапка карточки; label главнее — по нему формулы ссылаются на
+    67→    // объект («Статьи.marketing»): миграция заголовка (title = «Статьи
+    68→    // бюджета») не должна рвать resolution ссылок. Фолбэк «первая непустая
+    69→    // строка» — последний рубеж для не-мигрированных контекстов (MCP);
+    70→    // шапкой он больше не становится (cards::title_for).
+    71→    if let Some(label) = node.label.as_deref() {
+    72→        if !label.trim().is_empty() {
+    73→            return label.to_owned();
+    74→        }
+    75→    }
+    76→    if let Some(title) = node.title() {
+    77→        if !title.trim().is_empty() {
+    78→            return title.to_owned();
+    79→        }
+    80→    }
+    81→    if let Some(name) = node.template().and_then(|t| t.name) {
+    82→        if !name.trim().is_empty() {
+    83→            return name;
+    84→        }
+    85→    }
+    86→    if let Some(text) = node.text.as_deref() {
+    87→        if let Some(line) = text.lines().map(str::trim).find(|l| !l.is_empty()) {
+    88→            return line.to_owned();
+    89→        }
+    90→    }
+    91→    node.id.clone()
+    92→}
+    93→
+    94→/// Счётчик отображаемых имён (для детекции коллизий §Q2): имя → сколько нод
+    95→/// его носят. Публичен для переиспользования рендером (один обход на кадр).
+    96→pub fn display_name_counts(canvas: &Canvas) -> BTreeMap<String, usize> {
+    97→    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    98→    for node in &canvas.nodes {
+    99→        *counts
+   100→            .entry(node_display_name(canvas, &node.id))
+   101→            .or_insert(0) += 1;
+   102→    }
+   103→    counts
+   104→}
+   105→
+   106→/// Объект для [`display_ref`]: имя ноды с разрешением коллизии — если
+   107→/// имя носят несколько нод, добавляется ` (node_id)` (FR-045 §Q2, базово).
+   108→pub fn qualified_obj_name(
+   109→    canvas: &Canvas,
+   110→    node_id: &str,
+   111→    counts: &BTreeMap<String, usize>,
+   112→) -> String {
+   113→    let name = node_display_name(canvas, node_id);
+   114→    if counts.get(&name).copied().unwrap_or(0) > 1 {
+   115→        format!("{name} ({node_id})")
+   116→    } else {
+   117→        name
+   118→    }
+   119→}
+   120→
+   121→/// Единая точка сборки отображаемого пути value-ребра (FR-044 §Changes-1,
+   122→/// тесты §Проверка; правила — FR-045 Р-5). `edge_index` вне диапазона —
+   123→/// пустой путь (без паники; чистая функция не падает).
+   124→pub fn display_ref(canvas: &Canvas, edge_index: usize) -> QualifiedRef {
+   125→    let Some(edge) = canvas.edges.get(edge_index) else {
+   126→        return QualifiedRef {
+   127→            obj: String::new(),
+   128→            field: String::new(),
+   129→            tooltip: None,
+   130→        };
+   131→    };
+   132→    display_ref_for_edge(canvas, edge, &display_name_counts(canvas))
+   133→}
+   134→
+   135→/// То же, но с переиспользованием готового счётчика имён (горячий путь
+   136→/// рендера: один [`display_name_counts`] на кадр вместо обхода на ребро).
+   137→pub fn display_ref_for_edge(
+   138→    canvas: &Canvas,
+   139→    edge: &Edge,
+   140→    counts: &BTreeMap<String, usize>,
+   141→) -> QualifiedRef {
+   142→    let obj = qualified_obj_name(canvas, &edge.from_node, counts);
+   143→    // Приоритет адресации — как в flow::edge_source_value (FR-025/FR-029):
+   144→    // fromLine → fromOutput → значение ноды целиком.
+   145→    if let Some(line) = edge.from_line {
+   146→        return QualifiedRef {
+   147→            obj,
+   148→            // Отображение 1-based (человек считает строки с единицы);
+   149→            // в модели `from_line` — индекс листа (0-based).
+   150→            field: format!("строка {}", line + 1),
+   151→            tooltip: Some(format!("строка {}", line + 1)),
+   152→        };
+   153→    }
+   154→    if let Some(name) = &edge.from_output {
+   155→        return QualifiedRef {
+   156→            obj,
+   157→            field: name.clone(),
+   158→            tooltip: None,
+   159→        };
+   160→    }
+   161→    // Ребро без адресации: значение ноды целиком — fallback `edge.id`
+   162→    // (FR-044 Р-3/инвариант 5: «безымянный выход → edge.id»).
+   163→    QualifiedRef {
+   164→        obj,
+   165→        field: edge.id.clone(),
+   166→        tooltip: None,
+   167→    }
+   168→}
+   169→
+   170→/// Вход приёмника для групп «Переменные» (FR-044 Р-4, FR-045 Р-4):
+   171→/// ребро + его позиция в адресации + квалифицированный путь.
+   172→#[derive(Debug, Clone, PartialEq, Eq)]
+   173→pub struct InputRef {
+   174→    /// Индекс ребра в `canvas.edges`.
+   175→    pub edge_index: usize,
+   176→    /// Позиционный слот `$N` (0-based индекс среди позиционных рёбер);
+   177→    /// `None` — проливание в параметр.
+   178→    pub slot: Option<usize>,
+   179→    /// Имя параметра (`toParam`); `None` — позиционный слот.
+   180→    pub param: Option<String>,
+   181→    /// Квалифицированный путь истока.
+   182→    pub r: QualifiedRef,
+   183→}
+   184→
+   185→/// Все входящие value-рёбра ноды с квалифицированными путями — порядок
+   186→/// `canvas.edges` (детерминирован); позиционные и проливания в параметры.
+   187→/// Единственный источник группы «Переменные · входящие значения» для
+   188→/// панели main stage (FR-044 Р-4) и рейлов ноды (FR-045 Р-4).
+   189→pub fn input_refs(canvas: &Canvas, node_id: &str) -> Vec<InputRef> {
+   190→    let counts = display_name_counts(canvas);
+   191→    let mut slot: usize = 0;
+   192→    canvas
+   193→        .edges
+   194→        .iter()
+   195→        .enumerate()
+   196→        .filter(|(_, edge)| {
+   197→            edge.to_node == node_id && edge.flow_kind() == crate::flow::FlowKind::Value
+   198→        })
+   199→        .map(|(edge_index, edge)| {
+   200→            let (slot_no, param) = if edge.to_param.is_none() {
+   201→                let no = slot;
+   202→                slot += 1;
+   203→                (Some(no), None)
+   204→            } else {
+   205→                (None, edge.to_param.clone())
+   206→            };
+   207→            InputRef {
+   208→                edge_index,
+   209→                slot: slot_no,
+   210→                param,
+   211→                r: display_ref_for_edge(canvas, edge, &counts),
+   212→            }
+   213→        })
+   214→        .collect()
+   215→}
+   216→
+   217→/// Строка расчёта приёмника (FR-044 Р-4/Р-5, FR-045 Р-4): исходник,
+   218→/// display-подстановка квалифицированных путей вместо `$N`/`$параметр`
+   219→/// и рёбра-операнды (для подсветки формула⇄переменные⇄рёбра, FR-044 Р-5).
+   220→#[derive(Debug, Clone, PartialEq, Eq)]
+   221→pub struct FormulaDisplay {
+   222→    /// Индекс строки тела (для template-ноды — 0: формула снимка).
+   223→    pub line: usize,
+   224→    /// Исходный текст строки (дословно).
+   225→    pub raw: String,
+   226→    /// Текст с подставленными путями `Объект.Поле`; неразрешённые токены
+   227→    /// (`$N` вне диапазона, параметр без рёбер) остаются как есть.
+   228→    pub display: String,
+   229→    /// Индексы рёбер-операндов в порядке первого упоминания (без дублей).
+   230→    pub operand_edges: Vec<usize>,
+   231→}
+   232→
+   233→/// Строки расчёта ноды (группа «Расчёт · формулы», FR-044 Р-4):
+   234→/// - template-нода (снимок с непустым `expr`) — одна строка: формула снимка;
+   235→/// - текстовая нода — строки тела с родом `Assignment`/`Expression`
+   236→///   ([`NumiLineKind`], детектор FR-021) в порядке тела; проза пропускается.
+   237→///
+   238→/// Детерминировано; подстановка — display-level, исходник не меняется.
+   239→///
+   240→/// FR-044 Р-5 (именованный синтаксис, решение владельца 2026-09-22 —
+   241→/// FR-050 Р-6 «сразу вариант Б», Q1 закрыт): операндами становятся не
+   242→/// только `$`-токены (`$N`/`$in`/`$параметр`), но и qualified-пути
+   243→/// исходника «Объект.Поле» — матчинг по всем адресным формам имени
+   244→/// истока × поле (`flow::QualifiedNames::edge_keys` — те же ключи, что
+   245→/// резолвит `Env.qualified`; последнее value-ребро побеждает — зеркало
+   246→/// insert в `inbound_values`). Локальные переменные присваиваний (bare-
+   247→/// идентификаторы без `.Поля`) и числа (`0.6`) операндами не являются;
+   248→/// неразрешённый путь остаётся в display как написан (диагностика Р-3).
+   249→pub fn formula_displays(canvas: &Canvas, node_id: &str) -> Vec<FormulaDisplay> {
+   250→    let Some(node) = canvas.node(node_id) else {
+   251→        return Vec::new();
+   252→    };
+   253→    let counts = display_name_counts(canvas);
+   254→    // Карта адресации приёмника: позиционные слоты и проливания.
+   255→    let mut slot_edges: Vec<usize> = Vec::new();
+   256→    let mut param_edges: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+   257→    // FR-044 Р-5: qualified-ключи value-рёбер приёмника → индекс ребра.
+   258→    let obj_names = crate::flow::QualifiedNames::build(canvas);
+   259→    let mut qkeys: std::collections::HashMap<(String, String), usize> =
+   260→        std::collections::HashMap::new();
+   261→    for (index, edge) in canvas.edges.iter().enumerate() {
+   262→        if edge.to_node != node_id || edge.flow_kind() != crate::flow::FlowKind::Value {
+   263→            continue;
+   264→        }
+   265→        match &edge.to_param {
+   266→            None => slot_edges.push(index),
+   267→            Some(name) => param_edges.entry(name.clone()).or_default().push(index),
+   268→        }
+   269→        for key in obj_names.edge_keys(canvas, edge) {
+   270→            qkeys.insert(key, index);
+   271→        }
+   272→    }
+   273→    // Единый проход по строке: `$`-токены (слот/`$in`/параметр — прежняя
+   274→    // семантика) и qualified-пути именованного синтаксиса; операнды — в
+   275→    // порядке первого упоминания без дублей (документированный контракт).
+   276→    let render = move |raw: &str, operands: &mut Vec<usize>| -> String {
+   277→        let chars: Vec<char> = raw.chars().collect();
+   278→        let mut out = String::with_capacity(raw.len() + 16);
+   279→        let mut i = 0;
+   280→        while i < chars.len() {
+   281→            if chars[i] != '$' {
+   282→                // FR-044 Р-5: qualified-путь «Объект.Поле» (не цифра —
+   283→                // числа с точкой не пути; bare-идентификатор — локальная
+   284→                // переменная/функция, не операнд)
+   285→                if is_base_char(chars[i]) && !chars[i].is_ascii_digit() {
+   286→                    if let Some((obj, field, next)) = scan_qualified(&chars, i) {
+   287→                        if let Some(&index) = qkeys.get(&(obj, field)) {
+   288→                            if !operands.contains(&index) {
+   289→                                operands.push(index);
+   290→                            }
+   291→                        }
+   292→                        // display: путь остаётся как написан
+   293→                        while i < next {
+   294→                            out.push(chars[i]);
+   295→                            i += 1;
+   296→                        }
+   297→                        continue;
+   298→                    }
+   299→                    // plain идентификатор — копируем как есть
+   300→                    let mut j = i + 1;
+   301→                    while j < chars.len() && is_base_char(chars[j]) {
+   302→                        j += 1;
+   303→                    }
+   304→                    while i < j {
+   305→                        out.push(chars[i]);
+   306→                        i += 1;
+   307→                    }
+   308→                    continue;
+   309→                }
+   310→                out.push(chars[i]);
+   311→                i += 1;
+   312→                continue;
+   313→            }
+   314→            // Токен: максимум цифр; если после цифр идёт буква/`_`/`-` —
+   315→            // это имя параметра, а не слот (детерминированное правило).
+   316→            let mut j = i + 1;
+   317→            while j < chars.len() && chars[j].is_ascii_digit() {
+   318→                j += 1;
+   319→            }
+   320→            let digits_only = j > i + 1;
+   321→            let ident_next = j < chars.len() && is_ident_char(chars[j]);
+   322→            if digits_only && !ident_next {
+   323→                let slot_no: usize = chars[i + 1..j]
+   324→                    .iter()
+   325→                    .collect::<String>()
+   326→                    .parse()
+   327→                    .unwrap_or(0);
+   328→                let edge_index = if slot_no >= 1 {
+   329→                    slot_edges.get(slot_no - 1).copied()
+   330→                } else {
+   331→                    None
+   332→                };
+   333→                match edge_index {
+   334→                    Some(index) => {
+   335→                        operands.push(index);
+   336→                        out.push_str(
+   337→                            &display_ref_for_edge(canvas, &canvas.edges[index], &counts).path(),
+   338→                        );
+   339→                    }
+   340→                    None => {
+   341→                        // Неразрешённый слот — токен остаётся как есть.
+   342→                        out.push('$');
+   343→                        out.push_str(&chars[i + 1..j].iter().collect::<String>());
+   344→                    }
+   345→                }
+   346→                i = j;
+   347→                continue;
+   348→            }
+   349→            // Имя параметра: `$` + идентификатор.
+   350→            let mut k = i + 1;
+   351→            while k < chars.len() && is_ident_char(chars[k]) {
+   352→                k += 1;
+   353→            }
+   354→            if k > i + 1 {
+   355→                let name: String = chars[i + 1..k].iter().collect();
+   356→                // Спец-токен `$in` (FR-014): ровно одно входящее ребро.
+   357→                if name == "in" && slot_edges.len() == 1 {
+   358→                    let index = slot_edges[0];
+   359→                    operands.push(index);
+   360→                    out.push_str(
+   361→                        &display_ref_for_edge(canvas, &canvas.edges[index], &counts).path(),
+   362→                    );
+   363→                    i = k;
+   364→                    continue;
+   365→                }
+   366→                if let Some(edges) = param_edges.get(&name) {
+   367→                    // Все рёбра параметра — операнды (последнее побеждает
+   368→                    // в проливе; для подсветки значимы все — конфликты
+   369→                    // предупреждаются отдельно, FR-029).
+   370→                    for (n, index) in edges.iter().enumerate() {
+   371→                        if n == 0 {
+   372→                            out.push_str(
+   373→                                &display_ref_for_edge(canvas, &canvas.edges[*index], &counts)
+   374→                                    .path(),
+   375→                            );
+   376→                        }
+   377→                        operands.push(*index);
+   378→                    }
+   379→                } else {
+   380→                    out.push('$');
+   381→                    out.push_str(&name);
+   382→                }
+   383→                i = k;
+   384→                continue;
+   385→            }
+   386→            // Одиночный `$` без токена — литерал.
+   387→            out.push('$');
+   388→            i += 1;
+   389→        }
+   390→        out
+   391→    };
+   392→    // Источник строк: снимок шаблона или текст тела.
+   393→    if let Some(expr) = node
+   394→        .template()
+   395→        .map(|t| t.expr)
+   396→        .filter(|e| !e.trim().is_empty())
+   397→    {
+   398→        let mut operands = Vec::new();
+   399→        let display = render(&expr, &mut operands);
+   400→        dedup_keep_first(&mut operands);
+   401→        return vec![FormulaDisplay {
+   402→            line: 0,
+   403→            raw: expr,
+   404→            display,
+   405→            operand_edges: operands,
+   406→        }];
+   407→    }
+   408→    let Some(text) = node.text.as_deref() else {
+   409→        return Vec::new();
+   410→    };
+   411→    text.lines()
+   412→        .enumerate()
+   413→        .filter(|(_, line)| {
+   414→            matches!(
+   415→                crate::expr::line_kind(line),
+   416→                NumiLineKind::Assignment { .. } | NumiLineKind::Expression
+   417→            )
+   418→        })
+   419→        .map(|(line, raw)| {
+   420→            let mut operands = Vec::new();
+   421→            let display = render(raw, &mut operands);
+   422→            dedup_keep_first(&mut operands);
+   423→            FormulaDisplay {
+   424→                line,
+   425→                raw: raw.to_owned(),
+   426→                display,
+   427→                operand_edges: operands,
+   428→            }
+   429→        })
+   430→        .collect()
+   431→}
+   432→
+   433→/// Стабильный дедуп «первое упоминание» (контракт `operand_edges`).
+   434→fn dedup_keep_first(items: &mut Vec<usize>) {
+   435→    let mut seen = std::collections::HashSet::new();
+   436→    items.retain(|&item| seen.insert(item));
+   437→}
+   438→
+   439→/// Базовый символ идентификатора — зеркало цикла `lex_ident` expr.rs:
+   440→/// alphanumeric (включая кириллицу) + `_`; дефис НЕ входит (`a-b` —
+   441→/// вычитание).
+   442→fn is_base_char(c: char) -> bool {
+   443→    c.is_alphanumeric() || c == '_'
+   444→}
+   445→
+   446→/// FR-044 Р-5: сканировать qualified-путь с позиции `start` (первый символ
+   447→/// — базовый, не цифра). Ветвь А: `Объект.Поле`; ветвь Б: алиас коллизии
+   448→/// «Объект (N)»/«Объект (id)» + `.Поле` (§Q2). Поле — [`scan_field`].
+   449→/// Возвращает `(объект, поле, позиция за путём)` — зеркало правил
+   450→/// `lex_ident`/`try_qualified`/`lex_qualified_field` expr.rs (FR-050 Р-6),
+   451→/// чтобы матчинг операндов читал ровно то, что резолвит вычислитель.
+   452→fn scan_qualified(chars: &[char], start: usize) -> Option<(String, String, usize)> {
+   453→    let mut j = start + 1;
+   454→    while j < chars.len() && is_base_char(chars[j]) {
+   455→        j += 1;
+   456→    }
+   457→    let base: String = chars[start..j].iter().collect();
+   458→    // Ветвь А: `.Поле` сразу за идентификатором.
+   459→    if let Some((field, next)) = scan_field(chars, j) {
+   460→        return Some((base, field, next));
+   461→    }
+   462→    // Ветвь Б: суффикс ` (N)`/` (id)` (пробелы/табы допускаются) + `.Поле`.
+   463→    let mut k = j;
+   464→    while k < chars.len() && (chars[k] == ' ' || chars[k] == '\t') {
+   465→        k += 1;
+   466→    }
+   467→    if k < chars.len() && chars[k] == '(' {
+   468→        let open = k;
+   469→        let mut m = open + 1;
+   470→        while m < chars.len() && (chars[m].is_alphanumeric() || chars[m] == '_' || chars[m] == '-')
+   471→        {
+   472→            m += 1;
+   473→        }
+   474→        if m < chars.len() && chars[m] == ')' && m > open + 1 {
+   475→            let content: String = chars[open + 1..m].iter().collect();
+   476→            let mut p = m + 1;
+   477→            while p < chars.len() && (chars[p] == ' ' || chars[p] == '\t') {
+   478→                p += 1;
+   479→            }
+   480→            if let Some((field, next)) = scan_field(chars, p) {
+   481→                return Some((format!("{base} ({content})"), field, next));
+   482→            }
+   483→        }
+   484→    }
+   485→    None
+   486→}
+   487→
+   488→/// `.Поле` с позиции `dot` (`chars[dot] == '.'`); поле начинается с
+   489→/// буквы/`_` (точка перед цифрой — дробное число, не путь), продолжается
+   490→/// alphanumeric/`_`; дефис продолжается именем, если сразу за ним
+   491→/// буква/цифра/`_` («Кол-во»; `Кол - во` — вычитание, поле «Кол»).
+   492→/// Возвращает `(поле, позиция за полем)`.
+   493→fn scan_field(chars: &[char], dot: usize) -> Option<(String, usize)> {
+   494→    if chars.get(dot) != Some(&'.') {
+   495→        return None;
+   496→    }
+   497→    let first = *chars.get(dot + 1)?;
+   498→    if !(first.is_alphabetic() || first == '_') {
+   499→        return None;
+   500→    }
+   501→    let mut j = dot + 2;
+   502→    while j < chars.len() {
+   503→        let c = chars[j];
+   504→        let continues = c.is_alphanumeric()
+   505→            || c == '_'
+   506→            || (c == '-'
+   507→                && chars
+   508→                    .get(j + 1)
+   509→                    .is_some_and(|n| n.is_alphanumeric() || *n == '_'));
+   510→        if continues {
+   511→            j += 1;
+   512→        } else {
+   513→            break;
+   514→        }
+   515→    }
+   516→    Some((chars[dot + 1..j].iter().collect(), j))
+   517→}
+   518→
+   519→fn is_ident_char(c: char) -> bool {
+   520→    c.is_alphanumeric() || c == '_' || c == '-'
+   521→}
+   522→
+   523→#[cfg(test)]
+   524→mod tests {
+   525→    use super::*;
+   526→    use crate::model::Node;
+   527→
+   528→    fn text_node(id: &str, text: &str, x: f32) -> Node {
+   529→        Node::text(id, text, x, 0.0)
+   530→    }
+   531→
+   532→    fn value_edge(canvas: &mut Canvas, id: &str, from: &str, to: &str) {
+   533→        let mut edge = Edge::new(id, from, None, to, None);
+   534→        edge.set_flow_kind(crate::flow::FlowKind::Value);
+   535→        canvas.edges.push(edge);
+   536→    }
+   537→
+   538→    /// FR-044 §Проверка: `fromOutput` → «Нода.Выход».
+   539→    #[test]
+   540→    fn display_ref_from_output() {
+   541→        let mut canvas = Canvas::default();
+   542→        canvas.nodes.push(text_node("a", "заявки", 0.0));
+   543→        canvas.nodes.push(text_node("b", "x", 1.0));
+   544→        let mut edge = Edge::new("e5", "a", None, "b", None);
+   545→        edge.set_flow_kind(crate::flow::FlowKind::Value);
+   546→        edge.from_output = Some("Средний_чек".to_owned());
+   547→        canvas.edges.push(edge);
+   548→        let r = display_ref(&canvas, 0);
+   549→        assert_eq!(r.path(), "заявки.Средний_чек");
+   550→        assert_eq!(r.short(), "Средний_чек");
+   551→        assert_eq!(r.tooltip, None);
+   552→    }
+   553→
+   554→    /// FR-044 §Проверка: `fromLine` → поле «строка N» + полное в тултипе;
+   555→    /// отображение 1-based.
+   556→    #[test]
+   557→    fn display_ref_from_line() {
+   558→        let mut canvas = Canvas::default();
+   559→        canvas.nodes.push(text_node("a", "заявки", 0.0));
+   560→        canvas.nodes.push(text_node("b", "x", 1.0));
+   561→        let mut edge = Edge::new("e1", "a", None, "b", None);
+   562→        edge.set_flow_kind(crate::flow::FlowKind::Value);
+   563→        edge.from_line = Some(2);
+   564→        canvas.edges.push(edge);
+   565→        let r = display_ref(&canvas, 0);
+   566→        assert_eq!(r.path(), "заявки.строка 3");
+   567→        assert_eq!(r.tooltip.as_deref(), Some("строка 3"));
+   568→    }
+   569→
+   570→    /// FR-044 §Проверка: безымянный выход (ребро без адресации) → `edge.id`.
+   571→    #[test]
+   572→    fn display_ref_fallback_edge_id() {
+   573→        let mut canvas = Canvas::default();
+   574→        canvas.nodes.push(text_node("a", "заявки", 0.0));
+   575→        canvas.nodes.push(text_node("b", "x", 1.0));
+   576→        value_edge(&mut canvas, "e7", "a", "b");
+   577→        let r = display_ref(&canvas, 0);
+   578→        assert_eq!(r.path(), "заявки.e7");
+   579→    }
+   580→
+   581→    /// FR-045 §Q2: коллизия имён нод — fallback «Имя (node_id)».
+   582→    #[test]
+   583→    fn display_ref_name_collision() {
+   584→        let mut canvas = Canvas::default();
+   585→        canvas.nodes.push(text_node("a1", "Заявки", 0.0));
+   586→        canvas.nodes.push(text_node("a2", "Заявки", 1.0));
+   587→        canvas.nodes.push(text_node("b", "x", 2.0));
+   588→        let mut edge = Edge::new("e1", "a1", None, "b", None);
+   589→        edge.set_flow_kind(crate::flow::FlowKind::Value);
+   590→        edge.from_output = Some("чек".to_owned());
+   591→        canvas.edges.push(edge);
+   592→        let r = display_ref(&canvas, 0);
+   593→        assert_eq!(r.path(), "Заявки (a1).чек");
+   594→    }
+   595→
+   596→    /// FR-045 Р-5: имя — дословно, приоритет label; висячее ребро — id истока.
+   597→    #[test]
+   598→    fn display_ref_dangling_and_label_priority() {
+   599→        let mut canvas = Canvas::default();
+   600→        canvas
+   601→            .nodes
+   602→            .push(Node::text("a", "первая строка\nвторая", 0.0, 0.0));
+   603→        canvas.nodes[0].label = Some("Метка".to_owned());
+   604→        value_edge(&mut canvas, "e1", "a", "ghost");
+   605→        assert_eq!(display_ref(&canvas, 0).obj, "Метка");
+   606→        let mut canvas2 = Canvas::default();
+   607→        value_edge(&mut canvas2, "e9", "ghost", "b");
+   608→        assert_eq!(display_ref(&canvas2, 0).obj, "ghost");
+   609→    }
+   610→
+   611→    /// display_ref вне диапазона — пустой путь без паники.
+   612→    #[test]
+   613→    fn display_ref_out_of_range_safe() {
+   614→        let canvas = Canvas::default();
+   615→        let r = display_ref(&canvas, 42);
+   616→        assert_eq!(r.obj, "");
+   617→        assert_eq!(r.field, "");
+   618→    }
+   619→
+   620→    /// FR-045 Р-4/FR-044 Р-4: input_refs — позиционные слоты по порядку
+   621→    /// `canvas.edges`, проливания отдельно; control-рёбра не входят.
+   622→    #[test]
+   623→    fn input_refs_slots_and_params() {
+   624→        let mut canvas = Canvas::default();
+   625→        canvas.nodes.push(text_node("s1", "5", 0.0));
+   626→        canvas.nodes.push(text_node("s2", "7", 1.0));
+   627→        canvas.nodes.push(text_node("p", "9", 2.0));
+   628→        canvas.nodes.push(text_node("t", "итог", 3.0));
+   629→        value_edge(&mut canvas, "e1", "s1", "t");
+   630→        let mut e2 = Edge::new("e2", "s2", None, "t", None);
+   631→        e2.set_flow_kind(crate::flow::FlowKind::Value);
+   632→        e2.to_param = Some("Сезон".to_owned());
+   633→        canvas.edges.push(e2);
+   634→        let mut e3 = Edge::new("e3", "p", None, "t", None);
+   635→        e3.set_flow_kind(crate::flow::FlowKind::Value);
+   636→        e3.from_output = Some("peak".to_owned());
+   637→        canvas.edges.push(e3);
+   638→        let refs = input_refs(&canvas, "t");
+   639→        assert_eq!(refs.len(), 3);
+   640→        assert_eq!(refs[0].slot, Some(0));
+   641→        assert_eq!(refs[0].param, None);
+   642→        assert_eq!(refs[0].r.path(), "5.e1");
+   643→        assert_eq!(refs[1].slot, None);
+   644→        assert_eq!(refs[1].param.as_deref(), Some("Сезон"));
+   645→        assert_eq!(refs[2].r.path(), "9.peak");
+   646→    }
+   647→
+   648→    /// FR-044 Р-5/инвариант 6: подстановка путей в формулу вместо `$N`
+   649→    /// и `$параметр`; операнды — ровно рёбра формулы (оракул «выручка»).
+   650→    #[test]
+   651→    fn formula_display_substitution_and_operands() {
+   652→        let mut canvas = Canvas::default();
+   653→        canvas.nodes.push(text_node("z", "Заявки", 0.0));
+   654→        canvas.nodes.push(text_node(
+   655→            "t",
+   656→            "выручка = $1 · $2 · $Сезон\nпримечание без формулы",
+   657→            1.0,
+   658→        ));
+   659→        value_edge(&mut canvas, "eK", "z", "t");
+   660→        let mut e2 = Edge::new("eS", "z", None, "t", None);
+   661→        e2.set_flow_kind(crate::flow::FlowKind::Value);
+   662→        e2.from_output = Some("Средний_чек".to_owned());
+   663→        canvas.edges.push(e2);
+   664→        let mut e3 = Edge::new("eC", "z", None, "t", None);
+   665→        e3.set_flow_kind(crate::flow::FlowKind::Value);
+   666→        e3.to_param = Some("Сезон".to_owned());
+   667→        e3.from_output = Some("Сезон".to_owned());
+   668→        canvas.edges.push(e3);
+   669→        let rows = formula_displays(&canvas, "t");
+   670→        assert_eq!(rows.len(), 1, "проза пропущена, формульная строка одна");
+   671→        let row = &rows[0];
+   672→        assert_eq!(
+   673→            row.display,
+   674→            "выручка = Заявки.eK · Заявки.Средний_чек · Заявки.Сезон"
+   675→        );
+   676→        assert_eq!(row.operand_edges, vec![0, 1, 2]);
+   677→        assert_eq!(row.raw, "выручка = $1 · $2 · $Сезон");
+   678→    }
+   679→
+   680→    /// FR-044 Р-5/инвариант 7 (обратная навигация — данные для неё):
+   681→    /// один и тот же параметр в двух строках → операнды в обеих.
+   682→    #[test]
+   683→    fn formula_display_param_shared() {
+   684→        let mut canvas = Canvas::default();
+   685→        canvas.nodes.push(text_node("t", "a = $1\nb = $1 · 2", 0.0));
+   686→        canvas.nodes.push(text_node("s", "3", 1.0));
+   687→        value_edge(&mut canvas, "e1", "s", "t");
+   688→        let rows = formula_displays(&canvas, "t");
+   689→        assert_eq!(rows.len(), 2);
+   690→        assert_eq!(rows[0].display, "a = 3.e1");
+   691→        assert_eq!(rows[1].display, "b = 3.e1 · 2");
+   692→        assert_eq!(rows[1].operand_edges, vec![0]);
+   693→    }
+   694→
+   695→    /// Токен вне диапазона остаётся как есть; `$123abc` — имя параметра.
+   696→    #[test]
+   697→    fn formula_display_unresolved_tokens() {
+   698→        let mut canvas = Canvas::default();
+   699→        canvas
+   700→            .nodes
+   701→            .push(text_node("t", "x = $5 · $неизвестный · $2abc", 0.0));
+   702→        canvas.nodes.push(text_node("s", "1", 1.0));
+   703→        value_edge(&mut canvas, "e1", "s", "t");
+   704→        let rows = formula_displays(&canvas, "t");
+   705→        assert_eq!(
+   706→            rows[0].display, "x = $5 · $неизвестный · $2abc",
+   707→            "нет рёбер для слота 5, параметров и смешанного токена"
+   708→        );
+   709→    }
+   710→
+   711→    /// FR-044 §Решения: template-нода — формула из снимка (`expr`).
+   712→    #[test]
+   713→    fn formula_display_template_expr() {
+   714→        let mut canvas = Canvas::default();
+   715→        let mut node = Node::text("t", "Сезон = 1.15", 0.0, 0.0);
+   716→        let mut template = serde_json::Map::new();
+   717→        template.insert("id".into(), serde_json::json!("tpl"));
+   718→        template.insert("version".into(), serde_json::json!("1"));
+   719→        template.insert("expr".into(), serde_json::json!("$in * $Сезон"));
+   720→        template.insert("params".into(), serde_json::json!({}));
+   721→        template.insert("icon".into(), serde_json::json!("x"));
+   722→        template.insert("color".into(), serde_json::json!("1"));
+   723→        node.canvasdesk = Some(CanvasdeskExt {
+   724→            template: Some(serde_json::Value::Object(template)),
+   725→            ..CanvasdeskExt::empty()
+   726→        });
+   727→        canvas.nodes.push(node);
+   728→        canvas.nodes.push(text_node("s", "2", 1.0));
+   729→        value_edge(&mut canvas, "e1", "s", "t");
+   730→        let rows = formula_displays(&canvas, "t");
+   731→        assert_eq!(
+   732→            rows.len(),
+   733→            1,
+   734→            "формула снимка — одна строка, лист не сканируется"
+   735→        );
+   736→        assert_eq!(rows[0].display, "2.e1 * $Сезон");
+   737→    }
+   738→
+   739→    /// FR-044 Р-5 (именований синтаксис, FR-050 Р-6): qualified-пути
+   740→    /// исходника — операнды (оракул инварианта 6: «выручка := Заявки.
+   741→    /// Количество · Заявки.Средний_чек · Заявки.Сезон» → 3 ребра).
+   742→    #[test]
+   743→    fn formula_display_named_paths_are_operands() {
+   744→        let mut canvas = Canvas::default();
+   745→        canvas.nodes.push(text_node(
+   746→            "z",
+   747→            "Заявки\nКоличество = 10\nСредний_чек = 5\nСезон = 1.15",
+   748→            0.0,
+   749→        ));
+   750→        canvas.nodes.push(text_node(
+   751→            "t",
+   752→            "выручка = Заявки.Количество * Заявки.Средний_чек * Заявки.Сезон",
+   753→            1.0,
+   754→        ));
+   755→        let mut e1 = Edge::new("eK", "z", None, "t", None);
+   756→        e1.set_flow_kind(crate::flow::FlowKind::Value);
+   757→        e1.from_output = Some("Количество".to_owned());
+   758→        canvas.edges.push(e1);
+   759→        let mut e2 = Edge::new("eS", "z", None, "t", None);
+   760→        e2.set_flow_kind(crate::flow::FlowKind::Value);
+   761→        e2.from_output = Some("Средний_чек".to_owned());
+   762→        canvas.edges.push(e2);
+   763→        let mut e3 = Edge::new("eC", "z", None, "t", None);
+   764→        e3.set_flow_kind(crate::flow::FlowKind::Value);
+   765→        e3.from_output = Some("Сезон".to_owned());
+   766→        canvas.edges.push(e3);
+   767→        let rows = formula_displays(&canvas, "t");
+   768→        assert_eq!(rows.len(), 1);
+   769→        // display: пути остаются как написаны (именований синтаксис)
+   770→        assert_eq!(rows[0].display, rows[0].raw);
+   771→        assert_eq!(rows[0].operand_edges, vec![0, 1, 2]);
+   772→    }
+   773→
+   774→    /// FR-044 Р-5: негативы сканера — локальная переменная присваивания,
+   775→    /// число с точкой, функция, неразрешённый путь — НЕ операнды;
+   776→    /// дефис-поле («Кол-во») — операнд; алиас коллизии «Имя (id).Поле»
+   777→    /// резолвится; дубль пути — один операнд (первое упоминание).
+   778→    #[test]
+   779→    fn formula_display_named_scanner_negatives() {
+   780→        let mut canvas = Canvas::default();
+   781→        canvas
+   782→            .nodes
+   783→            .push(text_node("z", "Заявки\nКол-во = 10\nusers = 3", 0.0));
+   784→        // Коллизия имён: алиас-форма «Заявки (z)» регистрируется только
+   785→        // при дубликате отображаемого имени (QualifiedNames::build)
+   786→        canvas.nodes.push(text_node("z2", "Заявки", 0.5));
+   787→        canvas.nodes.push(text_node(
+   788→            "t",
+   789→            "tmp = 2\nx = tmp * Заявки.Кол-во + util(2.5) + Нет.Поля + Заявки.Кол-во\ny = Заявки (z).users",
+   790→            1.0,
+   791→        ));
+   792→        let mut e1 = Edge::new("eK", "z", None, "t", None);
+   793→        e1.set_flow_kind(crate::flow::FlowKind::Value);
+   794→        e1.from_output = Some("Кол-во".to_owned());
+   795→        canvas.edges.push(e1);
+   796→        let mut e2 = Edge::new("eU", "z", None, "t", None);
+   797→        e2.set_flow_kind(crate::flow::FlowKind::Value);
+   798→        e2.from_output = Some("users".to_owned());
+   799→        canvas.edges.push(e2);
+   800→        let rows = formula_displays(&canvas, "t");
+   801→        assert_eq!(rows.len(), 3);
+   802→        assert_eq!(rows[0].operand_edges, Vec::<usize>::new(), "локальная tmp");
+   803→        // x: путь ×2 (дубль), число/функция/неразрешённый — мимо
+   804→        assert_eq!(rows[1].operand_edges, vec![0], "Кол-во ×2 — один операнд");
+   805→        assert_eq!(
+   806→            rows[1].display, rows[1].raw,
+   807→            "display без $-токенов не меняется"
+   808→        );
+   809→        // y: алиас «Заявки (z).users» — форма коллизии не нужна (имя
+   810→        // уникально), но допустима и резолвится через алиас-ключ
+   811→        assert_eq!(rows[2].operand_edges, vec![1]);
+   812→    }
+   813→
+   814→    /// FR-044 Р-5: fromLine-ребро — поле пути = имя присваивания строки
+   815→    /// (те же ключи, что у вычислителя — `QualifiedNames::edge_keys`).
+   816→    #[test]
+   817→    fn formula_display_named_from_line_key() {
+   818→        let mut canvas = Canvas::default();
+   819→        canvas
+   820→            .nodes
+   821→            .push(text_node("z", "График\nadvance = 0.6", 0.0));
+   822→        canvas
+   823→            .nodes
+   824→            .push(text_node("t", "x = График.advance * 2", 1.0));
+   825→        let mut e1 = Edge::new("eA", "z", None, "t", None);
+   826→        e1.set_flow_kind(crate::flow::FlowKind::Value);
+   827→        e1.from_line = Some(1);
+   828→        canvas.edges.push(e1);
+   829→        let rows = formula_displays(&canvas, "t");
+   830→        assert_eq!(rows[0].operand_edges, vec![0]);
+   831→    }
+   832→
+   833→    /// FR-044 Р-5: смешанная строка — `$N` подставляется путём, именованный
+   834→    /// путь остаётся; операнды в порядке упоминания.
+   835→    #[test]
+   836→    fn formula_display_mixed_legacy_and_named() {
+   837→        let mut canvas = Canvas::default();
+   838→        canvas.nodes.push(text_node("z", "Заявки\nusers = 3", 0.0));
+   839→        canvas
+   840→            .nodes
+   841→            .push(text_node("t", "x = $1 + Заявки.users", 1.0));
+   842→        let mut e1 = Edge::new("e1", "z", None, "t", None);
+   843→        e1.set_flow_kind(crate::flow::FlowKind::Value);
+   844→        e1.from_output = Some("users".to_owned());
+   845→        canvas.edges.push(e1);
+   846→        let rows = formula_displays(&canvas, "t");
+   847→        assert_eq!(rows[0].display, "x = Заявки.users + Заявки.users");
+   848→        assert_eq!(rows[0].operand_edges, vec![0], "$1 и путь — одно ребро");
+   849→    }
+   850→}
+   851→

@@ -1,0 +1,57 @@
+/home/z/my-project/cargo-target/debug/deps/canvas_app-56246aae28e4d1b7.d: crates/canvas-app/src/lib.rs crates/canvas-app/src/app.rs crates/canvas-app/src/app/telemetry.rs crates/canvas-app/src/app/ui_registry.rs crates/canvas-app/src/app/ai_status_panel.rs crates/canvas-app/src/app/agent_panel.rs crates/canvas-app/src/app/graph_builder_ui.rs crates/canvas-app/src/app/explain.rs crates/canvas-app/src/app/export_ui.rs crates/canvas-app/src/app/handler.rs crates/canvas-app/src/app/input.rs crates/canvas-app/src/app/overlays.rs crates/canvas-app/src/app/stage.rs crates/canvas-app/src/app/support.rs crates/canvas-app/src/app/tooltip.rs crates/canvas-app/src/auto_width.rs crates/canvas-app/src/i18n.rs crates/canvas-app/src/widgets.rs crates/canvas-app/src/palette.rs crates/canvas-app/src/template_ui.rs crates/canvas-app/src/hints_ui.rs crates/canvas-app/src/search_ui.rs crates/canvas-app/src/settings_ui.rs crates/canvas-app/src/llm_factory.rs crates/canvas-app/src/docs_ui.rs crates/canvas-app/src/onboarding_art.rs crates/canvas-app/src/onboarding_ui.rs crates/canvas-app/src/scheme_gallery_ui.rs crates/canvas-app/src/snap.rs crates/canvas-app/src/touch_targets.rs crates/canvas-app/src/flowmap_ui.rs crates/canvas-app/src/calc_panel_ui.rs crates/canvas-app/src/whatif_ui.rs crates/canvas-app/src/explain_ui.rs crates/canvas-app/src/autolink_ui.rs crates/canvas-app/src/suggest.rs crates/canvas-app/src/suggest_worker.rs crates/canvas-app/src/kit_ui.rs crates/canvas-app/src/admin_ui.rs crates/canvas-app/src/debug_overlay.rs crates/canvas-app/src/../../../user-docs/index.md crates/canvas-app/src/../../../user-docs/quick-start.md crates/canvas-app/src/../../../user-docs/interface.md crates/canvas-app/src/../../../user-docs/hotkeys.md crates/canvas-app/src/../../../user-docs/calculations.md crates/canvas-app/src/../../../user-docs/templates.md crates/canvas-app/src/../../../user-docs/faq.md crates/canvas-app/src/../../../user-docs/agent-recipe.md crates/canvas-app/src/../../../user-docs/admin.md Cargo.toml
+
+/home/z/my-project/cargo-target/debug/deps/libcanvas_app-56246aae28e4d1b7.rmeta: crates/canvas-app/src/lib.rs crates/canvas-app/src/app.rs crates/canvas-app/src/app/telemetry.rs crates/canvas-app/src/app/ui_registry.rs crates/canvas-app/src/app/ai_status_panel.rs crates/canvas-app/src/app/agent_panel.rs crates/canvas-app/src/app/graph_builder_ui.rs crates/canvas-app/src/app/explain.rs crates/canvas-app/src/app/export_ui.rs crates/canvas-app/src/app/handler.rs crates/canvas-app/src/app/input.rs crates/canvas-app/src/app/overlays.rs crates/canvas-app/src/app/stage.rs crates/canvas-app/src/app/support.rs crates/canvas-app/src/app/tooltip.rs crates/canvas-app/src/auto_width.rs crates/canvas-app/src/i18n.rs crates/canvas-app/src/widgets.rs crates/canvas-app/src/palette.rs crates/canvas-app/src/template_ui.rs crates/canvas-app/src/hints_ui.rs crates/canvas-app/src/search_ui.rs crates/canvas-app/src/settings_ui.rs crates/canvas-app/src/llm_factory.rs crates/canvas-app/src/docs_ui.rs crates/canvas-app/src/onboarding_art.rs crates/canvas-app/src/onboarding_ui.rs crates/canvas-app/src/scheme_gallery_ui.rs crates/canvas-app/src/snap.rs crates/canvas-app/src/touch_targets.rs crates/canvas-app/src/flowmap_ui.rs crates/canvas-app/src/calc_panel_ui.rs crates/canvas-app/src/whatif_ui.rs crates/canvas-app/src/explain_ui.rs crates/canvas-app/src/autolink_ui.rs crates/canvas-app/src/suggest.rs crates/canvas-app/src/suggest_worker.rs crates/canvas-app/src/kit_ui.rs crates/canvas-app/src/admin_ui.rs crates/canvas-app/src/debug_overlay.rs crates/canvas-app/src/../../../user-docs/index.md crates/canvas-app/src/../../../user-docs/quick-start.md crates/canvas-app/src/../../../user-docs/interface.md crates/canvas-app/src/../../../user-docs/hotkeys.md crates/canvas-app/src/../../../user-docs/calculations.md crates/canvas-app/src/../../../user-docs/templates.md crates/canvas-app/src/../../../user-docs/faq.md crates/canvas-app/src/../../../user-docs/agent-recipe.md crates/canvas-app/src/../../../user-docs/admin.md Cargo.toml
+
+crates/canvas-app/src/lib.rs:
+crates/canvas-app/src/app.rs:
+crates/canvas-app/src/app/telemetry.rs:
+crates/canvas-app/src/app/ui_registry.rs:
+crates/canvas-app/src/app/ai_status_panel.rs:
+crates/canvas-app/src/app/agent_panel.rs:
+crates/canvas-app/src/app/graph_builder_ui.rs:
+crates/canvas-app/src/app/explain.rs:
+crates/canvas-app/src/app/export_ui.rs:
+crates/canvas-app/src/app/handler.rs:
+crates/canvas-app/src/app/input.rs:
+crates/canvas-app/src/app/overlays.rs:
+crates/canvas-app/src/app/stage.rs:
+crates/canvas-app/src/app/support.rs:
+crates/canvas-app/src/app/tooltip.rs:
+crates/canvas-app/src/auto_width.rs:
+crates/canvas-app/src/i18n.rs:
+crates/canvas-app/src/widgets.rs:
+crates/canvas-app/src/palette.rs:
+crates/canvas-app/src/template_ui.rs:
+crates/canvas-app/src/hints_ui.rs:
+crates/canvas-app/src/search_ui.rs:
+crates/canvas-app/src/settings_ui.rs:
+crates/canvas-app/src/llm_factory.rs:
+crates/canvas-app/src/docs_ui.rs:
+crates/canvas-app/src/onboarding_art.rs:
+crates/canvas-app/src/onboarding_ui.rs:
+crates/canvas-app/src/scheme_gallery_ui.rs:
+crates/canvas-app/src/snap.rs:
+crates/canvas-app/src/touch_targets.rs:
+crates/canvas-app/src/flowmap_ui.rs:
+crates/canvas-app/src/calc_panel_ui.rs:
+crates/canvas-app/src/whatif_ui.rs:
+crates/canvas-app/src/explain_ui.rs:
+crates/canvas-app/src/autolink_ui.rs:
+crates/canvas-app/src/suggest.rs:
+crates/canvas-app/src/suggest_worker.rs:
+crates/canvas-app/src/kit_ui.rs:
+crates/canvas-app/src/admin_ui.rs:
+crates/canvas-app/src/debug_overlay.rs:
+crates/canvas-app/src/../../../user-docs/index.md:
+crates/canvas-app/src/../../../user-docs/quick-start.md:
+crates/canvas-app/src/../../../user-docs/interface.md:
+crates/canvas-app/src/../../../user-docs/hotkeys.md:
+crates/canvas-app/src/../../../user-docs/calculations.md:
+crates/canvas-app/src/../../../user-docs/templates.md:
+crates/canvas-app/src/../../../user-docs/faq.md:
+crates/canvas-app/src/../../../user-docs/agent-recipe.md:
+crates/canvas-app/src/../../../user-docs/admin.md:
+Cargo.toml:
+
+# env-dep:CLIPPY_ARGS=-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__
+# env-dep:CLIPPY_CONF_DIR

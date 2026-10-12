@@ -1,0 +1,195 @@
+/* ============================================================
+   Theme: De Stijl (1917)
+   Tokens from 60-styles/de-stijl.md — white dominant, two line
+   weights (8px structural / 3px detail), primaries as landmark
+   cells, zero curves, zero diagonals.
+   Detail layer: landmark cells in stats, colored level cells,
+   segmented structural bars, CTA accent cells.
+   ============================================================ */
+
+html[data-style="de-stijl"] {
+  --bg: #FFFFFF;
+  --bg-soft: #FFFFFF;        /* white ground is the style; sections divide by 8px lines */
+  --surface: #FFFFFF;
+  --ink: #0A0A0A;
+  --muted: #444444;
+
+  --accent: #DD0100;         /* red = primary action cell */
+  --accent-fg: #FFFFFF;      /* white on red ≈5.1:1 (black fails 4.1) */
+  --accent-ink: #DD0100;     /* red only ever colors >=large/bold or fills */
+  --accent-2: #FACA03;       /* yellow — black text only */
+  --accent-3: #225095;       /* blue = information */
+
+  --line: #0A0A0A;
+  --border-w: 3px;
+  --radius: 0px;
+  --chip-radius: 0px;
+
+  --font-display: 'Inter Tight', 'Inter', system-ui, sans-serif;
+  --font-body: 'Inter Tight', 'Inter', system-ui, sans-serif;
+
+  --h1-weight: 900;
+  --h1-transform: none;
+  --h1-tracking: -0.01em;
+  --h1-lh: 1.12;
+  --h2-weight: 800;
+  --h2-transform: none;
+  --h2-tracking: 0;
+
+  --kicker-weight: 700;
+  --kicker-transform: uppercase;
+  --kicker-tracking: .16em;
+
+  --btn-weight: 700;
+  --btn-transform: uppercase;
+  --btn-tracking: .04em;
+  --btn-radius: 0px;
+  --btn-border-w: 2px;
+
+  --card-border-w: 3px;
+  --card-radius: 0px;
+
+  --focus: #0A0A0A;
+  --speed: 170ms;
+  --hero-dur: 180ms;
+
+  --struct-w: 8px;           /* structural line between sections (R2) */
+  --cal-frame-w: 8px;
+  --cal-cell-border-w: 3px;
+  --cal-cell-line: #0A0A0A;
+  --cal-gap: 8px;
+  --brand-accent: #DD0100;
+  --sel-bg: #DD0100;
+  --sel-fg: #FFFFFF;
+
+  --title-rule: block;
+  --orn-h: 8px;
+  /* structural bar with one blue landmark segment */
+  --orn-bg: linear-gradient(to right,
+    #0A0A0A 0 68%, #225095 68% 82%, #0A0A0A 82% 100%);
+  --sel-fg: #FFFFFF;
+}
+
+/* structural 8px lines on header/footer too */
+html[data-style="de-stijl"] .site-header,
+html[data-style="de-stijl"] .site-footer { border-width: 8px; }
+
+/* kicker & links: blue = information (a11y: 7.9:1 on white) */
+html[data-style="de-stijl"] .kicker { color: #225095; }
+html[data-style="de-stijl"] a { color: #225095; }
+
+/* --- agent level tag becomes a solid landmark cell --- */
+html[data-style="de-stijl"] .agent__lvl {
+  display: inline-block;
+  padding: .28em .7em;
+  font-size: .72rem;
+  margin-bottom: .6em;
+}
+html[data-style="de-stijl"] .agent:nth-child(1) .agent__lvl { background: #225095; color: #FFFFFF; }
+html[data-style="de-stijl"] .agent:nth-child(2) .agent__lvl { background: #DD0100; color: #FFFFFF; }
+html[data-style="de-stijl"] .agent:nth-child(3) .agent__lvl { background: #FACA03; color: #0A0A0A; }
+html[data-style="de-stijl"] .agent:nth-child(4) .agent__lvl { background: #225095; color: #FFFFFF; }
+html[data-style="de-stijl"] .agent:nth-child(5) .agent__lvl { background: #DD0100; color: #FFFFFF; }
+
+/* --- medallions: white cells with thick colored top bars --- */
+html[data-style="de-stijl"] .medallion {
+  border: 3px solid #0A0A0A;
+  background: #FFFFFF;
+  color: #0A0A0A;
+  width: 52px; height: 52px;
+}
+html[data-style="de-stijl"] .medallion::before {
+  content: ""; position: absolute; left: -3px; right: -3px; top: -3px;
+  height: 12px;
+}
+html[data-style="de-stijl"] .agent:nth-child(1) .medallion::before { background: #DD0100; }
+html[data-style="de-stijl"] .agent:nth-child(2) .medallion::before { background: #225095; }
+html[data-style="de-stijl"] .agent:nth-child(3) .medallion::before { background: #FACA03; }
+html[data-style="de-stijl"] .agent:nth-child(4) .medallion::before { background: #0A0A0A; }
+html[data-style="de-stijl"] .agent:nth-child(5) .medallion::before { background: #DD0100; }
+html[data-style="de-stijl"] .medallion .ic { margin-top: 8px; }
+
+/* --- buttons: colored cells obeying the grid (R6), hover = cell inversion --- */
+html[data-style="de-stijl"] .btn--primary {
+  background: #DD0100; color: #FFFFFF; border: 2px solid #0A0A0A;
+}
+html[data-style="de-stijl"] .btn--primary:hover { background: #0A0A0A; color: #FFFFFF; }
+html[data-style="de-stijl"] .btn--ghost {
+  background: #FFFFFF; color: #0A0A0A; border: 3px solid #0A0A0A;
+}
+html[data-style="de-stijl"] .btn--ghost:hover { background: #0A0A0A; color: #FFFFFF; }
+
+/* --- step number: white cell with thick black border (R4: no curves) --- */
+html[data-style="de-stijl"] .step__num {
+  background: #FFFFFF; color: #0A0A0A;
+  border: 3px solid #0A0A0A; border-radius: 0;
+}
+html[data-style="de-stijl"] .step__ic {
+  width: 32px; height: 32px; padding: 7px;
+  background: #0A0A0A; color: #FFFFFF; opacity: 1;
+  top: 1.2rem; right: 1.2rem;
+}
+
+/* flat: no transforms on hover (motion = opacity/color only, 150–200ms) */
+html[data-style="de-stijl"] .card,
+html[data-style="de-stijl"] .card:hover { transform: none; }
+html[data-style="de-stijl"] .card { transition: background var(--speed) ease-out; }
+html[data-style="de-stijl"] .card:hover { background: #E9E9E9; }
+
+/* --- stats: adjacent cells + two landmark fills --- */
+html[data-style="de-stijl"] .stats__grid { gap: 0; }
+html[data-style="de-stijl"] .stat {
+  border: 3px solid #0A0A0A; border-radius: 0;
+  padding-block: 1.3rem;
+}
+html[data-style="de-stijl"] .stat + .stat { border-left-width: 0; }
+html[data-style="de-stijl"] .stat__val { color: #0A0A0A; }
+html[data-style="de-stijl"] .stat:nth-child(2) { background: #FACA03; }
+html[data-style="de-stijl"] .stat:nth-child(2) .stat__ic { color: #0A0A0A; }
+html[data-style="de-stijl"] .stat:nth-child(3) { background: #225095; border-left-width: 3px; }
+html[data-style="de-stijl"] .stat:nth-child(3) .stat__val,
+html[data-style="de-stijl"] .stat:nth-child(3) .stat__label,
+html[data-style="de-stijl"] .stat:nth-child(3) .stat__ic { color: #FFFFFF; }
+
+/* --- calendar: corner cell + strict cells (existing tokens do the rest) --- */
+html[data-style="de-stijl"] .cal__corner {
+  background: #FACA03; color: #0A0A0A;
+  padding-left: .6rem;
+}
+html[data-style="de-stijl"] .cal__day {
+  border-bottom: 3px solid #0A0A0A;
+  color: #0A0A0A;
+}
+html[data-style="de-stijl"] .cal__chan .ic { opacity: 1; }
+
+/* --- CTA: black cell with landmark squares --- */
+html[data-style="de-stijl"] .cta { background: #0A0A0A; position: relative; }
+html[data-style="de-stijl"] .cta h2 { color: #FACA03; }
+html[data-style="de-stijl"] .cta p { color: #FFFFFF; }
+html[data-style="de-stijl"] .cta::before {
+  content: ""; position: absolute; right: 0; bottom: 0;
+  width: 72px; height: 40px; background: #FFFFFF;
+}
+html[data-style="de-stijl"] .cta::after {
+  content: ""; position: absolute; right: 72px; bottom: 0;
+  width: 40px; height: 40px; background: #DD0100;
+}
+html[data-style="de-stijl"] .cta .btn--ghost { border-color: #FFFFFF; color: #FFFFFF; }
+html[data-style="de-stijl"] .cta .btn--ghost:hover { background: #FFFFFF; color: #0A0A0A; }
+
+/* chips: white cells with 3px detail border + colored top bar (R2, R3) */
+html[data-style="de-stijl"] .chip {
+  position: relative; background: #FFFFFF; color: #0A0A0A;
+  border: 3px solid #0A0A0A; border-top-width: 12px;
+}
+html[data-style="de-stijl"] .chip--s { border-top-color: #DD0100; }
+html[data-style="de-stijl"] .chip--c { border-top-color: #225095; }
+html[data-style="de-stijl"] .chip--a { border-top-color: #FACA03; }
+html[data-style="de-stijl"] .chip--d { border-top-color: #0A0A0A; }
+
+/* legend dots: solid primary squares, no cell chrome */
+html[data-style="de-stijl"] .dot { background: #FFFFFF; }
+html[data-style="de-stijl"] .dot.chip--s { background: #DD0100; }
+html[data-style="de-stijl"] .dot.chip--c { background: #225095; }
+html[data-style="de-stijl"] .dot.chip--a { background: #FACA03; }
+html[data-style="de-stijl"] .dot.chip--d { background: #0A0A0A; }

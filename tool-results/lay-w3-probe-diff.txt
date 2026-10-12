@@ -1,0 +1,232 @@
+diff --git a/crates/canvas-app/src/admin_ui.rs b/crates/canvas-app/src/admin_ui.rs
+index 684a9ec..b112f67 100644
+--- a/crates/canvas-app/src/admin_ui.rs
++++ b/crates/canvas-app/src/admin_ui.rs
+@@ -3433,6 +3433,97 @@ mod tests {
+         }
+     }
+ 
++    /// ВРЕМЕННЫЙ probe (LAY-W3): снять золотые значения вертикальных линеек.
++    #[test]
++    fn zz_probe_golden_values() {
++        let palette = test_palette();
++        let mut m = new_measurer();
++        let mut fs = canvas_render::text::measure_font_system();
++        // components: синтетическое высокое окно (все блоки fully)
++        let demo = UiRect::new(40.0, 60.0, 800.0, 2400.0);
++        let body = components_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
++        eprintln!("== components ==");
++        eprintln!("h = {}", body.h);
++        for (p, k) in &body.headers {
++            eprintln!("header {:?} y={} x={}", k, p.y, p.x);
++        }
++        for r in &body.button_rows {
++            eprintln!("btnrow {:?} slot_y={}", r.variant, r.slot.y);
++        }
++        for c in &body.icon_cells {
++            eprintln!("icon y={} state={:?}", c.rect.y, c.state);
++        }
++        for c in &body.chip_cells {
++            eprintln!("chip y={}", c.rect.y);
++        }
++        for (_, fl) in &body.fields {
++            eprintln!("field y={} h={}", fl.rect.y, fl.rect.h);
++        }
++        for (_, _, r, _) in &body.switches {
++            eprintln!("switch y={}", r.y);
++        }
++        if let Some(a) = body.dropdown_closed {
++            eprintln!("dd_closed y={}", a.y);
++        }
++        if let Some(dd) = &body.dropdown_open {
++            eprintln!("dd_open anchor_y={} menu_y={} menu_h={}", dd.anchor.y, dd.menu.y, dd.menu.h);
++        }
++        if let Some((a, b)) = body.tooltip {
++            eprintln!("tooltip anchor_y={} bubble_y={} bubble_h={}", a.y, b.y, b.h);
++        }
++        if let Some(t) = body.toast {
++            eprintln!("toast y={} h={}", t.y, t.h);
++        }
++        for (s, r) in &body.list_state_rows {
++            eprintln!("list_row {:?} y={} area_h?", s, r.y);
++        }
++        if let Some(k) = body.list_scroll_knob {
++            eprintln!("knob y={} h={}", k.y, k.h);
++        }
++        for r in &body.row_state_rows {
++            eprintln!("rowslot y={} row_h={}", r.lay.row.y, r.lay.row.h);
++        }
++
++        // fill
++        eprintln!("== fill ==");
++        let big = UiRect::new(40.0, 60.0, 800.0, 1200.0);
++        let fill = fill_body(big, 0.0, &palette, Language::Ru, &mut m, &mut fs);
++        eprintln!("h = {}", fill.h);
++        for r in &fill.rows {
++            eprintln!("row {:?} slot_y={} slot_h={}", r.title_key, r.slot.y, r.slot.h);
++        }
++        for (p, _) in &fill.headers {
++            eprintln!("fill header y={}", p.y);
++        }
++
++        // canvas
++        eprintln!("== canvas ==");
++        let cv = canvas_body(demo, 0.0, &palette, [0.2, 0.2, 0.25, 1.0], Language::Ru, &mut m, &mut fs);
++        eprintln!("h = {}", cv.h);
++        for (k, r, _, _) in &cv.node_demos {
++            eprintln!("node {:?} y={}", k, r.y);
++        }
++        for (k, r, _) in &cv.edge_demos {
++            eprintln!("edge {:?} y={} h={}", k, r.y, r.h);
++        }
++        for (k, r, _, _) in &cv.port_demos {
++            eprintln!("port {:?} y={}", k, r.y);
++        }
++        if let Some(t) = &cv.node_table {
++            eprintln!("node_table card_y={} card_h={}", t.card.y, t.card.h);
++        }
++
++        // tokens
++        eprintln!("== tokens ==");
++        let tk = tokens_body(UiRect::new(40.0, 60.0, 800.0, 1600.0), 0.0, &palette, Language::Ru, &mut m, &mut fs);
++        eprintln!("h = {}", tk.h);
++        for g in &tk.groups {
++            for r in &g.rows {
++                eprintln!("tokrow name={:?} y={}", r.name, r.rect.y);
++            }
++        }
++    }
++
+     /// Тестовая палитра (значения не важны — важны различные слоты).
+     fn test_palette() -> KitPalette {
+         KitPalette {
+diff --git a/crates/canvas-app/src/kit_ui.rs b/crates/canvas-app/src/kit_ui.rs
+index 44be6a8..3c5bbe0 100644
+--- a/crates/canvas-app/src/kit_ui.rs
++++ b/crates/canvas-app/src/kit_ui.rs
+@@ -3289,4 +3289,125 @@ mod tests {
+             "панель скрыта целиком (нет промежуточных ступеней)"
+         );
+     }
++
++    /// ВРЕМЕННЫЙ probe (LAY-W3): снять золотые значения линейки секций —
++    /// скан смещений: каждая подпись/блок печатается в КОНТЕНТ-координатах
++    /// (y + off − sections_top).
++    #[test]
++    fn zz_probe_golden_values() {
++        let mut m = new_measurer();
++        let mut fs = measure_font_system();
++        let p = gallery_palette();
++        let scroll = kit::ScrollState::default();
++        let lay0 = gallery_layout([1280.0, 800.0], Language::Ru, &scroll, &p, &mut m, &mut fs);
++        eprintln!("content_h = {}", lay0.content_h);
++        eprintln!(
++            "sections_vp = {:?}", (lay0.sections_viewport.x, lay0.sections_viewport.y, lay0.sections_viewport.h)
++        );
++        eprintln!("focus_targets rel = {:?}", lay0.focus_targets.iter().map(|t| t.y - lay0.sections_viewport.y).collect::<Vec<_>>());
++        let top = lay0.sections_viewport.y;
++        let vp_h = lay0.sections_viewport.h;
++        let mut seen: std::collections::BTreeMap<&'static str, f32> = Default::default();
++        let mut off = 0.0f32;
++        while off <= lay0.content_h - vp_h {
++            let s = kit::ScrollState { offset: off, content_h: lay0.content_h, viewport_h: vp_h };
++            let lay = gallery_layout([1280.0, 800.0], Language::Ru, &s, &p, &mut m, &mut fs);
++            for (o, k) in &lay.section_titles {
++                seen.entry(*k).or_insert(o.y + off - top);
++            }
++            if let Some(r) = lay.button_rows.first() {
++                seen.entry("BLOCK:btnrow0").or_insert(r.slot.y + off - top);
++            }
++            if let Some(r) = lay.icon_buttons.first() {
++                seen.entry("BLOCK:icon0").or_insert(r.y + off - top);
++            }
++            if let Some(r) = lay.chips.first() {
++                seen.entry("BLOCK:chip0").or_insert(r.y + off - top);
++            }
++            if lay.dropdown_anchor.h > 0.0 {
++                seen.entry("BLOCK:dd_anchor").or_insert(lay.dropdown_anchor.y + off - top);
++                seen.entry("BLOCK:dd_menu").or_insert(lay.dropdown_menu.y + off - top);
++            }
++            if lay.toast.h > 0.0 {
++                seen.entry("BLOCK:toast").or_insert(lay.toast.y + off - top);
++            }
++            if lay.tooltip_anchor.h > 0.0 {
++                seen.entry("BLOCK:tip_anchor").or_insert(lay.tooltip_anchor.y + off - top);
++            }
++            if let Some((st, _, tl)) = lay.text_fields.first() {
++                let _ = st;
++                seen.entry("BLOCK:tf0").or_insert(tl.rect.y + off - top);
++            }
++            if let Some((r, _, _, _)) = lay.switches.first() {
++                seen.entry("BLOCK:switch0").or_insert(r.y + off - top);
++            }
++            if let Some(c) = &lay.card {
++                seen.entry("BLOCK:card").or_insert(c.rect.y + off - top);
++            }
++            if lay.list_area.h > 0.0 {
++                seen.entry("BLOCK:list_area").or_insert(lay.list_area.y + off - top);
++            }
++            if let Some((r, _)) = lay.icon_glyphs.first() {
++                seen.entry("BLOCK:icon_glyph0").or_insert(r.y + off - top);
++            }
++            if let Some(r) = lay.row_rows.first() {
++                seen.entry("BLOCK:table_row0").or_insert(r.lay.row.y + off - top);
++            }
++            if let Some(r) = lay.measured_chips.first() {
++                seen.entry("BLOCK:measured0").or_insert(r.y + off - top);
++            }
++            if let Some((r, _)) = lay.grow_cells.first() {
++                seen.entry("BLOCK:grow0").or_insert(r.y + off - top);
++            }
++            if let Some((r, _)) = lay.wrap_chips.first() {
++                seen.entry("BLOCK:wrap0").or_insert(r.y + off - top);
++            }
++            if let Some(r) = lay.grid_cells.first() {
++                seen.entry("BLOCK:grid0").or_insert(r.y + off - top);
++            }
++            if lay.component_row_slot.w > 0.0 {
++                seen.entry("BLOCK:comp_row").or_insert(lay.component_row_slot.y + off - top);
++            }
++            if let Some((pr, _)) = lay.component_panel {
++                seen.entry("BLOCK:comp_panel").or_insert(pr.y + off - top);
++            }
++            if lay.squeeze_slot.h > 0.0 {
++                seen.entry("BLOCK:squeeze").or_insert(lay.squeeze_slot.y + off - top);
++            }
++            if let Some((r, _)) = lay.align_between.first() {
++                seen.entry("BLOCK:align0").or_insert(r.y + off - top);
++            }
++            if lay.column_cells.len() == 4 {
++                seen.entry("BLOCK:column0").or_insert(lay.column_cells[0].y + off - top);
++            }
++            if let Some((r, _)) = lay.layout_constrain.first() {
++                seen.entry("BLOCK:constrain0").or_insert(r.y + off - top);
++            }
++            if let Some((r, _, _)) = lay.layout_pad.first() {
++                seen.entry("BLOCK:pad0").or_insert(r.y + off - top);
++            }
++            if let Some((r, _)) = lay.layout_stack.first() {
++                seen.entry("BLOCK:stack0").or_insert(r.y + off - top);
++            }
++            if let Some(g) = lay.layout_gaps.first() {
++                seen.entry("BLOCK:gaps0").or_insert(g.blocks[0].y + off - top);
++            }
++            if let Some(r) = lay.layout_percent.first() {
++                seen.entry("BLOCK:percent0").or_insert(r.y + off - top);
++            }
++            if let Some(r) = lay.layout_aspect.first() {
++                seen.entry("BLOCK:aspect0").or_insert(r.y + off - top);
++            }
++            if let Some(sd) = &lay.layout_sticky {
++                seen.entry("BLOCK:sticky_window").or_insert(sd.window.y + off - top);
++            }
++            if lay.layout_hide_below.slot.h > 0.0 {
++                seen.entry("BLOCK:hide_below").or_insert(lay.layout_hide_below.slot.y + off - top);
++            }
++            off += 2.0;
++        }
++        for (k, v) in &seen {
++            eprintln!("{k} rel = {v}");
++        }
++    }
+ }

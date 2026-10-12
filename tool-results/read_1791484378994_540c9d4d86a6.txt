@@ -1,0 +1,1073 @@
+     1→//! FR-028: онбординг по функциям сервиса — чистая модель (образец
+     2→//! [`crate::settings_ui`]): шаги-карточки ([`ONBOARDING_STEPS`], скоуп
+     3→//! владельца — база + расчёты + шаблоны), таблица решений авто-показа
+     4→//! ([`should_show_onboarding`]: не пройден И откладываний < 3), машина
+     5→//! карусели ([`OnboardingState`]: `next`/`prev` с клампом, подпись
+     6→//! «Далее»/«Готово») и геометрия карточки с кнопками и клампом к окну.
+     7→//!
+     8→//! W-e (разморозка решением владельца 03.10.2026, миграция на ui-kit):
+     9→//! геометрия — `kit::modal` по слоту вьюпорта С ПОЛЯМИ
+    10→//! ([`ONBOARDING_VIEWPORT_MARGIN`] — раньше карточка клампилась к кромкам
+    11→//! вплотную, аудит ui-kit §8 №12); при клампе высоты тело ужимается
+    12→//! скроллом `kit::ScrollState` (футер с CTA всегда видим); перенос тела —
+    13→//! измеренный `TextMeasurer::wrap` (замена символьной эвристики
+    14→//! `CHAR_W_FACTOR 0.62` — строка onboarding в §9 CR-015/аудита).
+    15→//!
+    16→//! Рендер и ввод — приложение (`main.rs`): затемнение канваса (паттерн
+    17→//! FR-022), карточка поверх, ввод канваса под ней блокируется. Поля
+    18→//! `onboarding_done`/`onboarding_defers` и кламп — `canvas-core`
+    19→//! settings.rs (схема `config.toml`, `#[serde(default)]`).
+    20→
+    21→use canvas_core::{Language, Settings, ONBOARDING_MAX_DEFERS};
+    22→use canvas_ui::geometry::{UiRect, UiVec2};
+    23→use canvas_ui::kit::{self, ScrollState};
+    24→use canvas_ui::measure::TextMeasurer;
+    25→
+    26→use crate::i18n::{self, keys};
+    27→
+    28→/// Семейство замера/отрисовки строк (паритет sans_attrs рендера —
+    29→/// Weight::MEDIUM, тот же шейпинг, что у `OwnedScreenText`).
+    30→const FAMILY: &str = canvas_render::text::SANS_FAMILY;
+    31→
+    32→/// Автопоказ тура при старте (таблица решений FR-028): не пройден до конца
+    33→/// И отложен менее `ONBOARDING_MAX_DEFERS` раз. Ручной вход из меню «?»
+    34→/// этой функцией не гейтится (явное намерение пользователя).
+    35→pub fn should_show_onboarding(settings: &Settings) -> bool {
+    36→    !settings.onboarding_done && settings.onboarding_defers < ONBOARDING_MAX_DEFERS
+    37→}
+    38→
+    39→/// Шаг тура: заголовок и абзац тела (короткие тексты, перенос по ширине
+    40→/// карточки — измеренный `TextMeasurer::wrap`). Зарезервированный
+    41→/// `action` для v2 — интерактивная чек-точка демо-канваса (машина состояний
+    42→/// не переписывается).
+    43→pub struct OnboardingStep {
+    44→    /// Ключ заголовка (таблица [`crate::i18n`] — FR-040).
+    45→    pub title_key: &'static str,
+    46→    /// Ключ тела (полная фраза, перенос на стороне [`body_lines`]).
+    47→    pub body_key: &'static str,
+    48→    /// FR-049: опциональное действие шага — CTA-кнопка «Далее» превращается
+    49→    /// в действие (резервация v1 `onboarding_ui.rs:27` задействована).
+    50→    /// `Some(keys::GALLERY_TRY)` — открыть галерею схем (тур закрывается).
+    51→    pub action_key: Option<&'static str>,
+    52→}
+    53→
+    54→/// Шаги тура (FR-028, скоуп владельца — база + расчёты + шаблоны; NN/g:
+    55→/// 8±2 шага, «один шаг = одна мысль», выход виден всегда). Порядок
+    56→/// стабилен; «Готово» — на последнем.
+    57→pub const ONBOARDING_STEPS: [OnboardingStep; 9] = [
+    58→    OnboardingStep {
+    59→        title_key: keys::ONBOARDING_STEP1_TITLE,
+    60→        body_key: keys::ONBOARDING_STEP1_BODY,
+    61→        action_key: None,
+    62→    },
+    63→    OnboardingStep {
+    64→        title_key: keys::ONBOARDING_STEP2_TITLE,
+    65→        body_key: keys::ONBOARDING_STEP2_BODY,
+    66→        action_key: None,
+    67→    },
+    68→    OnboardingStep {
+    69→        title_key: keys::ONBOARDING_STEP3_TITLE,
+    70→        body_key: keys::ONBOARDING_STEP3_BODY,
+    71→        action_key: None,
+    72→    },
+    73→    OnboardingStep {
+    74→        title_key: keys::ONBOARDING_STEP4_TITLE,
+    75→        body_key: keys::ONBOARDING_STEP4_BODY,
+    76→        action_key: None,
+    77→    },
+    78→    OnboardingStep {
+    79→        title_key: keys::ONBOARDING_STEP5_TITLE,
+    80→        body_key: keys::ONBOARDING_STEP5_BODY,
+    81→        action_key: None,
+    82→    },
+    83→    OnboardingStep {
+    84→        title_key: keys::ONBOARDING_STEP6_TITLE,
+    85→        body_key: keys::ONBOARDING_STEP6_BODY,
+    86→        action_key: None,
+    87→    },
+    88→    OnboardingStep {
+    89→        title_key: keys::ONBOARDING_STEP7_TITLE,
+    90→        body_key: keys::ONBOARDING_STEP7_BODY,
+    91→        action_key: Some(keys::GALLERY_TRY),
+    92→    },
+    93→    OnboardingStep {
+    94→        title_key: keys::ONBOARDING_STEP8_TITLE,
+    95→        body_key: keys::ONBOARDING_STEP8_BODY,
+    96→        action_key: None,
+    97→    },
+    98→    // FR-070: шаг 9 — UI-консоль (приёмка/баг-репорты, доступна всегда)
+    99→    OnboardingStep {
+   100→        title_key: keys::ONBOARDING_STEP9_TITLE,
+   101→        body_key: keys::ONBOARDING_STEP9_BODY,
+   102→        action_key: None,
+   103→    },
+   104→];
+   105→
+   106→/// Состояние тура: индекс текущего шага (кламп `0..len-1` — инвариант
+   107→/// карусели). `None` в `App` — тура нет.
+   108→#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+   109→pub struct OnboardingState {
+   110→    pub step: usize,
+   111→}
+   112→
+   113→impl OnboardingState {
+   114→    /// Число шагов.
+   115→    pub fn len(&self) -> usize {
+   116→        ONBOARDING_STEPS.len()
+   117→    }
+   118→
+   119→    /// Тур пуст (недостижимо с непустым ONBOARDING_STEPS — для полноты).
+   120→    pub fn is_empty(&self) -> bool {
+   121→        ONBOARDING_STEPS.is_empty()
+   122→    }
+   123→
+   124→    /// Шаг вперёд; false на последнем шаге (вызывающий завершает тур —
+   125→    /// «Готово» ставит `onboarding_done` и сохраняет конфиг).
+   126→    // Не Iterator::next — шаги карусели с клампом, а не выдача элементов
+   127→    #[allow(clippy::should_implement_trait)]
+   128→    pub fn next(&mut self) -> bool {
+   129→        if self.step + 1 < ONBOARDING_STEPS.len() {
+   130→            self.step += 1;
+   131→            true
+   132→        } else {
+   133→            false
+   134→        }
+   135→    }
+   136→
+   137→    /// Шаг назад; false на первом (кнопки «Назад» там нет — hit-тест None).
+   138→    pub fn prev(&mut self) -> bool {
+   139→        if self.step == 0 {
+   140→            return false;
+   141→        }
+   142→        self.step -= 1;
+   143→        true
+   144→    }
+   145→
+   146→    /// Последний шаг (подпись кнопки меняется на «Готово»).
+   147→    pub fn is_last(&self) -> bool {
+   148→        self.step + 1 >= ONBOARDING_STEPS.len()
+   149→    }
+   150→
+   151→    /// Ключ подписи правой кнопки: «Далее» / «Готово» на последнем шаге
+   152→    /// (текст — таблица [`crate::i18n`], FR-040).
+   153→    pub fn next_label_key(&self) -> &'static str {
+   154→        if self.is_last() {
+   155→            keys::ONBOARDING_DONE
+   156→        } else if let Some(action) = ONBOARDING_STEPS
+   157→            .get(self.step)
+   158→            .and_then(|step| step.action_key)
+   159→        {
+   160→            // FR-049: шаг с действием — CTA «Попробовать» (галерея схем)
+   161→            action
+   162→        } else {
+   163→            keys::ONBOARDING_NEXT
+   164→        }
+   165→    }
+   166→
+   167→    /// Ключ подписи левой кнопки: «Назад» / нет на первом шаге.
+   168→    pub fn prev_label_key(&self) -> Option<&'static str> {
+   169→        (self.step > 0).then_some(keys::ONBOARDING_BACK)
+   170→    }
+   171→}
+   172→
+   173→// --- Геометрия карточки ---
+   174→
+   175→/// Поля клампа карточки к вьюпорту (W-e, аудит ui-kit §8 №12): слот
+   176→/// модали = окно минус поля (токен `SPACING_LG`); раньше карточка
+   177→/// клампилась к кромкам вплотную.
+   178→pub const ONBOARDING_VIEWPORT_MARGIN: f32 = canvas_core::tokens::SPACING_LG;
+   179→/// Ширина карточки тура (логические px).
+   180→pub const ONBOARDING_CARD_WIDTH: f32 = 460.0;
+   181→/// Внутренние поля карточки.
+   182→pub const ONBOARDING_PAD: f32 = 24.0;
+   183→/// Кегли строк карточки: заголовок/тело/кнопки.
+   184→pub const ONBOARDING_TITLE_FONT: f32 = 18.0;
+   185→pub const ONBOARDING_BODY_FONT: f32 = 13.0;
+   186→pub const ONBOARDING_TITLE_LINE_H: f32 = 24.0;
+   187→pub const ONBOARDING_BODY_LINE_H: f32 = 19.0;
+   188→/// Высота футера с кнопками.
+   189→pub const ONBOARDING_FOOTER_H: f32 = 46.0;
+   190→/// Размер кнопок карточки.
+   191→pub const ONBOARDING_BUTTON_W: f32 = 96.0;
+   192→pub const ONBOARDING_BUTTON_H: f32 = 30.0;
+   193→/// Диаметр прогресс-точки.
+   194→pub const ONBOARDING_DOT: f32 = 8.0;
+   195→/// Зазор между точками прогресса.
+   196→pub const ONBOARDING_DOT_GAP: f32 = 10.0;
+   197→/// Отступ прогресс-точек от заголовка.
+   198→pub const ONBOARDING_DOTS_TOP: f32 = 12.0;
+   199→
+   200→/// Кнопка карточки тура (hit-тест/рендер).
+   201→#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+   202→pub enum OnboardingButton {
+   203→    /// «Назад» — только со 2-го шага.
+   204→    Prev,
+   205→    /// «Далее», на последнем шаге — «Готово».
+   206→    Next,
+   207→    /// «Пропустить» — отложить до следующего запуска (Esc — то же).
+   208→    Skip,
+   209→}
+   210→
+   211→/// Строки тела шага после переноса по ширине карточки — измеренный
+   212→/// `TextMeasurer::wrap` (W-e, CR-015: замена эвристики
+   213→/// «символы × 0.62»; те же метрики, что у шейпинга рендера). Один источник
+   214→/// для высоты карточки ([`card_layout`]) и рендера (overlays.rs) —
+   215→/// раскладка и геометрия не разъезжаются.
+   216→pub fn body_lines(
+   217→    step: usize,
+   218→    width: f32,
+   219→    language: Language,
+   220→    m: &mut TextMeasurer,
+   221→    fs: &mut cosmic_text::FontSystem,
+   222→) -> Vec<String> {
+   223→    let Some(step) = ONBOARDING_STEPS.get(step) else {
+   224→        return Vec::new();
+   225→    };
+   226→    let avail = (width - ONBOARDING_PAD * 2.0).max(10.0);
+   227→    let wrapped = m.wrap(
+   228→        fs,
+   229→        i18n::tr(language, step.body_key),
+   230→        FAMILY,
+   231→        ONBOARDING_BODY_FONT,
+   232→        avail,
+   233→    );
+   234→    // W-e follow-up (CI windows): сверхширокий токен без переносов
+   235→    // («markdown-разметкой» на Windows-метриках — 226.6 > бюджета 192)
+   236→    // выходил за карточку и на рендере, и в тесте бюджета. Жёсткий
+   237→    // посимвольный разрыв в бюджет: строка либо влезает, либо рвётся
+   238→    // глиф за глифом (тексты онбординга — кириллица/латиница).
+   239→    let mut lines: Vec<String> = Vec::with_capacity(wrapped.len());
+   240→    for line in wrapped {
+   241→        if m.width_of(fs, &line, FAMILY, ONBOARDING_BODY_FONT) <= avail {
+   242→            lines.push(line);
+   243→            continue;
+   244→        }
+   245→        let mut cur = String::new();
+   246→        for ch in line.chars() {
+   247→            let mut next = cur.clone();
+   248→            next.push(ch);
+   249→            if m.width_of(fs, &next, FAMILY, ONBOARDING_BODY_FONT) > avail && !cur.is_empty() {
+   250→                lines.push(std::mem::take(&mut cur));
+   251→            }
+   252→            cur.push(ch);
+   253→        }
+   254→        if !cur.is_empty() {
+   255→            lines.push(cur);
+   256→        }
+   257→    }
+   258→    lines
+   259→}
+   260→
+   261→/// Отступ от верха карточки до первой строки тела (заголовок +
+   262→/// прогресс-точки + зазор) — общий для геометрии и рендера.
+   263→pub fn body_top_offset() -> f32 {
+   264→    ONBOARDING_PAD + ONBOARDING_TITLE_LINE_H + ONBOARDING_DOTS_TOP + ONBOARDING_DOT + 10.0
+   265→}
+   266→
+   267→/// Зона тела шага в карточке: от якоря первой строки до футера с CTA
+   268→/// (минус нижний пад). Общий источник высоты окна видимости скролла для
+   269→/// раскладки ([`card_layout`]), колеса ввода и отрисовки (видимые строки).
+   270→pub fn body_area(card: [f32; 4]) -> [f32; 4] {
+   271→    [
+   272→        card[0] + ONBOARDING_PAD,
+   273→        card[1] + body_top_offset(),
+   274→        (card[2] - ONBOARDING_PAD * 2.0).max(0.0),
+   275→        (card[3] - body_top_offset() - ONBOARDING_PAD - ONBOARDING_FOOTER_H).max(0.0),
+   276→    ]
+   277→}
+   278→
+   279→/// Раскладка карточки шага (W-e): слот = вьюпорт минус поля
+   280→/// ([`ONBOARDING_VIEWPORT_MARGIN`]), панель — `kit::modal` (центр слота,
+   281→/// как dialog/autolink); ширина — кламп к слоту, высота — по измеренному
+   282→/// телу с клампом к слоту (инвариант FR-028 «карточка целиком в окне» —
+   283→/// теперь ещё и с полями). При клампе высоты контент ужимается:
+   284→/// скролл-состояние тела синхронизируется с контентом/окном (футер с CTA
+   285→/// всегда видим — в скролл-зону не входит). Один источник для реестра
+   286→/// (hit-rect'ы), ввода (кнопки) и отрисовки — «ввод = тому, что видно».
+   287→pub struct OnboardingLayout {
+   288→    /// Rect карточки `[x, y, w, h]` (центр окна, кламп с полями).
+   289→    pub card: [f32; 4],
+   290→    /// Строки тела после измеренного переноса по ширине карточки.
+   291→    pub lines: Vec<String>,
+   292→}
+   293→
+   294→/// Раскладка карточки шага: карточка + строки тела + синхронизация
+   295→/// скролл-состояния тела (кит [`ScrollState`] — offset сохраняется,
+   296→/// content_h/viewport_h обновляются, позиция клампится; паттерн
+   297→/// `flow_map_layout`).
+   298→pub fn card_layout(
+   299→    viewport: [f32; 2],
+   300→    step: usize,
+   301→    language: Language,
+   302→    scroll: &mut ScrollState,
+   303→    m: &mut TextMeasurer,
+   304→    fs: &mut cosmic_text::FontSystem,
+   305→) -> OnboardingLayout {
+   306→    let margin = ONBOARDING_VIEWPORT_MARGIN;
+   307→    let slot = UiRect::new(
+   308→        margin,
+   309→        margin,
+   310→        (viewport[0] - margin * 2.0).max(0.0),
+   311→        (viewport[1] - margin * 2.0).max(0.0),
+   312→    );
+   313→    let w = ONBOARDING_CARD_WIDTH.min(slot.w);
+   314→    let lines = body_lines(step, w, language, m, fs);
+   315→    let body_h = lines.len() as f32 * ONBOARDING_BODY_LINE_H;
+   316→    let desired_h = body_top_offset() + body_h + ONBOARDING_PAD + ONBOARDING_FOOTER_H;
+   317→    // Кламп высоты к слоту: desired пре-клампнут, поэтому min-инвариант
+   318→    // модали (приоритетен — parity FR-060) не конфликтует с клампом FR-028.
+   319→    let h = desired_h.min(slot.h);
+   320→    let size = UiVec2::new(w, h);
+   321→    let panel = kit::modal(slot, size, size, size).panel;
+   322→    let card = [panel.x, panel.y, panel.w, panel.h];
+   323→    // Скролл тела: при клампе высоты viewport_h < content_h — строки
+   324→    // прокручиваются (колесо ввода; видимые строки — `kit::list_rows`).
+   325→    let body = body_area(card);
+   326→    scroll.content_h = lines.len() as f32 * ONBOARDING_BODY_LINE_H;
+   327→    scroll.viewport_h = body[3];
+   328→    scroll.clamp();
+   329→    OnboardingLayout { card, lines }
+   330→}
+   331→
+   332→/// Прогресс-точки: центры по горизонтали (рендер — квады-кружки).
+   333→pub fn progress_dots(card: [f32; 4]) -> (Vec<f32>, f32) {
+   334→    let n = ONBOARDING_STEPS.len() as f32;
+   335→    let total = n * ONBOARDING_DOT + (n - 1.0) * ONBOARDING_DOT_GAP;
+   336→    let start = card[0] + (card[2] - total) / 2.0;
+   337→    let centers: Vec<f32> = (0..ONBOARDING_STEPS.len())
+   338→        .map(|i| start + i as f32 * (ONBOARDING_DOT + ONBOARDING_DOT_GAP) + ONBOARDING_DOT / 2.0)
+   339→        .collect();
+   340→    let y = card[1] + ONBOARDING_PAD + ONBOARDING_TITLE_LINE_H + ONBOARDING_DOTS_TOP;
+   341→    (centers, y)
+   342→}
+   343→
+   344→/// Rect кнопки карточки (футер прибит к низу карточки — при клампе высоты
+   345→/// кнопки остаются достижимы): Prev — слева, Next — справа (оба в футере);
+   346→/// Skip — в правом верхнем углу карточки (выход виден всегда — NN/g).
+   347→//
+   348→// K5/FR-070: `Skip` — это подписанная прямоугольная кнопка 64×22
+   349→// («Пропустить»), НЕ каноническая «×» в углу модали. Поэтому `Skip` НЕ
+   350→// является миграционным кандидатом для `kit::stage_close_button` (тот
+   351→// возвращает квадрат `ICON_BUTTON_SIZE`=26×26 под глиф «×», а Skip —
+   352→// широкая кнопка-призрак с подписью). Этот TODO — НЕ close-button
+   353→// migration (вопреки FR-070 тегу), а кнопочный layout-миграция.
+   354→//
+   355→// O2 (Task O / FR-UI-FOOTER): Prev/Next carousel footer migrated to
+   356→// `kit::split_footer_buttons` (Agent L's split-footer kit component).
+   357→// Pattern: Prev on LEFT (slot.x + inset), Next on RIGHT (slot.right -
+   358→// inset - W), inset = ONBOARDING_PAD = 24, gap = GAP_CONTROLS (8,
+   359→// unused — 1 button per side). Skip stays manual (top-right corner —
+   360→// NOT in the footer slot). Positions are 1:1 with the previous
+   361→// hand-rolled formula (footer_y = card.bottom - FOOTER_H + (FOOTER_H -
+   362→// BTN_H)/2; Prev.x = card.x + PAD; Next.x = card.right - PAD - W) —
+   363→// I-1: zero visual jump.
+   364→//
+   365→// Будущая миграция Skip — на `kit::button_layout` (измеренный размер
+   366→// подписи + `BUTTON_PAD_H` × 2, высота `BUTTON_HEIGHT`=30). Требует:
+   367→// 1. Сигнатуру `button_rect(card, button, m, fs, family, size)` —
+   368→//    вместо текущей без замерщика (10+ callers в onboarding_ui.rs,
+   369→//    app/overlays.rs:3669, app.rs:13310 — большая площадь рефактора).
+   370→// 2. UX-ревью: размер меняется с 64×22 на ~(80–100)×30 (ширина
+   371→//    измеренной подписи «Пропустить» + 2·BUTTON_PAD_H=12; высота — kit
+   372→//    canonical `BUTTON_HEIGHT`=30). Это сдвиг позиции кнопки в карточке
+   373→//    (примерно +6px по высоте, +16–36px по ширине).
+   374→// 3. Стиль: `kit::button_style(ButtonVariant::Ghost, KitState::Normal,
+   375→//    palette)` — ghost-кнопка без заливки/рамки, hover → accent border.
+   376→//
+   377→// Оставлено как TODO до отдельной волны onboarding button_layout
+   378→// (I-1: ноль скачка). Паритет с другими подписанными кнопками-призраками
+   379→// в карточках (например suggest-cards).
+   380→pub fn button_rect(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
+   381→    match button {
+   382→        OnboardingButton::Prev | OnboardingButton::Next => {
+   383→            // O2: split footer (Prev left / Next right) via kit.
+   384→            let slot = UiRect::new(
+   385→                card[0],
+   386→                card[1] + card[3] - ONBOARDING_FOOTER_H,
+   387→                card[2],
+   388→                ONBOARDING_FOOTER_H,
+   389→            );
+   390→            let btns = kit::split_footer_buttons(
+   391→                slot,
+   392→                &[ONBOARDING_BUTTON_W],
+   393→                &[ONBOARDING_BUTTON_W],
+   394→                kit::GAP_CONTROLS,
+   395→                ONBOARDING_PAD,
+   396→            );
+   397→            // btns[0] = (Prev rect, FooterGroup::Left, 0);
+   398→            // btns[1] = (Next rect, FooterGroup::Right, 0).
+   399→            let idx = match button {
+   400→                OnboardingButton::Prev => 0,
+   401→                OnboardingButton::Next => 1,
+   402→                _ => unreachable!(),
+   403→            };
+   404→            let r = btns[idx].0;
+   405→            [r.x, r.y, r.w, r.h]
+   406→        }
+   407→        OnboardingButton::Skip => [
+   408→            card[0] + card[2] - ONBOARDING_PAD - 64.0,
+   409→            card[1] + 10.0,
+   410→            64.0,
+   411→            22.0,
+   412→        ],
+   413→    }
+   414→}
+   415→
+   416→/// Hit-test кнопки карточки. «Назад» на первом шаге отсутствует (None),
+   417→/// «Далее»/«Готово» и «Пропустить» доступны всегда (инвариант карусели).
+   418→/// FR-097: на coarse-указателе тач-цели кнопок дотягиваются до 44 лог. px
+   419→/// (hit-only, кламп в карточку — расширенная зона не выходит за оверлей;
+   420→/// на точном указателе — прежние зоны).
+   421→pub fn button_at(
+   422→    card: [f32; 4],
+   423→    state: &OnboardingState,
+   424→    point: [f32; 2],
+   425→) -> Option<OnboardingButton> {
+   426→    let coarse = crate::touch_targets::pointer_coarse();
+   427→    let hit = |rect: [f32; 4]| {
+   428→        let rect = if coarse {
+   429→            crate::touch_targets::intersect_xywh(
+   430→                crate::touch_targets::expand_xywh(rect, crate::touch_targets::MIN_TOUCH_TARGET),
+   431→                card,
+   432→            )
+   433→        } else {
+   434→            rect
+   435→        };
+   436→        point[0] >= rect[0]
+   437→            && point[0] <= rect[0] + rect[2]
+   438→            && point[1] >= rect[1]
+   439→            && point[1] <= rect[1] + rect[3]
+   440→    };
+   441→    if hit(button_rect(card, OnboardingButton::Next)) {
+   442→        return Some(OnboardingButton::Next);
+   443→    }
+   444→    if hit(button_rect(card, OnboardingButton::Skip)) {
+   445→        return Some(OnboardingButton::Skip);
+   446→    }
+   447→    // «Назад» только не на первом шаге
+   448→    if state.step > 0 && hit(button_rect(card, OnboardingButton::Prev)) {
+   449→        return Some(OnboardingButton::Prev);
+   450→    }
+   451→    None
+   452→}
+   453→
+   454→/// Клик внутри карточки (но не по кнопкам)? Ввод канваса глотается всей
+   455→/// карточкой — клик мимо кнопок не проваливается под оверлей.
+   456→pub fn point_in_card(card: [f32; 4], point: [f32; 2]) -> bool {
+   457→    point[0] >= card[0]
+   458→        && point[0] <= card[0] + card[2]
+   459→        && point[1] >= card[1]
+   460→        && point[1] <= card[1] + card[3]
+   461→}
+   462→
+   463→// =============================================================================
+   464→// FR-LLM-B / PRD-0010 F-8: AI-онбординг — экран выбора режима (Local / Cloud /
+   465→// Self-hosted). Не часть карусели [`ONBOARDING_STEPS`] — отдельный модальный
+   466→// оверлей, открываемый пунктом «Онбординг AI» из меню «?» либо триггером
+   467→// продукта при первом включении AI-функции. Сохраняет выбор в
+   468→// `Settings::llm::data_residency` (плюс per-feature провайдеры по режиму).
+   469→// =============================================================================
+   470→
+   471→/// Ширина карточки AI-онбординга (логические px, прототип F-8: 600px).
+   472→pub const AI_ONB_CARD_W: f32 = 600.0;
+   473→/// Внутренние поля карточки (прототип F-8: 26px top / 30px sides / 22px bottom).
+   474→pub const AI_ONB_PAD_X: f32 = 30.0;
+   475→pub const AI_ONB_PAD_TOP: f32 = 26.0;
+   476→pub const AI_ONB_PAD_BOTTOM: f32 = 22.0;
+   477→/// Кегль заголовка/подзаголовка/режимов/кнопок.
+   478→pub const AI_ONB_STEP_FONT: f32 = 10.0;
+   479→pub const AI_ONB_TITLE_FONT: f32 = 19.0;
+   480→pub const AI_ONB_SUB_FONT: f32 = 12.5;
+   481→pub const AI_ONB_MODE_TITLE_FONT: f32 = 13.5;
+   482→pub const AI_ONB_MODE_DESC_FONT: f32 = 11.5;
+   483→pub const AI_ONB_BTN_FONT: f32 = 13.0;
+   484→/// Высоты строк: step / title / sub / mode card / privacy block.
+   485→pub const AI_ONB_STEP_H: f32 = 18.0;
+   486→pub const AI_ONB_TITLE_H: f32 = 26.0;
+   487→pub const AI_ONB_SUB_H: f32 = 38.0;
+   488→pub const AI_ONB_MODE_H: f32 = 64.0;
+   489→pub const AI_ONB_MODE_GAP: f32 = 8.0;
+   490→pub const AI_ONB_ACTIONS_H: f32 = 36.0;
+   491→pub const AI_ONB_PRIV_H: f32 = 180.0;
+   492→/// Поля клампа карточки к вьюпорту (паттерн ONBOARDING_VIEWPORT_MARGIN).
+   493→pub const AI_ONB_VIEWPORT_MARGIN: f32 = canvas_core::tokens::SPACING_LG;
+   494→/// Размер кнопок «Подробнее о privacy» / «Продолжить» (прототип F-8).
+   495→pub const AI_ONB_BTN_H: f32 = 30.0;
+   496→pub const AI_ONB_BTN_PRIV_W: f32 = 168.0;
+   497→pub const AI_ONB_BTN_CONTINUE_W: f32 = 132.0;
+   498→
+   499→/// Режим AI (F-8.2): выбор пользователя сохраняется в
+   500→/// `Settings::llm::data_residency`. Per-feature провайдеры переопределяются
+   501→/// по режиму (Local → Laya/Ollama, Cloud → BYOK/ChatGPT, Self-hosted →
+   502→/// self-hosted endpoint).
+   503→#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+   504→pub enum AiOnboardingChoice {
+   505→    /// Local only (Laya / Ollama) — offline, данные не покидают машину.
+   506→    /// `data_residency: Local`, suggest=Laya, graph=Ollama, agent=Ollama.
+   507→    Local,
+   508→    /// Cloud (ChatGPT / BYOK) — лучшее качество, redact context (Q1).
+   509→    /// `data_residency: Cloud`, suggest=BYOK, graph=ChatGPT, agent=ChatGPT.
+   510→    #[default]
+   511→    Cloud,
+   512→    /// Self-hosted (ваш GPU-сервер) — данные в контуре, нужен endpoint.
+   513→    /// `data_residency: SelfHosted`, per-feature провайдеры остаются Off
+   514→    /// до ввода endpoint'а (настройки → AI и модели).
+   515→    SelfHosted,
+   516→}
+   517→
+   518→impl AiOnboardingChoice {
+   519→    /// Соответствующий режим `DataResidency` (сохраняется в Settings.llm).
+   520→    pub fn data_residency(self) -> canvas_llm::DataResidency {
+   521→        match self {
+   522→            AiOnboardingChoice::Local => canvas_llm::DataResidency::Local,
+   523→            AiOnboardingChoice::Cloud => canvas_llm::DataResidency::Cloud,
+   524→            AiOnboardingChoice::SelfHosted => canvas_llm::DataResidency::SelfHosted,
+   525→        }
+   526→    }
+   527→
+   528→    /// Per-feature провайдеры по умолчанию для режима (прототип F-8 JS:
+   529→    /// `aiOnbGo` применяет `AI.prov.{suggest,graph,agent}` по `c`).
+   530→    /// `SelfHosted` не задаёт провайдеров автоматически — пользователь
+   531→    /// вводит endpoint в настройках и THEN выбирает BYOK/self-hosted.
+   532→    pub fn default_providers(self) -> [canvas_llm::LlmProviderId; 3] {
+   533→        match self {
+   534→            AiOnboardingChoice::Local => [
+   535→                canvas_llm::LlmProviderId::Laya,
+   536→                canvas_llm::LlmProviderId::Ollama,
+   537→                canvas_llm::LlmProviderId::Ollama,
+   538→            ],
+   539→            AiOnboardingChoice::Cloud => [
+   540→                canvas_llm::LlmProviderId::Byok,
+   541→                canvas_llm::LlmProviderId::ChatGptOAuth,
+   542→                canvas_llm::LlmProviderId::ChatGptOAuth,
+   543→            ],
+   544→            AiOnboardingChoice::SelfHosted => [
+   545→                canvas_llm::LlmProviderId::Off,
+   546→                canvas_llm::LlmProviderId::Off,
+   547→                canvas_llm::LlmProviderId::Off,
+   548→            ],
+   549→        }
+   550→    }
+   551→
+   552→    /// i18n-ключ заголовка режима (подпись в карточке-радио F-8).
+   553→    pub fn title_key(self) -> &'static str {
+   554→        match self {
+   555→            AiOnboardingChoice::Local => keys::AI_ONB_LOCAL_TITLE,
+   556→            AiOnboardingChoice::Cloud => keys::AI_ONB_CLOUD_TITLE,
+   557→            AiOnboardingChoice::SelfHosted => keys::AI_ONB_SELFHOST_TITLE,
+   558→        }
+   559→    }
+   560→
+   561→    /// i18n-ключ описания режима (строка под заголовком в карточке-радио).
+   562→    pub fn desc_key(self) -> &'static str {
+   563→        match self {
+   564→            AiOnboardingChoice::Local => keys::AI_ONB_LOCAL_DESC,
+   565→            AiOnboardingChoice::Cloud => keys::AI_ONB_CLOUD_DESC,
+   566→            AiOnboardingChoice::SelfHosted => keys::AI_ONB_SELFHOST_DESC,
+   567→        }
+   568→    }
+   569→
+   570→    /// i18n-ключ тега режима (правый верхний угол карточки-радио —
+   571→    /// «offline» / «лучшее качество» / «в контуре»).
+   572→    pub fn tag_key(self) -> &'static str {
+   573→        match self {
+   574→            AiOnboardingChoice::Local => keys::AI_ONB_TAG_OFFLINE,
+   575→            AiOnboardingChoice::Cloud => keys::AI_ONB_TAG_QUALITY,
+   576→            AiOnboardingChoice::SelfHosted => keys::AI_ONB_TAG_CONTOUR,
+   577→        }
+   578→    }
+   579→
+   580→    /// i18n-ключ тоста после подтверждения выбора («AI-режим: Local only…»).
+   581→    pub fn toast_key(self) -> &'static str {
+   582→        match self {
+   583→            AiOnboardingChoice::Local => keys::AI_ONB_TOAST_LOCAL,
+   584→            AiOnboardingChoice::Cloud => keys::AI_ONB_TOAST_CLOUD,
+   585→            AiOnboardingChoice::SelfHosted => keys::AI_ONB_TOAST_SELFHOST,
+   586→        }
+   587→    }
+   588→}
+   589→
+   590→/// Состояние экрана AI-онбординга. `selected = None` — ничего не выбрано,
+   591→/// кнопка «Продолжить» отключена (прототип F-8: `disabled` пока `onbChoice`
+   592→/// null). `privacy_open` — раскрытый блок «Подробнее о privacy».
+   593→#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+   594→pub struct AiOnboardingState {
+   595→    /// Выбранный режим (Local / Cloud / SelfHosted). `None` до клика по
+   596→    /// карточке-радио — кнопка «Продолжить» отключена.
+   597→    pub selected: Option<AiOnboardingChoice>,
+   598→    /// Раскрыт ли блок «Подробнее о privacy» (toggle кнопкой «Подробнее»).
+   599→    pub privacy_open: bool,
+   600→}
+   601→
+   602→/// Кнопка экрана AI-онбординга (hit-тест/рендер).
+   603→#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+   604→pub enum AiOnboardingButton {
+   605→    /// Карточка-радио режима (Local / Cloud / SelfHosted).
+   606→    Mode(AiOnboardingChoice),
+   607→    /// «Подробнее о privacy» — toggle раскрытия блока.
+   608→    Privacy,
+   609→    /// «Продолжить» — применить выбор и закрыть экран. Отключена, пока
+   610→    /// `selected = None`.
+   611→    Continue,
+   612→}
+   613→
+   614→/// Раскладка экрана AI-онбординга: rect карточки + высота (зависит от
+   615→/// `privacy_open` — раскрытый блок добавляет `AI_ONB_PRIV_H`).
+   616→#[derive(Debug, Clone, PartialEq)]
+   617→pub struct AiOnboardingLayout {
+   618→    /// Rect карточки `[x, y, w, h]` (центр вьюпорта, кламп с полями).
+   619→    pub card: [f32; 4],
+   620→    /// Rect каждой карточки-режима (Local / Cloud / SelfHosted) — порядок
+   621→    /// [`AiOnboardingChoice`]: Local, Cloud, SelfHosted.
+   622→    pub mode_cards: [[f32; 4]; 3],
+   623→    /// Rect кнопок «Подробнее о privacy» и «Продолжить».
+   624→    pub btn_privacy: [f32; 4],
+   625→    pub btn_continue: [f32; 4],
+   626→    /// Rect блока «Подробнее о privacy» (когда `privacy_open = true`).
+   627→    pub privacy_block: [f32; 4],
+   628→}
+   629→
+   630→/// Вычислить раскладку экрана AI-онбординга (чистая функция, без замерщика —
+   631→/// высоты строк фиксированы по прототипу F-8). Карточка центрируется во
+   632→/// вьюпорте с полями `AI_ONB_VIEWPORT_MARGIN`; высота зависит от
+   633→/// `state.privacy_open`.
+   634→//
+   635→// O1 (Task O / FR-UI-RADIO): mode-card rendering migrated to `kit::radio_card`
+   636→// in `app/overlays.rs::ai_onboarding_overlay` (where palette is available —
+   637→// this layout function stays a pure geometry function returning slot rects,
+   638→// per task step 1 option (b); signature unchanged). The kit's
+   639→// `radio_card(slot, label_w, desc_w, selected, state, palette)` is called
+   640→// per-card in overlays.rs; `paint_radio_card` emits the card background +
+   641→// indicator; `layout.label`/`layout.desc` rects are used for text positions.
+   642→// Tag (right corner) stays separate — kit doesn't support tag.
+   643→pub fn ai_onboarding_layout(viewport: [f32; 2], state: &AiOnboardingState) -> AiOnboardingLayout {
+   644→    use canvas_ui::geometry::{UiRect, UiVec2};
+   645→    use canvas_ui::kit;
+   646→    let margin = AI_ONB_VIEWPORT_MARGIN;
+   647→    let slot = UiRect::new(
+   648→        margin,
+   649→        margin,
+   650→        (viewport[0] - margin * 2.0).max(0.0),
+   651→        (viewport[1] - margin * 2.0).max(0.0),
+   652→    );
+   653→    let w = AI_ONB_CARD_W.min(slot.w);
+   654→    // Высота: step + title + sub + 3 mode cards (с зазорами) + actions +
+   655→    // опционально privacy block. Поля — top/bottom.
+   656→    let modes_h = 3.0 * AI_ONB_MODE_H + 2.0 * AI_ONB_MODE_GAP;
+   657→    let mut h = AI_ONB_PAD_TOP
+   658→        + AI_ONB_STEP_H
+   659→        + AI_ONB_TITLE_H
+   660→        + AI_ONB_SUB_H
+   661→        + modes_h
+   662→        + 18.0 // зазор от режимов до actions (прототип: margin-top: 18px)
+   663→        + AI_ONB_ACTIONS_H
+   664→        + AI_ONB_PAD_BOTTOM;
+   665→    if state.privacy_open {
+   666→        h += 15.0 + AI_ONB_PRIV_H; // зазор + блок
+   667→    }
+   668→    let h = h.min(slot.h);
+   669→    let panel = kit::modal(
+   670→        slot,
+   671→        UiVec2::new(w, h),
+   672→        UiVec2::new(w, h),
+   673→        UiVec2::new(w, h),
+   674→    )
+   675→    .panel;
+   676→    let card = [panel.x, panel.y, panel.w, panel.h];
+   677→    // Y-positions: шаг → заголовок → подзаголовок → 3 карточки → actions → privacy.
+   678→    let x = card[0] + AI_ONB_PAD_X;
+   679→    let inner_w = (card[2] - AI_ONB_PAD_X * 2.0).max(0.0);
+   680→    let mut y = card[1] + AI_ONB_PAD_TOP;
+   681→    y += AI_ONB_STEP_H + AI_ONB_TITLE_H + AI_ONB_SUB_H;
+   682→    // 3 карточки-режима (Local / Cloud / SelfHosted — порядок AiOnboardingChoice).
+   683→    let mut mode_cards = [[0.0f32; 4]; 3];
+   684→    for (i, rect) in mode_cards.iter_mut().enumerate() {
+   685→        *rect = [
+   686→            x,
+   687→            y + i as f32 * (AI_ONB_MODE_H + AI_ONB_MODE_GAP),
+   688→            inner_w,
+   689→            AI_ONB_MODE_H,
+   690→        ];
+   691→    }
+   692→    let actions_y = y + 3.0 * AI_ONB_MODE_H + 2.0 * AI_ONB_MODE_GAP + 18.0;
+   693→    // O2 (Task O / FR-UI-FOOTER): Privacy (left) + Continue (right) migrated
+   694→    // to `kit::split_footer_buttons` (Agent L's split-footer kit component).
+   695→    // Pattern: Privacy on LEFT (slot.x + inset=0), Continue on RIGHT
+   696→    // (slot.right - inset=0 - W). Slot height = AI_ONB_BTN_H (30, no vertical
+   697→    // centering — y stays at actions_y). Positions are 1:1 with the previous
+   698→    // hand-rolled formula (btn_privacy.x = x = card.x + PAD_X;
+   699→    // btn_continue.x = x + inner_w - CONTINUE_W = card.right - PAD_X -
+   700→    // CONTINUE_W) — I-1: zero visual jump.
+   701→    let actions_slot = UiRect::new(x, actions_y, inner_w, AI_ONB_BTN_H);
+   702→    let ai_footer_btns = kit::split_footer_buttons(
+   703→        actions_slot,
+   704→        &[AI_ONB_BTN_PRIV_W],
+   705→        &[AI_ONB_BTN_CONTINUE_W],
+   706→        kit::GAP_CONTROLS, // unused — 1 button per side
+   707→        0.0,               // no inset — both buttons flush to slot edges
+   708→    );
+   709→    // btns[0] = (Privacy rect, FooterGroup::Left, 0);
+   710→    // btns[1] = (Continue rect, FooterGroup::Right, 0).
+   711→    let priv_r = ai_footer_btns[0].0;
+   712→    let cont_r = ai_footer_btns[1].0;
+   713→    let btn_privacy = [priv_r.x, priv_r.y, priv_r.w, priv_r.h];
+   714→    let btn_continue = [cont_r.x, cont_r.y, cont_r.w, cont_r.h];
+   715→    let privacy_block = if state.privacy_open {
+   716→        [
+   717→            x,
+   718→            actions_y + AI_ONB_ACTIONS_H + 15.0,
+   719→            inner_w,
+   720→            AI_ONB_PRIV_H,
+   721→        ]
+   722→    } else {
+   723→        [0.0; 4]
+   724→    };
+   725→    AiOnboardingLayout {
+   726→        card,
+   727→        mode_cards,
+   728→        btn_privacy,
+   729→        btn_continue,
+   730→        privacy_block,
+   731→    }
+   732→}
+   733→
+   734→/// Hit-test кнопки экрана AI-онбординга (карточки-режимы — всегда доступны;
+   735→/// «Подробнее» — всегда; «Продолжить» — только если `selected` не None).
+   736→pub fn ai_onboarding_button_at(
+   737→    layout: &AiOnboardingLayout,
+   738→    state: &AiOnboardingState,
+   739→    point: [f32; 2],
+   740→) -> Option<AiOnboardingButton> {
+   741→    use canvas_ui::geometry::UiRect;
+   742→    let hit = |rect: [f32; 4]| -> bool {
+   743→        let r = UiRect::new(rect[0], rect[1], rect[2], rect[3]);
+   744→        point[0] >= r.x && point[0] <= r.x + r.w && point[1] >= r.y && point[1] <= r.y + r.h
+   745→    };
+   746→    // Карточки-режимы (Local / Cloud / SelfHosted — порядок AiOnboardingChoice).
+   747→    let choices = [
+   748→        AiOnboardingChoice::Local,
+   749→        AiOnboardingChoice::Cloud,
+   750→        AiOnboardingChoice::SelfHosted,
+   751→    ];
+   752→    for (i, &choice) in choices.iter().enumerate() {
+   753→        if hit(layout.mode_cards[i]) {
+   754→            return Some(AiOnboardingButton::Mode(choice));
+   755→        }
+   756→    }
+   757→    if hit(layout.btn_privacy) {
+   758→        return Some(AiOnboardingButton::Privacy);
+   759→    }
+   760→    // «Продолжить» — только если режим выбран (иначе кнопка disabled).
+   761→    if state.selected.is_some() && hit(layout.btn_continue) {
+   762→        return Some(AiOnboardingButton::Continue);
+   763→    }
+   764→    None
+   765→}
+   766→
+   767→/// Клик внутри карточки AI-онбординга (но не по кнопкам)? Ввод канваса
+   768→/// глотается всей карточкой — клик мимо кнопок не проваливается под оверлей.
+   769→pub fn ai_onboarding_point_in_card(card: [f32; 4], point: [f32; 2]) -> bool {
+   770→    point[0] >= card[0]
+   771→        && point[0] <= card[0] + card[2]
+   772→        && point[1] >= card[1]
+   773→        && point[1] <= card[1] + card[3]
+   774→}
+   775→
+   776→#[cfg(test)]
+   777→mod tests {
+   778→    use super::*;
+   779→    use canvas_core::ONBOARDING_MAX_DEFERS;
+   780→
+   781→    /// Замерщик + FontSystem для тестов (глобальный замерный шрифт —
+   782→    /// короткий скоуп, паттерн tooltip/dialog).
+   783→    fn measurer() -> (TextMeasurer, cosmic_text::FontSystem) {
+   784→        (TextMeasurer::new(), cosmic_text::FontSystem::new())
+   785→    }
+   786→
+   787→    /// Раскладка шага со свежим скролл-состоянием (тесты геометрии).
+   788→    fn layout(viewport: [f32; 2], step: usize, language: Language) -> OnboardingLayout {
+   789→        let mut scroll = ScrollState::default();
+   790→        layout_sync(viewport, step, language, &mut scroll)
+   791→    }
+   792→
+   793→    /// Раскладка шага с внешним скролл-состоянием (тесты скролла).
+   794→    fn layout_sync(
+   795→        viewport: [f32; 2],
+   796→        step: usize,
+   797→        language: Language,
+   798→        scroll: &mut ScrollState,
+   799→    ) -> OnboardingLayout {
+   800→        let (mut m, mut fs) = measurer();
+   801→        card_layout(viewport, step, language, scroll, &mut m, &mut fs)
+   802→    }
+   803→
+   804→    /// Инвариант триггера (таблица решений FR-028): показ = не пройден И
+   805→    /// откладываний < 3; пройден — никогда (любые defers).
+   806→    #[test]
+   807→    fn should_show_onboarding_decision_table() {
+   808→        for done in [false, true] {
+   809→            for defers in [0u8, 1, 2, 3, 4, 200] {
+   810→                let settings = Settings {
+   811→                    onboarding_done: done,
+   812→                    onboarding_defers: defers,
+   813→                    ..Settings::default()
+   814→                };
+   815→                let expected = !done && defers < ONBOARDING_MAX_DEFERS;
+   816→                assert_eq!(
+   817→                    should_show_onboarding(&settings),
+   818→                    expected,
+   819→                    "done={done} defers={defers}"
+   820→                );
+   821→            }
+   822→        }
+   823→        // Дефолтный конфиг — тур показать
+   824→        assert!(should_show_onboarding(&Settings::default()));
+   825→    }
+   826→
+   827→    /// Инвариант карусели: step в границах после любых next/prev; «Назад»
+   828→    /// отсутствует на первом шаге; подпись «Далее» → «Готово» на последнем.
+   829→    #[test]
+   830→    fn carousel_bounds_and_labels() {
+   831→        let mut state = OnboardingState::default();
+   832→        assert_eq!(state.step, 0);
+   833→        assert!(
+   834→            state.prev_label_key().is_none(),
+   835→            "«Назад» на первом шаге нет"
+   836→        );
+   837→        assert!(!state.prev(), "prev на первом — без изменений");
+   838→        assert_eq!(i18n::tr(Language::Ru, state.next_label_key()), "Далее");
+   839→        // Полный проход до последнего
+   840→        for expected in 1..ONBOARDING_STEPS.len() {
+   841→            assert!(state.next(), "шаг {expected}");
+   842→            assert_eq!(state.step, expected);
+   843→        }
+   844→        assert!(state.is_last());
+   845→        assert_eq!(
+   846→            i18n::tr(Language::Ru, state.next_label_key()),
+   847→            "Готово",
+   848→            "подпись на последнем шаге"
+   849→        );
+   850→        assert!(!state.next(), "next на последнем — без изменений");
+   851→        assert_eq!(state.step, ONBOARDING_STEPS.len() - 1);
+   852→        // Возврат к началу
+   853→        while state.step > 0 {
+   854→            assert!(state.prev());
+   855→        }
+   856→        assert!(!state.prev());
+   857→        // Шаги непустые (ключи заголовка/тела; EN-перевод длиннее 40 знаков)
+   858→        for step in &ONBOARDING_STEPS {
+   859→            assert!(!step.title_key.is_empty());
+   860→            assert!(
+   861→                i18n::tr(Language::En, step.body_key).len() > 40,
+   862→                "тело шага слишком короткое"
+   863→            );
+   864→        }
+   865→    }
+   866→
+   867→    /// Инвариант клампа (расширен W-e): карточка целиком внутри окна С
+   868→    /// ПОЛЯМИ ([`ONBOARDING_VIEWPORT_MARGIN`]) на G4-окнах (1280×800 /
+   869→    /// 1024×640 / 800×560) и стресс-окнах (320×240 / 240×180) на любом
+   870→    /// шаге; ширина не больше окна; кнопки внутри карточки.
+   871→    #[test]
+   872→    fn card_clamped_to_window() {
+   873→        for viewport in [
+   874→            [1600.0, 900.0],
+   875→            [1280.0, 800.0],
+   876→            [1024.0, 640.0],
+   877→            [800.0, 560.0],
+   878→            [320.0, 240.0],
+   879→            [240.0, 180.0],
+   880→        ] {
+   881→            for step in 0..ONBOARDING_STEPS.len() {
+   882→                let card = layout(viewport, step, Language::Ru).card;
+   883→                let margin = ONBOARDING_VIEWPORT_MARGIN;
+   884→                assert!(card[0] >= margin - 0.01, "за левым полем: {card:?}");
+   885→                assert!(card[1] >= margin - 0.01, "за верхним полем: {card:?}");
+   886→                assert!(
+   887→                    card[0] + card[2] <= viewport[0] - margin + 0.01,
+   888→                    "за правым полем: {card:?}"
+   889→                );
+   890→                assert!(
+   891→                    card[1] + card[3] <= viewport[1] - margin + 0.01,
+   892→                    "за нижним полем: {card:?}"
+   893→                );
+   894→                assert!(card[2] <= viewport[0] + 0.01, "шире окна: {card:?}");
+   895→                assert!(card[3] <= viewport[1] + 0.01, "выше окна: {card:?}");
+   896→                // Кнопки внутри карточки
+   897→                for button in [
+   898→                    OnboardingButton::Prev,
+   899→                    OnboardingButton::Next,
+   900→                    OnboardingButton::Skip,
+   901→                ] {
+   902→                    let rect = button_rect(card, button);
+   903→                    assert!(rect[0] >= card[0] && rect[0] + rect[2] <= card[0] + card[2]);
+   904→                    assert!(rect[1] >= card[1] && rect[1] + rect[3] <= card[1] + card[3]);
+   905→                }
+   906→            }
+   907→        }
+   908→    }
+   909→
+   910→    /// Стресс 240×180 (W-e): при клампе высоты контент ужимается, футер с
+   911→    /// CTA НЕ перекрывается телом и остаётся достижим; тело прокручивается
+   912→    /// до конца (последняя строка достижима скроллом).
+   913→    #[test]
+   914→    fn stress_240x180_footer_visible_and_body_reachable() {
+   915→        let viewport = [240.0, 180.0];
+   916→        for step in 0..ONBOARDING_STEPS.len() {
+   917→            let lay = layout(viewport, step, Language::Ru);
+   918→            let card = lay.card;
+   919→            // Футер (кнопки) прибит к низу карточки и НЕ входит в скролл-зону
+   920→            let body = body_area(card);
+   921→            let footer_top = card[1] + card[3] - ONBOARDING_FOOTER_H;
+   922→            assert!(
+   923→                body[1] + body[3] <= footer_top + 0.01,
+   924→                "тело налезает на футер: body={body:?} footer_top={footer_top}"
+   925→            );
+   926→            // CTA (Next, и Prev со 2-го шага) — в футере; Skip — ghost в
+   927→            // правом верхнем углу карточки (выход виден всегда — NN/g,
+   928→            // дизайн [`button_rect`]: `card[1] + 10`), в футер не входит,
+   929→            // но обязан быть внутри карточки.
+   930→            let next = button_rect(card, OnboardingButton::Next);
+   931→            assert!(next[1] >= footer_top - 0.01, "CTA выше футера: {next:?}");
+   932→            let skip = button_rect(card, OnboardingButton::Skip);
+   933→            assert!(
+   934→                skip[0] >= card[0]
+   935→                    && skip[1] >= card[1]
+   936→                    && skip[0] + skip[2] <= card[0] + card[2] + 0.01
+   937→                    && skip[1] + skip[3] <= card[1] + card[3] + 0.01,
+   938→                "Skip вне карточки: {skip:?}"
+   939→            );
+   940→            // Контент ужимается скроллом: окно видимости = зона тела,
+   941→            // полный контент достижим (offset ≤ max_offset показывает низ)
+   942→            let content_h = lay.lines.len() as f32 * ONBOARDING_BODY_LINE_H;
+   943→            let mut scroll = ScrollState::default();
+   944→            let relaid = layout_sync(viewport, step, Language::Ru, &mut scroll);
+   945→            assert!((relaid.lines.len() as f32 * ONBOARDING_BODY_LINE_H - content_h).abs() < 0.01);
+   946→            assert!(
+   947→                (scroll.viewport_h - body[3]).abs() < 0.01,
+   948→                "окно = зона тела"
+   949→            );
+   950→            if content_h > body[3] {
+   951→                assert!(scroll.needs_scroll(), "контент выше окна — скролл нужен");
+   952→                scroll.offset = scroll.max_offset(); // прокрутка до конца
+   953→                                                     // Последняя строка целиком в окне видимости
+   954→                let visible_tail = content_h - scroll.offset;
+   955→                assert!(
+   956→                    visible_tail <= scroll.viewport_h + 0.01,
+   957→                    "хвост контента не влез после прокрутки до конца"
+   958→                );
+   959→            }
+   960→            // Кнопки кликабельны (hit-тест работает при клампе)
+   961→            let next = button_rect(card, OnboardingButton::Next);
+   962→            let state = OnboardingState { step };
+   963→            assert_eq!(
+   964→                button_at(card, &state, [next[0] + 5.0, next[1] + 10.0]),
+   965→                Some(OnboardingButton::Next),
+   966→                "CTA достижим на шаге {step}"
+   967→            );
+   968→        }
+   969→    }
+   970→
+   971→    /// Измеренный перенос (W-e, CR-015): каждая строка тела укладывается в
+   972→    /// ширину карточки минус пад (замер тем же `TextMeasurer::width_of`, что
+   973→    /// и перенос); ручная эвристика 0.62 удалена.
+   974→    ///
+   975→    /// Нижняя граница ширины — 216: kit-перенос пословный, неразрывный
+   976→    /// токен длиннее бюджета не дробит (ниже поля найден кейс
+   977→    /// «markdown-разметкой» — 146.3px > 144px бюджета карточки 192 на
+   978→    /// стресс-поле 240×180; перелив ≤ одного слова ≈ 2px — задокументированное
+   979→    /// ограничение кита, жёсткий посимвольный брейк/брейк по дефису —
+   980→    /// не скоуп W-e). Достижимость/футер на 240×180 покрывает
+   981→    /// [`stress_240x180_footer_visible_and_body_reachable`].
+   982→    #[test]
+   983→    fn body_lines_fit_measured_width() {
+   984→        for width in [ONBOARDING_CARD_WIDTH, 240.0, 216.0] {
+   985→            for step in 0..ONBOARDING_STEPS.len() {
+   986→                let avail = width - ONBOARDING_PAD * 2.0;
+   987→                let (mut m, mut fs) = measurer();
+   988→                for language in [Language::Ru, Language::En] {
+   989→                    for line in body_lines(step, width, language, &mut m, &mut fs) {
+   990→                        let w = m.width_of(&mut fs, &line, FAMILY, ONBOARDING_BODY_FONT);
+   991→                        assert!(
+   992→                            w <= avail + 0.5,
+   993→                            "строка {w:.1} шире бюджета {avail:.1}: {line:?}"
+   994→                        );
+   995→                    }
+   996→                }
+   997→            }
+   998→        }
+   999→    }
+  1000→
+  1001→    /// Hit-тесты кнопок: Next/Skip кликабельны на каждом шаге; Prev —
+  1002→    /// только со 2-го; мимо кнопок — None; клик в теле карточки глотается.
+  1003→    #[test]
+  1004→    fn button_hit_tests() {
+  1005→        let viewport = [1600.0, 900.0];
+  1006→        let mut state = OnboardingState::default();
+  1007→        let card = layout(viewport, state.step, Language::Ru).card;
+  1008→        let next = button_rect(card, OnboardingButton::Next);
+  1009→        assert_eq!(
+  1010→            button_at(card, &state, [next[0] + 5.0, next[1] + 10.0]),
+  1011→            Some(OnboardingButton::Next)
+  1012→        );
+  1013→        let skip = button_rect(card, OnboardingButton::Skip);
+  1014→        assert_eq!(
+  1015→            button_at(card, &state, [skip[0] + 5.0, skip[1] + 10.0]),
+  1016→            Some(OnboardingButton::Skip)
+  1017→        );
+  1018→        // Первый шаг: «Назад» нет — даже по его rect
+  1019→        let prev = button_rect(card, OnboardingButton::Prev);
+  1020→        assert_eq!(
+  1021→            button_at(card, &state, [prev[0] + 5.0, prev[1] + 10.0]),
+  1022→            None,
+  1023→            "«Назад» на первом шаге отсутствует"
+  1024→        );
+  1025→        // Второй шаг: «Назад» есть
+  1026→        state.next();
+  1027→        let card = layout(viewport, state.step, Language::Ru).card;
+  1028→        let prev = button_rect(card, OnboardingButton::Prev);
+  1029→        assert_eq!(
+  1030→            button_at(card, &state, [prev[0] + 5.0, prev[1] + 10.0]),
+  1031→            Some(OnboardingButton::Prev)
+  1032→        );
+  1033→        // Точка в теле карточки — глотается (канвас не получает)
+  1034→        let body_point = [card[0] + card[2] / 2.0, card[1] + card[3] / 2.0];
+  1035→        assert!(point_in_card(card, body_point));
+  1036→        assert_eq!(button_at(card, &state, body_point), None);
+  1037→        // Мимо карточки — не в карточке
+  1038→        assert!(!point_in_card(card, [10.0, 10.0]));
+  1039→    }
+  1040→
+  1041→    /// Прогресс-точки: по числу шагов, в пределах карточки по ширине.
+  1042→    #[test]
+  1043→    fn progress_dots_layout() {
+  1044→        let viewport = [1600.0, 900.0];
+  1045→        let card = layout(viewport, 0, Language::Ru).card;
+  1046→        let (centers, y) = progress_dots(card);
+  1047→        assert_eq!(centers.len(), ONBOARDING_STEPS.len());
+  1048→        assert!(y > card[1]);
+  1049→        for &cx in &centers {
+  1050→            assert!(cx >= card[0] && cx <= card[0] + card[2]);
+  1051→        }
+  1052→        // Точки равноотстоящи
+  1053→        if centers.len() > 2 {
+  1054→            let d = centers[1] - centers[0];
+  1055→            assert!((centers[2] - centers[1] - d).abs() < 1e-3);
+  1056→        }
+  1057→    }
+  1058→
+  1059→    /// Высота тела растёт с длиной текста шага: карточка выше у многословных
+  1060→    /// шагов (перенос работает).
+  1061→    #[test]
+  1062→    fn card_height_follows_content() {
+  1063→        let viewport = [1600.0, 900.0];
+  1064→        let heights: Vec<f32> = (0..ONBOARDING_STEPS.len())
+  1065→            .map(|step| layout(viewport, step, Language::Ru).card[3])
+  1066→            .collect();
+  1067→        assert!(heights.iter().all(|&h| h > 100.0), "карточка не пустая");
+  1068→        // Узкое окно не даёт карточке вылезти
+  1069→        let narrow = layout([320.0, 240.0], 0, Language::Ru).card;
+  1070→        assert!(narrow[2] <= 320.0);
+  1071→    }
+  1072→}
+  1073→

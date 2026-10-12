@@ -1,0 +1,11 @@
+/home/z/my-project/cargo-target/debug/deps/codespan_reporting-42dc052316429279.d: /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/lib.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/diagnostic.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/files.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/term.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/term/config.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/term/renderer.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/term/views.rs
+
+/home/z/my-project/cargo-target/debug/deps/libcodespan_reporting-42dc052316429279.rmeta: /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/lib.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/diagnostic.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/files.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/term.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/term/config.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/term/renderer.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/term/views.rs
+
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/lib.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/diagnostic.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/files.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/term.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/term/config.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/term/renderer.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/codespan-reporting-0.11.1/src/term/views.rs:

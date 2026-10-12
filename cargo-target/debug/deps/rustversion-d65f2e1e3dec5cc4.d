@@ -1,0 +1,20 @@
+/home/z/my-project/cargo-target/debug/deps/rustversion-d65f2e1e3dec5cc4.d: /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/lib.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/attr.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/bound.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/constfn.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/date.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/error.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/expand.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/expr.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/iter.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/release.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/time.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/token.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/version.rs /home/z/my-project/cargo-target/debug/build/rustversion-446a3842e2e285ef/out/version.expr
+
+/home/z/my-project/cargo-target/debug/deps/librustversion-d65f2e1e3dec5cc4.so: /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/lib.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/attr.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/bound.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/constfn.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/date.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/error.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/expand.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/expr.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/iter.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/release.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/time.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/token.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/version.rs /home/z/my-project/cargo-target/debug/build/rustversion-446a3842e2e285ef/out/version.expr
+
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/lib.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/attr.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/bound.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/constfn.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/date.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/error.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/expand.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/expr.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/iter.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/release.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/time.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/token.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustversion-1.0.23/src/version.rs:
+/home/z/my-project/cargo-target/debug/build/rustversion-446a3842e2e285ef/out/version.expr:
+
+# env-dep:OUT_DIR=/home/z/my-project/cargo-target/debug/build/rustversion-446a3842e2e285ef/out
