@@ -40,7 +40,10 @@ Three contours, three file types:
    Normal), state slots.
 10. `rules/09-input.md` — behavioral adequacy of input modules: a single
     field model (kit TextFieldModel), the keyboard contract, scroll-follows-caret,
-    the password mask, IME/web parity, the ban on duplicates.
+    the password mask, IME/web parity, the ban on duplicates; the vertical
+    typography canon (issue #68): the label line box centered in the control
+    rect (IN11), the single caret formula (IN12), the ban on magic vertical
+    offsets (IN13).
 11. `rules/10-components.md` — the kit v2 component registry (K1), the
     KitPalette slot registry (K2), the scroll model (K3), the UI console
     showcase composition (K4). Introduced by the 2026-10-09 audit

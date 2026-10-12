@@ -93,6 +93,7 @@ pub(crate) fn build(
             .width_of(fs, text, SANS_FAMILY, LABEL_SIZE)
             .clamp(8.0, (clamp_right - origin[0]).max(8.0));
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: text.to_owned(),
             origin,
             width: w,

@@ -295,10 +295,18 @@ const SEARCH_RESULTS_LIMIT: usize = 16;
 
 /// Screen-space текст с владеемой строкой (панель настроек): промежуточное
 /// представление, конвертируется в `ScreenText` на кадр рендера.
+///
+/// `height` — высота area-хозяина текста (канон issue #68): уходит в
+/// `ScreenText::area_h` (авто-центрирование строкового бокса рендером).
+/// `0.0` — «нет slack'а → топ-анкер» (бит-паритет не-мигрировавших
+/// площадок: прямые пушы текстов с ручной ординатой, у которых origin.y —
+/// НЕ верх цельного rect контрола).
 pub(crate) struct OwnedScreenText {
     pub(crate) text: String,
     pub(crate) origin: [f32; 2],
     pub(crate) width: f32,
+    /// Высота area-хозяина (логические px; 0.0 = топ-анкер, бит-паритет).
+    pub(crate) height: f32,
     pub(crate) font_size: f32,
     pub(crate) color: Color,
     /// Выравнивание в области `width` (иконки кнопок — по центру).

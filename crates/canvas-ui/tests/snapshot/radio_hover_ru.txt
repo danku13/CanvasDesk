@@ -1,4 +1,4 @@
-text x=16 y=23 w=288 h=14 text="Радио"
+text x=16 y=23 w=288 h=17 text="Радио"
 rect x=16 y=48 w=24 h=24
 rect x=16 y=80 w=24 h=24
 rect x=22 y=54 w=12 h=12

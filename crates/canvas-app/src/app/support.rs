@@ -91,6 +91,7 @@ pub(super) fn paint_items_to_band(
                 size,
                 align,
             } => texts.push(OwnedScreenText {
+                height: area.h,
                 text,
                 origin: [area.x, area.y],
                 width: area.w,
@@ -179,6 +180,7 @@ pub(super) fn paint_items_to_stage(
                 size,
                 align,
             } => texts.push(OwnedScreenText {
+                height: area.h,
                 text,
                 origin: [area.x, area.y],
                 width: area.w,
@@ -788,6 +790,7 @@ pub(super) fn template_card_row(
         icon_tint,
     ));
     texts.push(OwnedScreenText {
+        height: 0.0,
         text: manifest.display_name(language).to_owned(),
         origin: [tile[0] + tile[2] + 8.0, rect[1] + 5.0],
         width: rect[2] - (tile[2] + 24.0),
@@ -811,6 +814,7 @@ pub(super) fn template_card_row(
             .enumerate()
         {
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: line,
                 origin: [
                     tile[0] + tile[2] + 8.0,

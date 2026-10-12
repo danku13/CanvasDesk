@@ -47,6 +47,13 @@ pub const BANNER_RADIUS: f32 = canvas_core::tokens::RADIUS_PANEL;
 
 /// Высота строки текста баннера (FONT_CAPTION · SCREEN_LINE_FACTOR ≈ 14.3 →
 /// 14; паритет explain.rs:211 `height = 16.0`).
+///
+/// Канон вертикальной типографики (issue #68): `label_area` — УЖЕ строковый
+/// бокс (фиксированная высота строки, не полный rect баннера), поэтому
+/// потребитель рисует подпись прямо в `layout.label_area` — обёртка
+/// `text_area_vcentered` здесь не нужна (она для центровки в ПОЛНОМ rect
+/// контрола; при нестандартном кегле потребитель считает бокс сам через
+/// `canvas_ui::measure::text_area_vcentered(slot, size)`).
 pub const BANNER_LABEL_LINE_H: f32 = 16.0;
 
 /// Tint alpha для фона баннера (rgb слота сохраняется, alpha = 0.10 —

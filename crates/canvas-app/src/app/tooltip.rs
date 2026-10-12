@@ -297,6 +297,7 @@ pub(crate) fn layout_tooltips(
         ));
         for (row, (line, color)) in lines.iter().enumerate() {
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: line.clone(),
                 origin: [
                     x + TOOLTIP_PAD_X,

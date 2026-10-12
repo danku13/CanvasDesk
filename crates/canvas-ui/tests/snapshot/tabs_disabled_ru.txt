@@ -1,7 +1,7 @@
-text x=16 y=16 w=288 h=14 text="Вкладки"
-rect x=16 y=38 w=140 h=36
-text x=16 y=38 w=140 h=36 text="Настройки"
-rect x=16 y=74 w=288 h=150
-rect x=44 y=72 w=84 h=2
-rect x=164 y=38 w=140 h=36
-text x=164 y=38 w=140 h=36 text="Поиск"
+text x=16 y=16 w=288 h=17 text="Вкладки"
+rect x=16 y=41 w=140 h=36
+text x=16 y=41 w=140 h=36 text="Настройки"
+rect x=16 y=77 w=288 h=147
+rect x=44 y=75 w=84 h=2
+rect x=164 y=41 w=140 h=36
+text x=164 y=41 w=140 h=36 text="Поиск"

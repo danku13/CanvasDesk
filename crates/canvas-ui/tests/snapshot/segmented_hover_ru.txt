@@ -1,4 +1,4 @@
-text x=16 y=78 w=240 h=14 text="Сегменты"
+text x=16 y=75 w=240 h=17 text="Сегменты"
 rect x=16 y=100 w=120 h=28
 text x=16 y=100 w=120 h=28 text="Настройки"
 rect x=16 y=100 w=240 h=28

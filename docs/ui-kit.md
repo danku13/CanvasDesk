@@ -136,6 +136,36 @@ did NOT change (`fs` — still an argument of the methods, the owner of the font
 `canvas-render::text`, PRD-0009 §14/Q6). W2: `TextMeasurer` is no longer
 `Clone` (inside — `Box<dyn Shaper>`; there were no clone points in the repo).
 
+**Vertical metrics (the issue #68 canon, wave V1)** — the line box of a
+single-line label = `size × 1.3` (`SCREEN_LINE_FACTOR`). Three pure helpers
+in `canvas_ui::measure` (re-exported via `canvas_ui::kit` for the consumers):
+
+```rust
+let area = canvas_ui::kit::text_area_vcentered(rect, 13.0); // line box centered in the control rect
+let caret = canvas_ui::kit::caret_rect(area, 13.0, caret_x); // THE caret formula
+let lm = canvas_ui::kit::line_metrics(13.0); // line_height / ascent / descent (hhea shares)
+```
+
+- `text_area_vcentered(rect, size) -> UiRect` — the line box
+  (`size × 1.3`, clamped to `rect.h`) centered vertically in the control
+  rect; pass it to `Painter::label`/`label_center` instead of the full rect
+  or hand-made `y + 2…+8` offsets. Top anchor — only for intentional
+  multi-line stacks. Renderer mirror: `ScreenText.area_h` (the owner-rect
+  height) auto-centers when slack is present; `area_h == 0.0`/`== line_h`
+  → the top anchor, byte-parity with the pre-canon render.
+- `caret_rect(text_area, size, caret_x) -> UiRect` — the single caret
+  formula for every field: `h = size × 1.3 − 2·2.0` (≥ 6.0), `w = 1.5`,
+  vertically centered on the text line (the canonical input — the line box
+  from `text_area_vcentered`). The per-surface `h − 4`/`h − 8` are
+  forbidden (IN12).
+- `line_metrics(size) -> LineMetrics` — the line box verticals:
+  `line_height`, `ascent`, `descent` (the hhea shares of the embedded
+  Noto Sans Display: 1.069em / 0.293em; `ascent + descent == line_height`).
+  No `FontSystem` — mock-friendly. `ROW_LINE_FRAC == SCREEN_LINE_FACTOR`
+  (one line factor everywhere; the historical 1.1 was retired).
+
+Rules: `design/rules/09-input.md` IN11–IN13.
+
 ## 6. Lints (CI)
 
 - **G4** (`app::ui_layout_lint`, run by `cargo test --workspace`):

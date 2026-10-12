@@ -5299,10 +5299,16 @@ pub(crate) struct KitDraw {
 
 /// Владеемый screen-текст кадра (зеркало `app::OwnedScreenText` — модуль
 /// без доступа к приватным полям app.rs; конвертация на кадре).
+///
+/// `height` — высота area-хозяина текста (канон issue #68): уходит в
+/// `ScreenText::area_h` и включает авто-центрирование строкового бокса
+/// рендером; `0.0` — «нет slack'а → топ-анкер» (бит-паритет).
 pub struct OwnedText {
     pub text: String,
     pub origin: [f32; 2],
     pub width: f32,
+    /// Высота area-хозяина (логические px; PaintItem::Text.area.h).
+    pub height: f32,
     pub font_size: f32,
     pub color: canvas_render::Color,
     pub align: TextAlign,
@@ -5476,6 +5482,10 @@ impl KitDraw {
                 text: text.clone(),
                 origin: [area.x, area.y],
                 width: area.w,
+                // Канон issue #68: высота area-хозяина → авто-центрирование
+                // строкового бокса рендером (area — то, что потребитель
+                // передал в label: строковый бокс или полный rect контрола).
+                height: area.h,
                 font_size: *size,
                 color: color4(*color),
                 align: match align {
@@ -5719,6 +5729,7 @@ mod tests {
             text: "Центр".to_owned(),
             origin: [area_c.x, area_c.y],
             width: area_c.w,
+            height: area_c.h,
             font_size: 13.0,
             color: color4(style.text),
             align: TextAlign::Center,
@@ -5727,6 +5738,7 @@ mod tests {
             text: "Лево".to_owned(),
             origin: [area_l.x, area_l.y],
             width: area_l.w,
+            height: area_l.h,
             font_size: 11.0,
             color: color4(style.text),
             align: TextAlign::Left,
