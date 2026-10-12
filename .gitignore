@@ -27,3 +27,11 @@ scripts/penpot_mcp_local*.py
 scripts/penpot_token*.txt
 **/penpot_token*
 
+
+# Локальные кэши сборки/запуска — не для репо (утекли в 40a08d13)
+cargo-target/
+cd-target/
+wasm-target/
+canvasdesk-run/
+repro_out*/
+target/dist/
