@@ -1,5 +1,0 @@
-/home/z/my-project/cargo-target/debug/deps/scoped_tls-5edbef8d09bfd168.d: /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/scoped-tls-1.0.1/src/lib.rs
-
-/home/z/my-project/cargo-target/debug/deps/libscoped_tls-5edbef8d09bfd168.rmeta: /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/scoped-tls-1.0.1/src/lib.rs
-
-/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/scoped-tls-1.0.1/src/lib.rs:

@@ -1,4 +1,0 @@
-cargo:rustc-env=CANVASDESK_GIT_COMMIT=0e2e7118
-cargo:rustc-env=CANVASDESK_GIT_DIRTY=true
-cargo:rerun-if-changed=.git/HEAD
-cargo:rerun-if-changed=.git/index
