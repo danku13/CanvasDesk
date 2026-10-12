@@ -385,3 +385,20 @@ Stage Summary:
 - 6/6 дефектов скриншотов закрыты по коду (не по глазам); онбординг: все 9 шагов достижимы, тур замыкается выбором «Что дальше»; CI-красные зоны идентифицированы по логам (fmt/docs-lint/pages) и починены
 - Дальше: onboarding/user-docs — рекомендации владельцу (сообщение TG), сборка wasm L2-сценария не задета (Skip-координаты не изменились)
 Tokens: in≈240000, out≈40000, model=GLM-5.3, scope=UI-REWORK-SCREENS
+
+---
+Task ID: UI-REWORK-SCREENS-CI (сессия web-0a539c42)
+Agent: Super Z (main)
+Task: Проверка CI по запросу владельца — 3 красных рана (cf54c55/bef8205/a7cd157) → зелёный
+
+Work Log:
+- Причины красного по логам ранов: (1) fmt — V3-коммит ушёл без cargo fmt (stage.rs:1743, rustfmt 1.10-канон); (2) docs-lint — 108 FAIL в вендорном skills/ (плейсхолдер-ссылки, чужие бэктик-пути) — гейт сканировал его как репо-доки; (3) pages build and deployment — gitlink canvasdesk без .gitmodules (15effe30, вложенный клон-бэкап) — fatal в checkout Pages и cleanup каждого CI-джоба
+- Фиксы: cargo fmt (12a6dd78); doc_lint SKIP_DIRS += skills (вне контракта доков CanvasDesk); git rm --cached canvasdesk + .gitignore /canvasdesk/
+- docs-lint после фиксов: worklog.md 120537 > 120000 симв → ротация $worklog-rotate: блоки MC-C5-FIN…ISSUE-STRUCTURE-64-66 (13 шт) → worklog/archive/worklog-2026-10-12.md lossless, Journal index обновлён (120537→59217) (a533a32d)
+- gates (ubuntu) test: manager_native_recent_files_as_entries FAILED — 3 теста хелпера native_manager_app параллельно делили /tmp/canvasdesk-fr108-recent/живой.canvas: «{}» соседа перетирал валидный json между write и Enter → from_str падал в тост, сцена оставалась stub-путём; фикс — уникальный tmp-каталог pid+счётчик (67a9a903); тест-шаг CI не гонялся с 27a9be5 (fmt падал раньше) — код менеджера с зелёного рана не менялся (проверено diff'ом)
+- Итог CI на 67a9a903: gates ubuntu/macos/windows SUCCESS, docs-lint/lay7/v3-ui-lint/licenses/wasm-check/llm-proxy/build/Pages SUCCESS; artifacts (3 ОС) — дозревают
+- Рекомендации onboarding/user-docs отправлены в TG (отдельным сообщением по запросу владельца)
+
+Stage Summary:
+- main снова полностью зелёный; системных правок продукта по CI не потребовалось (fmt-канон, скоуп гейта, битый gitlink, гонка тест-фикстуры — инфраструктурный слой)
+Tokens: in≈120000, out≈20000, model=GLM-5.3, scope=UI-REWORK-SCREENS-CI
