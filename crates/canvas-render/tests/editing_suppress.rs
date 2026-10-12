@@ -246,7 +246,15 @@ fn editing_keeps_desc_zone_hides_table_chrome() {
         let runs: Vec<(usize, f32, f32, f32, usize)> = session
             .buffer()
             .layout_runs()
-            .map(|r| (r.line_i, r.line_top, r.line_height, r.line_w, r.glyphs.len()))
+            .map(|r| {
+                (
+                    r.line_i,
+                    r.line_top,
+                    r.line_height,
+                    r.line_w,
+                    r.glyphs.len(),
+                )
+            })
             .collect();
         eprintln!("diag2: runs={runs:?}");
         eprintln!(
