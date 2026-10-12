@@ -1246,8 +1246,12 @@ pub(crate) fn draw_components(
     let label = |key: &'static str| crate::i18n::tr(lang, key).to_owned();
     // Заголовки колонок
     for (origin, key) in &comp.headers {
+        // Канон вертикали (issue #68, IN11).
         d.label_left(
-            UiRect::new(origin.x, origin.y, VARIANT_LABEL_W, MATRIX_HEADER_H),
+            kit::text_area_vcentered(
+                UiRect::new(origin.x, origin.y, VARIANT_LABEL_W, MATRIX_HEADER_H),
+                11.0,
+            ),
             &label(key),
             p.text_muted,
             11.0,
@@ -1255,8 +1259,13 @@ pub(crate) fn draw_components(
     }
     // Ряды кнопок
     for row in &comp.button_rows {
+        // Канон вертикали (issue #68, IN11): строковый бокс по центру слота
+        // ряда (высота kit::BUTTON_HEIGHT), без ручного офсета +8.
         d.label_left(
-            UiRect::new(row.slot.x, row.slot.y + 8.0, VARIANT_LABEL_W, 16.0),
+            kit::text_area_vcentered(
+                UiRect::new(row.slot.x, row.slot.y, VARIANT_LABEL_W, row.slot.h),
+                11.0,
+            ),
             &label(row.label_key),
             p.text_muted,
             11.0,
@@ -1269,7 +1278,12 @@ pub(crate) fn draw_components(
             } else {
                 label(STATE_MATRIX_LABELS[state_matrix_label_index(cell.state)])
             };
-            d.label_center(cell.rect, &text, style.text, LABEL_SIZE);
+            d.label_center(
+                kit::text_area_vcentered(cell.rect, LABEL_SIZE),
+                &text,
+                style.text,
+                LABEL_SIZE,
+            );
             if cell.focused {
                 d.rect(cell.rect, [0.0; 4], p.accent, style.radius);
             }
@@ -1280,8 +1294,13 @@ pub(crate) fn draw_components(
     for (i, cell) in comp.icon_cells.iter().enumerate() {
         let style = kit::icon_button_style(cell.state, p);
         d.control(cell.rect, &style);
-        let area = UiRect::new(cell.rect.x, cell.rect.y + 1.0, cell.rect.w, cell.rect.h);
-        d.label_center(area, icons[i], style.text, LABEL_SIZE);
+        // Канон вертикали (issue #68, IN11): без ручного офсета +1.
+        d.label_center(
+            kit::text_area_vcentered(cell.rect, LABEL_SIZE),
+            icons[i],
+            style.text,
+            LABEL_SIZE,
+        );
         if cell.focused {
             d.rect(cell.rect, [0.0; 4], p.accent, style.radius);
         }
@@ -1295,7 +1314,12 @@ pub(crate) fn draw_components(
         } else {
             label(STATE_MATRIX_LABELS[state_matrix_label_index(cell.state)])
         };
-        d.label_center(cell.rect, &text, style.text, 12.0);
+        d.label_center(
+            kit::text_area_vcentered(cell.rect, 12.0),
+            &text,
+            style.text,
+            12.0,
+        );
         if cell.focused {
             d.rect(cell.rect, [0.0; 4], p.accent, style.radius);
         }
@@ -1331,19 +1355,16 @@ pub(crate) fn draw_components(
                 canvas_core::tokens::RADIUS_CHIP,
             );
         }
-        d.label_left(fl.text_area, &fl.text_shown, text_color, LABEL_SIZE);
+        // Канон вертикали (issue #68, IN11/IN12): строковый бокс текста поля
+        // (text_field даёт полную высоту поля) — общий центр текста/каретки.
+        let ta_line = kit::text_area_vcentered(fl.text_area, LABEL_SIZE);
+        d.label_left(ta_line, &fl.text_shown, text_color, LABEL_SIZE);
         if *demo_kind == FieldDemo::Focused && fl.caret_x >= 0.0 {
-            d.rect(
-                UiRect::new(
-                    fl.text_area.x + fl.caret_x,
-                    fl.text_area.y + 6.0,
-                    1.0,
-                    fl.text_area.h - 12.0,
-                ),
-                p.accent,
-                [0.0; 4],
-                0.0,
-            );
+            // Канон каретки (issue #68, IN12): caret_rect от строкового бокса
+            // (w = CARET_WIDTH 1.5, h = size·1.3 − 2·2, центр строки); X —
+            // layout.caret_x (абсолютный, замер префикса тем же кеглем).
+            let c = kit::caret_rect(ta_line, LABEL_SIZE, fl.caret_x);
+            d.rect(c, p.accent, [0.0; 4], 0.0);
         }
     }
     // Переключатели
@@ -1362,13 +1383,25 @@ pub(crate) fn draw_components(
         let style = kit::button_style(ButtonVariant::Secondary, KitState::Normal, p);
         d.control(*anchor, &style);
         let text = crate::i18n::tr(lang, crate::i18n::keys::KIT_DROPDOWN_ANCHOR).to_owned();
-        d.label_center(*anchor, &text, style.text, LABEL_SIZE);
+        // Канон вертикали (issue #68, IN11).
+        d.label_center(
+            kit::text_area_vcentered(*anchor, LABEL_SIZE),
+            &text,
+            style.text,
+            LABEL_SIZE,
+        );
     }
     if let Some(dd) = &comp.dropdown_open {
         let style = kit::button_style(ButtonVariant::Secondary, KitState::Normal, p);
         d.control(dd.anchor, &style);
         let text = crate::i18n::tr(lang, crate::i18n::keys::KIT_DROPDOWN_ANCHOR).to_owned();
-        d.label_center(dd.anchor, &text, style.text, LABEL_SIZE);
+        // Канон вертикали (issue #68, IN11).
+        d.label_center(
+            kit::text_area_vcentered(dd.anchor, LABEL_SIZE),
+            &text,
+            style.text,
+            LABEL_SIZE,
+        );
         d.rect(
             dd.menu,
             p.panel_fill,
@@ -1386,8 +1419,10 @@ pub(crate) fn draw_components(
                 p,
             );
             d.rect(*ir, item_style.fill, [0.0; 4], 4.0);
+            // Канон вертикали (issue #68, IN11): строковый бокс по центру
+            // пункта (высота ir.h), без ручного офсета +3.
             d.label_left(
-                UiRect::new(ir.x + 8.0, ir.y + 3.0, ir.w - 16.0, ir.h),
+                kit::text_area_vcentered(UiRect::new(ir.x + 8.0, ir.y, ir.w - 16.0, ir.h), 12.0),
                 text,
                 item_style.text,
                 12.0,
@@ -1399,7 +1434,13 @@ pub(crate) fn draw_components(
         let style = kit::chip_style(KitState::Normal, p);
         d.control(*anchor, &style);
         let text = crate::i18n::tr(lang, crate::i18n::keys::KIT_TOOLTIP_ANCHOR).to_owned();
-        d.label_center(*anchor, &text, style.text, 12.0);
+        // Канон вертикали (issue #68, IN11).
+        d.label_center(
+            kit::text_area_vcentered(*anchor, 12.0),
+            &text,
+            style.text,
+            12.0,
+        );
         if !bubble.is_empty() {
             d.rect(
                 *bubble,
@@ -1408,8 +1449,13 @@ pub(crate) fn draw_components(
                 canvas_core::tokens::RADIUS_CHIP,
             );
             let text = crate::i18n::tr(lang, crate::i18n::keys::KIT_TOOLTIP_BODY).to_owned();
+            // Канон вертикали (issue #68, IN11): строковый бокс по центру
+            // пузыря, без ручного офсета +2.
             d.label_left(
-                UiRect::new(bubble.x + 8.0, bubble.y + 2.0, bubble.w - 16.0, 14.0),
+                kit::text_area_vcentered(
+                    UiRect::new(bubble.x + 8.0, bubble.y, bubble.w - 16.0, bubble.h),
+                    12.0,
+                ),
                 &text,
                 p.text,
                 12.0,
@@ -1425,7 +1471,8 @@ pub(crate) fn draw_components(
             canvas_core::tokens::RADIUS_CHIP,
         );
         let text = crate::i18n::tr(lang, crate::i18n::keys::ADMIN_TOAST_SHORT).to_owned();
-        d.label_center(*rect, &text, p.text, 12.0);
+        // Канон вертикали (issue #68, IN11).
+        d.label_center(kit::text_area_vcentered(*rect, 12.0), &text, p.text, 12.0);
     }
     // Строки списка: Normal/Hovered/Selected + бегунок (kit::scroll_bar)
     for (i, (st, rect)) in comp.list_state_rows.iter().enumerate() {
@@ -1436,8 +1483,13 @@ pub(crate) fn draw_components(
             crate::i18n::keys::KIT_LIST_ROW,
             &[("{n}", &(i + 1).to_string())],
         );
+        // Канон вертикали (issue #68, IN11): строковый бокс по центру строки
+        // (внутренний rect с симметричным падом — центр совпадает с рядом).
         d.label_left(
-            UiRect::new(rect.x + 8.0, rect.y + 4.0, rect.w - 16.0, rect.h - 8.0),
+            kit::text_area_vcentered(
+                UiRect::new(rect.x + 8.0, rect.y + 4.0, rect.w - 16.0, rect.h - 8.0),
+                12.0,
+            ),
             &text,
             style.text,
             12.0,
@@ -1954,7 +2006,13 @@ pub fn fill_body(
 
 /// Подпись-заглушка пустого контейнера (слот text_muted, по центру).
 fn draw_empty_hint(d: &mut crate::kit_ui::KitDraw, cell: UiRect, p: &KitPalette, text: &str) {
-    d.label_center(cell, text, p.text_muted, 12.0);
+    // Канон вертикали (issue #68, IN11).
+    d.label_center(
+        kit::text_area_vcentered(cell, 12.0),
+        text,
+        p.text_muted,
+        12.0,
+    );
 }
 
 /// Отрисовка тела «Наполнение» (ячейки уже сдвинуты/отфильтрованы).
@@ -1967,8 +2025,12 @@ pub(crate) fn draw_fill(
     let label = |key: &'static str| crate::i18n::tr(lang, key).to_owned();
     let empty_hint = label(crate::i18n::keys::ADMIN_EMPTY_PLACEHOLDER);
     for (origin, key) in &fill.headers {
+        // Канон вертикали (issue #68, IN11).
         d.label_left(
-            UiRect::new(origin.x, origin.y, VARIANT_LABEL_W, MATRIX_HEADER_H),
+            kit::text_area_vcentered(
+                UiRect::new(origin.x, origin.y, VARIANT_LABEL_W, MATRIX_HEADER_H),
+                11.0,
+            ),
             &label(key),
             p.text_muted,
             11.0,
@@ -2027,8 +2089,12 @@ pub(crate) fn draw_fill(
                         }
                         for (ir, text) in items.iter().zip(labels.iter()) {
                             d.rect(*ir, [0.0; 4], [0.0; 4], 0.0);
+                            // Канон вертикали (issue #68, IN11): без офсета +3.
                             d.label_left(
-                                UiRect::new(ir.x + 8.0, ir.y + 3.0, ir.w - 16.0, ir.h),
+                                kit::text_area_vcentered(
+                                    UiRect::new(ir.x + 8.0, ir.y, ir.w - 16.0, ir.h),
+                                    12.0,
+                                ),
                                 text,
                                 p.text,
                                 12.0,
@@ -2079,7 +2145,13 @@ pub(crate) fn draw_fill(
         } else {
             p.text
         };
-        d.label_left(fl.text_area, &fl.text_shown, color, LABEL_SIZE);
+        // Канон вертикали (issue #68, IN11): строковый бокс текста поля.
+        d.label_left(
+            kit::text_area_vcentered(fl.text_area, LABEL_SIZE),
+            &fl.text_shown,
+            color,
+            LABEL_SIZE,
+        );
         let _ = level;
     }
     // Чипы (предвычисленные rect'ы)
@@ -2132,8 +2204,13 @@ fn draw_list_demo(
                     crate::i18n::keys::KIT_LIST_ROW,
                     &[("{n}", &(i + 1).to_string())],
                 );
+                // Канон вертикали (issue #68, IN11): строковый бокс по центру
+                // строки (симметричный пад — центр совпадает с рядом).
                 d.label_left(
-                    UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 16.0, r.h - 8.0),
+                    kit::text_area_vcentered(
+                        UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 16.0, r.h - 8.0),
+                        12.0,
+                    ),
                     &text,
                     p.text,
                     12.0,
@@ -2163,8 +2240,13 @@ fn draw_list_demo(
                     crate::i18n::keys::KIT_LIST_ROW,
                     &[("{n}", &(i + 1).to_string())],
                 );
+                // Канон вертикали (issue #68, IN11): строковый бокс по центру
+                // строки (симметричный пад — центр совпадает с рядом).
                 d.label_left(
-                    UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 16.0, r.h - 8.0),
+                    kit::text_area_vcentered(
+                        UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 16.0, r.h - 8.0),
+                        12.0,
+                    ),
                     &text,
                     p.text,
                     12.0,
@@ -2282,12 +2364,16 @@ fn draw_card_demo(
                 [0.0; 4],
                 canvas_core::tokens::RADIUS_CHIP,
             );
+            // Канон вертикали (issue #68, IN11).
             d.label_center(
-                UiRect::new(
-                    card.body.x + 4.0,
-                    card.body.bottom() - 20.0,
-                    card.body.w - 8.0,
-                    18.0,
+                kit::text_area_vcentered(
+                    UiRect::new(
+                        card.body.x + 4.0,
+                        card.body.bottom() - 20.0,
+                        card.body.w - 8.0,
+                        18.0,
+                    ),
+                    12.0,
                 ),
                 "= $600/mo",
                 p.text_title,
@@ -2321,7 +2407,8 @@ fn draw_toast_demo(
                 p.accent,
                 canvas_core::tokens::RADIUS_CHIP,
             );
-            d.label_center(cell, text, p.text, 12.0);
+            // Канон вертикали (issue #68, IN11).
+            d.label_center(kit::text_area_vcentered(cell, 12.0), text, p.text, 12.0);
         }
     }
 }
@@ -2374,12 +2461,17 @@ fn draw_palette_demo(
                     crate::i18n::keys::KIT_LIST_ROW,
                     &[("{n}", &(i + 1).to_string())],
                 );
+                // Канон вертикали (issue #68, IN11): ручная центровка
+                // (tile.h − 16)/2 заменена строковым боксом кегля 11.
                 d.label_left(
-                    UiRect::new(
-                        tile.x + tile_h,
-                        tile.y + (tile.h - 16.0) / 2.0,
-                        (tile.w - tile_h - 4.0).max(0.0),
-                        16.0,
+                    kit::text_area_vcentered(
+                        UiRect::new(
+                            tile.x + tile_h,
+                            tile.y,
+                            (tile.w - tile_h - 4.0).max(0.0),
+                            tile.h,
+                        ),
+                        11.0,
                     ),
                     &text,
                     p.text,
@@ -2408,8 +2500,12 @@ fn draw_wheel_demo(
     );
     match level {
         FillLevel::Empty => {
+            // Канон вертикали (issue #68, IN11).
             d.label_center(
-                UiRect::new(cell.x, hub.bottom() + 4.0, cell.w, cell.h - 34.0),
+                kit::text_area_vcentered(
+                    UiRect::new(cell.x, hub.bottom() + 4.0, cell.w, cell.h - 34.0),
+                    12.0,
+                ),
                 empty_hint,
                 p.text_muted,
                 12.0,
@@ -2430,13 +2526,20 @@ fn draw_wheel_demo(
                     canvas_core::tokens::WHEEL_BORDER,
                     canvas_core::tokens::RADIUS_CHIP,
                 );
-                d.label_center(cat, "A", p.text, 11.0);
+                // Канон вертикали (issue #68, IN11).
+                d.label_center(kit::text_area_vcentered(cat, 11.0), "A", p.text, 11.0);
                 if level == FillLevel::Full {
                     for j in 0..2 {
                         let tpl =
                             UiRect::new(cat.x, cat.bottom() + 3.0 + j as f32 * 17.0, cat.w, 15.0);
                         d.rect(tpl, canvas_core::tokens::WHEEL_TEMPLATE, [0.0; 4], 4.0);
-                        d.label_center(tpl, "·", p.text_muted, 10.0);
+                        // Канон вертикали (issue #68, IN11).
+                        d.label_center(
+                            kit::text_area_vcentered(tpl, 10.0),
+                            "·",
+                            p.text_muted,
+                            10.0,
+                        );
                     }
                 }
             }
@@ -2768,12 +2871,12 @@ pub(crate) fn draw_canvas(
         );
     }
     for (key, area, color) in &lay.edge_demos {
+        // Канон вертикали (issue #68, IN11): ручная центровка (+2 в зоне
+        // высотой 20) заменена строковым боксом кегля 12.
         d.label_left(
-            UiRect::new(
-                area.x - VARIANT_LABEL_W,
-                area.y + 2.0,
-                VARIANT_LABEL_W,
-                16.0,
+            kit::text_area_vcentered(
+                UiRect::new(area.x - VARIANT_LABEL_W, area.y, VARIANT_LABEL_W, area.h),
+                12.0,
             ),
             crate::i18n::tr(lang, key),
             p.text_muted,
@@ -3176,9 +3279,14 @@ pub(crate) fn draw_tokens(
     for group in &lay.groups {
         for row in &group.rows {
             if row.slot_index.is_none() && row.name.is_empty() {
-                // Заголовок группы
+                // Заголовок группы — канон вертикали (issue #68, IN11):
+                // строковый бокс по центру строки (высота row.rect.h),
+                // выравнен с строками имени/значения ниже.
                 d.label_left(
-                    UiRect::new(row.rect.x, row.rect.y, row.rect.w.max(200.0), 16.0),
+                    kit::text_area_vcentered(
+                        UiRect::new(row.rect.x, row.rect.y, row.rect.w.max(200.0), row.rect.h),
+                        12.0,
+                    ),
                     crate::i18n::tr(lang, group.title_key),
                     p.text_title,
                     12.0,
@@ -3189,14 +3297,21 @@ pub(crate) fn draw_tokens(
                 let color = row.slot_index.map(|i| slot_color(p, i)).unwrap_or([0.0; 4]);
                 d.rect(swatch, color, p.control_border, 4.0);
             }
+            // Канон вертикали (issue #68, IN11): без ручного офсета +3.
             d.label_left(
-                UiRect::new(row.rect.x + 24.0, row.rect.y + 3.0, 190.0, 16.0),
+                kit::text_area_vcentered(
+                    UiRect::new(row.rect.x + 24.0, row.rect.y, 190.0, row.rect.h),
+                    12.0,
+                ),
                 row.name,
                 p.text,
                 12.0,
             );
             d.label_left(
-                UiRect::new(row.rect.x + 220.0, row.rect.y + 3.0, 120.0, 16.0),
+                kit::text_area_vcentered(
+                    UiRect::new(row.rect.x + 220.0, row.rect.y, 120.0, row.rect.h),
+                    12.0,
+                ),
                 &row.value,
                 p.text_muted,
                 12.0,
@@ -3471,14 +3586,23 @@ mod tests {
             };
             let style = kit::button_style(kit::ButtonVariant::Secondary, state, &palette);
             d.control(*item, &style);
-            d.label_center(*item, "X", style.text, LABEL_SIZE);
+            // Канон вертикали (issue #68, IN11).
+            d.label_center(
+                kit::text_area_vcentered(*item, LABEL_SIZE),
+                "X",
+                style.text,
+                LABEL_SIZE,
+            );
         }
         d.label_left(
-            UiRect::new(
-                lay.section_title.0.x,
-                lay.section_title.0.y,
-                lay.demo.w,
-                18.0,
+            kit::text_area_vcentered(
+                UiRect::new(
+                    lay.section_title.0.x,
+                    lay.section_title.0.y,
+                    lay.demo.w,
+                    18.0,
+                ),
+                LABEL_SIZE,
             ),
             "Секция",
             palette.text_title,
