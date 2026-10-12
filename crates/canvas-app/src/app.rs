@@ -7447,6 +7447,37 @@ impl App {
         }
     }
 
+    /// Wave M M4 (#85, блокер приёмки #64): единый источник pick/wheel-
+    /// геометрии модали настроек — ветка флага `modals_adaptive` та же,
+    /// что у рисования (overlays.rs:6708) и реестра хитов (ui_registry.rs:
+    /// 1430): контракт «ввод = тому, что видно» (FR-070). До фикса pick
+    /// (input.rs) и wheel читали legacy-раскладку всегда: с флагом ON
+    /// модаль рисовалась адаптивной (1280×800: 880×620.8 vs 576×480), а
+    /// клики/колесо считались по прежнему окну — тумблер/строки не
+    /// кликались (клик по видимому тумблеру у правого края попадал в
+    /// legacy-зону затемнения и закрывал модаль). Legacy-ветка — дословно
+    /// прежний вызов (паритет OFF бит-в-бит, M4 #64).
+    pub(crate) fn settings_layout_current(
+        &self,
+        viewport: [f32; 2],
+    ) -> crate::settings_ui::ModalLayout {
+        if self.settings.modals_adaptive {
+            modal_layout_scrolled_with_settings_adaptive(
+                self.settings_tab,
+                viewport,
+                self.settings_scroll_top,
+                &self.settings,
+            )
+        } else {
+            modal_layout_scrolled_with_settings(
+                self.settings_tab,
+                viewport,
+                self.settings_scroll_top,
+                &self.settings,
+            )
+        }
+    }
+
     /// FR-055 (этап U4, F-10): включить/выключить DebugOverlay извне
     /// (web-старт с `?ui=debug`; натив — тогл F9 в on_key).
     pub fn set_debug_overlay(&mut self, on: bool) {
@@ -16647,6 +16678,86 @@ mod tests {
             app.settings_text_placeholder_for_row(SettingsRow::AiModelAgent),
             "glm-5.3-flash"
         );
+    }
+
+    // --- Wave M M4 (#85, блокер приёмки #64): pick/wheel настроек — -------
+    // ветка флага `modals_adaptive` как у рисования/реестра («ввод = тому,
+    // что видно»). До фикса pick/wheel читали legacy-раскладку всегда: с
+    // флагом ON модаль рисовалась адаптивной, а клики — по прежнему окну
+    // (тумблер у правого края адаптивного окна попадал в legacy-зону
+    // затемнения и закрывал модаль — «переключатель ничего не делает»).
+
+    /// Флаг ON: pick-раскладка настроек = adaptive-окно, бит-в-бит с
+    /// draw-источником; и оно шире legacy (1280×800: 880 vs 576).
+    /// Флаг OFF: паритет legacy бит-в-бит.
+    #[test]
+    fn settings_pick_layout_follows_adaptive_flag() {
+        let mut app = stub_app_with_canvas(Canvas::default());
+        app.settings_open = true;
+        let vp = [1280.0_f32, 800.0];
+
+        // legacy-окно для сравнения (Settings::default → флаг OFF)
+        let legacy = modal_layout_scrolled_with_settings(
+            app.settings_tab,
+            vp,
+            app.settings_scroll_top,
+            &app.settings,
+        );
+
+        app.settings.modals_adaptive = true;
+        let pick = app.settings_layout_current(vp);
+        // бит-в-бит с draw-источником (overlays.rs)
+        let draw = modal_layout_scrolled_with_settings_adaptive(
+            app.settings_tab,
+            vp,
+            app.settings_scroll_top,
+            &app.settings,
+        );
+        assert_eq!(pick.rect, draw.rect, "pick == draw (контракт FR-070)");
+        // adaptive-окно заметно шире legacy (80% слота vs 45% вьюпорта)
+        assert!(
+            pick.rect[2] > legacy.rect[2] + 100.0,
+            "adaptive w={} должен быть шире legacy w={}",
+            pick.rect[2],
+            legacy.rect[2]
+        );
+        // тумблер (правый край строки) внутри pick-окна — клик по видимой
+        // позиции не уходит в затемнение
+        let switch_right = pick.rect[0] + pick.rect[2] - 16.0;
+        assert!(switch_right <= pick.rect[0] + pick.rect[2]);
+
+        app.settings.modals_adaptive = false;
+        let off = app.settings_layout_current(vp);
+        assert_eq!(off.rect, legacy.rect, "паритет OFF бит-в-бит");
+    }
+
+    /// Флаг ON: wheel-зона настроек — content_rect адаптивной раскладки
+    /// (выше legacy на 800×560: окно 428.8 vs 400); предел ≥ 0.
+    /// Флаг OFF: зона/предел — прежняя формула (паритет).
+    #[test]
+    fn settings_wheel_zone_follows_adaptive_flag() {
+        let mut app = stub_app_with_canvas(Canvas::default());
+        app.settings_open = true;
+        let vp = [800.0_f32, 560.0];
+
+        let legacy_zone =
+            modal_layout_with_settings(app.settings_tab, vp, &app.settings).content_rect;
+        let legacy_max = modal_scroll_max_filtered(app.settings_tab, vp, &app.settings);
+
+        app.settings.modals_adaptive = true;
+        let lay = app.settings_layout_current(vp);
+        assert!(
+            lay.content_rect[3] > legacy_zone[3] + 10.0,
+            "adaptive content h={} > legacy h={}",
+            lay.content_rect[3],
+            legacy_zone[3]
+        );
+        assert!(lay.scroll_max >= 0.0);
+
+        app.settings.modals_adaptive = false;
+        let off = app.settings_layout_current(vp);
+        assert_eq!(off.content_rect, legacy_zone, "паритет OFF: зона");
+        assert_eq!(off.scroll_max, legacy_max, "паритет OFF: предел");
     }
 
     /// `text_input_field_rect` возвращает высоту = `kit::TEXT_FIELD_HEIGHT`
