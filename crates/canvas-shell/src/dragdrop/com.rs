@@ -180,7 +180,7 @@ fn extract(data_obj: &IDataObject) -> DragData {
                 .0
                 .iter()
                 .map(|pair| u16::from_le_bytes(*pair))
-                .take_while(|&unit| *unit != 0)
+                .take_while(|&unit| unit != 0)
                 .collect();
             return DragData::Text(String::from_utf16_lossy(&units));
         }
