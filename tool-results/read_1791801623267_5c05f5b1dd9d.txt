@@ -1,0 +1,731 @@
+     1→//! FR-053 (U3 PRD-0009, F-6): TextMeasurer — измеренный текст для
+     2→//! раскладки (PRD-0009 §7.4 V-5, AC-4.1).
+     3→//!
+     4→//! Ширина/высота строки берутся из РЕАЛЬНОГО шейпинга cosmic-text — те же
+     5→//! метрики, что у screen-конвейера рендера (`canvas-render/src/text.rs`:
+     6→//! `Metrics::new(size, size·1.3)`, `Wrap::None`, семейство/вес —
+     7→//! `sans_attrs`), поэтому раскладка и отрисовка живут в одних единицах
+     8→//! (устраняет класс дефекта «эвристика 0.62·кегль занижала ширину» —
+     9→//! CR-015).
+    10→//!
+    11→//! `FontSystem` — аргументом (владелец инстанса — `canvas-render::text`,
+    12→//! PRD-0009 §14/Q6); `TextMeasurer` владеет только кэшем по ключу
+    13→//! (текст, семейство, кегль, макс-ширина) — Q6-a «измерение + кэш».
+    14→//! Кэш ограничен по ёмкости: переполнение → полная очистка (профиль
+    15→//! «просадка после всплеска уникальных строк» дешевле LRU и
+    16→//! детерминирован).
+    17→//!
+    18→//! FR-068 W2: сам пайплайн шейпинга вынесен за trait boundary
+    19→//! (`crate::shaper::Shaper`, default impl — `CosmicShaper`, пайплайн
+    20→//! перенесён бит-в-бит — метрики неизменны); этот модуль — кэш и
+    21→//! политика измерения (ellipsis и т.п.).
+    22→
+    23→use crate::shaper::{CosmicShaper, Shaper};
+    24→use cosmic_text::Weight;
+    25→use std::collections::HashMap;
+    26→use std::fmt;
+    27→
+    28→/// Фактор высоты строки screen-текстов рендера (зеркало
+    29→/// `canvas-render/src/text.rs`: `line_height = font_size * 1.3`).
+    30→pub const SCREEN_LINE_FACTOR: f32 = 1.3;
+    31→
+    32→/// FR-069 (этап F, шаг 3 плана): вес шейпинга по семейству — паритет
+    33→/// атрибутам рендера (`canvas-render/src/text.rs`): sans
+    34→/// («Noto Sans Display») → [`Weight::MEDIUM`] — `sans_attrs`; моно
+    35→/// («Noto Sans Mono») и наклонное моно («CanvasDesk Mono Oblique») →
+    36→/// [`Weight::NORMAL`] (400) — `mono_attrs`/`mono_oblique_attrs`.
+    37→/// Прежний жёсткий MEDIUM компенсировался отсутствием Medium-лица у
+    38→/// Noto Sans Mono (CSS-подбор давал Regular 400) — паритет сделан
+    39→/// явным, чтобы смена шрифтовой базы не меняла раскладку. Имена
+    40→/// семейств — те же строковые данные, что в `Family::Name` рендера;
+    41→/// живой паритет залочен тестом `ui_measure_weight_matches_render_attrs`
+    42→/// (canvas-render).
+    43→pub fn family_weight(family: &str) -> Weight {
+    44→    match family {
+    45→        "Noto Sans Mono" | "CanvasDesk Mono Oblique" => Weight::NORMAL,
+    46→        _ => Weight::MEDIUM,
+    47→    }
+    48→}
+    49→
+    50→/// Суб-пиксельный допуск «помещается»: раскладка гоняет ширины через
+    51→/// арифметику rect'ов (w+pad−pad) — отмена разрядов f32 даёт расхождение
+    52→/// порядка 1e-5; допуск отсекает ложные ellipsis на точной подгонке.
+    53→pub const FIT_EPS: f32 = 0.05;
+    54→
+    55→/// Спецификация измерения текста.
+    56→#[derive(Debug, Clone, Copy, PartialEq)]
+    57→pub struct TextSpec<'a> {
+    58→    pub text: &'a str,
+    59→    /// Семейство cosmic-text (например, «Noto Sans Display» — то же имя,
+    60→    /// что в `Family::Name` рендера).
+    61→    pub family: &'a str,
+    62→    /// Кегль в логических px.
+    63→    pub size: f32,
+    64→    /// Ограничение ширины для переносимых измерений; `f32::INFINITY` —
+    65→    /// без ограничения (однострочная ширина).
+    66→    pub max_width: f32,
+    67→    /// FR-061 приёмка (T9, фикс наложений): вес, каким текст РЕНДЕРИТСЯ.
+    68→    /// Замер обязан совпадать с шейпингом не только семейством, но и весом:
+    69→    /// cosmic-text ищет «дефолтный» шрифт семейства только среди лиц с ТОЧНО
+    70→    /// совпадающим весом (`get_font_matches` → `font_weight_diff == 0`);
+    71→    /// у Noto Sans Mono лица 400/700 — запрос MEDIUM промахивался мимо
+    72→    /// семейства целиком и уходил в системный шрифт того же веса (замер
+    73→    /// «rps» 19.2 px против рендера 21.6 px → зауженные направляющие →
+    74→    /// юниты налезали на числа). Дефолт конструктора — [`Weight::MEDIUM`]
+    75→    /// (паритет `sans_attrs` рендера); моно-ячейки таблицы замеряются с
+    76→    /// [`Weight::NORMAL`] (паритет `mono_attrs`).
+    77→    pub weight: Weight,
+    78→}
+    79→
+    80→impl<'a> TextSpec<'a> {
+    81→    /// Спека без ограничения ширины (однострочный замер), вес — MEDIUM
+    82→    /// (паритет `sans_attrs`).
+    83→    pub fn single_line(text: &'a str, family: &'a str, size: f32) -> Self {
+    84→        Self {
+    85→            text,
+    86→            family,
+    87→            size,
+    88→            max_width: f32::INFINITY,
+    89→            weight: Weight::MEDIUM,
+    90→        }
+    91→    }
+    92→}
+    93→
+    94→/// Результат измерения.
+    95→#[derive(Debug, Clone, Copy, PartialEq)]
+    96→pub struct Measured {
+    97→    /// Ширина самой широкой строки (ui px).
+    98→    pub width: f32,
+    99→    /// Суммарная высота строк: `lines · size · SCREEN_LINE_FACTOR`.
+   100→    pub height: f32,
+   101→    /// Число строк после раскладки.
+   102→    pub lines: usize,
+   103→}
+   104→
+   105→/// Ключ кэша: (текст, семейство, кегль, макс-ширина) — PRD-0009 AC-4.1.
+   106→/// Плавающие значения включаются битовым представлением (детерминизм
+   107→/// NaN-паттернов не важен: кегли/ширины конечны).
+   108→#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+   109→struct MeasureKey {
+   110→    text: Box<str>,
+   111→    family: Box<str>,
+   112→    size_bits: u32,
+   113→    max_bits: u32,
+   114→}
+   115→
+   116→/// Измеритель текста с кэшем. Дешёвое создание на кадр (пул строк кадра
+   117→/// короткий; шейпинг dominates), кэш переиспользует ширины внутри кадра
+   118→/// (ellipsis-поиск префиксов).
+   119→///
+   120→/// FR-068 W2: шейпинг за trait boundary (dyn Shaper); cosmic-text —
+   121→/// default impl ([`CosmicShaper`], real-метрики рендера), тесты —
+   122→/// `MockShaper` через [`TextMeasurer::with_shaper`]. `Clone` снят с
+   123→/// derive: `Box<dyn Shaper>` не `Clone`, а grep по репо на момент W2
+   124→/// дал 0 вызовов `.clone()` на `TextMeasurer` (клоны не требовались —
+   125→/// measurer дешёвый, создаётся `new()` на кадр) — breaking-потребителей
+   126→/// нет.
+   127→pub struct TextMeasurer {
+   128→    cache: HashMap<MeasureKey, Measured>,
+   129→    cap: usize,
+   130→    /// Шейпер за границей (FR-068 W2): `new()` — `CosmicShaper`,
+   131→    /// `with_shaper` — явная подмена (мок в тестах).
+   132→    shaper: Box<dyn Shaper>,
+   133→}
+   134→
+   135→/// Ручной `Debug`: `Box<dyn Shaper>` не `Debug` (трейт не требует
+   136→/// реализации от подменяемых шейперов) — печатаем состав кэша и тип-метку
+   137→/// шейпера без требования `Debug` у реализации.
+   138→impl fmt::Debug for TextMeasurer {
+   139→    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+   140→        f.debug_struct("TextMeasurer")
+   141→            .field("cache", &self.cache)
+   142→            .field("cap", &self.cap)
+   143→            .field("shaper", &"Box<dyn Shaper>")
+   144→            .finish()
+   145→    }
+   146→}
+   147→
+   148→impl Default for TextMeasurer {
+   149→    fn default() -> Self {
+   150→        Self::new()
+   151→    }
+   152→}
+   153→
+   154→impl TextMeasurer {
+   155→    /// Ёмкость кэша по умолчанию: строка кадра UI — десятки, всплеск
+   156→    /// ellipsis-префиксов — сотни; 4096 покрывает с запасом.
+   157→    pub const DEFAULT_CAP: usize = 4096;
+   158→
+   159→    pub fn new() -> Self {
+   160→        Self {
+   161→            cache: HashMap::new(),
+   162→            cap: Self::DEFAULT_CAP,
+   163→            // Default impl — реальный шейпинг cosmic-text (метрики
+   164→            // рендера, CR-015); мок — только явно через with_shaper.
+   165→            shaper: Box::new(CosmicShaper::new()),
+   166→        }
+   167→    }
+   168→
+   169→    /// Кэш с нестандартной ёмкостью (тесты переполнения).
+   170→    pub fn with_cap(cap: usize) -> Self {
+   171→        Self {
+   172→            cache: HashMap::new(),
+   173→            cap: cap.max(1),
+   174→            shaper: Box::new(CosmicShaper::new()),
+   175→        }
+   176→    }
+   177→
+   178→    /// FR-068 W2: измеритель с ЯВНЫМ шейпером (подмена реализации за
+   179→    /// границей [`Shaper`]): `Box::new(MockShaper::default())` в тестах —
+   180→    /// шрифто-независимая детерминированная геометрия; продакшн —
+   181→    /// [`TextMeasurer::new`] (CosmicShaper, real-метрики рендера).
+   182→    pub fn with_shaper(shaper: Box<dyn Shaper>) -> Self {
+   183→        Self {
+   184→            cache: HashMap::new(),
+   185→            cap: Self::DEFAULT_CAP,
+   186→            shaper,
+   187→        }
+   188→    }
+   189→
+   190→    pub fn len(&self) -> usize {
+   191→        self.cache.len()
+   192→    }
+   193→
+   194→    pub fn is_empty(&self) -> bool {
+   195→        self.cache.is_empty()
+   196→    }
+   197→
+   198→    /// Измерить текст реальным шейпингом cosmic-text (кэш: hit — без
+   199→    /// шейпинга; miss — шейпер за границей [`Shaper`], FR-068 W2).
+   200→    pub fn measure(&mut self, fs: &mut cosmic_text::FontSystem, spec: &TextSpec) -> Measured {
+   201→        let key = MeasureKey {
+   202→            text: spec.text.into(),
+   203→            family: spec.family.into(),
+   204→            size_bits: spec.size.to_bits(),
+   205→            max_bits: spec.max_width.to_bits(),
+   206→        };
+   207→        if let Some(hit) = self.cache.get(&key) {
+   208→            return *hit;
+   209→        }
+   210→        // `text` — источник истины по строке (контракт FR-068 §W2):
+   211→        // передаём spec.text — данные идентичны.
+   212→        let measured = self.shaper.shape(fs, spec.text, spec);
+   213→        // Переполнение ёмкости → очистка (кэш — ускоритель, не источник
+   214→        // истины: очистка не меняет результаты измерения).
+   215→        if self.cache.len() >= self.cap {
+   216→            self.cache.clear();
+   217→        }
+   218→        self.cache.insert(key, measured);
+   219→        measured
+   220→    }
+   221→
+   222→    /// Однострочная ширина текста (замена эвристик `0.62·кегль`). Вес —
+   223→    /// MEDIUM (паритет `sans_attrs` рендера); моно-текст замеряйте
+   224→    /// [`width_of_weighted`] с [`Weight::NORMAL`].
+   225→    pub fn width_of(
+   226→        &mut self,
+   227→        fs: &mut cosmic_text::FontSystem,
+   228→        text: &str,
+   229→        family: &str,
+   230→        size: f32,
+   231→    ) -> f32 {
+   232→        self.width_of_weighted(fs, text, family, size, Weight::MEDIUM)
+   233→    }
+   234→
+   235→    /// Однострочная ширина текста с ЯВНЫМ весом — паритет с шейпингом
+   236→    /// потребителя (см. [`TextSpec::weight`]: вес участвует в выборе лица,
+   237→    /// замер не тем весом — замер чужого шрифта).
+   238→    pub fn width_of_weighted(
+   239→        &mut self,
+   240→        fs: &mut cosmic_text::FontSystem,
+   241→        text: &str,
+   242→        family: &str,
+   243→        size: f32,
+   244→        weight: Weight,
+   245→    ) -> f32 {
+   246→        self.measure(
+   247→            fs,
+   248→            &TextSpec {
+   249→                text,
+   250→                family,
+   251→                size,
+   252→                max_width: f32::INFINITY,
+   253→                weight,
+   254→            },
+   255→        )
+   256→        .width
+   257→    }
+   258→
+   259→    /// Жадный перенос текста по словам (W3.3, каталог §9.3.1: общий
+   260→    /// replacement ручных циклов переноса потребителей). Слова —
+   261→    /// `split_whitespace` (подряд идущие пробелы схлопываются, явные
+   262→    /// переносы источника — на совести потребителя); строка набирается,
+   263→    /// пока кандидат «строка + пробел + слово» укладывается в `max_w`,
+   264→    /// иначе строка закрывается; слово шире `max_w` — отдельной строкой
+   265→    /// (без разрыва по глифам — семантика прежнего `admin_ui::wrap_text`,
+   266→    /// CR-прецедент). Пустой текст → одна пустая строка. Вес — MEDIUM
+   267→    /// (паритет [`width_of`]). Тот же замер, что и отрисовка строки, —
+   268→    /// ширины строк согласованы с рендером (F-6).
+   269→    pub fn wrap(
+   270→        &mut self,
+   271→        fs: &mut cosmic_text::FontSystem,
+   272→        text: &str,
+   273→        family: &str,
+   274→        size: f32,
+   275→        max_w: f32,
+   276→    ) -> Vec<String> {
+   277→        let mut lines: Vec<String> = Vec::new();
+   278→        let mut current = String::new();
+   279→        for word in text.split_whitespace() {
+   280→            if current.is_empty() {
+   281→                current.push_str(word);
+   282→                continue;
+   283→            }
+   284→            let candidate = format!("{current} {word}");
+   285→            if self.width_of(fs, &candidate, family, size) <= max_w {
+   286→                current = candidate;
+   287→            } else {
+   288→                lines.push(std::mem::take(&mut current));
+   289→                current.push_str(word);
+   290→            }
+   291→        }
+   292→        if !current.is_empty() {
+   293→            lines.push(current);
+   294→        }
+   295→        if lines.is_empty() {
+   296→            lines.push(String::new());
+   297→        }
+   298→        lines
+   299→    }
+   300→
+   301→    /// Перенос текста с уважением явных `\n` (параграфов) и NBSP
+   302→    /// (`\u{00A0}` — неразрывный пробел; каталог §6.3: LOW-priority kit
+   303→    /// gap, миграция `tooltip.rs::wrap_width`).
+   304→    ///
+   305→    /// В отличие от [`wrap`] (которая через `split_whitespace` схлопывает
+   306→    /// любые пробелы, включая `\n`, и не различает NBSP), этот метод:
+   307→    /// - сперва дробит текст на параграфы по `\n` (каждый параграф
+   308→    ///   переносится независимо — явный перенос источника сохраняется как
+   309→    ///   граница строки);
+   310→    /// - внутри параграфа слова разделяются по whitespace, КРОМЕ NBSP
+   311→    ///   (`char::is_whitespace() && c != '\u{a0}'`) — NBSP-группа (разряды
+   312→    ///   чисел `1\u{a0}234\u{a0}567` из `format_num`) остаётся одним
+   313→    ///   токеном, не рвётся посреди групп.
+   314→    ///
+   315→    /// Поведение идентично `tooltip.rs::wrap_width` (бит-в-бит, та же
+   316→    /// жадная стратегия: строка набирается, пока кандидат «строка +
+   317→    /// пробел + слово» укладывается в `max_w`; слово шире `max_w` —
+   318→    /// отдельной строкой). Пустой текст → пустой вектор (карточка без
+   319→    /// строк не рисуется); пустые параграфы (`"a\n\nb"`) не дают пустых
+   320→    /// строк-разделителей (соответствует `wrap_width`). Вес — MEDIUM
+   321→    /// (паритет [`width_of`]/[`wrap`]).
+   322→    ///
+   323→    /// Возвращает `Vec<String>` — одна строка на визуальную линию
+   324→    /// (параграфы склеены без разделителя; потребитель различает
+   325→    /// параграфы по контексту, как и `wrap_width`).
+   326→    pub fn wrap_paragraphs(
+   327→        &mut self,
+   328→        fs: &mut cosmic_text::FontSystem,
+   329→        text: &str,
+   330→        family: &str,
+   331→        size: f32,
+   332→        max_w: f32,
+   333→    ) -> Vec<String> {
+   334→        let mut lines: Vec<String> = Vec::new();
+   335→        for para in text.split('\n') {
+   336→            let mut current = String::new();
+   337→            for word in para
+   338→                .split(|c: char| c.is_whitespace() && c != '\u{a0}')
+   339→                .filter(|word| !word.is_empty())
+   340→            {
+   341→                if current.is_empty() {
+   342→                    current.push_str(word);
+   343→                    continue;
+   344→                }
+   345→                let candidate = format!("{current} {word}");
+   346→                if self.width_of(fs, &candidate, family, size) <= max_w {
+   347→                    current = candidate;
+   348→                } else {
+   349→                    lines.push(std::mem::take(&mut current));
+   350→                    current.push_str(word);
+   351→                }
+   352→            }
+   353→            if !current.is_empty() {
+   354→                lines.push(current);
+   355→            }
+   356→        }
+   357→        lines
+   358→    }
+   359→
+   360→    /// Политика Ellipsis (AC-4.2): самая длинная граница символов
+   361→    /// префикса, чья ширина с хвостом «…» укладывается в `max_width`;
+   362→    /// текст целиком, если помещается. Бинарный поиск по префиксам —
+   363→    /// ширины кэшируются. Вес — MEDIUM (см. [`width_of`]).
+   364→    pub fn ellipsis(
+   365→        &mut self,
+   366→        fs: &mut cosmic_text::FontSystem,
+   367→        text: &str,
+   368→        family: &str,
+   369→        size: f32,
+   370→        max_width: f32,
+   371→    ) -> String {
+   372→        self.ellipsis_weighted(fs, text, family, size, max_width, Weight::MEDIUM)
+   373→    }
+   374→
+   375→    /// [`Self::ellipsis`] с явным весом замера (моно-ячейки таблицы —
+   376→    /// [`Weight::NORMAL`], паритет `mono_attrs`).
+   377→    pub fn ellipsis_weighted(
+   378→        &mut self,
+   379→        fs: &mut cosmic_text::FontSystem,
+   380→        text: &str,
+   381→        family: &str,
+   382→        size: f32,
+   383→        max_width: f32,
+   384→        weight: Weight,
+   385→    ) -> String {
+   386→        if max_width <= 0.0 {
+   387→            return String::new();
+   388→        }
+   389→        let full = self.width_of_weighted(fs, text, family, size, weight);
+   390→        if full <= max_width + FIT_EPS {
+   391→            return text.to_owned();
+   392→        }
+   393→        let ell = '\u{2026}';
+   394→        if self.width_of_weighted(fs, &ell.to_string(), family, size, weight) > max_width + FIT_EPS
+   395→        {
+   396→            return String::new();
+   397→        }
+   398→        let chars: Vec<char> = text.chars().collect();
+   399→        // Наибольший префикс длины k, где width(prefix) + width(…) <= max.
+   400→        // Инвариант: lo укладывается, hi — нет.
+   401→        let mut lo = 0usize; // точно помещается (пустой префикс)
+   402→        let mut hi = chars.len(); // точно не помещается (full > max)
+   403→        while lo < hi {
+   404→            let mid = (lo + hi).div_ceil(2);
+   405→            let prefix: String = chars[..mid].iter().collect();
+   406→            let w = self.width_of_weighted(fs, &prefix, family, size, weight)
+   407→                + self.width_of_weighted(fs, &ell.to_string(), family, size, weight);
+   408→            if w <= max_width + FIT_EPS {
+   409→                lo = mid;
+   410→            } else {
+   411→                hi = mid - 1;
+   412→            }
+   413→        }
+   414→        let mut out: String = chars[..lo].iter().collect();
+   415→        out.push(ell);
+   416→        out
+   417→    }
+   418→}
+   419→
+   420→// =============================================================================
+   421→// Пайплайн реального шейпинга (`shape_measure`) ПЕРЕНЕСЁН в `shaper.rs`
+   422→// (FR-068 W2, trait boundary): `CosmicShaper` — бит-в-бит тот же код
+   423→// (Buffer + Metrics + Wrap::None + set_size + Attrs + Shaping::Advanced +
+   424→// shape_until_scroll + layout_runs) — метрики измерений не изменились.
+   425→// =============================================================================
+   426→
+   427→#[cfg(test)]
+   428→mod tests {
+   429→    use super::*;
+   430→
+   431→    /// Детерминированный FontSystem: только вшитый рендером шрифт
+   432→    /// (тот же файл `NotoSansDisplay-Medium.ttf`, что FONT_DATA
+   433→    /// canvas-render) — метрики тестов = метрикам рендера и одинаковы
+   434→    /// на всех платформах CI.
+   435→    fn font_system() -> cosmic_text::FontSystem {
+   436→        let mut fs = cosmic_text::FontSystem::new();
+   437→        const FONT: &[u8] = include_bytes!("../../../assets/fonts/NotoSansDisplay-Medium.ttf");
+   438→        fs.db_mut().load_font_data(FONT.to_vec());
+   439→        fs
+   440→    }
+   441→
+   442→    const FAMILY: &str = "Noto Sans Display";
+   443→
+   444→    /// W3.3: `wrap` — жадный перенос по словам. Оракул — ручной жадный
+   445→    /// цикл (прецедент `admin_ui::wrap_text`): строки совпадают бит-в-бит
+   446→    /// (посимвольно) на корпусе RU/EN с короткими/длинными словами.
+   447→    #[test]
+   448→    fn wrap_matches_manual_greedy_oracle() {
+   449→        let mut fs = font_system();
+   450→        let mut m = TextMeasurer::new();
+   451→        let corpus = [
+   452→            "Короткая строка",
+   453→            "Перенос слов по измеренной ширине строки с русским и English mix",
+   454→            "однодлинноесловобезпробеловвнутри",
+   455→            "a b c d e f g h i j k l m n o p",
+   456→            "Сверхдлинное слово «в prismах» переноса не рвётся по глифам",
+   457→        ];
+   458→        for text in corpus {
+   459→            for max_w in [40.0, 120.0, 300.0, 1000.0] {
+   460→                // Ручной оракул — дословно прежний цикл потребителя.
+   461→                let mut expected: Vec<String> = Vec::new();
+   462→                let mut current = String::new();
+   463→                for word in text.split_whitespace() {
+   464→                    if current.is_empty() {
+   465→                        current.push_str(word);
+   466→                        continue;
+   467→                    }
+   468→                    let candidate = format!("{current} {word}");
+   469→                    if m.width_of(&mut fs, &candidate, FAMILY, 13.0) <= max_w {
+   470→                        current = candidate;
+   471→                    } else {
+   472→                        expected.push(std::mem::take(&mut current));
+   473→                        current.push_str(word);
+   474→                    }
+   475→                }
+   476→                if !current.is_empty() {
+   477→                    expected.push(current);
+   478→                }
+   479→                if expected.is_empty() {
+   480→                    expected.push(String::new());
+   481→                }
+   482→                let got = m.wrap(&mut fs, text, FAMILY, 13.0, max_w);
+   483→                assert_eq!(got, expected, "text={text:?} max_w={max_w}");
+   484→                // Каждая строка с пробелами (набранная из ≥2 слов)
+   485→                // укладывается в max_w; строка-одиночное слово может быть
+   486→                // шире max_w — семантика «длинное слово не рвётся».
+   487→                for line in &got {
+   488→                    let w = m.width_of(&mut fs, line, FAMILY, 13.0);
+   489→                    if line.contains(' ') {
+   490→                        assert!(w <= max_w, "набранная строка шире max_w: {line:?} w={w}");
+   491→                    }
+   492→                }
+   493→            }
+   494→        }
+   495→    }
+   496→
+   497→    /// W3.3: пустой текст → одна пустая строка; переносы строк источника
+   498→    /// НЕ интерпретируются (split_whitespace схлопывает любые пробелы,
+   499→    /// включая \n) — многострочный источник дробит потребитель.
+   500→    #[test]
+   501→    fn wrap_empty_text_and_newlines() {
+   502→        let mut fs = font_system();
+   503→        let mut m = TextMeasurer::new();
+   504→        assert_eq!(m.wrap(&mut fs, "", FAMILY, 13.0, 100.0), vec![""]);
+   505→        assert_eq!(m.wrap(&mut fs, "   ", FAMILY, 13.0, 100.0), vec![""]);
+   506→        // Слово шире max_w — отдельной строкой, не пустой список.
+   507→        let got = m.wrap(&mut fs, "сверхдлинное", FAMILY, 13.0, 10.0);
+   508→        assert_eq!(got.len(), 1);
+   509→        assert_eq!(got[0], "сверхдлинное");
+   510→        // Несколько слов, каждое шире max_w — по строке на слово.
+   511→        let got = m.wrap(&mut fs, "первое второе", FAMILY, 13.0, 10.0);
+   512→        assert_eq!(got, vec!["первое", "второе"]);
+   513→    }
+   514→
+   515→    #[test]
+   516→    fn empty_text_has_zero_width() {
+   517→        let mut fs = font_system();
+   518→        let mut m = TextMeasurer::new();
+   519→        let r = m.measure(
+   520→            &mut fs,
+   521→            &TextSpec {
+   522→                text: "",
+   523→                family: FAMILY,
+   524→                size: 13.0,
+   525→                max_width: f32::INFINITY,
+   526→                weight: Weight::MEDIUM,
+   527→            },
+   528→        );
+   529→        assert_eq!(r.width, 0.0);
+   530→        assert_eq!(r.lines, 1, "пустая строка — одна линия раскладки");
+   531→        assert_eq!(m.len(), 1, "результат в кэше");
+   532→    }
+   533→
+   534→    /// Ширина монотонна по длине текста и растёт с кеглем (санити
+   535→    /// реального шейпинга; точные px не фиксируются — метрики шрифта
+   536→    /// не часть контракта).
+   537→    #[test]
+   538→    fn width_monotonic_by_length_and_size() {
+   539→        let mut fs = font_system();
+   540→        let mut m = TextMeasurer::new();
+   541→        let short = m.width_of(&mut fs, "База", FAMILY, 13.0);
+   542→        let long = m.width_of(&mut fs, "База + сценарий", FAMILY, 13.0);
+   543→        let bigger = m.width_of(&mut fs, "База", FAMILY, 20.0);
+   544→        assert!(short > 0.0);
+   545→        assert!(long > short, "длинный текст шире короткого");
+   546→        assert!(bigger > short, "больший кегль шире");
+   547→        // Многосимвольный текст с запасом уже эвристики 0.62·кегль —
+   548→        // проверяется отношением, не точным значением.
+   549→        let digits = m.width_of(&mut fs, "1111111111", FAMILY, 13.0);
+   550→        let wide = m.width_of(&mut fs, "ШШШШШШШШШШ", FAMILY, 13.0);
+   551→        assert!(wide > digits, "моноширинно-узкие цифры уже широких глифов");
+   552→    }
+   553→
+   554→    #[test]
+   555→    fn cache_reuses_measurements() {
+   556→        let mut fs = font_system();
+   557→        let mut m = TextMeasurer::with_cap(2);
+   558→        let a = m.width_of(&mut fs, "Сценарий 1", FAMILY, 13.0);
+   559→        let again = m.width_of(&mut fs, "Сценарий 1", FAMILY, 13.0);
+   560→        assert_eq!(a, again);
+   561→        assert_eq!(m.len(), 1, "один ключ, повтор — из кэша");
+   562→        // Другой кегль — другой ключ.
+   563→        let _ = m.width_of(&mut fs, "Сценарий 1", FAMILY, 15.0);
+   564→        assert_eq!(m.len(), 2);
+   565→        // Третий уникальный ключ при ёмкости 2 → очистка.
+   566→        let _ = m.width_of(&mut fs, "Сценарий 2", FAMILY, 13.0);
+   567→        assert!(m.len() <= 2, "ёмкость соблюдена");
+   568→    }
+   569→
+   570→    /// Политика Ellipsis: помещающийся текст возвращается целиком;
+   571→    /// не помещающийся — префикс + «…», чья ширина в границе; монотонен
+   572→    /// по границе.
+   573→    #[test]
+   574→    fn ellipsis_respects_max_width() {
+   575→        let mut fs = font_system();
+   576→        let mut m = TextMeasurer::new();
+   577→        let text = "Очень длинное имя сценария с деталями эксперимента";
+   578→        let full = m.width_of(&mut fs, text, FAMILY, 13.0);
+   579→        // Помещается — целиком.
+   580→        assert_eq!(m.ellipsis(&mut fs, text, FAMILY, 13.0, full + 1.0), text);
+   581→        // Не помещается — усечён и реально помещается.
+   582→        let cut = m.ellipsis(&mut fs, text, FAMILY, 13.0, full * 0.5);
+   583→        assert!(cut.ends_with('\u{2026}'), "хвост — символ многоточия");
+   584→        assert!(cut.chars().count() < text.chars().count());
+   585→        let cut_w = m.width_of(&mut fs, &cut, FAMILY, 13.0);
+   586→        assert!(
+   587→            cut_w <= full * 0.5 + FIT_EPS + f32::EPSILON,
+   588→            "усечённый текст ({cut_w}) укладывается в границу {}",
+   589→            full * 0.5
+   590→        );
+   591→        // Монотонность: шире граница — длиннее (по ширине) результат.
+   592→        let wider = m.ellipsis(&mut fs, text, FAMILY, 13.0, full * 0.75);
+   593→        assert!(m.width_of(&mut fs, &wider, FAMILY, 13.0) >= cut_w);
+   594→        // Нулевая/отрицательная граница — пустая строка.
+   595→        assert_eq!(m.ellipsis(&mut fs, text, FAMILY, 13.0, 0.0), "");
+   596→    }
+   597→
+   598→    /// Многострочность: при конечной ширине и Wrap::None строки не
+   599→    /// переносятся, но спецификация max_width не рвёт одиночную строку.
+   600→    #[test]
+   601→    fn nowrap_single_line_height() {
+   602→        let mut fs = font_system();
+   603→        let mut m = TextMeasurer::new();
+   604→        let r = m.measure(
+   605→            &mut fs,
+   606→            &TextSpec {
+   607→                text: "строка",
+   608→                family: FAMILY,
+   609→                size: 13.0,
+   610→                max_width: 50.0,
+   611→                weight: Weight::MEDIUM,
+   612→            },
+   613→        );
+   614→        assert_eq!(r.lines, 1, "Wrap::None — без переноса");
+   615→        assert!((r.height - 13.0 * SCREEN_LINE_FACTOR).abs() < 1e-3);
+   616→    }
+   617→
+   618→    /// `wrap_paragraphs` уважает явные `\n` как границы параграфов:
+   619→    /// каждый параграф переносится независимо (в отличие от [`TextMeasurer::wrap`],
+   620→    /// которая через `split_whitespace` схлопывает `\n` и склеивает слова
+   621→    /// разных параграфов в одну строку). Бит-в-бит паритет с
+   622→    /// `tooltip.rs::wrap_width` (оракул с моком 10 px/симв.):
+   623→    /// `"a\nb"` → `["a", "b"]` (2 строки), а `wrap("a\nb", ∞)` → `["a b"]`.
+   624→    #[test]
+   625→    fn wrap_paragraphs_respects_explicit_newlines_as_paragraph_breaks() {
+   626→        let mut fs = font_system();
+   627→        let mut m = TextMeasurer::new();
+   628→        // Широкий бюджет — wrap склеил бы всё в одну строку (через
+   629→        // split_whitespace, который схлопывает \n). wrap_paragraphs
+   630→        // уважает \n как границу параграфа.
+   631→        let text = "строка раз\nстрока два";
+   632→        let lines = m.wrap_paragraphs(&mut fs, text, FAMILY, 13.0, 10_000.0);
+   633→        assert_eq!(
+   634→            lines,
+   635→            vec!["строка раз".to_owned(), "строка два".to_owned()],
+   636→            "явный \\n — граница параграфа, склейки через \\n нет"
+   637→        );
+   638→        // Контраст с wrap: та же строка, тот же бюджет — 1 строка
+   639→        // (split_whitespace схлопывает \n с пробелами).
+   640→        let wrapped = m.wrap(&mut fs, text, FAMILY, 13.0, 10_000.0);
+   641→        assert_eq!(
+   642→            wrapped,
+   643→            vec!["строка раз строка два".to_owned()],
+   644→            "wrap схлопывает \\n — контрольный контраст"
+   645→        );
+   646→        // Пустые параграфы не дают пустых строк-разделителей (паритет
+   647→        // wrap_width: `"a\n\nb"` → `["a", "b"]`).
+   648→        let lines = m.wrap_paragraphs(&mut fs, "a\n\nb", FAMILY, 13.0, 10_000.0);
+   649→        assert_eq!(
+   650→            lines,
+   651→            vec!["a".to_owned(), "b".to_owned()],
+   652→            "пустые параграфы не плодят пустых строк"
+   653→        );
+   654→        // Пустой текст → пустой вектор (карточка без строк; паритет
+   655→        // wrap_width_empty_text_is_empty).
+   656→        assert!(m
+   657→            .wrap_paragraphs(&mut fs, "", FAMILY, 13.0, 100.0)
+   658→            .is_empty());
+   659→        assert!(m
+   660→            .wrap_paragraphs(&mut fs, "   \n  ", FAMILY, 13.0, 100.0)
+   661→            .is_empty());
+   662→    }
+   663→
+   664→    /// `wrap_paragraphs` НЕ рвёт NBSP-группу (неразрывный пробел `\u{a0}`)
+   665→    /// — разряды чисел (`1\u{a0}234\u{a0}567` из `format_num`) остаются
+   666→    /// одним токеном, не разрываются посреди групп (паритет с
+   667→    /// `tooltip.rs::wrap_width_keeps_nbsp_digit_groups_whole`).
+   668→    #[test]
+   669→    fn wrap_paragraphs_keeps_nbsp_token_whole() {
+   670→        let mut fs = font_system();
+   671→        let mut m = TextMeasurer::new();
+   672→        // Бюджет: достаточно узкий, чтобы заставить перенос после «итог»
+   673→        // и после числа; достаточно широкий для каждого токена в отдельности.
+   674→        // NBSP-группа «1\u{a0}234\u{a0}567» — один токен (неразрывный),
+   675→        // остаётся целой строкой в выводе.
+   676→        let text = "итог 1\u{a0}234\u{a0}567 руб";
+   677→        // Ширины: отдельно — каждое слово; комбинации — два варианта
+   678→        // «объединённой» строки. Бюджет между max_single и min_combo.
+   679→        let w_itog = m.width_of(&mut fs, "итог", FAMILY, 13.0);
+   680→        let w_num = m.width_of(&mut fs, "1\u{a0}234\u{a0}567", FAMILY, 13.0);
+   681→        let w_rub = m.width_of(&mut fs, "руб", FAMILY, 13.0);
+   682→        let w_itog_num = m.width_of(&mut fs, "итог 1\u{a0}234\u{a0}567", FAMILY, 13.0);
+   683→        let w_num_rub = m.width_of(&mut fs, "1\u{a0}234\u{a0}567 руб", FAMILY, 13.0);
+   684→        // Бюджет: между max(одиночные) и min(комбинации) — так, что
+   685→        // каждое слово помещается, но любая пара — нет.
+   686→        let max_single = w_itog.max(w_num).max(w_rub);
+   687→        let min_combo = w_itog_num.min(w_num_rub);
+   688→        assert!(
+   689→            max_single < min_combo,
+   690→            "премиса: max single ({max_single}) < min combo ({min_combo}) — бюджет существует"
+   691→        );
+   692→        let max_w = (max_single + min_combo) / 2.0;
+   693→        // Премисы: каждое слово помещается, обе комбинации — нет.
+   694→        assert!(w_itog <= max_w, "«итог» помещается: {w_itog} ≤ {max_w}");
+   695→        assert!(w_num <= max_w, "NBSP-число помещается: {w_num} ≤ {max_w}");
+   696→        assert!(w_rub <= max_w, "«руб» помещается: {w_rub} ≤ {max_w}");
+   697→        assert!(
+   698→            w_itog_num > max_w,
+   699→            "«итог 1…567» НЕ помещается: {w_itog_num} > {max_w}"
+   700→        );
+   701→        assert!(
+   702→            w_num_rub > max_w,
+   703→            "«1…567 руб» НЕ помещается: {w_num_rub} > {max_w}"
+   704→        );
+   705→
+   706→        let lines = m.wrap_paragraphs(&mut fs, text, FAMILY, 13.0, max_w);
+   707→        // Три строки: «итог», «1…567» (NBSP-группа целая), «руб».
+   708→        assert_eq!(
+   709→            lines,
+   710→            vec![
+   711→                "итог".to_owned(),
+   712→                "1\u{a0}234\u{a0}567".to_owned(),
+   713→                "руб".to_owned()
+   714→            ],
+   715→            "NBSP-группа остаётся одним токеном, не рвётся"
+   716→        );
+   717→        // Контраст: wrap (через split_whitespace) рвёт NBSP как обычный
+   718→        // пробел → мог бы склеить «1 234 567» в одну строку, и сам
+   719→        // NBSP в выводе не сохраняется (split_whitespace его удаляет).
+   720→        let wrapped = m.wrap(&mut fs, text, FAMILY, 13.0, max_w);
+   721→        // wrap не содержит NBSP (split_whitespace его схлопнул) —
+   722→        // цифры «1», «234», «567» — отдельные слова, склеиваются в
+   723→        // строках как «1 234 567» (без NBSP). Демонстрация асимметрии.
+   724→        let joined_wrap = wrapped.join(" | ");
+   725→        assert!(
+   726→            !joined_wrap.contains('\u{a0}'),
+   727→            "wrap схлопывает NBSP (контрольный контраст): {joined_wrap:?}"
+   728→        );
+   729→    }
+   730→}
+   731→
