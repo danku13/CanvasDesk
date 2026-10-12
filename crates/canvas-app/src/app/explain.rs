@@ -1645,14 +1645,18 @@ impl App {
             12.0,
         );
         drop(fs);
+        // Канон вертикали (issue #68, IN11/IN12): строковый бокс поля —
+        // горизонтальный пад 8 — забота вызывающего (x/w), вертикаль —
+        // text_area_vcentered; текст и каретка делят одну ординату центра.
+        let ta_line = canvas_ui::kit::text_area_vcentered(
+            canvas_ui::geometry::UiRect::new(field[0] + 8.0, field[1], field[2] - 16.0, field[3]),
+            12.0,
+        );
         let caret_x = lay.caret_x.max(field[0] + 8.0);
         if (state.opened_at.elapsed().as_millis() / 530) % 2 == 0 {
-            let caret = [
-                caret_x.min(field[0] + field[2] - 8.0),
-                field[1] + 5.0,
-                1.5,
-                16.0,
-            ];
+            let c =
+                canvas_ui::kit::caret_rect(ta_line, 12.0, caret_x.min(field[0] + field[2] - 8.0));
+            let caret = [c.x, c.y, c.w, c.h];
             quads.push(screen_rect_quad(
                 &self.camera,
                 viewport,
@@ -1664,10 +1668,10 @@ impl App {
         }
         let empty = edit.field.text.is_empty();
         texts.push(OwnedScreenText {
-            height: 0.0,
+            height: ta_line.h,
             text: lay.text_shown.clone(),
-            origin: [field[0] + 8.0, field[1] + 5.5],
-            width: field[2] - 16.0,
+            origin: [ta_line.x, ta_line.y],
+            width: ta_line.w,
             font_size: 12.0,
             color: if empty { palette.quote } else { palette.body },
             align: TextAlign::Left,
@@ -1761,11 +1765,15 @@ impl App {
             params: [6.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
+        // Канон вертикали (issue #68, IN11/IN13): строковый бокс кегля 12
+        // по центру тултипа — прежняя ручная формула
+        // `y + (h − 12·1.3)/2` с литералом 1.3 заменена хелпером кита.
+        let ta = canvas_ui::kit::text_area_vcentered(tl.rect, 12.0);
         texts.push(OwnedScreenText {
-            height: 0.0,
+            height: ta.h,
             text: label,
-            origin: [x, y + (tl.rect.h - 12.0 * 1.3) / 2.0],
-            width: tl.rect.w,
+            origin: [ta.x, ta.y],
+            width: ta.w,
             font_size: 12.0,
             color: palette.title,
             align: TextAlign::Center,

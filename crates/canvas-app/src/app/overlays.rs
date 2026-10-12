@@ -49,13 +49,12 @@ pub(super) fn kit_field_view(
         canvas_render::text::SANS_FAMILY,
         font_size,
     );
+    // Канон вертикали (issue #68, IN12): ЕДИНАЯ формула каретки от метрики
+    // строки (`caret_rect`); per-surface `+2.0`/`h − 4.0`/ширина 1.5 на
+    // местах вызовов запрещены.
     let caret = if lay.caret_x >= 0.0 {
-        Some([
-            lay.caret_x,
-            lay.text_area.y + 2.0,
-            1.5,
-            lay.text_area.h - 4.0,
-        ])
+        let c = kit::caret_rect(lay.text_area, font_size, lay.caret_x);
+        Some([c.x, c.y, c.w, c.h])
     } else {
         None
     };
@@ -835,11 +834,16 @@ impl App {
         d.rect(lay.panel, palette.menu_fill, palette.palette_border, 8.0);
         // Заголовок + «✕» (кнопка — тем же стилем, что панель поиска)
         d.label(
-            canvas_ui::geometry::UiRect::new(
-                lay.panel.x + 12.0,
-                lay.panel.y + 10.0,
-                (lay.panel.w - 48.0).max(0.0),
-                20.0,
+            // Канон вертикали: строковый бокс в полосе заголовка (якорь
+            // полосы +10 — раскладка; центровка — хелпер кита).
+            kit::text_area_vcentered(
+                canvas_ui::geometry::UiRect::new(
+                    lay.panel.x + 12.0,
+                    lay.panel.y + 10.0,
+                    (lay.panel.w - 48.0).max(0.0),
+                    20.0,
+                ),
+                13.0,
             ),
             self.tr(keys::FLOW_MAP_TITLE),
             kit_palette.text_title,
@@ -847,11 +851,16 @@ impl App {
             PaintAlign::Left,
         );
         d.label(
-            canvas_ui::geometry::UiRect::new(
-                lay.close.x + 5.0,
-                lay.close.y + 3.0,
-                (lay.close.w - 8.0).max(0.0),
-                18.0,
+            // Канон вертикали: строковый бокс по центру кнопки (горизонталь —
+            // прежняя: +5/−8; бокс клампится высотой кнопки).
+            kit::text_area_vcentered(
+                canvas_ui::geometry::UiRect::new(
+                    lay.close.x + 5.0,
+                    lay.close.y,
+                    (lay.close.w - 8.0).max(0.0),
+                    lay.close.h,
+                ),
+                14.0,
             ),
             "×",
             kit_palette.text_title,
@@ -861,11 +870,16 @@ impl App {
         // Пустое состояние — подсказка
         if rows.is_empty() {
             d.label(
-                canvas_ui::geometry::UiRect::new(
-                    lay.panel.x + 12.0,
-                    lay.panel.y + flowmap_ui::HEADER_H + 8.0,
-                    (lay.panel.w - 24.0).max(0.0),
-                    20.0,
+                // Канон вертикали: строковый бокс в полосе под шапкой (якорь
+                // HEADER_H + 8 — раскладка; центровка — хелпер кита).
+                kit::text_area_vcentered(
+                    canvas_ui::geometry::UiRect::new(
+                        lay.panel.x + 12.0,
+                        lay.panel.y + flowmap_ui::HEADER_H + 8.0,
+                        (lay.panel.w - 24.0).max(0.0),
+                        20.0,
+                    ),
+                    12.0,
                 ),
                 self.tr(keys::FLOW_MAP_EMPTY),
                 kit_palette.text,
@@ -967,11 +981,25 @@ impl App {
                 &palette.kit_palette(),
             )
         };
+        // Канон вертикали (issue #68, IN13): строковый бокс кегля 14
+        // (size × SCREEN_LINE_FACTOR) по центру поля — явный расчёт бокса
+        // хелпером кита, рендер-центровка не задействована (height ==
+        // line_h → топ-анкер ровно на origin.y бокса). Горизонталь прежняя:
+        // пад +10/−20; высоту поля не меняем.
+        let query_line = kit::text_area_vcentered(
+            canvas_ui::geometry::UiRect::new(
+                input[0] + 10.0,
+                input[1],
+                (input[2] - 20.0).max(10.0),
+                input[3],
+            ),
+            14.0,
+        );
         texts.push(OwnedScreenText {
-            height: 0.0,
+            height: query_line.h,
             text: query_shown,
-            origin: [input[0] + 10.0, input[1] + 9.0],
-            width: (input[2] - 20.0).max(10.0),
+            origin: [query_line.x, query_line.y],
+            width: query_line.w,
             font_size: 14.0,
             color: palette.title,
             align: TextAlign::Left,
@@ -1108,8 +1136,10 @@ impl App {
         );
 
         // Шапка: заголовок + «Сброс» (Disabled без переопределения) + тема + «✕»
+        // Канон вертикали (issue #68, IN13): строковый бокс хелпером кита —
+        // без ручных y-офсетов на местах вызовов.
         d.label_left(
-            lay.title,
+            kit::text_area_vcentered(lay.title, 14.0),
             crate::i18n::tr(lang, crate::i18n::keys::ADMIN_TITLE),
             palette.text_title,
             14.0,
@@ -1124,7 +1154,7 @@ impl App {
         );
         d.control(lay.reset, &reset_style);
         d.label_center(
-            lay.reset,
+            kit::text_area_vcentered(lay.reset, 13.0),
             crate::i18n::tr(lang, crate::i18n::keys::ADMIN_RESET),
             reset_style.text,
             13.0,
@@ -1142,7 +1172,12 @@ impl App {
         let (theme_rect, theme_label) =
             crate::kit_ui::theme_button_layout(lay.theme, lang, &mut m, &mut fs);
         d.control(theme_rect, &theme_style);
-        d.label_center(theme_rect, &theme_label, theme_style.text, 13.0);
+        d.label_center(
+            kit::text_area_vcentered(theme_rect, 13.0),
+            &theme_label,
+            theme_style.text,
+            13.0,
+        );
         let mut close_widget = WidgetState::default();
         close_widget.set_pointer(hover(&lay.close), false);
         let close_style = canvas_ui::kit::icon_button_style(close_widget.kit_state(), &palette);
@@ -1167,11 +1202,14 @@ impl App {
             d.control(*item, &style);
             if let Some(sec) = crate::admin_ui::AdminSection::at(i) {
                 d.label_left(
-                    canvas_ui::geometry::UiRect::new(
-                        item.x + kit::BUTTON_PAD_H,
-                        item.y,
-                        (item.w - kit::BUTTON_PAD_H).max(0.0),
-                        item.h,
+                    kit::text_area_vcentered(
+                        canvas_ui::geometry::UiRect::new(
+                            item.x + kit::BUTTON_PAD_H,
+                            item.y,
+                            (item.w - kit::BUTTON_PAD_H).max(0.0),
+                            item.h,
+                        ),
+                        13.0,
                     ),
                     crate::i18n::tr(lang, sec.label_key()),
                     style.text,
@@ -1189,11 +1227,16 @@ impl App {
         );
         let (origin, title_key) = lay.section_title;
         d.label_left(
-            canvas_ui::geometry::UiRect::new(
-                origin.x + 10.0,
-                origin.y + 6.0,
-                (lay.demo.w - 20.0).max(0.0),
-                18.0,
+            // Канон вертикали: строковый бокс в полосе заголовка (верх полосы
+            // — якорь раскладки; центровка внутри — хелпер, не +6.0 вручную).
+            kit::text_area_vcentered(
+                canvas_ui::geometry::UiRect::new(
+                    origin.x + 10.0,
+                    origin.y + 6.0,
+                    (lay.demo.w - 20.0).max(0.0),
+                    18.0,
+                ),
+                13.0,
             ),
             crate::i18n::tr(lang, title_key),
             palette.text_title,
@@ -1465,14 +1508,24 @@ impl App {
         let (theme_rect, theme_label) =
             crate::kit_ui::theme_button_layout(lay.theme, lang, &mut m, &mut fs);
         d.control(theme_rect, &theme_style);
-        d.label_center(theme_rect, &theme_label, theme_style.text, 13.0);
+        d.label_center(
+            kit::text_area_vcentered(theme_rect, 13.0),
+            &theme_label,
+            theme_style.text,
+            13.0,
+        );
         let mut close_widget = WidgetState::default();
         close_widget.set_pointer(hover(&lay.close), false);
         let close_style = canvas_ui::kit::icon_button_style(close_widget.kit_state(), &palette);
         d.control(lay.close, &close_style);
         d.icon(lay.close, "close", "×", close_style.text, 13.0);
         d.label_left(
-            canvas_ui::geometry::UiRect::new(lay.title.x, lay.title.y + 6.0, lay.title.w, 20.0),
+            // Канон вертикали: строковый бокс в полосе заголовка (якорь +6.0
+            // и высота полосы — раскладка; центровка — хелпер кита).
+            kit::text_area_vcentered(
+                canvas_ui::geometry::UiRect::new(lay.title.x, lay.title.y + 6.0, lay.title.w, 20.0),
+                14.0,
+            ),
             crate::i18n::tr(lang, crate::i18n::keys::KIT_GALLERY_TITLE),
             palette.text_title,
             14.0,
@@ -1493,15 +1546,18 @@ impl App {
         for (origin, key) in &lay.section_titles {
             let text = label(key);
             d.label_left(
-                canvas_ui::geometry::UiRect::new(
-                    if self.kit_demo.tobe {
-                        title_x
-                    } else {
-                        origin.x
-                    },
-                    origin.y,
-                    lay.content.w,
-                    16.0,
+                kit::text_area_vcentered(
+                    canvas_ui::geometry::UiRect::new(
+                        if self.kit_demo.tobe {
+                            title_x
+                        } else {
+                            origin.x
+                        },
+                        origin.y,
+                        lay.content.w,
+                        16.0,
+                    ),
+                    11.0,
                 ),
                 &text,
                 palette.text_muted,
@@ -1524,11 +1580,14 @@ impl App {
             };
             let title = label(title_key);
             d.label_left(
-                canvas_ui::geometry::UiRect::new(
-                    row.slot.x,
-                    row.slot.y + 8.0,
-                    crate::kit_ui::STATE_LABEL_W,
-                    16.0,
+                kit::text_area_vcentered(
+                    canvas_ui::geometry::UiRect::new(
+                        row.slot.x,
+                        row.slot.y + 8.0,
+                        crate::kit_ui::STATE_LABEL_W,
+                        16.0,
+                    ),
+                    11.0,
                 ),
                 &title,
                 palette.text_muted,
@@ -1544,7 +1603,7 @@ impl App {
                 let style = canvas_ui::kit::button_style(row.variant, state, &palette);
                 d.control(*br, &style);
                 let text = crate::i18n::tr(lang, crate::kit_ui::STATE_LABELS[i]);
-                d.label_center(*br, text, style.text, 13.0);
+                d.label_center(kit::text_area_vcentered(*br, 13.0), text, style.text, 13.0);
             }
         }
         // IconButtons: 4 состояния
@@ -1558,8 +1617,12 @@ impl App {
             };
             let style = canvas_ui::kit::icon_button_style(state, &palette);
             d.control(*r, &style);
-            let area = canvas_ui::geometry::UiRect::new(r.x, r.y + 1.0, r.w, r.h);
-            d.label_center(area, icons[i], style.text, 13.0);
+            d.label_center(
+                kit::text_area_vcentered(*r, 13.0),
+                icons[i],
+                style.text,
+                13.0,
+            );
         }
         // Chips: Normal/Hover/Selected/Disabled — подпись соответствует
         // СОСТОЯНИЮ (дефект v1: слот 2 показывал метку Pressed).
@@ -1579,7 +1642,7 @@ impl App {
             let style = canvas_ui::kit::chip_style(state, &palette);
             d.control(*r, &style);
             let text = crate::i18n::tr(lang, chip_labels[i]);
-            d.label_center(*r, text, style.text, 12.0);
+            d.label_center(kit::text_area_vcentered(*r, 12.0), text, style.text, 12.0);
         }
         // Dropdown: якорь + открытое меню (3 строки, hover по курсору)
         {
@@ -1590,7 +1653,12 @@ impl App {
             );
             d.control(lay.dropdown_anchor, &style);
             let text = label(crate::i18n::keys::KIT_DROPDOWN_ANCHOR);
-            d.label_center(lay.dropdown_anchor, &text, style.text, 13.0);
+            d.label_center(
+                kit::text_area_vcentered(lay.dropdown_anchor, 13.0),
+                &text,
+                style.text,
+                13.0,
+            );
             d.rect(
                 lay.dropdown_menu,
                 palette.panel_fill,
@@ -1604,7 +1672,12 @@ impl App {
                 d.rect(*r, style.fill, [0.0; 4], 4.0);
                 let text = label(crate::i18n::keys::KIT_DROPDOWN_ITEM);
                 d.label_left(
-                    canvas_ui::geometry::UiRect::new(r.x + 8.0, r.y + 5.0, r.w - 16.0, r.h - 6.0),
+                    // Горизонтальный пад строки прежний (+8/−16); вертикаль —
+                    // канон (строковый бокс по центру строки меню).
+                    kit::text_area_vcentered(
+                        canvas_ui::geometry::UiRect::new(r.x + 8.0, r.y, r.w - 16.0, r.h),
+                        12.0,
+                    ),
                     &text,
                     style.text,
                     12.0,
@@ -1614,14 +1687,24 @@ impl App {
         // Toast: строка-демо (kit Toast: TTL/зона — контракт кита)
         {
             let text = label(crate::i18n::keys::KIT_TOAST_BODY);
-            d.label_left(lay.toast, &text, palette.text_muted, 12.0);
+            d.label_left(
+                kit::text_area_vcentered(lay.toast, 12.0),
+                &text,
+                palette.text_muted,
+                12.0,
+            );
         }
         // Tooltip: якорь-чип + пузырь (delay пройден — показан)
         {
             let style = canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &palette);
             d.control(lay.tooltip_anchor, &style);
             let text = label(crate::i18n::keys::KIT_TOOLTIP_ANCHOR);
-            d.label_center(lay.tooltip_anchor, &text, style.text, 12.0);
+            d.label_center(
+                kit::text_area_vcentered(lay.tooltip_anchor, 12.0),
+                &text,
+                style.text,
+                12.0,
+            );
             if !lay.tooltip.is_empty() {
                 d.rect(
                     lay.tooltip,
@@ -1631,11 +1714,16 @@ impl App {
                 );
                 let text = label(crate::i18n::keys::KIT_TOOLTIP_BODY);
                 d.label_left(
-                    canvas_ui::geometry::UiRect::new(
-                        lay.tooltip.x + 8.0,
-                        lay.tooltip.y + 2.0,
-                        lay.tooltip.w - 16.0,
-                        14.0,
+                    // Горизонтальный пад пузыря прежний (+8/−16); вертикаль —
+                    // канон (строковый бокс по центру пузыря h=18).
+                    kit::text_area_vcentered(
+                        canvas_ui::geometry::UiRect::new(
+                            lay.tooltip.x + 8.0,
+                            lay.tooltip.y,
+                            lay.tooltip.w - 16.0,
+                            lay.tooltip.h,
+                        ),
+                        12.0,
                     ),
                     &text,
                     palette.text,
@@ -1663,16 +1751,18 @@ impl App {
             } else {
                 palette.text
             };
-            d.label_left(field.text_area, &field.text_shown, text_color, 13.0);
+            d.label_left(
+                kit::text_area_vcentered(field.text_area, 13.0),
+                &field.text_shown,
+                text_color,
+                13.0,
+            );
             if *focused && field.caret_x >= 0.0 {
-                // Каретка — рамка 1.5 px слотом accent (фокус-рамка FR-057)
+                // Каретка — рамка 1.5 px слотом accent (фокус-рамка FR-057);
+                // канон вертикали (issue #68, IN12): единая формула от
+                // метрики строки, центр общий с текстом в `text_area`.
                 d.rect(
-                    canvas_ui::geometry::UiRect::new(
-                        field.caret_x,
-                        field.text_area.y + 4.0,
-                        1.5,
-                        field.text_area.h - 8.0,
-                    ),
+                    kit::caret_rect(field.text_area, 13.0, field.caret_x),
                     palette.accent,
                     [0.0; 4],
                     0.0,
@@ -1703,18 +1793,20 @@ impl App {
                 panel_style.radius,
             );
             d.label_left(
-                canvas_ui::geometry::UiRect::new(
-                    card.header.x,
-                    card.header.y + 2.0,
-                    card.header.w,
-                    16.0,
-                ),
+                // Канон вертикали: строковый бокс по центру хедера карты
+                // (h=20) — вместо ручной полосы +2.0/16.0.
+                kit::text_area_vcentered(card.header, 13.0),
                 &label(crate::i18n::keys::KIT_CARD_TITLE),
                 palette.text_title,
                 13.0,
             );
             d.label_left(
-                canvas_ui::geometry::UiRect::new(card.body.x, card.body.y, card.body.w, 16.0),
+                // Первая строка тела — полоса 16 от верха body (якорь
+                // раскладки); центровка строкового бокса — хелпер.
+                kit::text_area_vcentered(
+                    canvas_ui::geometry::UiRect::new(card.body.x, card.body.y, card.body.w, 16.0),
+                    12.0,
+                ),
                 &label(crate::i18n::keys::KIT_CARD_BODY),
                 palette.text_muted,
                 12.0,
@@ -1733,11 +1825,11 @@ impl App {
                     &[("{n}", &(index + 1).to_string())],
                 );
                 d.label_left(
-                    canvas_ui::geometry::UiRect::new(
-                        row.x + 8.0,
-                        row.y + 4.0,
-                        row.w - 16.0,
-                        row.h - 6.0,
+                    // Горизонтальный пад строки прежний (+8/−16); вертикаль —
+                    // канон (строковый бокс по центру строки списка).
+                    kit::text_area_vcentered(
+                        canvas_ui::geometry::UiRect::new(row.x + 8.0, row.y, row.w - 16.0, row.h),
+                        12.0,
                     ),
                     &text,
                     style.text,
@@ -1810,7 +1902,12 @@ impl App {
             for (i, rect) in lay.measured_chips.iter().enumerate() {
                 d.control(*rect, &style);
                 if let Some(key) = keys.get(i) {
-                    d.label_center(*rect, &label(key), style.text, 12.0);
+                    d.label_center(
+                        kit::text_area_vcentered(*rect, 12.0),
+                        &label(key),
+                        style.text,
+                        12.0,
+                    );
                 }
             }
         }
@@ -1822,7 +1919,12 @@ impl App {
                 &palette,
             );
             d.control(*rect, &style);
-            d.label_center(*rect, &label(key), style.text, 13.0);
+            d.label_center(
+                kit::text_area_vcentered(*rect, 13.0),
+                &label(key),
+                style.text,
+                13.0,
+            );
         }
         // Wrap (F-15): жадная упаковка measured-чипов в строки слота
         for (rect, index) in &lay.wrap_chips {
@@ -1833,7 +1935,12 @@ impl App {
                 crate::i18n::keys::KIT_WRAP_CHIP,
                 &[("{n}", &(index + 1).to_string())],
             );
-            d.label_center(*rect, &text, style.text, 12.0);
+            d.label_center(
+                kit::text_area_vcentered(*rect, 12.0),
+                &text,
+                style.text,
+                12.0,
+            );
         }
         // Сетка (F-16): 4×2 равных колонок (grid_cells)
         for (i, rect) in lay.grid_cells.iter().enumerate() {
@@ -1844,7 +1951,12 @@ impl App {
                 canvas_core::tokens::RADIUS_CHIP,
             );
             let text = (i + 1).to_string();
-            d.label_center(*rect, &text, palette.text, 11.0);
+            d.label_center(
+                kit::text_area_vcentered(*rect, 11.0),
+                &text,
+                palette.text,
+                11.0,
+            );
         }
         // Фокус (F-17): Tab-кольцо — рамка accent на текущем слоте
         // (кольцо в контент-координатах; слоты здесь уже сдвинуты на off).
@@ -1867,7 +1979,7 @@ impl App {
             );
             d.control(*rect, &style);
             d.label_center(
-                *rect,
+                kit::text_area_vcentered(*rect, 11.0),
                 &(i + 1).to_string(),
                 if focused {
                     palette.accent
@@ -1908,7 +2020,12 @@ impl App {
             let ps = canvas_ui::kit::panel_style(&palette);
             d.rect(*prect, ps.fill, ps.border, ps.radius);
             d.label_left(
-                canvas_ui::geometry::UiRect::new(crect.x, crect.y + 2.0, crect.w, 16.0),
+                // Верх контента панели — якорь раскладки; строковый бокс в
+                // полосе 16 — хелпер (без ручного +2.0).
+                kit::text_area_vcentered(
+                    canvas_ui::geometry::UiRect::new(crect.x, crect.y, crect.w, 16.0),
+                    12.0,
+                ),
                 &label(crate::i18n::keys::KIT_COMPONENT_PANEL_BODY),
                 palette.text_muted,
                 12.0,
@@ -1946,7 +2063,12 @@ impl App {
         for (rect, key) in &lay.align_between {
             let style = canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &palette);
             d.control(*rect, &style);
-            d.label_center(*rect, &label(key), style.text, 12.0);
+            d.label_center(
+                kit::text_area_vcentered(*rect, 12.0),
+                &label(key),
+                style.text,
+                12.0,
+            );
         }
         // Column + распорка: ячейки вертикального стека с номерами;
         // распорка (нулевая ширина) — не рисуется.
@@ -1960,7 +2082,12 @@ impl App {
                 palette.control_border,
                 canvas_core::tokens::RADIUS_CHIP,
             );
-            d.label_center(*rect, &(i + 1).to_string(), palette.text, 11.0);
+            d.label_center(
+                kit::text_area_vcentered(*rect, 11.0),
+                &(i + 1).to_string(),
+                palette.text,
+                11.0,
+            );
         }
         // === LAY-SHOWCASE (design/rules/11-layouts.md, LAY11 п.10): витрина
         // раскладок — отрисовка декоративная (hit-зон нет), геометрия — из
@@ -1975,7 +2102,7 @@ impl App {
                 canvas_core::tokens::RADIUS_CHIP,
             );
             d.label_center(
-                *rect,
+                kit::text_area_vcentered(*rect, 11.0),
                 &format!("{}→{}", *desired as i32, rect.w as i32),
                 palette.text_muted,
                 11.0,
@@ -1991,7 +2118,12 @@ impl App {
                 canvas_core::tokens::RADIUS_CHIP,
             );
             d.rect(*inner, palette.control_fill, [0.0; 4], 2.0);
-            d.label_center(*inner, name, palette.text_muted, 11.0);
+            d.label_center(
+                kit::text_area_vcentered(*inner, 11.0),
+                name,
+                palette.text_muted,
+                11.0,
+            );
         }
         // Stack (LAY2): слот-рамка + фиксированный блок («модалка»):
         // Center/Center и End/End — подписи i18n.
@@ -2013,7 +2145,12 @@ impl App {
             } else {
                 crate::i18n::keys::KIT_LAYOUT_STACK_END
             };
-            d.label_center(*block, &label(key), palette.text, 11.0);
+            d.label_center(
+                kit::text_area_vcentered(*block, 11.0),
+                &label(key),
+                palette.text,
+                11.0,
+            );
         }
         // Шкала зазоров S1 (LAY7): пары блоков — зазор = значение ступени;
         // подпись — тот же текст, что в замере раскладки (GapDemoRow.caption).
@@ -2026,7 +2163,12 @@ impl App {
                     canvas_core::tokens::RADIUS_CHIP,
                 );
             }
-            d.label_left(row.label, &row.caption, palette.text_muted, 11.0);
+            d.label_left(
+                kit::text_area_vcentered(row.label, 11.0),
+                &row.caption,
+                palette.text_muted,
+                11.0,
+            );
         }
         // Сцена: percent + Fill (LAY5): доли ширины (подписи — запись долей
         // и имя варианта SceneDim::Fill — классы, без перевода).
@@ -2039,7 +2181,12 @@ impl App {
                 canvas_core::tokens::RADIUS_CHIP,
             );
             if let Some(text) = PERCENT_LABELS.get(i) {
-                d.label_center(*rect, text, palette.text, 11.0);
+                d.label_center(
+                    kit::text_area_vcentered(*rect, 11.0),
+                    text,
+                    palette.text,
+                    11.0,
+                );
             }
         }
         // Сцена: aspect-ratio (LAY5): плитки 16:9 — пропорция без перевода.
@@ -2050,7 +2197,12 @@ impl App {
                 palette.control_border,
                 canvas_core::tokens::RADIUS_CHIP,
             );
-            d.label_center(*rect, "16:9", palette.text, 11.0);
+            d.label_center(
+                kit::text_area_vcentered(*rect, 11.0),
+                "16:9",
+                palette.text,
+                11.0,
+            );
         }
         // Сцена: sticky-шапка (LAY5): окно + строки с номерами + шапка
         // поверх (рисуется последней — прилипла к верху окна).
@@ -2068,7 +2220,12 @@ impl App {
                     palette.control_border,
                     canvas_core::tokens::RADIUS_CHIP,
                 );
-                d.label_center(*rect, &(i + 1).to_string(), palette.text, 11.0);
+                d.label_center(
+                    kit::text_area_vcentered(*rect, 11.0),
+                    &(i + 1).to_string(),
+                    palette.text,
+                    11.0,
+                );
             }
             d.rect(
                 sticky.header,
@@ -2077,7 +2234,7 @@ impl App {
                 canvas_core::tokens::RADIUS_CHIP,
             );
             d.label_center(
-                sticky.header,
+                kit::text_area_vcentered(sticky.header, 11.0),
                 &label(crate::i18n::keys::KIT_LAYOUT_STICKY_HEADER),
                 palette.text,
                 11.0,
@@ -2105,7 +2262,7 @@ impl App {
                         panel_style.radius,
                     );
                     d.label_center(
-                        *panel,
+                        kit::text_area_vcentered(*panel, 11.0),
                         &crate::i18n::trf(
                             lang,
                             crate::i18n::keys::KIT_LAYOUT_HIDE_BELOW_PANEL,
@@ -2117,7 +2274,7 @@ impl App {
                 }
                 None => {
                     d.label_center(
-                        lay.layout_hide_below.slot,
+                        kit::text_area_vcentered(lay.layout_hide_below.slot, 11.0),
                         &crate::i18n::trf(
                             lang,
                             crate::i18n::keys::KIT_LAYOUT_HIDE_BELOW_HIDDEN,
@@ -4252,11 +4409,17 @@ impl App {
             params: [6.0, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
+        // Канон вертикали (issue #68, IN13): строковый бокс кегля 14 по центру
+        // кнопки закрытия — хелпер кита (без литерала ×1.3 на месте вызова).
+        let close_line = kit::text_area_vcentered(
+            canvas_ui::geometry::UiRect::new(close[0], close[1], close[2], close[3]),
+            14.0,
+        );
         texts.push(OwnedScreenText {
-            height: 0.0,
+            height: close_line.h,
             text: "×".to_owned(),
-            origin: [close[0], close[1] + (close[3] - 14.0 * 1.3) / 2.0],
-            width: close[2],
+            origin: [close_line.x, close_line.y],
+            width: close_line.w,
             font_size: 14.0,
             color: palette.title,
             align: TextAlign::Center,
@@ -4616,11 +4779,11 @@ impl App {
                     &style,
                 );
                 d.label(
-                    canvas_ui::geometry::UiRect::new(
-                        rect[0],
-                        rect[1] + (rect[3] - opt_font * 1.3) / 2.0,
-                        rect[2],
-                        opt_font * 1.3,
+                    // Канон вертикали (issue #68, IN13): строковый бокс по
+                    // центру кнопки — хелпер кита (без ручной формулы ×1.3).
+                    kit::text_area_vcentered(
+                        canvas_ui::geometry::UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                        opt_font,
                     ),
                     self.tr(label_key),
                     style.text,
@@ -4650,11 +4813,11 @@ impl App {
                 &style,
             );
             d.label(
-                canvas_ui::geometry::UiRect::new(
-                    rect[0],
-                    rect[1] + (rect[3] - opt_font * 1.3) / 2.0,
-                    rect[2],
-                    opt_font * 1.3,
+                // Канон вертикали (issue #68, IN13): строковый бокс по центру
+                // кнопки — хелпер кита (без ручной формулы ×1.3).
+                kit::text_area_vcentered(
+                    canvas_ui::geometry::UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                    opt_font,
                 ),
                 self.tr(keys::ONBOARDING_MULTICANVAS_CTA),
                 style.text,
@@ -4687,11 +4850,11 @@ impl App {
                 &style,
             );
             d.label(
-                canvas_ui::geometry::UiRect::new(
-                    rect[0],
-                    rect[1] + (rect[3] - font * 1.3) / 2.0,
-                    rect[2],
-                    font * 1.3,
+                // Канон вертикали (issue #68, IN13): строковый бокс по центру
+                // кнопки — хелпер кита (без ручной формулы ×1.3).
+                kit::text_area_vcentered(
+                    canvas_ui::geometry::UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                    *font,
                 ),
                 label,
                 style.text,
@@ -5795,9 +5958,6 @@ impl App {
             return render;
         }
         let palette = self.effective_palette();
-        // Вертикальная центровка иконки: лайн-бокс высотой font*1.3 по центру
-        // кнопки (так же считает рендер screen-текстов).
-        let icon_top = |rect: [f32; 4], font_size: f32| rect[1] + (rect[3] - font_size * 1.3) / 2.0;
         // W-c (аудит ui-kit §10): угловой кластер ⚙/тема/язык/«?» — kit
         // IconButton: рамка/фон/hover — `icon_button_style` (Ghost-слоты
         // палитры кита, паттерн kit_gallery_overlay), состояния —
@@ -5909,16 +6069,27 @@ impl App {
             params: [language_style.radius, 0.0, 0.0, 1.0],
             corners: [0.0; 4],
         });
+        // Канон вертикали (issue #68, IN13): строковый бокс метки по центру
+        // кнопки — хелпер кита (замена локального замыкания icon_top).
+        let lang_line = kit::text_area_vcentered(
+            canvas_ui::geometry::UiRect::new(
+                language_button[0],
+                language_button[1],
+                language_button[2],
+                language_button[3],
+            ),
+            13.0,
+        );
         texts.push(OwnedScreenText {
-            height: 0.0,
+            height: lang_line.h,
             // Код языка — на языке самого языка («RU»/«EN»), конвенция
             // FR-040 §4 (названия в переключателе — на языке самого языка).
             text: match self.settings.language {
                 canvas_core::Language::Ru => "RU".to_owned(),
                 canvas_core::Language::En => "EN".to_owned(),
             },
-            origin: [language_button[0], icon_top(language_button, 13.0)],
-            width: language_button[2],
+            origin: [lang_line.x, lang_line.y],
+            width: lang_line.w,
             font_size: 13.0,
             color: palette.title,
             align: TextAlign::Center,
@@ -5945,11 +6116,22 @@ impl App {
             ],
             corners: [0.0; 4],
         });
+        // Канон вертикали (issue #68, IN13): строковый бокс глифа по центру
+        // кнопки — хелпер кита (замена локального замыкания icon_top).
+        let help_line = kit::text_area_vcentered(
+            canvas_ui::geometry::UiRect::new(
+                help_button[0],
+                help_button[1],
+                help_button[2],
+                help_button[3],
+            ),
+            18.0,
+        );
         texts.push(OwnedScreenText {
-            height: 0.0,
+            height: help_line.h,
             text: canvas_ui::kit::icon_glyph(canvas_ui::kit::Icon::Question).to_owned(),
-            origin: [help_button[0], icon_top(help_button, 18.0)],
-            width: help_button[2],
+            origin: [help_line.x, help_line.y],
+            width: help_line.w,
             font_size: 18.0,
             color: palette.title,
             align: TextAlign::Center,
@@ -6159,7 +6341,13 @@ impl App {
             // той же посадке (центр слота / колонка).
             let icon_size = 16.0f32.min(item[3] - 4.0);
             let icon_y = item[1] + (item[3] - icon_size) / 2.0;
-            let glyph_y = item[1] + (item[3] - 14.0 * 1.3) / 2.0;
+            // Канон вертикали (issue #68, IN13): глиф-фолбэк таба — строковый
+            // бокс кегля 14 по центру слота таба (хелпер кита).
+            let glyph_y = kit::text_area_vcentered(
+                canvas_ui::geometry::UiRect::new(item[0], item[1], item[2], item[3]),
+                14.0,
+            )
+            .y;
             let (icon_x, glyph_origin, glyph_width, glyph_align) = if compact_tabs {
                 (
                     item[0] + (item[2] - icon_size) / 2.0,
@@ -6212,10 +6400,17 @@ impl App {
             // компакт/мобайл имя активного раздела читается в заголовке
             // под таб-баром (слоты ~62px не вмещают подписи без эвристик).
             if !compact_tabs {
+                // Канон вертикали (issue #68, IN13): подпись раздела —
+                // строковый бокс кегля 13 по центру слота таба (хелпер;
+                // горизонталь прежняя: +36 от левого края).
+                let tab_title_line = kit::text_area_vcentered(
+                    canvas_ui::geometry::UiRect::new(item[0], item[1], item[2], item[3]),
+                    13.0,
+                );
                 texts.push(OwnedScreenText {
-                    height: 0.0,
+                    height: tab_title_line.h,
                     text: self.tr(tab.title_key).to_owned(),
-                    origin: [item[0] + 36.0, item[1] + (item[3] - 13.0 * 1.3) / 2.0],
+                    origin: [item[0] + 36.0, tab_title_line.y],
                     width: item[2] - 36.0 - 6.0,
                     font_size: 13.0,
                     color: if active { palette.title } else { palette.body },
@@ -6226,11 +6421,23 @@ impl App {
         // Подсказка внизу левой колонки (перенос из подвала панели FR-026);
         // компакт/мобайл — левой колонки нет (hint_rect пуст).
         if !compact_tabs {
+            // Канон вертикали (issue #68, IN13): строковый бокс кегля 11 по
+            // центру полосы подсказки (h=24 из раскладки; без ручного +4.0;
+            // горизонталь прежняя).
+            let hint_line = kit::text_area_vcentered(
+                canvas_ui::geometry::UiRect::new(
+                    layout.hint_rect[0],
+                    layout.hint_rect[1],
+                    layout.hint_rect[2],
+                    layout.hint_rect[3],
+                ),
+                11.0,
+            );
             texts.push(OwnedScreenText {
-                height: 0.0,
+                height: hint_line.h,
                 text: self.tr(keys::SETTINGS_HINT).to_owned(),
-                origin: [layout.hint_rect[0], layout.hint_rect[1] + 4.0],
-                width: layout.hint_rect[2],
+                origin: [hint_line.x, hint_line.y],
+                width: hint_line.w,
                 font_size: 11.0,
                 color: palette.icon,
                 align: TextAlign::Left,
@@ -6238,11 +6445,22 @@ impl App {
         }
         // Заголовок раздела (правая панель)
         let tab_def = &SETTINGS_TABS[tab_index];
+        // Канон вертикали (issue #68, IN13): строковый бокс кегля 16 по центру
+        // полосы заголовка (h=30 из раскладки; без ручного +3.0).
+        let tab_header_line = kit::text_area_vcentered(
+            canvas_ui::geometry::UiRect::new(
+                layout.title_rect[0],
+                layout.title_rect[1],
+                layout.title_rect[2],
+                layout.title_rect[3],
+            ),
+            16.0,
+        );
         texts.push(OwnedScreenText {
-            height: 0.0,
+            height: tab_header_line.h,
             text: self.tr(tab_def.title_key).to_owned(),
-            origin: [layout.title_rect[0], layout.title_rect[1] + 3.0],
-            width: layout.title_rect[2],
+            origin: [tab_header_line.x, tab_header_line.y],
+            width: tab_header_line.w,
             font_size: 16.0,
             color: palette.title,
             align: TextAlign::Left,
@@ -6973,11 +7191,15 @@ impl App {
                     let field_text = layout.text_shown.clone();
                     let is_placeholder = model.text.is_empty();
                     if !field_text.is_empty() {
+                        // Канон вертикали (issue #68, IN13): строковый бокс
+                        // кегля 11 по центру text_area — хелпер кита (общий
+                        // центр с кареткой ниже; без ручного +2.0).
+                        let field_line = kit::text_area_vcentered(layout.text_area, 11.0);
                         texts.push(OwnedScreenText {
-                            height: 0.0,
+                            height: field_line.h,
                             text: field_text,
-                            origin: [layout.text_area.x, layout.text_area.y + 2.0],
-                            width: layout.text_area.w,
+                            origin: [field_line.x, field_line.y],
+                            width: field_line.w,
                             font_size: 11.0,
                             color: if is_placeholder {
                                 palette.icon
@@ -6992,10 +7214,13 @@ impl App {
                     // префикс до каретки тем же кеглем 11.0; -1.0 — не в
                     // фокусе). Кладётся ПОВЕРХ текста, как в explain —
                     // перекрытие последнего глифа 1.5 px не мешает.
+                    // Канон вертикали (issue #68, IN12): единая формула
+                    // каретки от метрики строки (не `h − 4.0`).
                     if editing_now && layout.caret_x >= 0.0 {
+                        let c = kit::caret_rect(layout.text_area, 11.0, layout.caret_x);
                         instances.push(CardInstance {
-                            pos: [layout.caret_x, layout.text_area.y + 2.0],
-                            size: [1.5, layout.text_area.h - 4.0],
+                            pos: [c.x, c.y],
+                            size: [c.w, c.h],
                             fill: color_to_rgba(palette.link),
                             border: [0.0; 4],
                             params: [0.0, 0.0, 0.0, 1.0],
@@ -7620,7 +7845,12 @@ impl App {
             lay.reconnect[3],
         );
         d.control(rec_rect, &rec_style);
-        d.label_center(rec_rect, reconnect, rec_style.text, font);
+        d.label_center(
+            kit::text_area_vcentered(rec_rect, font),
+            reconnect,
+            rec_style.text,
+            font,
+        );
         // «Переключиться в браузерное» — secondary (запасной выход)
         let mut sw_widget = WidgetState::default();
         sw_widget.set_pointer(hover(lay.switch), false);
@@ -7636,7 +7866,12 @@ impl App {
             lay.switch[3],
         );
         d.control(sw_rect, &sw_style);
-        d.label_center(sw_rect, switch, sw_style.text, font);
+        d.label_center(
+            kit::text_area_vcentered(sw_rect, font),
+            switch,
+            sw_style.text,
+            font,
+        );
         out.0 = d.quads;
         out.1 = d
             .texts
@@ -7793,18 +8028,28 @@ impl App {
             );
             d.control(check_rect, &check_style);
             if row.checked {
-                d.label_center(check_rect, "✓", kit_palette.text_title, font);
+                d.label_center(
+                    kit::text_area_vcentered(check_rect, font),
+                    "✓",
+                    kit_palette.text_title,
+                    font,
+                );
             }
             // Имя канваса (display, без .canvas) с эллипсисом по факту места
             // (TextMeasurer::ellipsis — единый шейпинг с отрисовкой)
             let entry = &self.migrate.entries[lay.first_row + index];
             let shown = m.ellipsis(&mut fs, entry.display(), family, font, row.label[2]);
             d.label_left(
-                canvas_ui::geometry::UiRect::new(
-                    row.label[0],
-                    row.label[1] + (row.label[3] - font - 2.0).max(0.0) * 0.5,
-                    row.label[2],
-                    font + 2.0,
+                // Канон вертикали (issue #68, IN13): строковый бокс по центру
+                // строки (замена ручного бокса font+2.0).
+                kit::text_area_vcentered(
+                    canvas_ui::geometry::UiRect::new(
+                        row.label[0],
+                        row.label[1],
+                        row.label[2],
+                        row.label[3],
+                    ),
+                    font,
                 ),
                 &shown,
                 kit_palette.text,
@@ -7822,7 +8067,12 @@ impl App {
         );
         let go_rect = canvas_ui::geometry::UiRect::new(lay.go[0], lay.go[1], lay.go[2], lay.go[3]);
         d.control(go_rect, &go_style);
-        d.label_center(go_rect, go, go_style.text, font);
+        d.label_center(
+            kit::text_area_vcentered(go_rect, font),
+            go,
+            go_style.text,
+            font,
+        );
         let mut cancel_widget = WidgetState::default();
         cancel_widget.set_pointer(hover(lay.cancel), false);
         let cancel_style = canvas_ui::kit::button_style(
@@ -7837,7 +8087,12 @@ impl App {
             lay.cancel[3],
         );
         d.control(cancel_rect, &cancel_style);
-        d.label_center(cancel_rect, cancel, cancel_style.text, font);
+        d.label_center(
+            kit::text_area_vcentered(cancel_rect, font),
+            cancel,
+            cancel_style.text,
+            font,
+        );
         out.0 = d.quads;
         out.1 = d
             .texts
@@ -7933,7 +8188,12 @@ impl App {
                 font,
                 &kit_palette,
             );
-            d.label_left(rect(lay.name), &shown, kit_palette.text, font);
+            d.label_left(
+                kit::text_area_vcentered(rect(lay.name), font),
+                &shown,
+                kit_palette.text,
+                font,
+            );
             if let Some(c) = caret {
                 d.rect(
                     canvas_ui::geometry::UiRect::new(c[0], c[1], c[2], c[3]),
@@ -7949,11 +8209,17 @@ impl App {
             // кластер «?»/кромка экрана). Кламп к левому краю вьюпорта.
             let hint_x = (lay.pill[0] - canvas_core::tokens::SPACING_SM - hint_w).max(0.0);
             d.label_left(
-                canvas_ui::geometry::UiRect::new(
-                    hint_x,
-                    lay.pill[1] + (lay.pill[3] - caption - 2.0).max(0.0) * 0.5,
-                    hint_w.min(lay.pill[0]),
-                    caption + 2.0,
+                // Канон вертикали (issue #68, IN13): строковый бокс по центру
+                // пилюли (замена ручного бокса caption+2.0); горизонталь —
+                // прежняя посадка слева от пилюли.
+                kit::text_area_vcentered(
+                    canvas_ui::geometry::UiRect::new(
+                        hint_x,
+                        lay.pill[1],
+                        hint_w.min(lay.pill[0]),
+                        lay.pill[3],
+                    ),
+                    caption,
                 ),
                 hint,
                 kit_palette.text_muted,
@@ -7970,12 +8236,9 @@ impl App {
                 lay.name_text_w.max(0.0),
             );
             d.label_left(
-                canvas_ui::geometry::UiRect::new(
-                    lay.name[0],
-                    lay.name[1] + (lay.pill[3] - font - 2.0).max(0.0) * 0.5,
-                    lay.name[2],
-                    font + 2.0,
-                ),
+                // Канон вертикали (issue #68, IN13): строковый бокс по центру
+                // зоны имени (замена ручного бокса font+2.0).
+                kit::text_area_vcentered(rect(lay.name), font),
                 &shown,
                 kit_palette.text_title,
                 font,
@@ -7995,10 +8258,15 @@ impl App {
                 lay.badge[2] * 0.5, // круг
             );
             d.label_center(
-                canvas_ui::geometry::UiRect::new(
-                    lay.badge[0],
-                    lay.badge[1] + (lay.badge[3] - caption).max(0.0) * 0.5,
-                    lay.badge[2],
+                // Канон вертикали (issue #68, IN13): строковый бокс по центру
+                // бейджа (замена ручного бокса высотой caption).
+                kit::text_area_vcentered(
+                    canvas_ui::geometry::UiRect::new(
+                        lay.badge[0],
+                        lay.badge[1],
+                        lay.badge[2],
+                        lay.badge[3],
+                    ),
                     caption,
                 ),
                 "!",
@@ -8052,11 +8320,16 @@ impl App {
                 canvas_core::tokens::RADIUS_CHIP,
             );
             d.label_left(
-                canvas_ui::geometry::UiRect::new(
-                    x + canvas_core::tokens::SPACING_MD,
-                    y + 4.0,
-                    text_w + 1.0,
-                    caption + 1.0,
+                // Канон вертикали: строковый бокс по центру пузыря тултипа
+                // (горизонтальный пад прежний; замена ручного y+4.0).
+                kit::text_area_vcentered(
+                    canvas_ui::geometry::UiRect::new(
+                        x + canvas_core::tokens::SPACING_MD,
+                        y,
+                        text_w + 1.0,
+                        h,
+                    ),
+                    caption,
                 ),
                 text,
                 kit_palette.text,
@@ -8168,11 +8441,16 @@ impl App {
                     canvas_core::tokens::RADIUS_CHIP,
                 );
                 d.label_left(
-                    canvas_ui::geometry::UiRect::new(
-                        x + canvas_core::tokens::SPACING_MD,
-                        y + 4.0,
-                        tip_w,
-                        caption + 1.0,
+                    // Канон вертикали: строковый бокс по центру пузыря
+                    // тултипа (горизонтальный пад прежний; замена y+4.0).
+                    kit::text_area_vcentered(
+                        canvas_ui::geometry::UiRect::new(
+                            x + canvas_core::tokens::SPACING_MD,
+                            y,
+                            tip_w,
+                            h,
+                        ),
+                        caption,
                     ),
                     tip,
                     kit_palette.text,
@@ -8397,7 +8675,12 @@ impl App {
             widget.set_pointer(hover(slot), false);
             let style = canvas_ui::kit::button_style(variant, widget.kit_state(), &kit_palette);
             d.control(rect(slot), &style);
-            d.label_center(rect(slot), label, style.text, font);
+            d.label_center(
+                kit::text_area_vcentered(rect(slot), font),
+                label,
+                style.text,
+                font,
+            );
         };
         if lay.has_entries {
             // Поле поиска (прецедент галереи схем: заливка слота + kit::text_field
@@ -8419,7 +8702,12 @@ impl App {
                 caption,
                 &kit_palette,
             );
-            d.label_left(rect(lay.search), &shown, kit_palette.text, caption);
+            d.label_left(
+                kit::text_area_vcentered(rect(lay.search), caption),
+                &shown,
+                kit_palette.text,
+                caption,
+            );
             if let Some(c) = caret {
                 d.rect(
                     canvas_ui::geometry::UiRect::new(c[0], c[1], c[2], c[3]),
@@ -8439,7 +8727,12 @@ impl App {
             sort_widget.set_pointer(hover(lay.sort_chip), false);
             let sort_style = canvas_ui::kit::chip_style(sort_widget.kit_state(), &kit_palette);
             d.control(rect(lay.sort_chip), &sort_style);
-            d.label_center(rect(lay.sort_chip), sort_label, sort_style.text, caption);
+            d.label_center(
+                kit::text_area_vcentered(rect(lay.sort_chip), caption),
+                sort_label,
+                sort_style.text,
+                caption,
+            );
             // Кнопки создания (№7): Пустой / Из шаблона… / Импорт файла…
             // FR-108 (натив): «Из шаблона…» скрыт (rect 0×0), слот import
             // рисует «Открыть…» (файловый диалог вместо импорта).
@@ -8479,15 +8772,11 @@ impl App {
                     );
                     let shown = m.ellipsis(&mut fs, &label, family, caption, row.row[2]);
                     d.label_left(
-                        canvas_ui::geometry::UiRect::new(
-                            row.row[0],
-                            // Центровка от высоты rect строки (Wave M M3-a:
-                            // в Compact строки 44 — паритет при OFF, где
-                            // row[3] == kit::LIST_ROW_H, бит-в-бит)
-                            row.row[1] + (row.row[3] - caption - 2.0).max(0.0) * 0.5,
-                            row.row[2],
-                            caption + 2.0,
-                        ),
+                        // Канон вертикали (issue #68, IN13): строковый бокс
+                        // по центру строки (замена ручного бокса caption+2.0;
+                        // центровка от высоты rect строки — Wave M M3-a:
+                        // в Compact строки 44 — паритет при OFF).
+                        kit::text_area_vcentered(rect(row.row), caption),
                         &shown,
                         kit_palette.text_muted,
                         caption,
@@ -8544,7 +8833,12 @@ impl App {
                         caption,
                         &kit_palette,
                     );
-                    d.label_left(rect(row.name), &shown, kit_palette.text, caption);
+                    d.label_left(
+                        kit::text_area_vcentered(rect(row.name), caption),
+                        &shown,
+                        kit_palette.text,
+                        caption,
+                    );
                     if let Some(c) = caret {
                         d.rect(
                             canvas_ui::geometry::UiRect::new(c[0], c[1], c[2], c[3]),
@@ -8556,13 +8850,9 @@ impl App {
                 } else {
                     let shown = m.ellipsis(&mut fs, entry.display(), family, font, row.name[2]);
                     d.label_left(
-                        canvas_ui::geometry::UiRect::new(
-                            row.name[0],
-                            // Центровка от высоты rect строки (см. Wave M M3-a)
-                            row.name[1] + (row.name[3] - font - 2.0).max(0.0) * 0.5,
-                            row.name[2],
-                            font + 2.0,
-                        ),
+                        // Канон вертикали (issue #68, IN13): строковый бокс
+                        // по центру зоны имени (замена бокса font+2.0).
+                        kit::text_area_vcentered(rect(row.name), font),
                         &shown,
                         if row.is_active {
                             kit_palette.text_title
@@ -8589,12 +8879,16 @@ impl App {
                     - canvas_manager_ui::BADGE_W
                     - canvas_core::tokens::SPACING_MD;
                 d.label_left(
-                    canvas_ui::geometry::UiRect::new(
-                        badge_x,
-                        // Центровка от высоты rect строки (см. Wave M M3-a)
-                        row.row[1] + (row.row[3] - caption - 2.0).max(0.0) * 0.5,
-                        canvas_manager_ui::BADGE_W,
-                        caption + 2.0,
+                    // Канон вертикали (issue #68, IN13): строковый бокс по
+                    // центру строки (горизонталь — прежняя посадка бейджа).
+                    kit::text_area_vcentered(
+                        canvas_ui::geometry::UiRect::new(
+                            badge_x,
+                            row.row[1],
+                            canvas_manager_ui::BADGE_W,
+                            row.row[3],
+                        ),
+                        caption,
                     ),
                     badge,
                     kit_palette.text_muted,
@@ -8602,12 +8896,16 @@ impl App {
                 );
                 let ts = canvas_manager_ui::format_ts(entry.ts);
                 d.label_left(
-                    canvas_ui::geometry::UiRect::new(
-                        row.row[0] + row.row[2] - canvas_manager_ui::TS_W,
-                        // Центровка от высоты rect строки (см. Wave M M3-a)
-                        row.row[1] + (row.row[3] - caption - 2.0).max(0.0) * 0.5,
-                        canvas_manager_ui::TS_W,
-                        caption + 2.0,
+                    // Канон вертикали (issue #68, IN13): строковый бокс по
+                    // центру строки (горизонталь — прежняя посадка даты).
+                    kit::text_area_vcentered(
+                        canvas_ui::geometry::UiRect::new(
+                            row.row[0] + row.row[2] - canvas_manager_ui::TS_W,
+                            row.row[1],
+                            canvas_manager_ui::TS_W,
+                            row.row[3],
+                        ),
+                        caption,
                     ),
                     &ts,
                     kit_palette.text_muted,

@@ -244,11 +244,12 @@ fn head_row_layout(
         12.5,
         model_avail,
     );
-    let model_area = UiRect::new(
-        model_x,
-        head_y + (HEAD_ROW_H - 12.5) * 0.5,
-        model_avail,
-        14.0,
+    // Канон вертикали (issue #68, IN11): строковый бокс кегля 12.5 по центру
+    // строки шапки (HEAD_ROW_H) — прежняя ручная центровка
+    // `head_y + (HEAD_ROW_H − 12.5)·0.5` с фиксированной высотой 14 заменена.
+    let model_area = canvas_ui::kit::text_area_vcentered(
+        UiRect::new(model_x, head_y, model_avail, HEAD_ROW_H),
+        12.5,
     );
     (
         HeadRow {
@@ -484,6 +485,8 @@ impl App {
         );
         // Имя модели (font 12.5px, `font-weight:600` в прототипе) —
         // сжимается первой, ellipsis по фактической ширине области.
+        // model_area — уже строковый бокс канона (text_area_vcentered в
+        // head_row_layout) — рисуется как есть.
         d.label_left(head.model_area, &model_fitted, kit_palette.text_title, 12.5);
         // Подпись провайдера — pill-чип контент-ширины
         // (border-radius:99px, padding:1px 7px, font 9.5px), flex:none.
@@ -491,7 +494,13 @@ impl App {
         let prov_chip_style =
             canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &kit_palette);
         d.control(prov_chip_rect, &prov_chip_style);
-        d.label_center(prov_chip_rect, &prov_fitted, prov_chip_style.text, 9.5);
+        // Канон вертикали (issue #68, IN11).
+        d.label_center(
+            canvas_ui::kit::text_area_vcentered(prov_chip_rect, 9.5),
+            &prov_fitted,
+            prov_chip_style.text,
+            9.5,
+        );
 
         // FR-LLM-FIX: кнопки ⏸/⚙ — 24×24, border-radius 6px (RADIUS_CHIP).
         // Позиция — из раскладки (правый край контента, зазор 6px).
@@ -574,7 +583,13 @@ impl App {
             // FR-LLM-FIX: pill-радиус переопределяем (chip_style даёт RADIUS_CHIP=6;
             // прототип — 99px). Рисуем вручную через d.rect с нужным радиусом.
             d.rect(chip_rect, chip_style.fill, chip_style.border, FEAT_RADIUS);
-            d.label_center(chip_rect, label_text, chip_style.text, FEAT_FONT);
+            // Канон вертикали (issue #68, IN11).
+            d.label_center(
+                canvas_ui::kit::text_area_vcentered(chip_rect, FEAT_FONT),
+                label_text,
+                chip_style.text,
+                FEAT_FONT,
+            );
             // hit-тест — та же геометрия (см. `ai_status_panel_hit`);
             // порядок чипов = порядок ToggleSuggest/Graph/Agent в hit-enum.
         }
@@ -587,8 +602,12 @@ impl App {
         let costs_text = self.trf(keys::AI_STATUS_DAY, &[("v", &day_str), ("lim", &limit_str)]);
         let session_text = self.trf(keys::AI_STATUS_SESSION, &[("v", &session_str)]);
         let combined = format!("{} · {}", session_text, costs_text);
+        // Канон вертикали (issue #68, IN11).
         d.label_left(
-            UiRect::new(content_x, costs_y, content_w, COST_ROW_H),
+            canvas_ui::kit::text_area_vcentered(
+                UiRect::new(content_x, costs_y, content_w, COST_ROW_H),
+                11.0,
+            ),
             &combined,
             kit_palette.text_muted,
             11.0,
@@ -637,8 +656,12 @@ impl App {
         if self.ai_paused {
             let paused_y = progress_y + BAR_H + GAP_BAR_PAUSED;
             let amber = kit_palette.control_warning;
+            // Канон вертикали (issue #68, IN11).
             d.label_left(
-                UiRect::new(content_x, paused_y, content_w, 13.0),
+                canvas_ui::kit::text_area_vcentered(
+                    UiRect::new(content_x, paused_y, content_w, 13.0),
+                    10.0,
+                ),
                 self.tr(keys::AI_STATUS_PAUSED),
                 amber,
                 10.0,

@@ -935,7 +935,14 @@ impl ApplicationHandler<AppEvent> for App {
                         let button = canvas_ui::UiRect::new(rect[0], rect[1], rect[2], rect[3]);
                         let mut d = crate::kit_ui::KitDraw::new();
                         d.control(button, &style);
-                        d.label_center(button, label, style.text, font);
+                        // Канон вертикали (issue #68, IN11): строковый бокс
+                        // подписи по центру кнопки тоста.
+                        d.label_center(
+                            canvas_ui::kit::text_area_vcentered(button, font),
+                            label,
+                            style.text,
+                            font,
+                        );
                         toast_instances = d.quads;
                         // Подпись кнопки — тем же полосным пушем ниже (кит
                         // отдаёт OwnedText; конвертация — как в overlays)

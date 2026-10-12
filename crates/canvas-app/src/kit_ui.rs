@@ -62,8 +62,9 @@ pub const PANEL_MAX: UiVec2 = UiVec2::new(900.0, 640.0);
 pub use canvas_core::tokens::SPACING_LG as SECTION_GAP;
 /// Высота строки подписи секции в линейке (шаг прежнего курсора; кегль
 /// подписи 11, окно отрисовки 16 — overlays.rs). Вне S3 — пин геометрии,
-/// кандидат в `kit::CONST` (LAY-W7). K4-секции (#62) переиспользуют
-/// высоту для вертикального центрирования подписей строк состояний.
+/// кандидат в `kit::CONST` (LAY-W7). K4-секции (#62): высота блока
+/// синтетической линейки теста `k4_sections_rows_fit_block`; подписи строк
+/// состояний — канон вертикали #68 (строковый бокс `text_area_vcentered`).
 pub const SECTION_TITLE_H: f32 = 18.0;
 /// Историческая надбавка зазора после секции Buttons (+4 px к SECTION_GAP;
 /// вне шкалы S1 — исключение LAY7: «Исключения» 11-layouts.md,
@@ -4036,7 +4037,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
                 )],
             ),
         };
-        d.label_center(*r, &text, style.text, 11.0);
+        d.label_center(kit::text_area_vcentered(*r, 11.0), &text, style.text, 11.0);
     }
 
     // --- Сайдбар (D5): группы + секции ---
@@ -4062,7 +4063,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             d.control(*r, &style);
             // F2: подпись чипа — по измеренной ширине слота (не по счёту).
             let text = m.ellipsis(fs, &label(key), FONT_FAMILY, 11.0, (r.w - 8.0).max(0.0));
-            d.label_center(*r, &text, style.text, 11.0);
+            d.label_center(kit::text_area_vcentered(*r, 11.0), &text, style.text, 11.0);
         }
         for (r, id) in &dl.sidebar_items {
             let hover = cursor_in(r, ctx.cursor);
@@ -4076,7 +4077,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             // F2: усечение по измеренной ширине строки (TextMeasurer).
             let title = m.ellipsis(fs, &title, FONT_FAMILY, 11.0, (r.w - 16.0).max(0.0));
             d.label_left(
-                UiRect::new(r.x + 8.0, r.y + (r.h - 14.0) / 2.0, r.w - 16.0, 14.0),
+                kit::text_area_vcentered(UiRect::new(r.x + 8.0, r.y, r.w - 16.0, r.h), 11.0),
                 &title,
                 p.text,
                 11.0,
@@ -4085,7 +4086,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
     } else {
         for (r, key) in &dl.sidebar_groups {
             d.label_left(
-                UiRect::new(r.x + 8.0, r.y + 2.0, r.w - 8.0, 14.0),
+                kit::text_area_vcentered(UiRect::new(r.x + 8.0, r.y, r.w - 8.0, r.h), 10.0),
                 &label(key),
                 p.text_muted,
                 10.0,
@@ -4106,7 +4107,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             // item.w − 8 (item inset) − 8 (label inset), метка не режется клипом.
             let shown = sidebar_item_label(m, fs, &title, r.w - 16.0);
             d.label_left(
-                UiRect::new(r.x + 8.0, r.y + 3.0, r.w - 16.0, 14.0),
+                kit::text_area_vcentered(UiRect::new(r.x + 8.0, r.y, r.w - 16.0, r.h), 11.0),
                 &shown,
                 p.text,
                 11.0,
@@ -4127,7 +4128,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             continue;
         }
         d.label_left(
-            UiRect::new(r.x, r.y, r.w, 12.0),
+            kit::text_area_vcentered(*r, 10.0),
             &label(key),
             p.text_muted,
             10.0,
@@ -4181,7 +4182,12 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         d.control(lay.box_rect, &style);
         let glyph = canvas_ui::component::checkbox::checkbox_glyph(cb_state);
         if !glyph.is_empty() {
-            d.label_center(lay.box_rect, glyph, style.text, 12.0);
+            d.label_center(
+                kit::text_area_vcentered(lay.box_rect, 12.0),
+                glyph,
+                style.text,
+                12.0,
+            );
         }
     }
     // Slider (компонентная раскладка из слота)
@@ -4233,7 +4239,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             r.h,
         );
         d.label_left(
-            label_rect,
+            kit::text_area_vcentered(label_rect, 12.0),
             &label(crate::i18n::keys::KIT_LIST_ROW),
             style.text,
             12.0,
@@ -4266,7 +4272,12 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             let Some(text_key) = tab_labels.get(i) else {
                 continue;
             };
-            d.label_center(*r, &label(text_key), style.text, 12.0);
+            d.label_center(
+                kit::text_area_vcentered(*r, 12.0),
+                &label(text_key),
+                style.text,
+                12.0,
+            );
             if active {
                 let ind = UiRect::new(r.x + r.w * 0.2, r.y + bar_h - 2.0, r.w * 0.6, 2.0);
                 d.rect(ind, p.accent, [0.0; 4], 1.0);
@@ -4277,7 +4288,12 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         let body_style = kit::button_style(kit::ButtonVariant::Secondary, kit::KitState::Normal, p);
         d.rect(panel, body_style.fill, body_style.border, 4.0);
         if let Some(text_key) = tab_labels.get(ctx.demo.tab_idx) {
-            d.label_center(panel, &label(text_key), body_style.text, 12.0);
+            d.label_center(
+                kit::text_area_vcentered(panel, 12.0),
+                &label(text_key),
+                body_style.text,
+                12.0,
+            );
         }
     }
     // Segmented
@@ -4311,7 +4327,12 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             let Some(key) = seg_labels.get(i) else {
                 continue;
             };
-            d.label_center(*r, &label(key), style.text, 11.0);
+            d.label_center(
+                kit::text_area_vcentered(*r, 11.0),
+                &label(key),
+                style.text,
+                11.0,
+            );
         }
     }
     // Command palette: якорь
@@ -4329,7 +4350,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         );
         d.control(wc.palette_anchor, &style);
         d.label_center(
-            wc.palette_anchor,
+            kit::text_area_vcentered(wc.palette_anchor, 12.0),
             &label(crate::i18n::keys::KIT_DEMO_PALETTE_OPEN),
             style.text,
             12.0,
@@ -4350,7 +4371,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         );
         d.control(wc.modal_anchor, &style);
         d.label_center(
-            wc.modal_anchor,
+            kit::text_area_vcentered(wc.modal_anchor, 12.0),
             &label(crate::i18n::keys::KIT_DEMO_MODAL_OPEN),
             style.text,
             12.0,
@@ -4369,17 +4390,23 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         let style = kit::button_style(kit::ButtonVariant::Ghost, state, p);
         d.control(wc.tree_root, &style);
         d.label_left(
-            UiRect::new(wc.tree_root.x + 8.0, wc.tree_root.y + 4.0, 16.0, 18.0),
+            kit::text_area_vcentered(
+                UiRect::new(wc.tree_root.x + 8.0, wc.tree_root.y, 16.0, wc.tree_root.h),
+                12.0,
+            ),
             chevron,
             style.text,
             12.0,
         );
         d.label_left(
-            UiRect::new(
-                wc.tree_root.x + 26.0,
-                wc.tree_root.y + 4.0,
-                wc.tree_root.w - 26.0,
-                18.0,
+            kit::text_area_vcentered(
+                UiRect::new(
+                    wc.tree_root.x + 26.0,
+                    wc.tree_root.y,
+                    wc.tree_root.w - 26.0,
+                    wc.tree_root.h,
+                ),
+                12.0,
             ),
             &label(crate::i18n::keys::KIT_DEMO_TREE_ROOT),
             style.text,
@@ -4409,7 +4436,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
                 &[("{n}", &(i + 1).to_string())],
             );
             d.label_left(
-                UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 8.0, 18.0),
+                kit::text_area_vcentered(UiRect::new(r.x + 8.0, r.y, r.w - 8.0, r.h), 12.0),
                 &text,
                 style.text,
                 12.0,
@@ -4442,7 +4469,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         d.control(*r, &style);
         let chevron = if open { "▾" } else { "▸" };
         d.label_left(
-            UiRect::new(r.x + 8.0, r.y + 7.0, 16.0, 18.0),
+            kit::text_area_vcentered(UiRect::new(r.x + 8.0, r.y, 16.0, r.h), 12.0),
             chevron,
             style.text,
             12.0,
@@ -4451,7 +4478,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             continue;
         };
         d.label_left(
-            UiRect::new(r.x + 26.0, r.y + 7.0, r.w - 26.0, 18.0),
+            kit::text_area_vcentered(UiRect::new(r.x + 26.0, r.y, r.w - 26.0, r.h), 12.0),
             &label(key),
             style.text,
             12.0,
@@ -4509,9 +4536,14 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             let style = canvas_ui::component::badge::badge_style(tone, p);
             d.control(bl.rect, &style);
             if let canvas_ui::component::badge::BadgeKind::Text(t) = &bl.kind {
-                d.label_center(bl.rect, t, style.text, 9.0);
+                d.label_center(kit::text_area_vcentered(bl.rect, 9.0), t, style.text, 9.0);
             } else if let canvas_ui::component::badge::BadgeKind::Count(n) = bl.kind {
-                d.label_center(bl.rect, &n.to_string(), style.text, 9.0);
+                d.label_center(
+                    kit::text_area_vcentered(bl.rect, 9.0),
+                    &n.to_string(),
+                    style.text,
+                    9.0,
+                );
             }
         }
     }
@@ -4568,7 +4600,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         );
         d.control(wc.snackbar_anchor, &style);
         d.label_center(
-            wc.snackbar_anchor,
+            kit::text_area_vcentered(wc.snackbar_anchor, 12.0),
             &label(crate::i18n::keys::KIT_DEMO_SNACKBAR_SHOW),
             style.text,
             12.0,
@@ -4588,7 +4620,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         );
         d.control(wc.popover_anchor, &style);
         d.label_center(
-            wc.popover_anchor,
+            kit::text_area_vcentered(wc.popover_anchor, 11.0),
             &label(crate::i18n::keys::KIT_DEMO_CLICK_ME),
             style.text,
             11.0,
@@ -4640,11 +4672,16 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             // Содержимое: Initials → текст, Icon/Image → глиф-плейсхолдер.
             match &lay.source {
                 canvas_ui::component::avatar::AvatarSource::Initials(s) => {
-                    d.label_center(lay.rect, s, style.text, size.button_h() * 0.45);
+                    d.label_center(
+                        kit::text_area_vcentered(lay.rect, size.button_h() * 0.45),
+                        s,
+                        style.text,
+                        size.button_h() * 0.45,
+                    );
                 }
                 canvas_ui::component::avatar::AvatarSource::Icon(_) => {
                     d.label_center(
-                        lay.rect,
+                        kit::text_area_vcentered(lay.rect, size.button_h() * 0.5),
                         &label(glyph_key),
                         style.text,
                         size.button_h() * 0.5,
@@ -4652,7 +4689,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
                 }
                 canvas_ui::component::avatar::AvatarSource::Image(_) => {
                     d.label_center(
-                        lay.rect,
+                        kit::text_area_vcentered(lay.rect, size.button_h() * 0.45),
                         &label(glyph_key),
                         style.text,
                         size.button_h() * 0.45,
@@ -4716,7 +4753,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             // Иконка-глиф (Unicode) — по центру кнопки.
             let icons = ["▤", "∑", "?", "✦", "⚙"];
             if let Some(glyph) = icons.get(i) {
-                d.label_center(*r, glyph, style.text, 16.0);
+                d.label_center(kit::text_area_vcentered(*r, 16.0), glyph, style.text, 16.0);
             }
         }
     }
@@ -4756,14 +4793,24 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         // В оверрайде подпись — имя форсированного состояния (не статичный
         // слот матрицы), иначе контрол показывает чужую метку.
         if let Some(s) = ctx.demo.state_override {
-            d.label_center(*r, &state_override_name(ctx.lang, s), style.text, 12.0);
+            d.label_center(
+                kit::text_area_vcentered(*r, 12.0),
+                &state_override_name(ctx.lang, s),
+                style.text,
+                12.0,
+            );
             resp.on_hover_text("Chip state override");
             continue;
         }
         let Some(text_key) = STATE_LABELS.get(i) else {
             continue;
         };
-        d.label_center(*r, crate::i18n::tr(ctx.lang, text_key), style.text, 12.0);
+        d.label_center(
+            kit::text_area_vcentered(*r, 12.0),
+            crate::i18n::tr(ctx.lang, text_key),
+            style.text,
+            12.0,
+        );
         // Response chain: tooltip поверх hovered чипа (no-op — TODO Wave D
         // интеграция с tooltip-state потребителя).
         resp.on_hover_text("Chip state toggle");
@@ -4786,14 +4833,24 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             // danger) — см. draw_state_visuals; до подписи (слой полупрозрачный).
             draw_state_visuals(d, r, state, p);
             if let Some(s) = ctx.demo.state_override {
-                d.label_center(*r, &state_override_name(ctx.lang, s), style.text, 13.0);
+                d.label_center(
+                    kit::text_area_vcentered(*r, 13.0),
+                    &state_override_name(ctx.lang, s),
+                    style.text,
+                    13.0,
+                );
                 resp.on_hover_text("Button state override");
                 continue;
             }
             let Some(text_key) = STATE_LABELS.get(i) else {
                 continue;
             };
-            d.label_center(*r, crate::i18n::tr(ctx.lang, text_key), style.text, 13.0);
+            d.label_center(
+                kit::text_area_vcentered(*r, 13.0),
+                crate::i18n::tr(ctx.lang, text_key),
+                style.text,
+                13.0,
+            );
             resp.on_hover_text("Button state demo");
         }
     }
@@ -4836,16 +4893,14 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         // Wave D (D4): показательные ST1-визуалы (Focused — рамка accent —
         // канон полей; Error — danger tint/рамка).
         draw_state_visuals(d, &tf.rect, state, p);
-        d.label_left(tf.text_area, &ctx.demo.text_value, p.text, 13.0);
+        // Канон вертикали (#68): строковый бокс поля + каретка caret_rect —
+        // общий центр строки (вертикальный пад/высота — из метрики кегля).
+        let ta = kit::text_area_vcentered(tf.text_area, 13.0);
+        d.label_left(ta, &ctx.demo.text_value, p.text, 13.0);
         if focused {
             let caret_x =
                 tf.text_area.x + ctx.m.width_of(fs, &ctx.demo.text_value, FONT_FAMILY, 13.0);
-            d.rect(
-                UiRect::new(caret_x, tf.text_area.y + 4.0, 1.0, tf.text_area.h - 8.0),
-                p.accent,
-                [0.0; 4],
-                0.5,
-            );
+            d.rect(kit::caret_rect(ta, 13.0, caret_x), p.accent, [0.0; 4], 0.5);
         }
     }
     // List: выделение из демо + hover.
@@ -4873,7 +4928,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             &[("{n}", &(idx + 1).to_string())],
         );
         d.label_left(
-            UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 16.0, r.h - 6.0),
+            kit::text_area_vcentered(UiRect::new(r.x + 8.0, r.y, r.w - 16.0, r.h), 12.0),
             &text,
             style.label,
             12.0,
@@ -4893,7 +4948,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         let style = kit::button_style(kit::ButtonVariant::Secondary, state, p);
         d.control(ctx.lay.dropdown_anchor, &style);
         d.label_center(
-            ctx.lay.dropdown_anchor,
+            kit::text_area_vcentered(ctx.lay.dropdown_anchor, 13.0),
             &crate::i18n::trf(
                 ctx.lang,
                 crate::i18n::keys::KIT_DROPDOWN_ANCHOR,
@@ -4926,7 +4981,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
                     &[("{n}", &(i + 1).to_string())],
                 );
                 d.label_left(
-                    UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 8.0, r.h - 4.0),
+                    kit::text_area_vcentered(UiRect::new(r.x + 8.0, r.y, r.w - 8.0, r.h), 12.0),
                     &text,
                     style.text,
                     12.0,
@@ -4981,7 +5036,12 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             p,
         );
         d.control(*close, &close_style);
-        d.label_center(*close, "×", close_style.text, 13.0);
+        d.label_center(
+            kit::text_area_vcentered(*close, 13.0),
+            "×",
+            close_style.text,
+            13.0,
+        );
     }
     if let Some((pp, input, rows)) = &dl.palette {
         d.rect(ctx.lay.panel, canvas_core::tokens::WHEEL_DIM, [0.0; 4], 0.0);
@@ -4991,7 +5051,10 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             canvas_ui::component::panel::control_style_of(p.control_fill, p.accent, p.text, 4.0);
         d.rect(*input, field_style.fill, p.accent, 4.0);
         d.label_left(
-            UiRect::new(input.x + 8.0, input.y + 6.0, input.w - 16.0, 16.0),
+            kit::text_area_vcentered(
+                UiRect::new(input.x + 8.0, input.y, input.w - 16.0, input.h),
+                12.0,
+            ),
             &if ctx.demo.palette_query.is_empty() {
                 label(crate::i18n::keys::KIT_DEMO_PALETTE_PH)
             } else {
@@ -5014,7 +5077,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             d.rect(*r, style.fill, [0.0; 4], 4.0);
             let Some(key) = items.get(i) else { continue };
             d.label_left(
-                UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 8.0, 16.0),
+                kit::text_area_vcentered(UiRect::new(r.x + 8.0, r.y, r.w - 8.0, r.h), 12.0),
                 &label(key),
                 style.text,
                 12.0,
@@ -5025,7 +5088,7 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         let style = kit::button_style(kit::ButtonVariant::Inverse, kit::KitState::Normal, p);
         d.rect(*bar, style.fill, style.border, 6.0);
         d.label_left(
-            UiRect::new(bar.x + 12.0, bar.y + 9.0, bar.w - 48.0, 18.0),
+            kit::text_area_vcentered(UiRect::new(bar.x + 12.0, bar.y, bar.w - 48.0, bar.h), 12.0),
             &label(crate::i18n::keys::KIT_DEMO_SNACKBAR_TEXT),
             style.text,
             12.0,
@@ -5041,7 +5104,12 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             p,
         );
         d.control(*close, &close_style);
-        d.label_center(*close, "×", close_style.text, 12.0);
+        d.label_center(
+            kit::text_area_vcentered(*close, 12.0),
+            "×",
+            close_style.text,
+            12.0,
+        );
     }
     if let Some(bubble) = &dl.popover_bubble {
         let style = kit::modal_style(p);
@@ -5085,7 +5153,10 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
                         canvas_core::tokens::RADIUS_CHIP,
                     );
                     d.label_left(
-                        UiRect::new(t.rect.x + 8.0, t.rect.y + 2.0, t.rect.w - 16.0, 14.0),
+                        kit::text_area_vcentered(
+                            UiRect::new(t.rect.x + 8.0, t.rect.y, t.rect.w - 16.0, t.rect.h),
+                            12.0,
+                        ),
                         &text,
                         p.text,
                         12.0,
@@ -5362,8 +5433,14 @@ impl KitDraw {
             // Неизвестная пара (set, name) — fallback на глиф с предупреждением.
             tracing::warn!(set, name, "иконка не найдена в атласе — глиф-фолбэк");
         }
-        // Glyph fallback (прежнее поведение): глиф шрифтом через label_center.
-        self.label_center(rect, glyph, tint, glyph_size);
+        // Glyph fallback (прежнее поведение): глиф шрифтом через label_center
+        // (строковый бокс — text_area_vcentered, канон #68).
+        self.label_center(
+            kit::text_area_vcentered(rect, glyph_size),
+            glyph,
+            tint,
+            glyph_size,
+        );
     }
 
     /// Прямоугольник с заливкой/рамкой/радиусом.

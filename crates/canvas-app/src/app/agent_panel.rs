@@ -748,8 +748,12 @@ impl App {
             chip_font,
             ctx_w - CHIP_PAD_H * 2.0,
         );
+        // Канон вертикали (issue #68, IN11): строковый бокс по центру чипа.
         d.label_left(
-            UiRect::new(ctx_x + CHIP_PAD_H, chip_y, ctx_w - CHIP_PAD_H * 2.0, CHIP_H),
+            canvas_ui::kit::text_area_vcentered(
+                UiRect::new(ctx_x + CHIP_PAD_H, chip_y, ctx_w - CHIP_PAD_H * 2.0, CHIP_H),
+                chip_font,
+            ),
             &ctx_shown,
             ctx_chip_style.text,
             chip_font,
@@ -759,14 +763,26 @@ impl App {
             canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &kit_palette);
         let prov_rect = UiRect::new(prov_x, chip_y, prov_w, CHIP_H);
         d.control(prov_rect, &prov_chip_style);
-        d.label_center(prov_rect, &prov_label, prov_chip_style.text, chip_font);
+        // Канон вертикали (issue #68, IN11): строковый бокс по центру чипа.
+        d.label_center(
+            canvas_ui::kit::text_area_vcentered(prov_rect, chip_font),
+            &prov_label,
+            prov_chip_style.text,
+            chip_font,
+        );
         // Rate chip (только для ChatGPT OAuth).
         if rate_visible {
             let rate_chip_style =
                 canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &kit_palette);
             let rate_rect = UiRect::new(rate_x, chip_y, rate_w, CHIP_H);
             d.control(rate_rect, &rate_chip_style);
-            d.label_center(rate_rect, &rate_label, rate_chip_style.text, chip_font);
+            // Канон вертикали (issue #68, IN11): строковый бокс по центру чипа.
+            d.label_center(
+                canvas_ui::kit::text_area_vcentered(rate_rect, chip_font),
+                &rate_label,
+                rate_chip_style.text,
+                chip_font,
+            );
         }
 
         // === Журнал сообщений (скроллится; здесь — простая простыня) ======
@@ -907,8 +923,13 @@ impl App {
                                 10.0,
                             );
                             // Status glyph — отдельным цветом (поверх серого).
+                            // Канон вертикали (issue #68, IN11): строковый бокс
+                            // глифа по центру строки tool_call.
                             d.label_left(
-                                UiRect::new(tc_rect.x, tc_rect.y, 14.0, 14.0),
+                                canvas_ui::kit::text_area_vcentered(
+                                    UiRect::new(tc_rect.x, tc_rect.y, 14.0, 14.0),
+                                    10.0,
+                                ),
                                 status_glyph,
                                 status_color,
                                 10.0,
@@ -932,7 +953,13 @@ impl App {
                                 &kit_palette,
                             );
                             d.control(*accept_rect, &accept_style);
-                            d.label_center(*accept_rect, "Accept", accept_style.text, 11.0);
+                            // Канон вертикали (issue #68, IN11).
+                            d.label_center(
+                                canvas_ui::kit::text_area_vcentered(*accept_rect, 11.0),
+                                "Accept",
+                                accept_style.text,
+                                11.0,
+                            );
                             // Reject — Secondary-вариант.
                             let reject_style = canvas_ui::kit::button_style(
                                 canvas_ui::kit::ButtonVariant::Secondary,
@@ -947,7 +974,13 @@ impl App {
                                 &kit_palette,
                             );
                             d.control(*reject_rect, &reject_style);
-                            d.label_center(*reject_rect, "Reject", reject_style.text, 11.0);
+                            // Канон вертикали (issue #68, IN11).
+                            d.label_center(
+                                canvas_ui::kit::text_area_vcentered(*reject_rect, 11.0),
+                                "Reject",
+                                reject_style.text,
+                                11.0,
+                            );
                         }
                     }
                 }
@@ -966,8 +999,12 @@ impl App {
                 self.ai_cost_day, self.settings.llm.cost_limit_daily
             ),
         };
+        // Канон вертикали (issue #68, IN11): строковый бокс по центру строки.
         d.label_left(
-            UiRect::new(panel_x + PAD, est_y, panel_w - PAD * 2.0, EST_H),
+            canvas_ui::kit::text_area_vcentered(
+                UiRect::new(panel_x + PAD, est_y, panel_w - PAD * 2.0, EST_H),
+                10.0,
+            ),
             &est_str,
             kit_palette.text_muted,
             10.0,
@@ -1022,6 +1059,11 @@ impl App {
             INPUT_FONT,
         );
         let text_area = field_layout.text_area;
+        // Канон вертикали (issue #68, IN11/IN12): строковый бокс текста поля —
+        // text_area_vcentered от полного rect'а text_area (text_field даёт
+        // всю высоту поля); текст, селекция и каретка делят одну ординату
+        // центра строки.
+        let ta_line = canvas_ui::kit::text_area_vcentered(text_area, INPUT_FONT);
         // UR-005: выделение — подложка accent α0.25 под текстом (фон до текста;
         // границы — замер префиксов тем же кеглем, что и рендер).
         if input_focused {
@@ -1040,8 +1082,12 @@ impl App {
                             .width_of(&mut fs, &sel_full, sans_family, INPUT_FONT)
                             .min(text_area.w);
                     if x1 > x0 {
+                        // Селекция — вертикальная геометрия caret_rect (канон
+                        // issue #68: высота строки, не всего поля; та же формула,
+                        // что у каретки — центр строки общий).
+                        let sel_band = canvas_ui::kit::caret_rect(ta_line, INPUT_FONT, x0);
                         d.rect(
-                            UiRect::new(x0, text_area.y + 2.0, x1 - x0, text_area.h - 4.0),
+                            UiRect::new(x0, sel_band.y, x1 - x0, sel_band.h),
                             [
                                 kit_palette.accent[0],
                                 kit_palette.accent[1],
@@ -1065,17 +1111,13 @@ impl App {
         } else {
             kit_palette.text
         };
-        d.label_left(text_area, &field_layout.text_shown, input_color, INPUT_FONT);
-        // Каретка — 1.5px слот accent (паттерн пилота TextField; kit даёт
-        // caret_x = -1 когда не в фокусе).
+        d.label_left(ta_line, &field_layout.text_shown, input_color, INPUT_FONT);
+        // Каретка — канон caret_rect (issue #68, IN12): h = size·1.3 − 2·2,
+        // w = 1.5, центр строки (kit даёт caret_x = -1 когда не в фокусе).
         if input_focused && field_layout.caret_x >= 0.0 {
+            let c = canvas_ui::kit::caret_rect(ta_line, INPUT_FONT, field_layout.caret_x);
             d.quads.push(crate::app::band_rect_quad_pub(
-                [
-                    field_layout.caret_x,
-                    text_area.y + 2.0,
-                    1.5,
-                    text_area.h - 4.0,
-                ],
+                [c.x, c.y, c.w, c.h],
                 kit_palette.accent,
                 [0.0; 4],
                 0.0,
@@ -1114,7 +1156,13 @@ impl App {
             // Pill: chip_style с радиусом RADIUS_PILL (максимальный радиус).
             let qstyle = canvas_ui::kit::chip_style(qstate, &kit_palette);
             d.rect(qrect, qstyle.fill, qstyle.border, PILL_RADIUS);
-            d.label_center(qrect, label, qstyle.text, 10.0);
+            // Канон вертикали (issue #68, IN11).
+            d.label_center(
+                canvas_ui::kit::text_area_vcentered(qrect, 10.0),
+                label,
+                qstyle.text,
+                10.0,
+            );
         }
 
         // FR-LLM-D: дрейн KitDraw → возвращаемые Vec'и (как ai_status_panel.rs).

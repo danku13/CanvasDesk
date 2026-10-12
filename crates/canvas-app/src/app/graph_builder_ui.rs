@@ -266,7 +266,11 @@ impl App {
             self.settings.llm.cost_limit_daily
         );
         d.label_left(
-            UiRect::new(dialog_x + PAD, est_y, dialog_w - PAD * 2.0, 14.0),
+            // Канон вертикали (issue #68, IN11): строковый бокс кегля 10.
+            canvas_ui::kit::text_area_vcentered(
+                UiRect::new(dialog_x + PAD, est_y, dialog_w - PAD * 2.0, 14.0),
+                10.0,
+            ),
             &est_str,
             kit_palette.text_muted,
             10.0,
@@ -305,7 +309,13 @@ impl App {
             &kit_palette,
         );
         d.control(cancel_rect, &cancel_style);
-        d.label_center(cancel_rect, "Отмена", cancel_style.text, 13.0);
+        // Канон вертикали (issue #68, IN11).
+        d.label_center(
+            canvas_ui::kit::text_area_vcentered(cancel_rect, 13.0),
+            "Отмена",
+            cancel_style.text,
+            13.0,
+        );
         // Generate — Primary (disabled если busy).
         let gen_hovered = point_in_rect(
             [gen_rect.x, gen_rect.y, gen_rect.w, gen_rect.h],
@@ -329,7 +339,13 @@ impl App {
             "Сгенерировать"
         };
         d.control(gen_rect, &gen_style);
-        d.label_center(gen_rect, gen_label, gen_style.text, 13.0);
+        // Канон вертикали (issue #68, IN11).
+        d.label_center(
+            canvas_ui::kit::text_area_vcentered(gen_rect, 13.0),
+            gen_label,
+            gen_style.text,
+            13.0,
+        );
 
         // === Preview (если есть — внутри диалога, compact list) =========
         if let Some(preview) = &self.graph_builder.preview {
@@ -385,7 +401,13 @@ impl App {
             );
             let acc_rect = UiRect::new(acc_x, prev_rect.y + 24.0, acc_w, 20.0);
             d.control(acc_rect, &acc_style);
-            d.label_center(acc_rect, "Accept", acc_style.text, 10.0);
+            // Канон вертикали (issue #68, IN11).
+            d.label_center(
+                canvas_ui::kit::text_area_vcentered(acc_rect, 10.0),
+                "Accept",
+                acc_style.text,
+                10.0,
+            );
             let rej_style = canvas_ui::kit::button_style(
                 canvas_ui::kit::ButtonVariant::Secondary,
                 if rej_hovered {
@@ -397,7 +419,13 @@ impl App {
             );
             let rej_rect = UiRect::new(rej_x, prev_rect.y + 24.0, acc_w, 20.0);
             d.control(rej_rect, &rej_style);
-            d.label_center(rej_rect, "Reject", rej_style.text, 10.0);
+            // Канон вертикали (issue #68, IN11).
+            d.label_center(
+                canvas_ui::kit::text_area_vcentered(rej_rect, 10.0),
+                "Reject",
+                rej_style.text,
+                10.0,
+            );
         }
 
         // FR-LLM-D: дрейн KitDraw → возвращаемые Vec'и.

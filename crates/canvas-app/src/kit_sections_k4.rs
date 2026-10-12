@@ -62,7 +62,7 @@ use canvas_ui::kit::{
 };
 use canvas_ui::measure::TextMeasurer;
 
-use crate::kit_ui::{FONT_FAMILY, LABEL_SIZE, SECTION_TITLE_H, STATE_LABEL_W};
+use crate::kit_ui::{FONT_FAMILY, LABEL_SIZE, STATE_LABEL_W};
 
 // === Константы демо K4 (размеры контента — не зазоры; зазоры только S1) ====
 
@@ -301,8 +301,9 @@ fn state_caption(state: KitState) -> K4Caption {
 /// [`K4Sections::shift_and_filter`], паттерн FR-059).
 #[derive(Debug, Clone, Default)]
 pub struct K4Sections {
-    /// Подписи строк состояний/вариантов (левая колонка, 11px muted).
-    pub labels: Vec<(UiPoint, K4Caption)>,
+    /// Подписи строк состояний/вариантов (левая колонка, 11px muted);
+    /// канон вертикали #68 — строковый бокс `text_area_vcentered` строки.
+    pub labels: Vec<(UiRect, K4Caption)>,
     // --- W2 (6) ---
     pub banner_rows: Vec<K4BannerRow>,
     pub chat_rows: Vec<K4ChatRow>,
@@ -545,10 +546,9 @@ impl K4Sections {
                 *r = sh(*r, off);
             }
         };
-        self.labels
-            .retain(|(pt, _)| visible(&UiRect::new(pt.x, pt.y, STATE_LABEL_W, SECTION_TITLE_H)));
-        for (pt, _) in self.labels.iter_mut() {
-            pt.y -= off;
+        self.labels.retain(|(area, _)| visible(area));
+        for (area, _) in self.labels.iter_mut() {
+            *area = sh(*area, off);
         }
         self.banner_rows.retain(|r| visible(&r.lay.rect));
         for r in self.banner_rows.iter_mut() {
@@ -759,9 +759,11 @@ fn label_x(slot: UiRect) -> f32 {
 }
 
 /// Подпись строки состояния в левую колонку (как подписи вариантов Buttons).
+/// Канон вертикали #68: строковый бокс кегля 11 (`text_area_vcentered`),
+/// центрированный в rect строки — ручной центровки `(row_h − H)/2` нет.
 fn row_label_at(k4: &mut K4Sections, x: f32, y: f32, row_h: f32, caption: K4Caption) {
     k4.labels.push((
-        UiPoint::new(x, y + (row_h - SECTION_TITLE_H).max(0.0) / 2.0),
+        kit::text_area_vcentered(UiRect::new(x, y, STATE_LABEL_W, row_h), 11.0),
         caption,
     ));
 }
@@ -1839,13 +1841,8 @@ pub(crate) fn k4_paint(
 
     // Подписи строк состояний/вариантов (левая колонка, 11px muted —
     // паттерн подписей Buttons в overlays.rs).
-    for (pt, cap) in &k4.labels {
-        d.label_left(
-            UiRect::new(pt.x, pt.y, STATE_LABEL_W, 16.0),
-            &text(*cap),
-            p.text_muted,
-            11.0,
-        );
+    for (area, cap) in &k4.labels {
+        d.label_left(*area, &text(*cap), p.text_muted, 11.0);
     }
 
     // --- W2 ----------------------------------------------------------------
@@ -1866,7 +1863,7 @@ pub(crate) fn k4_paint(
             &kit::button_style(ButtonVariant::Secondary, r.state, p),
         );
         d.label_center(
-            r.lay.action_button,
+            kit::text_area_vcentered(r.lay.action_button, 12.0),
             &text(K4Caption::Key(crate::i18n::keys::KIT_BANNER_ACTION)),
             style.action_color,
             12.0,
@@ -1919,7 +1916,12 @@ pub(crate) fn k4_paint(
                 p,
             );
             d.control(*rect, &style);
-            d.label_center(*rect, label, style.text, 11.0);
+            d.label_center(
+                kit::text_area_vcentered(*rect, 11.0),
+                label,
+                style.text,
+                11.0,
+            );
         }
     }
 
@@ -1928,7 +1930,12 @@ pub(crate) fn k4_paint(
         for b in &r.buttons {
             let style = kit::button_style(b.variant, b.state, p);
             d.control(b.rect, &style);
-            d.label_center(b.rect, &text(b.label), style.text, 12.0);
+            d.label_center(
+                kit::text_area_vcentered(b.rect, 12.0),
+                &text(b.label),
+                style.text,
+                12.0,
+            );
             if b.focused {
                 focus_ring(d, b.rect, style.radius, p);
             }
@@ -1984,9 +1991,14 @@ pub(crate) fn k4_paint(
     for c in &k4.checkbox_cells {
         let style = checkbox_style(c.check, c.kit_state, p);
         d.control(c.lay.box_rect, &style);
-        d.label_center(c.lay.box_rect, checkbox_glyph(c.check), style.text, 11.0);
+        d.label_center(
+            kit::text_area_vcentered(c.lay.box_rect, 11.0),
+            checkbox_glyph(c.check),
+            style.text,
+            11.0,
+        );
         d.label_left(
-            c.lay.label_rect,
+            kit::text_area_vcentered(c.lay.label_rect, 12.0),
             &text(K4Caption::Key(crate::i18n::keys::KIT_CHECKBOX_LABEL)),
             if c.kit_state == KitState::Disabled {
                 p.disabled_text
@@ -2038,7 +2050,7 @@ pub(crate) fn k4_paint(
             d.rect(dot, style.fill, [0.0; 4], dot.w * 0.5);
         }
         d.label_left(
-            c.lay.label_rect,
+            kit::text_area_vcentered(c.lay.label_rect, 12.0),
             &text(K4Caption::Key(crate::i18n::keys::KIT_DEMO_TAB_1)),
             if c.state == KitState::Disabled {
                 p.disabled_text
@@ -2063,7 +2075,12 @@ pub(crate) fn k4_paint(
             if st.fill[3] > 0.0 {
                 d.rect(t.rect, st.fill, [0.0; 4], st.radius);
             }
-            d.label_center(t.rect, &t.label, st.text, 12.0);
+            d.label_center(
+                kit::text_area_vcentered(t.rect, 12.0),
+                &t.label,
+                st.text,
+                12.0,
+            );
             if active && t.indicator.h > 0.0 {
                 d.rect(t.indicator, st.indicator_fill, [0.0; 4], 0.0);
             }
@@ -2086,7 +2103,12 @@ pub(crate) fn k4_paint(
             };
             let _ = active_style;
             d.control(*seg, &style);
-            d.label_center(*seg, &((i + 1).to_string()), style.text, 12.0);
+            d.label_center(
+                kit::text_area_vcentered(*seg, 12.0),
+                &((i + 1).to_string()),
+                style.text,
+                12.0,
+            );
         }
     }
 
@@ -2100,11 +2122,14 @@ pub(crate) fn k4_paint(
             canvas_core::tokens::RADIUS_CHIP,
         );
         d.label_left(
-            UiRect::new(
-                pl.lay.input.x + kit::TEXT_FIELD_PAD_H,
-                pl.lay.input.y + (pl.lay.input.h - 16.0) * 0.5,
-                (pl.lay.input.w - 2.0 * kit::TEXT_FIELD_PAD_H).max(0.0),
-                16.0,
+            kit::text_area_vcentered(
+                UiRect::new(
+                    pl.lay.input.x + kit::TEXT_FIELD_PAD_H,
+                    pl.lay.input.y,
+                    (pl.lay.input.w - 2.0 * kit::TEXT_FIELD_PAD_H).max(0.0),
+                    pl.lay.input.h,
+                ),
+                12.0,
             ),
             &text(pl.query),
             p.text_muted,
@@ -2116,11 +2141,14 @@ pub(crate) fn k4_paint(
             d.rect(*rect, style.fill, [0.0; 4], 4.0);
             if let Some(cap) = pl.actions.get(*action_idx) {
                 d.label_left(
-                    UiRect::new(
-                        rect.x + kit::CHIP_PAD_H,
-                        rect.y + (rect.h - 16.0) * 0.5,
-                        (rect.w - 2.0 * kit::CHIP_PAD_H).max(0.0),
-                        16.0,
+                    kit::text_area_vcentered(
+                        UiRect::new(
+                            rect.x + kit::CHIP_PAD_H,
+                            rect.y,
+                            (rect.w - 2.0 * kit::CHIP_PAD_H).max(0.0),
+                            rect.h,
+                        ),
+                        12.0,
                     ),
                     &text(*cap),
                     style.text,
@@ -2136,13 +2164,21 @@ pub(crate) fn k4_paint(
         let (style, chevron_color) = accordion_style(r.lay.expanded, r.state, p);
         d.control(r.lay.header, &style);
         let chevron = if r.lay.expanded { "▾" } else { "▸" };
-        d.label_center(r.lay.chevron, chevron, chevron_color, 11.0);
+        d.label_center(
+            kit::text_area_vcentered(r.lay.chevron, 11.0),
+            chevron,
+            chevron_color,
+            11.0,
+        );
         d.label_left(
-            UiRect::new(
-                r.lay.chevron.right() + 4.0,
-                r.lay.header.y + (K4_ACCORDION_HEADER_H - 16.0) * 0.5,
-                (r.lay.header.right() - r.lay.chevron.right() - 8.0).max(0.0),
-                16.0,
+            kit::text_area_vcentered(
+                UiRect::new(
+                    r.lay.chevron.right() + 4.0,
+                    r.lay.header.y,
+                    (r.lay.header.right() - r.lay.chevron.right() - 8.0).max(0.0),
+                    K4_ACCORDION_HEADER_H,
+                ),
+                12.0,
             ),
             &text(r.label),
             style.text,
@@ -2196,12 +2232,27 @@ pub(crate) fn k4_paint(
     for c in &k4.badge_cells {
         let anchor_style = kit::chip_style(KitState::Normal, p);
         d.control(c.anchor, &anchor_style);
-        d.label_center(c.anchor, &text(c.anchor_label), anchor_style.text, 11.0);
+        d.label_center(
+            kit::text_area_vcentered(c.anchor, 11.0),
+            &text(c.anchor_label),
+            anchor_style.text,
+            11.0,
+        );
         let style = badge_style(c.tone, p);
         d.control(c.lay.rect, &style);
         match &c.lay.kind {
-            BadgeKind::Count(n) => d.label_center(c.lay.rect, &n.to_string(), style.text, 9.0),
-            BadgeKind::Text(t) => d.label_center(c.lay.rect, t, style.text, 9.0),
+            BadgeKind::Count(n) => d.label_center(
+                kit::text_area_vcentered(c.lay.rect, 9.0),
+                &n.to_string(),
+                style.text,
+                9.0,
+            ),
+            BadgeKind::Text(t) => d.label_center(
+                kit::text_area_vcentered(c.lay.rect, 9.0),
+                t,
+                style.text,
+                9.0,
+            ),
             BadgeKind::Dot => {}
         }
     }
@@ -2210,7 +2261,12 @@ pub(crate) fn k4_paint(
     for r in &k4.popover_rows {
         let anchor_style = kit::button_style(ButtonVariant::Secondary, KitState::Normal, p);
         d.control(r.anchor, &anchor_style);
-        d.label_center(r.anchor, &text(r.anchor_label), anchor_style.text, 12.0);
+        d.label_center(
+            kit::text_area_vcentered(r.anchor, 12.0),
+            &text(r.anchor_label),
+            anchor_style.text,
+            12.0,
+        );
         d.rect(
             r.content,
             p.panel_fill,
@@ -2237,9 +2293,19 @@ pub(crate) fn k4_paint(
     for r in &k4.snackbar_rows {
         let style = snackbar_style(r.tone, p);
         d.control(r.lay.rect, &style);
-        d.label_left(r.lay.message_rect, &text(r.label), style.text, 12.0);
+        d.label_left(
+            kit::text_area_vcentered(r.lay.message_rect, 12.0),
+            &text(r.label),
+            style.text,
+            12.0,
+        );
         if let Some(a) = r.lay.action_rect {
-            d.label_center(a, &text(r.action), style.text, 12.0);
+            d.label_center(
+                kit::text_area_vcentered(a, 12.0),
+                &text(r.action),
+                style.text,
+                12.0,
+            );
         }
     }
 
@@ -2256,11 +2322,24 @@ pub(crate) fn k4_paint(
         );
         let glyph_size = c.size.button_h() * 0.45;
         match &c.source {
-            AvatarSource::Initials(s) => d.label_center(c.lay.rect, s, style.text, glyph_size),
-            AvatarSource::Icon(_) => d.label_center(c.lay.rect, "user", style.text, glyph_size),
-            AvatarSource::Image(_) => {
-                d.label_center(c.lay.rect, "IMG", style.text, glyph_size * 0.7)
-            }
+            AvatarSource::Initials(s) => d.label_center(
+                kit::text_area_vcentered(c.lay.rect, glyph_size),
+                s,
+                style.text,
+                glyph_size,
+            ),
+            AvatarSource::Icon(_) => d.label_center(
+                kit::text_area_vcentered(c.lay.rect, glyph_size),
+                "user",
+                style.text,
+                glyph_size,
+            ),
+            AvatarSource::Image(_) => d.label_center(
+                kit::text_area_vcentered(c.lay.rect, glyph_size * 0.7),
+                "IMG",
+                style.text,
+                glyph_size * 0.7,
+            ),
         }
     }
 
@@ -2271,9 +2350,19 @@ pub(crate) fn k4_paint(
         d.control(r.row.rect, &style);
         if r.row.has_children {
             let chevron = if r.row.expanded { "▾" } else { "▸" };
-            d.label_center(r.row.chevron, chevron, style.text, 10.0);
+            d.label_center(
+                kit::text_area_vcentered(r.row.chevron, 10.0),
+                chevron,
+                style.text,
+                10.0,
+            );
         }
-        d.label_left(r.row.label, &r.row.label_text, style.text, 12.0);
+        d.label_left(
+            kit::text_area_vcentered(r.row.label, 12.0),
+            &r.row.label_text,
+            style.text,
+            12.0,
+        );
     }
 }
 
@@ -2282,7 +2371,7 @@ pub(crate) fn k4_paint(
 #[cfg(test)]
 mod k4_golden {
     use super::*;
-    use crate::kit_ui::{gallery_layout, new_measurer, SECTION_GAP};
+    use crate::kit_ui::{gallery_layout, new_measurer, SECTION_GAP, SECTION_TITLE_H};
     use canvas_core::tokens::SPACING_SM;
     use canvas_render::text::measure_font_system;
     use std::iter::once;
