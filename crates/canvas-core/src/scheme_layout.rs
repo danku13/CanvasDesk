@@ -1190,9 +1190,9 @@ fn refine_by_column_transfers(
                     };
                     let valid = edges.iter().all(|&(u, w)| {
                         if u == v {
-                            col_of(w).map_or(true, |cw| cw > target)
+                            col_of(w).is_none_or(|cw| cw > target)
                         } else if w == v {
-                            col_of(u).map_or(true, |cu| cu < target)
+                            col_of(u).is_none_or(|cu| cu < target)
                         } else {
                             true
                         }

@@ -5,7 +5,7 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.5.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.89" # wgpu 30 требует 1.87, cosmic-text 0.19 — 1.89
 # Лицензия проекта — GNU AGPLv3 (см. LICENSE); права на реликенcинг вкладов
 # передаются владельцу по CLA.md
 license = "AGPL-3.0-only"
@@ -69,10 +69,12 @@ winit = "0.30"
 # (§2 п. 7: std-версия компилируется, но паникует в рантайме); на нативе
 # это тонкая обёртка над std. Версия уже в дереве через winit.
 web-time = "1.1"
-wgpu = "22"
-glyphon = "0.6" # совместим с wgpu 22
-# инлайн-редактирование текста (T7): та же версия, что тянет glyphon 0.6
-cosmic-text = "0.12"
+wgpu = "30"
+glyphon = "0.12" # требует wgpu 30 (пиннит в своих deps)
+# инлайн-редактирование текста (T7): ИНВАРИАНТ — строго та же мажорная
+# версия, что в deps glyphon 0.12 (иначе в дереве два несовместимых
+# cosmic-text: конфликт типов FontSystem/Buffer canvas-render ↔ canvas-ui)
+cosmic-text = "0.19"
 # буфер обмена (T7): без ручного unsafe Win32 clipboard-кода
 arboard = "3"
 pollster = "0.3"

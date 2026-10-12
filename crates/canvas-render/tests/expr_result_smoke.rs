@@ -101,6 +101,7 @@ fn expr_result_line_draws_in_footer() {
             label: Some("expr-result-smoke"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -122,15 +123,15 @@ fn expr_result_line_draws_in_footer() {
         mapped_at_creation: false,
     });
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: &target,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_row),
                 rows_per_image: None,
@@ -145,11 +146,15 @@ fn expr_result_line_draws_in_footer() {
     slice.map_async(wgpu::MapMode::Read, move |res| {
         let _ = tx.send(res);
     });
-    gpu.device.poll(wgpu::Maintain::Wait);
+    let _ = gpu.device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+
+        timeout: None,
+    });
     rx.recv()
         .expect("map_async: канал закрыт")
         .expect("map_async: ошибка маппинга");
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range().expect("get_mapped_range");
 
     // Футер результата: world y 92..108 → screen y 242..258 (камера по
     // умолчанию: world (0,0) в центре 400×300). Тело подрезается до футера,
@@ -289,6 +294,7 @@ fn expr_line_results_draw_on_own_rows() {
             label: Some("expr-line-smoke"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -310,15 +316,15 @@ fn expr_line_results_draw_on_own_rows() {
         mapped_at_creation: false,
     });
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: &target,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_row),
                 rows_per_image: None,
@@ -333,11 +339,15 @@ fn expr_line_results_draw_on_own_rows() {
     slice.map_async(wgpu::MapMode::Read, move |res| {
         let _ = tx.send(res);
     });
-    gpu.device.poll(wgpu::Maintain::Wait);
+    let _ = gpu.device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+
+        timeout: None,
+    });
     rx.recv()
         .expect("map_async: канал закрыт")
         .expect("map_async: ошибка маппинга");
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range().expect("get_mapped_range");
 
     // Геометрия рядов (камера по умолчанию: world (0,0) в центре 400×300):
     // origin тела = (x+10, y+28+4) → screen (20, 42). FR-069 (этап F):
@@ -511,6 +521,7 @@ fn expr_line_error_badge_and_hit_zone() {
             label: Some("expr-line-error-smoke"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -531,15 +542,15 @@ fn expr_line_error_badge_and_hit_zone() {
         mapped_at_creation: false,
     });
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: &target,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_row),
                 rows_per_image: None,
@@ -553,11 +564,15 @@ fn expr_line_error_badge_and_hit_zone() {
     slice.map_async(wgpu::MapMode::Read, move |res| {
         let _ = tx.send(res);
     });
-    gpu.device.poll(wgpu::Maintain::Wait);
+    let _ = gpu.device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+
+        timeout: None,
+    });
     rx.recv()
         .expect("map_async: канал закрыт")
         .expect("map_async: ошибка маппинга");
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range().expect("get_mapped_range");
     let lit = |x0: u32, x1: u32, y0: u32, y1: u32| -> usize {
         (y0..y1)
             .flat_map(|y| (x0..x1).map(move |x| (x, y)))
@@ -598,13 +613,13 @@ fn expr_editing_live_line_results() {
     let mut font_system = cosmic_text::FontSystem::new();
     let mut edit_buffer =
         cosmic_text::Buffer::new(&mut font_system, cosmic_text::Metrics::new(14.0, 20.0));
-    edit_buffer.set_wrap(&mut font_system, cosmic_text::Wrap::WordOrGlyph);
-    edit_buffer.set_size(&mut font_system, Some(360.0), Some(228.0));
+    edit_buffer.set_wrap(cosmic_text::Wrap::WordOrGlyph);
+    edit_buffer.set_size(Some(360.0), Some(228.0));
     edit_buffer.set_text(
-        &mut font_system,
         "x = 200\n250 + x",
-        cosmic_text::Attrs::new(),
+        &cosmic_text::Attrs::new(),
         cosmic_text::Shaping::Advanced,
+        None,
     );
     edit_buffer.shape_until_scroll(&mut font_system, false);
 
@@ -691,6 +706,7 @@ fn expr_editing_live_line_results() {
             label: Some("expr-editing-live-smoke"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -711,15 +727,15 @@ fn expr_editing_live_line_results() {
         mapped_at_creation: false,
     });
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: &target,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_row),
                 rows_per_image: None,
@@ -733,11 +749,15 @@ fn expr_editing_live_line_results() {
     slice.map_async(wgpu::MapMode::Read, move |res| {
         let _ = tx.send(res);
     });
-    gpu.device.poll(wgpu::Maintain::Wait);
+    let _ = gpu.device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+
+        timeout: None,
+    });
     rx.recv()
         .expect("map_async: канал закрыт")
         .expect("map_async: ошибка маппинга");
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range().expect("get_mapped_range");
     let lit = |x0: u32, x1: u32, y0: u32, y1: u32| -> usize {
         (y0..y1)
             .flat_map(|y| (x0..x1).map(move |x| (x, y)))

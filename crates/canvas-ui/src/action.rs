@@ -46,7 +46,7 @@ impl Action {
 
     /// Виден/доступен ли action (predicate true или None).
     pub fn is_available(&self) -> bool {
-        self.predicate.map_or(true, |p| p())
+        self.predicate.is_none_or(|p| p())
     }
 
     /// Конвертировать в CommandAction для Wave C CommandPalette.

@@ -375,7 +375,7 @@ impl EdgeBundleIndex {
         let mut best: Option<(u8, usize)> = None;
         for &index in &bundle.edges {
             let Some(r) = rank(index) else { continue };
-            if best.map_or(true, |(br, _)| r > br) {
+            if best.is_none_or(|(br, _)| r > br) {
                 best = Some((r, index));
             }
         }
@@ -755,7 +755,7 @@ pub fn stage_edge_at_lines(
                 dist = d;
             }
         }
-        if dist <= tolerance && best.map_or(true, |(bd, _)| dist < bd) {
+        if dist <= tolerance && best.is_none_or(|(bd, _)| dist < bd) {
             best = Some((dist, index));
         }
     }

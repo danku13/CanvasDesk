@@ -26,7 +26,7 @@ pub fn replace_canvas_param(search: &str, value: Option<&str>) -> String {
         .split('&')
         .filter(|pair| {
             // Пустые пары («?&», «a=1&&b=2») не переносим; canvas заменим.
-            !pair.is_empty() && pair.split_once('=').map_or(true, |(k, _)| k != "canvas")
+            !pair.is_empty() && pair.split_once('=').is_none_or(|(k, _)| k != "canvas")
         })
         .map(str::to_owned)
         .collect();

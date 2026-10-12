@@ -1417,7 +1417,7 @@ pub fn group_adopt_into_hierarchy(canvas: &mut Canvas, new_group_index: usize) -
             }
             let depth = depths.get(&ancestor).copied().unwrap_or(0);
             // map_or вместо is_none_or — MSRV 1.80 (см. input.rs)
-            if parent.map_or(true, |(pd, pi)| (depth, ancestor) > (pd, pi)) {
+            if parent.is_none_or(|(pd, pi)| (depth, ancestor) > (pd, pi)) {
                 parent = Some((depth, ancestor));
             }
         }

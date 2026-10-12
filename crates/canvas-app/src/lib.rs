@@ -985,8 +985,8 @@ pub mod ui {
         let mut paths = Vec::new();
         let mut segment: Vec<u16> = Vec::new();
         // Пары u16; хвостовый нечётный байт (remainder) игнорируем
-        for chunk in bytes[p_files..].chunks_exact(2) {
-            let unit = u16::from_le_bytes([chunk[0], chunk[1]]);
+        for chunk in bytes[p_files..].as_chunks::<2>().0 {
+            let unit = u16::from_le_bytes(*chunk);
             if unit == 0 {
                 if segment.is_empty() {
                     // Пустой сегмент = терминатор списка (DOUBLE null)

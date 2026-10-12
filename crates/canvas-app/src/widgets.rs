@@ -260,7 +260,7 @@ impl WidgetManager {
             let changed = self
                 .last_targets
                 .get(&d.node_id)
-                .map_or(true, |prev| *prev != d.target);
+                .is_none_or(|prev| *prev != d.target);
             if changed {
                 let w = inputs.iter().find(|w| w.node_id == d.node_id);
                 tracing::info!(

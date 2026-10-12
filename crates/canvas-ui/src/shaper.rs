@@ -105,10 +105,10 @@ fn cosmic_shape(fs: &mut cosmic_text::FontSystem, text: &str, spec: &TextSpec) -
     let size = spec.size.max(0.0);
     let line_height = size * SCREEN_LINE_FACTOR;
     let mut buffer = Buffer::new(fs, Metrics::new(size, line_height));
-    buffer.set_wrap(fs, Wrap::None);
+    buffer.set_wrap(Wrap::None);
     // Ограничение ширины: для Wrap::None строки не переносятся, ширина
     // задаёт только область (бесконечность — без ограничения).
-    buffer.set_size(fs, Some(spec.max_width), Some(line_height));
+    buffer.set_size(Some(spec.max_width), Some(line_height));
     // Вес — из спеки (паритет с рендером потребителя; см. TextSpec::weight:
     // cosmic-text ищет лицо семейства только среди лиц точного веса).
     let attrs = Attrs::new()
@@ -116,7 +116,7 @@ fn cosmic_shape(fs: &mut cosmic_text::FontSystem, text: &str, spec: &TextSpec) -
         .weight(spec.weight);
     // `text` — источник истины по строке (контракт FR-068 §W2;
     // `TextMeasurer::measure` передаёт spec.text — данные те же).
-    buffer.set_text(fs, text, attrs, Shaping::Advanced);
+    buffer.set_text(text, &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(fs, false);
     let mut width = 0.0f32;
     let mut lines = 0usize;

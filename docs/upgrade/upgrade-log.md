@@ -67,5 +67,74 @@
 
 ---
 
+---
+
+## W2 — скачок версий + API-миграция до зелёной компиляции
+
+**Дата:** 2026-10-13 · **Issue:** #72 · **Статус:** готово к проверке CI
+
+### Решения
+
+1. **Коммиты 2a/2b объединены в один атомарный deps-W2.** Раздельные коммиты
+   (bump+cosmic-text / wgpu) НЕ компилируются по отдельности: уже после bump
+   wgpu 30 ломает gpu.rs (Maintain, TexelCopy*, PollType), а cosmic-text 0.19
+   ломает text.rs — «скачок» по определению трека неделим. Откат: revert
+   коммита целиком (уровень 3) или тег `pre-render-upgrade` (уровень 1).
+2. **Suboptimal-кадр рисуется** (`Success | Suboptimal => frame`): паритет
+   поведения wgpu 22, где Suboptimal приходил как Ok(frame). Переконфигурация
+   — ветками Outdated/Lost на следующем кадре (configure при живом кадре
+   паникует — документация wgpu 30).
+3. **highlight(): `.next()`** — итератор спанов 0.19 свёрнут до первого
+   (паритет прежнего Option<(f32,f32)>). Мульти-спановая отрисовка выделений
+   (улучшение для bidi) — осознанное решение W4, задокументировано.
+4. **Desktop Instance без display-handle** (`new_without_display_handle()`) —
+   паритет wgpu 22 (тогда поля display не существовало). wgpu-hal GLES имеет
+   фолбэки XCB/surfaceless/default. РИСК W3: GL на Wayland может потребовать
+   проброса OwnedDisplayHandle от EventLoop через параметр Renderer::new —
+   решается по факту рантайм-проверки.
+5. **MSRV 1.80→1.89 разблокировал clippy-линты** на СТАРОМ коде: 15 правок за
+   пределами миграции (map_or→is_none_or ×11, chunks_exact→as_chunks ×4,
+   % →is_multiple_of ×1) в canvas-core/ui/app/web — иначе CI-гейт
+   `clippy -D warnings` красный.
+6. **deny.toml:** миграция убрала из дерева paste (RUSTSEC-2024-0436) и
+   rustybuzz (RUSTSEC-2026-0206) — оба игнора сняты; ttf-parser 0.25.1
+   остался одной копией (fontdb→cosmic-text 0.19, owned_ttf_parser→winit) —
+   игнор сохранён с обновлённым комментарием.
+
+### Журнал правок (машинная миграция + ручные)
+
+| Домен | Правки | Файлы |
+|---|---|---|
+| cosmic-text set_* -fs | 41 call-site | text.rs, edit.rs, shaper.rs, тесты |
+| set_text/set_rich_text (attrs по & + Align) | 24 | text.rs, edit.rs, shaper.rs, тесты |
+| Attrs non-Copy → .clone() | 12 | text.rs, edit.rs |
+| highlight → итератор (.next()) | 2 | text.rs, edit.rs |
+| wgpu Instance | 4 сайта (default()→конструкторы) | gpu.rs, renderer.rs ×3, grid_gl_smoke |
+| request_adapter Option→Result | 3 match | gpu.rs |
+| request_device -trace | 1 | gpu.rs |
+| Maintain→PollType | 15 | gpu.rs + 13 тестов + render_smoke |
+| ImageCopy*→TexelCopy* | 24 | gpu.rs + 5 модулей + 13 тестов |
+| Option-обёртки (bind_group_layouts/buffers/entry_point) | 40 | 8 пайплайн-модулей |
+| push_constant_ranges→immediate_size | 11 | 8 пайплайн-модулей |
+| multiview→multiview_mask | 9 | 8 пайплайн-модулей |
+| SurfaceConfiguration +color_space | 1 | renderer.rs |
+| RenderPassColorAttachment +depth_slice | 16 | gpu.rs, renderer.rs + тесты |
+| get_current_texture → CurrentSurfaceTexture | 1 match | renderer.rs |
+| present → Queue::present | 1 | renderer.rs |
+| get_mapped_range → Result | 16 | gpu.rs + 13 тестов |
+| MSRV-линты (map_or/as_chunks/is_multiple_of) | 15 | canvas-core ×5, ui ×1, app ×5, web ×1, render ×3 |
+| WGSL @interpolate(flat) | **0** (все варьинги f32) | 8 шейдеров — аудит чист |
+
+### Верификация
+
+- `cargo check --workspace --all-targets` — ✅ зелёный
+- `cargo clippy --workspace --all-targets -- -D warnings` — ✅ зелёный
+- `cargo fmt --all` — ✅
+- `cargo tree -i cosmic-text` → **единственная** cosmic-text v0.19.0 ✅
+- `cargo tree -i wgpu` → **единственный** wgpu v30.0.1 ✅
+- WGSL-аудит: int-варьингов нет, @interpolate не требуется ✅
+- Рантайм и эталоны — НЕ тронуты (полоса W2: только компиляция); тесты
+  запускаются в W3/W4
+
 *Формат записи волны: решения (что и почему), журнал (что сделано), диффы
 эталонов (W4+), статус. Дополняется каждой волной.*

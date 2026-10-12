@@ -1473,7 +1473,7 @@ pub fn split_two_lines(
             && m.width_of(fs, n2, FAMILY, WHEEL_TPL_FONT) <= max_w
             && n1.chars().count() >= 2
             && n2.chars().count() >= 2
-            && best.map_or(true, |b| split > b)
+            && best.is_none_or(|b| split > b)
         {
             best = Some(split);
         }

@@ -745,7 +745,7 @@ mod tests {
     }
 
     fn contains_color(image: &MinimapImage, color: [u8; 4]) -> bool {
-        image.rgba.chunks_exact(4).any(|px| px == color.as_slice())
+        image.rgba.as_chunks::<4>().0.contains(&color)
     }
 
     /// Контент заполняет карту (UR-003, замена порога охвата ×10):

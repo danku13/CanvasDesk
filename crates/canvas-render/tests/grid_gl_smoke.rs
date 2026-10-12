@@ -9,9 +9,10 @@ use canvas_render::{Camera, ThemeColors};
 use wgpu::Backends;
 
 fn gl_gpu() -> Option<GpuContext> {
+    // deps-W2: InstanceDescriptor::default() удалён (wgpu 29+); headless
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: Backends::GL,
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
     pollster::block_on(GpuContext::new(instance, None))
 }
@@ -68,6 +69,7 @@ fn gl_backend_grid_line_matches_theme_color() {
             label: Some("grid-gl-smoke"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(theme.clear_color()),
@@ -88,15 +90,15 @@ fn gl_backend_grid_line_matches_theme_color() {
         mapped_at_creation: false,
     });
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: &target,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_row),
                 rows_per_image: None,
@@ -111,11 +113,15 @@ fn gl_backend_grid_line_matches_theme_color() {
     slice.map_async(wgpu::MapMode::Read, move |res| {
         let _ = tx.send(res);
     });
-    gpu.device.poll(wgpu::Maintain::Wait);
+    let _ = gpu.device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+
+        timeout: None,
+    });
     rx.recv()
         .expect("map_async: канал")
         .expect("map_async: ошибка");
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range().expect("get_mapped_range");
 
     // Ядро вертикальной minor-линии: world x=20 → screen x=220 (y=100 — вне
     // major y и вне minor y: world y = -50).
