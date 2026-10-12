@@ -81,73 +81,15 @@ Tokens (правило учёта токенов — AGENTS.md). Записи д
 - 2026-10-10 | MC-C1 (GitHub #5, волна C1 мультиканваса; high-level #14) | Волна C1 на контрактах C0: OpfsStore над OPFS + JS-глю, AppEvent-конвейер + обратный канал App→web, Web Locks №14b + модал №35a, URL-синк №17a, битая ссылка №31c, активный сценарий №32c, persist() R-T3 | worklog-2026-10-08_10-10.md
 - 2026-10-10 | DOCS-EN-w2 (issue #24; сессия web-a6dbb853) | Волна 2 перевода агентского контура EN: SPEC/TASKS/RECIPES/ui-kit/WASM-TESTING/активный index-cr-fr/skills-скоупы; 12 файлов 1:1, корпус 70863->63640 o200k | worklog-2026-10-08_10-10.md
 - 2026-10-10 | DOCS-EN-w3 (issue #33; сессия web-a6dbb853) | Волна 3 агентского слоя: docs/agent/ (MAP, routes.yaml, брифы, глоссарий, 6 workflow-навыков, eval-скелет), разгрузка AGENTS.md 8280→4860 o200k, doc_lint+бэктик-пути+бюджеты, контракт-тест правила 5–6, дрейф счётчика CONTEXT/SPEC | worklog-2026-10-08_10-10.md
-- 2026-10-10 | DOCS-EN-w4 (issue #34; сессия web-a6dbb853) | Волна 4 перевода: design/rules/ 00–11 + design/README.md RU→EN (13 файлов, 37.5k→173 кириллич. симв., ~29.5k→~24.5k o200k), ID правил сохранены (П*, C*, LAY*…), runtime-литералы и grep-якоря сверены с crates/ | текущий
+- 2026-10-10 | DOCS-EN-w4 (issue #34; сессия web-a6dbb853) | Волна 4 перевода: design/rules/ 00–11 + design/README.md RU→EN (13 файлов, 37.5k→173 кириллич. симв., ~29.5k→~24.5k o200k), ID правил сохранены (П*, C*, LAY*…), runtime-литералы и grep-якоря сверены с crates/ | worklog-2026-10-10_10-10.md
 - 2026-10-10 | MC-C2 (GitHub #6, волна C2 мультиканваса; high-level #14) | Волна C2: FsAccessStore над granted-папкой (№41c тихий старт, R-T6 rename с .bak), миграция OPFS→папка №42a/№52a (копирование до удаления), баннер №44b, watch внешних изменений №45b/№53b | worklog-2026-10-08_10-10.md
-- 2026-10-10 | MC-C3 (GitHub #7, волна C3 мультиканваса; high-level #14) | Оверлей-менеджер канвасов: список/поиск/группы №43a, создание×4, ренейм №9, удаление+undo №15a/№22c, строка хранилища №51a, drop-коллизия №26b | текущий
+- 2026-10-10 | MC-C3 (GitHub #7, волна C3 мультиканваса; high-level #14) | Оверлей-менеджер канвасов: список/поиск/группы №43a, создание×4, ренейм №9, удаление+undo №15a/№22c, строка хранилища №51a, drop-коллизия №26b | worklog-2026-10-10_10-10.md
 - 2026-10-10 | WAVE-T (GitHub #28, high-level #27) | Wave T — Tokens & States: KitState+Focused/Dragged/Error, 4-role pairs (ButtonVariant+3), ControlSize, Elevation, Duration/Easing, Shape, Spacing | worklog-2026-10-08_10-10.md
 - 2026-10-10 | WAVE-L (GitHub #30, high-level #27) | Wave L — Layout примитивы: grid_auto/Track, aspect_ratio, sticky_header, Responsive/WindowClass, Density | worklog-2026-10-08_10-10.md
 - 2026-10-10 | WAVE-C (GitHub #29, high-level #27) | Wave C — 15 новых компонентов (checkbox, slider, radio, tabs, command_palette, accordion, progress, skeleton, badge, popover, snackbar, avatar, tree, segmented) | worklog-2026-10-08_10-10.md
-- 2026-10-10 | MC-C4-DONE (GitHub #8, волна C4 мультиканваса; high-level #14) | Финализация C4: чип активного канваса №21c, title №28a, dirty-сигнал №29b, камера №12/№30b, онбординг №19, чистка DOM-панели №37b (FR-107) | текущий
+- 2026-10-10 | MC-C4-DONE (GitHub #8, волна C4 мультиканваса; high-level #14) | Финализация C4: чип активного канваса №21c, title №28a, dirty-сигнал №29b, камера №12/№30b, онбординг №19, чистка DOM-панели №37b (FR-107) | worklog-2026-10-10_10-10.md
 
 Архив: `worklog/archive/worklog-2026-10-02_10-08.md` (2026-10-02…2026-10-08, 46 записей). Ниже — записи с 2026-10-09.
----
-Task ID: DOCS-EN-w4 (issue #34; сессия web-a6dbb853)
-Agent: Super Z (main) + 4 translate-агента (5-a/5-b/5-c/5-d)
-Task: Волна 4 перевода RU→EN — design/rules/ (12 нормативных файлов) + design/README.md, по языковой политике #24 (решение владельца по итогам волны 3, п.2)
-
-Work Log:
-- Tracking-issue #34 создан по правилу «задачи → код» и подшит sub-issue к мастер-issue #17 (sub-issues #18–#25, #34)
-- Переведены 13 файлов (смысл 1:1, структура сохранена — заголовки/таблицы/списки/фенсы, строки ±5%): 00-principles 107→107, 01-colors 107→107, 02-typography 89→89 (агент 5-a); 03-spacing-radius 112→113, 04-contrast-a11y 68→68, 05-layering 62→62, 06-motion 46→46 (5-b); 07-theming 83→85, 08-states 78→80, 09-input 120→123, 10-components 144→144 (5-c); 11-layouts 416→420 (5-d); design/README.md 96→96 (main)
-- ID правил не переводились (П1–П11, C1–C8, T*, S*, ST*, IN1–IN10, K*, LAY1–LAY11, G1–G8, I-1/I-5) — прецедент RECIPES §8.3; проверены числовые мультимножества (px/α/пороги/длительности) и мультимножества ID — 0 расхождений (агенты 5-c/5-d)
-- Сверка runtime-литералов и grep-якорей с кодом (главная правка волны): `==текст==` (markdown.rs/theme.rs/tokens.rs), «ПАРАМЕТРЫ · N» (text.rs FR-069), «⋯ целиком ▾» (text.rs:861), «Принять»/«Отклонить» (autolink_ui.rs) — восстановлены с EN-глоссами; `min(desired, остаток)`, `<зазор>`, `// LAY9.1: паритет-оракул`, `offset + ручной кламп` — реальные якоря layout.rs/canvas-app, сохранены байт-в-байт; чистый псевдокод без якорей переведён (chars.len() × width, stack(center))
-- Гейты: doc_lint 931 ссылка + 2533 бэктик-пути + 5 бюджетов — 0 ошибок (равен базовой линии); кириллица 37 532 → 173 симв. (только ID правил, сверенные якоря, цитата W8); замер o200k (оценка по калибровке doc_lint: RU 2.93 / EN 3.68 симв/ток): ~29 500 → ~24 500 токенов (−16.8%, консистентно с волнами 1–2)
-
-Stage Summary:
-- design/rules/ + README — целиком на EN; норматив UI-волн (#27/#31/#32) теперь читается агентами без перевода «на лету»; единственный крупный RU-массив agent-контура закрыт
-- Не переводились (вне скоупа #34): design/rules-audit-2026-10.md, design/layouts-audit-2026-10.md (точечные аудиты-отчёты), design/use-cases/ (кандидат волны 5 — решение владельца), design/tokens/ (JSON)
-- Для владельца: ротация worklog.md по триггеру объёма (правило AGENTS.md); решение по design/use-cases/
-Tokens: in≈392000, out≈88000, total≈480000 (estimate), model=GLM-5.3 (Super Z main), scope=DOCS-EN-w4
-
----
-Task ID: MC-C3 (GitHub #7, волна C3 мультиканваса; high-level #14)
-Agent: Super Z (subagent MC-C3 + координатор main при финализации; worktree wt-c3/ветка wave/mc-c3)
-Task: Волна C3: оверлей-менеджер канвасов — список/поиск/сортировка/группы (№43a), 4 источника создания, инлайн-ренейм (№9), мягкое удаление с undo (№15a), пустое состояние (№23a), строка хранилища (№51a), drop-коллизия (№26b).
-
-Work Log:
-- Сессия агента прерывалась (контекст) — незакоммиченный задел (~16 файлов + canvas_manager_ui.rs 50 КБ); финализация (wasm-фиксы, гейты, FR-106, worklog) — координатор от имени MC-C3
-- canvas_manager_ui.rs (новый, ~1050 строк): CanvasManagerState (open/filter/selected/scroll/entries/editing) по паттерну scheme_gallery; rows — поиск по display_name регистронезависимо + SortMode + группы №43a с заголовками (фильтр в группах тоже); move_selection пропускает заголовки, scroll_to_reveal/wheel_scroll; инлайн-ренейм №9 (begin_rename/insert/backspace/cancel/take_edit); StorageRowMode №51a (browser+кнопка / folder / unsupported — Firefox/Safari без кнопки); manager_layout/row_at/name_at (draw==hit); empty_card №23a; format_ts; DOUBLE_CLICK_MS-детект (строка — открыть №49, имя — ренейм) — 15 тестов
-- app-интеграция: AppEvent-блок // FR-106 (CanvasManagerOpen — кнопка «Недавние» тулбара до чипа C4, №37b; CanvasSavedAsCopy №26b; undo-удаления), клавиатура оверлея (Esc/Esc-ренейм/Enter/F2/↑↓/PgUp/PgDn/ввод), manager_after_open (шаблон №38a: создать → галерея-пикер set_pending_scheme поверх), после удаления активного №22c/№40b — менеджер открыт + новый «Canvas N» под ним; +8 i18n-ключей RU/EN (тосты удаления/коллизий/ошибок, Экспорт, бейджи browser/folder/disk)
-- web_requests.rs: операции менеджера — открытие из workspace (OPFS/папка), дубликат №27a (полный .canvas: сценарии/заморозки/extra; copy_name с i18n-суффиксом; сразу активен), импорт файла (пикер, санитизация, №26b авто-суффикс), undo удаления (.bak→файл без переключения сцены), перенос ключа камеры localStorage при ренейме активного (№12/№30b, формат C0 camera_key_for), remove_recent при удалении (№15a)
-- drop_files.rs: DOM-drop с коллизией — было create:true (тихая перезапись) → collision_suffix + тост «создана копия» (№26b)
-- Координаторские фиксы сессии: manager_last_click std::time::Instant → canvas_core::time::Instant (W1-аудит); 3 ошибки владения wasm-only (E0382 name/sanitized, E0521 remove_recent future, E0308) — видны только под wasm32-таргетом (натив проходит), подчёркнуто в FR-106 §Проверка; unused import
-- Гейты (финальное состояние): fmt --check OK; clippy --workspace -D warnings OK; cargo test --workspace 3001 passed / 0 failed (22 новых: canvas_manager_ui×15, app×5, web_requests×2); wasm_gate.sh --check OK
-- WASM L2 не гонялся (нет wasm-bindgen CLI, 2 ядра/4 ГБ) — ручные сценарии 8 шт. в FR-106 §Проверка (вкл. тёмная/светлая, RU/EN)
-
-Stage Summary:
-- C3 закрыта целиком: полный цикл управления канвасами в UI (создать/открыть/переименовать/дублировать/удалить+undo/импорт/экспорт); вход — кнопка «Недавние» (C4 заменит на двухзонный чип №21c + document.title №28a)
-- C4-задел: AppEvent-конвейер и web_requests операции переиспользуются чипом; persist() переносится в точку менеджера (TODO в C1)
-- Открытые пункты: онбординг-шаг 10, чистка DOM-панели, чип, title — C4; desktop-слой и приёмка — C5
-Tokens: in≈560k, out≈130k, total≈690k (estimate; subagent MC-C3 + координаторская финализация), model=GLM, scope=FR-106
-
----
-Task ID: MC-C4-DONE (GitHub #8, волна C4 мультиканваса; high-level #14; ядро волны — прерванная сессия MC-C4)
-Agent: Super Z (subagent MC-C4-DONE — финализация; worktree /home/z/my-project/canvasdesk/wt-c4, ветка wave/mc-c4)
-Task: Финализационный шаг волны C4 (FR-107): ревью+коммит незакоммиченного задела (document.title, камера web-часть, чистка DOM-панели №37b, SDK-туры), гейты, FR-107-документ + индекс, worklog-и. НЕ пушить.
-
-Work Log:
-- Ревью задела (22 файла): title_sync.rs (чистая document_title — 3 теста; wasm-обёртка в крючке web_state::set_active рядом с url_sync; ренейм активного переезжает в run_canvas_op), camera_web.rs (save/load по camera_key_for C0 + install_flush: visibilitychange→hidden + pagehide → CameraFlushRequested; стартовое восстановление App::apply_startup_camera в app_spawn, ?stress — дефолт), чистка №37b (index.html: #btn-recent/#btn-export + CSS-эллипсис удалены, <title> → «CanvasDesk»; toolbar.rs: set_recent_label и все 5 вызовов точек открытия убраны; SDK-туры RU/EN «три кнопки»→«две», шаги recent/export удалены, регресс-тест 3 шага; аудиты layout/touch_targets — эллипсис-кейсы сняты); недочётов/обрывков не найдено → коммит 0879e2a
-- Dirty-сигнал №29b проверен rg-ом: реализован в ядре волны (autosave_if_due -> Option<bool>; Some(false) → chip.save_failed + стойкий значок ⚠ + разовый тост canvas.chip.save_error_toast; Some(true) снимает; i18n RU/EN на месте; dot-индикаторов нет) — доработок не потребовалось
-- Гейты (все зелёные, фиксы не понадобились): cargo fmt --check OK; cargo clippy --workspace -- -D warnings OK; cargo test --workspace — 3081 passed / 0 failed; scripts/wasm_gate.sh --check OK; doc_lint 0 ошибок (933 ссылки)
-- FR-107-документ docs/change-requests/fr-107-multicanvas-c4-chip-title-onboarding.md по шаблону cr-template (образец fr-106): описание волны (чип №21c, title №28a, dirty №29b, камера №12/№30b, онбординг №19, чистка №37b), коммиты, гейты в §Проверка, 6 ручных дым-сценариев для владельца (Chromium ?log=debug), нумерация онбординга (9-й элемент ONBOARDING_STEPS = «шаг 10» сквозной нумерации issue) + строка в index-cr-fr.md → коммит 541fdae
-- Worklog-и: запись в журнале репозитория (эта) + append в оркестрационный /home/z/my-project/worklog.md
-- НЕ пушено, GitHub не тронут (координатор владеет issues/доской)
-
-Stage Summary:
-- Волна C4 закрыта целиком: чип активного канваса (вход в менеджер + инлайн-ренейм через конвейер C3), заголовок вкладки, камера в localStorage (перенос ключа ренеймом — готовый CanvasMoveCameraKey), финальная карточка онбординга с CTA «Создать канвас», панель из 3 кнопок; всего в волне 4 коммита (8fe51ae, 3795172, 0879e2a, 541fdae), 26+ новых тестов, i18n +9 ключей RU/EN
-- WASM L2 не выполнялся (нет wasm-bindgen CLI, 2 ядра/4 ГБ) — ручные сценарии 6 шт. в FR-107 §Проверка (чип-ренейм/коллизия/disk, title, камера после перезагрузки/ренейма, шаг онбординга, панель 3 кнопки RU/EN, dirty-значок)
-- За координатором: мерж wave/mc-c4 (+wt-c5 параллельно — пересечения i18n/canvas_manager_ui/app.rs промаркированы `// FR-107 (C4)`), приёмка CJM J4→J5→J7, закрытие issue #8
-Tokens: in≈600k, out≈160k, total≈760k (estimate; ядро волны прерванной сессии ≈in 420k/out 115k + финализация MC-C4-DONE ≈in 180k/out 45k), model=GLM (subagent MC-C4-DONE), scope=FR-107
-
 ---
 Task ID: MC-C5-FIN (GitHub #9, волна C5 мультиканваса; high-level #14; ядро волны — Task ID MC-C5, предыдущий прогон)
 Agent: Super Z (subagent MC-C5-FIN; worktree /home/z/my-project/canvasdesk/wt-c5, ветка wave/mc-c5)
