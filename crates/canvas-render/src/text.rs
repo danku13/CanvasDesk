@@ -753,8 +753,14 @@ fn decoration_quads(
         let start = offset_to_cursor(plain, span.start);
         let end = offset_to_cursor(plain, span.end);
         for run in buffer.layout_runs() {
-            // deps-W2: highlight → итератор (0.19); .next() — паритет
-            // прежнего Option; мульти-спаны — осознанное решение W4
+            // deps-W2: highlight() 0.19 размечает выбранными и строки ЗА
+            // пределами диапазона курсора («между строками» без клампа по
+            // line_i) — фильтр по строкам восстанавливает семантику 0.12
+            // (квады только на строках диапазона);
+            // .next() — один спан на ран (паритет Option), мульти-спаны — W4
+            if run.line_i < start.line || run.line_i > end.line {
+                continue;
+            }
             if let Some((x, width)) = run.highlight(start, end).next() {
                 if span.highlight {
                     quads.push((

@@ -961,10 +961,38 @@ impl EditingSession {
             }
             // FR-100: индент — готовые Action::Indent/Unindent cosmic-text
             // (пробелы до таб-стопа, строки выделения, коррекция каретки)
+            // deps-W2: 0.19 Action::Indent при Selection::None вставляет таб
+            // НА ПОЗИЦИИ КУРСОРА (0.12 индентил СТРОКУ от начала); FR-100
+            // требует индент текущей строки — ручной путь без выделения
             KeyCommand::Tab => {
                 self.push_undo(false);
-                self.with_editor(|editor| editor.action(font_system, Action::Indent));
-                self.sync_from_buffer(font_system);
+                if matches!(self.selection, Selection::None) {
+                    const TAB_WIDTH: usize = 4; // FR-100: таб-стоп индента
+                    let line = self.cursor.line;
+                    let line_text = self
+                        .buffer
+                        .lines
+                        .get(line)
+                        .map(|l| l.text().to_string())
+                        .unwrap_or_default();
+                    let leading = line_text.len() - line_text.trim_start().len();
+                    let insert_n = TAB_WIDTH - (leading % TAB_WIDTH);
+                    let spaces = " ".repeat(insert_n);
+                    let caret_index = self.cursor.index;
+                    self.with_editor(|editor| {
+                        editor.set_selection(Selection::None);
+                        editor.set_cursor(Cursor::new(line, 0));
+                        editor.insert_string(&spaces, None);
+                        // каретка следует за индентом (FR-100): старый индекс
+                        // сдвигается на вставленные байты
+                        editor.set_cursor(Cursor::new(line, caret_index + insert_n));
+                    });
+                    self.buffer.shape_until_scroll(font_system, false);
+                    self.sync_from_buffer(font_system);
+                } else {
+                    self.with_editor(|editor| editor.action(font_system, Action::Indent));
+                    self.sync_from_buffer(font_system);
+                }
             }
             KeyCommand::ShiftTab => {
                 self.push_undo(false);
@@ -1227,9 +1255,12 @@ impl EditingSession {
                 buffer
                     .layout_runs()
                     .filter_map(|run| {
-                        // deps-W2: highlight возвращает итератор спанов (0.19);
-                        // .next() — паритет прежнего Option (один спан на ран);
-                        // мульти-спановая отрисовка — осознанное решение W4
+                        // deps-W2: highlight() 0.19 размечает выбранными и строки
+                        // ЗА пределами диапазона — кламп по line_i (семантика
+                        // 0.12); .next() — один спан на ран, мульти-спаны — W4
+                        if run.line_i < start.line || run.line_i > end.line {
+                            return None;
+                        }
                         run.highlight(start, end).next().map(|(x, width)| {
                             [
                                 x,

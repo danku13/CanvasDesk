@@ -96,10 +96,20 @@
    пределами миграции (map_or→is_none_or ×11, chunks_exact→as_chunks ×4,
    % →is_multiple_of ×1) в canvas-core/ui/app/web — иначе CI-гейт
    `clippy -D warnings` красный.
-6. **deny.toml:** миграция убрала из дерева paste (RUSTSEC-2024-0436) и
-   rustybuzz (RUSTSEC-2026-0206) — оба игнора сняты; ttf-parser 0.25.1
-   остался одной копией (fontdb→cosmic-text 0.19, owned_ttf_parser→winit) —
-   игнор сохранён с обновлённым комментарием.
+6. **deny.toml:** rustybuzz (RUSTSEC-2026-0206) ушёл из дерева (harfrust в
+   cosmic-text 0.19) — игнор снят. paste (RUSTSEC-2024-0436) ВОЗВРАЩЁН:
+   wgpu 30 его больше не тянет, но `--all-features` получает через
+   statrs 0.17 → nalgebra 0.32 → simba 0.8 (фича statrs в canvas-core);
+   ttf-parser 0.25.1 — одна копия, игнор сохранён.
+7. **Рантайм-адаптация 0.19 (сверх брифа — для зелёного CI):**
+   - `Action::Indent` при `Selection::None` теперь вставляет таб НА
+     КУРСОРЕ (0.12 индентил строку) — FR-100 требует индент строки:
+     ручной путь в edit.rs (вставка пробелов в начало строки, каретка
+     сдвигается; путь с выделением — по-прежнему Action::Indent)
+   - `LayoutRun::highlight()` 0.19 размечает выбранными строки ЗА
+     пределами диапазона курсора (нет клампа по line_i) — фильтр
+     `run.line_i < start.line || run.line_i > end.line` в
+     decoration_quads (text.rs) и рендере выделения (edit.rs)
 
 ### Журнал правок (машинная миграция + ручные)
 
@@ -127,6 +137,9 @@
 
 ### Верификация
 
+- `cargo test --workspace` — ✅ **3443 passed / 0 failed** (снапшоты 221 и
+  html5 16 — зелёные, метрики шейпинга не дрейфнули: W4 ожидает
+  регенерация-ноуп, см. ниже)
 - `cargo check --workspace --all-targets` — ✅ зелёный
 - `cargo clippy --workspace --all-targets -- -D warnings` — ✅ зелёный
 - `cargo fmt --all` — ✅
