@@ -35,7 +35,10 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace -- -D warnings
       - name: test
-        run: cargo test --workspace
+        # deps-W2: --no-fail-fast — на ветке миграции важно видеть ВСЕ
+        # упавшие бинари за один цикл (флaky платформенные тесты не
+        # маскируют остальные); после merge трека можно вернуть как было
+        run: cargo test --workspace --no-fail-fast
       - name: build
         run: cargo build --workspace
 
