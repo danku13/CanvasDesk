@@ -423,3 +423,18 @@ Stage Summary:
 - W0 DoD выполнен: тег стоит, docs/upgrade/{baseline-deps.txt, baseline-inventory.md, baseline-perf.md} готовы, контрольные числа зафиксированы (220+15 эталонов, 3447 тестов, 221/16 зелёных), на main только новые файлы документации — нулевой риск
 - Опора для W2 (счётчики миграции) и W4/W6 (порог дрейфа 171.4/176.1 μs ± 20%) заморожена
 Tokens: in≈150000, out≈30000, total≈180000, model=GLM-5.3, scope=DEPS-W0/#70
+---
+Task ID: ISSUE-42-STATUS-AUDIT
+Agent: Super Z (main)
+Task: Анализ issue #42 (Интеграция волн T/C/L/A/D — 7 пробелов); смена статуса, если всё реализовано
+
+Work Log:
+- #42: 4 sub-issues #43–46, все closed as completed; реализация — коммит c83b888 (INT-1..INT-4), предок origin/main
+- Верификация 7/7 в коде main: P1 lint-функции (79 в ui_layout_lint.rs, вкл. 14 demo из INT-1), P2 Response/demo_widget_response kit_ui.rs:3588/4314, P3 app/actions.rs (13 actions), P4 app.rs:4015 compute_smart_guides при drag, P5 layout.rs:880 sticky_header(scroll_offset) + 3 теста AC-L4, P6 avatar/nav_rail kit_ui.rs + kit_sections_k4.rs, P7 Spacing/Shape/Elevation в demo
+- CI main: последний завершённый прогон success (Pages тоже); текущий in_progress на момент аудита
+- Действия: комментарий-вердикт (таблица 7×верификация) → close as completed; Project v2: Status Todo → Done
+- Скрипт scripts/issue42_status.py (в my-project, не в репо)
+
+Stage Summary:
+- #42 закрыт как завершённый: интеграция волн T/C/L/A/D полностью в main, все 4 sub-issues done, 7/7 пробелов подтверждены кодом
+- Tokens: scope=issue-42-status-audit
