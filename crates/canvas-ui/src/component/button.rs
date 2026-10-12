@@ -14,9 +14,9 @@
 //!    FR-057 (Wave T §5.1.2, keyboard-origin).
 
 use super::{
-    state_layer_alpha, ButtonVariant, Component, ControlSize, ControlStyle, KitPalette, KitState,
-    BUTTON_HEIGHT, BUTTON_PAD_H, CHIP_HEIGHT, CHIP_PAD_H, ICON_BUTTON_SIZE, SWITCH_H,
-    SWITCH_KNOB_PAD, SWITCH_W,
+    state_layer_alpha, touch_expand, ButtonVariant, Component, ComponentHit, ControlSize,
+    ControlStyle, KitPalette, KitState, BUTTON_HEIGHT, BUTTON_PAD_H, CHIP_HEIGHT, CHIP_PAD_H,
+    ICON_BUTTON_SIZE, MIN_TOUCH_TARGET, SWITCH_H, SWITCH_KNOB_PAD, SWITCH_W,
 };
 use crate::geometry::{UiPoint, UiRect, UiVec2};
 use crate::layout::{stack, HAlign, LayoutBackend, VAlign};
@@ -85,9 +85,12 @@ pub fn button_layout(
 
 /// Кнопка в слоте с явной шкалой размера (issue #67 V1: demo-витрина
 /// уважает [`ControlSize`] — высота через [`ControlSize::button_h`], не
-/// литерал `BUTTON_HEIGHT`). Ширина/усечение — контракт [`button_layout`];
-/// при `ControlSize::Sm` высота совпадает с прежней константой (паритет
-/// покрыт тестом `sized_button_parity_with_legacy`).
+/// литерал `BUTTON_HEIGHT`). Ширина/усечение — контракт [`button_layout`]
+/// (пад канона BUTTON_PAD_H — эталоны V3 витрины заморожены); при
+/// `ControlSize::Sm` высота совпадает с прежней константой (паритет
+/// покрыт тестом `sized_button_parity_with_legacy`). Кегль замера —
+/// потребитель; размерная шкала кегля — [`ControlSize::font_size`]
+/// (полировка 2026-10, проводка в Component-путь — `Button::layout`).
 #[allow(clippy::too_many_arguments)] // прецедент button_layout: layout-функции кита
 pub fn button_layout_sized(
     slot: UiRect,
@@ -519,18 +522,27 @@ pub struct ButtonProps {
     /// [`WidgetState::set_disabled`] (клик игнорируется — контракт
     /// [`KitState::Disabled`]). Смена между кадрами — [`Button::set_disabled`].
     pub disabled: bool,
-    /// Шкала размера (issue #67 V1): высота layout — [`ControlSize::button_h`];
-    /// `Sm` — канон == legacy [`BUTTON_HEIGHT`] (паритет — тест
-    /// `component_button_props_new_defaults_to_sm_parity`). Кегль подписи —
-    /// [`BUTTON_FONT_SIZE`] независимо от размера (потребитель с собственным
-    /// шрифтовым пулом передаёт свой кегль напрямую в [`button_layout_sized`]).
+    /// Шкала размера (issue #67 V1 + полировка 2026-10): высота layout —
+    /// [`ControlSize::button_h`]; кегль подписи — размерная шкала
+    /// [`ControlSize::font_size`] (Component-путь, замер тем же кеглем,
+    /// что и подпись потребителя — CR-015); `Sm` — канон == legacy
+    /// (паритет — тест `component_button_props_new_defaults_to_sm_parity`).
+    /// Пад ширины в sized-layout — канон BUTTON_PAD_H (эталоны V3
+    /// витрины заморожены; пад-шкала [`ControlSize::pad_h`] — к обработке
+    /// потребителем).
     pub size: ControlSize,
+    /// LAY8.3: hit-зона расширяется до [`MIN_TOUCH_TARGET`] центрированно
+    /// (hit-only — визуал/геометрия прежние, [`Button::hit_test`]).
+    /// Coarse-платформа — решение потребителя (FR-097 `POINTER_COARSE`):
+    /// включайте на тач-вводе; кламп в контейнер — [`super::touch_hit`]
+    /// у потребителя (компонент не знает своего контейнера).
+    pub touch_hit: bool,
 }
 
 impl ButtonProps {
-    /// Удобный конструктор: `size = ControlSize::Sm`, `disabled = false`
-    /// (канон == legacy-кнопка [`BUTTON_HEIGHT`]); остальные поля —
-    /// обновлением структуры.
+    /// Удобный конструктор: `size = ControlSize::Sm`, `disabled = false`,
+    /// `touch_hit = false` (канон == legacy-кнопка [`BUTTON_HEIGHT`]);
+    /// остальные поля — обновлением структуры.
     pub fn new(label: impl Into<String>, variant: ButtonVariant, palette: KitPalette) -> Self {
         Self {
             label: label.into(),
@@ -538,6 +550,7 @@ impl ButtonProps {
             palette,
             disabled: false,
             size: ControlSize::Sm,
+            touch_hit: false,
         }
     }
 }
@@ -590,7 +603,10 @@ impl Component for Button {
     /// — кнопка; других rect'ов нет.
     ///
     /// Выравнивание в слоте — Center/Center (как у кнопок диалога/шапки);
-    /// семейство/кегль — [`BUTTON_FAMILY`]/[`BUTTON_FONT_SIZE`].
+    /// семейство — [`BUTTON_FAMILY`]; кегль — размерная шкала
+    /// `props.size` ([`ControlSize::font_size`]: замер тем же кеглем, что
+    /// и подпись потребителя — CR-015; Sm — прежние числа 13/30/12,
+    /// бит-в-бит). Высота — [`ControlSize::button_h`].
     /// `backend` не участвует: layout — stack одного блока, контейнерной
     /// вёрстки нет (сигнатуры kit-функций НЕ менялись — §Контракт-1 FR-068).
     ///
@@ -609,7 +625,7 @@ impl Component for Button {
             &mut m,
             &mut fs,
             BUTTON_FAMILY,
-            BUTTON_FONT_SIZE,
+            self.props.size.font_size(),
         );
         vec![bl.rect]
     }
@@ -661,9 +677,22 @@ impl Component for Button {
         }
     }
 
-    // hit_test — дефолтный из [`Component`] (первый rect, содержащий
-    // точку): у кнопки rect один — этого достаточно, переопределение
-    // не требуется (план FR-068 §W3).
+    // hit_test — LAY8.3: при `props.touch_hit` точка проверяется против
+    // hit-зоны `rects[0]`, расширенной [`touch_expand`] до
+    // [`MIN_TOUCH_TARGET`] центрированно (hit-only: рисование/геометрия
+    // прежние — расширяется только зона попадания). Кламп в контейнер —
+    // забота потребителя ([`super::touch_hit`]: компонент не знает
+    // контейнера; FR-097). Без флага — дефолт трейта (бит-в-бит):
+    // первый rect, содержащий точку.
+    fn hit_test(&self, rects: &[UiRect], point: UiPoint) -> Option<ComponentHit> {
+        if !self.props.touch_hit {
+            return ComponentHit::pick(rects, point);
+        }
+        let rect = *rects.first()?;
+        touch_expand(rect, MIN_TOUCH_TARGET)
+            .contains(point)
+            .then_some(ComponentHit { index: 0 })
+    }
 }
 
 #[cfg(test)]
@@ -671,6 +700,7 @@ mod tests {
     use super::*;
     use crate::component::panel::panel_style;
     use crate::component::test_support::{palette_a, palette_b, FAMILY};
+    use crate::component::{BUTTON_HEIGHT, BUTTON_PAD_H};
     #[test]
     fn button_measure_is_text_plus_padding() {
         let mut m = TextMeasurer::new();
@@ -1317,5 +1347,82 @@ mod tests {
             }
             other => panic!("item[1] — overlay Rect, получен {other:?}"),
         }
+    }
+
+    // === Полировка кнопки 2026-10: размерные кегли + LAY8.3 =================
+
+    /// Размерная типографика: кегли/пады по ступеням; Sm = канон
+    /// BUTTON_FONT_SIZE/BUTTON_PAD_H (бит-в-бит прежним потребителям).
+    #[test]
+    fn control_size_label_typography_scale() {
+        assert_eq!(ControlSize::Xs.font_size(), 11.0);
+        assert_eq!(ControlSize::Sm.font_size(), BUTTON_FONT_SIZE);
+        assert_eq!(ControlSize::Md.font_size(), 14.0);
+        assert_eq!(ControlSize::Lg.font_size(), 15.0);
+        assert_eq!(ControlSize::Xs.pad_h(), 8.0);
+        assert_eq!(ControlSize::Sm.pad_h(), BUTTON_PAD_H);
+        assert_eq!(ControlSize::Md.pad_h(), 14.0);
+        assert_eq!(ControlSize::Lg.pad_h(), 16.0);
+        // Воздух: пад не съедает кнопку ни на одной ступени
+        for cs in [
+            ControlSize::Xs,
+            ControlSize::Sm,
+            ControlSize::Md,
+            ControlSize::Lg,
+        ] {
+            assert!(cs.pad_h() * 2.0 < cs.button_h(), "{cs:?}");
+        }
+    }
+
+    /// Кегль Component-кнопки — размерная шкала: ширина layout измеряется
+    /// кеглем `props.size.font_size()` (Sm — 13, канон; Lg — 15 → ширина
+    /// больше, чем при замере 13, при той же высоте 44).
+    #[test]
+    fn component_button_layout_uses_size_font_scale() {
+        let mut m = TextMeasurer::new();
+        let mut fs = cosmic_text::FontSystem::new();
+        let label = "Действие";
+        let slot = UiRect::new(10.0, 20.0, 400.0, 80.0);
+        let mut props = ButtonProps::new(label, ButtonVariant::Primary, palette_a());
+        props.size = ControlSize::Lg;
+        let rects = Button::new(props).layout(default_backend(), slot);
+        assert_eq!(rects[0].h, 44.0, "высота Lg");
+        let kegel = ControlSize::Lg.font_size();
+        let expected_w = m.width_of(&mut fs, label, BUTTON_FAMILY, kegel) + BUTTON_PAD_H * 2.0;
+        assert!(
+            (rects[0].w - expected_w).abs() < 0.01,
+            "ширина замерена кеглем шкалы Lg: {} vs {expected_w}",
+            rects[0].w
+        );
+    }
+
+    /// LAY8.3 hit-зона: touch_hit=true — точка вне визуала, но внутри
+    /// расширенной зоны (44 центрированно) попадает; далеко — мимо;
+    /// touch_hit=false — дефолт (бит-в-бит): вне визуала — None.
+    #[test]
+    fn button_touch_hit_zone_expands_hit_only() {
+        let btn = Button::new(ButtonProps {
+            touch_hit: true,
+            ..ButtonProps::new("ОК", ButtonVariant::Primary, palette_a())
+        });
+        let rects = btn.layout(default_backend(), UiRect::new(0.0, 0.0, 400.0, 100.0));
+        let r = rects[0];
+        // Визуал 30 px высотой в слоте 100 (r.y=35, низ 65); зона 44:
+        // 28..72. Точка на 5 px ниже/выше визуала — в зоне.
+        let below = UiPoint::new(r.x + 5.0, r.bottom() + 5.0);
+        assert_eq!(btn.hit_test(&rects, below), Some(ComponentHit { index: 0 }));
+        let above = UiPoint::new(r.x + 5.0, r.y - 5.0);
+        assert_eq!(btn.hit_test(&rects, above), Some(ComponentHit { index: 0 }));
+        // Вне зоны (за пределами ±(44−30)/2 = 7) — None.
+        let far = UiPoint::new(r.x + 5.0, r.bottom() + 20.0);
+        assert_eq!(btn.hit_test(&rects, far), None);
+        // Дефолт (touch_hit=false): вне визуала — None, внутри — Some
+        // (бит-в-бит прежнему hit_test).
+        let plain = Button::new(ButtonProps::new("ОК", ButtonVariant::Primary, palette_a()));
+        assert_eq!(plain.hit_test(&rects, below), None);
+        assert_eq!(
+            plain.hit_test(&rects, UiPoint::new(r.x + 5.0, r.y + 5.0)),
+            Some(ComponentHit { index: 0 }),
+        );
     }
 }

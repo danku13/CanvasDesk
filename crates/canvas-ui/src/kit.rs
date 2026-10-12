@@ -146,12 +146,12 @@ pub use crate::component::{Response, WidgetExt};
 pub use crate::keyboard::FocusTrap;
 
 pub use crate::component::{
-    resolve_state, state_layer_alpha, ButtonVariant, ControlSize, ControlStyle, Elevation,
-    KitPalette, KitState, PanelStyle, Shape, Spacing, BUTTON_HEIGHT, BUTTON_PAD_H, BUTTON_WIDTH,
-    CHIP_HEIGHT, CHIP_PAD_H, DROPDOWN_GAP, GAP_CONTROLS, ICON_BUTTON_SIZE, LIST_ROW_GAP,
-    LIST_ROW_H, SCROLLBAR_KNOB_MIN, SCROLLBAR_WIDTH, SWITCH_H, SWITCH_KNOB_PAD, SWITCH_W,
-    TEXT_FIELD_HEIGHT, TEXT_FIELD_MIN_W, TEXT_FIELD_PAD_H, TOAST_TTL_MS, TOOLTIP_DELAY_MS,
-    TOOLTIP_OFFSET,
+    resolve_state, state_layer_alpha, touch_expand, touch_hit, ButtonVariant, ControlSize,
+    ControlStyle, Elevation, KitPalette, KitState, PanelStyle, Shape, Spacing, BUTTON_HEIGHT,
+    BUTTON_PAD_H, BUTTON_WIDTH, CHIP_HEIGHT, CHIP_PAD_H, DROPDOWN_GAP, GAP_CONTROLS,
+    ICON_BUTTON_SIZE, LIST_ROW_GAP, LIST_ROW_H, MIN_TOUCH_TARGET, SCROLLBAR_KNOB_MIN,
+    SCROLLBAR_WIDTH, SWITCH_H, SWITCH_KNOB_PAD, SWITCH_W, TEXT_FIELD_HEIGHT, TEXT_FIELD_MIN_W,
+    TEXT_FIELD_PAD_H, TOAST_TTL_MS, TOOLTIP_DELAY_MS, TOOLTIP_OFFSET,
 };
 // Wave T §5.2.4: motion tokens (Duration, Easing, ease, effective_duration).
 pub use crate::anim::{ease, effective_duration, effective_duration_with, Duration, Easing};

@@ -18357,9 +18357,19 @@ mod we_onboarding_draw_tests {
             } else if step + 1 == crate::onboarding_ui::ONBOARDING_STEPS.len() {
                 crate::onboarding_ui::cta_rect(card)
             } else {
+                // Skip-ветка button_rect измеренная — для Next подпись не
+                // читается: свежий замерщик (без глобального мьютекса —
+                // guard держать нечего, см. комментарий выше).
+                let (mut m, mut fs) = (
+                    canvas_ui::measure::TextMeasurer::new(),
+                    cosmic_text::FontSystem::new(),
+                );
                 crate::onboarding_ui::button_rect(
                     card,
                     crate::onboarding_ui::OnboardingButton::Next,
+                    "",
+                    &mut m,
+                    &mut fs,
                 )
             };
             assert!(

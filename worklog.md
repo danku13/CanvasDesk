@@ -612,3 +612,25 @@ Stage Summary:
 - Component-слой кнопки доведён до канона кита (Wave T/#67 V1): шкала размеров, M3-отклик, keyboard-ring, retained-эргономика, публичный kit-API
 - Визуальный ноль-скачок: Component потребителей не имеет; снапшоты/витрина не задеты
 - scope=kit-button-polish
+
+---
+Task ID: KIT-BUTTON-POLISH
+Agent: Super Z (main; сессия web-0a539c42-84fd-4916-9a97-970c8052c51d)
+Task: Полировка ui-kit компонента «кнопка» (запрос владельца): миграция потребителей на kit::Button (снятый TODO onboarding), хит-зоны MIN_TOUCH_TARGET (LAY8.3), размерные кегли подписи.
+
+Work Log:
+- canvas-ui: ControlSize::font_size() (Xs=11 / Sm=13 / Md=14 / Lg=15; Sm ≡ BUTTON_FONT_SIZE) + ControlSize::pad_h() (8/12/14/16; Sm ≡ BUTTON_PAD_H) — размерная типографика подписи (кегль/воздух растут с высотой контрола, M3/Fluent).
+- canvas-ui: LAY8.3 в ките — MIN_TOUCH_TARGET = 44 + touch_expand (центрированное hit-only расширение) + touch_hit (кламп в контейнер); математика 1:1 с FR-097 (единый источник).
+- canvas-ui: слияние с параллельной полировкой 10ed162 (issue #67 V1: sized-layout, state-layer M3, focus-ring, set_disabled, ButtonProps::new): их sized-layout (высота=button_h, пад канона — эталоны V3 заморожены) сохранён 1:1; мои размерные кегли — ControlSize::font_size() (Xs=11/Sm=13/Md=14/Lg=15) + pad_h() (8/12/14/16) в mod.rs, проводка кегля шкалы в Component Button::layout (замер тем же кеглем, CR-015); ButtonProps + touch_hit: bool; hit_test override — зона до 44 при touch_hit (дефолт бит-в-бит).
+- canvas-app: touch_targets.rs — математика расширения/клампа делегирована киту (тонкие мосты xywh/xyxy + coarse-флаг FR-097); тесты семантики прошли без правок.
+- canvas-app: миграция Skip (снятый TODO onboarding button_layout): skip_rect — измеренная Ghost-кнопка (текст + 2·BUTTON_PAD_H·k, высота BUTTON_HEIGHT·k — канон, паритет Prev/Next); фикс 64×22 и отдельный кегль 11 удалены (64px был впритык к «Пропустить» без пада — измерение убирает риск клипа RU-подписи). button_rect/button_rect_touch/button_at/button_at_touch несут замерщик + skip_label: draw==hit — рендер (overlays.rs) и ввод (input.rs) мерят тем же замерщиком, что и раскладка карточки.
+- Гейты (на ребейзе поверх 0de9f49): fmt, check --workspace, test --workspace, clippy, wasm_gate --check, lay7, doc_lint — прогон после разрешения конфликтов (см. коммит).
+- Тесты: +5 kit (шкала кеглей/падов, кегль Component-кнопки по шкале, touch-зона hit-only, touch_expand/touch_hit клампы); пин Skip 64×22×k заменён измеренными инвариантами; дубли sized-тестов параллельной сессии устранены.
+
+Stage Summary:
+- Кнопка кита: 7 вариантов × 4 размера — единая шкала высота/пад/кегль; hit-зоны LAY8.3 — на уровне кита (Component touch_hit + утилиты touch_expand/touch_hit), FR-097 использует тот же источник.
+- Онбординг: Skip — измеренная kit-геометрия, последний hand-rolled кнопочный фикс ушёл; RU-подпись без риска клипа (64 → ~80px при k=1); вне Skip визуальных скачков нет.
+- Вопрос владельцу: обновлять ли онбординг-скриншоты/доки под новую геометрию Skip (шифт 64×22 → ~(80)×30 при k=1) — по протоколу FR/CR.
+- Telegram: план (msg 1111), этап 1 (1112), этап 2, финальное саммари — отправлены.
+Tokens: in≈120000, out≈40000, total≈160000 (estimate), model=GLM-4.7, scope=kit-button-polish
+

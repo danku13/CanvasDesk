@@ -234,6 +234,74 @@ impl ControlSize {
             Self::Lg => 36.0,
         }
     }
+    /// Размерные кегли подписи (полировка кнопки 2026-10): кегль растёт
+    /// с высотой контрола (M3/Fluent type-in-size). Шкала согласована
+    /// с токенами типографики `canvas_core`: Xs = [`canvas_core::tokens::FONT_CAPTION`]
+    /// (11), Sm = [`canvas_core::tokens::FONT_BODY`] / [`BUTTON_FONT_SIZE`]
+    /// (13 — канон подписей контролов, бит-в-бит прежним потребителям);
+    /// Md/Lg — промежуточные ступени к [`canvas_core::tokens::FONT_TITLE_LG`]
+    /// (18). Потребитель кнопки передаёт это значение в [`button_layout_sized`]
+    /// / `Painter::label` (замер тем же кеглем, что и отрисовка — CR-015).
+    pub const fn font_size(self) -> f32 {
+        match self {
+            Self::Xs => 11.0,
+            Self::Sm => 13.0,
+            Self::Md => 14.0,
+            Self::Lg => 15.0,
+        }
+    }
+    /// Размерный горизонтальный пад подписи кнопки (полировка кнопки
+    /// 2026-10): ширина кнопки = текст + 2·`pad_h()`. Sm = [`BUTTON_PAD_H`]
+    /// (12 — канон, бит-в-бит); Xs — плотнее (8, тулбары/чипы), Md/Lg —
+    /// просторнее (14/16) — воздух растёт с высотой.
+    pub const fn pad_h(self) -> f32 {
+        match self {
+            Self::Xs => 8.0,
+            Self::Sm => 12.0,
+            Self::Md => 14.0,
+            Self::Lg => 16.0,
+        }
+    }
+}
+
+// --- Хит-зоны LAY8.3 (touch targets) ----------------------------------------
+
+/// Минимальная тач-цель, лог. px (LAY8.3, ui-kit-deep-review §5.3; Apple HIG
+/// / Material / WCAG 2.5.5 — 44×44). Визуальный размер контрола может быть
+/// меньше ([`ControlSize`]); hit-зона дотягивается до этого минимума
+/// отдельной геометрией — hit-only (рисование не трогается; FR-097 —
+/// продукт-мост `POINTER_COARSE`, platform-флаг остаётся у потребителя).
+pub const MIN_TOUCH_TARGET: f32 = 44.0;
+
+/// LAY8.3: центрированное расширение rect до `min` по обеим осям (hit-only):
+/// короткая сторона дотягивается до `min`, длинная не сжимается. Чистая
+/// геометрия без platform-флагов — coarse-решение принимает потребитель
+/// (FR-097: `canvas_app::touch_targets::pointer_coarse`). Кламп в контейнер —
+/// [`touch_hit`]. Математика 1:1 с `canvas_app::touch_targets::expand_xywh`
+/// (единый источник — кит; canvas-app делегирует).
+pub fn touch_expand(rect: UiRect, min: f32) -> UiRect {
+    let dx = (min - rect.w).max(0.0) * 0.5;
+    let dy = (min - rect.h).max(0.0) * 0.5;
+    UiRect::new(
+        rect.x - dx,
+        rect.y - dy,
+        rect.w + dx * 2.0,
+        rect.h + dy * 2.0,
+    )
+}
+
+/// LAY8.3: hit-зона [`touch_expand`] до [`MIN_TOUCH_TARGET`] с клампом в
+/// контейнер (панель/модаль): расширенная зона не выходит за контейнер и не
+/// перекрывает соседние поверхности вне его. Пустое пересечение — нулевая
+/// ширина/высота у сжатого угла (семантика 1:1 с
+/// `canvas_app::touch_targets::touch_hit_xywh` без coarse-флага).
+pub fn touch_hit(rect: UiRect, container: UiRect) -> UiRect {
+    let e = touch_expand(rect, MIN_TOUCH_TARGET);
+    let x0 = e.x.max(container.x);
+    let y0 = e.y.max(container.y);
+    let x1 = e.right().min(container.right());
+    let y1 = e.bottom().min(container.bottom());
+    UiRect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
 }
 
 /// Elevation levels (Wave T §5.2.3, M3 + Fluent hybrid). Каждому уровню —
@@ -843,5 +911,57 @@ mod wave_t_tests {
     #[test]
     fn spacing_default_is_s() {
         assert_eq!(Spacing::default(), Spacing::S);
+    }
+
+    // --- Полировка кнопки 2026-10: LAY8.3 touch-хелперы ----------------------
+
+    /// touch_expand: короткая сторона дотягивается до min центрированно,
+    /// длинная не сжимается; уже бо́льшая — без изменений.
+    #[test]
+    fn touch_expand_centers_short_side() {
+        // Строка 32 px высотой → 44: −6/+6 по вертикали, ширина без изменений
+        let e = touch_expand(UiRect::new(100.0, 50.0, 200.0, 32.0), MIN_TOUCH_TARGET);
+        assert!((e.x - 100.0).abs() < 1e-4);
+        assert!((e.y - 44.0).abs() < 1e-4, "50 − (44−32)/2");
+        assert!((e.w - 200.0).abs() < 1e-4);
+        assert!((e.h - 44.0).abs() < 1e-4);
+        // Кнопка 20×20 → 44×44 центрированно
+        let small = touch_expand(UiRect::new(10.0, 10.0, 20.0, 20.0), MIN_TOUCH_TARGET);
+        assert!((small.x - (-2.0)).abs() < 1e-4);
+        assert!((small.w - 44.0).abs() < 1e-4);
+        // Больше минимума — без изменений
+        let big = touch_expand(UiRect::new(0.0, 0.0, 100.0, 60.0), MIN_TOUCH_TARGET);
+        assert_eq!(big, UiRect::new(0.0, 0.0, 100.0, 60.0));
+    }
+
+    /// touch_hit: кламп в контейнер (зона не выходит за панель); контейнер
+    /// внутри зоны — контейнер; пустое пересечение — нулевая ширина/высота
+    /// (без вывернутого rect); дефолтное расширение — MIN_TOUCH_TARGET.
+    #[test]
+    fn touch_hit_clamps_to_container() {
+        let panel = UiRect::new(0.0, 0.0, 340.0, 600.0);
+        // Строка у верхней границы: верх клампится к 0 (38 = 44 − 6 срезанных)
+        let hit = touch_hit(UiRect::new(10.0, 0.0, 100.0, 32.0), panel);
+        assert!(hit.y.abs() < 1e-4);
+        assert!((hit.h - 38.0).abs() < 1e-4, "44 минус срезанный край");
+        // Контейнер целиком внутри расширенной зоны — контейнер
+        let inner = touch_hit(
+            UiRect::new(10.0, 10.0, 4.0, 4.0),
+            UiRect::new(12.0, 12.0, 2.0, 2.0),
+        );
+        assert_eq!(inner, UiRect::new(12.0, 12.0, 2.0, 2.0));
+        // Непересекающиеся — нулевая зона
+        let empty = touch_hit(
+            UiRect::new(0.0, 0.0, 10.0, 10.0),
+            UiRect::new(50.0, 50.0, 10.0, 10.0),
+        );
+        assert!(empty.w.abs() < 1e-4 && empty.h.abs() < 1e-4);
+        // Контрол в середине панели — полное расширение до 44 по обеим осям
+        let centered = touch_hit(
+            UiRect::new(200.0, 100.0, 24.0, 24.0),
+            UiRect::new(0.0, 0.0, 1000.0, 1000.0),
+        );
+        assert!((centered.w - MIN_TOUCH_TARGET).abs() < 1e-4);
+        assert!((centered.h - MIN_TOUCH_TARGET).abs() < 1e-4);
     }
 }
