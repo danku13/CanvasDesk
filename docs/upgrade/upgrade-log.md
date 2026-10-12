@@ -71,7 +71,9 @@
 
 ## W2 — скачок версий + API-миграция до зелёной компиляции
 
-**Дата:** 2026-10-13 · **Issue:** #72 · **Статус:** готово к проверке CI
+**Дата:** 2026-10-13 · **Issue:** #72 · **Статус:** ✅ ЗАВЕРШЕНА — CI run
+38322569741 полностью зелёный (12/12 джобов: gates ×3 ОС, wasm-check,
+licenses, docs/lay7/v3-ui линты, llm-proxy, artifacts ×3)
 
 ### Решения
 
@@ -110,6 +112,18 @@
      пределами диапазона курсора (нет клампа по line_i) — фильтр
      `run.line_i < start.line || run.line_i > end.line` в
      decoration_quads (text.rs) и рендере выделения (edit.rs)
+8. **Скрытый баг платформ (главный урок волны): glyphon 0.12 не шейпит
+   буферы неявно.** glyphon 0.6 шейпил TextArea-буферы внутри prepare;
+   0.12 читает `layout_runs(&self)` без авто-шейпинга. `EditingSession::new`
+   не вызывал shape_until_scroll (new_title — вызывал) → тело сессии
+   НЕ РИСОВАЛОСЬ на платформах с GPU (macOS/Windows). Убежище ложной
+   зелёности: ubuntu-раннер без адаптера СКИПАЛ headless-тест (return =
+   pass). Диагностика через CI (runs=[]), фикс — явный
+   `buffer.shape_until_scroll` в new(). CI: `cargo test --no-fail-fast`
+   добавлен в gates (полная картина падений за цикл).
+9. **MSRV-линты в windows-gated коде** (canvas-shell: chunks_exact →
+   as_chunks ×2) — локально невидимы (cfg(windows)), пойманы gates
+   windows-latest.
 
 ### Журнал правок (машинная миграция + ручные)
 
@@ -137,6 +151,9 @@
 
 ### Верификация
 
+- **CI ветки: run 38322569741 — 12/12 джобов SUCCESS** (gates
+  ubuntu/windows/macos, wasm-check, licenses, docs-lint, lay7-lint,
+  v3-ui-lint, llm-proxy, artifacts ×3)
 - `cargo test --workspace` — ✅ **3443 passed / 0 failed** (снапшоты 221 и
   html5 16 — зелёные, метрики шейпинга не дрейфнули: W4 ожидает
   регенерация-ноуп, см. ниже)
