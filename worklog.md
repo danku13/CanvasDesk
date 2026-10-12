@@ -423,3 +423,22 @@ Stage Summary:
 - W0 DoD выполнен: тег стоит, docs/upgrade/{baseline-deps.txt, baseline-inventory.md, baseline-perf.md} готовы, контрольные числа зафиксированы (220+15 эталонов, 3447 тестов, 221/16 зелёных), на main только новые файлы документации — нулевой риск
 - Опора для W2 (счётчики миграции) и W4/W6 (порог дрейфа 171.4/176.1 μs ± 20%) заморожена
 Tokens: in≈150000, out≈30000, total≈180000, model=GLM-5.3, scope=DEPS-W0/#70
+
+---
+Task ID: DEPS-W2/#72 (сессия web-b86179c7)
+Agent: Super Z (main)
+Task: Скачок версий wgpu 30 + glyphon 0.12 + cosmic-text 0.19 с API-миграцией до зелёной компиляции (трек #69, волна W2)
+
+Work Log:
+- Bump: wgpu 22.1.0→30.0.1, glyphon 0.6.0→0.12.0, cosmic-text 0.12.1→0.19.0, MSRV 1.80→1.89, инвариант-комментарий cosmic-text↔glyphon; Cargo.lock; tree -i — по единственной версии
+- Механическая миграция скриптами (migrate_w2.py + v2 + tests): cosmic-text set_* без fs (41), set_text/set_rich_text attrs по & + None (24), Attrs non-Copy клоны (12), highlight → итератор с клампом line_i; wgpu: Instance конструкторы (5), request_adapter Result, PollType, TexelCopy* (24), Option-обёртки пайплайнов (40), immediate_size (11), multiview_mask (9), color_space, depth_slice (16), CurrentSurfaceTexture, Queue::present, get_mapped_range Result
+- MSRV-разблокированные clippy-линты: 15 правок старого кода (map_or→is_none_or ×11, chunks→as_chunks ×4+2 windows-gated, is_multiple_of) в core/ui/app/web/shell/render
+- deny.toml: rustybuzz-игнор снят (harfrust), paste-игнор ВОЗВРАЩЁН (тянет statrs→nalgebra→simba при --all-features), ttf-parser комментарий обновлён
+- Рантайм-адаптация сверх брифа: Action::Indent ручной путь (FR-100), highlight кламп line_i, ГЛАВНОЕ — явный shape_until_scroll в EditingSession::new (glyphon 0.12 не шейпит неявно; ubuntu-раннер без GPU скипал тест и маскировал регресс — найдено CI-диагностикой runs=[])
+- CI: --no-fail-fast в gates; 5 итераций до зелёного (windows-gated ленты, deref-фикс, diag→фикс)
+- Итог: CI run 38322569741 — 12/12 SUCCESS; локально 3443/0; снапшоты 221+16 зелёные (дрейфа метрик НЕТ); тег upgrade/step-2-compile на 39a72e9
+
+Stage Summary:
+- W2 закрыта с превышением DoD: не только компиляция, но и зелёные тесты+CI на 3 ОС; W3 (рантайм-запуски) и W4 (регенерация эталонов) существенно упрощены — эталоны уже зелёные
+- Урок задокументирован в upgrade-log (решение 8): неявный шейпинг glyphon исчез — скрытые зависимости от него ловятся только платформами с GPU
+Tokens: in≈900000, out≈120000, total≈1020000, model=GLM-5.3, scope=DEPS-W2/#72
