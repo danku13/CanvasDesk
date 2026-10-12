@@ -35,3 +35,6 @@ wasm-target/
 canvasdesk-run/
 repro_out*/
 target/dist/
+
+# Временные результаты чтений тулов (Read-артефакты платформы)
+tool-results/
