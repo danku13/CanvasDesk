@@ -241,6 +241,24 @@ fn editing_keeps_desc_zone_hides_table_chrome() {
     let body_offset = text_sys.body_text_offset_px(0);
     assert!(body_offset > 0.0, "санити: desc-зона даёт ненулевой сдвиг");
     session.body_offset_px = body_offset;
+    // deps-W2 diag2: состояние буфера сессии и геометрия TextArea
+    {
+        let runs: Vec<(usize, f32, f32, f32, usize)> = session
+            .buffer()
+            .layout_runs()
+            .map(|r| (r.line_i, r.line_top, r.line_height, r.line_w, r.glyphs.len()))
+            .collect();
+        eprintln!("diag2: runs={runs:?}");
+        eprintln!(
+            "diag2: lines={} body_origin=({:.1},{:.1},w={:.1},h={:.1}) edit_h={:.1}",
+            session.buffer().lines.len(),
+            body_origin.0[0],
+            body_origin.0[1],
+            body_origin.1,
+            body_origin.2,
+            (body_origin.2 - body_offset).max(0.0)
+        );
+    }
     let edit_origin = [body_origin.0[0], body_origin.0[1] + body_offset];
     let edit_height = (body_origin.2 - body_offset).max(0.0);
     let (_row, edit_data) = render_frame(
