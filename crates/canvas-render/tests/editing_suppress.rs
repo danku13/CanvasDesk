@@ -241,32 +241,6 @@ fn editing_keeps_desc_zone_hides_table_chrome() {
     let body_offset = text_sys.body_text_offset_px(0);
     assert!(body_offset > 0.0, "санити: desc-зона даёт ненулевой сдвиг");
     session.body_offset_px = body_offset;
-    // deps-W2 diag2: состояние буфера сессии и геометрия TextArea
-    {
-        let runs: Vec<(usize, f32, f32, f32, usize)> = session
-            .buffer()
-            .layout_runs()
-            .map(|r| {
-                (
-                    r.line_i,
-                    r.line_top,
-                    r.line_height,
-                    r.line_w,
-                    r.glyphs.len(),
-                )
-            })
-            .collect();
-        eprintln!("diag2: runs={runs:?}");
-        eprintln!(
-            "diag2: lines={} body_origin=({:.1},{:.1},w={:.1},h={:.1}) edit_h={:.1}",
-            session.buffer().lines.len(),
-            body_origin.0[0],
-            body_origin.0[1],
-            body_origin.1,
-            body_origin.2,
-            (body_origin.2 - body_offset).max(0.0)
-        );
-    }
     let edit_origin = [body_origin.0[0], body_origin.0[1] + body_offset];
     let edit_height = (body_origin.2 - body_offset).max(0.0);
     let (_row, edit_data) = render_frame(
@@ -369,22 +343,6 @@ fn editing_keeps_desc_zone_hides_table_chrome() {
     eprintln!(
         "idle_desc={idle_desc} idle_values={idle_values} | offset={body_offset:.1} edit_marker={edit_marker} edit_desc_band={edit_desc_band} edit_values={edit_values} card_h={card_h:.1}"
     );
-    // deps-W2 diag: где реально текст сессии (платформенный сдвиг 0.19)
-    {
-        eprintln!("diag: session runs:");
-        // edit_origin[1] — верх буфера; печатаем ран-метрики через re-render
-        // нельзя (буфер dropped) — вместо этого построчный профиль кадра
-        for y in ((body_top as u32)..(card_top + card_h) as u32).step_by(4) {
-            let lit = lit_in(&edit_data, padded_row, 212, 588, y, y + 1);
-            if lit > 0 {
-                eprintln!("diag: y={y} lit={lit}");
-            }
-        }
-        eprintln!(
-            "diag: body_top={body_top} edit_origin_y={} card_top={card_top}",
-            edit_origin[1]
-        );
-    }
     assert!(idle_desc > 0, "санити idle: desc-зона видна");
     assert!(idle_values > 0, "санити idle: значения рядов видны");
     assert!(edit_desc_band > 0, "вариант B: desc-зона видна при правке");

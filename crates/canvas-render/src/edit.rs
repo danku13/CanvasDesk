@@ -567,6 +567,11 @@ impl EditingSession {
             Shaping::Advanced,
             None,
         );
+        // deps-W2: явный шейпинг — glyphon 0.12 больше НЕ шейпит буферы
+        // неявно (0.6 шейпил в prepare); без этого тело сессии не рисовалось
+        // на платформах с адаптером (macOS/Windows), ubuntu-раннер без GPU
+        // скипал тест и маскировал регресс
+        buffer.shape_until_scroll(font_system, false);
         let last_line = buffer.lines.len().saturating_sub(1);
         let last_len = buffer
             .lines
