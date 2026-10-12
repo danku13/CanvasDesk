@@ -7,6 +7,7 @@ Tokens (правило учёта токенов — AGENTS.md). Записи д
 
 ## Journal index (все записи: текущие и архивные)
 
+- 2026-10-13 | DEPS-W0/#70 (сессия web-b86179c7) | Заморозка базлайнов рендер-стека до перехода на wgpu 30/glyphon 0.12/cosmic-text 0.19 (трек #69): тег pre-render-upgrade на main @ 086036a; docs/upgrade/{baseline-deps.txt (523 строки), baseline-inventory.md (51 ломающийся call-site cosmic-text: text.rs 39/edit.rs 7/app.rs 3/shaper.rs 2; wgpu Instance×6/present×1/8 пайплайнов/8 WGSL/4 сэмплера; glyphon ×13 файлов), baseline-perf.md (perf_baseline 171.4 μs, perf_flex 176.1 μs — бюджеты <1000 μs PASS, относительный дрейф к dev-машине 45.1/29.4 μs ожидаемо красный в сэндбоксе)}; контрольные числа: 3447 тестов workspace, 220+1 снапшот-тестов зелёные, 15+1 html5 зелёные | worklog.md (текущий)
 - 2026-10-12 | UI-SYSTEMIC-PLAN (сессия web-0a539c42) | Системные решения по вёрстке (анализ находок второй модели): верификация 3 корней по коду (234 label-вызова в 9 файлах, 7 формул кареток, факторы 1.1/1.3), решения P1 VAnchor-рендер / P2 single-writer подписи / P3 kit::caret_rect / P4 LineMetrics, гейты-линты на каждый класс, мета-ответ «почему криво после волн» (6 механизмов) + триада Конвенция→Миграция→Гейт + WASM pixel-diff, волны V1/V2/V3 | worklog.md (текущий)
 - 2026-10-12 | CR-036/#63 (сессия web-b5714086-2f9f-44a0-af82-302aa182533b) | Фикс вёрстки верхнего хрома после CR-035 (директивы владельца): WEB_TOOLBAR_INSET удалён — кластер ⚙/☼/RU-EN/? у кромки y=12..48; чип топ-право слева от «?» (ChipAnchor, сжатие/перенос ряд №2, гейт агент-панели); author-bar 5 иконок топ-лево (DOM-паритет, бренды в атласе); клампы хоткеев/flyout о chip_left_bound; тур #gpu-canvas-chip + TourOptions.hooks; wasm_audit HELP [1118,30] (прежний — в кнопку ЯЗЫКА); контракт-тест top_chrome; user-docs; #63 closed (VLM-верификация деплоя); #58 — коммент с вариантами решения | worklog.md (текущий)
 - 2026-10-11 | WAVE-7 (сессия web-a6dbb853-16af-4113-bc40-c40ccb7269c3) | K4-витрина #62 (секции 6 W2 + 14 Wave C во всех ST1, golden-пины, §K4 33 секции, use-case §7 ×20) + Wave D #32 (интерактивная TO-BE витрина: D1/D3/D4/D5/D6/D7, 8 KitState, 7 тем, сайдбар, ?ui=demo); связка #62↔#32; сосуществование с M3-b адаптивом (#53); #62/#32/#27 closed completed | worklog.md (текущий)
@@ -402,3 +403,23 @@ Work Log:
 Stage Summary:
 - main снова полностью зелёный; системных правок продукта по CI не потребовалось (fmt-канон, скоуп гейта, битый gitlink, гонка тест-фикстуры — инфраструктурный слой)
 Tokens: in≈120000, out≈20000, model=GLM-5.3, scope=UI-REWORK-SCREENS-CI
+
+---
+Task ID: DEPS-W0/#70 (сессия web-b86179c7)
+Agent: Super Z (main)
+Task: Заморозка базлайнов рендер-стека на main до перехода на wgpu 30 / glyphon 0.12 / cosmic-text 0.19 (трек #69, волна W0 — issue #70)
+
+Work Log:
+- Окружение: полный checkout (sparse-checkout выключен — /assets/** и /docs/** не материализовались в blobless-клоне; шрифты восстановлены: 6 ttf, тесты завязаны на include_bytes! assets/fonts/NotoSansDisplay-Medium.ttf); rustc 1.99.0 stable через rsproxy-зеркало; core.filemode off (сэндбокс-режимы)
+- Тег pre-render-upgrade (annotated) на main @ 086036a — точка отката уровня 1
+- docs/upgrade/baseline-deps.txt: cargo tree -e normal --workspace, 523 строки; пины подтверждены: wgpu 22.1.0 / glyphon 0.6.0 / cosmic-text 0.12.1 / swash 0.1.19 / etagere 0.2.15 / fontdb 0.16.2 / winit 0.30.13
+- docs/upgrade/baseline-inventory.md: счётчики сняты машинно (rg-команды в §6 документа): ломащиеся call-site'ы cosmic-text 0.12→0.19 — 51 (text.rs 39 [set_text 18/set_size 21], edit.rs 7 [set_text 1/set_size 5/set_metrics 1], app.rs 3, shaper.rs 2); wgpu — Instance::new/default ×6, SurfaceConfiguration ×2 (renderer.rs), frame.present() ×1 (renderer.rs:2539), 8 пайплайн-модулей, 8 WGSL, 4 create_sampler; glyphon ×13 файлов src; FontSystem пересекает границы 3 крейтов (render/ui/app) — корень жёсткой связки версий
+- docs/upgrade/baseline-perf.md: perf_baseline медиана 171.4 μs, perf_flex 176.1 μs (200 итераций × 20 прогревочных, debug-профиль, 2 vCPU); абсолютные бюджеты <1000 μs — PASS с запасом ×5.8; относительный чек к dev-базлайнам 45.1/29.4 μs красный (машинная зависимость, НЕ регрессия — задокументировано; baseline-файлы не обновлялись, W0 замораживает); числа 171.4/176.1 — референс дрейфа для W4/W6 в том же классе окружения
+- Контрольные числа: cargo test --workspace -- --list → 3447 тестов (31 бинарей); снапшот-тесты 221 passed / 0 failed (220 эталонов + счётчик), html5_demos 16 passed / 0 failed (15 эталонов + счётчик) — зелёные на 086036a в сэндбоксе
+- Статусы Projects v2: #69 In Progress, #70 In Progress, W1–W6 (#71–#76) и трек B (#77–#84) Todo
+- doc_lint: 938 ссылок / 2098 бэктик-путей / 0 ошибок — OK
+
+Stage Summary:
+- W0 DoD выполнен: тег стоит, docs/upgrade/{baseline-deps.txt, baseline-inventory.md, baseline-perf.md} готовы, контрольные числа зафиксированы (220+15 эталонов, 3447 тестов, 221/16 зелёных), на main только новые файлы документации — нулевой риск
+- Опора для W2 (счётчики миграции) и W4/W6 (порог дрейфа 171.4/176.1 μs ± 20%) заморожена
+Tokens: in≈150000, out≈30000, total≈180000, model=GLM-5.3, scope=DEPS-W0/#70
