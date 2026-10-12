@@ -69,7 +69,10 @@ pub use layout::{
     sticky_header, Child, Column, CrossAlign, Custom, Density, FlexLayoutEngine, GridAuto, HAlign,
     MainAlign, MeasuredItem, Row, RowPolicy, Track, TrackMax, TrackMin, VAlign, WindowClass,
 };
-pub use measure::{Measured, TextMeasurer, TextSpec, SCREEN_LINE_FACTOR};
+pub use measure::{
+    caret_rect, line_metrics, text_area_vcentered, LineMetrics, Measured, TextMeasurer, TextSpec,
+    CARET_MIN_H, CARET_PAD_V, CARET_WIDTH, SCREEN_LINE_FACTOR,
+};
 // FR-068 W2: шейпинг за trait boundary (cosmic-text — default impl).
 pub use registry::{
     DegradationPolicy, KeyboardScopeId, RegistryError, SurfaceDecl, SurfaceId, SurfaceRegistry,

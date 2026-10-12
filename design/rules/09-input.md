@@ -121,3 +121,47 @@ The minimally sufficient composition of the kit input module: `TextFieldModel`
 (click) + the `TextField` component (container/focus/states). Sufficiency
 was verified by the screens audit: all text inputs of the app are covered by
 the IN7 types; what was missing at the audit time — implemented in this wave.
+
+## IN11. Vertical label centering
+
+The area of a single-line label is the LINE BOX: height = `size × 1.3`
+(`SCREEN_LINE_FACTOR`), vertically centered in the control rect —
+`canvas_ui::measure::text_area_vcentered(rect, size)` (x/w inherited, the
+box is clamped to `rect.h`). The renderer mirrors the convention:
+`ScreenText.area_h` carries the owner-rect height and the renderer
+auto-centers the line box when slack is present (`vcenter_top`,
+`canvas-render/text.rs`); `area_h == 0.0` or `== line_h` → the top anchor,
+byte-identical to the pre-canon rendering (the bit-parity guarantee for
+not-yet-migrated sites).
+
+A top anchor is allowed ONLY for intentional multi-line stacks (list rows,
+about-lines, search results, tooltips) that advance by the line height —
+never as a substitute for centering a control label.
+
+Forbidden: hand-made sub-rects and magic y-offsets (+2…+8) at label call
+sites; a second line-height factor — the row/table factor is
+`ROW_LINE_FRAC == SCREEN_LINE_FACTOR` (one multiplier everywhere; the
+historical 1.1 was a defect class, issue #68).
+
+## IN12. Caret geometry
+
+The caret of EVERY text field comes from ONE formula —
+`canvas_ui::measure::caret_rect(text_area, size, caret_x)`:
+`h = size × 1.3 − 2·2.0` (clamped to ≥ 6.0), `w = 1.5`, vertically centered
+on the text line (the same center as the label; the canonical input is the
+line box from `text_area_vcentered` — a full control rect also works, but
+the line box is the convention). The X position (caret index/scroll) is the
+caller's job. Per-surface math (`area.h − 4`, `area.h − 8`, widths
+1.0/1.5 mixed — the pre-canon state of 7 sites) is forbidden: a caret
+taller than the text line is a defect, not a style.
+
+## IN13. Forbidden magic vertical offsets
+
+No hand-computed y-offsets at label/caret call sites: the vertical geometry
+of a label is `text_area_vcentered`, of a caret — `caret_rect` (the kit
+helpers live in `canvas_ui::measure`, re-exported via `canvas_ui::kit`).
+The renderer auto-centering (`ScreenText.area_h`) covers sites that pass a
+full control rect, but new code passes the line box explicitly. Enforced by
+grep-lints (the V3 wave): full-rect label calls, vertical literal offsets
+at label/caret sites, and `× 1.3`/`× 1.1` line-height literals outside
+`crates/canvas-ui/src/measure.rs`.

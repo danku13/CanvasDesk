@@ -411,6 +411,7 @@ impl App {
             });
             let (pill_box, pill_width) = centered_box(pill, 4.0);
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: self.tr(keys::WHATIF_PILL).to_owned(),
                 origin: [pill_box[0], pill[1] + 8.0],
                 width: pill_width,
@@ -449,6 +450,7 @@ impl App {
         });
         // Индикатор режима.
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: "WHAT-IF".to_owned(),
             origin: [layout.indicator[0], layout.indicator[1] + 6.0],
             width: layout.indicator[2],
@@ -489,6 +491,7 @@ impl App {
             ];
             let (box_origin, box_width) = centered_box(body_rect, 3.0);
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: label,
                 origin: [box_origin[0], rect[1] + 6.0],
                 width: box_width,
@@ -505,6 +508,7 @@ impl App {
             let close = layout.scenario_closes.get(i).copied().unwrap_or([0.0; 4]);
             let (close_origin, close_width) = centered_box(close, 2.0);
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: "×".to_owned(),
                 origin: [close_origin[0], close[1] + 6.0],
                 width: close_width,
@@ -533,6 +537,7 @@ impl App {
             ));
             let (box_origin, box_width) = centered_box(rect, 3.0);
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: label.to_owned(),
                 origin: [box_origin[0], rect[1] + 6.0],
                 width: box_width,
@@ -598,6 +603,7 @@ impl App {
             ));
             let (box_origin, box_width) = centered_box(rect, 3.0);
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: label.to_owned(),
                 origin: [box_origin[0], rect[1] + 6.0],
                 width: box_width,
@@ -628,6 +634,7 @@ impl App {
             });
             if rows.is_empty() {
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: self.tr(keys::WHATIF_NO_OVERRIDES).to_owned(),
                     origin: [
                         list[0] + whatif_ui::LIST_MARGIN,
@@ -668,6 +675,7 @@ impl App {
                     palette.title
                 };
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text,
                     origin: [rect[0] + 4.0, rect[1] + 4.0],
                     width: rect[2] - whatif_ui::REMOVE_WIDTH - 8.0,
@@ -677,6 +685,7 @@ impl App {
                 });
                 let remove = whatif_ui::remove_button_rect(list, i);
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: "×".to_owned(),
                     origin: [remove[0], remove[1] + 2.0],
                     width: remove[2],
@@ -690,6 +699,7 @@ impl App {
             if rows.len() > visible {
                 let more = (rows.len() - visible).to_string();
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: self.trf(keys::WHATIF_MORE, &[("{count}", &more)]),
                     origin: [
                         list[0] + whatif_ui::LIST_MARGIN,
@@ -726,6 +736,7 @@ impl App {
             });
             for (c, rect) in table.header.iter().enumerate() {
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: columns.get(c).cloned().unwrap_or_default(),
                     origin: [rect[0] + 6.0, rect[1] + 6.0],
                     width: rect[2] - 12.0,
@@ -740,6 +751,7 @@ impl App {
                         continue;
                     };
                     texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: cell.clone(),
                         origin: [rect[0] + 6.0, rect[1] + 4.0],
                         width: rect[2] - 12.0,
@@ -755,6 +767,7 @@ impl App {
             if let Some(tail) = table.tail {
                 let more = (rows.len() - table.cells.len()).to_string();
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: self.trf(keys::WHATIF_MORE, &[("{count}", &more)]),
                     origin: [tail[0] + 6.0, tail[1] + 4.0],
                     width: tail[2] - 12.0,
@@ -955,6 +968,7 @@ impl App {
             )
         };
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: query_shown,
             origin: [input[0] + 10.0, input[1] + 9.0],
             width: (input[2] - 20.0).max(10.0),
@@ -1016,6 +1030,7 @@ impl App {
                 });
                 if drawn.is_none() {
                     texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: "?".to_owned(),
                         origin: [badge_rect[0] + 2.0, badge_rect[1] + 1.0],
                         width: 12.0,
@@ -1033,6 +1048,7 @@ impl App {
                 continue;
             };
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: rt.title.clone(),
                 origin: rt.title_pos,
                 width: rt.text_width,
@@ -1042,6 +1058,7 @@ impl App {
             });
             for (line, pos) in rt.subtitle_lines.iter().zip(&rt.subtitle_pos) {
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: line.clone(),
                     origin: *pos,
                     width: rt.text_width,
@@ -1223,6 +1240,7 @@ impl App {
             .texts
             .into_iter()
             .map(|t| OwnedScreenText {
+                height: t.height,
                 text: t.text,
                 origin: t.origin,
                 width: t.width,
@@ -2161,6 +2179,7 @@ impl App {
             .texts
             .into_iter()
             .map(|t| OwnedScreenText {
+                height: t.height,
                 text: t.text,
                 origin: t.origin,
                 width: t.width,
@@ -2255,6 +2274,7 @@ impl App {
         });
         // Шапка + счётчик
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: self.tr(keys::GALLERY_TITLE).to_owned(),
             origin: [lay.header_rect[0], lay.header_rect[1] + 8.0],
             width: lay.header_rect[2] - 40.0,
@@ -2263,6 +2283,7 @@ impl App {
             align: TextAlign::Left,
         });
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: format!("{}", list.len()),
             origin: [
                 lay.header_rect[0] + lay.header_rect[2] - 36.0,
@@ -2294,6 +2315,7 @@ impl App {
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: "×".to_owned(),
             origin: [lay.close_rect[0], lay.close_rect[1] + 4.0],
             width: lay.close_rect[2],
@@ -2326,6 +2348,7 @@ impl App {
             &palette.kit_palette(),
         );
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: gallery_shown,
             origin: [gallery_input[0] + 8.0, gallery_input[1] + 8.0],
             width: gallery_input[2] - 16.0,
@@ -2378,6 +2401,7 @@ impl App {
                 }
             };
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: label,
                 origin: [rect[0] + 8.0, rect[1] + 6.0],
                 width: rect[2] - 16.0,
@@ -2419,6 +2443,7 @@ impl App {
                 corners: [0.0; 4],
             });
             texts.push(OwnedScreenText {
+                height: 0.0,
                 // FR-053 (U3): метка из раскладки — измеренный Ellipsis.
                 text: label.title.clone(),
                 origin: [rect[0] + 10.0, rect[1] + 7.0],
@@ -2428,6 +2453,7 @@ impl App {
                 align: TextAlign::Left,
             });
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: label.desc.clone(),
                 origin: [rect[0] + 10.0, rect[1] + 26.0],
                 width: rect[2] - 20.0,
@@ -2439,6 +2465,7 @@ impl App {
             // прижималась к нижней кромке карточки (y+44 при inner 48) —
             // ROW_H 56 → 62, мета на y+40 с полным нижним полем.
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: i18n::trf(
                     self.settings.language,
                     keys::GALLERY_META,
@@ -2456,6 +2483,7 @@ impl App {
         }
         // Футер-подсказка
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: self.tr(keys::GALLERY_FOOTER).to_owned(),
             origin: [lay.footer_rect[0], lay.footer_rect[1] + 5.0],
             width: lay.footer_rect[2],
@@ -2554,6 +2582,7 @@ impl App {
                 .camera
                 .world_to_screen([label.pos.x, label.pos.y], viewport);
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: label.text_str(),
                 origin: [screen[0] - LABEL_WIDTH * 0.5, screen[1]],
                 width: LABEL_WIDTH,
@@ -2585,6 +2614,7 @@ impl App {
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: self.tr(keys::GALLERY_EMPTY_TITLE).to_owned(),
             origin: [card[0] + 20.0, card[1] + 18.0],
             width: card[2] - 40.0,
@@ -2616,6 +2646,7 @@ impl App {
             .enumerate()
             {
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: line,
                     origin: [card[0] + 20.0, card[1] + 46.0 + line_idx as f32 * 15.0],
                     width: body_w,
@@ -2652,6 +2683,7 @@ impl App {
                 corners: [0.0; 4],
             });
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: self.tr(label_key).to_owned(),
                 origin: [rect[0], rect[1] + 9.0],
                 width: rect[2],
@@ -2977,6 +3009,7 @@ impl App {
                     crate::i18n::tr(self.settings.language, crate::i18n::keys::SUGGEST_EMPTY)
                         .to_owned();
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: label,
                     origin: [rect.x + 10.0, rect.y + 8.0],
                     width: rect.w - 16.0,
@@ -3024,6 +3057,7 @@ impl App {
             });
             // Шапка: «✦ ИмяШаблона»
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: format!("✦ {}", cards.items[i].label),
                 origin: [rect.x + 12.0, rect.y + 8.0],
                 width: rect.w - 20.0,
@@ -3045,6 +3079,7 @@ impl App {
                 .unwrap_or_default();
             if !body.is_empty() {
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: body,
                     origin: [rect.x + 12.0, rect.y + 40.0],
                     width: rect.w - 20.0,
@@ -3241,6 +3276,7 @@ impl App {
             // Шапка: название + счётчик шаблонов
             let total = template_ui::template_row_count(&rows);
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: self.tr(keys::TEMPLATES_TITLE).to_owned(),
                 origin: [lay.header_rect[0], lay.header_rect[1] + 6.0],
                 width: lay.header_rect[2] * 0.5,
@@ -3249,6 +3285,7 @@ impl App {
                 align: TextAlign::Left,
             });
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: format!("{total}"),
                 origin: [
                     lay.header_rect[0] + lay.header_rect[2] * 0.5,
@@ -3270,6 +3307,7 @@ impl App {
                 corners: [0.0; 4],
             });
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: "‹".to_owned(),
                 origin: [collapse[0], collapse[1] + 3.0],
                 width: collapse[2],
@@ -3300,6 +3338,7 @@ impl App {
                 &palette.kit_palette(),
             );
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: tpl_shown,
                 origin: [tpl_input[0] + 10.0, tpl_input[1] + 8.0],
                 width: (tpl_input[2] - 20.0).max(10.0),
@@ -3339,6 +3378,7 @@ impl App {
                     corners: [0.0; 4],
                 });
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     // FR-040 v2: чипы категорий — по языку приложения
                     // (raw-токен — только для поиска по реестру)
                     text: template_ui::category_display_name(self.settings.language, name),
@@ -3354,6 +3394,7 @@ impl App {
                 match row {
                     PanelRow::Section(name) => {
                         texts.push(OwnedScreenText {
+                            height: 0.0,
                             // FR-040 v2: секции — по языку приложения
                             text: template_ui::category_display_name(self.settings.language, name),
                             origin: [rect[0] + 2.0, rect[1] + 5.0],
@@ -3410,6 +3451,7 @@ impl App {
             // UR-003: rect — xywh как есть, без ложной xyxy-конвертации)
             let footer = lay.footer_rect;
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: self.tr(keys::TEMPLATES_FOOTER).to_owned(),
                 origin: [footer[0], footer[1] + 7.0],
                 width: footer[2],
@@ -3560,6 +3602,7 @@ impl App {
             // FR-087: счётчик — по видимым шаблонам (роль/ручной фильтр).
             let count = self.visible_templates_by_category(raw).len();
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: format!("{name} · {count}"),
                 origin: [rect[0] + 8.0, rect[1] + 6.0],
                 width: rect[2] - 12.0,
@@ -3584,6 +3627,7 @@ impl App {
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: "»".to_owned(),
             origin: [strip.chevron_rect[0], strip.chevron_rect[1] + 5.0],
             width: strip.chevron_rect[2],
@@ -3658,6 +3702,7 @@ impl App {
             if fly.max_scroll > 0 {
                 if fly.scroll_top > 0 {
                     texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: "▲".to_owned(),
                         origin: [fly.rect[0] + fly.rect[2] - 20.0, fly.rect[1] + 2.0],
                         width: 16.0,
@@ -3668,6 +3713,7 @@ impl App {
                 }
                 if fly.scroll_top < fly.max_scroll {
                     texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: "▼".to_owned(),
                         origin: [
                             fly.rect[0] + fly.rect[2] - 20.0,
@@ -3781,6 +3827,7 @@ impl App {
             match sector.hit {
                 WheelHit::Category(i) => {
                     texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: categories[i].to_owned(),
                         origin: [px - 40.0, py - 7.0],
                         width: 80.0,
@@ -3805,6 +3852,7 @@ impl App {
                         template_ui::WHEEL_TPL_TEXT_W,
                     );
                     let push_line = |text: String, dy: f32| OwnedScreenText {
+                        height: 0.0,
                         text,
                         origin: [px - template_ui::WHEEL_TPL_TEXT_W / 2.0, py + dy],
                         width: template_ui::WHEEL_TPL_TEXT_W,
@@ -3838,6 +3886,7 @@ impl App {
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: if let Some(category) = &menu.category {
                 format!("← {category}")
             } else {
@@ -3881,6 +3930,7 @@ impl App {
         });
         // Заголовок — приглушённым тоном (не пункт, не интерактивен)
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: self.tr(menu.title_key).to_owned(),
             origin: [x + MENU_PADDING + 4.0, y + MENU_PADDING + 5.0],
             width: w - MENU_PADDING * 2.0 - 8.0,
@@ -3905,6 +3955,7 @@ impl App {
                 });
             }
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: item.label.clone(),
                 origin: [rect[0] + 8.0, rect[1] + 5.0],
                 width: rect[2] - 12.0,
@@ -4003,6 +4054,7 @@ impl App {
             });
             if submenu.entries.is_empty() {
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: self.tr(keys::WIDGETS_EMPTY).to_owned(),
                     origin: [
                         submenu.origin[0] + MENU_PADDING + 4.0,
@@ -4095,6 +4147,7 @@ impl App {
                 });
             }
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: docs_ui::help_menu_item_label(*item, self.settings.language).to_owned(),
                 origin: [rect[0] + 8.0, rect[1] + 6.0],
                 width: rect[2] - 8.0,
@@ -4128,6 +4181,7 @@ impl App {
                     });
                 }
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: self.tr(page.label_key).to_owned(),
                     origin: [rect[0] + 8.0, rect[1] + 6.0],
                     width: rect[2] - 8.0,
@@ -4199,6 +4253,7 @@ impl App {
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: "×".to_owned(),
             origin: [close[0], close[1] + (close[3] - 14.0 * 1.3) / 2.0],
             width: close[2],
@@ -4211,6 +4266,7 @@ impl App {
             .map(|p| self.tr(p.label_key).to_owned())
             .unwrap_or_default();
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: title,
             origin: [panel[0] + docs_ui::DOCS_PADDING, panel[1] + 11.0],
             width: close[0] - panel[0] - docs_ui::DOCS_PADDING * 2.0,
@@ -4247,6 +4303,7 @@ impl App {
                     color
                 };
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: span.text.clone(),
                     origin: [x, y],
                     width: (content[0] + content[2] - x).max(10.0),
@@ -4316,6 +4373,7 @@ impl App {
         }
         // Футер-подсказка
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: self.tr(keys::DOCS_FOOTER).to_owned(),
             origin: [panel[0] + docs_ui::DOCS_PADDING, panel[1] + panel[3] - 18.0],
             width: panel[2] - docs_ui::DOCS_PADDING * 2.0,
@@ -4710,6 +4768,7 @@ impl App {
         let mut y = card[1] + onboarding_ui::AI_ONB_PAD_TOP;
         // Шаг «Шаг 3 из 3 · AI-режим» (акцентный цвет, маленький кегль).
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: self.tr(keys::AI_ONB_STEP).to_owned(),
             origin: [inner_x, y],
             width: inner_w,
@@ -4720,6 +4779,7 @@ impl App {
         y += onboarding_ui::AI_ONB_STEP_H;
         // Заголовок «Выберите режим AI».
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: self.tr(keys::AI_ONB_TITLE).to_owned(),
             origin: [inner_x, y],
             width: inner_w,
@@ -4730,6 +4790,7 @@ impl App {
         y += onboarding_ui::AI_ONB_TITLE_H;
         // Подзаголовок (приглушённый, перенос — на стороне рендера).
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: self.tr(keys::AI_ONB_SUB).to_owned(),
             origin: [inner_x, y],
             width: inner_w,
@@ -4807,6 +4868,7 @@ impl App {
             // Заголовок режима (Local only / Cloud / Self-hosted) —
             // positioned via kit's layout.label rect.
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: self.tr(choice.title_key()).to_owned(),
                 origin: [rc_layout.label.x, rc_layout.label.y],
                 width: rc_layout.label.w,
@@ -4837,6 +4899,7 @@ impl App {
                 corners: [0.0; 4],
             });
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: self.tr(choice.tag_key()).to_owned(),
                 origin: [
                     mode_rect[0] + mode_rect[2] - tag_w - 8.0,
@@ -4851,6 +4914,7 @@ impl App {
             // positioned via kit's layout.desc rect.
             if let Some(desc_rect) = rc_layout.desc {
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: self.tr(choice.desc_key()).to_owned(),
                     origin: [desc_rect.x, desc_rect.y],
                     width: desc_rect.w,
@@ -4879,6 +4943,7 @@ impl App {
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: self.tr(keys::AI_ONB_PRIV).to_owned(),
             origin: [btn_priv[0], btn_priv[1] + 8.0],
             width: btn_priv[2],
@@ -4912,6 +4977,7 @@ impl App {
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: self.tr(keys::AI_ONB_CONTINUE).to_owned(),
             origin: [btn_cont[0], btn_cont[1] + 8.0],
             width: btn_cont[2],
@@ -4945,6 +5011,7 @@ impl App {
                         let step = if line.title { 14.0 } else { 15.0 };
                         if y + step >= view[1] && y <= view[1] + view[3] {
                             texts.push(OwnedScreenText {
+                                height: 0.0,
                                 text: line.text.clone(),
                                 origin: [view[0], y],
                                 width: view[2],
@@ -4999,6 +5066,7 @@ impl App {
                     continue;
                 }
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: self.tr(title_key).to_owned(),
                     origin: [pb[0] + 10.0, py],
                     width: pb[2] - 20.0,
@@ -5009,6 +5077,7 @@ impl App {
                 py += AI_ONB_PRIV_TITLE_STEP;
                 if !body_key.is_empty() {
                     texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: self.tr(body_key).to_owned(),
                         origin: [pb[0] + 10.0, py],
                         width: pb[2] - 20.0,
@@ -5841,6 +5910,7 @@ impl App {
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
+            height: 0.0,
             // Код языка — на языке самого языка («RU»/«EN»), конвенция
             // FR-040 §4 (названия в переключателе — на языке самого языка).
             text: match self.settings.language {
@@ -5876,6 +5946,7 @@ impl App {
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: canvas_ui::kit::icon_glyph(canvas_ui::kit::Icon::Question).to_owned(),
             origin: [help_button[0], icon_top(help_button, 18.0)],
             width: help_button[2],
@@ -5924,6 +5995,7 @@ impl App {
             let desc_x = panel[0] + pad + key_w;
             let desc_w = (panel[2] - pad * 2.0 - key_w).max(10.0);
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: self.tr(keys::HOTKEYS_TITLE).to_owned(),
                 origin: [key_x, panel[1] + pad + 7.0],
                 width: panel[2] - pad * 2.0,
@@ -5959,6 +6031,7 @@ impl App {
                 };
                 let y = rect.y + 3.0;
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: self.tr(key).to_owned(),
                     origin: [key_x, y],
                     width: key_w,
@@ -5967,6 +6040,7 @@ impl App {
                     align: TextAlign::Left,
                 });
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: self.tr(description).to_owned(),
                     origin: [desc_x, y],
                     width: desc_w,
@@ -6113,6 +6187,7 @@ impl App {
                         });
                     } else {
                         texts.push(OwnedScreenText {
+                            height: 0.0,
                             text: tab.icon.to_owned(),
                             origin: glyph_origin,
                             width: glyph_width,
@@ -6124,6 +6199,7 @@ impl App {
                 }
             } else {
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: tab.icon.to_owned(),
                     origin: glyph_origin,
                     width: glyph_width,
@@ -6137,6 +6213,7 @@ impl App {
             // под таб-баром (слоты ~62px не вмещают подписи без эвристик).
             if !compact_tabs {
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: self.tr(tab.title_key).to_owned(),
                     origin: [item[0] + 36.0, item[1] + (item[3] - 13.0 * 1.3) / 2.0],
                     width: item[2] - 36.0 - 6.0,
@@ -6150,6 +6227,7 @@ impl App {
         // компакт/мобайл — левой колонки нет (hint_rect пуст).
         if !compact_tabs {
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: self.tr(keys::SETTINGS_HINT).to_owned(),
                 origin: [layout.hint_rect[0], layout.hint_rect[1] + 4.0],
                 width: layout.hint_rect[2],
@@ -6161,6 +6239,7 @@ impl App {
         // Заголовок раздела (правая панель)
         let tab_def = &SETTINGS_TABS[tab_index];
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: self.tr(tab_def.title_key).to_owned(),
             origin: [layout.title_rect[0], layout.title_rect[1] + 3.0],
             width: layout.title_rect[2],
@@ -6213,6 +6292,7 @@ impl App {
                     corners: [0.0; 4],
                 });
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: self.tr(label_key).to_owned(),
                     origin: [card[0], card[1] + card[3] / 2.0 - 8.5],
                     width: card[2],
@@ -6245,6 +6325,7 @@ impl App {
                 });
             }
             texts.push(OwnedScreenText {
+                height: 0.0,
                 text: self.tr(row_label_key(*row)).to_owned(),
                 origin: [rect[0] + 2.0, rect[1] + 4.0],
                 width: rect[2] - MODAL_ROW_LABEL_W,
@@ -6284,6 +6365,7 @@ impl App {
                 .enumerate()
                 {
                     texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: line,
                         origin: [rect[0] + 2.0, rect[1] + 22.0 + line_idx as f32 * 14.0],
                         width: desc_w,
@@ -6437,6 +6519,7 @@ impl App {
                     });
                     if let Some(value) = dropdown_value(*row, &self.settings) {
                         texts.push(OwnedScreenText {
+                            height: 0.0,
                             text: value,
                             origin: [control[0] + 10.0, control[1] + 4.0],
                             width: control[2] - 26.0,
@@ -6446,6 +6529,7 @@ impl App {
                         });
                     }
                     texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: "▾".to_owned(),
                         origin: [control[0] + control[2] - 16.0, control[1] + 4.0],
                         width: 14.0,
@@ -6530,6 +6614,7 @@ impl App {
                         corners: [0.0; 4],
                     });
                     texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: button_label,
                         origin: [control[0] + 6.0, control[1] + 4.0],
                         width: control[2] - 12.0,
@@ -6545,6 +6630,7 @@ impl App {
                     // на всю ширину строки минус контрол): у строки нет
                     // текстового поля.
                     texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: badge_text,
                         origin: [rect[0] + 2.0, rect[1] + 24.0],
                         width: (rect[2] - MODAL_ROW_LABEL_W).max(10.0),
@@ -6583,6 +6669,7 @@ impl App {
                         corners: [0.0; 4],
                     });
                     texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: button_label,
                         origin: [control[0] + 6.0, control[1] + 4.0],
                         width: control[2] - 12.0,
@@ -6706,6 +6793,7 @@ impl App {
                     };
                     if !field_text.is_empty() {
                         texts.push(OwnedScreenText {
+                            height: 0.0,
                             text: field_text,
                             origin: [field_x + 8.0, field_y + 2.0],
                             width: field_w - 12.0,
@@ -6716,6 +6804,7 @@ impl App {
                     }
                     if !badge_text.is_empty() {
                         texts.push(OwnedScreenText {
+                            height: 0.0,
                             text: badge_text,
                             origin: [field_x + field_w + gap, field_y + 2.0],
                             width: badge_w,
@@ -6779,6 +6868,7 @@ impl App {
                             corners: [0.0; 4],
                         });
                         texts.push(OwnedScreenText {
+                            height: 0.0,
                             text: button_label,
                             origin: [control[0] + 6.0, control[1] + 4.0],
                             width: control[2] - 12.0,
@@ -6884,6 +6974,7 @@ impl App {
                     let is_placeholder = model.text.is_empty();
                     if !field_text.is_empty() {
                         texts.push(OwnedScreenText {
+                            height: 0.0,
                             text: field_text,
                             origin: [layout.text_area.x, layout.text_area.y + 2.0],
                             width: layout.text_area.w,
@@ -6966,6 +7057,7 @@ impl App {
                             let badge_w = 110.0;
                             let gap = 6.0;
                             texts.push(OwnedScreenText {
+                                height: 0.0,
                                 text: badge_text,
                                 origin: [field_x + field_w + gap, field_y + 2.0],
                                 width: badge_w,
@@ -7009,6 +7101,7 @@ impl App {
                 }
                 if *current {
                     render.dropdown_texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: "✓".to_owned(),
                         origin: [menu_rect[0] + 8.0, y + 5.0],
                         width: 18.0,
@@ -7018,6 +7111,7 @@ impl App {
                     });
                 }
                 render.dropdown_texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: label.clone(),
                     origin: [menu_rect[0] + MENU_LABEL_X, y + 4.0],
                     width: menu_rect[2] - MENU_LABEL_X - DROPDOWN_MARGIN,
@@ -7548,6 +7642,7 @@ impl App {
             .texts
             .into_iter()
             .map(|t| OwnedScreenText {
+                height: t.height,
                 text: t.text,
                 origin: t.origin,
                 width: t.width,
@@ -7748,6 +7843,7 @@ impl App {
             .texts
             .into_iter()
             .map(|t| OwnedScreenText {
+                height: t.height,
                 text: t.text,
                 origin: t.origin,
                 width: t.width,
@@ -7972,6 +8068,7 @@ impl App {
             .texts
             .into_iter()
             .map(|t| OwnedScreenText {
+                height: t.height,
                 text: t.text,
                 origin: t.origin,
                 width: t.width,
@@ -8089,6 +8186,7 @@ impl App {
             .texts
             .into_iter()
             .map(|t| OwnedScreenText {
+                height: t.height,
                 text: t.text,
                 origin: t.origin,
                 width: t.width,
@@ -8221,6 +8319,7 @@ impl App {
             .texts
             .into_iter()
             .map(|t| OwnedScreenText {
+                height: t.height,
                 text: t.text,
                 origin: t.origin,
                 width: t.width,
@@ -8653,6 +8752,7 @@ impl App {
             .texts
             .into_iter()
             .map(|t| OwnedScreenText {
+                height: t.height,
                 text: t.text,
                 origin: t.origin,
                 width: t.width,

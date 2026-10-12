@@ -675,3 +675,24 @@ Stage Summary:
 - Владельцу передан системный фреймворк: каждая проблема закрыта триадой (владелец в архитектуре + гейт в CI + правило в спеке) — классы дефектов не смогут вернуться; ответ на вопрос «почему криво после волн» сформулирован
 - План V1/V2/V3 готов к передаче исполняющей модели; по команде — GitHub-issue (high-level + чек-лист) и/или старт V1
 Tokens: in≈95000, out≈28000, total≈123000 (estimate), model=GLM-5.3, scope=UI-SYSTEMIC-PLAN
+
+---
+Task ID: UI-V1-FOUNDATION (issue #68, сессия web-0a539c42)
+Agent: Super Z (subagent V1, прерван платформой по таймауту до отчёта; верификация, гейты, worklog — координатор)
+Task: Волна V1 системного канона вертикали (issue #68): LineMetrics, kit-хелперы text_area_vcentered/caret_rect, авто-центрирование line-box в рендере, ROW_LINE_FRAC→1.3, спека, тесты/доки
+
+Work Log:
+- measure.rs: LineMetrics{line_height,ascent,descent} + line_metrics(size) — чистая, hhea-доли (asc 1.069/desc 0.293 от суммы 1.362, инвариант ascent+descent==line_height бит-в-бит); CARET_WIDTH/PAD_V/MIN_H
+- kit.rs (фасад) + lib.rs: pub use caret_rect, line_metrics, text_area_vcentered, LineMetrics — канонический путь canvas_ui::measure, эргономичный canvas_ui::kit:: (для V2)
+- text_area_vcentered(rect,size): строковый бокс size×1.3, кламп по rect.h, slack пополам; caret_rect(text_area,size,caret_x): h=line_h−2·pad (≥6), w=1.5, центр строки
+- render text.rs: ScreenText.area_h + pub(crate) vcenter_top (area_h>line_h → центрирование, иначе бит-паритет); top=(vcenter_top(...)*scale).round(); плумбинг height: PaintItem::Text→OwnedText (kit_ui flush_last_text)→OwnedScreenText (конструкторы app обновлены механически: rect.h где известен, 0.0 → топ-анкер/паритет)
+- row.rs: ROW_LINE_FRAC = SCREEN_LINE_FACTOR (1.1 → 1.3, паритет с рендером); banner.rs: label через text_area_vcentered
+- Снапшоты canvas-ui (switch/tabs/two_column и пр.) перегенерированы под новую геометрию рядов — прошли
+- Спека design/rules/09-input.md: IN11 (line-box centering + бит-паритет рендера), IN12 (caret formula), IN13 (запрет магических офсетов; якорь будущих линтов V3); design/README индекс; docs/ui-kit.md — секция хелперов
+- Тесты: measure (сумма метрик, геометрия хелперов), vcenter_top (render)
+
+Stage Summary:
+- Гейты (координатор): fmt OK; clippy -p canvas-ui -p canvas-render -D warnings OK; check -p canvas-app OK; cargo test -p canvas-ui 445+11+4+6+16 passed/0; canvas-render 420+1+15+1 passed/0; doc_lint: 0 ошибок по репо-файлам (108 FAIL в skills/ — pre-existing, сессией не трогались)
+- API для V2: canvas_ui::kit::{text_area_vcentered(rect,size), caret_rect(text_area,size,caret_x)}; OwnedScreenText.height — высота rect-владельца (0.0 = бит-паритет топ-анкера)
+- V2 границы: миграцию label/кареток агент НЕ начинал (agent_panel/overlays каретки ещё старые) — только механический плумбинг height
+Tokens: in≈260000, out≈60000, total≈320000 (estimate), model=GLM-5.3, scope=UI-V1-FOUNDATION

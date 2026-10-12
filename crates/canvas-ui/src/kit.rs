@@ -25,6 +25,15 @@
 // сохранено 1:1 (§Контракт-1 PRD-0009 V-5: потребители не переписываются;
 // `crate::component` — канонический путь, `crate::kit` — совместимость).
 
+// Канон вертикальной типографики (issue #68, волна V1): метрики строкового
+// бокса и хелперы центровки — единый источник в `measure` (канонический
+// путь `crate::measure`); фасад — для эргономики потребителей V2
+// (`canvas_ui::kit::text_area_vcentered` / `canvas_ui::kit::caret_rect`).
+pub use crate::measure::{
+    caret_rect, line_metrics, text_area_vcentered, LineMetrics, CARET_MIN_H, CARET_PAD_V,
+    CARET_WIDTH,
+};
+
 // FR-105 (C2): константы баннера — фасад кита (как RADIO_* из radio_card):
 // потребители баннера потери доступа (storage_ui/overlays) не тянут
 // внутренний путь `component::banner`.

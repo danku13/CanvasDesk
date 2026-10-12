@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use super::{Component, KitPalette, KitState};
 use crate::geometry::UiRect;
 use crate::layout::LayoutBackend;
-use crate::measure::TextMeasurer;
+use crate::measure::{TextMeasurer, SCREEN_LINE_FACTOR};
 use crate::paint::{PaintAlign, Painter};
 use crate::row_guides::{RowCellWidths, RowGuides};
 use crate::widget::WidgetState;
@@ -24,9 +24,14 @@ use crate::widget::WidgetState;
 // штрихи — [`leader_dash_rects`], единая геометрия с телом ноды).
 
 /// Высота линейной коробки текста для вертикальной центровки:
-/// `size * ROW_LINE_FRAC` — практика потребителей (панель FR-044:
-/// коробка 12 px при кегле 11).
-pub const ROW_LINE_FRAC: f32 = 1.1;
+/// `size * ROW_LINE_FRAC`. Значение — [`SCREEN_LINE_FACTOR`] (1.3):
+/// паритет рендеру/шейперу (`canvas-render/text.rs`: строка = кегль × 1.3;
+/// `shaper.rs`: `Metrics(size, size·SCREEN_LINE_FACTOR)`). Прежние 1.1 —
+/// историческая практика потребителей (панель FR-044: коробка 12 px при
+/// кегле 11); расхождение фактора строки раскладки и рендера — класс
+/// дефекта issue #68 (текст и его строковый бокс жили в разных высотах),
+/// схлопнуто в единый множитель (канон вертикальной типографики, V1).
+pub const ROW_LINE_FRAC: f32 = SCREEN_LINE_FACTOR;
 /// Отступ точки-маркера от левого края строки (панель FR-044, Р-4).
 pub const ROW_DOT_PAD: f32 = 6.0;
 /// Диаметр точки-маркера.
@@ -623,6 +628,17 @@ mod tests {
     use crate::component::test_support::{font_system, load_display_font, palette_a, FAMILY};
     use crate::paint::PaintItem;
     const ROW_SIZE: f32 = 12.0;
+
+    /// Паритет ROW_LINE_FRAC == SCREEN_LINE_FACTOR (канон issue #68, V1):
+    /// фактор строки раскладки кит-строк равен фактору строки рендера/
+    /// шейпера — расхождение множителей (прежде 1.1 vs 1.3) было классом
+    /// дефекта «текст и его строковый бокс в разных высотах».
+    #[test]
+    fn row_line_frac_matches_screen_line_factor() {
+        assert_eq!(ROW_LINE_FRAC, SCREEN_LINE_FACTOR);
+        assert!((ROW_LINE_FRAC - 1.3).abs() < 1e-6);
+    }
+
     fn row_parts<'a>(
         marker: RowMarker,
         label: &'a str,

@@ -1324,6 +1324,7 @@ impl App {
                 let rect = header_chip_rect(node, label_w);
                 let origin = transform.map_point([rect[0] + 7.0, rect[1] + 2.0]);
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: label,
                     origin,
                     width: label_px + 2.0,
@@ -1357,6 +1358,7 @@ impl App {
                     node.width - 24.0
                 };
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: title,
                     origin: transform.map_point([node.x + 12.0, node.y + 8.0]),
                     width: transform.map_size(title_w_world),
@@ -1414,6 +1416,7 @@ impl App {
                     palette.quote
                 };
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: mx.ellipsis(line.trim_end(), line_budget, 12.0),
                     origin: transform.map_point([node.x + BODY_PADDING, row_y + 2.0]),
                     width: transform.map_size(node.width - BODY_PADDING * 2.0),
@@ -1424,6 +1427,7 @@ impl App {
                 if !value_text.is_empty() {
                     let vw = value_w;
                     texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: value_text,
                         origin: transform
                             .map_point([node.x + node.width - BODY_PADDING - vw, row_y + 2.0]),
@@ -1479,6 +1483,7 @@ impl App {
                 ));
                 let vw = vw.min(node.width - BODY_PADDING * 2.0 - 14.0).max(0.0);
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: value_text,
                     origin: transform.map_point([
                         node.x + node.width - BODY_PADDING - d - 6.0 - vw,

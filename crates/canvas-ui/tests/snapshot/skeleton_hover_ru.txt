@@ -1,4 +1,4 @@
-text x=16 y=16 w=288 h=14 text="Скелетон"
-rect x=16 y=38 w=288 h=14
-rect x=16 y=60 w=288 h=14
-rect x=16 y=82 w=202 h=14
+text x=16 y=16 w=288 h=17 text="Скелетон"
+rect x=16 y=41 w=288 h=14
+rect x=16 y=63 w=288 h=14
+rect x=16 y=85 w=202 h=14

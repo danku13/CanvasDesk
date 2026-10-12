@@ -20,6 +20,7 @@
 //! перенесён бит-в-бит — метрики неизменны); этот модуль — кэш и
 //! политика измерения (ellipsis и т.п.).
 
+use crate::geometry::UiRect;
 use crate::shaper::{CosmicShaper, Shaper};
 use cosmic_text::Weight;
 use std::collections::HashMap;
@@ -28,6 +29,124 @@ use std::fmt;
 /// Фактор высоты строки screen-текстов рендера (зеркало
 /// `canvas-render/src/text.rs`: `line_height = font_size * 1.3`).
 pub const SCREEN_LINE_FACTOR: f32 = 1.3;
+
+// --- Канон вертикальной типографики (issue #68, волна V1) --------------------
+
+/// hhea-метрики вшитого Noto Sans Display в em-долях (проверено по файлу
+/// `assets/fonts/NotoSansDisplay-Medium.ttf`: unitsPerEm 1000, ascender
+/// 1069, descender −293, lineGap 0). Сумма — 1.362em: рост строки
+/// `size × 1.3` покрывает глифовый бокс 1.362em с лёгким уплотнением.
+const HHEA_ASC_EM: f32 = 1.069;
+/// См. [`HHEA_ASC_EM`] (hhea descender 293 — по модулю).
+const HHEA_DESC_EM: f32 = 0.293;
+/// Сумма hhea-долей (`HHEA_ASC_EM + HHEA_DESC_EM`) — знаменатель долей
+/// внутри строкового бокса.
+const HHEA_SUM_EM: f32 = HHEA_ASC_EM + HHEA_DESC_EM;
+
+/// Вертикальные метрики строкового бокса (канон issue #68): единый
+/// источник вертикали для кита и потребителей — вместо ручных
+/// суб-геометрий и магических офсетов у label-вызовов.
+///
+/// - `line_height` — высота строкового бокса: `size ×
+///   [`SCREEN_LINE_FACTOR`]` (тот же множитель, что в шейпинге
+///   `Metrics(size, size·1.3)` и рендере `LINE_HEIGHT_FACTOR`);
+/// - `ascent`/`descent` — доли бокса над/под базовой линией,
+///   пропорциональные hhea Noto Sans Display: доля ascent =
+///   `1.069 / 1.362` от бокса, доля descent = `0.293 / 1.362`.
+///   Вывод: строковый бокс (`1.3em`) НИЖЕ глифового hhea-бокса
+///   (`1.362em`), поэтому посадка распределяет бокс пропорционально
+///   hhea-долям (а не «em + равный leading»); инвариант
+///   `ascent + descent == line_height` залочен тестом
+///   `line_metrics_sums_to_line_height`.
+///
+/// Функция ЧИСТАЯ (без `FontSystem`) — мок-дружелюбна: геометрию тестов
+/// можно считать без шрифтов; hhea-значения вшитого шрифта постоянны,
+/// зависимость от платформы/CI исключена.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineMetrics {
+    /// Высота строкового бокса: `size × SCREEN_LINE_FACTOR`.
+    pub line_height: f32,
+    /// От верха бокса до базовой линии.
+    pub ascent: f32,
+    /// От базовой линии до низа бокса (`ascent + descent == line_height`).
+    pub descent: f32,
+}
+
+/// Метрики строкового бокса для кегля `size` (см. [`LineMetrics`]).
+pub fn line_metrics(size: f32) -> LineMetrics {
+    let line_height = size * SCREEN_LINE_FACTOR;
+    // Доля ascent пропорциональна hhea-доле; descent выводится вычитанием —
+    // инвариант `ascent + descent == line_height` держится бит-в-бит (f32).
+    let ascent = line_height * (HHEA_ASC_EM / HHEA_SUM_EM);
+    LineMetrics {
+        line_height,
+        ascent,
+        descent: line_height - ascent,
+    }
+}
+
+/// Строковый бокс однострочной подписи, центрированный по вертикали в
+/// `rect` контрола (канон issue #68): высота = `size ×
+/// [`SCREEN_LINE_FACTOR`]` (не более `rect.h`), y — с равным slack'ом
+/// сверху/снизу, x/w наследуются.
+///
+/// Это каноническая область для label-вызовов контрола (кнопка, чип,
+/// поле, вкладка): рендер ставит верх текста в `area.y`, поэтому
+/// вертикальная центровка делается ЗДЕСЬ, а не магическими офсетами
+/// `+2…+8` на местах вызовов. Топ-анкер без slack'а — только для
+/// осознанных многострочных стеков (списки, about-строки).
+///
+/// ```ignore
+/// // БЫЛО (магический офсет, ломается при смене кегля/высоты):
+/// let area = UiRect::new(r.x, r.y + 7.0, r.w, 16.0);
+/// p.label_center(area, text, color, 13.0);
+/// // СТАЛО (канон: строковый бокс по центру контрола):
+/// p.label_center(text_area_vcentered(r, 13.0), text, color, 13.0);
+/// ```
+pub fn text_area_vcentered(rect: UiRect, size: f32) -> UiRect {
+    let h = size * SCREEN_LINE_FACTOR;
+    // Бокс не выше контрола (деградация: контрол ниже строки — бокс = rect.h).
+    let h = h.min(rect.h.max(0.0));
+    UiRect::new(rect.x, rect.y + (rect.h - h) / 2.0, rect.w, h)
+}
+
+/// Ширина каретки полей ввода (канон issue #68: единая формула, никаких
+/// per-surface `h − 4`/`h − 8` и ширин 1.0/1.5 вперемешку).
+pub const CARET_WIDTH: f32 = 1.5;
+/// Вертикальный пад каретки сверху/снизу строкового бокса (каретка чуть
+/// короче строки — визуальный воздух, паритет агент-панель-паттерна).
+pub const CARET_PAD_V: f32 = 2.0;
+/// Минимальная высота каретки после клампа (читаемость при мелких кеглях).
+pub const CARET_MIN_H: f32 = 6.0;
+
+/// Геометрия каретки от метрики строки (канон issue #68, ЕДИНАЯ формула
+/// для всех полей ввода): `h = size × SCREEN_LINE_FACTOR − 2·[`CARET_PAD_V`]`
+/// (кламп минимум [`CARET_MIN_H`]), `w = [`CARET_WIDTH`]`, вертикальный
+/// центр — общий с текстом в `text_area`, `x = caret_x`.
+///
+/// `text_area` — строковый бокс подписи (после [`text_area_vcentered`])
+/// либо полный rect контрола: формула центрирует каретку в переданной
+/// высоте в обоих случаях, но канон — передавать строковый бокс
+/// (`text_area_vcentered`), тогда каретка и текст гарантированно делят
+/// одну ординату центра. Смещение по X (scroll/индекс) — забота
+/// вызывающего (`caret_x`).
+///
+/// ```ignore
+/// // БЫЛО (4 несогласованные геометрии по площадкам):
+/// let caret = UiRect::new(x, area.y + 2.0, 1.5, area.h - 8.0);
+/// // СТАЛО:
+/// let caret = caret_rect(text_area_vcentered(field, 13.0), 13.0, x);
+/// ```
+pub fn caret_rect(text_area: UiRect, size: f32, caret_x: f32) -> UiRect {
+    let line_h = size * SCREEN_LINE_FACTOR;
+    let caret_h = (line_h - 2.0 * CARET_PAD_V).max(CARET_MIN_H);
+    UiRect::new(
+        caret_x,
+        text_area.y + (text_area.h - caret_h) / 2.0,
+        CARET_WIDTH,
+        caret_h,
+    )
+}
 
 /// FR-069 (этап F, шаг 3 плана): вес шейпинга по семейству — паритет
 /// атрибутам рендера (`canvas-render/src/text.rs`): sans
@@ -726,5 +845,102 @@ mod tests {
             !joined_wrap.contains('\u{a0}'),
             "wrap схлопывает NBSP (контрольный контраст): {joined_wrap:?}"
         );
+    }
+
+    // --- Канон вертикальной типографики (issue #68, волна V1) ---------------
+
+    /// `line_metrics`: строка = size × SCREEN_LINE_FACTOR; посадка
+    /// пропорциональна hhea Noto Sans Display (asc 1.069em / desc 0.293em);
+    /// инвариант `ascent + descent == line_height` — бит-в-бит (descent
+    /// выводится вычитанием).
+    #[test]
+    fn line_metrics_sums_to_line_height() {
+        for size in [10.0_f32, 11.0, 12.5, 13.0, 14.0, 20.0] {
+            let lm = line_metrics(size);
+            assert_eq!(lm.line_height, size * SCREEN_LINE_FACTOR);
+            // Доли hhea (проверено по NotoSansDisplay-Medium.ttf:
+            // unitsPerEm 1000, ascender 1069, descender −293).
+            let asc_frac = 1.069 / 1.362;
+            assert!((lm.ascent - lm.line_height * asc_frac).abs() < 1e-4);
+            // Инвариант — точный (f32): descent = line_height − ascent.
+            assert_eq!(lm.ascent + lm.descent, lm.line_height);
+            assert!(lm.ascent > lm.descent, "у Noto Sans Display asc > desc");
+        }
+        // Кегль 13: строка 16.9, базовая линия на 13.264 от верха бокса.
+        let lm = line_metrics(13.0);
+        assert!((lm.line_height - 16.9).abs() < 1e-4);
+        assert!((lm.ascent - 13.2644).abs() < 1e-3);
+        assert!((lm.descent - 3.6356).abs() < 1e-3);
+    }
+
+    /// `text_area_vcentered` — identity: rect.h == size × 1.3 → y/h без
+    /// изменений (бит-паритет уже-строковых боксов).
+    #[test]
+    fn text_area_vcentered_identity_when_height_matches_line() {
+        let rect = UiRect::new(10.0, 20.0, 120.0, 13.0 * SCREEN_LINE_FACTOR);
+        let area = text_area_vcentered(rect, 13.0);
+        assert_eq!(area.x, rect.x);
+        assert_eq!(area.w, rect.w);
+        assert_eq!(area.y, rect.y, "нет slack'а — топ-анкер (identity)");
+        assert_eq!(area.h, rect.h);
+    }
+
+    /// `text_area_vcentered` — slack: контрол 30 px, кегль 13 → строковый
+    /// бокс 16.9, y = rect.y + (30 − 16.9)/2 = rect.y + 6.55.
+    #[test]
+    fn text_area_vcentered_centers_in_slack() {
+        let rect = UiRect::new(0.0, 30.0, 100.0, 30.0);
+        let area = text_area_vcentered(rect, 13.0);
+        assert!((area.h - 16.9).abs() < 1e-4);
+        assert!((area.y - (30.0 + 6.55)).abs() < 1e-4);
+        assert_eq!(area.x, rect.x);
+        assert_eq!(area.w, rect.w);
+        // Симметрия slack'а: сверху и снизу поровну.
+        assert!(((area.y - rect.y) - (rect.y + rect.h - area.y - area.h)).abs() < 1e-4);
+    }
+
+    /// `text_area_vcentered` — деградация: контрол НИЖЕ строки — бокс
+    /// клампится до rect.h (y без изменений).
+    #[test]
+    fn text_area_vcentered_clamps_to_rect_height() {
+        let rect = UiRect::new(4.0, 8.0, 40.0, 10.0);
+        let area = text_area_vcentered(rect, 13.0);
+        assert_eq!(area.h, 10.0, "строка 16.9 > контрола 10 — бокс = rect.h");
+        assert_eq!(area.y, rect.y);
+    }
+
+    /// `caret_rect`: кегль 13 → каретка 12.9 (16.9 − 2×2.0), w = 1.5,
+    /// центр по вертикали общий со строкой (text_area h 16.9 → y = ta.y+2.0).
+    #[test]
+    fn caret_rect_follows_line_metrics() {
+        let ta = text_area_vcentered(UiRect::new(0.0, 30.0, 100.0, 30.0), 13.0);
+        let caret = caret_rect(ta, 13.0, 42.5);
+        assert!((caret.h - 12.9).abs() < 1e-4, "h = 16.9 − 2·2.0");
+        assert_eq!(caret.w, CARET_WIDTH);
+        assert!((caret.w - 1.5).abs() < 1e-6);
+        assert!((caret.x - 42.5).abs() < 1e-6, "x = caret_x");
+        // ta.y = 36.55, ta.h = 16.9 → y = 36.55 + (16.9 − 12.9)/2 = 38.55.
+        assert!((caret.y - (ta.y + 2.0)).abs() < 1e-4);
+        // Центр каретки == центр текста в ta.
+        assert!(((caret.y + caret.h / 2.0) - (ta.y + ta.h / 2.0)).abs() < 1e-4);
+    }
+
+    /// `caret_rect` — кламп минимум 6.0: кегль 5 → строка 6.5, 6.5 − 4.0 =
+    /// 2.5 → каретка 6.0 (читаемость при мелких кеглях).
+    #[test]
+    fn caret_rect_clamps_to_minimum_height() {
+        let caret = caret_rect(UiRect::new(0.0, 0.0, 50.0, 20.0), 5.0, 1.0);
+        assert_eq!(caret.h, CARET_MIN_H);
+        // Кламп центрирует в переданной высоте (20 − 6)/2 = 7.
+        assert!((caret.y - 7.0).abs() < 1e-4);
+    }
+
+    /// Паритет ROW_LINE_FRAC и SCREEN_LINE_FACTOR (канон issue #68: фактор
+    /// строки раскладки == фактору строки рендера/шейпера; расхождение —
+    /// класс дефекта issue #68). Тест в row.rs дублирует инвариант со
+    /// стороны потребителя константы.
+    #[test]
+    fn row_line_frac_matches_screen_line_factor() {
+        assert_eq!(crate::component::row::ROW_LINE_FRAC, SCREEN_LINE_FACTOR);
     }
 }

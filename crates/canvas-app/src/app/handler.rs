@@ -469,6 +469,7 @@ impl ApplicationHandler<AppEvent> for App {
                     ));
                     let count = self.autolink_proposals.len().to_string();
                     let badge_texts = vec![OwnedScreenText {
+                        height: 0.0,
                         text: self.trf(keys::AUTOLINK_BADGE, &[("{n}", count.as_str())]),
                         origin: [badge[0], badge[1] + 6.0],
                         width: badge[2],
@@ -496,6 +497,7 @@ impl ApplicationHandler<AppEvent> for App {
                         )];
                         let percent_text = percent.to_string();
                         let cov_texts = vec![OwnedScreenText {
+                            height: 0.0,
                             text: self
                                 .trf(keys::EXPLAIN_COVERAGE, &[("{n}", percent_text.as_str())]),
                             origin: [chip[0], chip[1] + 6.0],
@@ -806,6 +808,7 @@ impl ApplicationHandler<AppEvent> for App {
                         });
                         let (btn_box, btn_width) = centered_box(buttons[i], 4.0);
                         dialog_texts.push(OwnedScreenText {
+                            height: 0.0,
                             text: (*label).to_owned(),
                             origin: [btn_box[0], buttons[i][1] + 7.0],
                             width: btn_width,
@@ -815,6 +818,7 @@ impl ApplicationHandler<AppEvent> for App {
                         });
                     }
                     dialog_texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: shown[0].clone(),
                         origin: [dx + DIALOG_PAD_X, dy + DIALOG_TITLE_Y],
                         width: dw - DIALOG_PAD_X * 2.0,
@@ -823,6 +827,7 @@ impl ApplicationHandler<AppEvent> for App {
                         align: TextAlign::Left,
                     });
                     dialog_texts.push(OwnedScreenText {
+                        height: 0.0,
                         text: shown[1].clone(),
                         origin: [dx + DIALOG_PAD_X, dy + DIALOG_BODY_Y],
                         width: dw - DIALOG_PAD_X * 2.0,
@@ -940,6 +945,7 @@ impl ApplicationHandler<AppEvent> for App {
                                 toast_clip,
                                 Vec::new(),
                                 vec![OwnedScreenText {
+                                    height: t.height,
                                     text: t.text,
                                     origin: t.origin,
                                     width: t.width,
@@ -959,6 +965,7 @@ impl ApplicationHandler<AppEvent> for App {
                         toast_clip,
                         toast_instances,
                         vec![OwnedScreenText {
+                            height: 0.0,
                             text: text.clone(),
                             origin: [40.0, toast_clip.y],
                             width: viewport[0] - 80.0,
@@ -1087,6 +1094,9 @@ impl ApplicationHandler<AppEvent> for App {
                                 text: &t.text,
                                 origin: t.origin,
                                 width: t.width,
+                                // Канон issue #68: высота area-хозяина →
+                                // авто-центрирование строкового бокса рендером.
+                                area_h: t.height,
                                 font_size: t.font_size,
                                 color: t.color,
                                 align: t.align,
@@ -1121,6 +1131,9 @@ impl ApplicationHandler<AppEvent> for App {
                         text: &t.text,
                         origin: t.origin,
                         width: t.width,
+                        // Канон issue #68: высота area-хозяина →
+                        // авто-центрирование строкового бокса рендером.
+                        area_h: t.height,
                         font_size: t.font_size,
                         color: t.color,
                         align: t.align,
@@ -1134,6 +1147,9 @@ impl ApplicationHandler<AppEvent> for App {
                         text: &t.text,
                         origin: t.origin,
                         width: t.width,
+                        // Канон issue #68: высота area-хозяина →
+                        // авто-центрирование строкового бокса рендером.
+                        area_h: t.height,
                         font_size: t.font_size,
                         color: t.color,
                         align: t.align,

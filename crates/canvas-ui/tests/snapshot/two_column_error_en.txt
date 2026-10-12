@@ -1,4 +1,4 @@
 rect x=16 y=16 w=96 h=208
-text x=16 y=113 w=96 h=14 text="Columns"
+text x=16 y=112 w=96 h=17 text="Columns"
 rect x=120 y=16 w=184 h=208
-text x=120 y=113 w=184 h=14 text="Settings"
+text x=120 y=112 w=184 h=17 text="Settings"

@@ -849,6 +849,7 @@ impl App {
                     self.tr(keys::EXPLAIN_LOADER_12),
                 ];
                 texts.push(OwnedScreenText {
+                    height: 0.0,
                     text: state.loader_caption(&captions).to_owned(),
                     origin: [body[0], cy + 34.0],
                     width: body[2],
@@ -1663,6 +1664,7 @@ impl App {
         }
         let empty = edit.field.text.is_empty();
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: lay.text_shown.clone(),
             origin: [field[0] + 8.0, field[1] + 5.5],
             width: field[2] - 16.0,
@@ -1760,6 +1762,7 @@ impl App {
             corners: [0.0; 4],
         });
         texts.push(OwnedScreenText {
+            height: 0.0,
             text: label,
             origin: [x, y + (tl.rect.h - 12.0 * 1.3) / 2.0],
             width: tl.rect.w,

@@ -453,7 +453,15 @@ fn screen_text_area<'a>(
         left += ((st.width * scale_factor) - line_w).max(0.0) / 2.0;
     }
     let left = left.round();
-    let top = (st.origin[1] * scale_factor).round();
+    // Канон issue #68: авто-центрирование строкового бокса в области-хозяине.
+    // Центрирование — в ЛОГИЧЕСКИХ px (origin/area_h логические, slack
+    // линейно масштабируется), затем единый снап к физическим px. При
+    // `area_h <= line_h` (нет slack'а / 0.0) vcenter_top отдаёт origin[1]
+    // без изменений — выражение байт-в-байт прежнее (`(origin[1]*sf).round()`).
+    let line_h_logical = st.font_size * LINE_HEIGHT_FACTOR;
+    let top = (vcenter_top(st.origin[1], st.area_h, line_h_logical) * scale_factor).round();
+    // Бит-паритет: прежний порядок умножений f32 (`font_size * sf * FACTOR`)
+    // сохранён дословно — высота строки уходит в bounds.bottom.
     let line_height = st.font_size * scale_factor * LINE_HEIGHT_FACTOR;
     TextArea {
         buffer,
@@ -2483,11 +2491,32 @@ pub struct ScreenText<'a> {
     pub origin: [f32; 2],
     /// Ширина области в логических px (bounds клипа и опора выравнивания).
     pub width: f32,
+    /// Высота области-хозяина в логических px (канон issue #68): slack
+    /// авто-центрирования строкового бокса. `origin[1]` — верх ЭТОЙ области.
+    /// `0.0` или высота, равная строке (`font_size × LINE_HEIGHT_FACTOR`),
+    /// — slack'а нет, топ-анкер: результат байт-в-байт прежний (бит-паритет
+    /// не-мигрировавших площадок; конверсии отдают 0.0, где rect хозяина
+    /// недоступен).
+    pub area_h: f32,
     /// Размер шрифта в логических px (умножается на scale_factor).
     pub font_size: f32,
     pub color: Color,
     /// Выравнивание строки в области `width`.
     pub align: TextAlign,
+}
+
+/// Авто-центрирование строкового бокса по вертикали (канон issue #68):
+/// в области-хозяине выше строки — верх строки с равным slack'ом;
+/// иначе (плюс вырожденный `area_h == 0.0`) — топ-анкер, `origin_y`
+/// без изменений. Чистая функция (unit-агностична: аргументы в ОДНОЙ
+/// системе координат — логической или физической); инвариант бит-паритета:
+/// `area_h <= line_h → origin_y`.
+pub(crate) fn vcenter_top(origin_y: f32, area_h: f32, line_h: f32) -> f32 {
+    if area_h > line_h {
+        origin_y + (area_h - line_h) * 0.5
+    } else {
+        origin_y
+    }
 }
 
 /// Лейбл связи для кадра (T8): текст по центру кривой, шейпится с кэшем
@@ -5644,6 +5673,36 @@ impl TextSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Канон вертикальной типографики (issue #68, волна V1) ---------------
+
+    /// `vcenter_top` — slack: область-хозяин выше строки → верх строки с
+    /// равным slack'ом (центрирование строкового бокса).
+    #[test]
+    fn vcenter_top_centers_when_slack_present() {
+        let top = vcenter_top(100.0, 30.0, 16.9);
+        assert!((top - (100.0 + (30.0 - 16.9) * 0.5)).abs() < 1e-4);
+        assert!((top - 106.55).abs() < 1e-3);
+        // Симметрия slack'а: (top − origin) == (area_bottom − line_bottom).
+        assert!(((top - 100.0) - (100.0 + 30.0 - top - 16.9)).abs() < 1e-4);
+    }
+
+    /// `vcenter_top` — identity: area_h == line_h → origin_y без изменений
+    /// (бит-паритет уже-строковых областей; это же выражение даёт прежний
+    /// `(origin[1] * scale_factor).round()` в screen_text_area).
+    #[test]
+    fn vcenter_top_identity_when_area_equals_line() {
+        assert_eq!(vcenter_top(42.0, 16.9, 16.9), 42.0);
+    }
+
+    /// `vcenter_top` — вырожденный area_h = 0.0 («rect хозяина недоступен»)
+    /// и area_h < line_h → топ-анкер, origin_y без изменений (бит-паритет
+    /// не-мигрировавших площадок).
+    #[test]
+    fn vcenter_top_top_anchor_when_no_slack() {
+        assert_eq!(vcenter_top(42.0, 0.0, 16.9), 42.0);
+        assert_eq!(vcenter_top(42.0, 10.0, 16.9), 42.0);
+    }
 
     /// Приёмка T9 FR-061 (фикс наложений чисел/юнитов): замер ячейки
     /// TextMeasurer'ом с весом mono-шейпинга совпадает с фактическим

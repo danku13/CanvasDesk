@@ -1,4 +1,4 @@
-text x=16 y=154 w=288 h=14 text="Footer"
+text x=16 y=151 w=288 h=17 text="Footer"
 rect x=16 y=176 w=288 h=44
 rect x=16 y=183 w=49 h=30
 text x=16 y=183 w=49 h=30 text="Hint"

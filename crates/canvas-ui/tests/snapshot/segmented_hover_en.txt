@@ -1,4 +1,4 @@
-text x=16 y=78 w=240 h=14 text="Segments"
+text x=16 y=75 w=240 h=17 text="Segments"
 rect x=16 y=100 w=120 h=28
 text x=16 y=100 w=120 h=28 text="Settings"
 rect x=16 y=100 w=240 h=28

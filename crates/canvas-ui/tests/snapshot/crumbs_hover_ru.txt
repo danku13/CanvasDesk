@@ -1,4 +1,4 @@
-text x=16 y=72 w=288 h=14 text="Крошки"
+text x=16 y=72 w=288 h=17 text="Крошки"
 rect x=16 y=99 w=55 h=18
 text x=16 y=99 w=55 h=18 text="Панель"
 rect x=75 y=99 w=73 h=18

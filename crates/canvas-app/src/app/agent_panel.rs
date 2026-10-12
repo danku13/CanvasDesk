@@ -1125,6 +1125,7 @@ impl App {
             .texts
             .into_iter()
             .map(|t| OwnedScreenText {
+                height: t.height,
                 text: t.text,
                 origin: t.origin,
                 width: t.width,
