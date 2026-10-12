@@ -1,0 +1,220 @@
+/* ============================================================
+   Theme: Constructivism (≈1921)
+   Tokens from 60-styles/constructivism.md — poster red + ink on
+   cream paper, <=3 diagonals per view, 0–150ms snaps, cream never
+   pure white.
+   Detail layer: halftone paper, rotated sticker kickers, skewed
+   medallions, poster corner marks, РАСПИСАНИЕ ribbon, barber band.
+   ============================================================ */
+
+html[data-style="constructivism"] {
+  --bg: #F2E8D5;             /* cream paper, never pure white (R5) */
+  --bg-soft: #E9DEC8;
+  --surface: #E9DEC8;
+  --ink: #16130F;
+  --muted: #57503F;
+
+  --accent: #D42B1E;         /* poster red — fills & large display */
+  --accent-fg: #F2E8D5;
+  --accent-ink: #A61F14;     /* deepened red, >=6:1 on cream for small text */
+  --accent-2: #333944;       /* deep neutral block */
+  --accent-3: #D42B1E;
+
+  --line: #16130F;
+  --border-w: 2px;
+  --radius: 0px;
+  --chip-radius: 0px;
+
+  --font-display: 'Oswald', 'PT Sans', sans-serif;
+  --font-body: 'PT Sans', system-ui, sans-serif;
+
+  --h1-weight: 700;
+  --h1-transform: uppercase;
+  --h1-tracking: .01em;
+  --h1-lh: .98;
+  --h2-weight: 700;
+  --h2-transform: uppercase;
+  --h2-tracking: .01em;
+
+  --kicker-weight: 700;
+  --kicker-transform: uppercase;
+  --kicker-tracking: .14em;
+
+  --btn-weight: 700;
+  --btn-transform: uppercase;
+  --btn-tracking: .05em;
+  --btn-radius: 0px;
+
+  --card-border-w: 2px;
+  --card-radius: 0px;
+
+  --focus: #16130F;
+  --speed: 100ms;            /* R6: 0–150ms snaps */
+  --hero-dur: 140ms;
+
+  --cal-frame-w: 2px;
+  --cal-cell-border-w: 1px;
+  --cal-cell-line: #C9BCA0;
+  --brand-accent: #D42B1E;
+  --sel-bg: #D42B1E;
+  --sel-fg: #F2E8D5;
+
+  --title-rule: none;        /* red mass bar lives on h2::after */
+}
+
+/* --- page ground: cream paper + faint halftone --- */
+html[data-style="constructivism"] body {
+  background-image: radial-gradient(rgba(22,19,15,.07) 1.1px, transparent 1.25px);
+  background-size: 16px 16px;
+}
+
+/* --- kicker: rotated poster sticker --- */
+html[data-style="constructivism"] .kicker {
+  display: inline-block;
+  background: #D42B1E;
+  color: #F2E8D5;
+  padding: .32em .75em;
+  transform: rotate(-1.4deg);
+}
+
+/* hero decor: Lissitzky set — red wedge, rotated ink bar, ring.
+   Diagonal budget = 3 (R1): wedge, bar, small wedge. Ring is neutral. */
+html[data-style="constructivism"] .hero__visual {
+  max-width: 520px;
+  margin-inline: auto;
+  border: 2px solid #16130F;
+  box-shadow: 12px 12px 0 #D42B1E;
+  background: #F2E8D5;
+}
+
+/* --- buttons: skewed poster cells; action red deepened to >=4.5:1 with
+   cream text (a11y watchpoint overrides raw #D42B1E for text-bearing fills) --- */
+html[data-style="constructivism"] .btn { transform: skewX(-8deg); }
+html[data-style="constructivism"] .btn--primary { background: #C0200F; color: #F2E8D5; }
+html[data-style="constructivism"] .btn--primary:hover { background: #16130F; color: #F2E8D5; }
+html[data-style="constructivism"] .btn--ghost { border-color: #16130F; color: #16130F; }
+html[data-style="constructivism"] .btn--ghost:hover { background: #16130F; color: #F2E8D5; }
+
+/* section heads: red mass marker (hierarchy by mass, R7) */
+html[data-style="constructivism"] .section-head h2::after {
+  content: ""; display: block; width: 68px; height: 8px;
+  background: #D42B1E; margin-top: .7rem;
+}
+
+/* --- cards: paper blocks + red poster corner + hard overlap on hover --- */
+html[data-style="constructivism"] .card { position: relative; overflow: hidden; }
+html[data-style="constructivism"] .card::before {
+  content: ""; position: absolute; top: 0; right: 0;
+  border-style: solid; border-width: 0 30px 30px 0;
+  border-color: transparent #D42B1E transparent transparent;
+}
+html[data-style="constructivism"] .card:hover {
+  transform: translate(-3px, -3px);
+  box-shadow: 6px 6px 0 #16130F;
+}
+
+/* --- medallions: skewed red cell, counter-skewed icon --- */
+html[data-style="constructivism"] .medallion {
+  width: 48px; height: 48px;
+  background: #D42B1E;
+  border: 2px solid #16130F;
+  transform: skewX(-8deg);
+  color: #F2E8D5;
+}
+html[data-style="constructivism"] .medallion .ic { transform: skewX(8deg); }
+html[data-style="constructivism"] .agent:nth-child(2) .medallion { background: #333944; }
+html[data-style="constructivism"] .agent:nth-child(4) .medallion { background: #333944; }
+
+/* step numbers: red squares, cream numerals (large bold >=3:1), skewed */
+html[data-style="constructivism"] .step__num {
+  background: #D42B1E; color: #F2E8D5;
+  border-radius: 0;
+  transform: skewX(-8deg);
+}
+
+/* step corner icon: ink cell */
+html[data-style="constructivism"] .step__ic {
+  width: 30px; height: 30px; padding: 6px;
+  background: #16130F; color: #F2E8D5; opacity: 1;
+  top: 1.2rem; right: 1.2rem;
+}
+
+/* --- calendar: РАСПИСАНИЕ ribbon over the frame --- */
+html[data-style="constructivism"] .cal { position: relative; }
+html[data-style="constructivism"] .cal::before {
+  content: "РАСПИСАНИЕ НЕДЕЛИ";
+  position: absolute; top: -13px; left: -6px; z-index: 2;
+  background: #D42B1E; color: #F2E8D5;
+  font-family: var(--font-display); font-weight: 600;
+  font-size: .78rem; letter-spacing: .1em;
+  padding: .3em .9em;
+  transform: rotate(-2.4deg);
+  box-shadow: 3px 3px 0 #16130F;
+}
+html[data-style="constructivism"] .cal__day {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  color: #A61F14;
+}
+html[data-style="constructivism"] .cal__chan .ic { opacity: 1; }
+
+/* chips: ink/neutral blocks with cream text, red identified by bar (R2).
+   Bar is scoped to .cal — legend .dot shares chip--s but must stay a flat square. */
+html[data-style="constructivism"] .chip { position: relative; font-weight: 700; }
+html[data-style="constructivism"] .cal .chip--s { background: #16130F; color: #F2E8D5; }
+html[data-style="constructivism"] .cal .chip--s::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px;
+  background: #D42B1E;
+}
+html[data-style="constructivism"] .cal .chip--c { background: #333944; color: #F2E8D5; }
+html[data-style="constructivism"] .cal .chip--a { background: #E9DEC8; color: #16130F; border: 2px solid #D42B1E; }
+html[data-style="constructivism"] .cal .chip--d { background: transparent; color: #16130F; border: 3px solid #16130F; }
+
+/* legend dots: flat palette squares (no chip chrome) */
+html[data-style="constructivism"] .dot { border: 0; }
+html[data-style="constructivism"] .dot.chip--s { background: #16130F; }
+html[data-style="constructivism"] .dot.chip--c { background: #333944; }
+html[data-style="constructivism"] .dot.chip--a { background: #D42B1E; }
+html[data-style="constructivism"] .dot.chip--d { background: #57503F; }
+
+/* quote: stepped left mass + diagonal paper wash behind the section */
+html[data-style="constructivism"] .quote {
+  background-image: repeating-linear-gradient(-24deg,
+    transparent 0 20px, rgba(212, 43, 30, .05) 20px 40px);
+}
+html[data-style="constructivism"] .quote blockquote {
+  border-left: 12px solid #D42B1E; padding-left: 1.3rem;
+}
+html[data-style="constructivism"] .quote p {
+  font-family: var(--font-display); font-weight: 600;
+  text-transform: none;
+}
+
+/* stats: display mass, alternating red mass markers */
+html[data-style="constructivism"] .stat__val {
+  color: #16130F;
+  font-family: var(--font-display); font-weight: 700;
+  font-size: 2.8rem;
+}
+html[data-style="constructivism"] .stat { border-top-width: 4px; border-top-color: #16130F; }
+html[data-style="constructivism"] .stat:nth-child(even) { border-top-color: #D42B1E; }
+html[data-style="constructivism"] .stat__ic { color: #A61F14; opacity: 1; }
+
+/* CTA: ink block, barber band on top, red headline bar */
+html[data-style="constructivism"] .cta {
+  background: #16130F; position: relative; padding-top: 92px;
+}
+html[data-style="constructivism"] .cta::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 16px;
+  background: repeating-linear-gradient(-45deg,
+    #D42B1E 0 18px, #F2E8D5 18px 36px, #16130F 36px 54px);
+}
+html[data-style="constructivism"] .cta h2 { color: #F2E8D5; }
+html[data-style="constructivism"] .cta h2::after {
+  content: ""; display: block; width: 68px; height: 8px;
+  background: #D42B1E; margin-top: .7rem;
+}
+html[data-style="constructivism"] .cta .btn--primary { border: 2px solid #F2E8D5; }
+html[data-style="constructivism"] .cta .btn--primary:hover { background: #D42B1E; }
+html[data-style="constructivism"] .cta .btn--ghost { border-color: #F2E8D5; color: #F2E8D5; }
+html[data-style="constructivism"] .cta .btn--ghost:hover { background: #F2E8D5; color: #16130F; }

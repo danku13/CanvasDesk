@@ -1,0 +1,1431 @@
+     1→//! `FlexLayoutEngine` (FR-068 W2, ADR-0015 §Решение п.3 «свой layout»):
+     2→//! собственный движок вёрстки БЕЗ внешних зависимостей — реализация
+     3→//! [`LayoutBackend`] + расширенной сцены ([`SceneNode`]) на чистой f32-
+     4→//! арифметике (zero-dep инвариант G7; §Контракт-2 FR-068).
+     5→//!
+     6→//! # Побитовый паритет с taffy на совместимых политиках
+     7→//!
+     8→//! (FR-068 §W2: `Fit`/`Start`/`End`/`SpaceBetween`/`Wrap`/равная 2D-сетка):
+     9→//! - grow-распределение — CSS flexbox §9.7 «Resolving Flexible Lengths»
+    10→//!   в порядке операций taffy 0.14: `target = basis + free · (grow / Σgrow)`,
+    11→//!   `free = inner − gap_total − Σ(баз unfrozen)`; при Σgrow < 1 —
+    12→//!   квотирование `initial_free · Σgrow − gap_total` (taffy-форма);
+    13→//! - justify-офсеты — `compute_alignment_offset` c fallback'ами
+    14→//!   `apply_alignment_fallback`: SpaceBetween при переполнении/одном
+    15→//!   ребёнке деградирует в Start; `End` — без fallback: при переполнении
+    16→//!   дети выталкиваются ЗА начальный край (CSS unsafe alignment —
+    17→//!   документированное расхождение с Native-клампом);
+    18→//! - поперечные офсеты — от линии: Center = `free/2`, End = `free`
+    19→//!   (могут быть отрицательными — ребёнок выступает за оба края);
+    20→//! - финальное приведение к целой px-сетке — зеркало
+    21→//!   `taffy::compute::round_layout`: локация округляется ПОЗИЦИОННО
+    22→//!   (parent-relative), размер — разность округлённых КРАЁВ по
+    23→//!   кумулятивной unrounded-координате от корня; функция round —
+    24→//!   дословная копия `taffy::util::sys::round` (std-путь).
+    25→//!
+    26→//! Паритет-гейты: `tests/flex_vs_taffy_parity.rs` (1000 деревьев,
+    27→//! ≥ 80% побитово) + 15 golden-эталонов html5/CD demos (общие для обоих
+    28→//! backend'ов).
+    29→//!
+    30→//! # Документированные семантики
+    31→//!
+    32→//! - `SqueezeTail` — ДОСЛОВНО (хвост до 0 ширины, half-open hit;
+    33→//!   §Контракт-4 FR-068: «FlexLayoutEngine решает»), не flex_shrink
+    34→//!   (расхождение C3 с taffy — документировано, не fail в parity).
+    35→//! - Сцена: percent (от внутреннего размера родителя), `Fill` (главная —
+    36→//!   grow 1 basis 0; поперечная — stretch до линии), aspect-ratio,
+    37→//!   Absolute (от border-box родителя) / Fixed (от корневого слота —
+    38→//!   ре-парент к корню) / Sticky (в потоке + пост-кламп с трансляцией
+    39→//!   поддерева; FR-074 — по ОБОИМ осям: `top` против Y-scroll-предка,
+    40→//!   `left` против X-scroll-предка), scroll-offset content-shift,
+    41→//!   overflow (rect'ы не меняет — клип у потребителя, `PaintItem::ClipRect`
+    42→//!   FR-056), Grid (треки Length/Percent/Fill + FR-074: Auto по контенту
+    43→//!   span-1 ячеек, `minmax(min, max)` — кламп контента в границы,
+    44→//!   `max: Fill` — гибкий трек с полом min) + span + definite/Auto высоты
+    45→//!   строк.
+    46→//! - Grid-ячейки: Fill/Auto тянутся в область трека (default stretch
+    47→//!   taffy); definite/Percent — собственный размер (CSS grid-item,
+    48→//!   старт-выравнивание, переполнение видно).
+    49→//! - Sticky/scroll — пост-обработка формул 1:1 из `taffy_backend.rs`.
+    50→//!
+    51→//! # Grid-треки: авторасчёт и minmax (FR-074)
+    52→//!
+    53→//! Колонки — шаги CSS Grid §11.5–11.8 в порядке taffy 0.14 (паритет
+    54→//! подтверждён parity-тестами; контент = max-content span-1 ячеек,
+    55→//! min-content отдельно не моделируется):
+    56→//! 1. Плейсмент row-major (sparse cursor со спанами) — [`grid_placements`].
+    57→//! 2. Контент-вклад трека = max max-content ширин ЯЧЕЕК SPAN 1 трека
+    58→//!    (span>1 не растят авторасчётные треки — упрощение, докурировано;
+    59→//!    ячейка всё равно тянется на область спана).
+    60→//! 3. База/лимит: Length/Percent — base=limit=definite; Auto — base=
+    61→//!    limit=контент; Fill — base 0, limit ∞ (Fr); MinMax{min,max} —
+    62→//!    base = min (definite или контент), limit = max definite | контент
+    63→//!    (max Auto) | ∞ (max Fill → Fr).
+    64→//! 4. §11.6 Maximise: свободное место (inner − Σбаз − зазоры) поровну
+    65→//!    трекам с конечным лимитом, с заморозкой достигших лимита.
+    66→//! 5. §11.7 Expand Flexible (taffy find_size_of_fr, факторы = 1): fr —
+    67→//!    наибольший, при котором Σ max(base, fr) ≤ inner; база больше fr —
+    68→//!    трек остаётся на базе (переполнение видно, G4).
+    69→//! 6. §11.8 Stretch auto (taffy default STRETCH): остаток поровну
+    70→//!    AutoMax-трекам (поверх лимитов — как в браузерах по умолчанию).
+    71→
+    72→use super::{
+    73→    Child, Column, CrossAlign, LayoutBackend, LayoutFeatures, MainAlign, MeasuredItem, Row,
+    74→    RowPolicy, SceneDim, SceneKind, SceneNode, ScenePosition, SceneTrack, TrackMax, TrackMin,
+    75→    UiRect, UiVec2,
+    76→};
+    77→use crate::measure::TextMeasurer;
+    78→
+    79→/// Собственный движок вёрстки (FR-068 W2). ZST без состояния
+    80→/// (immediate-mode, D2 ADR-0013) — `Send + Sync` бесплатно, статический
+    81→/// [`super::default_backend`].
+    82→#[derive(Debug, Clone, Copy, Default)]
+    83→pub struct FlexLayoutEngine;
+    84→
+    85→impl LayoutBackend for FlexLayoutEngine {
+    86→    fn features(&self) -> LayoutFeatures {
+    87→        // Полный flexbox (БЕЗ CSS flex_shrink — SqueezeTail дословен,
+    88→        // §Контракт-4) + сетка/measured + сцена (percent/aspect/clip/
+    89→        // sticky-эмуляция). Бит FLEX_SHRINK не выставляется: сжатие —
+    90→        // именованная политика `SqueezeTail`, а не CSS-фактор.
+    91→        LayoutFeatures::FLEX_GROW
+    92→            .union(LayoutFeatures::FLEX_BASIS)
+    93→            .union(LayoutFeatures::FLEX_WRAP)
+    94→            .union(LayoutFeatures::GRID_2D)
+    95→            .union(LayoutFeatures::AUTO_SIZE)
+    96→            .union(LayoutFeatures::OVERFLOW_CLIP)
+    97→            .union(LayoutFeatures::PERCENT)
+    98→            .union(LayoutFeatures::ASPECT_RATIO)
+    99→            .union(LayoutFeatures::STICKY)
+   100→    }
+   101→
+   102→    fn lay_out_row(&self, row: Row, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
+   103→        match row.policy {
+   104→            RowPolicy::SqueezeTail => self.squeeze_tail(row.gap, slot, items),
+   105→            _ => {
+   106→                let children: Vec<FlexChild> = items
+   107→                    .iter()
+   108→                    .map(|c| FlexChild {
+   109→                        basis: c.w.max(0.0),
+   110→                        cross: c.h.max(0.0),
+   111→                        grow: c.grow.max(0.0),
+   112→                    })
+   113→                    .collect();
+   114→                let (placed, _, _) = layout_flex_container(
+   115→                    Axis::X,
+   116→                    row.gap,
+   117→                    row.main,
+   118→                    row.cross,
+   119→                    row.policy == RowPolicy::Wrap,
+   120→                    (slot.w, slot.h),
+   121→                    &children,
+   122→                );
+   123→                finish_line(&placed, Axis::X, slot)
+   124→            }
+   125→        }
+   126→    }
+   127→
+   128→    fn lay_out_column(&self, column: Column, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
+   129→        let children: Vec<FlexChild> = items
+   130→            .iter()
+   131→            .map(|c| FlexChild {
+   132→                // Главная ось колонки — Y: basis = высота, cross = ширина.
+   133→                basis: c.h.max(0.0),
+   134→                cross: c.w.max(0.0),
+   135→                grow: c.grow.max(0.0),
+   136→            })
+   137→            .collect();
+   138→        let (placed, _, _) = layout_flex_container(
+   139→            Axis::Y,
+   140→            column.gap,
+   141→            column.main,
+   142→            column.cross,
+   143→            false,
+   144→            // (main, cross) в осях контейнера: главная колонки — Y (высота).
+   145→            (slot.h, slot.w),
+   146→            &children,
+   147→        );
+   148→        finish_line(&placed, Axis::Y, slot)
+   149→    }
+   150→
+   151→    fn lay_out_measured(
+   152→        &self,
+   153→        row: Row,
+   154→        slot: UiRect,
+   155→        items: &[MeasuredItem],
+   156→        m: &mut TextMeasurer,
+   157→        fs: &mut cosmic_text::FontSystem,
+   158→        family: &str,
+   159→        size: f32,
+   160→    ) -> Vec<UiRect> {
+   161→        // Тот же resolve, что у всех backend'ов — единая точка замера
+   162→        // (`MeasuredItem::resolve`), шейпинг бит-в-бит (через Shaper W2).
+   163→        let children: Vec<Child> = items
+   164→            .iter()
+   165→            .map(|item| item.resolve(m, fs, family, size))
+   166→            .collect();
+   167→        self.lay_out_row(row, slot, &children)
+   168→    }
+   169→
+   170→    fn lay_out_grid(
+   171→        &self,
+   172→        slot: UiRect,
+   173→        cols: &[f32],
+   174→        rows: usize,
+   175→        row_h: f32,
+   176→        gap: UiVec2,
+   177→    ) -> Vec<UiRect> {
+   178→        // Явные колонки — накопление как taffy (Points-треки, row-major)
+   179→        // + round-layout pass (локация позиционно, размер — края).
+   180→        let row_h = row_h.max(0.0);
+   181→        let mut rects = Vec::with_capacity(cols.len().saturating_mul(rows));
+   182→        for r in 0..rows {
+   183→            let y = r as f32 * (row_h + gap.y.max(0.0));
+   184→            let mut x = 0.0f32;
+   185→            for &w in cols {
+   186→                let w = w.max(0.0);
+   187→                rects.push(UiRect::new(x, y, w, row_h));
+   188→                x += w + gap.x.max(0.0);
+   189→            }
+   190→        }
+   191→        rects
+   192→            .into_iter()
+   193→            .map(|r| {
+   194→                let (x, y, w, h) = (r.x, r.y, r.w, r.h);
+   195→                UiRect::new(
+   196→                    slot.x + round_px(x),
+   197→                    slot.y + round_px(y),
+   198→                    round_px(x + w) - round_px(x),
+   199→                    round_px(y + h) - round_px(y),
+   200→                )
+   201→            })
+   202→            .collect()
+   203→    }
+   204→}
+   205→
+   206→impl FlexLayoutEngine {
+   207→    /// Раскладка расширенной сцены ([`SceneNode`], FR-068 W2): контракт —
+   208→    /// модульная докa `scene` (DFS pre-order, `[0]` — корень; percent/
+   209→    /// aspect/absolute/fixed/sticky/scroll/overflow — как у
+   210→    /// `TaffyBackend::lay_out_scene`, побитово на сценах demos).
+   211→    pub fn lay_out_scene(&self, slot: UiRect, scene: &SceneNode) -> Vec<UiRect> {
+   212→        // 1. DFS pre-order дерево с parent/children-индексами.
+   213→        let mut tree = SceneTree::build(scene);
+   214→        // 2. Раскладка (unrounded): локации parent-relative, корень (0,0).
+   215→        tree.layout_node(0, None, (slot.w, slot.h), (slot.w, slot.h));
+   216→        // 3. round-layout pass + абсолютные координаты (таффy-чтение:
+   217→        //    abs = abs(parent) + round(loc); размер — края cumulative).
+   218→        let rects = tree.round_and_absolve(slot);
+   219→        // 4. Пост-обработка (формулы taffy_backend 1:1): content-shift
+   220→        //    scroll-предков + sticky-кламп с трансляцией поддерева.
+   221→        post_process(&tree, rects)
+   222→    }
+   223→
+   224→    /// `SqueezeTail` — дословная семантика (Native-формулы 1:1, БЕЗ
+   225→    /// round-layout: дробные ширины чипов сохраняются дословно — контракт
+   226→    /// «чип = измеренная подпись + пад» CR-015/F-17). Хвост сжимается до
+   227→    /// нуля, half-open hit. §Контракт-4 FR-068; расхождение с taffy
+   228→    /// (flex_shrink) — C3.
+   229→    fn squeeze_tail(&self, gap: f32, slot: UiRect, items: &[Child]) -> Vec<UiRect> {
+   230→        let mut x = 0.0f32;
+   231→        let limit = slot.w;
+   232→        items
+   233→            .iter()
+   234→            .map(|c| {
+   235→                let remaining = (limit - x).max(0.0);
+   236→                let w = c.w.min(remaining);
+   237→                // Кламп x к limit — дословно Native (за слот позиция не
+   238→                // выходит; вырожденный хвост — пустой, half-open).
+   239→                let rect = UiRect::new(x.min(limit), 0.0, w, c.h);
+   240→                x += w + gap;
+   241→                rect
+   242→            })
+   243→            .map(|r| UiRect::new(slot.x + r.x, slot.y + r.y, r.w, r.h))
+   244→            .collect()
+   245→    }
+   246→}
+   247→
+   248→// =============================================================================
+   249→// Ядро flexbox: ось, CSS §9.7, justify/align, wrap, round-layout
+   250→// =============================================================================
+   251→
+   252→/// Главная ось контейнера (X — row, Y — column/grid).
+   253→#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+   254→enum Axis {
+   255→    X,
+   256→    Y,
+   257→}
+   258→
+   259→/// Гипотетические размеры flex-ребёнка (в осях КОНТЕЙНЕРА).
+   260→#[derive(Debug, Clone, Copy)]
+   261→struct FlexChild {
+   262→    /// flex-basis (главный размер до распределения).
+   263→    basis: f32,
+   264→    /// Гипотетический поперечный размер.
+   265→    cross: f32,
+   266→    /// flex-grow (CSS §9.7); 0 — фиксированный.
+   267→    grow: f32,
+   268→}
+   269→
+   270→/// Округление к целой px-сетке (half-away-from-zero) — дословная копия
+   271→/// `taffy::util::sys::round` (std-путь; провenance алгоритма round-layout
+   272→/// W2; FR-068 W4: taffy вырезан, функция — часть собственного движка).
+   273→fn round_px(value: f32) -> f32 {
+   274→    let f = if value == 0.0 { 0.0 } else { value % 1.0 };
+   275→    if f.is_nan() || f == 0.0 {
+   276→        value
+   277→    } else if value > 0.0 {
+   278→        if f < 0.5 {
+   279→            value - f
+   280→        } else {
+   281→            value - f + 1.0
+   282→        }
+   283→    } else if -f < 0.5 {
+   284→        value - f
+   285→    } else {
+   286→        value - f - 1.0
+   287→    }
+   288→}
+   289→
+   290→/// Unrounded размещение ребёнка в осях контейнера.
+   291→#[derive(Debug, Clone, Copy)]
+   292→struct Placed {
+   293→    main: f32,
+   294→    cross: f32,
+   295→    size_main: f32,
+   296→    size_cross: f32,
+   297→}
+   298→
+   299→/// Финализация V-5 линии: round-layout + сдвиг в слот (один уровень от
+   300→/// корня: cum = локация).
+   301→fn finish_line(placed: &[Placed], axis: Axis, slot: UiRect) -> Vec<UiRect> {
+   302→    placed
+   303→        .iter()
+   304→        .map(|p| {
+   305→            let (x, y, w, h) = match axis {
+   306→                Axis::X => (p.main, p.cross, p.size_main, p.size_cross),
+   307→                Axis::Y => (p.cross, p.main, p.size_cross, p.size_main),
+   308→            };
+   309→            UiRect::new(
+   310→                slot.x + round_px(x),
+   311→                slot.y + round_px(y),
+   312→                round_px(x + w) - round_px(x),
+   313→                round_px(y + h) - round_px(y),
+   314→            )
+   315→        })
+   316→        .collect()
+   317→}
+   318→
+   319→/// Сумма главных зазоров (taffy sum_axis_gaps: n−1 зазоров).
+   320→fn total_main_axis_gap(gap: f32, n: usize) -> f32 {
+   321→    gap * n.saturating_sub(1) as f32
+   322→}
+   323→
+   324→/// Плейсмент row-major auto-flow (sparse cursor со спанами) — ЕДИНЫЙ
+   325→/// оракул для measure/layout/row-count (FR-074: раньше курсор был
+   326→/// продублирован трижды). Возвращает `(col, row, span)` в ПОРЯДКЕ детей.
+   327→/// `n_cols == 0` — вырожденная сетка: каждый ребёнок на своей строке
+   328→/// нулевой ширины (col = 0, span = 1).
+   329→fn grid_placements(
+   330→    spans: impl Iterator<Item = usize>,
+   331→    n_cols: usize,
+   332→) -> Vec<(usize, usize, usize)> {
+   333→    let mut out = Vec::new();
+   334→    let mut cursor_col = 0usize;
+   335→    let mut cursor_row = 0usize;
+   336→    for span in spans {
+   337→        let span = span.max(1);
+   338→        if n_cols == 0 {
+   339→            out.push((0, out.len(), 1));
+   340→            continue;
+   341→        }
+   342→        let mut col = cursor_col;
+   343→        let mut row = cursor_row;
+   344→        while col + span > n_cols {
+   345→            col = 0;
+   346→            row += 1;
+   347→        }
+   348→        out.push((col, row, span));
+   349→        cursor_col = col + span;
+   350→        cursor_row = row;
+   351→    }
+   352→    out
+   353→}
+   354→
+   355→/// Вклад трека в max-content ширину grid-контейнера (FR-074):
+   356→/// Length — definite; Percent — 0 (база неопределена в max-content, как
+   357→/// раньше); Auto — контент трека; Fill — 0 (гибкий); MinMax — кламп
+   358→/// контента в границы (max definite) или минимум (max Auto).
+   359→fn track_max_content(track: &SceneTrack, content_w: f32) -> f32 {
+   360→    match track {
+   361→        SceneTrack::Length(v) => v.max(0.0),
+   362→        SceneTrack::Percent(_) => 0.0,
+   363→        SceneTrack::Auto => content_w,
+   364→        SceneTrack::Fill => 0.0,
+   365→        SceneTrack::MinMax { min, max } => {
+   366→            let min_size = match min {
+   367→                TrackMin::Length(v) => v.max(0.0),
+   368→                TrackMin::Percent(_) => 0.0,
+   369→                TrackMin::Auto => content_w,
+   370→            };
+   371→            match max {
+   372→                TrackMax::Length(m) => min_size.max(content_w.min(m.max(0.0))),
+   373→                TrackMax::Percent(_) => min_size,
+   374→                TrackMax::Auto => min_size.max(content_w),
+   375→                TrackMax::Fill => min_size,
+   376→            }
+   377→        }
+   378→    }
+   379→}
+   380→
+   381→/// CSS §9.7 «Resolving Flexible Lengths» (порядок операций taffy 0.14,
+   382→/// growing-ветка; shrink у Flex-детей отсутствует — переполнение видно,
+   383→/// G4; SqueezeTail — отдельная дословная политика). → целевые размеры.
+   384→fn resolve_flexible_lengths(inner_main: f32, gap_total: f32, line: &[FlexChild]) -> Vec<f32> {
+   385→    let n = line.len();
+   386→    let mut targets: Vec<f32> = line.iter().map(|c| c.basis).collect();
+   387→    if n == 0 {
+   388→        return targets;
+   389→    }
+   390→    // 1. Используемый flex-фактор: Σ баз + зазоры против inner.
+   391→    let total_hypothetical: f32 = line.iter().map(|c| c.basis).sum();
+   392→    let used_flex_factor = gap_total + total_hypothetical;
+   393→    let growing = used_flex_factor < inner_main;
+   394→    let shrinking = used_flex_factor > inner_main;
+   395→    if !growing && !shrinking {
+   396→        return targets; // exactly_sized — все заморожены на базах
+   397→    }
+   398→    // 2. Неподвижные: grow == 0 (shrink всегда 0 — overflow виден).
+   399→    let mut frozen: Vec<bool> = line.iter().map(|c| c.grow == 0.0).collect();
+   400→
+   401→    // 3. Начальное свободное место (frozen — по базам, ещё без целей).
+   402→    let used_space = |frozen: &[bool], targets: &[f32]| -> f32 {
+   403→        gap_total
+   404→            + line
+   405→                .iter()
+   406→                .zip(frozen.iter().zip(targets))
+   407→                .map(|(c, (&fz, &t))| if fz { t } else { c.basis })
+   408→                .sum::<f32>()
+   409→    };
+   410→    let initial_free_space = inner_main - used_space(&frozen, &targets);
+   411→
+   412→    // 4. Цикл (min 0 / max нет — violations нет → один проход).
+   413→    loop {
+   414→        if frozen.iter().all(|&f| f) {
+   415→            break;
+   416→        }
+   417→        let used = used_space(&frozen, &targets);
+   418→        let sum_grow: f32 = line
+   419→            .iter()
+   420→            .zip(&frozen)
+   421→            .filter(|(_, &fz)| !fz)
+   422→            .map(|(c, _)| c.grow)
+   423→            .sum();
+   424→        // b. Оставшееся свободное место (taffy-форма, вкл. квоту Σgrow<1).
+   425→        let free_space = if growing && sum_grow < 1.0 {
+   426→            (initial_free_space * sum_grow - gap_total).min(inner_main - used)
+   427→        } else {
+   428→            inner_main - used
+   429→        };
+   430→        // c. Распределение (is_normal отсекает 0 — как в taffy).
+   431→        if free_space.is_normal() && growing && sum_grow > 0.0 {
+   432→            for i in 0..n {
+   433→                if !frozen[i] {
+   434→                    targets[i] = line[i].basis + free_space * (line[i].grow / sum_grow);
+   435→                }
+   436→            }
+   437→        }
+   438→        // d/e. Кламп ≥ 0; violations нет → заморозка всех (один проход).
+   439→        for i in 0..n {
+   440→            if !frozen[i] {
+   441→                targets[i] = targets[i].max(0.0);
+   442→            }
+   443→        }
+   444→        for f in frozen.iter_mut() {
+   445→            *f = true;
+   446→        }
+   447→        let _ = shrinking;
+   448→    }
+   449→    targets
+   450→}
+   451→
+   452→/// `apply_alignment_fallback` taffy (compute/common/alignment.rs):
+   453→/// SpaceBetween при ≤1 элементе или переполнении деградирует в Start
+   454→/// (safe-семантика распределительных ключей); Start/End — без fallback.
+   455→fn justify_fallback(free_space: f32, num_items: usize, main: MainAlign) -> MainAlign {
+   456→    if num_items <= 1 || free_space <= 0.0 {
+   457→        match main {
+   458→            MainAlign::SpaceBetween => MainAlign::Start,
+   459→            other => other,
+   460→        }
+   461→    } else {
+   462→        main
+   463→    }
+   464→}
+   465→
+   466→/// Полная раскладка flex-контейнера: линии (wrap), CSS §9.7, justify,
+   467→/// align → unrounded placements + контентный размер (для auto-сцен).
+   468→fn layout_flex_container(
+   469→    _axis: Axis,
+   470→    gap: f32,
+   471→    main: MainAlign,
+   472→    cross: CrossAlign,
+   473→    wrap: bool,
+   474→    inner: (f32, f32), // (main, cross) definite контейнера
+   475→    children: &[FlexChild],
+   476→) -> (Vec<Placed>, (f32, f32), Vec<f32>) {
+   477→    let inner_main = inner.0;
+   478→    let n = children.len();
+   479→
+   480→    // Линии: no-wrap — одна; wrap — жадная упаковка (порог как у Native:
+   481→    // EPSILON против ложного переноса на точной подгонке).
+   482→    let mut lines: Vec<Vec<usize>> = Vec::new();
+   483→    if !wrap {
+   484→        lines.push((0..n).collect());
+   485→    } else {
+   486→        let mut cur: Vec<usize> = Vec::new();
+   487→        let mut cur_w = 0.0f32;
+   488→        for (i, c) in children.iter().enumerate() {
+   489→            let next_w = if cur.is_empty() {
+   490→                c.basis
+   491→            } else {
+   492→                cur_w + gap + c.basis
+   493→            };
+   494→            if !cur.is_empty() && next_w > inner_main + f32::EPSILON {
+   495→                lines.push(std::mem::take(&mut cur));
+   496→                cur_w = 0.0;
+   497→            }
+   498→            cur.push(i);
+   499→            cur_w = if cur.len() == 1 {
+   500→                c.basis
+   501→            } else {
+   502→                cur_w + gap + c.basis
+   503→            };
+   504→        }
+   505→        if !cur.is_empty() {
+   506→            lines.push(cur);
+   507→        }
+   508→    }
+   509→
+   510→    let cross_gap = if wrap { gap } else { 0.0 };
+   511→    let mut placed = vec![
+   512→        Placed {
+   513→            main: 0.0,
+   514→            cross: 0.0,
+   515→            size_main: 0.0,
+   516→            size_cross: 0.0
+   517→        };
+   518→        n
+   519→    ];
+   520→    // Поперечный размер ЛИНИИ каждого ребёнка (для stretch Fill-cross).
+   521→    let mut line_cross_of = vec![0.0f32; n];
+   522→    let mut line_y = 0.0f32;
+   523→    let mut content_main = 0.0f32;
+   524→
+   525→    for line in &lines {
+   526→        let items: Vec<FlexChild> = line.iter().map(|&i| children[i]).collect();
+   527→        // Главные размеры (CSS §9.7). Для auto-главной оси inner_main
+   528→        // уже = Σ баз + зазоры → free 0 → базы без распределения.
+   529→        let targets =
+   530→            resolve_flexible_lengths(inner_main, total_main_axis_gap(gap, line.len()), &items);
+   531→        // Линия: justify (свободное место — от целевых размеров).
+   532→        let used: f32 = total_main_axis_gap(gap, line.len()) + targets.iter().sum::<f32>();
+   533→        let free = inner_main - used;
+   534→        content_main = content_main.max(used);
+   535→        let mode = justify_fallback(free, line.len(), main);
+   536→        // Поперечный размер линии: single-line definite — контейнер;
+   537→        // wrap — max гипотетической поперечной детей линии.
+   538→        let line_cross = if !wrap {
+   539→            inner.1
+   540→        } else {
+   541→            items.iter().map(|c| c.cross).fold(0.0f32, f32::max)
+   542→        };
+   543→        for &i in line {
+   544→            line_cross_of[i] = line_cross;
+   545→        }
+   546→        // Позиции по главной оси: loc_0 = base; loc_i = loc_{i-1} + t + off
+   547→        // (off уже содержит зазор — форма compute_alignment_offset).
+   548→        let mut cursor = match mode {
+   549→            MainAlign::Start | MainAlign::SpaceBetween => 0.0,
+   550→            MainAlign::End => free,
+   551→        };
+   552→        for (k, (&i, &t)) in line.iter().zip(&targets).enumerate() {
+   553→            if k > 0 {
+   554→                let off = gap
+   555→                    + match mode {
+   556→                        MainAlign::SpaceBetween => free / (line.len() - 1) as f32,
+   557→                        _ => 0.0,
+   558→                    };
+   559→                cursor += targets[k - 1] + off;
+   560→            }
+   561→            // Поперечный офсет от линии (Center/End могут уйти в минус —
+   562→            // unsafe alignment, как taffy).
+   563→            let cross_free = line_cross - children[i].cross;
+   564→            let cross_off = line_y
+   565→                + match cross {
+   566→                    CrossAlign::Start => 0.0,
+   567→                    CrossAlign::Center => cross_free / 2.0,
+   568→                    CrossAlign::End => cross_free,
+   569→                };
+   570→            placed[i] = Placed {
+   571→                main: cursor,
+   572→                cross: cross_off,
+   573→                size_main: t,
+   574→                size_cross: children[i].cross,
+   575→            };
+   576→        }
+   577→        line_y += line_cross + cross_gap;
+   578→    }
+   579→    // Контентная поперечная: Σ линий + межстрочные зазоры.
+   580→    let content_cross = line_y - if lines.is_empty() { 0.0 } else { cross_gap };
+   581→    (placed, (content_main, content_cross), line_cross_of)
+   582→}
+   583→
+   584→// =============================================================================
+   585→// Сцена: DFS-дерево, percent/aspect/auto/fixed/absolute/grid, round-layout
+   586→//
+   587→// Двухфазная архитектура (зеркало taffy):
+   588→//   A. `measure_content` — bottom-up max-content замер (для Auto-осей и
+   589→//      flex-basis Auto-детей; definite-оси читаются напрямую).
+   590→//   B. `layout_node` — top-down раскладка: родитель распределяет главные
+   591→//      размеры (CSS §9.7), затем рекурсивно раскладывает детей с УЖЕ
+   592→//      известными definite-размерами (Fill-дети получают target от
+   593→//      родителя — их поддеревья считаются от него, как в taffy).
+   594→// =============================================================================
+   595→
+   596→/// Узел сцены в DFS pre-order (unrounded раскладка + пост-контекст).
+   597→struct SceneEntry {
+   598→    /// Индекс родителя (None — корень; fixed-дети — Some(0)).
+   599→    parent: Option<usize>,
+   600→    position: ScenePosition,
+   601→    /// SceneNode::offset (scroll-контейнер).
+   602→    offset: f32,
+   603→    /// Главная ось контейнера (направление content-shift).
+   604→    axis: Axis,
+   605→    /// Дети (все) в pre-order индексах.
+   606→    children: Vec<usize>,
+   607→    /// Дети в потоке (без fixed/absolute).
+   608→    flow: Vec<usize>,
+   609→    /// Ссылка-клон узла сцены (kind/size/aspect/span).
+   610→    node: SceneNode,
+   611→    /// Unrounded локация (parent-relative; fixed — root-relative).
+   612→    loc: (f32, f32),
+   613→    /// Unrounded размер.
+   614→    size: (f32, f32),
+   615→}
+   616→
+   617→struct SceneTree {
+   618→    nodes: Vec<SceneEntry>,
+   619→}
+   620→
+   621→/// Definite-оси: Length/Percent → Some (percent — от `base`); Fill/Auto → None.
+   622→fn definite_dim(dim: &SceneDim, base: f32) -> Option<f32> {
+   623→    match dim {
+   624→        SceneDim::Length(v) => Some(v.max(0.0)),
+   625→        SceneDim::Percent(p) => Some(base * p.clamp(0.0, 1.0)),
+   626→        SceneDim::Fill | SceneDim::Auto => None,
+   627→    }
+   628→}
+   629→
+   630→impl SceneTree {
+   631→    fn build(scene: &SceneNode) -> Self {
+   632→        let mut tree = Self { nodes: Vec::new() };
+   633→        tree.push_node(scene, None);
+   634→        tree
+   635→    }
+   636→
+   637→    fn push_node(&mut self, node: &SceneNode, parent: Option<usize>) -> usize {
+   638→        let idx = self.nodes.len();
+   639→        let axis = match &node.kind {
+   640→            SceneKind::Row { .. } => Axis::X,
+   641→            SceneKind::Column { .. } | SceneKind::Grid { .. } => Axis::Y,
+   642→            SceneKind::Leaf => Axis::Y,
+   643→        };
+   644→        self.nodes.push(SceneEntry {
+   645→            parent,
+   646→            position: node.position,
+   647→            offset: node.offset,
+   648→            axis,
+   649→            children: Vec::new(),
+   650→            flow: Vec::new(),
+   651→            node: node.clone(),
+   652→            loc: (0.0, 0.0),
+   653→            size: (0.0, 0.0),
+   654→        });
+   655→        for child in &node.children {
+   656→            let child_idx = self.push_node(child, Some(idx));
+   657→            self.nodes[idx].children.push(child_idx);
+   658→            match child.position {
+   659→                ScenePosition::Absolute { .. } | ScenePosition::Fixed { .. } => {}
+   660→                _ => self.nodes[idx].flow.push(child_idx),
+   661→            }
+   662→        }
+   663→        idx
+   664→    }
+   665→
+   666→    // --- Фаза A: max-content замер (bottom-up, без мутаций) -----------------
+   667→
+   668→    /// Max-content размер узла (для Auto-осей): definite-оси напрямую,
+   669→    /// контейнеры — сумма/максимум контента детей, лист — Length/Auto(0),
+   670→    /// aspect-вывод (fixed_w + ratio → h = w/ratio; fixed_h → w = h·ratio).
+   671→    /// Percent в max-content — 0 (база неопределена; demos процентов
+   672→    /// внутри Auto-контейнеров не используют).
+   673→    fn measure_content(&self, idx: usize) -> (f32, f32) {
+   674→        let node = &self.nodes[idx].node;
+   675→        let mut w = definite_dim(&node.size.w, 0.0);
+   676→        let mut h = definite_dim(&node.size.h, 0.0);
+   677→        let content = match &node.kind {
+   678→            SceneKind::Leaf => (0.0f32, 0.0f32),
+   679→            SceneKind::Row { gap, wrap, .. } => {
+   680→                // Max-content: Σ баз детей (главная) + зазоры; поперечная —
+   681→                // max. Wrap-контейнер: та же Σ (max-content одной линии).
+   682→                let mut sum = 0.0f32;
+   683→                let mut max_cross = 0.0f32;
+   684→                for (k, &ci) in self.nodes[idx].flow.iter().enumerate() {
+   685→                    let c = self.measure_content(ci);
+   686→                    sum += if k == 0 { c.0 } else { gap + c.0 };
+   687→                    max_cross = max_cross.max(c.1);
+   688→                }
+   689→                let _ = wrap;
+   690→                (sum, max_cross)
+   691→            }
+   692→            SceneKind::Column { gap, .. } => {
+   693→                let mut sum = 0.0f32;
+   694→                let mut max_cross = 0.0f32;
+   695→                for (k, &ci) in self.nodes[idx].flow.iter().enumerate() {
+   696→                    let c = self.measure_content(ci);
+   697→                    sum += if k == 0 { c.1 } else { gap + c.1 };
+   698→                    max_cross = max_cross.max(c.0);
+   699→                }
+   700→                (max_cross, sum)
+   701→            }
+   702→            SceneKind::Grid { cols, row_h, gap } => {
+   703→                // Ширина — Σ вкладов треков + зазоры (Length/Percent
+   704→                // definite; Auto — контент span-1 ячеек трека; MinMax —
+   705→                // кламп контента в границы; Fill — 0, гибкий); высота —
+   706→                // Σ строк (Length; Percent → 0 без базы; Fill/Auto →
+   707→                // контент строк) + зазоры.
+   708→                let gap_x = gap.x.max(0.0);
+   709→                let gap_y = gap.y.max(0.0);
+   710→                let flow = &self.nodes[idx].flow;
+   711→                let spans = flow
+   712→                    .iter()
+   713→                    .map(|&ci| (self.nodes[ci].node.span as usize).max(1));
+   714→                let placements = grid_placements(spans, cols.len());
+   715→                let mut content_w: Vec<f32> = vec![0.0; cols.len()];
+   716→                let mut row_h_max: Vec<f32> = Vec::new();
+   717→                for (k, &(col, row, span)) in placements.iter().enumerate() {
+   718→                    let ci = flow[k];
+   719→                    let c = self.measure_content(ci);
+   720→                    if span == 1 && col < cols.len() {
+   721→                        content_w[col] = content_w[col].max(c.0);
+   722→                    }
+   723→                    if row_h_max.len() <= row {
+   724→                        row_h_max.resize(row + 1, 0.0);
+   725→                    }
+   726→                    row_h_max[row] = row_h_max[row].max(c.1);
+   727→                }
+   728→                let w_sum: f32 = cols
+   729→                    .iter()
+   730→                    .enumerate()
+   731→                    .map(|(i, t)| track_max_content(t, content_w[i]))
+   732→                    .sum::<f32>()
+   733→                    + gap_x * cols.len().saturating_sub(1) as f32;
+   734→                let rows = placements.iter().map(|&(_, r, _)| r + 1).max().unwrap_or(0);
+   735→                let h_sum = match row_h {
+   736→                    SceneDim::Length(v) => {
+   737→                        v.max(0.0) * rows as f32 + gap_y * rows.saturating_sub(1) as f32
+   738→                    }
+   739→                    SceneDim::Percent(_) => 0.0,
+   740→                    SceneDim::Fill | SceneDim::Auto => {
+   741→                        row_h_max.iter().sum::<f32>() + gap_y * rows.saturating_sub(1) as f32
+   742→                    }
+   743→                };
+   744→                (w_sum, h_sum)
+   745→            }
+   746→        };
+   747→        if w.is_none() {
+   748→            w = Some(content.0);
+   749→        }
+   750→        if h.is_none() {
+   751→            h = Some(content.1);
+   752→        }
+   753→        let (mut ww, mut hh) = (w.unwrap_or(0.0), h.unwrap_or(0.0));
+   754→        if let SceneKind::Leaf = node.kind {
+   755→            if let Some(ratio) = node.aspect {
+   756→                let w_def = matches!(node.size.w, SceneDim::Length(_) | SceneDim::Percent(_));
+   757→                let h_def = matches!(node.size.h, SceneDim::Length(_) | SceneDim::Percent(_));
+   758→                if w_def && !h_def {
+   759→                    hh = ww / ratio;
+   760→                } else if h_def && !w_def {
+   761→                    ww = hh * ratio;
+   762→                }
+   763→            }
+   764→        }
+   765→        (ww, hh)
+   766→    }
+   767→
+   768→    // --- Фаза B: top-down раскладка -----------------------------------------
+   769→
+   770→    /// Раскладка узла. `provided` — definite размер от родителя (главная
+   771→    /// ось после распределения / stretch поперечной); None — размер из
+   772→    /// SceneSize (percent — от `percent_base`) или контента. `root_inner`
+   773→    /// — definite слот корня (percent fixed-детей). Возвращает размер.
+   774→    fn layout_node(
+   775→        &mut self,
+   776→        idx: usize,
+   777→        provided: Option<(f32, f32)>,
+   778→        percent_base: (f32, f32),
+   779→        root_inner: (f32, f32),
+   780→    ) -> (f32, f32) {
+   781→        let node = self.nodes[idx].node.clone();
+   782→        // 1. Размер: provided (Fill/stretch) > Length/Percent > контент.
+   783→        let (w, h) = match provided {
+   784→            Some((pw, ph)) => (pw, ph),
+   785→            None => {
+   786→                let w_def = definite_dim(&node.size.w, percent_base.0);
+   787→                let h_def = definite_dim(&node.size.h, percent_base.1);
+   788→                match (w_def, h_def) {
+   789→                    (Some(ww), Some(hh)) => (ww, hh),
+   790→                    (wd, hd) => {
+   791→                        let content = self.content_of(idx, percent_base);
+   792→                        (wd.unwrap_or(content.0), hd.unwrap_or(content.1))
+   793→                    }
+   794→                }
+   795→            }
+   796→        };
+   797→        self.nodes[idx].size = (w, h);
+   798→
+   799→        // 2. Absolute/Fixed дети — вне потока: percent от содержащего
+   800→        //    блока (absolute — родитель, fixed — корень), aspect-вывод;
+   801→        //    локация — inset (absolute — border-box родителя, fixed —
+   802→        //    корневой слот). Рекурсия раскладывает их поддеревья.
+   803→        for &ai in &self.nodes[idx].children.clone() {
+   804→            let pos = self.nodes[ai].position;
+   805→            let containing = match pos {
+   806→                ScenePosition::Absolute { .. } => (w, h),
+   807→                ScenePosition::Fixed { .. } => root_inner,
+   808→                _ => continue,
+   809→            };
+   810→            let (ax, ay) = match pos {
+   811→                ScenePosition::Absolute { x, y } | ScenePosition::Fixed { x, y } => (x, y),
+   812→                _ => (0.0, 0.0),
+   813→            };
+   814→            self.layout_positioned(ai, containing, root_inner);
+   815→            self.nodes[ai].loc = (ax, ay);
+   816→        }
+   817→
+   818→        // 3. Flex/Grid дети (в потоке) — рекурсивно с definite-целями.
+   819→        match &node.kind {
+   820→            SceneKind::Row {
+   821→                gap,
+   822→                main,
+   823→                cross,
+   824→                wrap,
+   825→            } => {
+   826→                self.layout_flex_children(
+   827→                    idx,
+   828→                    Axis::X,
+   829→                    *gap,
+   830→                    *main,
+   831→                    *cross,
+   832→                    *wrap,
+   833→                    (w, h),
+   834→                    root_inner,
+   835→                );
+   836→            }
+   837→            SceneKind::Column { gap, main, cross } => {
+   838→                self.layout_flex_children(
+   839→                    idx,
+   840→                    Axis::Y,
+   841→                    *gap,
+   842→                    *main,
+   843→                    *cross,
+   844→                    false,
+   845→                    (w, h),
+   846→                    root_inner,
+   847→                );
+   848→            }
+   849→            SceneKind::Grid { cols, row_h, gap } => {
+   850→                self.layout_grid_children(idx, cols, row_h, gap, (w, h), root_inner);
+   851→            }
+   852→            SceneKind::Leaf => {}
+   853→        }
+   854→        (w, h)
+   855→    }
+   856→
+   857→    /// Контентный размер узла (для Auto/Fill-без-родителя осей):
+   858→    /// definite-оси поверх max-content замера.
+   859→    fn content_of(&self, idx: usize, percent_base: (f32, f32)) -> (f32, f32) {
+   860→        let measured = self.measure_content(idx);
+   861→        let node = &self.nodes[idx].node;
+   862→        let w = definite_dim(&node.size.w, percent_base.0).unwrap_or(measured.0);
+   863→        let h = definite_dim(&node.size.h, percent_base.1).unwrap_or(measured.1);
+   864→        (w, h)
+   865→    }
+   866→
+   867→    /// Раскладка positioned-узла (absolute/fixed): размер от содержащего
+   868→    /// блока + рекурсия в поддерево от его definite inner.
+   869→    fn layout_positioned(&mut self, idx: usize, containing: (f32, f32), root_inner: (f32, f32)) {
+   870→        let node = self.nodes[idx].node.clone();
+   871→        let w_def = definite_dim(&node.size.w, containing.0);
+   872→        let h_def = definite_dim(&node.size.h, containing.1);
+   873→        let (ww, hh) = match (w_def, h_def) {
+   874→            (Some(ww), Some(hh)) => (ww, hh),
+   875→            (wd, hd) => {
+   876→                let content = self.content_of(idx, containing);
+   877→                (wd.unwrap_or(content.0), hd.unwrap_or(content.1))
+   878→            }
+   879→        };
+   880→        self.nodes[idx].size = (ww, hh);
+   881→        match &node.kind {
+   882→            SceneKind::Row {
+   883→                gap,
+   884→                main,
+   885→                cross,
+   886→                wrap,
+   887→            } => {
+   888→                self.layout_flex_children(
+   889→                    idx,
+   890→                    Axis::X,
+   891→                    *gap,
+   892→                    *main,
+   893→                    *cross,
+   894→                    *wrap,
+   895→                    (ww, hh),
+   896→                    root_inner,
+   897→                );
+   898→            }
+   899→            SceneKind::Column { gap, main, cross } => {
+   900→                self.layout_flex_children(
+   901→                    idx,
+   902→                    Axis::Y,
+   903→                    *gap,
+   904→                    *main,
+   905→                    *cross,
+   906→                    false,
+   907→                    (ww, hh),
+   908→                    root_inner,
+   909→                );
+   910→            }
+   911→            SceneKind::Grid { cols, row_h, gap } => {
+   912→                self.layout_grid_children(idx, cols, row_h, gap, (ww, hh), root_inner);
+   913→            }
+   914→            SceneKind::Leaf => {}
+   915→        }
+   916→    }
+   917→
+   918→    /// Гипотеза flex-ребёнка (в осях контейнера): basis (Length/Percent/
+   919→    /// Fill/Auto→max-content), гипотетический cross, grow.
+   920→    fn child_hypo(&self, ci: usize, axis: Axis, inner: (f32, f32)) -> FlexChild {
+   921→        let node = &self.nodes[ci].node;
+   922→        let (main_d, cross_d) = if axis == Axis::X {
+   923→            (node.size.w, node.size.h)
+   924→        } else {
+   925→            (node.size.h, node.size.w)
+   926→        };
+   927→        let content = self.measure_content(ci);
+   928→        let (basis, grow) = match main_d {
+   929→            SceneDim::Length(v) => (v.max(0.0), 0.0),
+   930→            SceneDim::Percent(p) => {
+   931→                let d = if axis == Axis::X { inner.0 } else { inner.1 };
+   932→                (d * p.clamp(0.0, 1.0), 0.0)
+   933→            }
+   934→            SceneDim::Fill => (0.0, 1.0),
+   935→            SceneDim::Auto => {
+   936→                let v = if axis == Axis::X {
+   937→                    content.0
+   938→                } else {
+   939→                    content.1
+   940→                };
+   941→                (v, 0.0)
+   942→            }
+   943→        };
+   944→        let cross = match cross_d {
+   945→            SceneDim::Length(v) => v.max(0.0),
+   946→            SceneDim::Percent(p) => {
+   947→                let d = if axis == Axis::X { inner.1 } else { inner.0 };
+   948→                d * p.clamp(0.0, 1.0)
+   949→            }
+   950→            // Fill/Auto: гипотеза — контент; Fill stretch-ится до линии
+   951→            // на размещении.
+   952→            SceneDim::Fill | SceneDim::Auto => {
+   953→                if axis == Axis::X {
+   954→                    content.1
+   955→                } else {
+   956→                    content.0
+   957→                }
+   958→            }
+   959→        };
+   960→        FlexChild { basis, cross, grow }
+   961→    }
+   962→
+   963→    /// Раскладка flex-детей узла idx: гипотезы → линии → CSS §9.7 →
+   964→    /// justify/align → рекурсия в детей с definite-целями + stretch.
+   965→    #[allow(clippy::too_many_arguments)]
+   966→    fn layout_flex_children(
+   967→        &mut self,
+   968→        idx: usize,
+   969→        axis: Axis,
+   970→        gap: f32,
+   971→        main: MainAlign,
+   972→        cross: CrossAlign,
+   973→        wrap: bool,
+   974→        inner: (f32, f32),
+   975→        root_inner: (f32, f32),
+   976→    ) {
+   977→        let flow: Vec<usize> = self.nodes[idx].flow.clone();
+   978→        // Геометрический (w, h) → осевой (main, cross) контейнера.
+   979→        let inner_mc = if axis == Axis::X {
+   980→            (inner.0, inner.1)
+   981→        } else {
+   982→            (inner.1, inner.0)
+   983→        };
+   984→        let hypos: Vec<FlexChild> = flow
+   985→            .iter()
+   986→            .map(|&ci| self.child_hypo(ci, axis, inner_mc))
+   987→            .collect();
+   988→        let (placed, _, line_cross_of) =
+   989→            layout_flex_container(axis, gap, main, cross, wrap, inner_mc, &hypos);
+   990→        for (k, &ci) in flow.iter().enumerate() {
+   991→            let p = placed[k];
+   992→            let node = self.nodes[ci].node.clone();
+   993→            let cross_d = if axis == Axis::X {
+   994→                node.size.h
+   995→            } else {
+   996→                node.size.w
+   997→            };
+   998→            let size_main = p.size_main;
+   999→            let mut size_cross = p.size_cross;
+  1000→            // Stretch поперечной (Fill): до линии (line_cross_of[k]).
+  1001→            if matches!(cross_d, SceneDim::Fill) {
+  1002→                size_cross = line_cross_of[k];
+  1003→            }
+  1004→            let (x, y) = match axis {
+  1005→                Axis::X => (p.main, p.cross),
+  1006→                Axis::Y => (p.cross, p.main),
+  1007→            };
+  1008→            let (w, h) = match axis {
+  1009→                Axis::X => (size_main, size_cross),
+  1010→                Axis::Y => (size_cross, size_main),
+  1011→            };
+  1012→            self.nodes[ci].loc = (x, y);
+  1013→            // Рекурсия: поддерево ребёнка от его definite inner.
+  1014→            self.layout_node(ci, Some((w, h)), (w, h), root_inner);
+  1015→        }
+  1016→    }
+  1017→
+  1018→    /// Раскладка grid-детей: треки (Length/Percent/Fill; FR-074 — Auto по
+  1019→    /// контенту span-1 ячеек, `minmax(min, max)`), span, definite/Auto
+  1020→    /// высоты строк. Ячейки тянутся в область трека (default stretch
+  1021→    /// taffy). Алгоритм треков — модульная дока «Grid-треки» (CSS §7.5
+  1022→    /// в упрощении: один проход, fr = 1, пол вместо итераций).
+  1023→    fn layout_grid_children(
+  1024→        &mut self,
+  1025→        idx: usize,
+  1026→        cols: &[SceneTrack],
+  1027→        row_h: &SceneDim,
+  1028→        gap: &UiVec2,
+  1029→        inner: (f32, f32),
+  1030→        root_inner: (f32, f32),
+  1031→    ) {
+  1032→        let gap_x = gap.x.max(0.0);
+  1033→        let gap_y = gap.y.max(0.0);
+  1034→        let n_cols = cols.len();
+  1035→        let flow: Vec<usize> = self.nodes[idx].flow.clone();
+  1036→        let spans = flow
+  1037→            .iter()
+  1038→            .map(|&ci| (self.nodes[ci].node.span as usize).max(1));
+  1039→        // 1. Плейсмент (единый оракул с measure — FR-074).
+  1040→        let placements = grid_placements(spans, n_cols);
+  1041→
+  1042→        // 2. Контент-вклады треков: max max-content ширин span-1 ячеек
+  1043→        //    (span>1 авторасчётные треки не растят — докурировано).
+  1044→        let mut content_w: Vec<f32> = vec![0.0; n_cols];
+  1045→        for (k, &ci) in flow.iter().enumerate() {
+  1046→            let (col, _, span) = placements[k];
+  1047→            if span == 1 && col < n_cols {
+  1048→                let cw = self.measure_content(ci).0;
+  1049→                content_w[col] = content_w[col].max(cw);
+  1050→            }
+  1051→        }
+  1052→
+  1053→        // 3. База/лимит/вид трека (CSS §7.5-спецификации в терминах
+  1054→        //    движка; контент = max-content span-1 ячеек):
+  1055→        //      Length/Percent  — base = limit = definite;
+  1056→        //      Auto            — base = limit = контент (интринсик);
+  1057→        //      Fill            — base = 0, limit = ∞, вид Fr;
+  1058→        //      MinMax{min,max} — base = min (definite/контент), limit =
+  1059→        //                        max definite | контент (max Auto) | ∞
+  1060→        //                        (max Fill, вид Fr).
+  1061→        enum Kind {
+  1062→            Fixed,
+  1063→            AutoMax,
+  1064→            Fr,
+  1065→        }
+  1066→        let mut bases: Vec<f32> = Vec::with_capacity(n_cols);
+  1067→        let mut limits: Vec<f32> = Vec::with_capacity(n_cols);
+  1068→        let mut kinds: Vec<Kind> = Vec::with_capacity(n_cols);
+  1069→        for (i, t) in cols.iter().enumerate() {
+  1070→            match t {
+  1071→                SceneTrack::Length(v) => {
+  1072→                    let v = v.max(0.0);
+  1073→                    bases.push(v);
+  1074→                    limits.push(v);
+  1075→                    kinds.push(Kind::Fixed);
+  1076→                }
+  1077→                SceneTrack::Percent(p) => {
+  1078→                    let v = inner.0 * p.clamp(0.0, 1.0);
+  1079→                    bases.push(v);
+  1080→                    limits.push(v);
+  1081→                    kinds.push(Kind::Fixed);
+  1082→                }
+  1083→                SceneTrack::Auto => {
+  1084→                    bases.push(content_w[i]);
+  1085→                    limits.push(content_w[i]);
+  1086→                    kinds.push(Kind::AutoMax);
+  1087→                }
+  1088→                SceneTrack::Fill => {
+  1089→                    bases.push(0.0);
+  1090→                    limits.push(f32::INFINITY);
+  1091→                    kinds.push(Kind::Fr);
+  1092→                }
+  1093→                SceneTrack::MinMax { min, max } => {
+  1094→                    let min_size = match min {
+  1095→                        TrackMin::Length(v) => v.max(0.0),
+  1096→                        TrackMin::Percent(p) => inner.0 * p.clamp(0.0, 1.0),
+  1097→                        TrackMin::Auto => content_w[i],
+  1098→                    };
+  1099→                    match max {
+  1100→                        TrackMax::Length(m) => {
+  1101→                            bases.push(min_size);
+  1102→                            limits.push(min_size.max(m.max(0.0)));
+  1103→                            kinds.push(Kind::Fixed);
+  1104→                        }
+  1105→                        TrackMax::Percent(p) => {
+  1106→                            let m = inner.0 * p.clamp(0.0, 1.0);
+  1107→                            bases.push(min_size);
+  1108→                            limits.push(min_size.max(m));
+  1109→                            kinds.push(Kind::Fixed);
+  1110→                        }
+  1111→                        TrackMax::Auto => {
+  1112→                            // Лимит ≥ базы (min Length может превысить
+  1113→                            // max-content контента — CSS клампит).
+  1114→                            bases.push(min_size);
+  1115→                            limits.push(min_size.max(content_w[i]));
+  1116→                            kinds.push(Kind::AutoMax);
+  1117→                        }
+  1118→                        TrackMax::Fill => {
+  1119→                            bases.push(min_size);
+  1120→                            limits.push(f32::INFINITY);
+  1121→                            kinds.push(Kind::Fr);
+  1122→                        }
+  1123→                    }
+  1124→                }
+  1125→            }
+  1126→        }
+  1127→        let gap_total = gap_x * n_cols.saturating_sub(1) as f32;
+  1128→        // 4. CSS 11.6 «Maximise Tracks»: свободное место (inner − Σ баз −
+  1129→        //    зазоры) распределяется ПОРОВНУ трекам с конечным лимитом,
+  1130→        //    с заморозкой достигших лимита (итеративно; fr с бесконечным
+  1131→        //    лимитом не участвует).
+  1132→        {
+  1133→            let mut free = inner.0 - bases.iter().sum::<f32>() - gap_total;
+  1134→            if free.is_finite() && free > 0.0 {
+  1135→                // Заморожены: Fr (taffy resolve_intrinsic_track_sizes
+  1136→                // step 5: бесконечный лимит fr = base — «Maximise не
+  1137→                // трогает гибкие треки») и достигшие лимита (Fixed —
+  1138→                // limit == base — сюда же).
+  1139→                let mut frozen: Vec<bool> = limits
+  1140→                    .iter()
+  1141→                    .enumerate()
+  1142→                    .map(|(i, l)| matches!(kinds[i], Kind::Fr) || *l <= bases[i])
+  1143→                    .collect();
+  1144→                loop {
+  1145→                    let open: Vec<usize> = (0..n_cols).filter(|&i| !frozen[i]).collect();
+  1146→                    if open.is_empty() || free <= f32::EPSILON {
+  1147→                        break;
+  1148→                    }
+  1149→                    let share = free / open.len() as f32;
+  1150→                    let mut all_frozen = true;
+  1151→                    for &i in &open {
+  1152→                        let room = limits[i] - bases[i];
+  1153→                        let take = share.min(room);
+  1154→                        bases[i] += take;
+  1155→                        free -= take;
+  1156→                        if take < room - f32::EPSILON {
+  1157→                            all_frozen = false;
+  1158→                        } else {
+  1159→                            frozen[i] = true;
+  1160→                        }
+  1161→                    }
+  1162→                    if all_frozen {
+  1163→                        break;
+  1164→                    }
+  1165→                }
+  1166→            }
+  1167→        }
+  1168→        // 5. CSS 11.7 «Expand Flexible Tracks» (taffy find_size_of_fr,
+  1169→        //    факторы все = 1): fr = наибольший размер, при котором
+  1170→        //    Σ max(base, fr) по fr-трекам ≤ inner; треки, чья база больше
+  1171→        //    fr, остаются на базе (переполнение видно — G4).
+  1172→        {
+  1173→            let fr_count = kinds.iter().filter(|k| matches!(k, Kind::Fr)).count();
+  1174→            if fr_count > 0 {
+  1175→                let mut fr = f32::INFINITY;
+  1176→                for _ in 0..=fr_count {
+  1177→                    let mut used = gap_total;
+  1178→                    let mut flex_sum = 0.0f32;
+  1179→                    for (i, k) in kinds.iter().enumerate() {
+  1180→                        match k {
+  1181→                            Kind::Fr if bases[i] <= fr || fr.is_infinite() => flex_sum += 1.0,
+  1182→                            _ => used += bases[i],
+  1183→                        }
+  1184→                    }
+  1185→                    fr = (inner.0 - used) / flex_sum.max(1.0);
+  1186→                    let consistent = kinds
+  1187→                        .iter()
+  1188→                        .enumerate()
+  1189→                        .all(|(i, k)| !matches!(k, Kind::Fr) || bases[i] <= fr || fr <= 0.0);
+  1190→                    if consistent {
+  1191→                        break;
+  1192→                    }
+  1193→                }
+  1194→                for (i, k) in kinds.iter().enumerate() {
+  1195→                    if matches!(k, Kind::Fr) {
+  1196→                        bases[i] = bases[i].max(fr);
+  1197→                    }
+  1198→                }
+  1199→            }
+  1200→        }
+  1201→        // 6. CSS 11.8 «Stretch auto Tracks» (taffy default STRETCH —
+  1202→        //    модульная докa): остаток делится поровну между AutoMax-
+  1203→        //    треками (поверх лимитов — как в браузерах по умолчанию).
+  1204→        {
+  1205→            let leftover = inner.0 - bases.iter().sum::<f32>() - gap_total;
+  1206→            let auto_n = kinds.iter().filter(|k| matches!(k, Kind::AutoMax)).count();
+  1207→            if leftover > 0.0 && auto_n > 0 {
+  1208→                let each = leftover / auto_n as f32;
+  1209→                for (i, k) in kinds.iter().enumerate() {
+  1210→                    if matches!(k, Kind::AutoMax) {
+  1211→                        bases[i] += each;
+  1212→                    }
+  1213→                }
+  1214→            }
+  1215→        }
+  1216→        let widths = bases;
+  1217→        // 7. Позиции треков (накопление слева направо — как taffy).
+  1218→        let mut track_x: Vec<f32> = Vec::with_capacity(n_cols);
+  1219→        let mut x = 0.0f32;
+  1220→        for &w in &widths {
+  1221→            track_x.push(x);
+  1222→            x += w + gap_x;
+  1223→        }
+  1224→        // 6. Высоты строк: definite (Length/Percent) или контент ячеек.
+  1225→        let n_rows = placements.iter().map(|&(_, r, _)| r + 1).max().unwrap_or(0);
+  1226→        let mut heights: Vec<f32> = vec![0.0; n_rows.max(1)];
+  1227→        match row_h {
+  1228→            SceneDim::Length(v) => {
+  1229→                for hh in heights.iter_mut() {
+  1230→                    *hh = v.max(0.0);
+  1231→                }
+  1232→            }
+  1233→            SceneDim::Percent(p) => {
+  1234→                let v = inner.1 * p.clamp(0.0, 1.0);
+  1235→                for hh in heights.iter_mut() {
+  1236→                    *hh = v;
+  1237→                }
+  1238→            }
+  1239→            SceneDim::Fill | SceneDim::Auto => {
+  1240→                for (k, &ci) in flow.iter().enumerate() {
+  1241→                    let (_, row, _) = placements[k];
+  1242→                    let ch = self.measure_content(ci).1;
+  1243→                    heights[row] = heights[row].max(ch);
+  1244→                }
+  1245→            }
+  1246→        }
+  1247→        // 8. Размещение ячеек: loc = (track_x, Σ предыдущих строк+зазоры);
+  1248→        //    размер ячейки — CSS-семантика grid-item: Length — definite
+  1249→        //    (старт-выравнена в области, переполнение видно), Percent —
+  1250→        //    доля области, Fill/Auto — stretch на всю область (default
+  1251→        //    justify-self: stretch). Рекурсия в поддерево от размера
+  1252→        //    ячейки (percent потомков — от неё же).
+  1253→        for (k, &ci) in flow.iter().enumerate() {
+  1254→            let (col, row, span) = placements[k];
+  1255→            let track_w = |c: usize| widths.get(c).copied().unwrap_or(0.0);
+  1256→            let mut area_w = track_w(col);
+  1257→            for s in 1..span {
+  1258→                area_w += track_w(col + s) + gap_x;
+  1259→            }
+  1260→            let area_h = heights[row];
+  1261→            let mut y = 0.0f32;
+  1262→            // Тот же порядок операций, что у наивного накопления (биты).
+  1263→            for &h in heights[..row].iter() {
+  1264→                y += h + gap_y;
+  1265→            }
+  1266→            let cell_node = &self.nodes[ci].node;
+  1267→            let cw = match cell_node.size.w {
+  1268→                SceneDim::Length(v) => v.max(0.0),
+  1269→                SceneDim::Percent(p) => area_w * p.clamp(0.0, 1.0),
+  1270→                SceneDim::Fill | SceneDim::Auto => area_w,
+  1271→            };
+  1272→            let ch = match cell_node.size.h {
+  1273→                SceneDim::Length(v) => v.max(0.0),
+  1274→                SceneDim::Percent(p) => area_h * p.clamp(0.0, 1.0),
+  1275→                SceneDim::Fill | SceneDim::Auto => area_h,
+  1276→            };
+  1277→            self.nodes[ci].loc = (track_x.get(col).copied().unwrap_or(0.0), y);
+  1278→            self.nodes[ci].size = (cw, ch);
+  1279→            // Aspect-листья: derive внутри layout_node по definite осям.
+  1280→            self.layout_node(ci, Some((cw, ch)), (cw, ch), root_inner);
+  1281→        }
+  1282→    }
+  1283→
+  1284→    /// round-layout pass + абсолютные координаты (зеркало
+  1285→    /// `taffy::compute::round_layout` + чтение taffy_backend):
+  1286→    /// abs = abs(parent) + round(loc_unrounded); размер — разность
+  1287→    /// округлённых краёв по кумулятивной unrounded-координате от корня.
+  1288→    fn round_and_absolve(&self, slot: UiRect) -> Vec<UiRect> {
+  1289→        let mut rects = vec![UiRect::default(); self.nodes.len()];
+  1290→        let mut cum: Vec<(f32, f32)> = vec![(0.0, 0.0); self.nodes.len()];
+  1291→        for (i, e) in self.nodes.iter().enumerate() {
+  1292→            let (cx, cy) = match e.parent {
+  1293→                None => (e.loc.0, e.loc.1),
+  1294→                Some(p) => (cum[p].0 + e.loc.0, cum[p].1 + e.loc.1),
+  1295→            };
+  1296→            cum[i] = (cx, cy);
+  1297→            let (ax, ay) = match e.parent {
+  1298→                None => (slot.x + round_px(e.loc.0), slot.y + round_px(e.loc.1)),
+  1299→                Some(p) => (
+  1300→                    rects[p].x + round_px(e.loc.0),
+  1301→                    rects[p].y + round_px(e.loc.1),
+  1302→                ),
+  1303→            };
+  1304→            let w = round_px(cx + e.size.0) - round_px(cx);
+  1305→            let h = round_px(cy + e.size.1) - round_px(cy);
+  1306→            rects[i] = UiRect::new(ax, ay, w, h);
+  1307→        }
+  1308→        rects
+  1309→    }
+  1310→}
+  1311→// =============================================================================
+  1312→// Пост-обработка: content-shift + sticky (формулы taffy_backend 1:1)
+  1313→// =============================================================================
+  1314→
+  1315→/// Content-shift scroll-предков + sticky-кламп (taffy_backend.rs 1:1;
+  1316→/// FR-074 — sticky по ОБОИМ осям: top против Y-scroll-предка, left против
+  1317→/// X-scroll-предка, кламп двигает узел и всё его поддерево).
+  1318→fn post_process(tree: &SceneTree, mut rects: Vec<UiRect>) -> Vec<UiRect> {
+  1319→    let nodes = &tree.nodes;
+  1320→    // Content-shift: сумма offset'ов scroll-предков по их главным осям
+  1321→    // (fixed-узлы прицеплены к корню — shift'а не получают, как CSS
+  1322→    // position:fixed внутри scroll-контейнера).
+  1323→    for i in 1..nodes.len() {
+  1324→        if matches!(nodes[i].position, ScenePosition::Fixed { .. }) {
+  1325→            continue;
+  1326→        }
+  1327→        let (sx, sy) = shift_for(nodes, i);
+  1328→        if sx != 0.0 || sy != 0.0 {
+  1329→            rects[i].x -= sx;
+  1330→            rects[i].y -= sy;
+  1331→        }
+  1332→    }
+  1333→    // Sticky-кламп по ближайшему scroll-предку СООТВЕТСТВУЮЩЕЙ ОСИ
+  1334→    // (после shift'ов); кламп двигает узел и ВСЁ его поддерево;
+  1335→    // fixed-потомки исключены.
+  1336→    for i in 1..nodes.len() {
+  1337→        if let ScenePosition::Sticky { top, left } = nodes[i].position {
+  1338→            // Вертикаль: Y-scroll-предок (Column/Grid).
+  1339→            if let (Some(top), Some(ai)) = (top, scroll_ancestor(nodes, i, Axis::Y)) {
+  1340→                let off = nodes[ai].offset;
+  1341→                let target = rects[ai].y + top;
+  1342→                if off > 0.0 && rects[i].y < target {
+  1343→                    let dy = target - rects[i].y;
+  1344→                    rects[i].y = target;
+  1345→                    translate_subtree(nodes, &mut rects, i, 0.0, dy);
+  1346→                }
+  1347→            }
+  1348→            // Горизонталь (FR-074): X-scroll-предок (Row).
+  1349→            if let (Some(left), Some(ai)) = (left, scroll_ancestor(nodes, i, Axis::X)) {
+  1350→                let off = nodes[ai].offset;
+  1351→                let target = rects[ai].x + left;
+  1352→                if off > 0.0 && rects[i].x < target {
+  1353→                    let dx = target - rects[i].x;
+  1354→                    rects[i].x = target;
+  1355→                    translate_subtree(nodes, &mut rects, i, dx, 0.0);
+  1356→                }
+  1357→            }
+  1358→        }
+  1359→    }
+  1360→    rects
+  1361→}
+  1362→
+  1363→/// Трансляция поддерева узла `i` на (dx, dy) (fixed-потомки исключены —
+  1364→/// viewport-контекст).
+  1365→fn translate_subtree(nodes: &[SceneEntry], rects: &mut [UiRect], i: usize, dx: f32, dy: f32) {
+  1366→    for j in i + 1..nodes.len() {
+  1367→        if !is_descendant_of(nodes, j, i) {
+  1368→            continue;
+  1369→        }
+  1370→        if matches!(nodes[j].position, ScenePosition::Fixed { .. }) {
+  1371→            continue;
+  1372→        }
+  1373→        rects[j].x += dx;
+  1374→        rects[j].y += dy;
+  1375→    }
+  1376→}
+  1377→
+  1378→/// Суммарный content-shift предков (по их главным осям) для узла `i`.
+  1379→/// Fixed-предок ОБРЫВАЕТ цепочку (viewport-контекст).
+  1380→fn shift_for(nodes: &[SceneEntry], i: usize) -> (f32, f32) {
+  1381→    let mut sx = 0.0;
+  1382→    let mut sy = 0.0;
+  1383→    let mut p = nodes[i].parent;
+  1384→    while let Some(pidx) = p {
+  1385→        let a = &nodes[pidx];
+  1386→        if matches!(a.position, ScenePosition::Fixed { .. }) {
+  1387→            break;
+  1388→        }
+  1389→        if a.offset > 0.0 {
+  1390→            match a.axis {
+  1391→                Axis::X => sx += a.offset,
+  1392→                Axis::Y => sy += a.offset,
+  1393→            }
+  1394→        }
+  1395→        p = a.parent;
+  1396→    }
+  1397→    (sx, sy)
+  1398→}
+  1399→
+  1400→/// Ближайший scroll-предок вдоль оси `axis` (для sticky-клампа; fixed
+  1401→/// обрывает цепочку). FR-074: ось-зависимо — вертикальный sticky ищет
+  1402→/// Y-контейнер (Column/Grid), горизонтальный — X (Row).
+  1403→fn scroll_ancestor(nodes: &[SceneEntry], i: usize, axis: Axis) -> Option<usize> {
+  1404→    let mut p = nodes[i].parent;
+  1405→    while let Some(pidx) = p {
+  1406→        if matches!(nodes[pidx].position, ScenePosition::Fixed { .. }) {
+  1407→            return None;
+  1408→        }
+  1409→        if nodes[pidx].offset > 0.0 && nodes[pidx].axis == axis {
+  1410→            return Some(pidx);
+  1411→        }
+  1412→        p = nodes[pidx].parent;
+  1413→    }
+  1414→    None
+  1415→}
+  1416→
+  1417→/// Является ли узел `j` потомком узла `i` (по цепочке parent).
+  1418→fn is_descendant_of(nodes: &[SceneEntry], j: usize, i: usize) -> bool {
+  1419→    let mut p = nodes[j].parent;
+  1420→    while let Some(pidx) = p {
+  1421→        if pidx == i {
+  1422→            return true;
+  1423→        }
+  1424→        if pidx < i {
+  1425→            return false;
+  1426→        }
+  1427→        p = nodes[pidx].parent;
+  1428→    }
+  1429→    false
+  1430→}
+  1431→

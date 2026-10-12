@@ -1,0 +1,81 @@
+# Glossary
+
+> **Read when:** a term is unclear. **Section:** root reference. **Related:** README.md
+
+- **Adaptive layout** — layout that switches between predefined arrangements per environment (window class, input type), as opposed to fluid reflow.
+- **Affordance** — visual properties that suggest how a thing can be used (a raised button looks pressable).
+- **Anatomy** — named parts of a component (e.g. button: container, label, icon, badge) used in documentation and QA.
+- **Anti-pattern** — a recurring "solution" that looks reasonable but reliably causes problems.
+- **Baseline grid** — invisible vertical rhythm to which text blocks align.
+- **Bidi (bidirectional text)** — text mixing RTL and LTR runs in one paragraph; embedded runs must be isolated so punctuation and order stay correct.
+- **Bottom sheet** — panel anchored to the screen bottom for contextual tasks; the mobile alternative to a full-screen modal.
+- **Breakpoint** — viewport/window width at which layout arrangement changes.
+- **Color ramp (scale)** — ordered steps of one hue (50…900) from which semantic roles pick values.
+- **Component** — a reusable UI unit with defined anatomy, states, and behavior.
+- **Controlled / uncontrolled** — whether a component's value is driven by external state or owns it internally.
+- **Contrast ratio** — luminance ratio between text and background; WCAG floor 4.5:1 body, 3:1 large text / UI parts.
+- **Design token** — named design decision (color, size, duration); the contract between design and implementation.
+- **Diverging scale** — color scale with a meaningful midpoint (zero, target); used only when the data actually has one.
+- **Elevation** — perceived distance from the background, expressed via shadow/surface/border.
+- **Escape hatch** — documented "exit" in an API (style/class passthrough) for cases the component does not cover.
+- **Empty state** — what a region shows when it has no data; a teaching moment, not a blank.
+- **FAB (floating action button)** — the single primary action of a mobile view, floating above content.
+- **Focus order** — sequence focus moves through with Tab; must match visual/logical order.
+- **Focus trap** — keeping keyboard focus inside a modal until it closes; must release focus back on close.
+- **Golden-image test** — automated pixel comparison against an approved baseline screenshot.
+- **Gestalt principles** — perception rules (proximity, similarity, common region…) explaining grouping.
+- **Headless component** — behavior + a11y without styling; you supply the skin.
+- **Hit target (touch target)** — interactive area size; WCAG 2.2 minimum 24×24 px, 44×44 recommended for touch.
+- **Immediate mode** — GUI style (egui) where the UI is re-declared every frame; state lives in the app.
+- **Landmark** — semantic page region (navigation, main, search) exposed to assistive tech.
+- **Logical properties** — layout expressed as start/end and inline/block instead of left/right; the foundation of RTL-safe design.
+- **Measure (line length)** — characters per line; readable range 45–75.
+- **Microcopy** — short UI text: labels, buttons, errors, hints.
+- **Modal / modeless** — blocking vs non-blocking overlay; modal demands a decision now.
+- **Optimistic UI** — showing the expected result before confirmation, rolling back on failure.
+- **Pattern (UX)** — a named reusable solution to a recurring flow problem (e.g. "undo toast").
+- **Perceived performance** — how fast the UI feels, independent of actual latency.
+- **Primitive** — lowest-level building block (button, input, text) in a kit.
+- **Progressive disclosure** — showing detail only when requested, keeping default views simple.
+- **Progressive loading (docs)** — agent loads only files relevant to the current task.
+- **RTL / LTR** — right-to-left / left-to-right script direction; mirrors layout and icons.
+- **Safe area** — screen region guaranteed free of notches, system bars, and gesture zones; controls must live inside it.
+- **Retained mode** — GUI style (iced, Slint) where widgets persist; state syncs between model and view.
+- **Scrim** — dimming layer behind overlays that separates context layers.
+- **Sequential scale** — ordered color ramp (one hue light→dark) encoding magnitude data.
+- **Skeleton screen** — layout-shaped placeholder shown while real content loads.
+- **Slot** — named insertion point in a component (header, footer, actions).
+- **Spacing scale** — fixed spacing steps (4, 8, 12, 16, 24, 32, 48, 64) instead of arbitrary values.
+- **State (UI)** — condition a component renders: default, hover, focus, active, disabled, loading, empty, error.
+- **Surface** — background plane on which content sits; carries elevation meaning.
+- **Small multiples** — series of mini charts sharing identical scales, one per group; beats one overloaded chart.
+- **Text expansion** — translated text growing vs English (~+35% German, ~+20% Russian); containers must absorb it.
+- **Themable** — component expresses colors/sizes only through tokens, so remapping re-skins it.
+- **Thumb zone** — screen region comfortably reached by a one-handed thumb; primary actions live here.
+- **Truncation** — shortening overflowing text with ellipsis; must preserve access to full content.
+- **WCAG** — Web Content Accessibility Guidelines; the a11y norm this library cites.
+- **Whitespace** — empty area used for grouping and hierarchy; a design material, not leftovers.
+- **Z-index discipline** — managing stacking via a fixed layer scale instead of ad-hoc numbers.
+- **Brutalism** — web style embracing raw, unpolished visuals: thick borders, hard shadows, 0 radius, harsh type, "honest UI".
+- **Era lock** — retro style discipline: one decade's palette/type/texture per product, never mixed.
+- **Glassmorphism** — style built on frosted translucent panels (background blur + light-alpha borders) over a designed scene.
+- **Neumorphism** — soft-UI style: same-hue surfaces with light/dark shadow pairs simulating extrusion; strict a11y limits.
+- **Signature element** — 1–3 components/effects deliberately exaggerated to carry a style's identity.
+- **Style preset** — documented token set + signature elements + motion spec + a11y watchpoints that reproduces a visual style.
+- **Art Nouveau** — 1890–1910 movement: whiplash organic lines, botanical ornament as frames, arch containers.
+- **Art Deco** — 1920s–30s movement: ceremonial symmetry, geometric ornament (sunburst/fan/chevron), gold + black + jewel tones.
+- **Bauhaus** — 1919–33 school/movement: form follows function; circle/triangle/square primitives, primary triad + black, geometric sans.
+- **Constructivism** — 1915–30s Russian movement: red/black diagonal geometry, photomontage, condensed uppercase poster type.
+- **Corporate Memphis** — 2017– flat-illustration style (also "Alegria"): humans with exaggerated proportions; illustration-led, quiet UI.
+- **Dark Academia** — aesthetic movement: parchment/oxblood/gold scholarly romance, old-style serif, engraved imagery.
+- **De Stijl** — 1917–31 movement (Mondrian): orthogonal black grid, white cells, primary-colored landmarks; diagonals and curves banned.
+- **Flat design** — 2013+ paradigm (iOS 7/Metro): zero faux-realism; hierarchy via color blocks + typography; Flat 2.0 reintroduced subtle depth.
+- **Frutiger Aero** — 2004–13 digital aesthetic: glossy aqua buttons, nature imagery, blue-green + white, humanist sans.
+- **Memphis Design** — 1981–88 postmodern movement (Memphis Group): squiggles, terrazzo, clashing brights on pastel.
+- **Movement preset** — style preset documenting a named historical direction (Bauhaus, Art Deco, Y2K…); same format as product presets.
+- **Neubrutalism** — 2016– web movement: brutalist borders/shadows plus saturated color blocks and chunky type; "brutalism that went to art school".
+- **Skeuomorphism** — 2000s–13 paradigm: digital imitates physical materials and affordances (leather, gloss, bevels).
+- **Vaporwave / Synthwave** — sibling 2010s nostalgia movements: vapor = pastel pink/cyan + VHS irony; synth = purple night + sunset grid + neon.
+- **Y2K aesthetic** — 1997–2004 (revived 2020s): liquid chrome, iridescence, translucent tech-blue, techno-optimism.
+- **Ma (間)** — Japanese concept of negative space as a design material; basis of the japanese-zen preset.
+- **Wabi-sabi / Kanso** — Japanese aesthetics of imperfect beauty / simplicity; inform zen-style restraint.

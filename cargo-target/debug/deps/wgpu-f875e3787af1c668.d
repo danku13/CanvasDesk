@@ -1,0 +1,14 @@
+/home/z/my-project/cargo-target/debug/deps/wgpu-f875e3787af1c668.d: /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/lib.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/backend/mod.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/backend/wgpu_core.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/context.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/mod.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/belt.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/device.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/encoder.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/init.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/macros.rs
+
+/home/z/my-project/cargo-target/debug/deps/libwgpu-f875e3787af1c668.rmeta: /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/lib.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/backend/mod.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/backend/wgpu_core.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/context.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/mod.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/belt.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/device.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/encoder.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/init.rs /home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/macros.rs
+
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/lib.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/backend/mod.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/backend/wgpu_core.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/context.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/mod.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/belt.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/device.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/encoder.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/util/init.rs:
+/home/z/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-22.1.0/src/macros.rs:

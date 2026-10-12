@@ -1,0 +1,947 @@
+     1→     1→//! FR-068 W3: кнопка/чип/свитч/иконка — перенос из kit.rs 1:1 (W3).
+     2→     2→//!
+     3→     3→//! Владелец волны (агент 3-a): [`ButtonProps`]/[`Button`] + `impl
+     4→     4→//! Component` добавлены (см. секцию «Component» внизу файла);
+     5→     5→//! существующие функции — стабильный API кита (§Контракт-1 PRD-0009 V-5).
+     6→     6→
+     7→     7→use super::{
+     8→     8→    ButtonVariant, Component, ControlStyle, KitPalette, KitState, BUTTON_HEIGHT, BUTTON_PAD_H,
+     9→     9→    CHIP_HEIGHT, CHIP_PAD_H, ICON_BUTTON_SIZE, SWITCH_H, SWITCH_KNOB_PAD, SWITCH_W,
+    10→    10→};
+    11→    11→use crate::geometry::{UiPoint, UiRect, UiVec2};
+    12→    12→use crate::layout::{stack, HAlign, LayoutBackend, VAlign};
+    13→    13→use crate::measure::TextMeasurer;
+    14→    14→use crate::paint::Painter;
+    15→    15→use crate::widget::WidgetState;
+    16→    16→
+    17→    17→// --- Button -----------------------------------------------------------------
+    18→    18→
+    19→    19→/// Замер кнопки по подписи: ширина = текст + 2·BUTTON_PAD_H, высота = const.
+    20→    20→/// Пустая подпись → квадрат минимальной ширины BUTTON_HEIGHT.
+    21→    21→pub fn button_size(
+    22→    22→    label: &str,
+    23→    23→    m: &mut TextMeasurer,
+    24→    24→    fs: &mut cosmic_text::FontSystem,
+    25→    25→    family: &str,
+    26→    26→    size: f32,
+    27→    27→) -> UiVec2 {
+    28→    28→    let text_w = if label.is_empty() {
+    29→    29→        0.0
+    30→    30→    } else {
+    31→    31→        m.width_of(fs, label, family, size)
+    32→    32→    };
+    33→    33→    let w = (text_w + BUTTON_PAD_H * 2.0).max(BUTTON_HEIGHT);
+    34→    34→    UiVec2::new(w, BUTTON_HEIGHT)
+    35→    35→}
+    36→    36→
+    37→    37→/// Кнопка в слоте: измеренный размер, позиция — stack по выравниванию;
+    38→    38→/// подпись усекается `ellipsis`, если слот уже кнопки (деградация видна
+    39→    39→/// потребителю и линту, не молчаливый break).
+    40→    40→pub struct ButtonLayout {
+    41→    41→    /// Rect кнопки.
+    42→    42→    pub rect: UiRect,
+    43→    43→    /// Подпись после ellipsis (может отличаться от исходной).
+    44→    44→    pub label: String,
+    45→    45→}
+    46→    46→
+    47→    47→pub fn button_layout(
+    48→    48→    slot: UiRect,
+    49→    49→    label: &str,
+    50→    50→    align: (HAlign, VAlign),
+    51→    51→    m: &mut TextMeasurer,
+    52→    52→    fs: &mut cosmic_text::FontSystem,
+    53→    53→    family: &str,
+    54→    54→    size: f32,
+    55→    55→) -> ButtonLayout {
+    56→    56→    let desired = button_size(label, m, fs, family, size);
+    57→    57→    let max_w = slot.w;
+    58→    58→    // Деградация узкого слота: усечение по фактической ширине (не срез);
+    59→    59→    // кнопка не вылезает за слот — сжимается до его ширины.
+    60→    60→    let width = desired.x.min(max_w);
+    61→    61→    let shown = if desired.x > max_w {
+    62→    62→        m.ellipsis(
+    63→    63→            fs,
+    64→    64→            label,
+    65→    65→            family,
+    66→    66→            size,
+    67→    67→            (max_w - BUTTON_PAD_H * 2.0).max(0.0),
+    68→    68→        )
+    69→    69→    } else {
+    70→    70→        label.to_owned()
+    71→    71→    };
+    72→    72→    let rect = stack(slot, UiVec2::new(width, BUTTON_HEIGHT), align.0, align.1);
+    73→    73→    ButtonLayout { rect, label: shown }
+    74→    74→}
+    75→    75→
+    76→    76→/// Стиль кнопки: слот заливки по варианту, слот hover/pressed по состоянию,
+    77→    77→/// текст — слот по состоянию (disabled — свой слот). Никакой арифметики
+    78→    78→/// над цветами: только выбор слота.
+    79→    79→pub fn button_style(variant: ButtonVariant, state: KitState, p: &KitPalette) -> ControlStyle {
+    80→    80→    // Wave T §5.1.3: + Tertiary, Text, Inverse variants.
+    81→    81→    let base_fill = match variant {
+    82→    82→        ButtonVariant::Primary => p.control_primary,
+    83→    83→        ButtonVariant::Danger => p.control_danger,
+    84→    84→        ButtonVariant::Secondary | ButtonVariant::Ghost | ButtonVariant::Tertiary => p.control_fill,
+    85→    85→        // Text — прозрачный контейнер (M3 text button).
+    86→    86→        ButtonVariant::Text => [0.0, 0.0, 0.0, 0.0],
+    87→    87→        // Inverse — на цветном фоне; используем accent как «inverse» fill.
+    88→    88→        ButtonVariant::Inverse => p.accent,
+    89→    89→    };
+    90→    90→    let fill = match state {
+    91→    91→        KitState::Normal
+    92→    92→        | KitState::Selected
+    93→    93→        | KitState::Focused
+    94→    94→        | KitState::Dragged
+    95→    95→        | KitState::Error => base_fill,
+    96→    96→        KitState::Hovered => match variant {
+    97→    97→            ButtonVariant::Primary | ButtonVariant::Inverse => p.primary_hover_fill,
+    98→    98→            ButtonVariant::Secondary
+    99→    99→            | ButtonVariant::Ghost
+   100→   100→            | ButtonVariant::Tertiary
+   101→   101→            | ButtonVariant::Text
+   102→   102→            | ButtonVariant::Danger => p.hover_fill,
+   103→   103→        },
+   104→   104→        KitState::Pressed => match variant {
+   105→   105→            ButtonVariant::Primary | ButtonVariant::Inverse => p.primary_hover_fill,
+   106→   106→            _ => p.hover_fill,
+   107→   107→        },
+   108→   108→        KitState::Disabled => base_fill,
+   109→   109→    };
+   110→   110→    let border = match (variant, state) {
+   111→   111→        (ButtonVariant::Ghost | ButtonVariant::Text, KitState::Hovered | KitState::Pressed) => {
+   112→   112→            p.accent
+   113→   113→        }
+   114→   114→        (ButtonVariant::Ghost | ButtonVariant::Text, _) => [0.0, 0.0, 0.0, 0.0],
+   115→   115→        _ => p.control_border,
+   116→   116→    };
+   117→   117→    let text = match state {
+   118→   118→        KitState::Disabled => p.disabled_text,
+   119→   119→        _ => match variant {
+   120→   120→            ButtonVariant::Ghost | ButtonVariant::Text => p.text,
+   121→   121→            ButtonVariant::Inverse => p.text_title,
+   122→   122→            _ => p.text_title,
+   123→   123→        },
+   124→   124→    };
+   125→   125→    ControlStyle {
+   126→   126→        fill,
+   127→   127→        border,
+   128→   128→        text,
+   129→   129→        radius: canvas_core::tokens::RADIUS_CHIP,
+   130→   130→        elevation: super::Elevation::None,
+   131→   131→    }
+   132→   132→}
+   133→   133→
+   134→   134→// --- IconButton -------------------------------------------------------------
+   135→   135→
+   136→   136→/// Квадратная кнопка в слоте (угловые кнопки, ✕ модалей).
+   137→   137→pub fn icon_button_rect(slot: UiRect, align: (HAlign, VAlign)) -> UiRect {
+   138→   138→    stack(
+   139→   139→        slot,
+   140→   140→        UiVec2::new(ICON_BUTTON_SIZE, ICON_BUTTON_SIZE),
+   141→   141→        align.0,
+   142→   142→        align.1,
+   143→   143→    )
+   144→   144→}
+   145→   145→
+   146→   146→/// Стиль icon-кнопки = Ghost-кнопка (тот же слот hover, без заливки в Normal).
+   147→   147→pub fn icon_button_style(state: KitState, p: &KitPalette) -> ControlStyle {
+   148→   148→    button_style(ButtonVariant::Ghost, state, p)
+   149→   149→}
+   150→   150→
+   151→   151→// --- Chip -------------------------------------------------------------------
+   152→   152→
+   153→   153→/// Замер чипа: ширина = текст + 2·CHIP_PAD_H, высота = const.
+   154→   154→pub fn chip_size(
+   155→   155→    label: &str,
+   156→   156→    m: &mut TextMeasurer,
+   157→   157→    fs: &mut cosmic_text::FontSystem,
+   158→   158→    family: &str,
+   159→   159→    size: f32,
+   160→   160→) -> UiVec2 {
+   161→   161→    let text_w = m.width_of(fs, label, family, size);
+   162→   162→    UiVec2::new(text_w + CHIP_PAD_H * 2.0, CHIP_HEIGHT)
+   163→   163→}
+   164→   164→
+   165→   165→/// Чип от левого края `origin_x` (ряд чипов компонует потребитель через
+   166→   166→/// `Row`/SqueezeTail); усечение подписи — ellipsis по `max_width`.
+   167→   167→pub struct ChipLayout {
+   168→   168→    pub rect: UiRect,
+   169→   169→    pub label: String,
+   170→   170→}
+   171→   171→
+   172→   172→pub fn chip_layout(
+   173→   173→    origin: UiPoint,
+   174→   174→    label: &str,
+   175→   175→    max_width: f32,
+   176→   176→    m: &mut TextMeasurer,
+   177→   177→    fs: &mut cosmic_text::FontSystem,
+   178→   178→    family: &str,
+   179→   179→    size: f32,
+   180→   180→) -> ChipLayout {
+   181→   181→    let desired = chip_size(label, m, fs, family, size);
+   182→   182→    let shown = if desired.x > max_width {
+   183→   183→        m.ellipsis(
+   184→   184→            fs,
+   185→   185→            label,
+   186→   186→            family,
+   187→   187→            size,
+   188→   188→            (max_width - CHIP_PAD_H * 2.0).max(0.0),
+   189→   189→        )
+   190→   190→    } else {
+   191→   191→        label.to_owned()
+   192→   192→    };
+   193→   193→    let w = if shown == label { desired.x } else { max_width };
+   194→   194→    ChipLayout {
+   195→   195→        rect: UiRect::new(origin.x, origin.y, w, CHIP_HEIGHT),
+   196→   196→        label: shown,
+   197→   197→    }
+   198→   198→}
+   199→   199→
+   200→   200→/// Стиль чипа: selected → слот selected_fill, hovered → hover_fill,
+   201→   201→/// disabled → текст disabled. Радиус RADIUS_CHIP.
+   202→   202→pub fn chip_style(state: KitState, p: &KitPalette) -> ControlStyle {
+   203→   203→    let fill = match state {
+   204→   204→        KitState::Selected => p.selected_fill,
+   205→   205→        KitState::Hovered | KitState::Pressed => p.hover_fill,
+   206→   206→        _ => p.control_fill,
+   207→   207→    };
+   208→   208→    ControlStyle {
+   209→   209→        fill,
+   210→   210→        border: p.control_border,
+   211→   211→        text: match state {
+   212→   212→            KitState::Disabled => p.disabled_text,
+   213→   213→            _ => p.text,
+   214→   214→        },
+   215→   215→        radius: canvas_core::tokens::RADIUS_CHIP,
+   216→   216→        elevation: super::Elevation::None,
+   217→   217→    }
+   218→   218→}
+   219→   219→
+   220→   220→// --- Switch -----------------------------------------------------------------
+   221→   221→
+   222→   222→/// Раскладка Switch (тогла): трек (pill) + бегунок + стиль трека + заливка
+   223→   223→/// бегунка. `on` определяет позицию бегунка (вправо) и слот заливки трека.
+   224→   224→#[derive(Debug, Clone, Copy, PartialEq)]
+   225→   225→pub struct SwitchLayout {
+   226→   226→    /// Rect трека (pill).
+   227→   227→    pub track: UiRect,
+   228→   228→    /// Rect бегунка (квадрат внутри трека).
+   229→   229→    pub knob: UiRect,
+   230→   230→    /// Стиль трека — слот заливки/рамки/радиуса (RADIUS_PILL).
+   231→   231→    pub track_style: ControlStyle,
+   232→   232→    /// Заливка бегунка (слот `text_title`/`disabled_text`).
+   233→   233→    pub knob_fill: [f32; 4],
+   234→   234→}
+   235→   235→
+   236→   236→/// Switch в слоте: трек (pill) + бегунок. `on` — позиция бегунка и слот
+   237→   237→/// заливки трека (`control_primary` on / `control_fill` off); `state` —
+   238→   238→/// hover/pressed/disabled слоты; `knob_fill` — `text_title` (disabled —
+   239→   239→/// `disabled_text`).
+   240→   240→pub fn switch(slot: UiRect, on: bool, state: KitState, p: &KitPalette) -> SwitchLayout {
+   241→   241→    let track = stack(
+   242→   242→        slot,
+   243→   243→        UiVec2::new(SWITCH_W, SWITCH_H),
+   244→   244→        HAlign::Center,
+   245→   245→        VAlign::Center,
+   246→   246→    );
+   247→   247→    // Бегунок: квадрат side = SWITCH_H - 2·pad; позиция — влево/вправо по `on`.
+   248→   248→    let knob_side = (SWITCH_H - 2.0 * SWITCH_KNOB_PAD).max(0.0);
+   249→   249→    let knob_x = if on {
+   250→   250→        track.right() - SWITCH_KNOB_PAD - knob_side
+   251→   251→    } else {
+   252→   252→        track.x + SWITCH_KNOB_PAD
+   253→   253→    };
+   254→   254→    let knob_y = track.y + SWITCH_KNOB_PAD;
+   255→   255→    let knob = UiRect::new(knob_x, knob_y, knob_side, knob_side);
+   256→   256→    // Стиль трека: заливка — primary on / control_fill off; hover/pressed —
+   257→   257→    // свои слоты; disabled — базовая. Радиус RADIUS_PILL (pill).
+   258→   258→    let base_fill = if on {
+   259→   259→        p.control_primary
+   260→   260→    } else {
+   261→   261→        p.control_fill
+   262→   262→    };
+   263→   263→    let fill = match state {
+   264→   264→        KitState::Hovered | KitState::Pressed => {
+   265→   265→            if on {
+   266→   266→                p.primary_hover_fill
+   267→   267→            } else {
+   268→   268→                p.hover_fill
+   269→   269→            }
+   270→   270→        }
+   271→   271→        _ => base_fill,
+   272→   272→    };
+   273→   273→    let track_style = ControlStyle {
+   274→   274→        fill,
+   275→   275→        border: p.control_border,
+   276→   276→        text: p.text, // не используется у Switch (без подписи)
+   277→   277→        radius: canvas_core::tokens::RADIUS_PILL,
+   278→   278→        elevation: super::Elevation::None,
+   279→   279→    };
+   280→   280→    // Бегунок: text_title (white/light); disabled — приглушён.
+   281→   281→    let knob_fill = match state {
+   282→   282→        KitState::Disabled => p.disabled_text,
+   283→   283→        _ => p.text_title,
+   284→   284→    };
+   285→   285→    SwitchLayout {
+   286→   286→        track,
+   287→   287→        knob,
+   288→   288→        track_style,
+   289→   289→        knob_fill,
+   290→   290→    }
+   291→   291→}
+   292→   292→
+   293→   293→// --- Icon -------------------------------------------------------------------
+   294→   294→
+   295→   295→/// Семантическая иконка для IconButton. Глифы — существующим шрифтом
+   296→   296→/// (NotoSansDisplay-Medium): 0 новых зависимостей (G7). Литералы потребителей
+   297→   297→/// («✕»/«⚙»/«?»/«+») переносятся сюда; новые (Search/ArrowLeft/ArrowRight/
+   298→   298→/// Refresh) — стандартные Unicode-символы, поддерживаемые NotoSansDisplay.
+   299→   299→#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+   300→   300→pub enum Icon {
+   301→   301→    /// Закрыть (✕).
+   302→   302→    Close,
+   303→   303→    /// Настройки/шестерёнка (⚙).
+   304→   304→    Gear,
+   305→   305→    /// Помощь/вопрос (?).
+   306→   306→    Question,
+   307→   307→    /// Поиск (⌕).
+   308→   308→    Search,
+   309→   309→    /// Добавить (+).
+   310→   310→    Plus,
+   311→   311→    /// Стрелка влево (←).
+   312→   312→    ArrowLeft,
+   313→   313→    /// Стрелка вправо (→).
+   314→   314→    ArrowRight,
+   315→   315→    /// Обновить (↻).
+   316→   316→    Refresh,
+   317→   317→}
+   318→   318→
+   319→   319→/// Глиф иконки — `&'static str` для `TextMeasurer`/`Painter::label`. Маппинг
+   320→   320→/// полон (все варианты `Icon` покрыты — тест `icon_glyph_mapping_is_complete`).
+   321→   321→pub fn icon_glyph(i: Icon) -> &'static str {
+   322→   322→    match i {
+   323→   323→        Icon::Close => "×",
+   324→   324→        Icon::Gear => "⚙",
+   325→   325→        Icon::Question => "?",
+   326→   326→        Icon::Search => "⌕",
+   327→   327→        Icon::Plus => "+",
+   328→   328→        Icon::ArrowLeft => "←",
+   329→   329→        Icon::ArrowRight => "→",
+   330→   330→        Icon::Refresh => "↻",
+   331→   331→    }
+   332→   332→}
+   333→   333→
+   334→   334→/// FR-ICONS: строковый идентификатор иконки для SVG-атласа (без набора —
+   335→   335→/// набор задаётся отдельной настройкой `IconStyle`). Маппинг 1:1 с `Icon`
+   336→   336→/// (тест `icon_name_mapping_is_complete`). Идентификаторы стабильны:
+   337→   337→/// `close`, `gear`, `question`, `search`, `plus`, `arrow_left`,
+   338→   338→/// `arrow_right`, `refresh` — соответствуют именам файлов в
+   339→   339→/// `assets/icons/<set>/<name>.svg`.
+   340→   340→pub fn icon_name(i: Icon) -> &'static str {
+   341→   341→    match i {
+   342→   342→        Icon::Close => "close",
+   343→   343→        Icon::Gear => "gear",
+   344→   344→        Icon::Question => "question",
+   345→   345→        Icon::Search => "search",
+   346→   346→        Icon::Plus => "plus",
+   347→   347→        Icon::ArrowLeft => "arrow_left",
+   348→   348→        Icon::ArrowRight => "arrow_right",
+   349→   349→        Icon::Refresh => "refresh",
+   350→   350→    }
+   351→   351→}
+   352→   352→
+   353→   353→// --- StageCloseButton (FR-070) ----------------------------------------------
+   354→   354→
+   355→   355→/// Кнопка «×» в правом-верхнем углу панели/модали (FR-070, audit §6.1 —
+   356→   356→/// самый повторяющийся паттерн: 7+ файлов дублировали ручную формулу
+   357→   357→/// `x = panel.right() - 28.0, y = panel.y + 6.0` с дрейфом inset/size
+   358→   358→/// между 22/24/26/28/30 — канонический размер [`ICON_BUTTON_SIZE`],
+   359→   359→/// inset — [`canvas_core::tokens::SPACING_SM`] = 8).
+   360→   360→///
+   361→   361→/// Возвращает `UiRect` угловой кнопки в слоте `slot` (panel/modal rect);
+   362→   362→/// позиция — «прижата к правому-верхнему углу слота» минус inset, размер —
+   363→   363→/// квадрат `ICON_BUTTON_SIZE × ICON_BUTTON_SIZE` (та же метрика, что у
+   364→   364→/// [`icon_button_rect`] с `HAlign::End, VAlign::Start`, но с явным inset —
+   365→   365→/// не вплотную к углу).
+   366→   366→///
+   367→   367→/// Контракт F-8: цвет/стиль кнопки — забота потребителя
+   368→   368→/// ([`icon_button_style`] с `KitState`/`KitPalette`); здесь — только
+   369→   369→/// геометрия (как у [`icon_button_rect`]).
+   370→   370→pub fn stage_close_button(slot: UiRect) -> UiRect {
+   371→   371→    let s = ICON_BUTTON_SIZE;
+   372→   372→    let inset = canvas_core::tokens::SPACING_SM;
+   373→   373→    UiRect::new(slot.right() - s - inset, slot.y + inset, s, s)
+   374→   374→}
+   375→   375→
+   376→   376→/// LG-вариант [`stage_close_button`] — 30×30 (вместо канонического
+   377→   377→/// [`ICON_BUTTON_SIZE`] = 26), тот же inset [`canvas_core::tokens::SPACING_SM`]
+   378→   378→/// = 8. Выделен для dialog-шапок с HEADER_H = 56–58 (autolink/explain —
+   379→   379→/// FR-060/FR-059 documented deviation): крупная кнопка визуально
+   380→   380→/// сбалансирована с высоким заголовком; канонический 26 выглядит мелко.
+   381→   381→///
+   382→   382→/// **Визуальный скачок при миграции** с hand-rolled (inset 14 от прежнего
+   383→   383→/// `panel.right() - 14 - 30`/`panel.y + 14`) на канон `SPACING_SM`=8 —
+   384→   384→/// позиция кнопки сдвигается на ~6px по диагонали (вверх+вправо, к углу
+   385→   385→/// панели). Это каноническое направление kit (FR-070/§6.1 — «× в углу
+   386→   386→/// панели с inset `SPACING_SM`»); прежний inset 14 был наследием ручной
+   387→   387→/// вертикальной центровки в HEADER_H=58 (где `(58−30)/2=14`). Когда
+   388→   388→/// `HEADER_H` мигрирует на `PANEL_HEADER_H_L`=44 (отдельный TODO W-d),
+   389→   389→/// `(44−30)/2`=7 — почти совпадает с `SPACING_SM`=8, и LG-вариант можно
+   390→   390→/// будет пересмотреть (возможно, свернуть обратно в [`stage_close_button`]).
+   391→   391→///
+   392→   392→/// Контракт F-8 (как у [`stage_close_button`]): цвет/стиль — забота
+   393→   393→/// потребителя (через [`icon_button_style`] с `KitState`/`KitPalette`);
+   394→   394→/// здесь — только геометрия.
+   395→   395→pub fn stage_close_button_lg(slot: UiRect) -> UiRect {
+   396→   396→    let s = 30.0;
+   397→   397→    let inset = canvas_core::tokens::SPACING_SM;
+   398→   398→    UiRect::new(slot.right() - s - inset, slot.y + inset, s, s)
+   399→   399→}
+   400→   400→
+   401→   401→// === Component (FR-068 W3, агент 3-a) =======================================
+   402→   402→
+   403→   403→/// Семейство подписи по умолчанию для [`Component::layout`] кнопки — то же
+   404→   404→/// имя, что `Family::Name` screen-текстов рендера (паритет `sans_attrs`,
+   405→   405→/// CR-015: замер тем же лицом, что и отрисовка).
+   406→   406→pub const BUTTON_FAMILY: &str = "Noto Sans Display";
+   407→   407→
+   408→   408→/// Кегль подписи по умолчанию для [`Component::layout`] кнопки (ui px) —
+   409→   409→/// прежний кегль подписей контролов поверхностей (13.0). Потребитель с
+   410→   410→/// собственным шрифтовым пулом передаёт свой кегль напрямую в
+   411→   411→/// [`button_layout`] — значения здесь только для standalone-пути.
+   412→   412→pub const BUTTON_FONT_SIZE: f32 = 13.0;
+   413→   413→
+   414→   414→/// Свойства кнопки — декларативный вход кадра (FR-068 W3).
+   415→   415→#[derive(Debug, Clone, PartialEq)]
+   416→   416→pub struct ButtonProps {
+   417→   417→    /// Подпись (узкий слот — ellipsis в [`button_layout`], деградация
+   418→   418→    /// видна потребителю, не молчаливый срез).
+   419→   419→    pub label: String,
+   420→   420→    /// Вариант (семантика действия → слот заливки [`button_style`]).
+   421→   421→    pub variant: ButtonVariant,
+   422→   422→    /// Палитра-срез: цвета — только слоты (контракт F-8 PRD-0009 §8).
+   423→   423→    pub palette: KitPalette,
+   424→   424→    /// Недоступна: [`Button::new`] транслирует флаг в
+   425→   425→    /// [`WidgetState::set_disabled`] (клик игнорируется — контракт
+   426→   426→    /// [`KitState::Disabled`]).
+   427→   427→    pub disabled: bool,
+   428→   428→}
+   429→   429→
+   430→   430→/// Кнопка как [`Component`] — retained-объект (FR-068 §W3): `props` —
+   431→   431→/// вход кадра, `state` — машина состояний FR-057 (потребитель двигает
+   432→   432→/// `set_pointer`/`clicked` по событиям указателя; интерактивность —
+   433→   433→/// потому `WidgetState` обязателен).
+   434→   434→#[derive(Debug, Clone, PartialEq)]
+   435→   435→pub struct Button {
+   436→   436→    /// Свойства кадра.
+   437→   437→    pub props: ButtonProps,
+   438→   438→    /// Состояние виджета (hover/pressed/disabled/... — матрица
+   439→   439→    /// приоритетов [`WidgetState::kit_state`]).
+   440→   440→    pub state: WidgetState,
+   441→   441→}
+   442→   442→
+   443→   443→impl Button {
+   444→   444→    /// Новая кнопка: `props.disabled` прошивается в состояние виджета —
+   445→   445→    /// дальше стиль (`paint`) и ребро клика (`WidgetState::clicked`)
+   446→   446→    /// читают одно и то же состояние. Смена `disabled` между кадрами —
+   447→   447→    /// через пересоздание или `state.set_disabled` потребителем.
+   448→   448→    pub fn new(props: ButtonProps) -> Self {
+   449→   449→        let mut state = WidgetState::default();
+   450→   450→        state.set_disabled(props.disabled);
+   451→   451→        Self { props, state }
+   452→   452→    }
+   453→   453→}
+   454→   454→
+   455→   455→impl Component for Button {
+   456→   456→    type Props = ButtonProps;
+   457→   457→
+   458→   458→    fn props(&self) -> &ButtonProps {
+   459→   459→        &self.props
+   460→   460→    }
+   461→   461→
+   462→   462→    /// Один rect — сама кнопка: делегирование [`button_layout`] 1:1
+   463→   463→    /// (размер = подпись + 2·[`BUTTON_PAD_H`], минимум [`BUTTON_HEIGHT`];
+   464→   464→    /// узкий слот — сжатие до ширины слота + ellipsis подписи). Порядок
+   465→   465→    /// rects: `rects[0]` — кнопка; других rect'ов нет.
+   466→   466→    ///
+   467→   467→    /// Выравнивание в слоте — Center/Center (как у кнопок диалога/шапки);
+   468→   468→    /// семейство/кегль — [`BUTTON_FAMILY`]/[`BUTTON_FONT_SIZE`].
+   469→   469→    /// `backend` не участвует: `button_layout` — stack одного блока,
+   470→   470→    /// контейнерной вёрстки нет (сигнатура kit-функции НЕ менялась —
+   471→   471→    /// §Контракт-1 FR-068).
+   472→   472→    ///
+   473→   473→    /// Standalone-семантика: измеритель и шрифтовой пул создаются на
+   474→   474→    /// вызов (immediate, без retained-состояния — решение FR-068 §W3);
+   475→   475→    /// горячий путь потребителя — [`button_layout`] с собственным пулом
+   476→   476→    /// (владелец пула — canvas-render::text, PRD-0009 §14/Q6).
+   477→   477→    fn layout(&self, _backend: &dyn LayoutBackend, slot: UiRect) -> Vec<UiRect> {
+   478→   478→        let mut m = TextMeasurer::new();
+   479→   479→        let mut fs = cosmic_text::FontSystem::new();
+   480→   480→        let bl = button_layout(
+   481→   481→            slot,
+   482→   482→            &self.props.label,
+   483→   483→            (HAlign::Center, VAlign::Center),
+   484→   484→            &mut m,
+   485→   485→            &mut fs,
+   486→   486→            BUTTON_FAMILY,
+   487→   487→            BUTTON_FONT_SIZE,
+   488→   488→        );
+   489→   489→        vec![bl.rect]
+   490→   490→    }
+   491→   491→
+   492→   492→    /// Рисует `rects[0]` (rect из [`Component::layout`]) контролом:
+   493→   493→    /// заливка/рамка/радиус — [`button_style`] по варианту и состоянию
+   494→   494→    /// [`WidgetState::kit_state`] (disabled прошит в state при
+   495→   495→    /// [`Button::new`]). Подпись — забота потребителя (`Painter::label`
+   496→   496→    /// слотом `style.text`; усечённая подпись живёт в [`button_layout`],
+   497→   497→    /// кит цвет от геометрии не отделяет — F-8). Пустой `rects` — no-op
+   498→   498→    /// (деградация, не паника).
+   499→   499→    fn paint(&self, painter: &mut Painter, rects: &[UiRect]) {
+   500→   500→        let Some(&rect) = rects.first() else {
+   501→   501→            return;
+   502→   502→        };
+   503→   503→        let style = button_style(
+   504→   504→            self.props.variant,
+   505→   505→            self.state.kit_state(),
+   506→   506→            &self.props.palette,
+   507→   507→        );
+   508→   508→        painter.control(rect, &style);
+   509→   509→    }
+   510→   510→
+   511→   511→    // hit_test — дефолтный из [`Component`] (первый rect, содержащий
+   512→   512→    // точку): у кнопки rect один — этого достаточно, переопределение
+   513→   513→    // не требуется (план FR-068 §W3).
+   514→   514→}
+   515→   515→
+   516→   516→#[cfg(test)]
+   517→   517→mod tests {
+   518→   518→    use super::*;
+   519→   519→    use crate::component::panel::panel_style;
+   520→   520→    use crate::component::test_support::{palette_a, palette_b, FAMILY};
+   521→   521→    #[test]
+   522→   522→    fn button_measure_is_text_plus_padding() {
+   523→   523→        let mut m = TextMeasurer::new();
+   524→   524→        let mut fs = cosmic_text::FontSystem::new();
+   525→   525→        let w = button_size("ОО", &mut m, &mut fs, FAMILY, 13.0).x;
+   526→   526→        let text_w = m.width_of(&mut fs, "ОО", FAMILY, 13.0);
+   527→   527→        assert!((w - (text_w + BUTTON_PAD_H * 2.0)).abs() < 0.01);
+   528→   528→        // Пустая подпись — минимальная квадратная кнопка
+   529→   529→        assert_eq!(
+   530→   530→            button_size("", &mut m, &mut fs, FAMILY, 13.0).x,
+   531→   531→            BUTTON_HEIGHT
+   532→   532→        );
+   533→   533→        assert_eq!(
+   534→   534→            button_size("", &mut m, &mut fs, FAMILY, 13.0).y,
+   535→   535→            BUTTON_HEIGHT
+   536→   536→        );
+   537→   537→    }
+   538→   538→    #[test]
+   539→   539→    fn button_in_narrow_slot_ellipsizes() {
+   540→   540→        let mut m = TextMeasurer::new();
+   541→   541→        let mut fs = cosmic_text::FontSystem::new();
+   542→   542→        let slot = UiRect::new(0.0, 0.0, 40.0, BUTTON_HEIGHT);
+   543→   543→        let layout = button_layout(
+   544→   544→            slot,
+   545→   545→            "Длинная подпись кнопки",
+   546→   546→            (HAlign::Center, VAlign::Center),
+   547→   547→            &mut m,
+   548→   548→            &mut fs,
+   549→   549→            FAMILY,
+   550→   550→            13.0,
+   551→   551→        );
+   552→   552→        assert!(layout.label != "Длинная подпись кнопки");
+   553→   553→        assert!(layout.rect.w <= slot.w + 0.01);
+   554→   554→        // Широкий слот — подпись целиком
+   555→   555→        let wide = UiRect::new(0.0, 0.0, 400.0, BUTTON_HEIGHT);
+   556→   556→        let layout = button_layout(
+   557→   557→            wide,
+   558→   558→            "Длинная подпись кнопки",
+   559→   559→            (HAlign::Center, VAlign::Center),
+   560→   560→            &mut m,
+   561→   561→            &mut fs,
+   562→   562→            FAMILY,
+   563→   563→            13.0,
+   564→   564→        );
+   565→   565→        assert_eq!(layout.label, "Длинная подпись кнопки");
+   566→   566→    }
+   567→   567→    /// Контракт F-8: стиль собирается ТОЛЬКО выбором слота палитры — смена
+   568→   568→    /// палитры меняет стиль; состояния берут РАЗНЫЕ слоты.
+   569→   569→    #[test]
+   570→   570→    fn styles_use_palette_slots_only() {
+   571→   571→        let a = palette_a();
+   572→   572→        let b = palette_b();
+   573→   573→        for variant in [
+   574→   574→            ButtonVariant::Primary,
+   575→   575→            ButtonVariant::Secondary,
+   576→   576→            ButtonVariant::Ghost,
+   577→   577→            ButtonVariant::Danger,
+   578→   578→        ] {
+   579→   579→            let sa = button_style(variant, KitState::Normal, &a);
+   580→   580→            let sb = button_style(variant, KitState::Normal, &b);
+   581→   581→            assert_ne!(sa.fill, sb.fill, "{variant:?}: fill не из слота");
+   582→   582→            assert_ne!(sa.text, sb.text, "{variant:?}: text не из слота");
+   583→   583→        }
+   584→   584→        // Состояния: hover/pressed/disabled — свои слоты
+   585→   585→        let normal = button_style(ButtonVariant::Secondary, KitState::Normal, &a);
+   586→   586→        let hovered = button_style(ButtonVariant::Secondary, KitState::Hovered, &a);
+   587→   587→        assert_eq!(hovered.fill, a.hover_fill);
+   588→   588→        assert_ne!(normal.fill, hovered.fill);
+   589→   589→        let disabled = button_style(ButtonVariant::Secondary, KitState::Disabled, &a);
+   590→   590→        assert_eq!(disabled.text, a.disabled_text);
+   591→   591→        // Ghost в Normal — без рамки
+   592→   592→        let ghost = button_style(ButtonVariant::Ghost, KitState::Normal, &a);
+   593→   593→        assert_eq!(ghost.border[3], 0.0);
+   594→   594→        // Чип: selected — слот selected
+   595→   595→        assert_eq!(chip_style(KitState::Selected, &a).fill, a.selected_fill);
+   596→   596→        // Радиусы — из radius-scale
+   597→   597→        assert_eq!(normal.radius, canvas_core::tokens::RADIUS_CHIP);
+   598→   598→        assert_eq!(panel_style(&a).radius, canvas_core::tokens::RADIUS_PANEL);
+   599→   599→    }
+   600→   600→    #[test]
+   601→   601→    fn chip_measures_and_ellipsizes() {
+   602→   602→        let mut m = TextMeasurer::new();
+   603→   603→        let mut fs = cosmic_text::FontSystem::new();
+   604→   604→        let c = chip_layout(
+   605→   605→            UiPoint::new(10.0, 20.0),
+   606→   606→            "Категория",
+   607→   607→            f32::INFINITY,
+   608→   608→            &mut m,
+   609→   609→            &mut fs,
+   610→   610→            FAMILY,
+   611→   611→            13.0,
+   612→   612→        );
+   613→   613→        let text_w = m.width_of(&mut fs, "Категория", FAMILY, 13.0);
+   614→   614→        assert!((c.rect.w - (text_w + CHIP_PAD_H * 2.0)).abs() < 0.01);
+   615→   615→        assert_eq!(c.rect.h, CHIP_HEIGHT);
+   616→   616→        let c = chip_layout(
+   617→   617→            UiPoint::new(10.0, 20.0),
+   618→   618→            "Очень длинная категория чипа",
+   619→   619→            60.0,
+   620→   620→            &mut m,
+   621→   621→            &mut fs,
+   622→   622→            FAMILY,
+   623→   623→            13.0,
+   624→   624→        );
+   625→   625→        assert!(c.label != "Очень длинная категория чипа");
+   626→   626→        assert!(c.rect.w <= 60.0 + 0.01);
+   627→   627→    }
+   628→   628→    #[test]
+   629→   629→    fn icon_button_is_square_in_slot() {
+   630→   630→        let slot = UiRect::new(0.0, 0.0, 400.0, 300.0);
+   631→   631→        let r = icon_button_rect(slot, (HAlign::End, VAlign::Start));
+   632→   632→        assert_eq!(r.w, ICON_BUTTON_SIZE);
+   633→   633→        assert_eq!(r.h, ICON_BUTTON_SIZE);
+   634→   634→        assert!((r.right() - slot.right()).abs() < 0.01);
+   635→   635→        assert!((r.y - slot.y).abs() < 0.01);
+   636→   636→    }
+   637→   637→
+   638→   638→    // === FR-070: stage_close_button (кнопка «×» в углу панели) =============
+   639→   639→
+   640→   640→    /// Геометрия канонической угловой кнопки закрытия: квадрат
+   641→   641→    /// `ICON_BUTTON_SIZE × ICON_BUTTON_SIZE`, прижата к правому-верхнему
+   642→   642→    /// углу слота с отступом `SPACING_SM` (= 8); `right == slot.right() -
+   643→   643→    /// inset - size`, `top == slot.y + inset`. Контракт F-8: цвет/стиль —
+   644→   644→    /// отдельно (через [`icon_button_style`]); здесь — геометрия.
+   645→   645→    #[test]
+   646→   646→    fn stage_close_button_is_inset_in_top_right_corner() {
+   647→   647→        let slot = UiRect::new(0.0, 0.0, 400.0, 300.0);
+   648→   648→        let r = stage_close_button(slot);
+   649→   649→        let inset = canvas_core::tokens::SPACING_SM;
+   650→   650→        assert_eq!(r.w, ICON_BUTTON_SIZE);
+   651→   651→        assert_eq!(r.h, ICON_BUTTON_SIZE);
+   652→   652→        assert!(
+   653→   653→            (r.right() - (slot.right() - inset)).abs() < 0.01,
+   654→   654→            "правый край кнопки = slot.right() - inset"
+   655→   655→        );
+   656→   656→        assert!(
+   657→   657→            (r.y - (slot.y + inset)).abs() < 0.01,
+   658→   658→            "верх = slot.y + inset"
+   659→   659→        );
+   660→   660→        // Кнопка внутри слота (не вылезает за границы)
+   661→   661→        assert!(r.x >= slot.x && r.right() <= slot.right() + 0.01);
+   662→   662→        assert!(r.y >= slot.y && r.bottom() <= slot.bottom() + 0.01);
+   663→   663→        // Положение квадрата = правый-верхний угол с inset (формула из аудита
+   664→   664→        // §6.1: канон `ICON_BUTTON_SIZE`=26 + `SPACING_SM`=8).
+   665→   665→        assert_eq!(
+   666→   666→            r,
+   667→   667→            UiRect::new(
+   668→   668→                slot.right() - ICON_BUTTON_SIZE - inset,
+   669→   669→                slot.y + inset,
+   670→   670→                ICON_BUTTON_SIZE,
+   671→   671→                ICON_BUTTON_SIZE,
+   672→   672→            )
+   673→   673→        );
+   674→   674→    }
+   675→   675→
+   676→   676→    /// Каноническая формула не зависит от позиции/размера слота — invariant
+   677→   677→    /// «прижата к правому-верхнему углу»: для слота со смещением и другой
+   678→   678→    /// геометрией формула та же.
+   679→   679→    #[test]
+   680→   680→    fn stage_close_button_inset_invariant_for_arbitrary_slot() {
+   681→   681→        let slot = UiRect::new(120.0, 80.0, 500.0, 400.0);
+   682→   682→        let r = stage_close_button(slot);
+   683→   683→        let inset = canvas_core::tokens::SPACING_SM;
+   684→   684→        assert!((r.right() - (slot.right() - inset)).abs() < 0.01);
+   685→   685→        assert!((r.y - (slot.y + inset)).abs() < 0.01);
+   686→   686→        assert_eq!(r.w, ICON_BUTTON_SIZE);
+   687→   687→        assert_eq!(r.h, ICON_BUTTON_SIZE);
+   688→   688→    }
+   689→   689→
+   690→   690→    // === FR-070: stage_close_button_lg (LG-вариант для tall-header dialogs) ==
+   691→   691→
+   692→   692→    /// LG-вариант: 30×30 (а не [`ICON_BUTTON_SIZE`] = 26), inset
+   693→   693→    /// `SPACING_SM`=8 — как у [`stage_close_button`], но больше размер.
+   694→   694→    /// Контракт: прижата к правому-верхнему углу slot с тем же inset; паритет
+   695→   695→    /// формулы с [`stage_close_button`] кроме `s = 30.0`.
+   696→   696→    #[test]
+   697→   697→    fn stage_close_button_lg_is_30x30_in_top_right_corner() {
+   698→   698→        let slot = UiRect::new(0.0, 0.0, 400.0, 300.0);
+   699→   699→        let r = stage_close_button_lg(slot);
+   700→   700→        let inset = canvas_core::tokens::SPACING_SM;
+   701→   701→        assert_eq!(r.w, 30.0);
+   702→   702→        assert_eq!(r.h, 30.0);
+   703→   703→        assert!(
+   704→   704→            (r.right() - (slot.right() - inset)).abs() < 0.01,
+   705→   705→            "правый край = slot.right() - inset (тот же inset, что у canonical)"
+   706→   706→        );
+   707→   707→        assert!(
+   708→   708→            (r.y - (slot.y + inset)).abs() < 0.01,
+   709→   709→            "верх = slot.y + inset"
+   710→   710→        );
+   711→   711→        assert!(r.x >= slot.x && r.right() <= slot.right() + 0.01);
+   712→   712→        assert!(r.y >= slot.y && r.bottom() <= slot.bottom() + 0.01);
+   713→   713→        assert_eq!(
+   714→   714→            r,
+   715→   715→            UiRect::new(slot.right() - 30.0 - inset, slot.y + inset, 30.0, 30.0),
+   716→   716→        );
+   717→   717→    }
+   718→   718→
+   719→   719→    /// Инвариант «прижата к правому-верхнему углу» для LG-варианта на
+   720→   720→    /// произвольном слоте (как [`stage_close_button_inset_invariant_for_arbitrary_slot`]).
+   721→   721→    #[test]
+   722→   722→    fn stage_close_button_lg_invariant_for_arbitrary_slot() {
+   723→   723→        let slot = UiRect::new(120.0, 80.0, 500.0, 400.0);
+   724→   724→        let r = stage_close_button_lg(slot);
+   725→   725→        let inset = canvas_core::tokens::SPACING_SM;
+   726→   726→        assert!((r.right() - (slot.right() - inset)).abs() < 0.01);
+   727→   727→        assert!((r.y - (slot.y + inset)).abs() < 0.01);
+   728→   728→        assert_eq!(r.w, 30.0);
+   729→   729→        assert_eq!(r.h, 30.0);
+   730→   730→    }
+   731→   731→
+   732→   732→    // === FR-058: тесты компонентов v2 =======================================
+   733→   733→
+   734→   734→    // --- TextFieldModel: insert/backspace/delete/move/select/set_text -------
+   735→   735→    #[test]
+   736→   736→    fn switch_geometry_in_slot_and_knob_position_by_on() {
+   737→   737→        let slot = UiRect::new(0.0, 0.0, 100.0, 30.0);
+   738→   738→        let p = palette_a();
+   739→   739→        // ON
+   740→   740→        let on = switch(slot, true, KitState::Normal, &p);
+   741→   741→        assert!((on.track.w - SWITCH_W).abs() < 0.01);
+   742→   742→        assert!((on.track.h - SWITCH_H).abs() < 0.01);
+   743→   743→        assert!(
+   744→   744→            (on.track.x - (slot.x + (slot.w - SWITCH_W) / 2.0)).abs() < 0.01,
+   745→   745→            "трек по центру слота"
+   746→   746→        );
+   747→   747→        let knob_side = SWITCH_H - 2.0 * SWITCH_KNOB_PAD;
+   748→   748→        assert!((on.knob.w - knob_side).abs() < 0.01);
+   749→   749→        assert!((on.knob.h - knob_side).abs() < 0.01);
+   750→   750→        // ON: knob у правого края трека
+   751→   751→        assert!((on.knob.right() - (on.track.right() - SWITCH_KNOB_PAD)).abs() < 0.01);
+   752→   752→        // OFF: knob у левого края трека
+   753→   753→        let off = switch(slot, false, KitState::Normal, &p);
+   754→   754→        assert!((off.knob.x - (off.track.x + SWITCH_KNOB_PAD)).abs() < 0.01);
+   755→   755→    }
+   756→   756→    #[test]
+   757→   757→    fn switch_uses_palette_slots_for_fill() {
+   758→   758→        let p = palette_a();
+   759→   759→        // ON normal → control_primary
+   760→   760→        let on = switch(
+   761→   761→            UiRect::new(0.0, 0.0, 100.0, 30.0),
+   762→   762→            true,
+   763→   763→            KitState::Normal,
+   764→   764→            &p,
+   765→   765→        );
+   766→   766→        assert_eq!(on.track_style.fill, p.control_primary);
+   767→   767→        // OFF normal → control_fill
+   768→   768→        let off = switch(
+   769→   769→            UiRect::new(0.0, 0.0, 100.0, 30.0),
+   770→   770→            false,
+   771→   771→            KitState::Normal,
+   772→   772→            &p,
+   773→   773→        );
+   774→   774→        assert_eq!(off.track_style.fill, p.control_fill);
+   775→   775→        // ON hovered → primary_hover_fill
+   776→   776→        let on_h = switch(
+   777→   777→            UiRect::new(0.0, 0.0, 100.0, 30.0),
+   778→   778→            true,
+   779→   779→            KitState::Hovered,
+   780→   780→            &p,
+   781→   781→        );
+   782→   782→        assert_eq!(on_h.track_style.fill, p.primary_hover_fill);
+   783→   783→        // OFF hovered → hover_fill
+   784→   784→        let off_h = switch(
+   785→   785→            UiRect::new(0.0, 0.0, 100.0, 30.0),
+   786→   786→            false,
+   787→   787→            KitState::Hovered,
+   788→   788→            &p,
+   789→   789→        );
+   790→   790→        assert_eq!(off_h.track_style.fill, p.hover_fill);
+   791→   791→        // Knob fill: text_title (normal), disabled_text (disabled)
+   792→   792→        assert_eq!(on.knob_fill, p.text_title);
+   793→   793→        let dis = switch(
+   794→   794→            UiRect::new(0.0, 0.0, 100.0, 30.0),
+   795→   795→            true,
+   796→   796→            KitState::Disabled,
+   797→   797→            &p,
+   798→   798→        );
+   799→   799→        assert_eq!(dis.knob_fill, p.disabled_text);
+   800→   800→        // Радиус — RADIUS_PILL
+   801→   801→        assert_eq!(on.track_style.radius, canvas_core::tokens::RADIUS_PILL);
+   802→   802→    }
+   803→   803→
+   804→   804→    // --- card: геометрия в слоте, min/max, header/body ----------------------
+   805→   805→    #[test]
+   806→   806→    fn icon_glyph_mapping_is_complete() {
+   807→   807→        // Все варианты Icon возвращают непустой &str
+   808→   808→        for icon in [
+   809→   809→            Icon::Close,
+   810→   810→            Icon::Gear,
+   811→   811→            Icon::Question,
+   812→   812→            Icon::Search,
+   813→   813→            Icon::Plus,
+   814→   814→            Icon::ArrowLeft,
+   815→   815→            Icon::ArrowRight,
+   816→   816→            Icon::Refresh,
+   817→   817→        ] {
+   818→   818→            let g = icon_glyph(icon);
+   819→   819→            assert!(!g.is_empty(), "{icon:?} — пустой глиф");
+   820→   820→        }
+   821→   821→        // Существующие литералы потребителей сохранены (I-1 ноль скачка)
+   822→   822→        assert_eq!(icon_glyph(Icon::Close), "×");
+   823→   823→        assert_eq!(icon_glyph(Icon::Gear), "⚙");
+   824→   824→        assert_eq!(icon_glyph(Icon::Question), "?");
+   825→   825→        assert_eq!(icon_glyph(Icon::Plus), "+");
+   826→   826→    }
+   827→   827→
+   828→   828→    // === FR-062 F-17: focus_order ===
+   829→   829→
+   830→   830→    // === FR-068 W3: Component Button (агент 3-a) ============================
+   831→   831→    use crate::component::ComponentHit;
+   832→   832→    use crate::layout::default_backend;
+   833→   833→    use crate::paint::PaintItem;
+   834→   834→
+   835→   835→    /// Component::layout: ровно один rect (сама кнопка), внутри слота,
+   836→   836→    /// по центру (Center/Center); пустая подпись — минимальный квадрат
+   837→   837→    /// BUTTON_HEIGHT (шрифто-независимо: 0 ширина текста).
+   838→   838→    #[test]
+   839→   839→    fn component_button_layout_single_rect_in_slot() {
+   840→   840→        let slot = UiRect::new(10.0, 20.0, 400.0, 60.0);
+   841→   841→        let btn = Button::new(ButtonProps {
+   842→   842→            label: "ОО".to_owned(),
+   843→   843→            variant: ButtonVariant::Primary,
+   844→   844→            palette: palette_a(),
+   845→   845→            disabled: false,
+   846→   846→        });
+   847→   847→        let rects = btn.layout(default_backend(), slot);
+   848→   848→        assert_eq!(rects.len(), 1, "кнопка — один rect");
+   849→   849→        let r = rects[0];
+   850→   850→        assert_eq!(r.h, BUTTON_HEIGHT);
+   851→   851→        assert!(r.w >= BUTTON_HEIGHT, "ширина не ниже минимума");
+   852→   852→        assert!(
+   853→   853→            r.x >= slot.x && r.right() <= slot.right() + 0.01,
+   854→   854→            "в слоте по X"
+   855→   855→        );
+   856→   856→        assert!(
+   857→   857→            r.y >= slot.y && r.bottom() <= slot.bottom() + 0.01,
+   858→   858→            "в слоте по Y"
+   859→   859→        );
+   860→   860→        // Center/Center: слева/сверху поровну свободного места.
+   861→   861→        assert!((r.x - slot.x - (slot.w - r.w) / 2.0).abs() < 0.01);
+   862→   862→        assert!((r.y - slot.y - (slot.h - r.h) / 2.0).abs() < 0.01);
+   863→   863→        // Пустая подпись — квадрат BUTTON_HEIGHT×BUTTON_HEIGHT (без
+   864→   864→        // шейпинга: ширина текста 0 — детерминировано на любом CI).
+   865→   865→        let empty = Button::new(ButtonProps {
+   866→   866→            label: String::new(),
+   867→   867→            ..btn.props.clone()
+   868→   868→        });
+   869→   869→        let rects = empty.layout(default_backend(), slot);
+   870→   870→        assert_eq!(rects[0].w, BUTTON_HEIGHT);
+   871→   871→        assert_eq!(rects[0].h, BUTTON_HEIGHT);
+   872→   872→    }
+   873→   873→
+   874→   874→    /// Component::paint: один Rect со слотами [`button_style`] —
+   875→   875→    /// Primary/Normal → control_primary, hover (из WidgetState) →
+   876→   876→    /// primary_hover_fill; props.disabled прошит в состояние при new;
+   877→   877→    /// пустой rects — no-op.
+   878→   878→    #[test]
+   879→   879→    fn component_button_paint_emits_style_rect() {
+   880→   880→        let pal = palette_a();
+   881→   881→        let mut btn = Button::new(ButtonProps {
+   882→   882→            label: "ОК".to_owned(),
+   883→   883→            variant: ButtonVariant::Primary,
+   884→   884→            palette: pal,
+   885→   885→            disabled: false,
+   886→   886→        });
+   887→   887→        let rects = vec![UiRect::new(0.0, 0.0, 100.0, BUTTON_HEIGHT)];
+   888→   888→        let mut painter = Painter::new();
+   889→   889→        btn.paint(&mut painter, &rects);
+   890→   890→        assert_eq!(painter.items().len(), 1, "контрольный rect — один item");
+   891→   891→        assert_eq!(
+   892→   892→            painter.items()[0],
+   893→   893→            PaintItem::Rect {
+   894→   894→                rect: rects[0],
+   895→   895→                fill: pal.control_primary,
+   896→   896→                border: pal.control_border,
+   897→   897→                radius: canvas_core::tokens::RADIUS_CHIP,
+   898→   898→            }
+   899→   899→        );
+   900→   900→        // Hover — из WidgetState (state и props разделены: стиль меняет
+   901→   901→        // состояние, а не свойства).
+   902→   902→        btn.state.set_pointer(true, false);
+   903→   903→        let mut painter = Painter::new();
+   904→   904→        btn.paint(&mut painter, &rects);
+   905→   905→        assert_eq!(
+   906→   906→            painter.items()[0],
+   907→   907→            PaintItem::Rect {
+   908→   908→                rect: rects[0],
+   909→   909→                fill: pal.primary_hover_fill,
+   910→   910→                border: pal.control_border,
+   911→   911→                radius: canvas_core::tokens::RADIUS_CHIP,
+   912→   912→            }
+   913→   913→        );
+   914→   914→        // disabled-проп → KitState::Disabled (прошивка в new).
+   915→   915→        let dis = Button::new(ButtonProps {
+   916→   916→            disabled: true,
+   917→   917→            ..btn.props.clone()
+   918→   918→        });
+   919→   919→        assert_eq!(dis.state.kit_state(), KitState::Disabled);
+   920→   920→        // Пустой rects — no-op, не паника.
+   921→   921→        let mut painter = Painter::new();
+   922→   922→        dis.paint(&mut painter, &[]);
+   923→   923→        assert!(painter.items().is_empty());
+   924→   924→    }
+   925→   925→
+   926→   926→    /// Component::hit_test (дефолт из трейта): точка внутри rect →
+   927→   927→    /// `ComponentHit { index: 0 }`, вне — None.
+   928→   928→    #[test]
+   929→   929→    fn component_button_hit_test_picks_first_rect() {
+   930→   930→        let btn = Button::new(ButtonProps {
+   931→   931→            label: "ОК".to_owned(),
+   932→   932→            variant: ButtonVariant::Secondary,
+   933→   933→            palette: palette_a(),
+   934→   934→            disabled: false,
+   935→   935→        });
+   936→   936→        let rects = btn.layout(default_backend(), UiRect::new(0.0, 0.0, 400.0, 60.0));
+   937→   937→        assert_eq!(rects.len(), 1);
+   938→   938→        let inside = UiPoint::new(rects[0].x + 1.0, rects[0].y + 1.0);
+   939→   939→        assert_eq!(
+   940→   940→            btn.hit_test(&rects, inside),
+   941→   941→            Some(ComponentHit { index: 0 })
+   942→   942→        );
+   943→   943→        let outside = UiPoint::new(rects[0].right() + 10.0, rects[0].y + 1.0);
+   944→   944→        assert_eq!(btn.hit_test(&rects, outside), None);
+   945→   945→    }
+   946→   946→}
+   947→   947→

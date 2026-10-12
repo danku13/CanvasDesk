@@ -1,0 +1,2002 @@
+     1→//! FR-018: UI шаблонов — боковая палитра (`Ctrl+P`) и радиальное wheel-меню
+     2→//! (`Shift+клик` по пустому месту).
+     3→//!
+     4→//! Модуль ЧИСТЫЙ (без winit/wgpu): состояния, геометрия, hit-test'ы,
+     5→//! фильтрация реестра — всё тестируется без GPU/окна. Рендер выполняет
+     6→//! приложение через `FrameOverlay` (квады [`CardInstance`] + screen-тексты —
+     7→//! сборка в `main.rs`, паттерн `search_overlay`).
+     8→//!
+     9→//! Решения владельца FR-018:
+    10→//! - панель `Ctrl+P` (поиск + категории) И радиальный wheel по `Shift+клику`
+    11→//!   (donut-сектора в стиле circular-menu: кольца от центрального отверстия
+    12→//!   наружу — шаблоны выбранной категории, внешние кольца — категории;
+    13→//!   при переполнении кольца сектора уходят в концентрические под-кольца —
+    14→//!   рестайл FR-022 2026-09-16 по скриншоту пользователя);
+    15→//! - иконки — квад-иконки (как в палитре действий, без SVG/resvg) —
+    16→//!   геометрия в [`crate::cards`-пайплайне]; здесь — [`icon_key`].
+    17→
+    18→use canvas_core::templates::{TemplateManifest, TemplateRegistry};
+    19→use canvas_core::time::Instant;
+    20→use canvas_render::sectors::{angle_gap, norm_angle};
+    21→use canvas_ui::measure::TextMeasurer;
+    22→
+    23→use std::time::Duration;
+    24→
+    25→use crate::Vec2;
+    26→
+    27→/// Семейство измерения = семейство screen-текстов рендера (паритет метрик
+    28→/// FR-053: раскладка и отрисовка в одних единицах).
+    29→const FAMILY: &str = canvas_render::text::SANS_FAMILY;
+    30→
+    31→/// Кегль чипов категорий (панель и полоса) — совпадает с отрисовкой
+    32→/// (`app.rs`, screen-тексты чипов).
+    33→const CHIP_FONT: f32 = 12.0;
+    34→
+    35→// --- Иконки ---
+    36→
+    37→/// Ключ квад-иконки шаблона: известные ключи манифестов (`lb`, `db`,
+    38→/// `cache`, `http`, `queue`), прочее — `custom` (рамка с ядром). Геометрия
+    39→/// самих иконок — `canvas_render::cards::template_icon_quads` (общая с
+    40→/// шапкой карточки). Аудит шаблонов 2026-09-25: allowlist синхронизирован
+    41→/// с arms `template_icon_quads` — прежде FR-027-ключи (`money`, `burn`,
+    42→/// `users`, `retention`, `churn`, `funnel`, `chart`) и `clock` падали в
+    43→/// custom-фолбэк, и все UE/PA-шаблоны показывали generic-иконку в
+    44→/// палитре и wheel-меню.
+    45→pub fn icon_key(manifest: &TemplateManifest) -> &str {
+    46→    match manifest.icon.as_str() {
+    47→        "lb" | "db" | "cache" | "http" | "queue" | "gateway" | "worker" | "storage" | "auth"
+    48→        | "grpc" | "graphql" | "money" | "burn" | "users" | "retention" | "churn" | "funnel"
+    49→        | "chart" | "clock" => manifest.icon.as_str(),
+    50→        _ => "custom",
+    51→    }
+    52→}
+    53→
+    54→/// Отображаемое имя категории по языку приложения (FR-040 v2 —
+    55→/// локализация поверхности шаблонов): сырой токен манифеста → подпись
+    56→/// чипов/секций палитры и строк дока. Имена синхронны между поверхностями
+    57→/// (рендер и hit-test зовут один хелпер с одним языком — расхождения
+    58→/// геометрии нет). Неизвестные токены (custom-каталоги FR-020) — как есть
+    59→/// (fallback-инвариант: показ всегда есть).
+    60→pub fn category_display_name(language: canvas_core::Language, category: &str) -> String {
+    61→    let ru = matches!(language, canvas_core::Language::Ru);
+    62→    match category {
+    63→        "backend" => (if ru { "Бэкенд" } else { "Backend" }).to_owned(),
+    64→        "network" => (if ru { "Сеть" } else { "Network" }).to_owned(),
+    65→        "cache" => (if ru { "Кэш" } else { "Cache" }).to_owned(),
+    66→        "queue" => (if ru { "Очереди" } else { "Queues" }).to_owned(),
+    67→        "unit-economics" => (if ru {
+    68→            "Юнит-экономика"
+    69→        } else {
+    70→            "Unit Economics"
+    71→        })
+    72→        .to_owned(),
+    73→        "product-analytics" => (if ru {
+    74→            "Продуктовая аналитика"
+    75→        } else {
+    76→            "Product Analytics"
+    77→        })
+    78→        .to_owned(),
+    79→        "custom" => (if ru {
+    80→            "Свои шаблоны"
+    81→        } else {
+    82→            "Custom"
+    83→        })
+    84→        .to_owned(),
+    85→        other => other.to_owned(),
+    86→    }
+    87→}
+    88→
+    89→// --- Панель шаблонов (Ctrl+P, FR-024 — в стиле Miro) ---
+    90→
+    91→/// Ширина панели, логические px (клампится к окну).
+    92→pub const PANEL_WIDTH: f32 = 340.0;
+    93→/// Боковой отступ панели от ЛЕВОГО края окна (FR-024: док слева —
+    94→/// паттерн Miro Template picker).
+    95→pub const PANEL_MARGIN: f32 = 12.0;
+    96→/// Отступ от верхнего и нижнего края окна (панель — во всю высоту).
+    97→pub const PANEL_TOP_MARGIN: f32 = 12.0;
+    98→/// Внутренний отступ содержимого.
+    99→pub const PANEL_PADDING: f32 = 10.0;
+   100→/// Высота шапки панели («Шаблоны» + счётчик).
+   101→// FR-046 W-d аудит §4: токен-источник `PANEL_HEADER_H_S` (30 — small
+   102→// вариант шкалы высот шапок панелей). Прежний локальный литерал 30.0
+   103→// заменён реэкспортом токена — ноль визуального скачка (I-1).
+   104→pub use canvas_core::tokens::PANEL_HEADER_H_S as PANEL_HEADER_H;
+   105→/// Высота поля поиска.
+   106→pub const INPUT_HEIGHT: f32 = 32.0;
+   107→/// Высота строки категории (чипы-фильтры).
+   108→pub const CATEGORY_ROW_H: f32 = 26.0;
+   109→/// Шаг строки шаблона: карточка + зазор. 46 → 52 (wasm-аудит 2026-09-25):
+   110→/// описание строки переносится на 2 строки (11px) — раньше рвалось
+   111→/// кромкой панели без эллипсиса («латентность вы|»).
+   112→pub const ROW_HEIGHT: f32 = 52.0;
+   113→/// Высота заголовка секции категории (Miro-стиль группировки).
+   114→pub const SECTION_HEIGHT: f32 = 24.0;
+   115→/// Сторона квад-иконки в строке панели (логические px).
+   116→pub const TEMPLATE_ROW_ICON: f32 = 18.0;
+   117→/// Сторона плитки под иконкой (Miro-стиль: иконка на скруглённом квадрате).
+   118→pub const TEMPLATE_ROW_TILE: f32 = 28.0;
+   119→/// FR-082: строк списка за один щелчок колеса над развёрнутой панелью
+   120→/// (60+ шаблонов реального реестра: построчный шаг медлителен; у flyout
+   121→/// свёрнутой полосы шаг остаётся построчным — там другой контекст).
+   122→pub const PANEL_WHEEL_LINES: i32 = 3;
+   123→/// Высота футера-подсказки панели (CR-011): резервируется в геометрии,
+   124→/// строки списка под неё не заходят.
+   125→pub const PANEL_FOOTER_H: f32 = 24.0;
+   126→
+   127→/// Измеренная ширина чипа категории по имени (CR-011): измеренный текст
+   128→/// (FR-054, TextMeasurer — реальный шейпинг cosmic-text тем же семейством/кеглем,
+   129→/// что отрисовка). Прежняя символьная эвристика `chars·7.5+20` удалена
+   130→/// (урок CR-015: символьные оценки дрейфуют с текстом и шрифтом); паддинг
+   131→/// чипа — прежний (20 px).
+   132→/// FR-068 W3.3: в [`panel_layout`] чипы категорий сами себя измеряют
+   133→/// ([`MeasuredItem::Text`] c `pad_x: 20.0`); функция осталась для
+   134→/// контейнерного замера [`dock_strip_layout`] (ширина полосы — по самому
+   135→/// длинному чипу) и прямых вызовов в тестах.
+   136→pub fn category_chip_width(
+   137→    name: &str,
+   138→    m: &mut TextMeasurer,
+   139→    fs: &mut cosmic_text::FontSystem,
+   140→) -> f32 {
+   141→    m.width_of(fs, name, FAMILY, CHIP_FONT) + 20.0
+   142→}
+   143→
+   144→/// Строка панели (FR-024): заголовок секции категории или строка шаблона.
+   145→/// Секции — группировка реестра «как в Miro»; выделение (клавиатура) и
+   146→/// клик-вставка цели только строки шаблонов.
+   147→#[derive(Debug, Clone, PartialEq)]
+   148→pub enum PanelRow {
+   149→    /// Заголовок секции — имя категории.
+   150→    Section(String),
+   151→    /// Строка шаблона — индекс в `registry.list()`.
+   152→    Template(usize),
+   153→}
+   154→
+   155→/// Состояние боковой палитры шаблонов (FR-018, `Ctrl+P`; FR-025 —
+   156→/// постоянный левый док; ревизия FR-025 2026-09-16 — палитра ПРИМАРНО
+   157→/// свёрнута: вертикальная полоса категорий по центру слева, hover раскрывает
+   158→/// flyout справа). Поле ввода — своя лёгкая модель (однострочная,
+   159→/// как `SearchInput`), НЕ `EditingSession`.
+   160→///
+   161→/// Ревизия FR-025: `open` — развёрнут ли док (по умолчанию false — свёрнута
+   162→/// в полосу категорий); `focused` — принимает ли панель клавиатуру (фокус в
+   163→/// поиске: Ctrl+P или клик по полю фильтра). Клик по канвасу мимо панели
+   164→/// фокус снимает, док не закрывает.
+   165→#[derive(Debug, Clone, PartialEq)]
+   166→pub struct TemplatePanel {
+   167→    pub open: bool,
+   168→    /// Клавиатурный фокус: true — клавиши уходят в панель (фильтр, стрелки,
+   169→    /// Enter, Esc), false — в канвас (панель видна, но не перехватывает).
+   170→    pub focused: bool,
+   171→    /// Строка фильтра (подстрока без учёта регистра по имени/описанию/id).
+   172→    pub filter: String,
+   173→    /// Байтовая позиция каретки в `filter`.
+   174→    pub cursor: usize,
+   175→    /// Фильтр категории (клик по чипу); None — все категории.
+   176→    pub category: Option<String>,
+   177→    /// Выбранная строка-шаблон (ординал среди [`PanelRow::Template`]).
+   178→    pub selected: usize,
+   179→    /// Первая видимая строка (индекс в векторе [`PanelRow`], прокрутка).
+   180→    pub scroll_top: usize,
+   181→}
+   182→
+   183→impl TemplatePanel {
+   184→    /// Новая панель — СВЁРНУТАЯ (ревизия FR-025: палитра примарно свёрнута,
+   185→    /// полоса категорий по центру слева; развёрнутый док — по Ctrl+P),
+   186→    /// клавиатурный фокус снят.
+   187→    pub fn new() -> Self {
+   188→        Self {
+   189→            open: false,
+   190→            focused: false,
+   191→            filter: String::new(),
+   192→            cursor: 0,
+   193→            category: None,
+   194→            selected: 0,
+   195→            scroll_top: 0,
+   196→        }
+   197→    }
+   198→
+   199→    /// Развернуть док с клавиатурным фокусом в поиске (сброс фильтров —
+   200→    /// каждый вызов с чистого листа). Вызывается по Ctrl+P.
+   201→    pub fn open(&mut self) {
+   202→        self.open = true;
+   203→        self.focused = true;
+   204→        self.filter.clear();
+   205→        self.cursor = 0;
+   206→        self.category = None;
+   207→        self.selected = 0;
+   208→        self.scroll_top = 0;
+   209→    }
+   210→
+   211→    /// Свернуть док в полосу-ручку (FR-025; Esc). Фокус снимается.
+   212→    pub fn close(&mut self) {
+   213→        self.open = false;
+   214→        self.focused = false;
+   215→    }
+   216→
+   217→    /// Развернуть док без сброса фильтров и без клавиатурного фокуса
+   218→    /// (клик по полосе-ручке свёрнутого дока).
+   219→    pub fn expand(&mut self) {
+   220→        self.open = true;
+   221→    }
+   222→
+   223→    /// Клавиатурный фокус в поиск (Ctrl+P по развёрнутому доку: фильтр
+   224→    /// сохраняется, каретка — в конец строки).
+   225→    pub fn focus_search(&mut self) {
+   226→        self.focused = true;
+   227→        self.cursor = self.filter.len();
+   228→    }
+   229→
+   230→    /// Снять клавиатурный фокус (клик по канвасу): док остаётся развёрнут.
+   231→    pub fn unfocus(&mut self) {
+   232→        self.focused = false;
+   233→    }
+   234→
+   235→    /// Вставка строки в каретку (печать символа, IME).
+   236→    pub fn insert_str(&mut self, text: &str) {
+   237→        let byte = self.cursor.min(self.filter.len());
+   238→        self.filter.insert_str(byte, text);
+   239→        self.cursor += text.len();
+   240→    }
+   241→
+   242→    /// Backspace: удалить символ перед кареткой (true — было изменение).
+   243→    pub fn backspace(&mut self) -> bool {
+   244→        if self.cursor == 0 {
+   245→            return false;
+   246→        }
+   247→        let byte = self.cursor.min(self.filter.len());
+   248→        let prev = self.filter[..byte]
+   249→            .char_indices()
+   250→            .next_back()
+   251→            .map(|(i, _)| i)
+   252→            .unwrap_or(0);
+   253→        self.filter.replace_range(prev..byte, "");
+   254→        self.cursor = prev;
+   255→        true
+   256→    }
+   257→
+   258→    pub fn move_left(&mut self) {
+   259→        let byte = self.cursor.min(self.filter.len());
+   260→        if let Some(i) = self.filter[..byte]
+   261→            .char_indices()
+   262→            .next_back()
+   263→            .map(|(i, _)| i)
+   264→        {
+   265→            self.cursor = i;
+   266→        }
+   267→    }
+   268→
+   269→    pub fn move_right(&mut self) {
+   270→        let byte = self.cursor.min(self.filter.len());
+   271→        if let Some(i) = self.filter[byte..]
+   272→            .char_indices()
+   273→            .nth(1)
+   274→            .map(|(i, _)| byte + i)
+   275→        {
+   276→            self.cursor = i;
+   277→        }
+   278→    }
+   279→
+   280→    /// Сдвиг выделения (стрелки): нумеруются ТОЛЬКО строки-шаблоны
+   281→    /// (секции — заголовки, не цели); true — было изменение. Прокрутка
+   282→    /// следует за выделением по ИЗМЕРЕННОЙ высоте окна строк
+   283→    /// `rows_area_h` (W-e, аудит ui-kit §8 п.11: прежнее константное окно
+   284→    /// `SCROLL_WINDOW` не зависело от высоты панели и могло оставить
+   285→    /// выделение за пределами экрана): вверх — строка становится первой
+   286→    /// (с заголовком секции над ней), вниз — выделение прижимается к
+   287→    /// нижней границе окна (максимум контекста сверху).
+   288→    pub fn move_selection(&mut self, delta: i32, rows: &[PanelRow], rows_area_h: f32) -> bool {
+   289→        let total = template_row_count(rows);
+   290→        if total == 0 {
+   291→            return false;
+   292→        }
+   293→        let next = (self.selected as i32 + delta).clamp(0, total as i32 - 1);
+   294→        if next == self.selected as i32 {
+   295→            return false;
+   296→        }
+   297→        self.selected = next as usize;
+   298→        let Some(row_idx) = row_of_ordinal(rows, self.selected) else {
+   299→            return true;
+   300→        };
+   301→        if row_idx < self.scroll_top {
+   302→            // Заголовок секции над строкой — показать и его
+   303→            self.scroll_top = if row_idx > 0 && matches!(rows[row_idx - 1], PanelRow::Section(_)) {
+   304→                row_idx - 1
+   305→            } else {
+   306→                row_idx
+   307→            };
+   308→        } else {
+   309→            // Строка ниже окна? Видимость от scroll_top: сумма шагов
+   310→            // scroll_top..row_idx + карточка выделенной строки ≤ высота окна.
+   311→            let steps_to_row: f32 = rows[self.scroll_top..row_idx].iter().map(row_step).sum();
+   312→            if steps_to_row + row_card_h(&rows[row_idx]) > rows_area_h {
+   313→                // Прижать выделение к нижней границе: наибольшее s ≤ row_idx,
+   314→                // при котором выделенная строка целиком видна (хвост
+   315→                // s..row_idx помещается в окно).
+   316→                let mut s = row_idx;
+   317→                let mut tail = row_card_h(&rows[row_idx]);
+   318→                while s > 0 {
+   319→                    let prev = row_step(&rows[s - 1]);
+   320→                    if tail + prev > rows_area_h {
+   321→                        break;
+   322→                    }
+   323→                    tail += prev;
+   324→                    s -= 1;
+   325→                }
+   326→                self.scroll_top = s;
+   327→            }
+   328→        }
+   329→        true
+   330→    }
+   331→
+   332→    /// FR-082: прокрутка списка развёрнутой панели колесом — кламп к
+   333→    /// `[0, max_scroll]` (max_scroll считает `panel_layout` — «приклейка
+   334→    /// хвоста» по измеренной высоте окна строк; W-e: кэп
+   335→    /// `MAX_VISIBLE_ROWS` удалён — предел задаёт только высота). Знак —
+   336→    /// как у списков: колесо от себя (LineDelta y < 0) увеличивает
+   337→    /// scroll_top; шаг строк — `PANEL_WHEEL_LINES`.
+   338→    pub fn scroll_by(&mut self, delta: i32, max_scroll: usize) {
+   339→        let cur = self.scroll_top as i32;
+   340→        self.scroll_top = (cur + delta).clamp(0, max_scroll as i32) as usize;
+   341→    }
+   342→}
+   343→
+   344→/// Default для совместимости (`TemplatePanel::new` — свёрнутая полоса).
+   345→impl Default for TemplatePanel {
+   346→    fn default() -> Self {
+   347→        Self::new()
+   348→    }
+   349→}
+   350→
+   351→/// FR-025: нажатие на строку шаблона палитры — кандидат в drag: без
+   352→/// движения порога это клик (вставка в центр viewport), с движением —
+   353→/// drag с ghost-превью (вставка в точку курсора). Отпускание решает.
+   354→#[derive(Debug, Clone, PartialEq)]
+   355→pub struct PanelDrag {
+   356→    /// Индекс шаблона в `registry.list()`.
+   357→    pub index: usize,
+   358→    /// Точка нажатия (screen, логические px).
+   359→    pub press: Vec2,
+   360→    /// Порог пройден — идёт drag (ghost-превью, вставка в точку курсора).
+   361→    pub active: bool,
+   362→}
+   363→
+   364→impl PanelDrag {
+   365→    /// Порог перевода нажатия в drag, логические px (как рамка выделения).
+   366→    pub const THRESHOLD: f32 = 4.0;
+   367→
+   368→    /// Обновление по позиции курсора: true — только что перешло в drag.
+   369→    pub fn update(&mut self, cursor: Vec2) -> bool {
+   370→        if self.active {
+   371→            return false;
+   372→        }
+   373→        let moved = (cursor[0] - self.press[0]).abs() > Self::THRESHOLD
+   374→            || (cursor[1] - self.press[1]).abs() > Self::THRESHOLD;
+   375→        if moved {
+   376→            self.active = true;
+   377→        }
+   378→        moved
+   379→    }
+   380→}
+   381→
+   382→/// Число строк-шаблонов в наборе строк панели (секции не считаются).
+   383→pub fn template_row_count(rows: &[PanelRow]) -> usize {
+   384→    rows.iter()
+   385→        .filter(|row| matches!(row, PanelRow::Template(_)))
+   386→        .count()
+   387→}
+   388→
+   389→/// Позиция строки-шаблона по ординалу выделения (k-я строка-шаблон →
+   390→/// индекс в `rows`). Секции пропускаются.
+   391→pub fn row_of_ordinal(rows: &[PanelRow], ordinal: usize) -> Option<usize> {
+   392→    let mut seen = 0_usize;
+   393→    for (index, row) in rows.iter().enumerate() {
+   394→        if matches!(row, PanelRow::Template(_)) {
+   395→            if seen == ordinal {
+   396→                return Some(index);
+   397→            }
+   398→            seen += 1;
+   399→        }
+   400→    }
+   401→    None
+   402→}
+   403→
+   404→/// Строки панели (FR-024): при пустом фильтре и без чипа категории —
+   405→/// группировка по категориям с заголовками секций (порядок реестра,
+   406→/// паттерн Miro Template picker); при поиске/фильтре — плоский список
+   407→/// совпадений (секции не имеют смысла в результатах поиска).
+   408→///
+   409→/// FR-040 v2: фильтр — двуязычный: совпадение по `name_en` ИЛИ `name_ru` ИЛИ
+   410→/// `description` ИЛИ `description_en` ИЛИ `id`. Английский пользователь,
+   411→/// набирающий «load», находит «Load Balancer» (`name_en`) и шаблоны с
+   412→/// этим словом в `description_en`; русский — «баланс» — находит по
+   413→/// `name_ru`/`description`. Снапшот имени на момент вставки берётся
+   414→/// по активному языку (`TemplateManifest::display_name(language)` в
+   415→/// рендере карточки и `instantiate_with_language`).
+   416→///
+   417→/// FR-087 (роль/класс): `visible` — allow-list raw-токенов категорий
+   418→/// ([`crate::App::visible_template_categories`]: ручной фильтр настроек >
+   419→/// дефолт роли > все). Поиск ведётся ТОЛЬКО по видимым категориям —
+   420→/// скрытые роли не «всплывают» через строку поиска. Индексы строк —
+   421→/// как и прежде, позиция в `registry.list()` (полный реестр: вставка
+   422→/// и `find` не зависят от фильтра).
+   423→pub fn panel_rows(
+   424→    registry: &TemplateRegistry,
+   425→    panel: &TemplatePanel,
+   426→    language: canvas_core::Language,
+   427→    visible: &[String],
+   428→) -> Vec<PanelRow> {
+   429→    let query = panel.filter.to_lowercase();
+   430→    let matches = |manifest: &TemplateManifest| -> bool {
+   431→        if !visible
+   432→            .iter()
+   433→            .any(|category| category == &manifest.category)
+   434→        {
+   435→            return false;
+   436→        }
+   437→        if let Some(category) = &panel.category {
+   438→            if &manifest.category != category {
+   439→                return false;
+   440→            }
+   441→        }
+   442→        query.is_empty()
+   443→            || manifest.name.to_lowercase().contains(&query)
+   444→            || manifest
+   445→                .name_ru
+   446→                .as_deref()
+   447→                .is_some_and(|n| n.to_lowercase().contains(&query))
+   448→            || manifest.description.to_lowercase().contains(&query)
+   449→            || manifest
+   450→                .description_en
+   451→                .as_deref()
+   452→                .is_some_and(|d| d.to_lowercase().contains(&query))
+   453→            || manifest.id.to_lowercase().contains(&query)
+   454→    };
+   455→    // (аргумент language — индикатор намерения: фильтр билингвален и
+   456→    //  работает для любого языка; в будущем — упреждающее ранжирование)
+   457→    let _ = language;
+   458→    let grouped = panel.filter.is_empty() && panel.category.is_none();
+   459→    if !grouped {
+   460→        return registry
+   461→            .list()
+   462→            .iter()
+   463→            .enumerate()
+   464→            .filter(|(_, manifest)| matches(manifest))
+   465→            .map(|(index, _)| PanelRow::Template(index))
+   466→            .collect();
+   467→    }
+   468→    let mut rows = Vec::new();
+   469→    for category in registry.categories() {
+   470→        // FR-087: секции скрытых категорий не показываются вовсе
+   471→        if !visible.iter().any(|visible| visible == category) {
+   472→            continue;
+   473→        }
+   474→        let indexes: Vec<usize> = registry
+   475→            .list()
+   476→            .iter()
+   477→            .enumerate()
+   478→            .filter(|(_, manifest)| manifest.category == *category)
+   479→            .map(|(index, _)| index)
+   480→            .collect();
+   481→        if indexes.is_empty() {
+   482→            continue;
+   483→        }
+   484→        rows.push(PanelRow::Section((*category).to_owned()));
+   485→        rows.extend(indexes.into_iter().map(PanelRow::Template));
+   486→    }
+   487→    rows
+   488→}
+   489→
+   490→/// Геометрия панели на кадр (логические px) — левый док во всю высоту
+   491→/// окна (FR-024). `rows` — результат [`panel_rows`].
+   492→#[derive(Debug, Clone, PartialEq)]
+   493→pub struct PanelLayout {
+   494→    pub panel_rect: [f32; 4],
+   495→    /// Шапка панели («Шаблоны» + счётчик).
+   496→    pub header_rect: [f32; 4],
+   497→    pub input_rect: [f32; 4],
+   498→    /// Чипы категорий: (rect, имя категории, активен).
+   499→    pub category_rects: Vec<([f32; 4], String, bool)>,
+   500→    /// Rect'ы видимых строк — параллельно [`PanelLayout::rows`]
+   501→    /// (секции и шаблоны в одном списке).
+   502→    pub row_rects: Vec<[f32; 4]>,
+   503→    /// Видимые строки (параллельно row_rects).
+   504→    pub rows: Vec<PanelRow>,
+   505→    /// Футер-подсказка (CR-011): единый rect для рендера и hit-test —
+   506→    /// строки списка в него не заходят (резерв в `panel_layout`).
+   507→    pub footer_rect: [f32; 4],
+   508→    /// Кнопка сворачивания дока в шапке (FR-025; 22×22 у правого края
+   509→    /// шапки) — единый rect для рендера и hit-test.
+   510→    pub collapse_rect: [f32; 4],
+   511→    /// W-e: применённая первая видимая строка (индекс в полном наборе
+   512→    /// [`PanelRow`]) — `panel.scroll_top`, клампнутый к пределу прокрутки
+   513→    /// (вид может опережать протухшее состояние после смены фильтра или
+   514→    /// размера окна — семантика «применённого значения»
+   515→    /// `settings_ui::ModalLayout::scroll`).
+   516→    pub scroll_top: usize,
+   517→    /// W-e: окно строк — измеренная доступная высота панели (между чипами
+   518→    /// категорий и футером, xywh) — число видимых строк задаёт ОНА, а не
+   519→    /// константа; единый источник для бегунка `kit::scroll_bar` и тестов.
+   520→    pub rows_area: [f32; 4],
+   521→    /// W-e: состояние скролла окна строк — kit
+   522→    /// [`canvas_ui::kit::ScrollState`]: `content_h` — полная высота списка
+   523→    /// (шаги всех строк), `viewport_h` — измеренная высота окна
+   524→    /// ([`Self::rows_area`]), `offset` — px применённого `scroll_top`.
+   525→    /// Бегунок — `kit::scroll_bar(&rows_area, &scroll, …)` (образец
+   526→    /// FR-059/flowmap).
+   527→    pub scroll: canvas_ui::kit::ScrollState,
+   528→    /// FR-082: максимум `scroll_top` (кламп колеса) — «приклейка хвоста»:
+   529→    /// наибольший старт, при котором хвост списка ещё целиком у нижней
+   530→    /// границы окна строк. W-e (аудит §8 п.11): предел задаёт ТОЛЬКО
+   531→    /// измеренная высота окна — кэп `MAX_VISIBLE_ROWS` удалён (на высоких
+   532→    /// окнах видно больше дюжины строк). 0 — прокрутка не нужна.
+   533→    pub max_scroll: usize,
+   534→}
+   535→
+   536→/// Ширина полосы категорий свёрнутой палитры (ревизия FR-025, 2026-09-16),
+   537→/// логические px. Ширина полосы — максимум ширин чипов категорий, но не
+   538→/// уже этой границы (впритык под короткие имена не сжимаем).
+   539→pub const STRIP_MIN_W: f32 = 64.0;
+   540→/// Вертикальный внутренний паддинг полосы (над первой строкой и под шевроном).
+   541→pub const STRIP_PAD_V: f32 = 6.0;
+   542→/// Горизонтальный внутренний паддинг полосы.
+   543→pub const STRIP_PAD_H: f32 = 4.0;
+   544→/// Запас ширины полосы под счётчик шаблонов («backend · 10») рядом с именем.
+   545→pub const STRIP_COUNT_SLACK: f32 = 28.0;
+   546→/// Зазор между полосой категорий и flyout, логические px.
+   547→pub const FLYOUT_GAP: f32 = 6.0;
+   548→/// Минимальная ширина flyout, логические px.
+   549→pub const FLYOUT_MIN_W: f32 = 260.0;
+   550→/// Вертикальный внутренний паддинг flyout (над первой/под последней строкой).
+   551→pub const FLYOUT_PAD_V: f32 = 6.0;
+   552→/// Горизонтальный внутренний паддинг flyout.
+   553→pub const FLYOUT_PAD_H: f32 = 8.0;
+   554→
+   555→/// Ширина flyout: уже дока на 40 px, но не уже [`FLYOUT_MIN_W`].
+   556→pub fn flyout_width() -> f32 {
+   557→    (PANEL_WIDTH - 40.0).max(FLYOUT_MIN_W)
+   558→}
+   559→
+   560→/// Геометрия свёрнутой палитры (ревизия FR-025): вертикальная полоса
+   561→/// категорий у левого края, центрированная по вертикали окна. Все rect'ы —
+   562→/// `[x, y, w, h]` (конвенция `point_in_rect`). Единый источник для рендера
+   563→/// и hit-test: что нарисовано, по тому и клик/наведение.
+   564→#[derive(Debug, Clone, PartialEq)]
+   565→pub struct StripLayout {
+   566→    /// Прямоугольник полосы целиком (включая шеврон).
+   567→    pub rect: [f32; 4],
+   568→    /// Строки категорий: (rect, имя категории), порядок — порядок реестра.
+   569→    pub rows: Vec<([f32; 4], String)>,
+   570→    /// Шеврон «развернуть док» — строка внизу полосы.
+   571→    pub chevron_rect: [f32; 4],
+   572→}
+   573→
+   574→/// Раскладка свёрнутой полосы категорий: ширина — по самому длинному чипу
+   575→/// (+ запас под счётчик), строки по [`CATEGORY_ROW_H`], полоса центрирована
+   576→/// по вертикали окна и клампится отступом [`PANEL_TOP_MARGIN`] сверху/снизу
+   577→/// (в маленьком окне не уходит за края выше верхнего отступа).
+   578→pub fn dock_strip_layout(
+   579→    categories: &[String],
+   580→    window_h: f32,
+   581→    m: &mut TextMeasurer,
+   582→    fs: &mut cosmic_text::FontSystem,
+   583→) -> StripLayout {
+   584→    // Ширина полосы — КОНТЕЙЕРНЫЙ замер (первый проход): максимум ширин
+   585→    // самых широких чипов (+ запас под счётчик). Это не проводка в ребёнка —
+   586→    // строки полосы получают готовую ширину полосы (ниже), поэтому
+   587→    // width_of здесь легитимен (FR-068 W3.3).
+   588→    let width = categories
+   589→        .iter()
+   590→        .map(|name| category_chip_width(name, m, fs) + STRIP_COUNT_SLACK)
+   591→        .fold(STRIP_MIN_W, f32::max);
+   592→    let rows_h = categories.len() as f32 * CATEGORY_ROW_H;
+   593→    // + строка шеврона внизу полосы
+   594→    let height = rows_h + STRIP_PAD_V * 2.0 + CATEGORY_ROW_H;
+   595→    let y = ((window_h - height) / 2.0).clamp(
+   596→        PANEL_TOP_MARGIN,
+   597→        (window_h - height - PANEL_TOP_MARGIN).max(PANEL_TOP_MARGIN),
+   598→    );
+   599→    let x = PANEL_MARGIN;
+   600→    // W-c (аудит ui-kit §10): строки категорий — окно kit::list_rows
+   601→    // (ScrollState без прокрутки: вьюпорт = контент — вся полоса видна);
+   602→    // прежняя стопка «y + PAD_V + i·CATEGORY_ROW_H» воспроизводится
+   603→    // дословно (hit-тест реестра зовёт эту же функцию — hit==draw).
+   604→    let rows_area = canvas_ui::geometry::UiRect::new(
+   605→        x + STRIP_PAD_H,
+   606→        y + STRIP_PAD_V,
+   607→        (width - STRIP_PAD_H * 2.0).max(0.0),
+   608→        rows_h,
+   609→    );
+   610→    let strip_scroll = canvas_ui::kit::ScrollState {
+   611→        offset: 0.0,
+   612→        content_h: rows_h,
+   613→        viewport_h: rows_h,
+   614→    };
+   615→    let rows = canvas_ui::kit::list_rows(
+   616→        rows_area,
+   617→        &strip_scroll,
+   618→        CATEGORY_ROW_H,
+   619→        0.0,
+   620→        categories.len(),
+   621→    )
+   622→    .into_iter()
+   623→    .zip(categories.iter())
+   624→    .map(|((_, r), name)| ([r.x, r.y, r.w, r.h], name.clone()))
+   625→    .collect();
+   626→    StripLayout {
+   627→        rect: [x, y, width, height],
+   628→        rows,
+   629→        chevron_rect: [
+   630→            x + STRIP_PAD_H,
+   631→            y + STRIP_PAD_V + rows_h,
+   632→            width - STRIP_PAD_H * 2.0,
+   633→            CATEGORY_ROW_H,
+   634→        ],
+   635→    }
+   636→}
+   637→
+   638→/// Геометрия flyout — выпадающего списка шаблонов категории справа от
+   639→/// полосы. Rect'ы — `[x, y, w, h]`. `row_rects` — только видимое окно строк
+   640→/// (обрезка по скроллу как у строк дока); `scroll_top` в раскладке уже
+   641→/// клампнут к `max_scroll`.
+   642→#[derive(Debug, Clone, PartialEq)]
+   643→pub struct FlyoutLayout {
+   644→    /// Прямоугольник flyout.
+   645→    pub rect: [f32; 4],
+   646→    /// Видимые строки (начиная с клампнутого `scroll_top`).
+   647→    pub row_rects: Vec<[f32; 4]>,
+   648→    /// Клампнутая первая видимая строка.
+   649→    pub scroll_top: usize,
+   650→    /// Максимум прокрутки в строках.
+   651→    pub max_scroll: usize,
+   652→}
+   653→
+   654→/// Инсет строки-карточки flyout от её шага ([`ROW_HEIGHT`]): карточка ниже
+   655→/// соседней на 4 px (прежний литерал `ROW_HEIGHT - 4.0`), зазор между
+   656→/// карточками — те же 4 px (шаг строки `list_rows` = row_h + gap =
+   657→/// [`ROW_HEIGHT`]).
+   658→pub const FLYOUT_ROW_INSET: f32 = 4.0;
+   659→
+   660→/// Раскладка flyout справа от строки-категории (`strip_row_rect`, xywh).
+   661→///
+   662→/// W-c (аудит ui-kit §8 п.11, §10 — «flyout — ручные клампы»): ручные
+   663→/// клампы координат у краёв заменены kit-dropdown
+   664→/// `canvas_ui::kit::dropdown_menu` («якорь + flip + финальный кламп к
+   665→/// вьюпорту», паттерн `hints_ui::popup_rect`):
+   666→/// - якорь — тонкая линия у ПРАВОГО края строки категории: flyout
+   667→///   раскрывается справа от полосы с прежним зазором [`FLYOUT_GAP`]
+   668→///   (зазор зашит в позицию якоря), по вертикали якорь = строка категории;
+   669→/// - вьюпорт — окно с полями [`PANEL_TOP_MARGIN`] по вертикали и
+   670→///   [`PANEL_MARGIN`] справа: кит сам опускает меню ПОД строку, у нижнего
+   671→///   края разворачивает НАД ней (flip), переполнение прижимает к низу и
+   672→///   финально клампит к вьюпорту — строки никогда не вылезают за область
+   673→///   видимости;
+   674→/// - ширина — [`flyout_width`]: горизонтальный кламп кита держит правый
+   675→///   край за [`PANEL_MARGIN`] (у узкого окна сдвигает меню влево, совсем
+   676→///   не влезающее — обрезает до вьюпорта).
+   677→///
+   678→/// Строки — окно `kit::list_rows` ([`ScrollState`]): шаг [`ROW_HEIGHT`]
+   679→/// (карточка = `ROW_HEIGHT − FLYOUT_ROW_INSET`, зазор = `FLYOUT_ROW_INSET` —
+   680→/// прежняя стопка дословно); рисуются только ПОЛНОСТЬЮ видимые строки
+   681→/// (частичный низ — прежний контракт flyout: полоса скроллится построчно).
+   682→pub fn flyout_layout(
+   683→    strip_row_rect: [f32; 4],
+   684→    item_count: usize,
+   685→    window_w: f32,
+   686→    window_h: f32,
+   687→    scroll_top: usize,
+   688→) -> FlyoutLayout {
+   689→    use canvas_ui::geometry::{UiRect, UiVec2};
+   690→    use canvas_ui::kit::{self, ScrollState};
+   691→
+   692→    // Вьюпорт: поля PANEL_TOP_MARGIN сверху/снизу, PANEL_MARGIN справа
+   693→    // (левая граница — край окна: flyout и так правее полосы).
+   694→    let viewport = UiRect::new(
+   695→        0.0,
+   696→        PANEL_TOP_MARGIN,
+   697→        (window_w - PANEL_MARGIN).max(0.0),
+   698→        (window_h - PANEL_TOP_MARGIN * 2.0).max(0.0),
+   699→    );
+   700→    // Якорь — правый край строки категории + FLYOUT_GAP, высота = строка.
+   701→    let anchor = UiRect::new(
+   702→        strip_row_rect[0] + strip_row_rect[2] + FLYOUT_GAP,
+   703→        strip_row_rect[1],
+   704→        1.0,
+   705→        strip_row_rect[3],
+   706→    );
+   707→    // Желаемый контент: ширина flyout, высота — все строки + вертикальные
+   708→    // поля (кламп высоты к вьюпорту — внутри dropdown_menu).
+   709→    let content = UiVec2::new(
+   710→        flyout_width(),
+   711→        item_count as f32 * ROW_HEIGHT + FLYOUT_PAD_V * 2.0,
+   712→    );
+   713→    let menu = kit::dropdown_menu(anchor, viewport, content).menu;
+   714→    // Окно строк — из ФИНАЛЬНОЙ высоты меню (кламп кита учтён): прежняя
+   715→    // формула visible_count по клампнутой высоте.
+   716→    let visible_count = if item_count == 0 {
+   717→        0
+   718→    } else {
+   719→        (((menu.h - FLYOUT_PAD_V * 2.0) / ROW_HEIGHT).floor() as usize)
+   720→            .max(1)
+   721→            .min(item_count)
+   722→    };
+   723→    let max_scroll = item_count.saturating_sub(visible_count);
+   724→    let top = scroll_top.min(max_scroll);
+   725→    // Строки — kit::list_rows: offset построчный (шаг ROW_HEIGHT), карточка
+   726→    // ниже шага на FLYOUT_ROW_INSET. Частично видимый низ (остаток деления
+   727→    // высоты окна на шаг) не рисуется — фильтр полной видимости (у кита
+   728→    // нет scissor'а на этом проходе, прежний контракт «целые строки»).
+   729→    let area = UiRect::new(
+   730→        menu.x + FLYOUT_PAD_H,
+   731→        menu.y + FLYOUT_PAD_V,
+   732→        (menu.w - FLYOUT_PAD_H * 2.0).max(0.0),
+   733→        (menu.h - FLYOUT_PAD_V * 2.0).max(0.0),
+   734→    );
+   735→    let scroll = ScrollState {
+   736→        offset: top as f32 * ROW_HEIGHT,
+   737→        content_h: item_count as f32 * ROW_HEIGHT,
+   738→        viewport_h: area.h,
+   739→    };
+   740→    let row_rects = kit::list_rows(
+   741→        area,
+   742→        &scroll,
+   743→        ROW_HEIGHT - FLYOUT_ROW_INSET,
+   744→        FLYOUT_ROW_INSET,
+   745→        item_count,
+   746→    )
+   747→    .into_iter()
+   748→    .filter(|(_, r)| r.bottom() <= area.bottom() + 0.01)
+   749→    .map(|(_, r)| [r.x, r.y, r.w, r.h])
+   750→    .collect();
+   751→    FlyoutLayout {
+   752→        rect: [menu.x, menu.y, menu.w, menu.h],
+   753→        row_rects,
+   754→        scroll_top: top,
+   755→        max_scroll,
+   756→    }
+   757→}
+   758→
+   759→/// Задержка открытия flyout по наведению (hover-intent, как у
+   760→/// `PaletteHover`): провод курсора через полосу к канвасу не мигает списками.
+   761→pub const STRIP_OPEN_DELAY_MS: u64 = 150;
+   762→/// Отсрочка закрытия после ухода курсора с полосы/flyout (grace period).
+   763→pub const STRIP_CLOSE_DELAY_MS: u64 = 300;
+   764→
+   765→/// Состояние hover-раскрытия категорий свёрнутой полосы палитры (ревизия
+   766→/// FR-025). Механика — как у палитры выделения (`PaletteHover`, FR-009/010):
+   767→/// hover-intent 150 мс на открытие, grace 300 мс на закрытие, пин по клику
+   768→/// (WAI-ARIA menu button), удержание пока курсор внутри flyout. Скролл
+   769→/// flyout — колесом мыши, кламп к `max_scroll` (max_scroll зависит от числа
+   770→/// шаблонов категории — передаётся снаружи).
+   771→#[derive(Debug, Clone)]
+   772→pub struct StripHover {
+   773→    /// Раскрытая категория (индекс строки в `StripLayout::rows`).
+   774→    pub open: Option<usize>,
+   775→    /// Пин по клику: раскрытие держится после ухода курсора до повторного
+   776→    /// клика/Esc.
+   777→    pub pinned: bool,
+   778→    /// Первая видимая строка flyout (прокрутка колесом).
+   779→    pub scroll_top: usize,
+   780→    /// Строка полосы под курсором (None — мимо полосы) — для подсветки;
+   781→    /// смена строки — тоже повод для перерисовки.
+   782→    pub hovered_row: Option<usize>,
+   783→    /// (категория, момент входа курсора) — накопление hover-intent.
+   784→    trigger_since: Option<(usize, Instant)>,
+   785→    /// Момент ухода курсора с открытой зоны — отсрочка закрытия.
+   786→    left_since: Option<Instant>,
+   787→}
+   788→
+   789→impl Default for StripHover {
+   790→    fn default() -> Self {
+   791→        Self::new()
+   792→    }
+   793→}
+   794→
+   795→impl StripHover {
+   796→    pub fn new() -> Self {
+   797→        Self {
+   798→            open: None,
+   799→            pinned: false,
+   800→            scroll_top: 0,
+   801→            hovered_row: None,
+   802→            trigger_since: None,
+   803→            left_since: None,
+   804→        }
+   805→    }
+   806→
+   807→    /// Идут кадры ожидания (hover-intent / grace) — `about_to_wait` держит
+   808→    /// цикл перерисовки, иначе задержки не сработают при неподвижном курсоре.
+   809→    pub fn pending(&self) -> bool {
+   810→        self.trigger_since.is_some() || self.left_since.is_some()
+   811→    }
+   812→
+   813→    /// Кадровое обновление: `hovered` — строка категории под курсором,
+   814→    /// `in_flyout` — курсор внутри rect'а flyout раскрытой категории.
+   815→    /// true — раскрытие или строка под курсором изменились (нужна
+   816→    /// перерисовка); при неподвижном курсоре стабильно false — без
+   817→    /// самоподдерживающегося цикла кадров.
+   818→    pub fn update_at(&mut self, hovered: Option<usize>, in_flyout: bool, now: Instant) -> bool {
+   819→        let open_delay = Duration::from_millis(STRIP_OPEN_DELAY_MS);
+   820→        let close_delay = Duration::from_millis(STRIP_CLOSE_DELAY_MS);
+   821→        let row_changed = self.hovered_row != hovered;
+   822→        self.hovered_row = hovered;
+   823→        let mut changed = false;
+   824→        match hovered {
+   825→            Some(cat) => {
+   826→                self.left_since = None;
+   827→                match self.open {
+   828→                    Some(open) if open == cat => self.trigger_since = None,
+   829→                    _ => {
+   830→                        // Курсор на другой/закрытой категории — копим intent
+   831→                        match self.trigger_since {
+   832→                            Some((target, since)) if target == cat => {
+   833→                                if now.duration_since(since) >= open_delay {
+   834→                                    self.open = Some(cat);
+   835→                                    self.scroll_top = 0;
+   836→                                    self.trigger_since = None;
+   837→                                    changed = true;
+   838→                                }
+   839→                            }
+   840→                            _ => self.trigger_since = Some((cat, now)),
+   841→                        }
+   842→                    }
+   843→                }
+   844→            }
+   845→            None => {
+   846→                self.trigger_since = None;
+   847→                if in_flyout || self.pinned {
+   848→                    // Внутри flyout или закреплено кликом — держим открытым
+   849→                    self.left_since = None;
+   850→                } else if self.open.is_some() {
+   851→                    match self.left_since {
+   852→                        None => self.left_since = Some(now),
+   853→                        Some(since) => {
+   854→                            if now.duration_since(since) >= close_delay {
+   855→                                self.reset();
+   856→                                changed = true;
+   857→                            }
+   858→                        }
+   859→                    }
+   860→                }
+   861→            }
+   862→        }
+   863→        changed || row_changed
+   864→    }
+   865→
+   866→    /// Клик по строке категории: пин-переключение раскрытия (открывает без
+   867→    /// задержки — намерение явное; повторный клик — закрыть).
+   868→    pub fn toggle_trigger(&mut self, category: usize) {
+   869→        if self.open == Some(category) && self.pinned {
+   870→            self.reset();
+   871→        } else {
+   872→            self.open = Some(category);
+   873→            self.pinned = true;
+   874→            self.scroll_top = 0;
+   875→            self.trigger_since = None;
+   876→            self.left_since = None;
+   877→        }
+   878→    }
+   879→
+   880→    /// Прокрутка flyout на `delta` строк с клампом к `[0, max_scroll]`.
+   881→    pub fn scroll_by(&mut self, delta: i32, max_scroll: usize) {
+   882→        let cur = self.scroll_top as i32;
+   883→        self.scroll_top = (cur + delta).clamp(0, max_scroll as i32) as usize;
+   884→    }
+   885→
+   886→    /// Сброс: flyout закрыт, пин и прокрутка сняты.
+   887→    pub fn reset(&mut self) {
+   888→        self.open = None;
+   889→        self.pinned = false;
+   890→        self.scroll_top = 0;
+   891→        self.hovered_row = None;
+   892→        self.trigger_since = None;
+   893→        self.left_since = None;
+   894→    }
+   895→}
+   896→
+   897→#[allow(clippy::too_many_arguments)] // FR-087: +visible (allow-list роли)
+   898→pub fn panel_layout(
+   899→    window_w: f32,
+   900→    window_h: f32,
+   901→    registry: &TemplateRegistry,
+   902→    panel: &TemplatePanel,
+   903→    rows: &[PanelRow],
+   904→    m: &mut TextMeasurer,
+   905→    fs: &mut cosmic_text::FontSystem,
+   906→    visible: &[String],
+   907→) -> PanelLayout {
+   908→    use canvas_ui::geometry::{UiRect, UiVec2};
+   909→    use canvas_ui::layout::{pad, stack, Column, HAlign, MeasuredItem, Row, VAlign};
+   910→
+   911→    let width = PANEL_WIDTH.min((window_w - PANEL_MARGIN * 2.0).max(0.0));
+   912→    // FR-024: док у ЛЕВОГО края, во всю высоту окна (как Miro)
+   913→    let x = PANEL_MARGIN;
+   914→    let y = PANEL_TOP_MARGIN;
+   915→    let height = (window_h - PANEL_TOP_MARGIN * 2.0).max(0.0);
+   916→    let panel_slot = UiRect::new(x, y, width, height);
+   917→    let inner = pad(
+   918→        panel_slot,
+   919→        canvas_ui::geometry::EdgeInsets::uniform(PANEL_PADDING),
+   920→    );
+   921→    let inner_w = inner.w;
+   922→
+   923→    // Скелет содержимого: колонка [шапка, поле, чипы] с зазором SPACING_S
+   924→    // (значение прежнего литерала 6). W3.2: дети — MeasuredItem (см.
+   925→    // каталог docs/plans/fr-068-w3-consumer-migration.md).
+   926→    let gap = canvas_core::tokens::SPACING_S;
+   927→    let head_flow = Column {
+   928→        gap,
+   929→        ..Column::default()
+   930→    }
+   931→    .lay_out_measured(
+   932→        UiRect::new(inner.x, inner.y, inner_w, f32::INFINITY),
+   933→        &[
+   934→            MeasuredItem::Fixed {
+   935→                w: inner_w,
+   936→                h: PANEL_HEADER_H,
+   937→            },
+   938→            MeasuredItem::Fixed {
+   939→                w: inner_w,
+   940→                h: INPUT_HEIGHT,
+   941→            },
+   942→            MeasuredItem::Fixed {
+   943→                w: inner_w,
+   944→                h: CATEGORY_ROW_H,
+   945→            },
+   946→        ],
+   947→        m,
+   948→        fs,
+   949→        FAMILY,
+   950→        CHIP_FONT,
+   951→    );
+   952→    let header = head_flow[0];
+   953→    let input = head_flow[1];
+   954→    let chip_strip = head_flow[2];
+   955→    let header_rect = [header.x, header.y, header.w, header.h];
+   956→    let input_rect = [input.x, input.y, input.w, input.h];
+   957→    let chips_y = chip_strip.y;
+   958→
+   959→    // Чипы категорий: ширина по имени (измеренная), политика Wrap —
+   960→    // не влезающие чипы переносятся на второй ряд (wasm-аудит 2026-09-25,
+   961→    // скриншот 13_palette: SqueezeTail сжимал «unit-economics» до нуля —
+   962→    // срезанный текст выглядел браком). Слоту отдаётся высота до 2 рядов;
+   963→    // строки шаблонов стартуют ниже фактического низа чипов.
+   964→    //
+   965→    // FR-070 (агент N): миграция на `kit::chip_strip_wrap` (агент L):
+   966→    // `RowPolicy::Wrap` с `max_rows=2` (чипы, не влезающие в строку,
+   967→    // переносятся на 2-й ряд; чипы на строках ≥ 2 — drop, как явный cap).
+   968→    // Канонизация (AGENTS.md I-1): kit's `CHIP_HEIGHT=24` vs прежнего
+   969→    // `CATEGORY_ROW_H=26` (2px короче) и kit's `CHIP_PAD_H=8` vs прежнего
+   970→    // `pad_x=20.0` (4px у́же чип) — chips слегка компактнее, пропорции
+   971→    // прежние (text+2·PAD vs text+20). `chip_strip_wrap` сам измеряет
+   972→    // текст (через `TextMeasurer`), `gap = CHIP_GAP = SPACING_S = gap`
+   973→    // (как и прежний ручной `gap`).
+   974→    // FR-087: чипы категорий — только видимые (роль/ручной фильтр);
+   975→    // чип скрытой категории в panel.category (протух после смены роли)
+   976→    // не рисуется — строки фильтруются тем же allow-list в panel_rows.
+   977→    let categories: Vec<&str> = registry
+   978→        .categories()
+   979→        .into_iter()
+   980→        .filter(|category| visible.iter().any(|v| v == category))
+   981→        .collect();
+   982→    let chip_slot = UiRect::new(
+   983→        inner.x,
+   984→        chips_y,
+   985→        inner_w,
+   986→        (CATEGORY_ROW_H * 2.0 + gap).max(CATEGORY_ROW_H),
+   987→    );
+   988→    let chip_pairs = canvas_ui::kit::chip_strip_wrap(chip_slot, &categories, 2, m, fs);
+   989→    let chip_rects: Vec<UiRect> = chip_pairs.iter().map(|(r, _)| *r).collect();
+   990→    let category_rects: Vec<([f32; 4], String, bool)> = chip_pairs
+   991→        .iter()
+   992→        .map(|(r, category)| {
+   993→            let active = panel.category.as_deref() == Some(*category);
+   994→            ([r.x, r.y, r.w, r.h], (*category).to_owned(), active)
+   995→        })
+   996→        .collect();
+   997→    let chips_bottom = chip_rects
+   998→        .iter()
+   999→        .map(|r| r.y + r.h)
+  1000→        .fold(chips_y + CATEGORY_ROW_H, f32::max);
+  1001→
+  1002→    let rows_top = chips_bottom + gap;
+  1003→    // CR-011: резерв под футер-подсказку — строки в неё не заходят
+  1004→    let footer = stack(
+  1005→        UiRect::new(inner.x, inner.y, inner_w, inner.h),
+  1006→        UiVec2::new(inner_w, PANEL_FOOTER_H),
+  1007→        HAlign::Start,
+  1008→        VAlign::End,
+  1009→    );
+  1010→    let footer_rect = [footer.x, footer.y, footer.w, footer.h];
+  1011→    let bottom_limit = footer_rect[1];
+  1012→    // W-e (аудит ui-kit §8 п.11, §10): окно строк — ЧЕСТНЫЙ скролл kit
+  1013→    // [`canvas_ui::kit::ScrollState`] вместо break-пагинации с кэпом
+  1014→    // `MAX_VISIBLE_ROWS` (кэп не зависел от высоты окна; на высоких
+  1015→    // экранах список не рос). Высота окна = ИЗМЕРЕННАЯ доступная высота
+  1016→    // панели (rows_top..футер): число видимых строк определяет она — на
+  1017→    // высоких окнах видно больше дюжины строк при переполнении.
+  1018→    //
+  1019→    // kit::list_rows здесь неприменим напрямую (шаги строк смешанные:
+  1020→    // секция SECTION_HEIGHT / шаблон ROW_HEIGHT — единый stride
+  1021→    // отсутствует), поэтому окно строится по px-границам ScrollState тем
+  1022→    // же контрактом («строки, целиком влезающие в вьюпорт» — у прохода
+  1023→    // отрисовки нет scissor'а, как у flyout в W-c): offset — px-граница
+  1024→    // строки `scroll_top`, кламп — к пределу «приклейки хвоста»
+  1025→    // ([`PanelLayout::max_scroll_of`]); усечение показывает бегунок
+  1026→    // `kit::scroll_bar` (потребитель — overlay). Состояние скролла
+  1027→    // панели (`panel.scroll_top`, в строках) проводится как у flyout:
+  1028→    // layout строит kit-состояние из него, ввод клампит его же
+  1029→    // `scroll_by` к `max_scroll` («ввод = тому, что видно» — hit-тесты
+  1030→    // берут этот же PanelLayout).
+  1031→    let rows_area_h = (bottom_limit - rows_top).max(0.0);
+  1032→    let rows_area = [inner.x, rows_top, inner_w, rows_area_h];
+  1033→    let content_h: f32 = rows.iter().map(row_step).sum();
+  1034→    let max_scroll = PanelLayout::max_scroll_of(rows, rows_top, bottom_limit);
+  1035→    let top = panel.scroll_top.min(max_scroll);
+  1036→    let offset: f32 = rows.iter().take(top).map(row_step).sum();
+  1037→    let scroll = canvas_ui::kit::ScrollState {
+  1038→        offset,
+  1039→        content_h,
+  1040→        viewport_h: rows_area_h,
+  1041→    };
+  1042→    let mut row_rects = Vec::new();
+  1043→    let mut visible_rows = Vec::new();
+  1044→    let mut cursor_y = rows_top;
+  1045→    for row in rows.iter().skip(top) {
+  1046→        let (step, card_h) = (row_step(row), row_card_h(row));
+  1047→        if cursor_y + card_h > bottom_limit {
+  1048→            break; // окно строк кончилось (высота); хвост — прокруткой
+  1049→        }
+  1050→        row_rects.push([inner.x, cursor_y, inner_w, card_h]);
+  1051→        visible_rows.push(row.clone());
+  1052→        cursor_y += step;
+  1053→    }
+  1054→    // Кнопка сворачивания: правый край шапки (Row с хвостом-спейсером),
+  1055→    // вертикально с небольшим сдвигом от верха шапки.
+  1056→    let collapse = Row {
+  1057→        gap: 0.0,
+  1058→        ..Row::default()
+  1059→    }
+  1060→    .lay_out_measured(
+  1061→        UiRect::new(inner.x, header.y + 4.0, inner_w, 22.0),
+  1062→        &[
+  1063→            MeasuredItem::Spacer(inner_w - 22.0),
+  1064→            MeasuredItem::Fixed { w: 22.0, h: 22.0 },
+  1065→        ],
+  1066→        m,
+  1067→        fs,
+  1068→        FAMILY,
+  1069→        CHIP_FONT,
+  1070→    );
+  1071→    PanelLayout {
+  1072→        panel_rect: [x, y, width, height],
+  1073→        header_rect,
+  1074→        input_rect,
+  1075→        category_rects,
+  1076→        row_rects,
+  1077→        rows: visible_rows,
+  1078→        footer_rect,
+  1079→        collapse_rect: [collapse[1].x, collapse[1].y, collapse[1].w, collapse[1].h],
+  1080→        scroll_top: top,
+  1081→        rows_area,
+  1082→        scroll,
+  1083→        max_scroll,
+  1084→    }
+  1085→}
+  1086→
+  1087→/// Шаг строки списка панели (расстояние до следующей): секция —
+  1088→/// [`SECTION_HEIGHT`], шаблон — [`ROW_HEIGHT`] (карточка + зазор 4 px).
+  1089→fn row_step(row: &PanelRow) -> f32 {
+  1090→    match row {
+  1091→        PanelRow::Section(_) => SECTION_HEIGHT,
+  1092→        PanelRow::Template(_) => ROW_HEIGHT,
+  1093→    }
+  1094→}
+  1095→
+  1096→/// Высота карточки строки: секция — заголовок во весь шаг, шаблон —
+  1097→/// карточка ниже шага на 4 px (зазор, прежний литерал `ROW_HEIGHT − 4`).
+  1098→fn row_card_h(row: &PanelRow) -> f32 {
+  1099→    match row {
+  1100→        PanelRow::Section(_) => SECTION_HEIGHT,
+  1101→        PanelRow::Template(_) => ROW_HEIGHT - 4.0,
+  1102→    }
+  1103→}
+  1104→
+  1105→impl PanelLayout {
+  1106→    /// FR-082/W-e: «приклейка хвоста» — наибольшее `scroll_top`, при
+  1107→    /// котором панель показывает хвост списка ЦЕЛИКОМ (последняя строка
+  1108→    /// у нижней границы окна строк). W-e (аудит §8 п.11): предел задаёт
+  1109→    /// только измеренная высота окна строк — кэп `MAX_VISIBLE_ROWS`
+  1110→    /// удалён (раньше max = max(по высоте, по кэпу) и на высоких окнах
+  1111→    /// список обрывался дюжиной строк). Условие монотонно по старту
+  1112→    /// хвоста (хвост только укорачивается); suffix-суммы дают O(n) без
+  1113→    /// повторных прогонов раскладки. Условие видимости строки i при
+  1114→    /// старте s — то же, что в цикле выше:
+  1115→    /// `rows_top + Σ шагов(s..i) + card_h(i) ≤ bottom_limit` ⟹ весь
+  1116→    /// хвост s..len виден ⟺ `Σ шагов(s..len−1) + card_h(len−1) ≤
+  1117→    /// rows_area`.
+  1118→    fn max_scroll_of(rows: &[PanelRow], rows_top: f32, bottom_limit: f32) -> usize {
+  1119→        let len = rows.len();
+  1120→        if len == 0 {
+  1121→            return 0;
+  1122→        }
+  1123→        let rows_area = (bottom_limit - rows_top).max(0.0);
+  1124→        let last_card_h = row_card_h(rows.last().expect("len > 0"));
+  1125→        // suffix_steps[i] — сумма шагов строк i..len
+  1126→        let mut suffix_steps = vec![0.0f32; len + 1];
+  1127→        for i in (0..len).rev() {
+  1128→            suffix_steps[i] = suffix_steps[i + 1] + row_step(&rows[i]);
+  1129→        }
+  1130→        // Граница по высоте: наименьшее s, при котором высота хвоста
+  1131→        // s..len целиком ≤ rows_area; len — даже последняя строка не
+  1132→        // влезает (панель теснее одной строки) — прокрутки нет
+  1133→        let by_height = (0..len)
+  1134→            .find(|&s| suffix_steps[s] - suffix_steps[len - 1] + last_card_h <= rows_area)
+  1135→            .unwrap_or(len);
+  1136→        if by_height >= len {
+  1137→            return 0;
+  1138→        }
+  1139→        by_height
+  1140→    }
+  1141→}
+  1142→
+  1143→// --- Wheel-меню (Shift+клик) ---
+  1144→
+  1145→// Рестайл FR-022 (2026-09-16) по скриншоту пользователя: «прямоугольные
+  1146→// плашки на концентрических кольцах» заменены donut-секторами в стиле
+  1147→// circular-menu (https://www.npmjs.com/package/circular-menu — ориентир
+  1148→// по форме; пакет JS, реализация своя): кольцевые сектора с центральным
+  1149→// отверстием, в каждом секторе иконка + короткая подпись, между секторами
+  1150→// угловые зазоры. Рендер — instanced SDF-проход `canvas_render::sectors`
+  1151→// (`sectors.wgsl`); форма сектора и hit-test считаются одной и той же
+  1152→// полярной математикой (`sectors::angle_gap` — Rust-зеркало WGSL), поэтому
+  1153→// расхождения «клик мимо нарисованного» нет (раньше угловой тест расходился
+  1154→// с AABB плашек — заменён осознанно).
+  1155→
+  1156→/// Толщина кольца wheel (радиальная ширина секторов), лог. px.
+  1157→pub const WHEEL_RING_THICKNESS: f32 = 68.0;
+  1158→/// Межкольцевой зазор (радиальный), лог. px.
+  1159→pub const WHEEL_RING_GAP: f32 = 8.0;
+  1160→/// Угловой зазор между соседними секторами кольца, радианы (≈2.5°).
+  1161→pub const WHEEL_SECTOR_GAP: f32 = 0.043_633_23;
+  1162→/// Минимальная дуга сектора на среднем радиусе кольца, лог. px — из неё
+  1163→/// выводится вместимость кольца (окружность / (дуга + угловой зазор в px)).
+  1164→pub const WHEEL_MIN_SECTOR_ARC: f32 = 60.0;
+  1165→/// Максимум секторов в одном кольце; большее — концентрические под-кольца
+  1166→/// (внешние вместительнее — окружность больше).
+  1167→pub const WHEEL_RING_CAP: usize = 6;
+  1168→/// Радиус центрального отверстия (дырка donut — глотает клик мимо секторов).
+  1169→pub const WHEEL_HUB_R: f32 = 24.0;
+  1170→/// FR-022: диаметр кнопки-хаба (клик = «назад»/«закрыть»). Крупная цель
+  1171→/// ≥ 44 лог. px — гайдлайн сенсорных целей (Big Medium); совпадает с
+  1172→/// удвоенным [`WHEEL_HUB_R`] — зона хаба и кнопка — одно и то же.
+  1173→pub const WHEEL_HUB_D: f32 = 48.0;
+  1174→/// Отступ wheel от краёв окна при клампе центра.
+  1175→pub const WHEEL_SCREEN_MARGIN: f32 = 8.0;
+  1176→/// Ширина слота подписи шаблона в секторе wheel (лог. px) — дизайн-граница
+  1177→/// переноса, единая для раскладки ([`split_two_lines`]) и отрисовки
+  1178→/// (`overlays.rs`: подпись центрируется в слоте этой ширины при кегле
+  1179→/// [`WHEEL_TPL_FONT`]). CR-015: прежний символьный бюджет
+  1180→/// `WHEEL_TPL_TEXT_CHARS = 15` (~96 px кегля 11) расходился со слотом
+  1181→/// отрисовки 64 px — строки переноса клипались рендером; теперь строки
+  1182→/// переноса обязаны влезать в слот ПО ИЗМЕРЕННОЙ ШИРИНЕ.
+  1183→pub const WHEEL_TPL_TEXT_W: f32 = 64.0;
+  1184→/// Кегль подписи шаблона в секторе wheel — паритет отрисовке (overlays.rs,
+  1185→/// screen-тексты подписи сектора).
+  1186→pub const WHEEL_TPL_FONT: f32 = 11.0;
+  1187→
+  1188→/// Состояние радиального меню шаблонов (FR-018, `Shift+клик` по пустому
+  1189→/// месту). `screen` — центр в логических px (для рендера/hit-test),
+  1190→/// `world` — точка канваса (куда инстанцируется выбранный шаблон).
+  1191→#[derive(Debug, Clone, PartialEq)]
+  1192→pub struct WheelMenu {
+  1193→    pub screen: Vec2,
+  1194→    pub world: Vec2,
+  1195→    /// Выбранная категория (внутренние кольца — её шаблоны); None — только
+  1196→    /// кольца категорий.
+  1197→    pub category: Option<String>,
+  1198→}
+  1199→
+  1200→/// Цель попадания в wheel.
+  1201→#[derive(Debug, Clone, PartialEq)]
+  1202→pub enum WheelHit {
+  1203→    /// Сектор категории (индекс в `registry.categories()`).
+  1204→    Category(usize),
+  1205→    /// Сектор шаблона (индекс ВНУТРИ категории — `registry.by_category`;
+  1206→    /// сквозной по кольцам, кольца — только план раскладки).
+  1207→    Template(usize),
+  1208→}
+  1209→
+  1210→/// Donut-сектор wheel: дуговой интервал [a0, a1] (радианы, 12 часов = -π/2,
+  1211→/// по часовой) на кольце [r0, r1] (лог. px от центра). Единый источник
+  1212→/// правды рендера (`SectorInstance` в `wheel_overlay`) и hit-test
+  1213→/// ([`WheelGeometry::hit`]) — инвариант WYSIWYG.
+  1214→#[derive(Debug, Clone, PartialEq)]
+  1215→pub struct WheelSector {
+  1216→    pub a0: f32,
+  1217→    pub a1: f32,
+  1218→    pub r0: f32,
+  1219→    pub r1: f32,
+  1220→    pub hit: WheelHit,
+  1221→}
+  1222→
+  1223→impl WheelSector {
+  1224→    /// Середина дуги сектора (для иконки/подписи и hit-пробы тестов).
+  1225→    pub fn mid_angle(&self) -> f32 {
+  1226→        (self.a0 + self.a1) / 2.0
+  1227→    }
+  1228→    /// Средний радиус кольца сектора (для иконки/подписи).
+  1229→    pub fn mid_radius(&self) -> f32 {
+  1230→        (self.r0 + self.r1) / 2.0
+  1231→    }
+  1232→}
+  1233→
+  1234→/// Геометрия wheel на кадр: центр (с клампом к окну), сектора (шаблоны —
+  1235→/// внутренние кольца от дырки наружу, категории — внешние), внешний радиус,
+  1236→/// квадрат кнопки-хаба. Строится чистой функцией [`wheel_geometry`] — и
+  1237→/// рендер (`wheel_overlay`), и клики ([`WheelGeometry::hit`]) вызывают её с
+  1238→/// теми же аргументами, поэтому расхождений быть не может.
+  1239→#[derive(Debug, Clone, PartialEq)]
+  1240→pub struct WheelGeometry {
+  1241→    /// Центр меню: точка клика, сдвинутая клампом внутрь окна, если wheel
+  1242→    /// целиком не влезает.
+  1243→    pub center: Vec2,
+  1244→    /// Сектора: шаблоны (изнутри наружу), затем категории.
+  1245→    pub sectors: Vec<WheelSector>,
+  1246→    /// Внешний радиус (максимальный r1 секторов; для «клик заметно дальше —
+  1247→    /// закрыть» и клампа центра).
+  1248→    pub extent: f32,
+  1249→    /// FR-022: квадрат кнопки-хаба (`WHEEL_HUB_D × WHEEL_HUB_D`) вокруг
+  1250→    /// центра — единый источник для рендера круга и клика «назад/закрыть».
+  1251→    pub hub: [f32; 4],
+  1252→}
+  1253→
+  1254→impl WheelGeometry {
+  1255→    /// FR-022: курсор на кнопке-хабе? Тест по квадрату хаба (визуальный
+  1256→    /// круг вписан в него; углы квадрата прощаются — Fitts).
+  1257→    pub fn hub_hit(&self, cursor: Vec2) -> bool {
+  1258→        let [x, y, w, h] = self.hub;
+  1259→        cursor[0] >= x && cursor[0] <= x + w && cursor[1] >= y && cursor[1] <= y + h
+  1260→    }
+  1261→
+  1262→    /// Сектор под курсором (screen px): полярный hit-test — кольцо по
+  1263→    /// радиусу (r0 ≤ r ≤ r1), угловая принадлежность — знаковое угловое
+  1264→    /// расстояние `sectors::angle_gap` (тот же код, что в WGSL-шейдере
+  1265→    /// рендера, поэтому клик всегда попадает в нарисованное). В угловом
+  1266→    /// зазоре, в дырке (r < WHEEL_HUB_R) и за внешним радиусом — None.
+  1267→    pub fn hit(&self, cursor: Vec2) -> Option<WheelHit> {
+  1268→        let dx = cursor[0] - self.center[0];
+  1269→        let dy = cursor[1] - self.center[1];
+  1270→        let r = dx.hypot(dy);
+  1271→        let theta = norm_angle(dy.atan2(dx));
+  1272→        self.sectors
+  1273→            .iter()
+  1274→            .find(|s| r >= s.r0 && r <= s.r1 && angle_gap(theta, s.a0, s.a1) <= 0.0)
+  1275→            .map(|s| s.hit.clone())
+  1276→    }
+  1277→}
+  1278→
+  1279→/// Радиусы кольца `k` (0 — кольцо у дырки): r0 = HUB_R + k·(толщина+зазор),
+  1280→/// r1 = r0 + толщина.
+  1281→fn ring_radii(k: usize) -> (f32, f32) {
+  1282→    let r0 = WHEEL_HUB_R + k as f32 * (WHEEL_RING_THICKNESS + WHEEL_RING_GAP);
+  1283→    (r0, r0 + WHEEL_RING_THICKNESS)
+  1284→}
+  1285→
+  1286→/// Вместимость кольца `k`: число секторов, чья дуга на среднем радиусе
+  1287→/// ≥ [`WHEEL_MIN_SECTOR_ARC`] с учётом углового зазора между соседями.
+  1288→/// Гарантированно ≥ 2 (при HUB_R=24/толщине 68 кольцо 0 вмещает 5).
+  1289→pub fn ring_capacity(k: usize) -> usize {
+  1290→    let (r0, r1) = ring_radii(k);
+  1291→    let r_mid = (r0 + r1) / 2.0;
+  1292→    let arc_gap = WHEEL_SECTOR_GAP * r_mid;
+  1293→    ((std::f32::consts::TAU * r_mid / (WHEEL_MIN_SECTOR_ARC + arc_gap)).floor() as usize)
+  1294→        .clamp(2, WHEEL_RING_CAP)
+  1295→}
+  1296→
+  1297→/// План колец: `count` секторов по кольцам вместимости [`ring_capacity`]
+  1298→/// (у внешних колец она больше), сбалансированно: 10 → [5, 5], 11 → [5, 6],
+  1299→/// 7 → [3, 4], 15 → [5, 5, 5]. Каждая часть ≤ вместимости своего кольца.
+  1300→pub fn wheel_ring_plan(count: usize) -> Vec<usize> {
+  1301→    if count == 0 {
+  1302→        return Vec::new();
+  1303→    }
+  1304→    // Минимальное число колец, чья суммарная вместимость покрывает count
+  1305→    let mut rings = 0_usize;
+  1306→    let mut total = 0_usize;
+  1307→    while total < count {
+  1308→        total += ring_capacity(rings);
+  1309→        rings += 1;
+  1310→    }
+  1311→    let base = count / rings;
+  1312→    let extra = count % rings;
+  1313→    (0..rings)
+  1314→        .map(|i| base + usize::from(i + extra >= rings))
+  1315→        .collect()
+  1316→}
+  1317→
+  1318→/// Сектора одного кольца: `count` секторов на кольце `k`, цель каждого —
+  1319→/// через `hit_of` (нарастающий сквозной индекс — за пределами функции).
+  1320→/// Старт — 12 часов, по часовой; между соседними секторами угловой зазор
+  1321→/// [`WHEEL_SECTOR_GAP`].
+  1322→fn ring_sectors(k: usize, count: usize, hit_of: impl FnMut(usize) -> WheelHit) -> Vec<WheelSector> {
+  1323→    let (r0, r1) = ring_radii(k);
+  1324→    let step = std::f32::consts::TAU / count as f32;
+  1325→    let start = -std::f32::consts::FRAC_PI_2;
+  1326→    let mut hit_of = hit_of;
+  1327→    (0..count)
+  1328→        .map(|i| {
+  1329→            let a0 = start + step * i as f32 + WHEEL_SECTOR_GAP / 2.0;
+  1330→            let a1 = start + step * (i + 1) as f32 - WHEEL_SECTOR_GAP / 2.0;
+  1331→            WheelSector {
+  1332→                a0,
+  1333→                a1,
+  1334→                r0,
+  1335→                r1,
+  1336→                hit: hit_of(i),
+  1337→            }
+  1338→        })
+  1339→        .collect()
+  1340→}
+  1341→
+  1342→/// Перенос имени шаблона в подписи сектора: имя ШИРЕ бюджета `max_w`
+  1343→/// (по измеренной ширине при кегле подписи [`WHEEL_TPL_FONT`] — CR-015)
+  1344→/// делится на две строки по самому позднему подходящему разделителю
+  1345→/// (пробел или дефис) так, чтобы ОБЕ части влезали в бюджет по измеренной
+  1346→/// ширине; не получилось — одна строка (хвост клипается рендером по ширине
+  1347→/// слота [`WHEEL_TPL_TEXT_W`]). Замерщик/FontSystem — внешние (тот же пул
+  1348→/// шейпинга, что у draw-путей — FR-094).
+  1349→pub fn split_two_lines(
+  1350→    m: &mut TextMeasurer,
+  1351→    fs: &mut cosmic_text::FontSystem,
+  1352→    name: &str,
+  1353→    max_w: f32,
+  1354→) -> (String, Option<String>) {
+  1355→    if m.width_of(fs, name, FAMILY, WHEEL_TPL_FONT) <= max_w {
+  1356→        return (name.to_owned(), None);
+  1357→    }
+  1358→    let mut best: Option<usize> = None; // байт-позиция начала второй строки
+  1359→    for (byte, ch) in name.char_indices() {
+  1360→        if ch != ' ' && ch != '-' {
+  1361→            continue;
+  1362→        }
+  1363→        let split = byte + ch.len_utf8();
+  1364→        let (n1, n2) = (&name[..split], &name[split..]);
+  1365→        // Обе части влезают в бюджет ПО ИЗМЕРЕННОЙ ШИРИНЕ и не вырождены
+  1366→        // (минимум 2 символа — семантическая страховка от обрывков «Т-»).
+  1367→        if m.width_of(fs, n1, FAMILY, WHEEL_TPL_FONT) <= max_w
+  1368→            && m.width_of(fs, n2, FAMILY, WHEEL_TPL_FONT) <= max_w
+  1369→            && n1.chars().count() >= 2
+  1370→            && n2.chars().count() >= 2
+  1371→            && best.map_or(true, |b| split > b)
+  1372→        {
+  1373→            best = Some(split);
+  1374→        }
+  1375→    }
+  1376→    match best {
+  1377→        Some(split) => (
+  1378→            name[..split].trim_end().to_owned(),
+  1379→            Some(name[split..].to_owned()),
+  1380→        ),
+  1381→        None => (name.to_owned(), None),
+  1382→    }
+  1383→}
+  1384→
+  1385→/// Геометрия wheel (рестайл FR-022, donut-сектора): кольца фиксированной
+  1386→/// толщины [`WHEEL_RING_THICKNESS`] с межкольцевым зазором
+  1387→/// [`WHEEL_RING_GAP`]; вместимость каждого кольца выводится из минимальной
+  1388→/// дуги сектора ([`ring_capacity`]), переполнение уходит во внешние
+  1389→/// под-кольца ([`wheel_ring_plan`]). Шаблоны — кольца от дырки наружу,
+  1390→/// категории — внешние кольца. Угловые зазоры между секторами —
+  1391→/// [`WHEEL_SECTOR_GAP`], они же формируют визуальные промежутки рендера.
+  1392→/// `screen` — точка клика; `window_w/h` — размер окна для клампа центра
+  1393→/// (клик у края не должен обрезать меню).
+  1394→pub fn wheel_geometry(
+  1395→    screen: Vec2,
+  1396→    window_w: f32,
+  1397→    window_h: f32,
+  1398→    category_count: usize,
+  1399→    template_count: usize,
+  1400→) -> WheelGeometry {
+  1401→    // 1. Кольца шаблонов — от дырки наружу. Индекс шаблона — сквозной по
+  1402→    //    категории (кольца — только план раскладки).
+  1403→    let plan = wheel_ring_plan(template_count);
+  1404→    let mut sectors: Vec<WheelSector> = Vec::new();
+  1405→    let mut template_index = 0_usize;
+  1406→    for (k, count) in plan.iter().enumerate() {
+  1407→        sectors.extend(ring_sectors(k, *count, |_| {
+  1408→            let hit = WheelHit::Template(template_index);
+  1409→            template_index += 1;
+  1410→            hit
+  1411→        }));
+  1412→    }
+  1413→    // 2. Кольца категорий — снаружи шаблонных (индексы по порядку реестра).
+  1414→    let cat_plan = wheel_ring_plan(category_count);
+  1415→    let mut category_index = 0_usize;
+  1416→    for (j, count) in cat_plan.iter().enumerate() {
+  1417→        let k = plan.len() + j;
+  1418→        sectors.extend(ring_sectors(k, *count, |_| {
+  1419→            let hit = WheelHit::Category(category_index);
+  1420→            category_index += 1;
+  1421→            hit
+  1422→        }));
+  1423→    }
+  1424→
+  1425→    // 3. Внешний радиус, кнопка-хаб (FR-022) и кламп центра к окну.
+  1426→    let extent = sectors.iter().map(|s| s.r1).fold(WHEEL_HUB_R, f32::max);
+  1427→    let lo = extent + WHEEL_SCREEN_MARGIN;
+  1428→    let center: Vec2 = if window_w >= lo * 2.0 && window_h >= lo * 2.0 {
+  1429→        [
+  1430→            screen[0].clamp(lo, window_w - lo),
+  1431→            screen[1].clamp(lo, window_h - lo),
+  1432→        ]
+  1433→    } else {
+  1434→        [window_w / 2.0, window_h / 2.0]
+  1435→    };
+  1436→    let hub = [
+  1437→        center[0] - WHEEL_HUB_D / 2.0,
+  1438→        center[1] - WHEEL_HUB_D / 2.0,
+  1439→        WHEEL_HUB_D,
+  1440→        WHEEL_HUB_D,
+  1441→    ];
+  1442→    WheelGeometry {
+  1443→        center,
+  1444→        sectors,
+  1445→        extent,
+  1446→        hub,
+  1447→    }
+  1448→}
+  1449→
+  1450→/// Точка на кольце для рендера сектора (центр сектора на среднем радиусе).
+  1451→pub fn sector_point(center: Vec2, angle: f32, radius: f32) -> Vec2 {
+  1452→    [
+  1453→        center[0] + radius * angle.cos(),
+  1454→        center[1] + radius * angle.sin(),
+  1455→    ]
+  1456→}
+  1457→
+  1458→#[cfg(test)]
+  1459→mod tests {
+  1460→    use super::*;
+  1461→
+  1462→    /// W-c: зазор dropdown кита (tests — алиас полного пути).
+  1463→    const FLYOUT_GAP_KIT: f32 = canvas_ui::kit::DROPDOWN_GAP;
+  1464→
+  1465→    /// W-e: палитра-двойка для kit::scroll_bar в тестах (цвет бегунка
+  1466→    /// выбирает потребитель — слот; киту важна только геометрия).
+  1467→    fn scrollbar_test_palette() -> canvas_ui::kit::KitPalette {
+  1468→        canvas_ui::kit::KitPalette {
+  1469→            panel_fill: [0.1; 4],
+  1470→            panel_border: [0.2; 4],
+  1471→            control_fill: [0.3; 4],
+  1472→            control_border: [0.4; 4],
+  1473→            control_primary: [0.5; 4],
+  1474→            control_danger: [0.6; 4],
+  1475→            hover_fill: [0.7; 4],
+  1476→            primary_hover_fill: [0.75; 4],
+  1477→            selected_fill: [0.8; 4],
+  1478→            text: [0.9; 4],
+  1479→            text_title: [0.91; 4],
+  1480→            text_muted: [0.92; 4],
+  1481→            disabled_text: [0.93; 4],
+  1482→            accent: [0.94; 4],
+  1483→            // FR-070 (волна W-d): новые слоты — для геометрического теста
+  1484→            // scroll_bar не читаются, но значения берём из `KitPalette::dark()`
+  1485→            // (Agent B) — чтобы test fixture не расходился с production-коридором.
+  1486→            control_success: [0.30, 0.75, 0.55, 1.0],
+  1487→            control_warning: [0.95, 0.65, 0.30, 1.0],
+  1488→            stage_dim: [0.02, 0.02, 0.04, 0.6],
+  1489→            scrollbar_thumb: [0.35, 0.38, 0.46, 0.7],
+  1490→            rule_color: [0.30, 0.33, 0.40, 0.8],
+  1491→        }
+  1492→    }
+  1493→
+  1494→    /// Бегунок окна строк из PanelLayout (тот же вызов, что в overlay).
+  1495→    fn scrollbar_knob(lay: &PanelLayout) -> Option<canvas_ui::geometry::UiRect> {
+  1496→        canvas_ui::kit::scroll_bar(
+  1497→            canvas_ui::geometry::UiRect::new(
+  1498→                lay.rows_area[0],
+  1499→                lay.rows_area[1],
+  1500→                lay.rows_area[2],
+  1501→                lay.rows_area[3],
+  1502→            ),
+  1503→            &lay.scroll,
+  1504→            &scrollbar_test_palette(),
+  1505→        )
+  1506→    }
+  1507→
+  1508→    fn registry() -> TemplateRegistry {
+  1509→        TemplateRegistry::mock()
+  1510→    }
+  1511→
+  1512→    /// FR-087: allow-list «все категории реестра» (в тестах = без фильтра).
+  1513→    fn all_visible(registry: &TemplateRegistry) -> Vec<String> {
+  1514→        registry
+  1515→            .categories()
+  1516→            .into_iter()
+  1517→            .map(str::to_owned)
+  1518→            .collect()
+  1519→    }
+  1520→
+  1521→    // --- FR-040 v2: локализация категорий палитры ---
+  1522→
+  1523→    /// Известные токены — двуязычные подписи (RU/EN по языку).
+  1524→    #[test]
+  1525→    fn category_display_name_bilingual() {
+  1526→        use canvas_core::Language;
+  1527→        assert_eq!(
+  1528→            category_display_name(Language::Ru, "product-analytics"),
+  1529→            "Продуктовая аналитика"
+  1530→        );
+  1531→        assert_eq!(
+  1532→            category_display_name(Language::En, "product-analytics"),
+  1533→            "Product Analytics"
+  1534→        );
+  1535→        assert_eq!(category_display_name(Language::Ru, "backend"), "Бэкенд");
+  1536→        assert_eq!(
+  1537→            category_display_name(Language::En, "unit-economics"),
+  1538→            "Unit Economics"
+  1539→        );
+  1540→        // Неизвестный токен (custom-каталог FR-020) — как есть (fallback)
+  1541→        assert_eq!(
+  1542→            category_display_name(Language::Ru, "my-domain"),
+  1543→            "my-domain"
+  1544→        );
+  1545→    }
+  1546→
+  1547→    // --- Панель (FR-024: секции, левый док) ---
+  1548→
+  1549→    fn template_indexes(rows: &[PanelRow]) -> Vec<usize> {
+  1550→        rows.iter()
+  1551→            .filter_map(|row| match row {
+  1552→                PanelRow::Template(index) => Some(*index),
+  1553→                PanelRow::Section(_) => None,
+  1554→            })
+  1555→            .collect()
+  1556→    }
+  1557→
+  1558→    #[test]
+  1559→    fn panel_filter_by_name_and_id() {
+  1560→        let registry = registry();
+  1561→        let mut panel = TemplatePanel::new();
+  1562→        panel.open = true;
+  1563→        // Пустой фильтр — секции по категориям + все 5 шаблонов
+  1564→        let rows = panel_rows(
+  1565→            &registry,
+  1566→            &panel,
+  1567→            canvas_core::Language::Ru,
+  1568→            &all_visible(&registry),
+  1569→        );
+  1570→        assert_eq!(template_indexes(&rows).len(), 5);
+  1571→        assert_eq!(
+  1572→            rows.iter()
+  1573→                .filter(|r| matches!(r, PanelRow::Section(_)))
+  1574→                .count(),
+  1575→            4
+  1576→        );
+  1577→        // По имени (регистр не важен) — плоский список без секций
+  1578→        panel.insert_str("load");
+  1579→        let rows = panel_rows(
+  1580→            &registry,
+  1581→            &panel,
+  1582→            canvas_core::Language::Ru,
+  1583→            &all_visible(&registry),
+  1584→        );
+  1585→        assert_eq!(template_indexes(&rows), vec![0]);
+  1586→        assert!(rows.iter().all(|r| matches!(r, PanelRow::Template(_))));
+  1587→        // По id
+  1588→        panel.filter.clear();
+  1589→        panel.cursor = 0;
+  1590→        panel.insert_str("mock.db");
+  1591→        assert_eq!(
+  1592→            template_indexes(&panel_rows(
+  1593→                &registry,
+  1594→                &panel,
+  1595→                canvas_core::Language::Ru,
+  1596→                &all_visible(&registry)
+  1597→            )),
+  1598→            vec![1]
+  1599→        );
+  1600→        // По описанию
+  1601→        panel.filter.clear();
+  1602→        panel.cursor = 0;
+  1603→        panel.insert_str("партиции");
+  1604→        assert_eq!(
+  1605→            template_indexes(&panel_rows(
+  1606→                &registry,
+  1607→                &panel,
+  1608→                canvas_core::Language::Ru,
+  1609→                &all_visible(&registry)
+  1610→            )),
+  1611→            vec![4]
+  1612→        );
+  1613→        // Мимо — пусто
+  1614→        panel.filter = "ghost".to_owned();
+  1615→        assert!(panel_rows(
+  1616→            &registry,
+  1617→            &panel,
+  1618→            canvas_core::Language::Ru,
+  1619→            &all_visible(&registry)
+  1620→        )
+  1621→        .is_empty());
+  1622→    }
+  1623→
+  1624→    #[test]
+  1625→    fn panel_category_filter() {
+  1626→        let registry = registry();
+  1627→        let mut panel = TemplatePanel::new();
+  1628→        panel.open = true;
+  1629→        panel.category = Some("backend".to_owned());
+  1630→        let rows = panel_rows(
+  1631→            &registry,
+  1632→            &panel,
+  1633→            canvas_core::Language::Ru,
+  1634→            &all_visible(&registry),
+  1635→        );
+  1636→        let indexes = template_indexes(&rows);
+  1637→        assert_eq!(indexes.len(), 2);
+  1638→        assert_eq!(registry.list()[indexes[0]].category, "backend");
+  1639→        assert_eq!(registry.list()[indexes[1]].category, "backend");
+  1640→    }
+  1641→
+  1642→    /// FR-087 (роль/класс): allow-list категорий режет секции и поиск —
+  1643→    /// скрытые категории не показываются вовсе и не «всплывают» через
+  1644→    /// строку поиска; индексы строк остаются позициями полного реестра.
+  1645→    #[test]
+  1646→    fn panel_role_filter_sections_and_search() {
+  1647→        let registry = registry();
+  1648→        let mut panel = TemplatePanel::new();
+  1649→        panel.open = true;
+  1650→        // «Роль разработчика»: только backend из мок-реестра
+  1651→        // (моки: backend×2, cache, network, queue — FR-018).
+  1652→        let visible: Vec<String> = registry
+  1653→            .categories()
+  1654→            .into_iter()
+  1655→            .filter(|c| *c == "backend")
+  1656→            .map(str::to_owned)
+  1657→            .collect();
+  1658→        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru, &visible);
+  1659→        let indexes = template_indexes(&rows);
+  1660→        assert!(!indexes.is_empty());
+  1661→        for index in &indexes {
+  1662→            assert!(
+  1663→                visible.contains(&registry.list()[*index].category),
+  1664→                "скрытая категория попала в строки"
+  1665→            );
+  1666→        }
+  1667→        // Секция скрытой категории не показывается
+  1668→        for row in &rows {
+  1669→            if let PanelRow::Section(name) = row {
+  1670→                assert!(visible.contains(name), "секция скрытой категории: {name}");
+  1671→            }
+  1672→        }
+  1673→        // Поиск по скрытой категории (кэш) — пусто (шум роли убран)
+  1674→        panel.insert_str("cache");
+  1675→        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru, &visible);
+  1676→        assert!(
+  1677→            rows.is_empty(),
+  1678→            "поиск не должен всплывать в скрытые категории"
+  1679→        );
+  1680→        // Тот же поиск без фильтра — находит
+  1681→        let all = all_visible(&registry);
+  1682→        let rows = panel_rows(&registry, &panel, canvas_core::Language::Ru, &all);
+  1683→        assert!(!rows.is_empty(), "без фильтра поиск находит всё");
+  1684→    }
+  1685→
+  1686→    #[test]
+  1687→    fn panel_grouping_follows_registry_order() {
+  1688→        // Секции — в порядке реестра; шаблоны внутри — свои индексы
+  1689→        let registry = registry();
+  1690→        let panel = TemplatePanel::new();
+  1691→        let rows = panel_rows(
+  1692→            &registry,
+  1693→            &panel,
+  1694→            canvas_core::Language::Ru,
+  1695→            &all_visible(&registry),
+  1696→        );
+  1697→        let categories: Vec<&str> = rows
+  1698→            .iter()
+  1699→            .filter_map(|row| match row {
+  1700→                PanelRow::Section(name) => Some(name.as_str()),
+  1701→                PanelRow::Template(_) => None,
+  1702→            })
+  1703→            .collect();
+  1704→        assert_eq!(categories, registry.categories());
+  1705→        // Каждый Section предшествует своим Template
+  1706→        for (pos, row) in rows.iter().enumerate() {
+  1707→            if let PanelRow::Section(name) = row {
+  1708→                let next = rows.get(pos + 1).expect("секция не пустая");
+  1709→                match next {
+  1710→                    PanelRow::Template(index) => {
+  1711→                        assert_eq!(registry.list()[*index].category, name.as_str())
+  1712→                    }
+  1713→                    PanelRow::Section(_) => panic!("секция без шаблонов"),
+  1714→                }
+  1715→            }
+  1716→        }
+  1717→    }
+  1718→
+  1719→    #[test]
+  1720→    fn panel_row_of_ordinal_skips_sections() {
+  1721→        let rows = vec![
+  1722→            PanelRow::Section("backend".to_owned()),
+  1723→            PanelRow::Template(0),
+  1724→            PanelRow::Template(1),
+  1725→            PanelRow::Section("cache".to_owned()),
+  1726→            PanelRow::Template(2),
+  1727→        ];
+  1728→        assert_eq!(template_row_count(&rows), 3);
+  1729→        assert_eq!(row_of_ordinal(&rows, 0), Some(1));
+  1730→        assert_eq!(row_of_ordinal(&rows, 1), Some(2));
+  1731→        assert_eq!(row_of_ordinal(&rows, 2), Some(4));
+  1732→        assert_eq!(row_of_ordinal(&rows, 3), None);
+  1733→    }
+  1734→
+  1735→    #[test]
+  1736→    fn panel_dock_mode_focus_lifecycle() {
+  1737→        // Ревизия FR-025 (2026-09-16): палитра ПРИМАРНО свёрнута — полоса
+  1738→        // категорий по центру слева; развёрнутый док — по Ctrl+P/клику.
+  1739→        // Фокус — только по Ctrl+P или клику в поиск; Esc сворачивает док;
+  1740→        // клик по канвасу мимо панели снимает фокус, не закрывая док
+  1741→        let mut panel = TemplatePanel::new();
+  1742→        assert!(!panel.open, "ревизия FR-025: по умолчанию свёрнута");
+  1743→        assert!(!panel.focused);
+  1744→        // Ctrl+P: развернуть + фокус + чистый фильтр
+  1745→        panel.open();
+  1746→        assert!(panel.open && panel.focused);
+  1747→        panel.focus_search();
+  1748→        assert!(panel.focused);
+  1749→        panel.unfocus();
+  1750→        assert!(panel.open);
+  1751→        assert!(!panel.focused);
+  1752→        // Ctrl+P по свёрнутому: развернуть + фокус + чистый фильтр
+  1753→        panel.close();
+  1754→        assert!(!panel.open && !panel.focused);
+  1755→        panel.open();
+  1756→        assert!(panel.open && panel.focused);
+  1757→        panel.insert_str("lb");
+  1758→        // Ctrl+P по развёрнутому: фокус в поиск, фильтр сохраняется
+  1759→        panel.focus_search();
+  1760→        assert_eq!(panel.filter, "lb");
+  1761→        assert!(panel.focused);
+  1762→        assert_eq!(panel.cursor, panel.filter.len());
+  1763→        // Esc: свернуть док (фокус снят)
+  1764→        panel.close();
+  1765→        assert!(!panel.open && !panel.focused);
+  1766→        // Клик по ручке: развернуть без фокуса и без сброса фильтра
+  1767→        panel.expand();
+  1768→        assert!(panel.open && !panel.focused && panel.filter == "lb");
+  1769→        // FR-025 п.3: Esc по такому (развёрнутому, но БЕЗ фокуса) доку тоже
+  1770→        // должен сворачивать — снятие open обязано не зависеть от focused
+  1771→        // (ветка общей Esc-цепочки в main.rs, здесь — контракт close())
+  1772→        panel.close();
+  1773→        assert!(!panel.open && !panel.focused);
+  1774→    }
+  1775→
+  1776→    /// Детерминированный FontSystem тестов: только вшитый рендером шрифт
+  1777→    /// (паттерн measure.rs — метрики одинаковы на всех платформах CI).
+  1778→    fn font_system() -> cosmic_text::FontSystem {
+  1779→        let mut fs = cosmic_text::FontSystem::new();
+  1780→        const FONT: &[u8] = include_bytes!("../../../assets/fonts/NotoSansDisplay-Medium.ttf");
+  1781→        fs.db_mut().load_font_data(FONT.to_vec());
+  1782→        fs
+  1783→    }
+  1784→
+  1785→    #[test]
+  1786→    fn panel_collapse_button_and_strip_geometry() {
+  1787→        let registry = registry();
+  1788→        let mut panel = TemplatePanel::new();
+  1789→        panel.open = true;
+  1790→        let rows = panel_rows(
+  1791→            &registry,
+  1792→            &panel,
+  1793→            canvas_core::Language::Ru,
+  1794→            &all_visible(&registry),
+  1795→        );
+  1796→        let mut fs = font_system();
+  1797→        let mut m = TextMeasurer::new();
+  1798→        let lay = panel_layout(
+  1799→            1280.0,
+  1800→            800.0,
+  1801→            &registry,
+  1802→            &panel,
+  1803→            &rows,
+  1804→            &mut m,
+  1805→            &mut fs,
+  1806→            &all_visible(&registry),
+  1807→        );
+  1808→        // Кнопка сворачивания — в правой части шапки, внутри панели
+  1809→        let c = lay.collapse_rect;
+  1810→        assert!(c[0] >= lay.header_rect[0]);
+  1811→        assert!(c[0] + c[2] <= lay.panel_rect[0] + lay.panel_rect[2] - PANEL_PADDING + 0.01);
+  1812→        assert!(c[1] >= lay.header_rect[1]);
+  1813→        assert!(c[1] + c[3] <= lay.header_rect[1] + lay.header_rect[3] + 0.01);
+  1814→        // Ревизия FR-025: свёрнутая палитра — вертикальная полоса категорий,
+  1815→        // центрированная по вертикали; строки категорий + шеврон внизу
+  1816→        let categories: Vec<String> = registry
+  1817→            .categories()
+  1818→            .into_iter()
+  1819→            .map(|c| c.to_owned())
+  1820→            .collect();
+  1821→        let strip = dock_strip_layout(&categories, 800.0, &mut m, &mut fs);
+  1822→        assert_eq!(strip.rect[0], PANEL_MARGIN);
+  1823→        assert!(strip.rect[1] >= PANEL_TOP_MARGIN);
+  1824→        let h = strip.rect[3];
+  1825→        assert!(
+  1826→            (strip.rect[1] - (800.0 - h) / 2.0).abs() < 0.01,
+  1827→            "полоса центрирована по вертикали"
+  1828→        );
+  1829→        assert!(strip.rect[2] >= STRIP_MIN_W);
+  1830→        assert_eq!(strip.rows.len(), categories.len());
+  1831→        for (i, (rect, name)) in strip.rows.iter().enumerate() {
+  1832→            assert_eq!(name, &categories[i]);
+  1833→            assert!(rect[1] >= strip.rect[1]);
+  1834→            assert!(rect[1] + rect[3] <= strip.rect[1] + strip.rect[3] + 0.01);
+  1835→        }
+  1836→        // Шеврон — ниже последней строки категории, внутри полосы
+  1837→        let last = strip.rows.last().expect("строки есть");
+  1838→        assert!(strip.chevron_rect[1] > last.0[1]);
+  1839→        assert!(
+  1840→            strip.chevron_rect[1] + strip.chevron_rect[3] <= strip.rect[1] + strip.rect[3] + 0.01
+  1841→        );
+  1842→        // Малое окно: полоса клампится к верхнему отступу, не уходит в минус
+  1843→        let small = dock_strip_layout(&categories, 60.0, &mut m, &mut fs);
+  1844→        assert_eq!(small.rect[1], PANEL_TOP_MARGIN);
+  1845→    }
+  1846→
+  1847→    #[test]
+  1848→    fn strip_layout_clamps_to_window_bottom() {
+  1849→        // Окно, где центровка упирается в нижний отступ — полоса не вылезает
+  1850→        let categories: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
+  1851→        let h = (categories.len() + 1) as f32 * CATEGORY_ROW_H + STRIP_PAD_V * 2.0;
+  1852→        let window_h = h + PANEL_TOP_MARGIN * 2.0 + 10.0;
+  1853→        let mut fs = font_system();
+  1854→        let mut m = TextMeasurer::new();
+  1855→        let strip = dock_strip_layout(&categories, window_h, &mut m, &mut fs);
+  1856→        assert!(strip.rect[1] >= PANEL_TOP_MARGIN - 0.01);
+  1857→        assert!(
+  1858→            strip.rect[1] + strip.rect[3] <= window_h - PANEL_TOP_MARGIN + 0.01,
+  1859→            "низ полосы — не ниже нижнего отступа"
+  1860→        );
+  1861→    }
+  1862→
+  1863→    #[test]
+  1864→    fn flyout_layout_clamps_height_and_scroll() {
+  1865→        // 40 шаблонов в окне 600 px высотой: высота клампится к окну, строки
+  1866→        // не вылезают ни за прямоугольник flyout, ни за окно
+  1867→        let strip_row = [12.0, 300.0, 80.0, CATEGORY_ROW_H];
+  1868→        let fly = flyout_layout(strip_row, 40, 1280.0, 600.0, 0);
+  1869→        let max_h = 600.0 - PANEL_TOP_MARGIN * 2.0;
+  1870→        assert!(fly.rect[3] <= max_h + 0.01, "высота клампится к окну");
+  1871→        assert!(fly.rect[1] >= PANEL_TOP_MARGIN - 0.01);
+  1872→        assert!(fly.rect[1] + fly.rect[3] <= 600.0 - PANEL_TOP_MARGIN + 0.01);
+  1873→        // Справа от строки полосы
+  1874→        assert!(fly.rect[0] >= strip_row[0] + strip_row[2] + FLYOUT_GAP - 0.01);
+  1875→        let visible = ((fly.rect[3] - FLYOUT_PAD_V * 2.0) / ROW_HEIGHT).floor() as usize;
+  1876→        assert_eq!(fly.row_rects.len(), visible);
+  1877→        assert_eq!(fly.max_scroll, 40 - visible);
+  1878→        for rect in &fly.row_rects {
+  1879→            assert!(rect[1] >= fly.rect[1] - 0.01);
+  1880→            assert!(rect[1] + rect[3] <= fly.rect[1] + fly.rect[3] + 0.01);
+  1881→            assert!(rect[1] + rect[3] <= 600.0 - PANEL_TOP_MARGIN + 0.01);
+  1882→            assert!(rect[0] >= fly.rect[0] - 0.01);
+  1883→            assert!(rect[0] + rect[2] <= fly.rect[0] + fly.rect[2] + 0.01);
+  1884→        }
+  1885→        // Скролл клампится к max_scroll
+  1886→        let scrolled = flyout_layout(strip_row, 40, 1280.0, 600.0, 100);
+  1887→        assert_eq!(scrolled.scroll_top, fly.max_scroll);
+  1888→        assert!(!scrolled.row_rects.is_empty());
+  1889→        assert!((scrolled.row_rects[0][1] - (scrolled.rect[1] + FLYOUT_PAD_V)).abs() < 0.01);
+  1890→    }
+  1891→
+  1892→    /// W-c: flyout — kit-dropdown («якорь + flip»): места под строкой
+  1893→    /// хватает — меню раскрывается ПОД строкой категории с зазором
+  1894→    /// DROPDOWN_GAP кита (прежнее центрирование на строке заменено
+  1895→    /// контрактным поведением dropdown, паттерн hints_ui::popup_rect).
+  1896→    #[test]
+  1897→    fn flyout_layout_few_items_anchor_below_row() {
+  1898→        let strip_row = [12.0, 200.0, 80.0, CATEGORY_ROW_H];
+  1899→        let fly = flyout_layout(strip_row, 3, 1280.0, 800.0, 0);
+  1900→        let expected_h = 3.0 * ROW_HEIGHT + FLYOUT_PAD_V * 2.0;
+  1901→        assert!((fly.rect[3] - expected_h).abs() < 0.01);
+  1902→        // Под строкой: верх = низ строки + DROPDOWN_GAP (кит), правее полосы
+  1903→        assert!((fly.rect[1] - (strip_row[1] + strip_row[3] + FLYOUT_GAP_KIT)).abs() < 0.01);
+  1904→        assert!((fly.rect[0] - (strip_row[0] + strip_row[2] + FLYOUT_GAP)).abs() < 0.01);
+  1905→        assert_eq!(fly.max_scroll, 0);
+  1906→        assert_eq!(fly.row_rects.len(), 3);
+  1907→        // Строки — прежняя стопка: от верха flyout + FLYOUT_PAD_V, шаг
+  1908→        // ROW_HEIGHT, карточка = ROW_HEIGHT − FLYOUT_ROW_INSET
+  1909→        for (v, rect) in fly.row_rects.iter().enumerate() {
+  1910→            assert!((rect[1] - (fly.rect[1] + FLYOUT_PAD_V + v as f32 * ROW_HEIGHT)).abs() < 0.01);
+  1911→            assert!((rect[3] - (ROW_HEIGHT - FLYOUT_ROW_INSET)).abs() < 0.01);
+  1912→        }
+  1913→    }
+  1914→
+  1915→    /// W-c: kit-dropdown flip — строка у нижнего края: места под строкой
+  1916→    /// нет, меню разворачивается НАД строкой (низ = верх строки −
+  1917→    /// DROPDOWN_GAP) и не выходит за верхний отступ вьюпорта.
+  1918→    #[test]
+  1919→    fn flyout_layout_flips_above_at_bottom_edge() {
+  1920→        let window_h = 600.0;
+  1921→        // Строка вплотную к нижнему отступу
+  1922→        let strip_row = [
+  1923→            12.0,
+  1924→            window_h - PANEL_TOP_MARGIN - CATEGORY_ROW_H,
+  1925→            80.0,
+  1926→            CATEGORY_ROW_H,
+  1927→        ];
+  1928→        let fly = flyout_layout(strip_row, 3, 1280.0, window_h, 0);
+  1929→        let expected_h = 3.0 * ROW_HEIGHT + FLYOUT_PAD_V * 2.0;
+  1930→        assert!((fly.rect[3] - expected_h).abs() < 0.01);
+  1931→        // Низ меню — над якорем с зазором DROPDOWN_GAP кита
+  1932→        let menu_bottom = fly.rect[1] + fly.rect[3];
+  1933→        assert!((menu_bottom - (strip_row[1] - FLYOUT_GAP_KIT)).abs() < 0.01);
+  1934→        // Внутри вьюпорта по вертикали
+  1935→        assert!(fly.rect[1] >= PANEL_TOP_MARGIN - 0.01);
+  1936→    }
+  1937→
+  1938→    /// W-c: горизонтальный кламп кита — у узкого окна flyout сдвигается
+  1939→    /// влево (правый край за PANEL_MARGIN), совсем не влезающее меню
+  1940→    /// обрезается до вьюпорта (финальная гарантия dropdown_menu); строки
+  1941→    /// остаются внутри меню.
+  1942→    #[test]
+  1943→    fn flyout_layout_clamps_to_right_edge_and_narrow_window() {
+  1944→        let strip_row = [12.0, 200.0, 80.0, CATEGORY_ROW_H];
+  1945→        // Окно 400: меню (300) не помещается справа от полосы — x сдвинут
+  1946→        // влево, правый край = window_w − PANEL_MARGIN
+  1947→        let fly = flyout_layout(strip_row, 3, 400.0, 600.0, 0);
+  1948→        assert!((fly.rect[0] + fly.rect[2] - (400.0 - PANEL_MARGIN)).abs() < 0.01);
+  1949→        assert!(fly.rect[0] >= 0.0);
+  1950→        // Окно 200 (меню шире вьюпорта): ширина обрезана до вьюпорта,
+  1951→        // строки не вылезают за меню
+  1952→        let narrow = flyout_layout(strip_row, 3, 200.0, 600.0, 0);
+  1953→        assert!(narrow.rect[0] >= 0.0);
+  1954→        assert!(narrow.rect[0] + narrow.rect[2] <= 200.0 - PANEL_MARGIN + 0.01);
+  1955→        for rect in &narrow.row_rects {
+  1956→            assert!(rect[0] >= narrow.rect[0] - 0.01);
+  1957→            assert!(rect[0] + rect[2] <= narrow.rect[0] + narrow.rect[2] + 0.01);
+  1958→        }
+  1959→    }
+  1960→
+  1961→    #[test]
+  1962→    fn strip_hover_opens_after_intent_and_closes_with_grace() {
+  1963→        // Hover-intent: открытие только после 150 мс наведения; grace 300 мс
+  1964→        // держит flyout после ухода курсора. true — смена строки/раскрытия.
+  1965→        let t0 = Instant::now();
+  1966→        let mut hover = StripHover::new();
+  1967→        assert!(
+  1968→            hover.update_at(Some(0), false, t0),
+  1969→            "смена строки под курсором"
+  1970→        );
+  1971→        assert_eq!(hover.open, None);
+  1972→        assert!(!hover.update_at(Some(0), false, t0 + Duration::from_millis(149)));
+  1973→        assert_eq!(hover.open, None, "до intent-задержки не открывается");
+  1974→        assert!(hover.update_at(Some(0), false, t0 + Duration::from_millis(150)));
+  1975→        assert_eq!(hover.open, Some(0));
+  1976→        // Уход курсора: в пределах grace — ещё открыто (строка сменилась —
+  1977→        // перерисовка нужна)
+  1978→        assert!(hover.update_at(None, false, t0 + Duration::from_millis(200)));
+  1979→        assert_eq!(hover.open, Some(0));
+  1980→        assert!(hover.update_at(None, false, t0 + Duration::from_millis(200 + 300)));
+  1981→        assert_eq!(hover.open, None, "после grace-задержки закрывается");
+  1982→        assert!(!hover.pending());
+  1983→    }
+  1984→
+  1985→    #[test]
+  1986→    fn strip_hover_switches_category_and_resets_scroll() {
+  1987→        let t0 = Instant::now();
+  1988→        let mut hover = StripHover::new();
+  1989→        hover.update_at(Some(0), false, t0);
+  1990→        hover.update_at(Some(0), false, t0 + Duration::from_millis(150));
+  1991→        assert_eq!(hover.open, Some(0));
+  1992→        hover.scroll_by(3, 10);
+  1993→        assert_eq!(hover.scroll_top, 3);
+  1994→        // Переход на другую категорию — тоже с intent-задержкой, скролл
+  1995→        // новой категории сброшен
+  1996→        hover.update_at(Some(1), false, t0 + Duration::from_millis(200));
+  1997→        assert!(
+  1998→            hover.update_at(Some(1), false, t0 + Duration::from_millis(200 + 150)),
+  1999→            "переключение категории меняет состояние"
+  2000→        );
+
+[showing lines 1-2000 of 2998; use offset=2001 with limit to continue reading]

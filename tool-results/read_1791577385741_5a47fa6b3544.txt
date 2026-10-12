@@ -1,0 +1,737 @@
+  2729→            swatch: None,
+  2730→        })
+  2731→        .collect();
+  2732→    push_group(
+  2733→        &mut lay,
+  2734→        &mut y,
+  2735→        crate::i18n::keys::ADMIN_TOK_GROUP_TYPE,
+  2736→        typo_rows,
+  2737→    );
+  2738→
+  2739→    // Группа 4: движение (read-only, мс)
+  2740→    let motion: Vec<(&'static str, String)> = vec![
+  2741→        ("focus_fade_ms", "150".to_owned()),
+  2742→        ("camera_flight_ms", "300".to_owned()),
+  2743→        ("tooltip_delay_ms", "500".to_owned()),
+  2744→        ("result_pulse_ms", "1200".to_owned()),
+  2745→    ];
+  2746→    let motion_rows = motion
+  2747→        .into_iter()
+  2748→        .map(|(name, value)| TokenRow {
+  2749→            slot_index: None,
+  2750→            name,
+  2751→            value,
+  2752→            rect: UiRect::default(),
+  2753→            swatch: None,
+  2754→        })
+  2755→        .collect();
+  2756→    push_group(
+  2757→        &mut lay,
+  2758→        &mut y,
+  2759→        crate::i18n::keys::ADMIN_TOK_GROUP_MOTION,
+  2760→        motion_rows,
+  2761→    );
+  2762→
+  2763→    lay.h = y;
+  2764→    lay
+  2765→}
+  2766→
+  2767→/// Тело секции «Токены».
+  2768→#[derive(Debug, Clone, Default)]
+  2769→pub struct TokensLayout {
+  2770→    pub groups: Vec<TokenGroup>,
+  2771→    /// Полная высота тела (для скролла).
+  2772→    pub h: f32,
+  2773→}
+  2774→
+  2775→/// Отрисовка тела «Токены» (свотчи слотов — реальные текущие значения
+  2776→/// эффективной палитры: live-правка видна сразу).
+  2777→pub(crate) fn draw_tokens(
+  2778→    d: &mut crate::kit_ui::KitDraw,
+  2779→    lay: &TokensLayout,
+  2780→    p: &KitPalette,
+  2781→    lang: Language,
+  2782→) {
+  2783→    for group in &lay.groups {
+  2784→        for row in &group.rows {
+  2785→            if row.slot_index.is_none() && row.name.is_empty() {
+  2786→                // Заголовок группы
+  2787→                d.label_left(
+  2788→                    UiRect::new(row.rect.x, row.rect.y, row.rect.w.max(200.0), 16.0),
+  2789→                    crate::i18n::tr(lang, group.title_key),
+  2790→                    p.text_title,
+  2791→                    12.0,
+  2792→                );
+  2793→                continue;
+  2794→            }
+  2795→            if let Some(swatch) = row.swatch {
+  2796→                let color = row.slot_index.map(|i| slot_color(p, i)).unwrap_or([0.0; 4]);
+  2797→                d.rect(swatch, color, p.control_border, 4.0);
+  2798→            }
+  2799→            d.label_left(
+  2800→                UiRect::new(row.rect.x + 24.0, row.rect.y + 3.0, 190.0, 16.0),
+  2801→                row.name,
+  2802→                p.text,
+  2803→                12.0,
+  2804→            );
+  2805→            d.label_left(
+  2806→                UiRect::new(row.rect.x + 220.0, row.rect.y + 3.0, 120.0, 16.0),
+  2807→                &row.value,
+  2808→                p.text_muted,
+  2809→                12.0,
+  2810→            );
+  2811→        }
+  2812→    }
+  2813→}
+  2814→
+  2815→#[cfg(test)]
+  2816→mod tests {
+  2817→    use super::*;
+  2818→    use crate::kit_ui::{color4, cursor_in, new_measurer, KitDraw};
+  2819→
+  2820→    /// Раскладка детерминирована на канонических вьюпортах (G4-линт:
+  2821→    /// 1280×800 / 1024×640 / 800×560), панель зажата во вьюпорт.
+  2822→    #[test]
+  2823→    fn layout_is_deterministic_and_clamped() {
+  2824→        let palette = test_palette();
+  2825→        for vp in [[1280.0, 800.0], [1024.0, 640.0], [800.0, 560.0]] {
+  2826→            let mut m = new_measurer();
+  2827→            let mut fs = canvas_render::text::measure_font_system();
+  2828→            let lay = admin_layout(
+  2829→                vp,
+  2830→                AdminSection::Components,
+  2831→                0.0,
+  2832→                &palette,
+  2833→                [0.2, 0.2, 0.25, 1.0],
+  2834→                Language::Ru,
+  2835→                &mut m,
+  2836→                &mut fs,
+  2837→            );
+  2838→            let vp_rect = UiRect::new(0.0, 0.0, vp[0], vp[1]);
+  2839→            assert!(
+  2840→                vp_rect.contains(UiPoint::new(lay.panel.x, lay.panel.y)),
+  2841→                "панель выходит за вьюпорт {vp:?}: {:?}",
+  2842→                lay.panel
+  2843→            );
+  2844→            assert!(
+  2845→                lay.panel.right() <= vp_rect.right() + 0.5
+  2846→                    && lay.panel.bottom() <= vp_rect.bottom() + 0.5,
+  2847→                "панель выходит за вьюпорт {vp:?}: {:?}",
+  2848→                lay.panel
+  2849→            );
+  2850→            assert_eq!(lay.sidebar_items.len(), ADMIN_SECTIONS.len());
+  2851→            // Демо-зона справа от сайдбара, внутри панели.
+  2852→            assert!(lay.demo.x >= lay.sidebar.right());
+  2853→            assert!(lay.panel.contains(UiPoint::new(lay.demo.x, lay.demo.y)));
+  2854→            // Слоты шапки не пересекаются.
+  2855→            assert!(lay.reset.right() <= lay.theme.x);
+  2856→            assert!(lay.theme.right() <= lay.close.x);
+  2857→        }
+  2858→    }
+  2859→
+  2860→    /// Секции: индексы и обратное восстановление — полный цикл.
+  2861→    #[test]
+  2862→    fn sections_roundtrip() {
+  2863→        for (i, sec) in ADMIN_SECTIONS.iter().enumerate() {
+  2864→            assert_eq!(sec.index(), i);
+  2865→            assert_eq!(AdminSection::at(i), Some(*sec));
+  2866→        }
+  2867→        assert_eq!(AdminSection::at(ADMIN_SECTIONS.len()), None);
+  2868→        // Ключи подписей различны.
+  2869→        let keys: Vec<&'static str> = ADMIN_SECTIONS.iter().map(|s| s.label_key()).collect();
+  2870→        for i in 0..keys.len() {
+  2871→            for j in (i + 1)..keys.len() {
+  2872→                assert_ne!(keys[i], keys[j]);
+  2873→            }
+  2874→        }
+  2875→    }
+  2876→
+  2877→    /// Hit-слоты шапки совпадают с полной раскладкой (один источник
+  2878→    /// геометрии — контракт реестра FR-052 U2).
+  2879→    #[test]
+  2880→    fn hit_slots_match_full_layout() {
+  2881→        let palette = test_palette();
+  2882→        for vp in [[1280.0, 800.0], [800.0, 560.0]] {
+  2883→            let mut m = new_measurer();
+  2884→            let mut fs = canvas_render::text::measure_font_system();
+  2885→            let lay = admin_layout(
+  2886→                vp,
+  2887→                AdminSection::Tokens,
+  2888→                0.0,
+  2889→                &palette,
+  2890→                [0.2, 0.2, 0.25, 1.0],
+  2891→                Language::Ru,
+  2892→                &mut m,
+  2893→                &mut fs,
+  2894→            );
+  2895→            let (theme, reset, close) = admin_hit_slots(vp, &palette);
+  2896→            assert_eq!(theme, lay.theme);
+  2897→            assert_eq!(reset, lay.reset);
+  2898→            assert_eq!(close, lay.close);
+  2899→            let demo = admin_demo_viewport(vp);
+  2900→            assert_eq!(demo, lay.demo);
+  2901→        }
+  2902→    }
+  2903→
+  2904→    /// KitDraw-адаптер рисует каркас: панель, шапку, пункты сайдбара,
+  2905→    /// рамку демо-зоны — quads/texts непусты и в screen-координатах.
+  2906→    #[test]
+  2907→    fn frame_assembly_smoke() {
+  2908→        let palette = test_palette();
+  2909→        let mut m = new_measurer();
+  2910→        let mut fs = canvas_render::text::measure_font_system();
+  2911→        let lay = admin_layout(
+  2912→            [1280.0, 800.0],
+  2913→            AdminSection::Fill,
+  2914→            0.0,
+  2915→            &palette,
+  2916→            [0.2, 0.2, 0.25, 1.0],
+  2917→            Language::Ru,
+  2918→            &mut m,
+  2919→            &mut fs,
+  2920→        );
+  2921→        let mut d = KitDraw::new();
+  2922→        // Панель + рамка демо-зоны + пункт сайдбара + подписи.
+  2923→        d.rect(lay.panel, palette.panel_fill, palette.panel_border, 10.0);
+  2924→        d.rect(
+  2925→            lay.demo,
+  2926→            [0.0; 4],
+  2927→            palette.control_border,
+  2928→            canvas_core::tokens::RADIUS_PANEL,
+  2929→        );
+  2930→        for (i, item) in lay.sidebar_items.iter().enumerate() {
+  2931→            let state = if i == 1 {
+  2932→                kit::KitState::Selected
+  2933→            } else {
+  2934→                kit::KitState::Normal
+  2935→            };
+  2936→            let style = kit::button_style(kit::ButtonVariant::Secondary, state, &palette);
+  2937→            d.control(*item, &style);
+  2938→            d.label_center(*item, "X", style.text, LABEL_SIZE);
+  2939→        }
+  2940→        d.label_left(
+  2941→            UiRect::new(
+  2942→                lay.section_title.0.x,
+  2943→                lay.section_title.0.y,
+  2944→                lay.demo.w,
+  2945→                18.0,
+  2946→            ),
+  2947→            "Секция",
+  2948→            palette.text_title,
+  2949→            LABEL_SIZE,
+  2950→        );
+  2951→        assert!(!d.quads.is_empty(), "кадр без квадов");
+  2952→        assert!(!d.texts.is_empty(), "кадр без текстов");
+  2953→        // Все квады — валидные размеры (screen-пространство вьюпорта).
+  2954→        for q in &d.quads {
+  2955→            assert!(q.size[0] >= 0.0 && q.size[1] >= 0.0);
+  2956→        }
+  2957→        let _ = color4([0.0, 0.0, 0.0, 1.0]);
+  2958→        let _ = cursor_in(&lay.demo, [lay.demo.x + 1.0, lay.demo.y + 1.0]);
+  2959→    }
+  2960→
+  2961→    /// Перенос по словам: строки не шире слота (кроме одиночного длинного
+  2962→    /// слова), порядок слов сохранён, пустой ввод — одна пустая строка.
+  2963→    #[test]
+  2964→    fn wrap_text_breaks_by_words() {
+  2965→        let mut m = new_measurer();
+  2966→        let mut fs = canvas_render::text::measure_font_system();
+  2967→        let text = "короткий текст переносится по словам при превышении ширины слота";
+  2968→        let lines = wrap_text(&mut m, &mut fs, text, 140.0, LABEL_SIZE);
+  2969→        assert!(lines.len() >= 2, "ожидается перенос: {lines:?}");
+  2970→        // Слова не теряются (сумма слов строк = число слов исходного текста).
+  2971→        let words_in_lines: usize = lines.iter().map(|l| l.split_whitespace().count()).sum();
+  2972→        assert_eq!(words_in_lines, text.split_whitespace().count());
+  2973→        for line in &lines {
+  2974→            let w = m.width_of(&mut fs, line, FONT_FAMILY, LABEL_SIZE);
+  2975→            assert!(
+  2976→                w <= 140.0 + 0.5 || line.split_whitespace().count() == 1,
+  2977→                "строка шире слота и не одиночное слово: {line:?} ({w})"
+  2978→            );
+  2979→        }
+  2980→        assert_eq!(
+  2981→            wrap_text(&mut m, &mut fs, "", 140.0, LABEL_SIZE),
+  2982→            vec![String::new()]
+  2983→        );
+  2984→        assert_eq!(
+  2985→            wrap_text(&mut m, &mut fs, "одно", 140.0, LABEL_SIZE).len(),
+  2986→            1
+  2987→        );
+  2988→    }
+  2989→
+  2990→    /// Тело «Компоненты»: заголовки колонок, 4 ряда кнопок × 6 состояний,
+  2991→    /// икон-кнопки, чипы, поля (4 демо), переключатели — на 1280×800 всё
+  2992→    /// видно целиком (offset 0).
+  2993→    #[test]
+  2994→    fn components_body_full_matrix() {
+  2995→        let palette = test_palette();
+  2996→        let demo = admin_demo_viewport([1280.0, 800.0]);
+  2997→        let mut m = new_measurer();
+  2998→        let mut fs = canvas_render::text::measure_font_system();
+  2999→        let body = components_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+  3000→        assert!(
+  3001→            body.headers.len() >= 10,
+  3002→            "6 состояний + 4 подписи полей (хвост матрицы — по видимости): {}",
+  3003→            body.headers.len()
+  3004→        );
+  3005→        assert_eq!(body.button_rows.len(), 4);
+  3006→        for row in &body.button_rows {
+  3007→            assert_eq!(row.cells.len(), 6, "5 из ST1 + Focused");
+  3008→            let focused = row.cells.iter().filter(|c| c.focused).count();
+  3009→            assert_eq!(focused, 1, "одна Focused-ячейка в ряду");
+  3010→        }
+  3011→        assert_eq!(body.icon_cells.len(), 5, "ST1 без Focused");
+  3012→        assert_eq!(body.chip_cells.len(), 6);
+  3013→        assert_eq!(body.fields.len(), 4, "Normal/Focused/Error/Disabled");
+  3014→        assert_eq!(body.switches.len(), 6, "4 прежних + Pressed + фокус");
+  3015→        // Каретка видна только у Focused-поля
+  3016→        let caret_fields = body
+  3017→            .fields
+  3018→            .iter()
+  3019→            .filter(|(_, fl)| fl.caret_x >= 0.0)
+  3020→            .count();
+  3021→        assert_eq!(caret_fields, 1);
+  3022→    }
+  3023→
+  3024→    /// Пересборка поверхностей (волна 2): хвост матрицы состояний —
+  3025→    /// dropdown закрыт/открыт, tooltip, toast, строки списков в состояниях
+  3026→    /// и бегунок, строки таблицы (зебра/фокус/выбор). На синтетическом
+  3027→    /// высоком окне всё видно при offset 0.
+  3028→    #[test]
+  3029→    fn components_body_extended_matrix() {
+  3030→        let palette = test_palette();
+  3031→        let demo = admin_demo_viewport([1280.0, 800.0]);
+  3032→        let big = UiRect::new(0.0, 0.0, demo.w, 2400.0);
+  3033→        let mut m = new_measurer();
+  3034→        let mut fs = canvas_render::text::measure_font_system();
+  3035→        let body = components_body(big, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+  3036→        // Popup-контролы
+  3037→        assert!(body.dropdown_closed.is_some(), "закрытый dropdown");
+  3038→        let dd = body.dropdown_open.expect("открытый dropdown");
+  3039→        assert_eq!(dd.items.len(), 3, "3 видимых пункта");
+  3040→        assert_eq!(dd.items.len(), dd.labels.len());
+  3041→        assert!(dd.menu.bottom() >= dd.anchor.bottom(), "меню под якорем");
+  3042→        let (tip_anchor, tip_bubble) = body.tooltip.expect("tooltip-демо");
+  3043→        assert!(tip_bubble.w > 0.0, "пузырь показан (delay пройден)");
+  3044→        assert!(tip_bubble.x >= tip_anchor.right() - 1.0, "пузырь у якоря");
+  3045→        assert!(body.toast.is_some(), "toast-хром");
+  3046→        // Строки списка: Normal/Hovered/Selected + бегунок
+  3047→        let states: Vec<KitState> = body.list_state_rows.iter().map(|(s, _)| *s).collect();
+  3048→        assert_eq!(
+  3049→            states,
+  3050→            vec![KitState::Normal, KitState::Hovered, KitState::Selected]
+  3051→        );
+  3052→        assert!(body.list_scroll_knob.is_some(), "бегунок скролла списка");
+  3053→        // Строки таблицы: зебра / фокус / выбор; значения на направляющей
+  3054→        assert_eq!(body.row_state_rows.len(), 3);
+  3055→        assert!(body.row_state_rows[0].zebra, "первая строка — зебра");
+  3056→        assert!(body.row_state_rows[1].focused, "вторая — в фокусе");
+  3057→        assert_eq!(
+  3058→            body.row_state_rows[2].state,
+  3059→            KitState::Selected,
+  3060→            "Σ — выбор"
+  3061→        );
+  3062→        assert!(
+  3063→            body.row_state_rows[2].lay.badge.is_some(),
+  3064→            "бейдж у Σ-строки"
+  3065→        );
+  3066→        let value_right = body.row_state_rows[0].lay.value.right();
+  3067→        assert!(
+  3068→            body.row_state_rows.iter().all(|r| {
+  3069→                r.lay.value.w == 0.0 || (r.lay.value.right() - value_right).abs() < 0.01
+  3070→            }),
+  3071→            "значения строк — на колоночной направляющей (D-4)"
+  3072→        );
+  3073→        // Заголовки хвостовых групп присутствуют
+  3074→        let header_keys: Vec<&str> = body.headers.iter().map(|(_, k)| *k).collect();
+  3075→        for key in [
+  3076→            crate::i18n::keys::ADMIN_MATRIX_DROPDOWN,
+  3077→            crate::i18n::keys::ADMIN_MATRIX_TOOLTIP,
+  3078→            crate::i18n::keys::ADMIN_MATRIX_TOAST,
+  3079→            crate::i18n::keys::ADMIN_MATRIX_LIST,
+  3080→            crate::i18n::keys::ADMIN_MATRIX_ROWS,
+  3081→        ] {
+  3082→            assert!(header_keys.contains(&key), "нет заголовка {key}");
+  3083→        }
+  3084→    }
+  3085→
+  3086→    /// Пересборка поверхностей (волна 2): скролл хвоста матрицы — popup-
+  3087→    /// контролы и строки за окном отфильтрованы целиком (контракт
+  3088→    /// полной видимости).
+  3089→    #[test]
+  3090→    fn components_body_extended_filters_by_scroll() {
+  3091→        let palette = test_palette();
+  3092→        let demo = admin_demo_viewport([1280.0, 800.0]);
+  3093→        let big = UiRect::new(0.0, 0.0, demo.w, 2400.0);
+  3094→        let mut m = new_measurer();
+  3095→        let mut fs = canvas_render::text::measure_font_system();
+  3096→        let full = components_body(big, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+  3097→        let shifted = components_body(big, full.h, &palette, Language::Ru, &mut m, &mut fs);
+  3098→        assert!(shifted.dropdown_closed.is_none());
+  3099→        assert!(shifted.dropdown_open.is_none());
+  3100→        assert!(shifted.tooltip.is_none());
+  3101→        assert!(shifted.toast.is_none());
+  3102→        assert!(shifted.list_state_rows.is_empty());
+  3103→        assert!(shifted.list_scroll_knob.is_none());
+  3104→        assert!(shifted.row_state_rows.is_empty());
+  3105→    }
+  3106→
+  3107→    /// Скролл тела: при большом offset ячейки за окном демо-зоны
+  3108→    /// отфильтрованы (контракт видимости витрины FR-059).
+  3109→    #[test]
+  3110→    fn components_body_filters_by_scroll() {
+  3111→        let palette = test_palette();
+  3112→        let demo = admin_demo_viewport([1280.0, 800.0]);
+  3113→        let mut m = new_measurer();
+  3114→        let mut fs = canvas_render::text::measure_font_system();
+  3115→        let full = components_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+  3116→        let shifted = components_body(demo, full.h, &palette, Language::Ru, &mut m, &mut fs);
+  3117→        assert!(shifted.button_rows.is_empty(), "весь контент выше окна");
+  3118→        assert!(shifted.fields.is_empty());
+  3119→    }
+  3120→
+  3121→    /// Тело «Наполнение»: 9 контейнеров × 3 уровня, все демо-геометрии
+  3122→    /// предвычислены (поля/чипы/dropdown/таблица).
+  3123→    #[test]
+  3124→    fn fill_body_all_containers() {
+  3125→        let palette = test_palette();
+  3126→        let demo = admin_demo_viewport([1280.0, 800.0]);
+  3127→        let mut m = new_measurer();
+  3128→        let mut fs = canvas_render::text::measure_font_system();
+  3129→        let body = fill_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+  3130→        assert_eq!(body.headers.len(), 3, "empty/medium/full");
+  3131→        assert!(
+  3132→            body.rows.len() >= 5,
+  3133→            "первый экран: часть рядов, остальные — скроллом"
+  3134→        );
+  3135→        // Полный состав 9 контейнеров — на синтетическом высоком окне
+  3136→        // (fill_body — чистая функция от окна, вьюпорт панели не обязан)
+  3137→        let big = UiRect::new(0.0, 0.0, demo.w, 1200.0);
+  3138→        let all = fill_body(big, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+  3139→        assert_eq!(all.rows.len(), 9, "9 контейнеров");
+  3140→        for row in &all.rows {
+  3141→            assert_eq!(row.cells.len(), 3, "все уровни видны при offset 0");
+  3142→        }
+  3143→        assert_eq!(all.field_lays.len(), 3);
+  3144→        // Среднее — 2 чипа, полное — 5
+  3145→        assert_eq!(
+  3146→            all.chip_lays
+  3147→                .iter()
+  3148→                .filter(|(l, _)| *l == FillLevel::Medium)
+  3149→                .count(),
+  3150→            2
+  3151→        );
+  3152→        assert_eq!(
+  3153→            all.chip_lays
+  3154→                .iter()
+  3155→                .filter(|(l, _)| *l == FillLevel::Full)
+  3156→                .count(),
+  3157→            5
+  3158→        );
+  3159→        assert_eq!(all.dropdown.len(), 3);
+  3160→        let full_dd = all
+  3161→            .dropdown
+  3162→            .iter()
+  3163→            .find(|dd| dd.level == FillLevel::Full)
+  3164→            .expect("dropdown full");
+  3165→        assert_eq!(
+  3166→            full_dd.items.len(),
+  3167→            4,
+  3168→            "видимых пунктов не больше окна меню"
+  3169→        );
+  3170→        // Таблица: среднее 2 строки, полное 4 строки
+  3171→        let med = all
+  3172→            .row_table
+  3173→            .iter()
+  3174→            .filter(|d| d.level == FillLevel::Medium)
+  3175→            .count();
+  3176→        let full_rows = all
+  3177→            .row_table
+  3178→            .iter()
+  3179→            .filter(|d| d.level == FillLevel::Full)
+  3180→            .count();
+  3181→        assert_eq!(med, 2);
+  3182→        assert_eq!(full_rows, 4);
+  3183→        // Σ в полном ряду — Selected
+  3184→        assert!(all
+  3185→            .row_table
+  3186→            .iter()
+  3187→            .any(|d| d.level == FillLevel::Full && d.state == KitState::Selected));
+  3188→        // FR-068 W3 (M4): геометрия — компонент Table (set_rows +
+  3189→        // row_layout_with): общие направляющие уровня сохранены — значения
+  3190→        // и юниты всех строк полного ряда на одних осях (проход A/B §4.2)
+  3191→        let full_lays: Vec<&FillTableDemo> = all
+  3192→            .row_table
+  3193→            .iter()
+  3194→            .filter(|d| d.level == FillLevel::Full)
+  3195→            .collect();
+  3196→        let value_right = full_lays[0].lay.value.right();
+  3197→        let unit_right = full_lays[0].lay.unit.right();
+  3198→        assert!(
+  3199→            full_lays
+  3200→                .iter()
+  3201→                .all(|d| (d.lay.value.right() - value_right).abs() < 0.01),
+  3202→            "значения полного ряда — на колоночной направляющей (D-4)"
+  3203→        );
+  3204→        assert!(
+  3205→            full_lays
+  3206→                .iter()
+  3207→                .all(|d| (d.lay.unit.right() - unit_right).abs() < 0.01),
+  3208→            "юниты полного ряда — на направляющей юнитов"
+  3209→        );
+  3210→        // Зебра-override демо (нечётные строки) — как прежде
+  3211→        assert!(full_lays
+  3212→            .iter()
+  3213→            .enumerate()
+  3214→            .all(|(i, d)| d.zebra == (i % 2 == 1)));
+  3215→    }
+  3216→
+  3217→    /// Отрисовка тел непуста (smoke: quads/texts от draw_components/draw_fill).
+  3218→    #[test]
+  3219→    fn draw_bodies_smoke() {
+  3220→        let palette = test_palette();
+  3221→        let demo = admin_demo_viewport([1280.0, 800.0]);
+  3222→        let mut m = new_measurer();
+  3223→        let mut fs = canvas_render::text::measure_font_system();
+  3224→        let comp = components_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+  3225→        let mut d = KitDraw::new();
+  3226→        draw_components(&mut d, &comp, &palette, Language::Ru);
+  3227→        assert!(d.quads.len() > 20 && d.texts.len() > 20);
+  3228→        let fill = fill_body(demo, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+  3229→        let mut d2 = KitDraw::new();
+  3230→        draw_fill(&mut d2, &fill, &palette, Language::Ru);
+  3231→        assert!(d2.quads.len() > 30 && d2.texts.len() > 10);
+  3232→    }
+  3233→
+  3234→    /// Тело «Канвас»: 4 карточки-состояния, 4 ребра, 3 порта (ST4);
+  3235→    /// цвета рёбер — примитивы EDGE_*, dimmed — α 0.35.
+  3236→    #[test]
+  3237→    fn canvas_body_st4_states() {
+  3238→        let palette = test_palette();
+  3239→        let demo = admin_demo_viewport([1280.0, 800.0]);
+  3240→        let mut m = new_measurer();
+  3241→        let mut fs = canvas_render::text::measure_font_system();
+  3242→        let body = canvas_body(
+  3243→            demo,
+  3244→            0.0,
+  3245→            &palette,
+  3246→            [0.2, 0.2, 0.25, 1.0],
+  3247→            Language::Ru,
+  3248→            &mut m,
+  3249→            &mut fs,
+  3250→        );
+  3251→        assert_eq!(body.node_demos.len(), 4, "normal/selected/broken/group");
+  3252→        // Selected — рамка accent
+  3253→        assert_eq!(body.node_demos[1].2, palette.accent);
+  3254→        // Broken — примитив BROKEN_BORDER
+  3255→        assert_eq!(body.node_demos[2].2, canvas_core::tokens::BROKEN_BORDER);
+  3256→        assert_eq!(body.edge_demos.len(), 4);
+  3257→        assert_eq!(body.edge_demos[0].2, canvas_core::tokens::EDGE_DEFAULT);
+  3258→        assert_eq!(body.edge_demos[1].2, canvas_core::tokens::EDGE_FLOW);
+  3259→        assert_eq!(body.edge_demos[2].2, canvas_core::tokens::EDGE_DRAFT);
+  3260→        // Dimmed — альфа 0.35
+  3261→        assert!((body.edge_demos[3].2[3] - 0.35).abs() < 0.001);
+  3262→        assert_eq!(body.port_demos.len(), 3, "idle/hover/active");
+  3263→        // Порты: точки 10 → 26
+  3264→        assert_eq!(body.port_demos[0].2, 10.0);
+  3265→        assert_eq!(body.port_demos[1].2, 26.0);
+  3266→    }
+  3267→
+  3268→    /// Пересборка поверхностей (волна 2): демо табличного тела ноды
+  3269→    /// (FR-061) — карточка с хедером, 3 строки на общих направляющих,
+  3270→    /// зебра + бейдж у Σ-строки; строки внутри карточки.
+  3271→    #[test]
+  3272→    fn canvas_body_node_table_demo() {
+  3273→        let palette = test_palette();
+  3274→        let demo = admin_demo_viewport([1280.0, 800.0]);
+  3275→        let mut m = new_measurer();
+  3276→        let mut fs = canvas_render::text::measure_font_system();
+  3277→        let body = canvas_body(
+  3278→            demo,
+  3279→            0.0,
+  3280→            &palette,
+  3281→            [0.2, 0.2, 0.25, 1.0],
+  3282→            Language::Ru,
+  3283→            &mut m,
+  3284→            &mut fs,
+  3285→        );
+  3286→        let table = body.node_table.expect("демо табличного тела построено");
+  3287→        assert_eq!(table.rows.len(), NODE_TABLE_ROWS);
+  3288→        // Хедер — верх карточки, строки — под ним и внутри карточки.
+  3289→        assert_eq!(table.header.y, table.card.y);
+  3290→        assert!(table
+  3291→            .rows
+  3292→            .iter()
+  3293→            .all(|(.., lay)| lay.row.x >= table.card.x
+  3294→                && lay.row.right() <= table.card.right() + 0.01));
+  3295→        // Общие направляющие: значения всех строк — на одной оси (D-4).
+  3296→        let value_right = table.rows[0].3.value.right();
+  3297→        assert!(table
+  3298→            .rows
+  3299→            .iter()
+  3300→            .all(|(.., lay)| lay.value.w == 0.0 || (lay.value.right() - value_right).abs() < 0.01));
+  3301→        // Зебра (вторая) + бейдж/Selected (третья).
+  3302→        assert!(table.rows[1].2, "вторая строка — зебра");
+  3303→        assert!(table.rows[2].1 == KitState::Selected, "Σ — выбор");
+  3304→        assert!(!table.rows[2].0.badge.is_empty(), "у Σ — бейдж-демо");
+  3305→    }
+  3306→
+  3307→    /// Пересборка поверхностей (волна 2): новые ключи i18n админпанели
+  3308→    /// существуют в ОБОИХ языках.
+  3309→    #[test]
+  3310→    fn extended_admin_i18n_keys_exist() {
+  3311→        let keys = [
+  3312→            crate::i18n::keys::ADMIN_MATRIX_DROPDOWN,
+  3313→            crate::i18n::keys::ADMIN_MATRIX_TOOLTIP,
+  3314→            crate::i18n::keys::ADMIN_MATRIX_TOAST,
+  3315→            crate::i18n::keys::ADMIN_MATRIX_LIST,
+  3316→            crate::i18n::keys::ADMIN_MATRIX_ROWS,
+  3317→            crate::i18n::keys::ADMIN_NODE_TABLE,
+  3318→        ];
+  3319→        for lang in [Language::Ru, Language::En] {
+  3320→            for key in keys {
+  3321→                assert_ne!(
+  3322→                    crate::i18n::tr(lang, key),
+  3323→                    key,
+  3324→                    "нет перевода {key} для {lang:?}"
+  3325→                );
+  3326→            }
+  3327→        }
+  3328→    }
+  3329→
+  3330→    /// Тело «Токены»: 4 группы; группа слотов — 14 интерактивных свотчей;
+  3331→    /// read-only группы — размеры/типографика/движение.
+  3332→    #[test]
+  3333→    fn tokens_body_catalog() {
+  3334→        let palette = test_palette();
+  3335→        let demo = admin_demo_viewport([1280.0, 800.0]);
+  3336→        let mut m = new_measurer();
+  3337→        let mut fs = canvas_render::text::measure_font_system();
+  3338→        let big = UiRect::new(0.0, 0.0, demo.w, 1600.0);
+  3339→        let body = tokens_body(big, 0.0, &palette, Language::Ru, &mut m, &mut fs);
+  3340→        assert_eq!(body.groups.len(), 4);
+  3341→        let slots = &body.groups[0];
+  3342→        let slot_rows: Vec<&TokenRow> = slots
+  3343→            .rows
+  3344→            .iter()
+  3345→            .filter(|r| r.slot_index.is_some())
+  3346→            .collect();
+  3347→        assert_eq!(slot_rows.len(), PALETTE_SLOTS.len(), "все 14 слотов");
+  3348→        assert!(slot_rows.iter().all(|r| r.swatch.is_some()));
+  3349→        // Значение — hex текущего слота
+  3350→        assert_eq!(slot_rows[13].value, hex_of(palette.accent));
+  3351→        // Размеры: 12 строк, типографика 4, движение 4 (плюс заголовок-
+  3352→        // псевдострока группы — строки данных без пустого имени)
+  3353→        let data_rows = |g: &TokenGroup| g.rows.iter().filter(|r| !r.name.is_empty()).count();
+  3354→        assert_eq!(data_rows(&body.groups[1]), 12);
+  3355→        assert_eq!(data_rows(&body.groups[2]), 4);
+  3356→        assert_eq!(data_rows(&body.groups[3]), 4);
+  3357→        // У группы слотов псевдостроки нет данных — все строки слоты
+  3358→        assert_eq!(
+  3359→            body.groups[0]
+  3360→                .rows
+  3361→                .iter()
+  3362→                .filter(|r| !r.name.is_empty())
+  3363→                .count(),
+  3364→            14
+  3365→        );
+  3366→    }
+  3367→
+  3368→    /// Live-правка: cycle_slot идёт по кандидатам по кругу; неизвестный
+  3369→    /// цвет → первый кандидат; hex_of — корректный формат.
+  3370→    #[test]
+  3371→    fn token_edit_cycles_candidates() {
+  3372→        let first = TOKEN_CANDIDATES[0];
+  3373→        let second = cycle_slot(first);
+  3374→        assert_eq!(second, TOKEN_CANDIDATES[1]);
+  3375→        // Полный круг
+  3376→        let mut cur = first;
+  3377→        for _ in 0..TOKEN_CANDIDATES.len() {
+  3378→            cur = cycle_slot(cur);
+  3379→        }
+  3380→        assert_eq!(cur, first);
+  3381→        // Неизвестный цвет — первый кандидат
+  3382→        assert_eq!(cycle_slot([0.123, 0.456, 0.789, 1.0]), TOKEN_CANDIDATES[0]);
+  3383→        // hex
+  3384→        assert_eq!(hex_of([1.0, 0.0, 0.0, 0.5]), "#ff0000");
+  3385→        assert_eq!(hex_of([0.0, 1.0, 0.0, 1.0]), "#00ff00");
+  3386→    }
+  3387→
+  3388→    /// slot_color/set_slot_color: полный цикл по каталогу — запись читается.
+  3389→    #[test]
+  3390→    fn slot_accessors_roundtrip() {
+  3391→        let mut p = test_palette();
+  3392→        for i in 0..PALETTE_SLOTS.len() {
+  3393→            let c = [0.1 * i as f32, 0.2, 0.3, 1.0];
+  3394→            set_slot_color(&mut p, i, c);
+  3395→            assert_eq!(slot_color(&p, i), c);
+  3396→        }
+  3397→    }
+  3398→
+  3399→    /// Фикс налезания 2026-09-25 (wasm-аудит 19_admin): тело секции
+  3400→    /// строится ПОД подсказкой — верх матрицы ниже низа последней строки
+  3401→    /// hint'а, налезания текста на колонки/кнопки нет (3 вьюпорта × RU/EN).
+  3402→    #[test]
+  3403→    fn components_body_starts_below_hint() {
+  3404→        for vp in [[1280.0, 800.0], [1024.0, 640.0], [800.0, 560.0]] {
+  3405→            for lang in [Language::Ru, Language::En] {
+  3406→                let mut m = new_measurer();
+  3407→                let mut fs = canvas_render::text::measure_font_system();
+  3408→                let lay = admin_layout(
+  3409→                    vp,
+  3410→                    AdminSection::Components,
+  3411→                    0.0,
+  3412→                    &test_palette(),
+  3413→                    [0.2, 0.2, 0.25, 1.0],
+  3414→                    lang,
+  3415→                    &mut m,
+  3416→                    &mut fs,
+  3417→                );
+  3418→                let Some(comp) = &lay.components else {
+  3419→                    panic!("нет тела компонентов при {vp:?}/{lang:?}");
+  3420→                };
+  3421→                // Низ hint'а — формула рисования: demo.y + 24 + n·18.
+  3422→                let hint_bottom = lay.demo.y + 24.0 + lay.hint_lines.len() as f32 * 18.0;
+  3423→                let first_header_y = comp
+  3424→                    .headers
+  3425→                    .iter()
+  3426→                    .map(|(p, _)| p.y)
+  3427→                    .fold(f32::INFINITY, f32::min);
+  3428→                assert!(
+  3429→                    first_header_y >= hint_bottom - 0.01,
+  3430→                    "{vp:?}/{lang:?}: заголовок колонки {first_header_y} выше низа подсказки {hint_bottom}"
+  3431→                );
+  3432→            }
+  3433→        }
+  3434→    }
+  3435→
+  3436→    /// Тестовая палитра (значения не важны — важны различные слоты).
+  3437→    fn test_palette() -> KitPalette {
+  3438→        KitPalette {
+  3439→            panel_fill: [0.1, 0.1, 0.12, 0.97],
+  3440→            panel_border: [0.3, 0.3, 0.35, 1.0],
+  3441→            control_fill: [0.2, 0.2, 0.24, 1.0],
+  3442→            control_border: [0.35, 0.4, 0.5, 1.0],
+  3443→            control_primary: [0.16, 0.32, 0.6, 1.0],
+  3444→            control_danger: [0.8, 0.2, 0.2, 1.0],
+  3445→            hover_fill: [0.25, 0.25, 0.3, 1.0],
+  3446→            primary_hover_fill: [0.25, 0.46, 0.84, 1.0],
+  3447→            selected_fill: [0.3, 0.3, 0.4, 1.0],
+  3448→            text: [0.9, 0.9, 0.95, 1.0],
+  3449→            text_title: [0.95, 0.95, 1.0, 1.0],
+  3450→            text_muted: [0.7, 0.7, 0.75, 1.0],
+  3451→            disabled_text: [0.5, 0.5, 0.55, 1.0],
+  3452→            accent: [0.396, 0.612, 0.969, 1.0],
+  3453→            // FR-070 (волна W-d): новые слоты — не используются в тестах
+  3454→            // admin_ui (геометрия галереи), но значения берём из
+  3455→            // `KitPalette::dark()` (Agent B) — чтобы test fixture не расходился
+  3456→            // с production-коридором (single source of truth).
+  3457→            control_success: [0.30, 0.75, 0.55, 1.0],
+  3458→            control_warning: [0.95, 0.65, 0.30, 1.0],
+  3459→            stage_dim: [0.02, 0.02, 0.04, 0.6],
+  3460→            scrollbar_thumb: [0.35, 0.38, 0.46, 0.7],
+  3461→            rule_color: [0.30, 0.33, 0.40, 0.8],
+  3462→        }
+  3463→    }
+  3464→}
+  3465→

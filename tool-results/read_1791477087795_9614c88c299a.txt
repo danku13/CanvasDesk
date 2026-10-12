@@ -1,0 +1,831 @@
+     1→//! Геометрия связей (T8): порты нод, кубическая Безье между портами,
+     2→//! тесселяция в полилинию и hit-test «точка → кривая».
+     3→//!
+     4→//! Всё — чистые функции в world-координатах (SPEC §5.1); рендер использует
+     5→//! тесселяцию, ввод — hit-test. Зависимостей от ОС и GPU нет.
+     6→
+     7→use crate::model::{Canvas, Edge, Node, Side};
+     8→
+     9→/// Допуск hit-test'а линии связи в world-единицах (TASKS T8: < 6px).
+    10→pub const EDGE_HIT_TOLERANCE: f32 = 6.0;
+    11→
+    12→/// Допуск попадания курсора в порт ноды — в экранных пикселях
+    13→/// (переводится в world-единицы делением на zoom).
+    14→/// Дефолт зоны; пользователь настраивает величину в настройках приложения
+    15→/// (CR-003, `Settings::port_zone_px`) — она пробрасывается в `port_at`.
+    16→pub const PORT_HIT_PX: f32 = 10.0;
+    17→
+    18→/// Число сегментов полилинии при тесселяции кривой.
+    19→pub const TESSELLATION_SEGMENTS: usize = 24;
+    20→
+    21→/// Минимальное смещение контрольных точек от портов (world-единицы).
+    22→const MIN_CONTROL_OFFSET: f32 = 40.0;
+    23→
+    24→/// Зазор связи при обходе нод: препятствия инфлируются на эту величину
+    25→/// (world-px), чтобы линия не липла к границам нод.
+    26→pub const AVOID_MARGIN: f32 = 12.0;
+    27→
+    28→/// Предел числа огибаний на одну связь: страховка от зацикливания роутинга;
+    29→/// при превышении возвращаем исходную полилинию (не хуже старого поведения).
+    30→pub const MAX_DETOURS: usize = 8;
+    31→
+    32→/// Кубическая кривая Безье: концы в портах, контрольные точки — по нормалям.
+    33→#[derive(Debug, Clone, Copy, PartialEq)]
+    34→pub struct CubicBezier {
+    35→    pub p0: [f32; 2],
+    36→    pub c0: [f32; 2],
+    37→    pub c1: [f32; 2],
+    38→    pub p1: [f32; 2],
+    39→}
+    40→
+    41→/// Точка порта — центр соответствующей стороны ноды.
+    42→pub fn port_point(node: &Node, side: Side) -> [f32; 2] {
+    43→    let cx = node.x + node.width / 2.0;
+    44→    let cy = node.y + node.height / 2.0;
+    45→    match side {
+    46→        Side::Top => [cx, node.y],
+    47→        Side::Right => [node.x + node.width, cy],
+    48→        Side::Bottom => [cx, node.y + node.height],
+    49→        Side::Left => [node.x, cy],
+    50→    }
+    51→}
+    52→
+    53→/// Внешняя нормаль стороны (направление «от ноды»).
+    54→pub fn side_normal(side: Side) -> [f32; 2] {
+    55→    match side {
+    56→        Side::Top => [0.0, -1.0],
+    57→        Side::Right => [1.0, 0.0],
+    58→        Side::Bottom => [0.0, 1.0],
+    59→        Side::Left => [-1.0, 0.0],
+    60→    }
+    61→}
+    62→
+    63→/// Сторона ноды, ближайшая к точке (доминирующая ось с учётом пропорций).
+    64→/// Используется при drop резиновой линии и для None-сторон из файла.
+    65→pub fn nearest_side(node: &Node, point: [f32; 2]) -> Side {
+    66→    let dx = point[0] - (node.x + node.width / 2.0);
+    67→    let dy = point[1] - (node.y + node.height / 2.0);
+    68→    let nx = dx.abs() / (node.width / 2.0).max(1.0);
+    69→    let ny = dy.abs() / (node.height / 2.0).max(1.0);
+    70→    if nx >= ny {
+    71→        if dx >= 0.0 {
+    72→            Side::Right
+    73→        } else {
+    74→            Side::Left
+    75→        }
+    76→    } else if dy >= 0.0 {
+    77→        Side::Bottom
+    78→    } else {
+    79→        Side::Top
+    80→    }
+    81→}
+    82→
+    83→/// Кривая между портами двух нод. Контрольные точки смещены от портов
+    84→/// по нормалям сторон на max(MIN_CONTROL_OFFSET, 40% расстояния).
+    85→pub fn bezier_between(a: &Node, sa: Side, b: &Node, sb: Side) -> CubicBezier {
+    86→    let p0 = port_point(a, sa);
+    87→    let p1 = port_point(b, sb);
+    88→    let dist = ((p1[0] - p0[0]).powi(2) + (p1[1] - p0[1]).powi(2)).sqrt();
+    89→    let offset = (dist * 0.4).max(MIN_CONTROL_OFFSET);
+    90→    let n0 = side_normal(sa);
+    91→    let n1 = side_normal(sb);
+    92→    CubicBezier {
+    93→        p0,
+    94→        c0: [p0[0] + n0[0] * offset, p0[1] + n0[1] * offset],
+    95→        c1: [p1[0] + n1[0] * offset, p1[1] + n1[1] * offset],
+    96→        p1,
+    97→    }
+    98→}
+    99→
+   100→/// Точка на кривой по параметру t ∈ [0, 1].
+   101→pub fn curve_point(curve: &CubicBezier, t: f32) -> [f32; 2] {
+   102→    let mt = 1.0 - t;
+   103→    let (b0, b1, b2, b3) = (mt * mt * mt, 3.0 * mt * mt * t, 3.0 * mt * t * t, t * t * t);
+   104→    [
+   105→        b0 * curve.p0[0] + b1 * curve.c0[0] + b2 * curve.c1[0] + b3 * curve.p1[0],
+   106→        b0 * curve.p0[1] + b1 * curve.c0[1] + b2 * curve.c1[1] + b3 * curve.p1[1],
+   107→    ]
+   108→}
+   109→
+   110→/// Нормированная касательная к кривой в точке t (для стрелки на конце).
+   111→pub fn curve_tangent(curve: &CubicBezier, t: f32) -> [f32; 2] {
+   112→    let mt = 1.0 - t;
+   113→    let dx = 3.0 * mt * mt * (curve.c0[0] - curve.p0[0])
+   114→        + 6.0 * mt * t * (curve.c1[0] - curve.c0[0])
+   115→        + 3.0 * t * t * (curve.p1[0] - curve.c1[0]);
+   116→    let dy = 3.0 * mt * mt * (curve.c0[1] - curve.p0[1])
+   117→        + 6.0 * mt * t * (curve.c1[1] - curve.c0[1])
+   118→        + 3.0 * t * t * (curve.p1[1] - curve.c1[1]);
+   119→    let len = (dx * dx + dy * dy).sqrt();
+   120→    if len < f32::EPSILON {
+   121→        [1.0, 0.0]
+   122→    } else {
+   123→        [dx / len, dy / len]
+   124→    }
+   125→}
+   126→
+   127→/// Тесселяция кривой в полилинию из `segments` отрезков (segments+1 точек).
+   128→pub fn tessellate(curve: &CubicBezier, segments: usize) -> Vec<[f32; 2]> {
+   129→    let segments = segments.max(1);
+   130→    (0..=segments)
+   131→        .map(|i| curve_point(curve, i as f32 / segments as f32))
+   132→        .collect()
+   133→}
+   134→
+   135→/// Расстояние от точки до отрезка.
+   136→fn distance_point_to_segment(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+   137→    let ab = [b[0] - a[0], b[1] - a[1]];
+   138→    let ap = [p[0] - a[0], p[1] - a[1]];
+   139→    let len2 = ab[0] * ab[0] + ab[1] * ab[1];
+   140→    let t = if len2 < f32::EPSILON {
+   141→        0.0
+   142→    } else {
+   143→        ((ap[0] * ab[0] + ap[1] * ab[1]) / len2).clamp(0.0, 1.0)
+   144→    };
+   145→    let closest = [a[0] + ab[0] * t, a[1] + ab[1] * t];
+   146→    ((p[0] - closest[0]).powi(2) + (p[1] - closest[1]).powi(2)).sqrt()
+   147→}
+   148→
+   149→/// Расстояние от точки до полилинии (минимум по сегментам).
+   150→pub fn distance_point_to_polyline(point: [f32; 2], points: &[[f32; 2]]) -> f32 {
+   151→    points
+   152→        .windows(2)
+   153→        .map(|seg| distance_point_to_segment(point, seg[0], seg[1]))
+   154→        .fold(f32::INFINITY, f32::min)
+   155→}
+   156→
+   157→/// CR-008: штраф стоимости пары портов, когда порт «спиной» к другой ноде
+   158→/// (нормаль смотрит против направления на соседа) — в долях расстояния.
+   159→const BACK_FACING_PENALTY: f32 = 1.5;
+   160→
+   161→/// CR-008: штраф за одинаковые стороны истока и стока (петлеобразная
+   162→/// кривая) — в долях расстояния.
+   163→const SAME_SIDE_PENALTY: f32 = 1.0;
+   164→
+   165→/// Порог «спины» по скалярному произведению нормали и направления на
+   166→/// соседа: |dot| ниже порога — боковой порт, штрафа нет.
+   167→const FACING_DOT_THRESHOLD: f32 = 0.25;
+   168→
+   169→/// CR-008: пара сторон с кратчайшим путём между нодами. Перебор всех 4×4
+   170→/// пар портов; стоимость = расстояние между портами + штрафы за «спинные»
+   171→/// порты (нормаль смотрит от соседа) и за одинаковые стороны. Детерминирован:
+   172→/// при равной стоимости остаётся первая пара в порядке перебора (Top, Right,
+   173→/// Bottom, Left по истоку; внутренний цикл — по стоку).
+   174→pub fn best_sides(from: &Node, to: &Node) -> (Side, Side) {
+   175→    let sides = [Side::Top, Side::Right, Side::Bottom, Side::Left];
+   176→    let mut best = (Side::Top, Side::Top);
+   177→    let mut best_cost = f32::INFINITY;
+   178→    for &sa in &sides {
+   179→        let pa = port_point(from, sa);
+   180→        let na = side_normal(sa);
+   181→        for &sb in &sides {
+   182→            let pb = port_point(to, sb);
+   183→            let dx = pb[0] - pa[0];
+   184→            let dy = pb[1] - pa[1];
+   185→            let dist = dx.hypot(dy).max(1e-3);
+   186→            let ux = dx / dist;
+   187→            let uy = dy / dist;
+   188→            let mut cost = dist;
+   189→            // порт истока «спиной» к получателю
+   190→            if na[0] * ux + na[1] * uy < -FACING_DOT_THRESHOLD {
+   191→                cost += dist * BACK_FACING_PENALTY;
+   192→            }
+   193→            // порт получателя «спиной» к истоку (нормаль по направлению связи)
+   194→            let nb = side_normal(sb);
+   195→            if nb[0] * ux + nb[1] * uy > FACING_DOT_THRESHOLD {
+   196→                cost += dist * BACK_FACING_PENALTY;
+   197→            }
+   198→            if sa == sb {
+   199→                cost += dist * SAME_SIDE_PENALTY;
+   200→            }
+   201→            if cost < best_cost - f32::EPSILON {
+   202→                best_cost = cost;
+   203→                best = (sa, sb);
+   204→            }
+   205→        }
+   206→    }
+   207→    best
+   208→}
+   209→
+   210→/// CR-008: эффективные стороны связи — склейка закреплений и геометрии.
+   211→/// Закреплённый конец (`canvasdesk.pin_ports`) берёт сохранённую сторону
+   212→/// (None — `best_sides` как фолбэк), свободный — сторону кратчайшего пути.
+   213→pub fn effective_sides(edge: &Edge, from: &Node, to: &Node) -> (Side, Side) {
+   214→    let (from_pinned, to_pinned) = edge.port_pins();
+   215→    let (best_from, best_to) = best_sides(from, to);
+   216→    let from_side = if from_pinned {
+   217→        edge.from_side.unwrap_or(best_from)
+   218→    } else {
+   219→        best_from
+   220→    };
+   221→    let to_side = if to_pinned {
+   222→        edge.to_side.unwrap_or(best_to)
+   223→    } else {
+   224→        best_to
+   225→    };
+   226→    (from_side, to_side)
+   227→}
+   228→
+   229→/// Кривая связи: резолвит ноды по id; стороны — эффективные (CR-008):
+   230→/// закреплённый конец — сохранённая сторона, свободный — кратчайший путь
+   231→/// по взаимному положению нод (пересчёт на каждом кадре: drag, автораскладка
+   232→/// и загрузка идут через один путь). None, если хотя бы одна нода не найдена
+   233→/// (висячая связь).
+   234→pub fn edge_curve(canvas: &Canvas, edge: &Edge) -> Option<CubicBezier> {
+   235→    let from = canvas.node(&edge.from_node)?;
+   236→    let to = canvas.node(&edge.to_node)?;
+   237→    let (from_side, to_side) = effective_sides(edge, from, to);
+   238→    Some(bezier_between(from, from_side, to, to_side))
+   239→}
+   240→
+   241→/// Конец связи для перепривязки (CR-002).
+   242→#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+   243→pub enum EdgeEnd {
+   244→    /// Исток (`fromNode`).
+   245→    From,
+   246→    /// Сток (`toNode`).
+   247→    To,
+   248→}
+   249→
+   250→/// Разрешённый конец связи: сторона и точка порта. None-сторона выводится
+   251→/// из взаимного положения нод (резолв как в `edge_curve`) — хэндл перепривязки
+   252→/// рисуется/ловится там же, где линия фактически начинается. None — связь
+   253→/// висячая (ноды нет) или индекс невалиден.
+   254→pub fn edge_endpoint(canvas: &Canvas, edge_index: usize, end: EdgeEnd) -> Option<(Side, [f32; 2])> {
+   255→    let edge = canvas.edges.get(edge_index)?;
+   256→    let from = canvas.node(&edge.from_node)?;
+   257→    let to = canvas.node(&edge.to_node)?;
+   258→    // CR-008: сторона хэндла — та же эффективная сторона, по которой
+   259→    // рисуется линия (пин учитывается, авто следует геометрии)
+   260→    let (eff_from, eff_to) = effective_sides(edge, from, to);
+   261→    let (node, side) = match end {
+   262→        EdgeEnd::From => (from, eff_from),
+   263→        EdgeEnd::To => (to, eff_to),
+   264→    };
+   265→    Some((side, port_point(node, side)))
+   266→}
+   267→
+   268→/// Перепривязать конец связи к ноде `target_node_id` со стороной `side`
+   269→/// (CR-002). Чистая функция над моделью: id и настройки связи (лейбл,
+   270→/// цвет, стиль, толщина) сохраняются. Отказ (false):
+   271→///
+   272→/// - связь/индекс невалидны (висячая);
+   273→/// - целевая нода не найдена;
+   274→/// - цель — противоположный конец (петля или слияние концов).
+   275→///
+   276→/// Успех — true (поля обновлены на месте).
+   277→pub fn retarget_edge(
+   278→    canvas: &mut Canvas,
+   279→    edge_index: usize,
+   280→    end: EdgeEnd,
+   281→    target_node_id: &str,
+   282→    side: Side,
+   283→) -> bool {
+   284→    // Проверки ДО mutable-заимствования: цель существует и не противоположный
+   285→    // конец (immutable-чтения не конфликтуют друг с другом)
+   286→    let opposite = {
+   287→        let Some(edge) = canvas.edges.get(edge_index) else {
+   288→            return false;
+   289→        };
+   290→        match end {
+   291→            EdgeEnd::From => edge.to_node.clone(),
+   292→            EdgeEnd::To => edge.from_node.clone(),
+   293→        }
+   294→    };
+   295→    if opposite == target_node_id {
+   296→        return false;
+   297→    }
+   298→    if canvas.node(target_node_id).is_none() {
+   299→        return false;
+   300→    }
+   301→    let Some(edge) = canvas.edges.get_mut(edge_index) else {
+   302→        return false;
+   303→    };
+   304→    let target = target_node_id.to_owned();
+   305→    match end {
+   306→        EdgeEnd::From => {
+   307→            edge.from_node = target;
+   308→            edge.from_side = Some(side);
+   309→            // FR-025: перепривязка ИСТОКА на другую ноду сбрасывает
+   310→            // построчный исток (индекс строки мог не существовать у новой
+   311→            // ноды; v1 — деградация до узлового значения)
+   312→            edge.from_line = None;
+   313→            // FR-029: именованный выход истока тоже сбрасывается — у новой
+   314→            // ноды такого выхода может не быть (деградация до узлового
+   315→            // значения, семантика как у from_line)
+   316→            edge.from_output = None;
+   317→        }
+   318→        EdgeEnd::To => {
+   319→            edge.to_node = target;
+   320→            edge.to_side = Some(side);
+   321→        }
+   322→    }
+   323→    true
+   324→}
+   325→
+   326→/// Расстояние от world-точки до кривой связи; None для висячей связи.
+   327→/// Hit-test: результат < EDGE_HIT_TOLERANCE — попадание. `avoid` — обход
+   328→/// посторонних нод (глобальная настройка): рендер и hit-test ходят по одной
+   329→/// и той же полилинии, чтобы кликабельная область совпадала с нарисованным.
+   330→pub fn distance_to_edge(canvas: &Canvas, edge: &Edge, point: [f32; 2], avoid: bool) -> Option<f32> {
+   331→    let points = edge_polyline(canvas, edge, avoid, TESSELLATION_SEGMENTS)?;
+   332→    Some(distance_point_to_polyline(point, &points))
+   333→}
+   334→
+   335→/// Полилиния связи для рендера/hit-test'а: тесселяция Безье; при avoid —
+   336→/// с огибанием посторонних нод. Не препятствия: концевые ноды и ВСЕ их
+   337→/// группы-предки (транзитивно) — линк к ноде внутри группы свободно
+   338→/// проходит её границу, линк к группе в целом — её конец. Чужие группы
+   339→/// (не содержащие концы) огибаются как обычные ноды.
+   340→pub fn edge_polyline(
+   341→    canvas: &Canvas,
+   342→    edge: &Edge,
+   343→    avoid: bool,
+   344→    segments: usize,
+   345→) -> Option<Vec<[f32; 2]>> {
+   346→    let curve = edge_curve(canvas, edge)?;
+   347→    let points = tessellate(&curve, segments.max(1));
+   348→    if !avoid {
+   349→        return Some(points);
+   350→    }
+   351→    let mut excluded: Vec<usize> = Vec::new();
+   352→    for id in [&edge.from_node, &edge.to_node] {
+   353→        if let Some(i) = canvas.nodes.iter().position(|node| node.id == *id) {
+   354→            excluded.push(i);
+   355→            excluded.extend(crate::enclosing_group_indices(canvas, i));
+   356→        }
+   357→    }
+   358→    excluded.sort_unstable();
+   359→    excluded.dedup();
+   360→    let obstacles: Vec<[f32; 4]> = canvas
+   361→        .nodes
+   362→        .iter()
+   363→        .enumerate()
+   364→        .filter(|(index, _)| !excluded.contains(index))
+   365→        .map(|(_, node)| [node.x, node.y, node.width, node.height])
+   366→        .collect();
+   367→    Some(route_polyline(
+   368→        &points,
+   369→        &obstacles,
+   370→        AVOID_MARGIN,
+   371→        MAX_DETOURS,
+   372→    ))
+   373→}
+   374→
+   375→/// Середина связи по длине дуги (для лейбла и бокса редактирования):
+   376→/// при avoid совпадает с видимой огибающей линией.
+   377→pub fn edge_midpoint(canvas: &Canvas, edge: &Edge, avoid: bool) -> Option<[f32; 2]> {
+   378→    let points = edge_polyline(canvas, edge, avoid, TESSELLATION_SEGMENTS)?;
+   379→    let total: f32 = points
+   380→        .windows(2)
+   381→        .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+   382→        .sum();
+   383→    let half = total / 2.0;
+   384→    let mut acc = 0.0;
+   385→    for w in points.windows(2) {
+   386→        let seg = (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]);
+   387→        if acc + seg >= half {
+   388→            let t = ((half - acc) / seg.max(f32::EPSILON)).clamp(0.0, 1.0);
+   389→            return Some([
+   390→                w[0][0] + (w[1][0] - w[0][0]) * t,
+   391→                w[0][1] + (w[1][1] - w[0][1]) * t,
+   392→            ]);
+   393→        }
+   394→        acc += seg;
+   395→    }
+   396→    points.last().copied().or_else(|| points.first().copied())
+   397→}
+   398→
+   399→// --- Огибание препятствий (обход нод) ---
+   400→
+   401→/// Rect [x, y, w, h], инфлированный на margin.
+   402→fn inflate_rect(rect: [f32; 4], margin: f32) -> [f32; 4] {
+   403→    [
+   404→        rect[0] - margin,
+   405→        rect[1] - margin,
+   406→        rect[2] + margin * 2.0,
+   407→        rect[3] + margin * 2.0,
+   408→    ]
+   409→}
+   410→
+   411→/// Точка внутри rect (граница считается внутренностью).
+   412→fn point_in_rect(p: [f32; 2], rect: [f32; 4]) -> bool {
+   413→    p[0] >= rect[0] && p[0] <= rect[0] + rect[2] && p[1] >= rect[1] && p[1] <= rect[1] + rect[3]
+   414→}
+   415→
+   416→/// Пересекается ли отрезок a–b с прямоугольником (slab-метод).
+   417→fn segment_hits_rect(a: [f32; 2], b: [f32; 2], rect: [f32; 4]) -> bool {
+   418→    let d = [b[0] - a[0], b[1] - a[1]];
+   419→    let mut t_enter = 0.0f32;
+   420→    let mut t_exit = 1.0f32;
+   421→    for axis in 0..2 {
+   422→        let (start, dir, lo, hi) = if axis == 0 {
+   423→            (a[0], d[0], rect[0], rect[0] + rect[2])
+   424→        } else {
+   425→            (a[1], d[1], rect[1], rect[1] + rect[3])
+   426→        };
+   427→        if dir.abs() < f32::EPSILON {
+   428→            if start < lo || start > hi {
+   429→                return false;
+   430→            }
+   431→        } else {
+   432→            let (t0, t1) = ((lo - start) / dir, (hi - start) / dir);
+   433→            let (t0, t1) = (t0.min(t1), t0.max(t1));
+   434→            t_enter = t_enter.max(t0);
+   435→            t_exit = t_exit.min(t1);
+   436→            if t_enter > t_exit {
+   437→                return false;
+   438→            }
+   439→        }
+   440→    }
+   441→    true
+   442→}
+   443→
+   444→/// Точка входа отрезка a–b в rect (a снаружи): пересечение с ближней гранью.
+   445→fn rect_entry(a: [f32; 2], b: [f32; 2], rect: [f32; 4]) -> Option<[f32; 2]> {
+   446→    let d = [b[0] - a[0], b[1] - a[1]];
+   447→    let mut t_enter = 0.0f32;
+   448→    for axis in 0..2 {
+   449→        let (start, dir, lo, hi) = if axis == 0 {
+   450→            (a[0], d[0], rect[0], rect[0] + rect[2])
+   451→        } else {
+   452→            (a[1], d[1], rect[1], rect[1] + rect[3])
+   453→        };
+   454→        if dir.abs() < f32::EPSILON {
+   455→            continue;
+   456→        }
+   457→        let (t0, t1) = ((lo - start) / dir, (hi - start) / dir);
+   458→        t_enter = t_enter.max(t0.min(t1));
+   459→    }
+   460→    (t_enter > 0.0 && t_enter <= 1.0).then(|| [a[0] + d[0] * t_enter, a[1] + d[1] * t_enter])
+   461→}
+   462→
+   463→/// Параметр точки на границе rect вдоль периметра (по часовой от левого
+   464→/// верхнего угла): верх → право → низ → лево. Углы: TL=0, TR=w, BR=w+h,
+   465→/// BL=2w+h; периметр L = 2(w+h).
+   466→fn boundary_param(p: [f32; 2], rect: [f32; 4]) -> f32 {
+   467→    let (w, h) = (rect[2], rect[3]);
+   468→    let eps = 1e-3;
+   469→    if (p[1] - rect[1]).abs() <= eps {
+   470→        (p[0] - rect[0]).clamp(0.0, w)
+   471→    } else if (p[0] - (rect[0] + w)).abs() <= eps {
+   472→        w + (p[1] - rect[1]).clamp(0.0, h)
+   473→    } else if (p[1] - (rect[1] + h)).abs() <= eps {
+   474→        w + h + (rect[0] + w - p[0]).clamp(0.0, w)
+   475→    } else {
+   476→        2.0 * w + h + (rect[1] + h - p[1]).clamp(0.0, h)
+   477→    }
+   478→}
+   479→
+   480→/// Ближайшая к точке точка границы rect.
+   481→fn nearest_boundary_point(p: [f32; 2], rect: [f32; 4]) -> [f32; 2] {
+   482→    let (l, t, w, h) = (rect[0], rect[1], rect[2], rect[3]);
+   483→    let cx = p[0].clamp(l, l + w);
+   484→    let cy = p[1].clamp(t, t + h);
+   485→    if cx != p[0] || cy != p[1] {
+   486→        return [cx, cy];
+   487→    }
+   488→    // Внутри: ближайшая грань.
+   489→    let candidates = [
+   490→        ([l, cy], cx - l),
+   491→        ([l + w, cy], l + w - cx),
+   492→        ([cx, t], cy - t),
+   493→        ([cx, t + h], t + h - cy),
+   494→    ];
+   495→    candidates
+   496→        .into_iter()
+   497→        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+   498→        .map(|(point, _)| point)
+   499→        .unwrap_or([cx, cy])
+   500→}
+   501→
+   502→/// Угловые waypoints вдоль более короткого пути по периметру rect от p до q
+   503→/// (обе на границе). Порядок — от p к q, q НЕ включена.
+   504→fn detour_corners(rect: [f32; 4], p: [f32; 2], q: [f32; 2]) -> Vec<[f32; 2]> {
+   505→    let (l, t, w, h) = (rect[0], rect[1], rect[2], rect[3]);
+   506→    let perimeter = 2.0 * (w + h);
+   507→    if perimeter <= f32::EPSILON {
+   508→        return Vec::new();
+   509→    }
+   510→    let s_p = boundary_param(p, rect);
+   511→    let s_q = boundary_param(q, rect);
+   512→    let dist_cw = (s_q - s_p).rem_euclid(perimeter);
+   513→    let dist_ccw = perimeter - dist_cw;
+   514→    let corners = [
+   515→        (0.0f32, [l, t]),
+   516→        (w, [l + w, t]),
+   517→        (w + h, [l + w, t + h]),
+   518→        (2.0 * w + h, [l, t + h]),
+   519→    ];
+   520→    let mut waypoints: Vec<(f32, [f32; 2])> = corners
+   521→        .into_iter()
+   522→        .filter_map(|(s, point)| {
+   523→            if dist_cw <= dist_ccw {
+   524→                let off = (s - s_p).rem_euclid(perimeter);
+   525→                (off > 1e-3 && off < dist_cw - 1e-3).then_some((off, point))
+   526→            } else {
+   527→                let off = (s_p - s).rem_euclid(perimeter);
+   528→                (off > 1e-3 && off < dist_ccw - 1e-3).then_some((off, point))
+   529→            }
+   530→        })
+   531→        .collect();
+   532→    waypoints.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+   533→    waypoints.into_iter().map(|(_, point)| point).collect()
+   534→}
+   535→
+   536→/// Огибание препятствий: полилиния обходит инфлированные прямоугольники
+   537→/// нод короткой стороной. Детерминировано; при превышении `max_detours`
+   538→/// возвращается исходная полилиния (деградация к прямой Безье, без петель).
+   539→pub fn route_polyline(
+   540→    points: &[[f32; 2]],
+   541→    obstacles: &[[f32; 4]],
+   542→    margin: f32,
+   543→    max_detours: usize,
+   544→) -> Vec<[f32; 2]> {
+   545→    if points.len() < 2 {
+   546→        return points.to_vec();
+   547→    }
+   548→    let rects: Vec<[f32; 4]> = obstacles
+   549→        .iter()
+   550→        .map(|rect| inflate_rect(*rect, margin))
+   551→        .filter(|rect| rect[2] > 0.0 && rect[3] > 0.0)
+   552→        .collect();
+   553→    if rects.is_empty() {
+   554→        return points.to_vec();
+   555→    }
+   556→    let mut path = points.to_vec();
+   557→    for _ in 0..max_detours {
+   558→        // Первое пересечение любого сегмента с любым препятствием.
+   559→        let mut hit: Option<(usize, usize, [f32; 2], usize)> = None;
+   560→        'scan: for i in 0..path.len() - 1 {
+   561→            for (ri, rect) in rects.iter().enumerate() {
+   562→                if !segment_hits_rect(path[i], path[i + 1], *rect) {
+   563→                    continue;
+   564→                }
+   565→                let entry = if point_in_rect(path[i], *rect) {
+   566→                    path[i]
+   567→                } else {
+   568→                    rect_entry(path[i], path[i + 1], *rect).unwrap_or(path[i])
+   569→                };
+   570→                // Индекс первой точки полилинии за пределами rect.
+   571→                let mut k = i + 1;
+   572→                while k < path.len() && point_in_rect(path[k], *rect) {
+   573→                    k += 1;
+   574→                }
+   575→                hit = Some((i, ri, entry, k));
+   576→                break 'scan;
+   577→            }
+   578→        }
+   579→        let Some((i, ri, entry, k)) = hit else {
+   580→            break;
+   581→        };
+   582→        let rect = rects[ri];
+   583→        let target = path.get(k).copied().or_else(|| path.last().copied());
+   584→        let Some(target) = target else { break };
+   585→        let exit = nearest_boundary_point(target, rect);
+   586→        let corners = detour_corners(rect, entry, exit);
+   587→        if (exit[0] - entry[0]).abs() < f32::EPSILON
+   588→            && (exit[1] - entry[1]).abs() < f32::EPSILON
+   589→            && corners.is_empty()
+   590→        {
+   591→            // Касание без огибания — дальше прогресса не будет.
+   592→            break;
+   593→        }
+   594→        // Склейка: путь до входа, угловые waypoints, выход, остаток от k.
+   595→        let mut rerouted = Vec::with_capacity(path.len() + corners.len() + 2);
+   596→        rerouted.extend_from_slice(&path[..=i]);
+   597→        if (entry[0] - path[i][0]).abs() > f32::EPSILON
+   598→            || (entry[1] - path[i][1]).abs() > f32::EPSILON
+   599→        {
+   600→            rerouted.push(entry);
+   601→        }
+   602→        rerouted.extend_from_slice(&corners);
+   603→        rerouted.push(exit);
+   604→        rerouted.extend_from_slice(&path[k.min(path.len())..]);
+   605→        path = rerouted;
+   606→    }
+   607→    path
+   608→}
+   609→
+   610→/// Порт ноды под курсором: сторона, чья точка порта ближе всего к `point`
+   611→/// в пределах допуска `tolerance_px` экранных пикселей (zoom — camera.zoom();
+   612→/// CR-003: допуск — параметр, дефолт — `PORT_HIT_PX`).
+   613→pub fn port_at(node: &Node, point: [f32; 2], zoom: f32, tolerance_px: f32) -> Option<Side> {
+   614→    let tolerance = tolerance_px / zoom.max(1e-3);
+   615→    [Side::Top, Side::Right, Side::Bottom, Side::Left]
+   616→        .into_iter()
+   617→        .map(|side| {
+   618→            let port = port_point(node, side);
+   619→            let dist = ((point[0] - port[0]).powi(2) + (point[1] - port[1]).powi(2)).sqrt();
+   620→            (dist, side)
+   621→        })
+   622→        .filter(|(dist, _)| *dist <= tolerance)
+   623→        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+   624→        .map(|(_, side)| side)
+   625→}
+   626→
+   627→/// FR-025: построчная точка выхода — порт формульной строки Numi-листа на
+   628→/// правом краю ноды (вертикаль — ряд результата строки, как у бейджа FR-013).
+   629→#[derive(Debug, Clone, Copy, PartialEq)]
+   630→pub struct LinePort {
+   631→    /// Индекс формульной строки текста ноды. `None` — узловое значение
+   632→    /// (футер шаблонной ноды FR-023: формула и есть финальное значение).
+   633→    pub line: Option<usize>,
+   634→    /// World-точка порта (`node.x + node.width`, Y ряда результата).
+   635→    pub point: [f32; 2],
+   636→    /// Финальная строка (значение ноды) — рендер отличает заполненным
+   637→    /// кружком от промежуточных.
+   638→    pub is_final: bool,
+   639→}
+   640→
+   641→/// FR-025: построчный порт под курсором — ближайший в пределах допуска
+   642→/// `tolerance_px` экранных пикселей (тот же допуск, что у сторонных
+   643→/// портов, CR-003). Приоритет построчного порта над сторонным решает
+   644→/// вызывающий (проверка `line_port_at` ДО `port_at`).
+   645→pub fn line_port_at(
+   646→    ports: &[LinePort],
+   647→    point: [f32; 2],
+   648→    zoom: f32,
+   649→    tolerance_px: f32,
+   650→) -> Option<LinePort> {
+   651→    let tolerance = tolerance_px / zoom.max(1e-3);
+   652→    ports
+   653→        .iter()
+   654→        .copied()
+   655→        .map(|port| {
+   656→            let dist =
+   657→                ((point[0] - port.point[0]).powi(2) + (point[1] - port.point[1]).powi(2)).sqrt();
+   658→            (dist, port)
+   659→        })
+   660→        .filter(|(dist, _)| *dist <= tolerance)
+   661→        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+   662→        .map(|(_, port)| port)
+   663→}
+   664→
+   665→/// FR-050 Н2 (этап C): входной якорь параметра шаблонной ноды — точка на
+   666→/// ЛЕВОМ краю ноды (вертикаль — ряд строки параметра, зеркально построчным
+   667→/// выходам FR-025; hit-тест — допуск CR-003). Строится рендером из кэша
+   668→/// раскладки тела: core не знает вертикалей строк. Имя — адрес `toParam`
+   669→/// (совпадает с именем присваивания строки Numi-листа шаблонной ноды,
+   670→/// канонический список — `TemplateRef.params`).
+   671→#[derive(Debug, Clone, PartialEq)]
+   672→pub struct ParamPort {
+   673→    /// Имя параметра — цель `toParam` value-ребра.
+   674→    pub param: String,
+   675→    /// World-точка якоря (`node.x`, Y ряда строки параметра).
+   676→    pub point: [f32; 2],
+   677→}
+   678→
+   679→/// FR-050 Н2: якорь параметра под курсором — ближайший в пределах допуска
+   680→/// `tolerance_px` экранных пикселей (тот же допуск, что у построчных и
+   681→/// сторонных портов, CR-003). Приоритет якоря над сторонным портом решает
+   682→/// вызывающий (проверка `param_port_at` ДО `port_at` левого края).
+   683→pub fn param_port_at(
+   684→    ports: &[ParamPort],
+   685→    point: [f32; 2],
+   686→    zoom: f32,
+   687→    tolerance_px: f32,
+   688→) -> Option<&ParamPort> {
+   689→    let tolerance = tolerance_px / zoom.max(1e-3);
+   690→    ports
+   691→        .iter()
+   692→        .map(|port| {
+   693→            let dist =
+   694→                ((point[0] - port.point[0]).powi(2) + (point[1] - port.point[1]).powi(2)).sqrt();
+   695→            (dist, port)
+   696→        })
+   697→        .filter(|(dist, _)| *dist <= tolerance)
+   698→        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+   699→        .map(|(_, port)| port)
+   700→}
+   701→
+   702→/// Ближайшая к точке связь в допуске EDGE_HIT_TOLERANCE.
+   703→/// Возвращает индекс в `canvas.edges`; None — промах (или все связи висячие).
+   704→/// `avoid` — обход посторонних нод (см. `edge_polyline`).
+   705→pub fn edge_at(canvas: &Canvas, point: [f32; 2], avoid: bool) -> Option<usize> {
+   706→    canvas
+   707→        .edges
+   708→        .iter()
+   709→        .enumerate()
+   710→        .filter_map(|(index, edge)| {
+   711→            distance_to_edge(canvas, edge, point, avoid).map(|d| (index, d))
+   712→        })
+   713→        .filter(|(_, dist)| *dist < EDGE_HIT_TOLERANCE)
+   714→        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+   715→        .map(|(index, _)| index)
+   716→}
+   717→
+   718→/// Кривая «резиновой линии» при drag новой связи: от точки порта к курсору.
+   719→/// Контрольная точка у порта смещена по нормали стороны, у курсора —
+   720→/// совпадает с ним (линия «прилипает» к указателю без выраженного изгиба).
+   721→pub fn draft_curve(port: [f32; 2], side: Side, to: [f32; 2]) -> CubicBezier {
+   722→    let dist = ((to[0] - port[0]).powi(2) + (to[1] - port[1]).powi(2)).sqrt();
+   723→    let offset = (dist * 0.4).max(MIN_CONTROL_OFFSET);
+   724→    let normal = side_normal(side);
+   725→    CubicBezier {
+   726→        p0: port,
+   727→        c0: [port[0] + normal[0] * offset, port[1] + normal[1] * offset],
+   728→        c1: to,
+   729→        p1: to,
+   730→    }
+   731→}
+   732→
+   733→#[cfg(test)]
+   734→mod tests {
+   735→    use super::*;
+   736→    use crate::model::Canvas;
+   737→
+   738→    fn node_a() -> Node {
+   739→        Node::text("a", "a", 0.0, 0.0)
+   740→    }
+   741→
+   742→    /// FR-025: hit-test построчных портов — попадание в зоне допуска,
+   743→    /// промах вне, из двух близких портов берётся ближайший.
+   744→    #[test]
+   745→    fn line_port_at_hit_miss_nearest() {
+   746→        let ports = [
+   747→            LinePort {
+   748→                line: Some(0),
+   749→                point: [200.0, 30.0],
+   750→                is_final: false,
+   751→            },
+   752→            LinePort {
+   753→                line: Some(1),
+   754→                point: [200.0, 50.0],
+   755→                is_final: true,
+   756→            },
+   757→        ];
+   758→        // В зоне (tolerance 10 screen px при zoom 1 → 10 world)
+   759→        let hit = line_port_at(&ports, [206.0, 50.0], 1.0, 10.0).expect("попадание");
+   760→        assert_eq!(hit.line, Some(1));
+   761→        assert!(hit.is_final);
+   762→        // Промах: дальше допуска по вертикали
+   763→        assert!(line_port_at(&ports, [206.0, 90.0], 1.0, 10.0).is_none());
+   764→        // Промах: далеко правее края
+   765→        assert!(line_port_at(&ports, [400.0, 50.0], 1.0, 10.0).is_none());
+   766→        // Между двумя портами — ближайший
+   767→        let hit = line_port_at(&ports, [200.0, 41.0], 1.0, 10.0).expect("попадание");
+   768→        assert_eq!(hit.line, Some(1), "41 ближе к 50, чем к 30");
+   769→        // zoom > 1 ужесточает world-допуск: 10 screen px при zoom 2 —
+   770→        // 5 world px — точка в 6 px от порта уже мимо
+   771→        assert!(line_port_at(&ports, [206.0, 50.0], 2.0, 10.0).is_none());
+   772→    }
+   773→
+   774→    /// FR-050 Н2: hit-test якорей параметров — попадание/промах/ближайший,
+   775→    /// zoom ужесточает допуск (зеркало line_port_at).
+   776→    #[test]
+   777→    fn param_port_at_hit_miss_nearest() {
+   778→        let ports = [
+   779→            ParamPort {
+   780→                param: "rps".to_owned(),
+   781→                point: [100.0, 30.0],
+   782→            },
+   783→            ParamPort {
+   784→                param: "latency".to_owned(),
+   785→                point: [100.0, 50.0],
+   786→            },
+   787→        ];
+   788→        let hit = param_port_at(&ports, [94.0, 50.0], 1.0, 10.0).expect("попадание");
+   789→        assert_eq!(hit.param, "latency");
+   790→        assert!(param_port_at(&ports, [94.0, 90.0], 1.0, 10.0).is_none());
+   791→        assert!(param_port_at(&ports, [40.0, 50.0], 1.0, 10.0).is_none());
+   792→        let hit = param_port_at(&ports, [100.0, 41.0], 1.0, 10.0).expect("попадание");
+   793→        assert_eq!(hit.param, "latency", "41 ближе к 50, чем к 30");
+   794→        // zoom 2: 10 screen px → 5 world px — точка в 6 px мимо
+   795→        assert!(param_port_at(&ports, [94.0, 50.0], 2.0, 10.0).is_none());
+   796→    }
+   797→
+   798→    /// FR-025: перепривязка ИСТОКА сбрасывает построчный исток (v1),
+   799→    /// перепривязка СТОКА — сохраняет.
+   800→    #[test]
+   801→    fn retarget_resets_from_line_only_on_from_end() {
+   802→        let mut canvas = Canvas::default();
+   803→        canvas.nodes.push(node_a());
+   804→        canvas.nodes.push(Node::text("b", "b", 400.0, 0.0));
+   805→        canvas.nodes.push(Node::text("c", "c", 800.0, 0.0));
+   806→        canvas.nodes.push(Node::text("d", "d", 1200.0, 0.0));
+   807→        let mut edge = Edge::new("e1", "a", Some(Side::Right), "b", Some(Side::Left));
+   808→        edge.from_line = Some(1);
+   809→        canvas.add_edge(edge);
+   810→
+   811→        // Перепривязка СТОКА (b → c): from_line сохраняется
+   812→        assert!(retarget_edge(&mut canvas, 0, EdgeEnd::To, "c", Side::Left));
+   813→        assert_eq!(canvas.edges[0].to_node, "c");
+   814→        assert_eq!(canvas.edges[0].from_line, Some(1));
+   815→        // Перепривязка ИСТОКА (a → d, цель не противоположный конец):
+   816→        // from_line сбрасывается
+   817→        assert!(retarget_edge(
+   818→            &mut canvas,
+   819→            0,
+   820→            EdgeEnd::From,
+   821→            "d",
+   822→            Side::Right
+   823→        ));
+   824→        assert_eq!(canvas.edges[0].from_node, "d");
+   825→        assert_eq!(
+   826→            canvas.edges[0].from_line, None,
+   827→            "v1: сброс построчного истока"
+   828→        );
+   829→    }
+   830→}
+   831→
