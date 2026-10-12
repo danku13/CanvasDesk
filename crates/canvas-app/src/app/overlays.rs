@@ -1749,23 +1749,30 @@ impl App {
         }
         // Chips: Normal/Hover/Selected/Disabled — подпись соответствует
         // СОСТОЯНИЮ (дефект v1: слот 2 показывал метку Pressed).
-        let chip_labels = [
-            crate::i18n::keys::KIT_STATE_NORMAL,
-            crate::i18n::keys::KIT_STATE_HOVER,
-            crate::i18n::keys::KIT_STATE_SELECTED,
-            crate::i18n::keys::KIT_STATE_DISABLED,
-        ];
-        for (i, r) in lay.chips.iter().enumerate() {
-            let state = match i {
-                0 => canvas_ui::kit::KitState::Normal,
-                1 => canvas_ui::kit::KitState::Hovered,
-                2 => canvas_ui::kit::KitState::Selected,
-                _ => canvas_ui::kit::KitState::Disabled,
-            };
-            let style = canvas_ui::kit::chip_style(state, &palette);
-            d.control(*r, &style);
-            let text = crate::i18n::tr(lang, chip_labels[i]);
-            d.label_center(kit::text_area_vcentered(*r, 12.0), text, style.text, 12.0);
+        // TO-BE: статичный draw пропускается — интерактивные оверрайды
+        // draw_demo_extras рисуют ряд ЦЕЛИКОМ (control + label); раньше
+        // оба пути рисовали одни rect'ы и метка Selected («Выбрано»)
+        // просвечивала под Pressed («Нажатие») — двойной текст на слоте 2
+        // (скриншот 110957).
+        if !self.kit_demo.tobe {
+            let chip_labels = [
+                crate::i18n::keys::KIT_STATE_NORMAL,
+                crate::i18n::keys::KIT_STATE_HOVER,
+                crate::i18n::keys::KIT_STATE_SELECTED,
+                crate::i18n::keys::KIT_STATE_DISABLED,
+            ];
+            for (i, r) in lay.chips.iter().enumerate() {
+                let state = match i {
+                    0 => canvas_ui::kit::KitState::Normal,
+                    1 => canvas_ui::kit::KitState::Hovered,
+                    2 => canvas_ui::kit::KitState::Selected,
+                    _ => canvas_ui::kit::KitState::Disabled,
+                };
+                let style = canvas_ui::kit::chip_style(state, &palette);
+                d.control(*r, &style);
+                let text = crate::i18n::tr(lang, chip_labels[i]);
+                d.label_center(kit::text_area_vcentered(*r, 12.0), text, style.text, 12.0);
+            }
         }
         // Dropdown: якорь + открытое меню (3 строки, hover по курсору)
         {
@@ -5038,11 +5045,13 @@ impl App {
                 &kit_palette,
             );
         }
-        // Заголовок (в текстовой колонке)
+        // Заголовок (в текстовой колонке). Якорь — title_top (строка
+        // НЕ пересекает полосу Skip правого верхнего угла — фикс
+        // «заголовок × Пропустить», скриншот 111807; compact — тач-Skip).
         d.label(
             canvas_ui::geometry::UiRect::new(
                 col[0] + onboarding_ui::pad(k),
-                col[1] + onboarding_ui::pad(k),
+                col[1] + onboarding_ui::title_top(k, onb_compact),
                 (col[2] - onboarding_ui::pad(k) * 2.0).max(0.0),
                 onboarding_ui::title_line_h(k),
             ),
@@ -5053,7 +5062,7 @@ impl App {
         );
         // Прогресс-точки: текущая — слот link (как прежде), остальные —
         // panel_border (бывший литерал [0.30, 0.33, 0.40, 0.9])
-        let (centers, dots_y) = onboarding_ui::progress_dots(card);
+        let (centers, dots_y) = onboarding_ui::progress_dots(card, onb_compact);
         let dot_r = onboarding_ui::dot(k) / 2.0;
         for (i, cx) in centers.iter().enumerate() {
             let fill = if i == state.step {
@@ -8792,17 +8801,30 @@ impl App {
         } else {
             // Подпись имени (display_name, эллипсис по зоне — как у строк
             // менеджера; активный канвас — титульный цвет текста).
+            // Горизонтальный пад подписи — канон кита BUTTON_PAD_H: ширина
+            // чипа заложена с падом с ДВУХ сторон (chip_layout_current:
+            // text_w += BUTTON_PAD_H·2), а подпись рисовалась от левого
+            // края зоны — текст впритык к рамке пилюли (скриншот 111018).
             let shown = m.ellipsis(
                 &mut fs,
                 &self.chip_display_name(),
                 canvas_render::text::SANS_FAMILY,
                 font,
-                lay.name_text_w.max(0.0),
+                (lay.name_text_w - canvas_ui::kit::BUTTON_PAD_H * 2.0).max(0.0),
             );
             d.label_left(
                 // Канон вертикали (issue #68, IN13): строковый бокс по центру
-                // зоны имени (замена ручного бокса font+2.0).
-                kit::text_area_vcentered(rect(lay.name), font),
+                // зоны имени (замена ручного бокса font+2.0); горизонталь —
+                // с левым падом BUTTON_PAD_H (правый — бюджет эллипсиса).
+                kit::text_area_vcentered(
+                    canvas_ui::geometry::UiRect::new(
+                        lay.name[0] + canvas_ui::kit::BUTTON_PAD_H,
+                        lay.name[1],
+                        (lay.name[2] - canvas_ui::kit::BUTTON_PAD_H * 2.0).max(0.0),
+                        lay.name[3],
+                    ),
+                    font,
+                ),
                 &shown,
                 kit_palette.text_title,
                 font,

@@ -2607,7 +2607,11 @@ pub fn canvas_body(
 ) -> CanvasLayout {
     let mut lay = CanvasLayout::default();
     let content_x = demo.x + 8.0;
-    let top = demo.y - offset;
+    // Верх окна видимости — ВЕРХНЯЯ ГРАНИЦА тела (demo.y): прежний
+    // top = demo.y − offset разрешал рисовать строки ВЫШЕ тела (зона
+    // «прокрученного past») — контент вылетал за верх панели
+    // (скриншот 172802, вкладка «Токены»; тот же класс — «Канвас»).
+    let top = demo.y;
     let fully = |ry: f32, rh: f32| ry >= top && ry + rh <= demo.bottom();
 
     // === LAY-W13: вертикальная линейка тела — Column-скелет примитивов
@@ -3121,7 +3125,11 @@ pub fn tokens_body(
     let _ = lang; // подписи групп/строк — при отрисовке (draw_tokens)
     let mut lay = TokensLayout::default();
     let content_x = demo.x + 8.0;
-    let top = demo.y - offset;
+    // Верх окна видимости — верхняя граница тела (demo.y), а не
+    // demo.y − offset: иначе строки, прокрученные past верха, рисуются
+    // ВЫШЕ тела и вылетают за панель (скриншот 172802). Паритет
+    // Components/Fill (top = demo.y).
+    let top = demo.y;
     let fully = |ry: f32, rh: f32| ry >= top && ry + rh <= demo.bottom();
     let row_h = 22.0;
 

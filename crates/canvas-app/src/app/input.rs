@@ -5117,9 +5117,12 @@ impl App {
                 )
             };
             let body = if onb_flex {
-                onboarding_ui::body_area_flex(lay.card, state.is_last(), onb_compact)
+                // has_cta_zone (не is_last): зону CTA резервируют ОБА шага
+                // с полноширинными CTA — финал FR-028 И карточка
+                // мультиканваса №19 (паритет с отрисовкой — draw==hit).
+                onboarding_ui::body_area_flex(lay.card, state.has_cta_zone(), onb_compact)
             } else {
-                onboarding_ui::body_area(lay.card, state.is_last())
+                onboarding_ui::body_area(lay.card, state.has_cta_zone())
             };
             let dy = match delta {
                 MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,

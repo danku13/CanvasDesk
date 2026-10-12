@@ -33,6 +33,10 @@ cargo-target/
 cd-target/
 wasm-target/
 canvasdesk-run/
+# Вложенная копия репозитория (внешний бэкап-клон — не часть воркспейса;
+# gitlink без .gitmodules ломал Pages-деплой и cleanup CI-джоб)
+/canvasdesk/
+
 repro_out*/
 target/dist/
 

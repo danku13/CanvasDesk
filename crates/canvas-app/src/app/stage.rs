@@ -1743,10 +1743,8 @@ impl App {
                 );
                 // Канон вертикали (issue #68, IN13): строковый бокс кегля
                 // по центру индикатора; x-инсеты сохранены (stage_area).
-                let ta = kit::text_area_vcentered(
-                    UiRect::new(ind.x, ind.y, ind.w, ind.h),
-                    font(10.0),
-                );
+                let ta =
+                    kit::text_area_vcentered(UiRect::new(ind.x, ind.y, ind.w, ind.h), font(10.0));
                 chrome.label(
                     stage_area(&transform, ind.x + 6.0, ta.y, ind.w - 12.0, ta.h),
                     &self.trf(text_key, &[("n", &n.to_string())]),

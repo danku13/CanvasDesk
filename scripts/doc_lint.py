@@ -30,7 +30,12 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SKIP_DIRS = {".git", "target", "node_modules", "dist", ".cargo"}
+# skills/ — вендоренный набор агент-скиллов (внешние источники): 108+
+# FAIL от плейсхолдер-ссылок (path/to/image.jpg, regex-«ссылки», бэктик-
+# пути внешних scripts/*) — вне контракта доков CanvasDesk (решение
+# сессии 2026-10-12 после красного docs-lint на a7cd157/bef8205/cf54c55).
+# Контракт гейта — репо-доки: design/, user-docs/, docs/, crates/, scripts/.
+SKIP_DIRS = {".git", "target", "node_modules", "dist", ".cargo", "skills"}
 
 # Пути-префиксы, которые не обязаны существовать в чекауте (генерируемые/
 # внешние). Проверка бэктик-путей их пропускает.

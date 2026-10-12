@@ -731,3 +731,24 @@ Stage Summary:
 - Пробные фоновые nohup-задачи платформа убивает по завершении вызова — тяжёлые сборки только foreground с resume кэша
 - Дефолтный wasm_ui_scenario.mjs требует перекалибровки координат (дрейф онбординга/хрома) — кандидат в отдельную задачу, не блокер #68
 Tokens: in≈680000, out≈60000, total≈740000 (estimate: координатор + 4 сабагента, 2 прерваны), model=GLM-5.3, scope=UI-V3
+
+---
+Task ID: UI-REWORK-SCREENS (доработки по скриншотам 2026-10-12; сессия web-0a539c42)
+Agent: Super Z (main, координатор)
+Task: Хвосты после V1–V3 #68: 6 дефектов по скриншотам владельца + проверка CI
+
+Work Log:
+- Скриншоты Drive (10 шт) скачаны, разобраны; 5 заказанных + бонус 110957:
+- Онбординг 111807 (заголовок × Пропустить): строка заголовка якорилась pad(k)=24k, Skip — 10k..40k → пересечение полос; якорь title_top(k, compact) = skip_top+кнопка (compact — BTN_H_TOUCH), прогресс-точки/body_top_offset на том же якоре (единый источник)
+- Онбординг 111822 (финал недостижим): CHOICE_STEP=7 (выбор) — «Далее» не рисуется, обе CTA завершают тур → шаг 8 (мультиканвас №19) недостижим ни одним кликом; порядок развёрнут: мультиканвас (CTA+«Далее») на 7, выбор — последний (CHOICE_STEP=8); тесты multicanvas_step_is_final_with_cta / carousel_reaches_multicanvas_through_next переписаны; input.rs body_area: is_last → has_cta_zone (паритет с draw)
+- Чип 111018 (текст впритык к левому краю): ширина чипа заложена с BUTTON_PAD_H с двух сторон, а подпись рисовалась от name[0]; фикс: inset BUTTON_PAD_H + эллипсис-бюджет name_text_w − 2·BUTTON_PAD_H
+- About 111127: строки-ссылки без внутренних падов → ABOUT_ROW_PAD_H=BUTTON_PAD_H / ABOUT_ROW_PAD_V=SPACING_SM, ABOUT_ROW_H 42→58; tofu «★» (U+2605 нет в Noto Sans Display и Symbols) → «✦» (U+2726 есть в CanvasDesk Symbols), RU+EN
+- UI-консоль 172802 (вылет за панель): фильтр fully() в canvas_body/tokens_body проверял top = demo.y − offset (зона «прокрученного past») → строки рисовались выше верхней границы панели; top = demo.y (паритет Components/Fill)
+- Витрина 110957 (двойной текст чипа): статичный draw (Выбрано) + draw_demo_extras (Нажатие) на одних rect'ах; статичный draw чипов загейтван !tobe (extras рисует ряд целиком)
+- CI (было 3 красных рана): fmt — rustfmt-канон stage.rs:1743 (V3-коммит ушёл без fmt, исправлен cargo fmt); docs-lint — 108 FAIL в вендорном skills/ → SKIP_DIRS += skills (вне контракта доков); pages build and deployment — gitlink canvasdesk без .gitmodules (15effe30) → git rm --cached + .gitignore
+- Гейты: fmt --all OK, clippy --workspace 0, cargo test -p canvas-app 910+12 наборов/0, v3_ui_lint OK, doc_lint OK (0 ошибок)
+
+Stage Summary:
+- 6/6 дефектов скриншотов закрыты по коду (не по глазам); онбординг: все 9 шагов достижимы, тур замыкается выбором «Что дальше»; CI-красные зоны идентифицированы по логам (fmt/docs-lint/pages) и починены
+- Дальше: onboarding/user-docs — рекомендации владельцу (сообщение TG), сборка wasm L2-сценария не задета (Skip-координаты не изменились)
+Tokens: in≈240000, out≈40000, model=GLM-5.3, scope=UI-REWORK-SCREENS

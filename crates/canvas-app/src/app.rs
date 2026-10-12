@@ -18358,11 +18358,11 @@ mod we_onboarding_draw_tests {
             // CTA виден: подпись кнопки «Далее» (футер) — внутри rect кнопки
             // (hit-тест и отрисовка — одна геометрия). CR-031: на финале
             // FR-028 (CHOICE_STEP) CTA — полноширинная опция «Открыть
-            // шаблонную схему»; FR-107 (C4): последний шаг — карточка
-            // мультиканваса №19 с собственным CTA «Создать канвас».
+            // шаблонную схему»; FR-107 (C4): карточка мультиканваса №19
+            // (шаг с собственным CTA) — полноширинная «Создать канвас».
             let next_rect = if step == crate::onboarding_ui::CHOICE_STEP {
                 crate::onboarding_ui::option_rects(card)[0]
-            } else if step + 1 == crate::onboarding_ui::ONBOARDING_STEPS.len() {
+            } else if crate::onboarding_ui::step_has_cta_zone(step) {
                 crate::onboarding_ui::cta_rect(card)
             } else {
                 // Skip-ветка button_rect измеренная — для Next подпись не

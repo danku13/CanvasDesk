@@ -25,8 +25,15 @@ pub const ABOUT_HEADER_H: f32 = 40.0;
 /// Подпись автора под титулом (кэпшн-строка).
 pub const ABOUT_AUTHOR_H: f32 = kit::BANNER_LABEL_LINE_H + tokens::SPACING_SM;
 /// Шаг строки-ссылки: метка + описание (двухстрочная строка, как
-/// `.link-row` DOM-оверлея: label 13px + desc 11px).
-pub const ABOUT_ROW_H: f32 = kit::LIST_ROW_H + kit::BANNER_LABEL_LINE_H;
+/// `.link-row` DOM-оверлея: label 13px + desc 11px). С внутренними
+/// падами строки (скриншот 111127 — текст прижат к краям):
+/// вертикаль — SPACING_SM сверху/снизу, метка — BANNER_LABEL_LINE_H,
+/// описание — LIST_ROW_H.
+pub const ABOUT_ROW_PAD_V: f32 = tokens::SPACING_SM;
+pub const ABOUT_ROW_H: f32 = ABOUT_ROW_PAD_V * 2.0 + kit::BANNER_LABEL_LINE_H + kit::LIST_ROW_H;
+/// Внутренний горизонтальный пад строки-ссылки (канон кита — как у
+/// кнопок): подпись/описание не прижаты к левому краю карточки-строки.
+pub const ABOUT_ROW_PAD_H: f32 = kit::BUTTON_PAD_H;
 /// Зазор между строками-ссылками.
 pub const ABOUT_ROW_GAP: f32 = tokens::SPACING_SM;
 /// Полный отступ контента от краёв панели.
@@ -155,11 +162,16 @@ pub fn about_layout(viewport: [f32; 2]) -> AboutLayout {
                 (width - ABOUT_PAD * 2.0).max(0.0),
                 ABOUT_ROW_H,
             ];
-            let label = [row[0], ry, row[2], kit::BANNER_LABEL_LINE_H];
+            let label = [
+                row[0] + ABOUT_ROW_PAD_H,
+                ry + ABOUT_ROW_PAD_V,
+                (row[2] - ABOUT_ROW_PAD_H * 2.0).max(0.0),
+                kit::BANNER_LABEL_LINE_H,
+            ];
             let desc = [
-                row[0],
-                ry + kit::BANNER_LABEL_LINE_H,
-                row[2],
+                row[0] + ABOUT_ROW_PAD_H,
+                ry + ABOUT_ROW_PAD_V + kit::BANNER_LABEL_LINE_H,
+                (row[2] - ABOUT_ROW_PAD_H * 2.0).max(0.0),
                 kit::LIST_ROW_H,
             ];
             AboutRowLayout {
@@ -378,12 +390,16 @@ mod tests {
     }
 
     /// Строки: одна под другой, без наложений; метка выше описания.
+    /// Текст не прижат к краям строки: внутренние пады
+    /// ABOUT_ROW_PAD_H/ABOUT_ROW_PAD_V (скриншот 111127).
     #[test]
     fn about_layout_rows_stacked_without_overlap() {
         let lay = about_layout(VP);
         for (index, row) in lay.rows.iter().enumerate() {
             assert_eq!(row.row[0], lay.panel[0] + ABOUT_PAD);
-            assert_eq!(row.row[1], row.label[1]);
+            assert_eq!(row.row[1], row.label[1] - ABOUT_ROW_PAD_V);
+            assert_eq!(row.label[0], row.row[0] + ABOUT_ROW_PAD_H);
+            assert_eq!(row.desc[0], row.row[0] + ABOUT_ROW_PAD_H);
             assert_eq!(row.desc[1], row.label[1] + row.label[3]);
             if index > 0 {
                 let prev = &lay.rows[index - 1];
