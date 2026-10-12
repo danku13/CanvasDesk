@@ -6,7 +6,10 @@ name: CI
 # в main — свежую сборку можно скачать из Actions без локальной сборки.
 on:
   push:
-    branches: [main]
+    # upgrade/render-stack — трек #69 (deps-W1): CI на каждый пуш ветки,
+    # т.к. draft PR программно открыть нельзя (PAT без pull_requests:write);
+    # после merge трека строку можно сузить обратно до [main]
+    branches: [main, upgrade/render-stack]
   pull_request:
     branches: [main]
 
