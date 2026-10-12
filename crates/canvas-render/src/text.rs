@@ -232,9 +232,9 @@ fn shape_chip_buffer(font_system: &mut FontSystem, label: &str, zoom_px: f32) ->
         font_system,
         Metrics::new(CHIP_FONT_SIZE * zoom_px, CHIP_LINE_HEIGHT * zoom_px),
     );
-    buffer.set_wrap(font_system, Wrap::None);
-    buffer.set_size(font_system, None, Some(CHIP_LINE_HEIGHT * zoom_px));
-    buffer.set_text(font_system, label, chip_attrs(), Shaping::Advanced);
+    buffer.set_wrap(Wrap::None);
+    buffer.set_size(None, Some(CHIP_LINE_HEIGHT * zoom_px));
+    buffer.set_text(label, &chip_attrs(), Shaping::Advanced, None);
     buffer.shape_until_scroll(font_system, false);
     let width_px = buffer
         .layout_runs()
@@ -665,13 +665,9 @@ fn shape_row_cell(
         font_system,
         Metrics::new(RESULT_FONT_SIZE * zoom_px, RESULT_LINE_HEIGHT * zoom_px),
     );
-    buffer.set_wrap(font_system, Wrap::None);
-    buffer.set_size(
-        font_system,
-        Some(area_px),
-        Some(RESULT_LINE_HEIGHT * zoom_px),
-    );
-    buffer.set_text(font_system, text, attrs, Shaping::Advanced);
+    buffer.set_wrap(Wrap::None);
+    buffer.set_size(Some(area_px), Some(RESULT_LINE_HEIGHT * zoom_px));
+    buffer.set_text(text, &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(font_system, false);
     let width_px = buffer
         .layout_runs()
@@ -721,9 +717,9 @@ pub(crate) fn rich_spans<'a, 'r>(
     let mut pos = 0usize;
     for span in spans {
         if span.start > pos {
-            out.push((&plain[pos..span.start], base));
+            out.push((&plain[pos..span.start], base.clone()));
         }
-        let mut attrs = base;
+        let mut attrs = base.clone();
         if span.bold {
             attrs = attrs.weight(Weight::BOLD);
         }
@@ -734,7 +730,7 @@ pub(crate) fn rich_spans<'a, 'r>(
         pos = span.end;
     }
     if pos < plain.len() {
-        out.push((&plain[pos..], base));
+        out.push((&plain[pos..], base.clone()));
     }
     // Пустой текст (например, "****" без контента) — один пустой спан
     if out.is_empty() {
@@ -757,7 +753,9 @@ fn decoration_quads(
         let start = offset_to_cursor(plain, span.start);
         let end = offset_to_cursor(plain, span.end);
         for run in buffer.layout_runs() {
-            if let Some((x, width)) = run.highlight(start, end) {
+            // deps-W2: highlight → итератор (0.19); .next() — паритет
+            // прежнего Option; мульти-спаны — осознанное решение W4
+            if let Some((x, width)) = run.highlight(start, end).next() {
                 if span.highlight {
                     quads.push((
                         [x, run.line_top, width.max(1.0), run.line_height],
@@ -1655,7 +1653,10 @@ fn formula_rich_runs<'a, 'r>(
             while i < chars.len() && is_op(chars[i].1) {
                 i += 1;
             }
-            out.push((&text[byte_at(start)..byte_at(i)], base.color(op_color)));
+            out.push((
+                &text[byte_at(start)..byte_at(i)],
+                base.clone().color(op_color),
+            ));
             continue;
         }
         if is_ident(c) && !c.is_ascii_digit() {
@@ -1670,9 +1671,9 @@ fn formula_rich_runs<'a, 'r>(
             }
             let is_fn = peek < chars.len() && chars[peek].1 == '(';
             let attrs = if is_fn {
-                base.color(fn_color).style(Style::Italic)
+                base.clone().color(fn_color).style(Style::Italic)
             } else {
-                base
+                base.clone()
             };
             out.push((&text[byte_at(start)..byte_at(i)], attrs));
             continue;
@@ -1685,14 +1686,14 @@ fn formula_rich_runs<'a, 'r>(
         {
             i += 1;
         }
-        out.push((&text[byte_at(start)..byte_at(i)], base));
+        out.push((&text[byte_at(start)..byte_at(i)], base.clone()));
     }
     // Пустые раны не пушим; смежные раны одного стиля не сливаем —
     // set_rich_text корректно шейпит соседние раны (оптимизация не нужна).
     let mut merged: Vec<(&'a str, Attrs)> =
         out.into_iter().filter(|(s, _)| !s.is_empty()).collect();
     if merged.is_empty() {
-        merged.push((text, base));
+        merged.push((text, base.clone()));
     }
     merged
 }
@@ -1718,17 +1719,17 @@ fn shape_text_block(
     // WordOrGlyph: перенос по словам; слишком длинное слово рвётся по глифам,
     // а не вылезает за карточку. Высота None — shape_until_scroll зашейпит
     // ВСЕ строки (scroll_end = бесконечность, buffer.rs cosmic-text).
-    buffer.set_wrap(font_system, Wrap::WordOrGlyph);
-    buffer.set_size(font_system, Some(width_px), None);
+    buffer.set_wrap(Wrap::WordOrGlyph);
+    buffer.set_size(Some(width_px), None);
     // FR-061 этап D (O-5): формульная строка — раскраска лексем БЕЗ
     // GFM-парсинга (маркеры `*`/`==`/`~~` в формулах — литералы).
     if formula {
-        let rich = formula_rich_runs(text, base, theme.formula_fn, theme.formula_op);
+        let rich = formula_rich_runs(text, base.clone(), theme.formula_fn, theme.formula_op);
         buffer.set_rich_text(
-            font_system,
-            rich.iter().map(|&(s, attrs)| (s, attrs)),
-            base,
+            rich.iter().map(|&(s, ref attrs)| (s, attrs.clone())),
+            &base,
             Shaping::Advanced,
+            None,
         );
         buffer.shape_until_scroll(font_system, false);
         let height_px = buffer
@@ -1744,9 +1745,9 @@ fn shape_text_block(
     for seg in gfm::inline_segments(text) {
         let seg_attrs = if seg.link {
             // Ссылка: текст label акцентным цветом, URL не показываем
-            base.color(theme.link)
+            base.clone().color(theme.link)
         } else {
-            base
+            base.clone()
         };
         let (seg_plain, seg_spans) = markdown::parse(&seg.text);
         let offset = plain.len();
@@ -1763,10 +1764,10 @@ fn shape_text_block(
         );
     }
     buffer.set_rich_text(
-        font_system,
-        rich.iter().map(|(s, attrs)| (s.as_str(), *attrs)),
-        base,
+        rich.iter().map(|(s, attrs)| (s.as_str(), attrs.clone())),
+        &base,
         Shaping::Advanced,
+        None,
     );
     buffer.shape_until_scroll(font_system, false);
     let height_px = buffer
@@ -1989,9 +1990,9 @@ fn clamp_desc_text(
 ) -> (String, bool) {
     let wrapped_lines = |fs: &mut FontSystem, s: &str| -> usize {
         let mut buffer = Buffer::new(fs, Metrics::new(BODY_FONT_SIZE, BODY_LINE_HEIGHT));
-        buffer.set_wrap(fs, Wrap::WordOrGlyph);
-        buffer.set_size(fs, Some(width_px), None);
-        buffer.set_text(fs, s, sans_attrs(), Shaping::Advanced);
+        buffer.set_wrap(Wrap::WordOrGlyph);
+        buffer.set_size(Some(width_px), None);
+        buffer.set_text(s, &sans_attrs(), Shaping::Advanced, None);
         buffer.shape_until_scroll(fs, false);
         buffer.layout_runs().count()
     };
@@ -2953,9 +2954,9 @@ impl TextSystem {
             &mut self.font_system,
             Metrics::new(EDGE_LABEL_FONT_SIZE * zoom_px, line_height),
         );
-        buffer.set_wrap(&mut self.font_system, Wrap::None);
-        buffer.set_size(&mut self.font_system, None, Some(line_height));
-        buffer.set_text(&mut self.font_system, text, sans_attrs(), Shaping::Advanced);
+        buffer.set_wrap(Wrap::None);
+        buffer.set_size(None, Some(line_height));
+        buffer.set_text(text, &sans_attrs(), Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
         let width = buffer
             .layout_runs()
@@ -3661,18 +3662,9 @@ impl TextSystem {
                     ));
                     let mut title =
                         Buffer::new(&mut self.font_system, Metrics::new(font_size, line_height));
-                    title.set_wrap(&mut self.font_system, Wrap::None);
-                    title.set_size(
-                        &mut self.font_system,
-                        Some(width_px),
-                        Some(HEADER_HEIGHT * zoom_px),
-                    );
-                    title.set_text(
-                        &mut self.font_system,
-                        &title_text,
-                        sans_attrs(),
-                        Shaping::Advanced,
-                    );
+                    title.set_wrap(Wrap::None);
+                    title.set_size(Some(width_px), Some(HEADER_HEIGHT * zoom_px));
+                    title.set_text(&title_text, &sans_attrs(), Shaping::Advanced, None);
                     title.shape_until_scroll(&mut self.font_system, false);
 
                     let icon = extension_letter(node).map(|letter| {
@@ -3680,18 +3672,9 @@ impl TextSystem {
                             &mut self.font_system,
                             Metrics::new(font_size, line_height),
                         );
-                        icon.set_size(
-                            &mut self.font_system,
-                            Some(ICON_WIDTH * zoom_px),
-                            Some(HEADER_HEIGHT * zoom_px),
-                        );
+                        icon.set_size(Some(ICON_WIDTH * zoom_px), Some(HEADER_HEIGHT * zoom_px));
                         let letter = letter.to_string();
-                        icon.set_text(
-                            &mut self.font_system,
-                            &letter,
-                            sans_attrs(),
-                            Shaping::Advanced,
-                        );
+                        icon.set_text(&letter, &sans_attrs(), Shaping::Advanced, None);
                         icon.shape_until_scroll(&mut self.font_system, false);
                         icon
                     });
@@ -3806,18 +3789,12 @@ impl TextSystem {
                             &mut self.font_system,
                             Metrics::new(RESULT_FONT_SIZE * zoom_px, RESULT_LINE_HEIGHT * zoom_px),
                         );
-                        buffer.set_wrap(&mut self.font_system, Wrap::None);
+                        buffer.set_wrap(Wrap::None);
                         buffer.set_size(
-                            &mut self.font_system,
                             Some(body_width * zoom_px),
                             Some(RESULT_LINE_HEIGHT * zoom_px),
                         );
-                        buffer.set_text(
-                            &mut self.font_system,
-                            &result_text,
-                            mono_attrs(),
-                            Shaping::Advanced,
-                        );
+                        buffer.set_text(&result_text, &mono_attrs(), Shaping::Advanced, None);
                         buffer.shape_until_scroll(&mut self.font_system, false);
                         let result_width_px = buffer
                             .layout_runs()
@@ -3830,19 +3807,13 @@ impl TextSystem {
                             &mut self.font_system,
                             Metrics::new(BADGE_FONT_SIZE * zoom_px, BADGE_LINE_HEIGHT * zoom_px),
                         );
-                        label.set_wrap(&mut self.font_system, Wrap::None);
+                        label.set_wrap(Wrap::None);
                         label.set_size(
-                            &mut self.font_system,
                             Some(body_width * zoom_px),
                             Some(BADGE_LINE_HEIGHT * zoom_px),
                         );
                         let label_text = row_grid::result_footer_label_lang(self.language);
-                        label.set_text(
-                            &mut self.font_system,
-                            &label_text,
-                            sans_attrs(),
-                            Shaping::Advanced,
-                        );
+                        label.set_text(&label_text, &sans_attrs(), Shaping::Advanced, None);
                         label.shape_until_scroll(&mut self.font_system, false);
                         (Some(buffer), result_width_px, Some(label))
                     };
@@ -4169,7 +4140,7 @@ impl TextSystem {
                                 value: shape_row_cell(
                                     &mut self.font_system,
                                     &row.value,
-                                    attrs,
+                                    attrs.clone(),
                                     value_color,
                                     area_px,
                                     zoom_px,
@@ -4177,7 +4148,7 @@ impl TextSystem {
                                 unit: shape_row_cell(
                                     &mut self.font_system,
                                     &row.unit,
-                                    attrs,
+                                    attrs.clone(),
                                     self.theme.quote,
                                     area_px,
                                     zoom_px,
@@ -4439,7 +4410,7 @@ impl TextSystem {
         }
 
         // Периодическое вытеснение заголовков давно невидимых нод
-        if self.tick % CACHE_SWEEP_INTERVAL == 0 {
+        if self.tick.is_multiple_of(CACHE_SWEEP_INTERVAL) {
             let horizon = self.tick.saturating_sub(CACHE_MAX_AGE);
             self.cache.retain(|_, entry| entry.last_used >= horizon);
         }
@@ -4468,9 +4439,9 @@ impl TextSystem {
             let make_buffer = |font_system: &mut FontSystem| {
                 let mut buffer =
                     Buffer::new(font_system, Metrics::new(HUD_FONT_SIZE, HUD_LINE_HEIGHT));
-                buffer.set_wrap(font_system, Wrap::None);
-                buffer.set_size(font_system, Some(width), Some(HUD_LINE_HEIGHT));
-                buffer.set_text(font_system, hud, sans_attrs(), Shaping::Advanced);
+                buffer.set_wrap(Wrap::None);
+                buffer.set_size(Some(width), Some(HUD_LINE_HEIGHT));
+                buffer.set_text(hud, &sans_attrs(), Shaping::Advanced, None);
                 buffer.shape_until_scroll(font_system, false);
                 buffer
             };
@@ -4526,18 +4497,9 @@ impl TextSystem {
         for overlay in frame.overlay_texts {
             let mut buffer =
                 Buffer::new(&mut self.font_system, Metrics::new(font_size, line_height));
-            buffer.set_wrap(&mut self.font_system, Wrap::None);
-            buffer.set_size(
-                &mut self.font_system,
-                Some(overlay.width * zoom_px),
-                Some(line_height),
-            );
-            buffer.set_text(
-                &mut self.font_system,
-                overlay.text,
-                sans_attrs(),
-                Shaping::Advanced,
-            );
+            buffer.set_wrap(Wrap::None);
+            buffer.set_size(Some(overlay.width * zoom_px), Some(line_height));
+            buffer.set_text(overlay.text, &sans_attrs(), Shaping::Advanced, None);
             buffer.shape_until_scroll(&mut self.font_system, false);
             overlay_buffers.push((buffer, overlay.origin, overlay.width));
         }
@@ -4554,18 +4516,9 @@ impl TextSystem {
                 let line_height = font * LINE_HEIGHT_FACTOR;
                 let mut buffer =
                     Buffer::new(&mut self.font_system, Metrics::new(font, line_height));
-                buffer.set_wrap(&mut self.font_system, Wrap::None);
-                buffer.set_size(
-                    &mut self.font_system,
-                    Some(st.width * scale_factor),
-                    Some(line_height),
-                );
-                buffer.set_text(
-                    &mut self.font_system,
-                    st.text,
-                    sans_attrs(),
-                    Shaping::Advanced,
-                );
+                buffer.set_wrap(Wrap::None);
+                buffer.set_size(Some(st.width * scale_factor), Some(line_height));
+                buffer.set_text(st.text, &sans_attrs(), Shaping::Advanced, None);
                 buffer.shape_until_scroll(&mut self.font_system, false);
                 buffers.push(buffer);
             }
@@ -4580,18 +4533,9 @@ impl TextSystem {
             let font = st.font_size * scale_factor;
             let line_height = font * LINE_HEIGHT_FACTOR;
             let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font, line_height));
-            buffer.set_wrap(&mut self.font_system, Wrap::None);
-            buffer.set_size(
-                &mut self.font_system,
-                Some(st.width * scale_factor),
-                Some(line_height),
-            );
-            buffer.set_text(
-                &mut self.font_system,
-                st.text,
-                sans_attrs(),
-                Shaping::Advanced,
-            );
+            buffer.set_wrap(Wrap::None);
+            buffer.set_size(Some(st.width * scale_factor), Some(line_height));
+            buffer.set_text(st.text, &sans_attrs(), Shaping::Advanced, None);
             buffer.shape_until_scroll(&mut self.font_system, false);
             stage_buffers.push(buffer);
         }
@@ -4605,18 +4549,9 @@ impl TextSystem {
             let font = st.font_size * scale_factor;
             let line_height = font * LINE_HEIGHT_FACTOR;
             let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font, line_height));
-            buffer.set_wrap(&mut self.font_system, Wrap::None);
-            buffer.set_size(
-                &mut self.font_system,
-                Some(st.width * scale_factor),
-                Some(line_height),
-            );
-            buffer.set_text(
-                &mut self.font_system,
-                st.text,
-                sans_attrs(),
-                Shaping::Advanced,
-            );
+            buffer.set_wrap(Wrap::None);
+            buffer.set_size(Some(st.width * scale_factor), Some(line_height));
+            buffer.set_text(st.text, &sans_attrs(), Shaping::Advanced, None);
             buffer.shape_until_scroll(&mut self.font_system, false);
             stage_overlay_buffers.push(buffer);
         }
@@ -4638,13 +4573,9 @@ impl TextSystem {
                 &mut self.font_system,
                 Metrics::new(BADGE_FONT_SIZE, BADGE_LINE_HEIGHT),
             );
-            buffer.set_wrap(&mut self.font_system, Wrap::None);
-            buffer.set_size(
-                &mut self.font_system,
-                Some(BADGE_FONT_SIZE * 2.0),
-                Some(BADGE_LINE_HEIGHT),
-            );
-            buffer.set_text(&mut self.font_system, "=", mono_attrs(), Shaping::Advanced);
+            buffer.set_wrap(Wrap::None);
+            buffer.set_size(Some(BADGE_FONT_SIZE * 2.0), Some(BADGE_LINE_HEIGHT));
+            buffer.set_text("=", &mono_attrs(), Shaping::Advanced, None);
             buffer.shape_until_scroll(&mut self.font_system, false);
             badge_buffer = Some(buffer);
         }
@@ -4658,14 +4589,9 @@ impl TextSystem {
             let font = RESULT_FONT_SIZE * zoom_px;
             let line_h = RESULT_LINE_HEIGHT * zoom_px;
             let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font, line_h));
-            buffer.set_wrap(&mut self.font_system, Wrap::None);
-            buffer.set_size(&mut self.font_system, Some(font * 24.0), Some(line_h));
-            buffer.set_text(
-                &mut self.font_system,
-                badge.text.as_str(),
-                mono_attrs(),
-                Shaping::Advanced,
-            );
+            buffer.set_wrap(Wrap::None);
+            buffer.set_size(Some(font * 24.0), Some(line_h));
+            buffer.set_text(badge.text.as_str(), &mono_attrs(), Shaping::Advanced, None);
             buffer.shape_until_scroll(&mut self.font_system, false);
             let width_px = buffer
                 .layout_runs()
@@ -4697,18 +4623,9 @@ impl TextSystem {
                             &mut self.font_system,
                             Metrics::new(RESULT_FONT_SIZE * zoom_px, RESULT_LINE_HEIGHT * zoom_px),
                         );
-                        buffer.set_wrap(&mut self.font_system, Wrap::None);
-                        buffer.set_size(
-                            &mut self.font_system,
-                            Some(area_px),
-                            Some(RESULT_LINE_HEIGHT * zoom_px),
-                        );
-                        buffer.set_text(
-                            &mut self.font_system,
-                            &text,
-                            mono_attrs(),
-                            Shaping::Advanced,
-                        );
+                        buffer.set_wrap(Wrap::None);
+                        buffer.set_size(Some(area_px), Some(RESULT_LINE_HEIGHT * zoom_px));
+                        buffer.set_text(&text, &mono_attrs(), Shaping::Advanced, None);
                         buffer.shape_until_scroll(&mut self.font_system, false);
                         let width_px = buffer
                             .layout_runs()
@@ -5720,9 +5637,9 @@ mod tests {
         let mut m = canvas_ui::measure::TextMeasurer::new();
         let shaped = |fs: &mut FontSystem, text: &str| {
             let mut buffer = Buffer::new(fs, Metrics::new(RESULT_FONT_SIZE, RESULT_LINE_HEIGHT));
-            buffer.set_wrap(fs, Wrap::None);
-            buffer.set_size(fs, Some(1_000_000.0), Some(RESULT_LINE_HEIGHT));
-            buffer.set_text(fs, text, mono_attrs(), Shaping::Advanced);
+            buffer.set_wrap(Wrap::None);
+            buffer.set_size(Some(1_000_000.0), Some(RESULT_LINE_HEIGHT));
+            buffer.set_text(text, &mono_attrs(), Shaping::Advanced, None);
             buffer.shape_until_scroll(fs, false);
             buffer
                 .layout_runs()
@@ -5890,7 +5807,7 @@ load = connections_per_sec / (servers * server_rate)\n";
                 let value = shape_row_cell(
                     &mut fs,
                     &row.value,
-                    attrs,
+                    attrs.clone(),
                     Color::rgb(0, 0, 0),
                     area_px,
                     1.0,
@@ -6441,13 +6358,13 @@ load = connections_per_sec / (servers * server_rate)\n";
         let mut fs = FontSystem::new();
         let (plain, spans) = markdown::parse("==раз два==\nтри ==четыре==");
         let mut buffer = Buffer::new(&mut fs, Metrics::new(14.0, 20.0));
-        buffer.set_wrap(&mut fs, Wrap::Word);
-        buffer.set_size(&mut fs, Some(400.0), Some(200.0));
+        buffer.set_wrap(Wrap::Word);
+        buffer.set_size(Some(400.0), Some(200.0));
         buffer.set_rich_text(
-            &mut fs,
             rich_spans(&plain, &spans, Attrs::new()),
-            Attrs::new(),
+            &Attrs::new(),
             Shaping::Advanced,
+            None,
         );
         buffer.shape_until_scroll(&mut fs, false);
         let quads = decoration_quads(&buffer, &plain, &spans, 1.0);
@@ -6464,12 +6381,12 @@ load = connections_per_sec / (servers * server_rate)\n";
         // Зачёркивание — отдельный квад Strike
         let (plain, spans) = markdown::parse("~~весь текст~~");
         let mut buffer = Buffer::new(&mut fs, Metrics::new(14.0, 20.0));
-        buffer.set_size(&mut fs, Some(400.0), Some(200.0));
+        buffer.set_size(Some(400.0), Some(200.0));
         buffer.set_rich_text(
-            &mut fs,
             rich_spans(&plain, &spans, Attrs::new()),
-            Attrs::new(),
+            &Attrs::new(),
             Shaping::Advanced,
+            None,
         );
         buffer.shape_until_scroll(&mut fs, false);
         let quads = decoration_quads(&buffer, &plain, &spans, 1.0);
@@ -6484,12 +6401,12 @@ load = connections_per_sec / (servers * server_rate)\n";
         // Без маркеров — без квадов
         let (plain, spans) = markdown::parse("без подсветки");
         let mut buffer = Buffer::new(&mut fs, Metrics::new(14.0, 20.0));
-        buffer.set_size(&mut fs, Some(400.0), Some(200.0));
+        buffer.set_size(Some(400.0), Some(200.0));
         buffer.set_rich_text(
-            &mut fs,
             rich_spans(&plain, &spans, Attrs::new()),
-            Attrs::new(),
+            &Attrs::new(),
             Shaping::Advanced,
+            None,
         );
         buffer.shape_until_scroll(&mut fs, false);
         assert!(decoration_quads(&buffer, &plain, &spans, 1.0).is_empty());
@@ -6721,10 +6638,10 @@ load = connections_per_sec / (servers * server_rate)\n";
         for ch in symbols {
             let mut buffer = Buffer::new(&mut fs, Metrics::new(14.0, 20.0));
             buffer.set_text(
-                &mut fs,
                 &ch.to_string(),
-                Attrs::new().family(Family::Name(SANS_FAMILY)),
+                &Attrs::new().family(Family::Name(SANS_FAMILY)),
                 Shaping::Advanced,
+                None,
             );
             buffer.shape_until_scroll(&mut fs, false);
             let glyph_ids: Vec<u16> = buffer
@@ -6888,11 +6805,11 @@ load = connections_per_sec / (servers * server_rate)\n";
         let base = mono_attrs();
         let fn_c = Color::rgb(0xc7, 0x92, 0xea);
         let op_c = Color::rgb(0x66, 0x6a, 0x7c);
-        let runs = formula_rich_runs("rps = max(a, 2) * 3", base, fn_c, op_c);
+        let runs = formula_rich_runs("rps = max(a, 2) * 3", base.clone(), fn_c, op_c);
         let find = |needle: &str| {
             runs.iter()
                 .find(|(s, _)| *s == needle)
-                .copied()
+                .cloned()
                 .unwrap_or_else(|| panic!("ран «{needle}» не найден: {runs:?}"))
         };
         let (rps, rps_attrs) = find("rps");

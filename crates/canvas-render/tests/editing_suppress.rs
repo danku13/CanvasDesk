@@ -92,6 +92,7 @@ fn render_frame(
             label: Some(label),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -113,15 +114,15 @@ fn render_frame(
         mapped_at_creation: false,
     });
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: &target,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_row),
                 rows_per_image: None,
@@ -137,11 +138,15 @@ fn render_frame(
         slice.map_async(wgpu::MapMode::Read, move |res| {
             let _ = tx.send(res);
         });
-        gpu.device.poll(wgpu::Maintain::Wait);
+        let _ = gpu.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+
+            timeout: None,
+        });
         rx.recv()
             .expect("map_async: канал закрыт")
             .expect("map_async: ошибка маппинга");
-        slice.get_mapped_range().to_vec()
+        slice.get_mapped_range().expect("get_mapped_range").to_vec()
     };
     (padded_row as usize, data)
 }

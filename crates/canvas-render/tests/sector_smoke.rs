@@ -54,6 +54,7 @@ fn render_sectors(
             label: Some("sector-smoke"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     // Серый фон: прозрачность сектора видна по невозврату к нему
@@ -80,15 +81,15 @@ fn render_sectors(
         mapped_at_creation: false,
     });
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: &target,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_row),
                 rows_per_image: None,
@@ -102,11 +103,15 @@ fn render_sectors(
     slice.map_async(wgpu::MapMode::Read, move |res| {
         let _ = tx.send(res);
     });
-    gpu.device.poll(wgpu::Maintain::Wait);
+    let _ = gpu.device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+
+        timeout: None,
+    });
     rx.recv()
         .expect("map_async: канал закрыт")
         .expect("map_async: ошибка маппинга");
-    let data = slice.get_mapped_range().to_vec();
+    let data = slice.get_mapped_range().expect("get_mapped_range").to_vec();
     (data, padded_row)
 }
 

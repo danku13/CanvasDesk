@@ -50,13 +50,10 @@ impl GpuContext {
                 wgpu::Limits::default()
             };
             match adapter
-                .request_device(
-                    &wgpu::DeviceDescriptor {
-                        required_limits: limits,
-                        ..Default::default()
-                    },
-                    None,
-                )
+                .request_device(&wgpu::DeviceDescriptor {
+                    required_limits: limits,
+                    ..Default::default()
+                })
                 .await
             {
                 Ok(dq) => dq,
@@ -77,7 +74,9 @@ impl GpuContext {
     /// Headless-контекст без surface (тесты, будущие offscreen-превью).
     /// `None` — GPU-адаптер недоступен (например, CI без WARP).
     pub async fn headless() -> Option<Self> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        // deps-W2: InstanceDescriptor::default() удалён (wgpu 29+);
+        // headless-путь — конструктор без display-handle
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         Self::new(instance, None).await
     }
 }
@@ -105,14 +104,15 @@ async fn request_adapter_with_retry(
             power_preference: wgpu::PowerPreference::default(),
             compatible_surface,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         })
         .await
     {
-        Some(adapter) => {
+        Ok(adapter) => {
             tracing::info!(attempt = 1, "request_adapter: успех (default)");
             return Some(adapter);
         }
-        None => tracing::warn!(attempt = 1, "request_adapter: null (default)"),
+        Err(_) => tracing::warn!(attempt = 1, "request_adapter: null (default)"),
     }
 
     // Попытка 2: high-performance. На Windows powerPreference игнорируется
@@ -124,14 +124,15 @@ async fn request_adapter_with_retry(
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         })
         .await
     {
-        Some(adapter) => {
+        Ok(adapter) => {
             tracing::info!(attempt = 2, "request_adapter: успех (high-performance)");
             return Some(adapter);
         }
-        None => tracing::warn!(attempt = 2, "request_adapter: null (high-performance)"),
+        Err(_) => tracing::warn!(attempt = 2, "request_adapter: null (high-performance)"),
     }
 
     // Попытка 3: low-power — последний шанс (вдруг Chrome отдаст интегрированную).
@@ -141,14 +142,15 @@ async fn request_adapter_with_retry(
             power_preference: wgpu::PowerPreference::LowPower,
             compatible_surface,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         })
         .await
     {
-        Some(adapter) => {
+        Ok(adapter) => {
             tracing::info!(attempt = 3, "request_adapter: успех (low-power)");
             return Some(adapter);
         }
-        None => tracing::warn!(attempt = 3, "request_adapter: null (low-power) — фолбэк"),
+        Err(_) => tracing::warn!(attempt = 3, "request_adapter: null (low-power) — фолбэк"),
     }
 
     None
@@ -212,6 +214,8 @@ impl GpuContext {
                 label: Some("headless-clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
+                    // deps-W2: обязательное поле wgpu 30; None — вид 2D
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(background_color()),
@@ -233,15 +237,15 @@ impl GpuContext {
             mapped_at_creation: false,
         });
         encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_row),
                     rows_per_image: None,
@@ -256,12 +260,20 @@ impl GpuContext {
         slice.map_async(wgpu::MapMode::Read, move |res| {
             let _ = tx.send(res);
         });
-        self.device.poll(wgpu::Maintain::Wait);
+        // deps-W2: Maintain → PollType (wgpu 25+); poll теперь возвращает
+        // Result<PollStatus, PollError> — статуса ожидания достаточно
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
         rx.recv()
             .context("map_async: канал закрыт")?
             .context("map_async: ошибка маппинга")?;
 
-        let data = slice.get_mapped_range();
+        // deps-W2: get_mapped_range возвращает Result — обработать
+        let data = slice
+            .get_mapped_range()
+            .context("get_mapped_range: маппинг")?;
         let mut pixels = Vec::with_capacity((width * height * 4) as usize);
         for row in 0..height as usize {
             let start = row * padded_row as usize;

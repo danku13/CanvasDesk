@@ -130,7 +130,7 @@ where
         let d2 = dx * dx + dy * dy;
         // Итерация по возрастанию индекса: строгий `<` сохраняет меньший
         // индекс при равной дистанции (тай — как у first-match).
-        if best.map_or(true, |(bd, _)| d2 < bd) {
+        if best.is_none_or(|(bd, _)| d2 < bd) {
             best = Some((d2, i));
         }
     }

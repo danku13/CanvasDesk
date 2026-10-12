@@ -34,15 +34,15 @@ fn itog_label_baseline_fits_strip_with_v_center() {
         &mut fs,
         Metrics::new(BADGE_FONT_SIZE * zoom, BADGE_LINE_HEIGHT * zoom),
     );
-    buffer.set_wrap(&mut fs, Wrap::None);
-    buffer.set_size(&mut fs, Some(360.0 * zoom), Some(BADGE_LINE_HEIGHT * zoom));
+    buffer.set_wrap(Wrap::None);
+    buffer.set_size(Some(360.0 * zoom), Some(BADGE_LINE_HEIGHT * zoom));
     buffer.set_text(
-        &mut fs,
         "ИТОГ",
-        Attrs::new()
+        &Attrs::new()
             .family(Family::Name(SANS_FAMILY))
             .weight(Weight::MEDIUM),
         Shaping::Advanced,
+        None,
     );
     buffer.shape_until_scroll(&mut fs, false);
 

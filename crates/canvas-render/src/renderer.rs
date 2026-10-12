@@ -666,7 +666,7 @@ async fn create_gpu_web_gl(window: &Arc<Window>) -> Option<(GpuContext, wgpu::Su
     tracing::info!("create_gpu_web: GL (WebGL2) — surface до адаптера");
     let gl_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::GL,
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
     let surface = gl_instance.create_surface(window.clone()).ok()?;
     let gpu = GpuContext::new(gl_instance, Some(&surface)).await?;
@@ -686,7 +686,7 @@ async fn create_gpu_web_two_step(
     tracing::info!("create_gpu_web: ступень 1 — WebGPU (BROWSER_WEBGPU)");
     let webgpu_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::BROWSER_WEBGPU,
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
     if let Some(gpu) = GpuContext::new(webgpu_instance, None).await {
         // GpuContext владеет тем же Instance (gpu.instance) — surface из него
@@ -754,9 +754,15 @@ impl Renderer {
                 Err(_) if prefer_dx12 => wgpu::Backends::DX12,
                 Err(_) => wgpu::Backends::all(),
             };
+            // deps-W2: InstanceDescriptor::default() удалён (wgpu 29+).
+            // Без display-handle — паритет поведения wgpu 22 (EGL имеет
+            // фолбэки XCB/surfaceless/default); РИСК для W3: GL на Wayland
+            // может потребовать проброса OwnedDisplayHandle от EventLoop —
+            // тогда сюда добавится параметр Renderer::new (решение по
+            // рантайм-проверке, не по догадке)
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends,
-                ..Default::default()
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
             });
             let surface = instance
                 .create_surface(window.clone())
@@ -806,6 +812,8 @@ impl Renderer {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
+            // deps-W2: обязательное поле wgpu 30; Auto — дефолт презентаци
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: clamped_w,
             height: clamped_h,
             present_mode,
@@ -1284,18 +1292,23 @@ impl Renderer {
         if !surface_size_valid(self.size.width, self.size.height) {
             return Ok(FrameStats::default());
         }
+        // deps-W2: get_current_texture возвращает CurrentSurfaceTexture
+        // (не Result); Suboptimal несёт валидный кадр (паритет Ok wgpu 22),
+        // OOM-варианта больше нет — покрывается device-lost/Validation
         let frame = match self.surface.get_current_texture() {
-            Ok(frame) => frame,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            wgpu::CurrentSurfaceTexture::Success(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 // surface потерян/устарел (например, после смены DPI) — переконфигурация
                 self.surface.configure(&self.gpu.device, &self.config);
                 return Ok(FrameStats::default());
             }
-            Err(wgpu::SurfaceError::OutOfMemory) => {
-                anyhow::bail!("GPU: нехватка памяти под surface");
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                tracing::warn!("кадр пропущен (timeout/occluded)");
+                return Ok(FrameStats::default());
             }
-            Err(err) => {
-                tracing::warn!(?err, "кадр пропущен");
+            wgpu::CurrentSurfaceTexture::Validation => {
+                tracing::warn!("кадр пропущен (surface validation)");
                 return Ok(FrameStats::default());
             }
         };
@@ -2374,6 +2387,8 @@ impl Renderer {
                 label: Some("grid"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
+                    // deps-W2: обязательное поле wgpu 30
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(self.theme.clear_color()),
@@ -2536,7 +2551,8 @@ impl Renderer {
             }
         }
         self.gpu.queue.submit([encoder.finish()]);
-        frame.present();
+        // deps-W2: present переехал в Queue (wgpu 30)
+        self.gpu.queue.present(frame);
         // M8/W4: покадровая метка для диагностики web-дыма (по умолчанию
         // под INFO-фильтром консоли/натива; RUST_LOG=debug — включает)
         tracing::debug!(

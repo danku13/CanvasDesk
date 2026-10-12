@@ -31,7 +31,8 @@ fn headless_render_clear() {
     ];
     assert_eq!(expected, [0x1e, 0x1e, 0x22, 255], "фон не #1e1e22");
     assert_eq!(pixels.len(), (width * height * 4) as usize);
-    for chunk in pixels.chunks_exact(4) {
-        assert_eq!(chunk, expected, "пиксель отличается от фона");
-    }
+    assert!(
+        pixels.as_chunks::<4>().0.iter().all(|px| *px == expected),
+        "пиксель отличается от фона"
+    );
 }

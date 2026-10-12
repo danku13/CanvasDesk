@@ -4751,7 +4751,7 @@ impl App {
                 // ≥16мс с последней.
                 let time_ok = self
                     .hover_last_check
-                    .map_or(true, |t| now.duration_since(t).as_millis() >= 16);
+                    .is_none_or(|t| now.duration_since(t).as_millis() >= 16);
                 if moved_enough || time_ok {
                     self.hover_last_check = Some(now);
                     self.hover_last_cursor = logical;

@@ -170,6 +170,7 @@ fn template_card_content_fits_idle_height() {
             label: Some("template-card-fit"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -191,15 +192,15 @@ fn template_card_content_fits_idle_height() {
         mapped_at_creation: false,
     });
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: &target,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_row),
                 rows_per_image: None,
@@ -214,11 +215,15 @@ fn template_card_content_fits_idle_height() {
     slice.map_async(wgpu::MapMode::Read, move |res| {
         let _ = tx.send(res);
     });
-    gpu.device.poll(wgpu::Maintain::Wait);
+    let _ = gpu.device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+
+        timeout: None,
+    });
     rx.recv()
         .expect("map_async: канал закрыт")
         .expect("map_async: ошибка маппинга");
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range().expect("get_mapped_range");
 
     // Камера по умолчанию: world (0,0) — центр 800×600; zoom 1, scale 1.
     // Карточка: screen x 210..590, y 160..160+H.
@@ -385,6 +390,7 @@ fn template_card_with_auto_row_fits_idle_height() {
             label: Some("template-card-fit-auto"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -406,15 +412,15 @@ fn template_card_with_auto_row_fits_idle_height() {
         mapped_at_creation: false,
     });
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: &target,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_row),
                 rows_per_image: None,
@@ -429,11 +435,15 @@ fn template_card_with_auto_row_fits_idle_height() {
     slice.map_async(wgpu::MapMode::Read, move |res| {
         let _ = tx.send(res);
     });
-    gpu.device.poll(wgpu::Maintain::Wait);
+    let _ = gpu.device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+
+        timeout: None,
+    });
     rx.recv()
         .expect("map_async: канал закрыт")
         .expect("map_async: ошибка маппинга");
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range().expect("get_mapped_range");
 
     let card_bottom = 160.0 + card_h;
     let lit = |x0: u32, x1: u32, y0: u32, y1: u32| -> usize {

@@ -118,8 +118,8 @@ impl SectorsPipeline {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("sectors"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
 
         let instance_layout = wgpu::VertexBufferLayout {
@@ -138,13 +138,13 @@ impl SectorsPipeline {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[instance_layout],
+                buffers: &[Some(instance_layout)],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -155,7 +155,7 @@ impl SectorsPipeline {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -256,10 +256,8 @@ mod tests {
         let mut bytes = Vec::new();
         inst.write_to(&mut bytes);
         assert_eq!(bytes.len(), 40);
-        let floats: Vec<f32> = bytes
-            .chunks_exact(4)
-            .map(|c| f32::from_ne_bytes(c.try_into().expect("4 байта")))
-            .collect();
+        let (chunks, _) = bytes.as_chunks::<4>();
+        let floats: Vec<f32> = chunks.iter().map(|c| f32::from_ne_bytes(*c)).collect();
         assert_eq!(
             floats,
             vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 0.5]

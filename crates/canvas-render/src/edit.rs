@@ -45,7 +45,8 @@ fn pad_trailing_lines(buffer: &mut Buffer, plain: &str) {
         buffer.lines.push(BufferLine::new(
             String::new(),
             LineEnding::default(),
-            AttrsList::new(defaults),
+            // deps-W2: AttrsList::new принимает &Attrs (0.19)
+            AttrsList::new(&defaults),
             Shaping::Advanced,
         ));
     }
@@ -131,7 +132,7 @@ fn editor_rich<'a>(
                 ..*span
             })
             .collect();
-        out.extend(rich_spans(line, &line_spans, base));
+        out.extend(rich_spans(line, &line_spans, base.clone()));
         if i + 1 < lines.len() {
             out.push(("\n", base));
         }
@@ -547,11 +548,11 @@ impl EditingSession {
         let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
         // WordOrGlyph: перенос по словам, но одно длинное слово, не
         // влезающее в карточку, рвётся по глифам, а не уходит за край
-        buffer.set_wrap(font_system, Wrap::WordOrGlyph);
+        buffer.set_wrap(Wrap::WordOrGlyph);
         // FR-100: таб-стоп индента — 4 пробела (космический дефолт 8 давал
         // двойной индент; эталон — код-стайл заметок)
-        buffer.set_tab_width(font_system, 4);
-        buffer.set_size(font_system, Some(width_px), Some(height_px));
+        buffer.set_tab_width(4);
+        buffer.set_size(Some(width_px), Some(height_px));
         // CR-009: базис посемейственно — Numi-строки моноширинные (для
         // лейблов связей mono не применяется), прочее — sans medium.
         // CR-018 v1.2: Numi-строки также несут шаг табличного ряда.
@@ -561,10 +562,10 @@ impl EditingSession {
             Vec::new()
         };
         buffer.set_rich_text(
-            font_system,
             editor_rich(&plain, &spans, &formula_lines, zoom_px),
-            sans_attrs(),
+            &sans_attrs(),
             Shaping::Advanced,
+            None,
         );
         let last_line = buffer.lines.len().saturating_sub(1);
         let last_len = buffer
@@ -615,12 +616,12 @@ impl EditingSession {
         let font_size = TITLE_FONT_SIZE * zoom_px;
         let line_height = TITLE_LINE_HEIGHT * zoom_px;
         let mut buffer = Buffer::new(font_system, Metrics::new(font_size, line_height));
-        buffer.set_wrap(font_system, Wrap::None);
+        buffer.set_wrap(Wrap::None);
         // FR-100: единый таб-стоп с телом заметки (в заголовке Tab глушится
         // adapt_command — ширина нужна только для шейпа таб-глифов)
-        buffer.set_tab_width(font_system, 4);
-        buffer.set_size(font_system, Some(width_px), Some(height_px));
-        buffer.set_text(font_system, text, sans_attrs(), Shaping::Advanced);
+        buffer.set_tab_width(4);
+        buffer.set_size(Some(width_px), Some(height_px));
+        buffer.set_text(text, &sans_attrs(), Shaping::Advanced, None);
         buffer.shape_until_scroll(font_system, false);
         Self {
             buffer,
@@ -743,9 +744,8 @@ impl EditingSession {
         let line_height = line * zoom_px;
         self.line_height_px = line_height;
         self.buffer
-            .set_metrics(font_system, Metrics::new(font * zoom_px, line_height));
-        self.buffer
-            .set_size(font_system, Some(width_px), Some(height_px));
+            .set_metrics(Metrics::new(font * zoom_px, line_height));
+        self.buffer.set_size(Some(width_px), Some(height_px));
         // CR-018 v1.2: спан-метрики Numi-рядов физические (× зум) — при
         // смене зума/размера пере-apply атрибутов (шаг ряда следует зуму)
         self.refresh_styles(font_system);
@@ -793,10 +793,10 @@ impl EditingSession {
         self.origin_pad_px = first_row_pad(&formula_lines);
         let zoom_px = self.layout.2;
         self.buffer.set_rich_text(
-            font_system,
             editor_rich(&self.plain, &self.spans, &formula_lines, zoom_px),
-            sans_attrs(),
+            &sans_attrs(),
             Shaping::Advanced,
+            None,
         );
         // set_rich_text теряет хвостовые пустые строки (BidiParagraphs) —
         // восстановить число линий и валидность курсора/выделения (регресс:
@@ -1227,7 +1227,10 @@ impl EditingSession {
                 buffer
                     .layout_runs()
                     .filter_map(|run| {
-                        run.highlight(start, end).map(|(x, width)| {
+                        // deps-W2: highlight возвращает итератор спанов (0.19);
+                        // .next() — паритет прежнего Option (один спан на ран);
+                        // мульти-спановая отрисовка — осознанное решение W4
+                        run.highlight(start, end).next().map(|(x, width)| {
                             [
                                 x,
                                 run.line_top,
@@ -1255,7 +1258,7 @@ impl EditingSession {
     /// буфера восстанавливается (иначе set_layout не заметит разницы).
     pub fn content_size_px(&mut self, font_system: &mut FontSystem) -> (f32, f32) {
         let (width, height, _) = self.layout;
-        self.buffer.set_size(font_system, Some(width), None);
+        self.buffer.set_size(Some(width), None);
         self.buffer.shape_until_scroll(font_system, false);
         let mut lines = 0usize;
         let mut max_width = 0.0f32;
@@ -1275,7 +1278,7 @@ impl EditingSession {
                 total_h
             },
         );
-        self.buffer.set_size(font_system, Some(width), Some(height));
+        self.buffer.set_size(Some(width), Some(height));
         size
     }
 
