@@ -4,6 +4,6 @@
 
 crates/canvas-app/src/main.rs:
 
-# env-dep:CANVASDESK_GIT_COMMIT=cf54c55b
+# env-dep:CANVASDESK_GIT_COMMIT=0e2e7118
 # env-dep:CANVASDESK_GIT_DIRTY=true
 # env-dep:CARGO_PKG_VERSION=0.5.0

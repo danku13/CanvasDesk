@@ -469,9 +469,12 @@ impl ApplicationHandler<AppEvent> for App {
                     ));
                     let count = self.autolink_proposals.len().to_string();
                     let badge_texts = vec![OwnedScreenText {
-                        height: 0.0,
+                        // Канон вертикали (issue #68, IN11): origin — верх
+                        // хозяина, height = высота бейджа — рендер
+                        // авто-центрирует строковый бокс (ручной +6 убран).
+                        height: badge[3],
                         text: self.trf(keys::AUTOLINK_BADGE, &[("{n}", count.as_str())]),
-                        origin: [badge[0], badge[1] + 6.0],
+                        origin: [badge[0], badge[1]],
                         width: badge[2],
                         font_size: 12.0,
                         color: palette.body,
@@ -497,10 +500,13 @@ impl ApplicationHandler<AppEvent> for App {
                         )];
                         let percent_text = percent.to_string();
                         let cov_texts = vec![OwnedScreenText {
-                            height: 0.0,
+                            // Канон вертикали (issue #68, IN11): height =
+                            // высота чипа — авто-центрирование рендера
+                            // (ручной +6 убран).
+                            height: chip[3],
                             text: self
                                 .trf(keys::EXPLAIN_COVERAGE, &[("{n}", percent_text.as_str())]),
-                            origin: [chip[0], chip[1] + 6.0],
+                            origin: [chip[0], chip[1]],
                             width: chip[2],
                             font_size: 12.0,
                             color: palette.body,
@@ -808,9 +814,13 @@ impl ApplicationHandler<AppEvent> for App {
                         });
                         let (btn_box, btn_width) = centered_box(buttons[i], 4.0);
                         dialog_texts.push(OwnedScreenText {
-                            height: 0.0,
+                            // Канон вертикали (issue #68, IN11): origin — верх
+                            // кнопки, height = высота кнопки — рендер
+                            // авто-центрирует подпись (ручной +7 убран;
+                            // адаптивный компакт-вариант центрируется сам).
+                            height: buttons[i][3],
                             text: (*label).to_owned(),
-                            origin: [btn_box[0], buttons[i][1] + 7.0],
+                            origin: [btn_box[0], buttons[i][1]],
                             width: btn_width,
                             font_size: DIALOG_BTN_FS,
                             color: token_color(canvas_core::tokens::DIALOG_TEXT),

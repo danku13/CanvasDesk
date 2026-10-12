@@ -162,6 +162,9 @@ of a label is `text_area_vcentered`, of a caret — `caret_rect` (the kit
 helpers live in `canvas_ui::measure`, re-exported via `canvas_ui::kit`).
 The renderer auto-centering (`ScreenText.area_h`) covers sites that pass a
 full control rect, but new code passes the line box explicitly. Enforced by
-grep-lints (the V3 wave): full-rect label calls, vertical literal offsets
-at label/caret sites, and `× 1.3`/`× 1.1` line-height literals outside
-`crates/canvas-ui/src/measure.rs`.
+the V3 gate (issue #68): `bash scripts/v3_ui_lint.sh` (scanner
+`scripts/v3_ui_scan.py`, CI job `v3-ui-lint`) — full-rect label calls,
+vertical literal offsets at label/caret sites, and `× 1.3`/`× 1.1`
+line-height literals outside `crates/canvas-ui/src/measure.rs`. The only
+exception is the inline per-line marker `// v3:allow <reason>` (deliberate
+top-anchored stacks, IN11); file-level allowlists do not exist.

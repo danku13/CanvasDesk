@@ -360,9 +360,10 @@ fn value_flow_scene(d: &mut Painter, s: UiRect, kit: &KitPalette, k: f32) {
     edge_v(d, x, a.y + a.h + 2.0 * k, b.y - 6.0 * k, kit, k);
     arrow(d, x, b.y - 8.0 * k, true, kit, k);
     port(d, x, b.y, kit, k);
-    // Подпись входа значения
+    // Подпись входа значения — аннотация стрелки на арт-сцене (не контрол):
+    // позиция задаётся геометрией стрелки/порта, масштаб ×k.
     d.label(
-        UiRect::new(x + 10.0 * k, b.y - 8.0 * k, 44.0 * k, 16.0 * k),
+        UiRect::new(x + 10.0 * k, b.y - 8.0 * k, 44.0 * k, 16.0 * k), // v3:allow арт онбординга, масштаб k (IN11)
         "$in",
         kit.accent,
         11.0 * k,
@@ -417,8 +418,11 @@ fn final_scene(d: &mut Painter, s: UiRect, kit: &KitPalette, k: f32) {
     let b = UiRect::new(s.x + (s.w - cw) / 2.0, top + ch + 14.0 * k, cw, ch);
     // «Открыть шаблонную схему» — primary
     d.rect(a, kit.control_primary, [0.0; 4], 8.0 * k);
+    // Канон вертикали (issue #68, IN11): строковый бокс подписи карточки —
+    // text_area_vcentered (масштаб ×k); прежняя ручная формула
+    // (a.h − 16k)/2 удалена, рендер бит-в-бит (авто-центр в боксе 16k).
     d.label(
-        UiRect::new(a.x, a.y + (a.h - 16.0 * k) / 2.0, a.w, 16.0 * k),
+        canvas_ui::kit::text_area_vcentered(a, 11.0 * k),
         "схема",
         kit.text_title,
         11.0 * k,
@@ -427,7 +431,7 @@ fn final_scene(d: &mut Painter, s: UiRect, kit: &KitPalette, k: f32) {
     // «Начать самому» — контурная
     d.rect(b, kit.control_fill, kit.panel_border, 8.0 * k);
     d.label(
-        UiRect::new(b.x, b.y + (b.h - 16.0 * k) / 2.0, b.w, 16.0 * k),
+        canvas_ui::kit::text_area_vcentered(b, 11.0 * k),
         "свой канвас",
         kit.text_muted,
         11.0 * k,

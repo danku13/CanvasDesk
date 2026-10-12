@@ -106,6 +106,24 @@ jobs:
       - name: LAY7 regression lint (gap literals + x/y cursors)
         run: bash scripts/lay7_lint.sh
 
+  # Issue #68 волна V3: гейт канона вертикали (спека design/rules/09-input.md
+  # IN11–IN13). scripts/v3_ui_scan.py — python3-сканер без сборки: L1 —
+  # полный-rect label (label_center/label_left вне kit::text_area_vcentered),
+  # L2 — магические вертикальные офсеты на текст/каретка-сайтах (литеральные
+  # y-сдвиги, ручные v-центрирующие формулы, литеральный dy в push_line),
+  # L3 — литералы фактора строки ×1.3/×1.1 вне measure.rs. Инлайн-исключения
+  # `// v3:allow <причина>` (осознанные топ-анкерные стеки IN11), файловых
+  # allowlist нет; negative-тест --selftest — первым шагом job'ы.
+  v3-ui-lint:
+    name: v3-ui-lint (vertical canon gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: V3 selftest (negative-тест гейта)
+        run: bash scripts/v3_ui_lint.sh --selftest
+      - name: V3 regression lint (full-rect labels + magic offsets + factor literals)
+        run: bash scripts/v3_ui_lint.sh
+
   # Issue #18 (аудит доков 2026-10-10): гейт целостности документации.
   # scripts/doc_lint.py — python3-сканер без сборки (прецедент
   # wasm_time_audit.py): битые *.md-ссылки, *.html-ссылки на несобранные

@@ -792,7 +792,11 @@ pub(super) fn template_card_row(
     texts.push(OwnedScreenText {
         height: 0.0,
         text: manifest.display_name(language).to_owned(),
-        origin: [tile[0] + tile[2] + 8.0, rect[1] + 5.0],
+        // Строка шаблона — топ-анкерный текст-стек (title + ≤2 строк desc):
+        // якорь группы — верхний пад строки, строки стека идут вниз
+        // (desc: rect[1] + 21 + line_idx·14); центрировать title в строке
+        // нельзя — сломает стек с desc.
+        origin: [tile[0] + tile[2] + 8.0, rect[1] + 5.0], // v3:allow строка шаблона — топ-анкерный стек title+desc (IN11)
         width: rect[2] - (tile[2] + 24.0),
         font_size: 13.0,
         color: palette.title,

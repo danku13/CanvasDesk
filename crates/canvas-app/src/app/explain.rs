@@ -174,14 +174,16 @@ impl App {
             14.0,
         );
         let (accepted, rejected, pending) = review.counts();
-        // Шапка: заголовок + мета + ✕
+        // Шапка: заголовок + мета + ✕ (канон вертикали issue #68, IN11:
+        // строковый бокс кегля по центру зоны заголовка)
+        let title_zone = UiRect::new(
+            win[0] + 16.0,
+            win[1] + 10.0,
+            (win[2] - 120.0).max(120.0),
+            20.0,
+        );
         d.label(
-            canvas_ui::geometry::UiRect::new(
-                win[0] + 16.0,
-                win[1] + 10.0,
-                (win[2] - 120.0).max(120.0),
-                20.0,
-            ),
+            canvas_ui::kit::text_area_vcentered(title_zone, 15.0),
             self.tr(keys::AUTOLINK_TITLE),
             color_to_rgba(palette.title),
             15.0,
@@ -210,7 +212,10 @@ impl App {
             7.0,
         );
         d.label(
-            canvas_ui::geometry::UiRect::new(close[0], close[1] + 2.0, close[2], 18.0),
+            canvas_ui::kit::text_area_vcentered(
+                UiRect::new(close[0], close[1], close[2], close[3]),
+                14.0,
+            ),
             "×",
             color_to_rgba(palette.body),
             14.0,
@@ -261,13 +266,10 @@ impl App {
             // rect), стиль прежний (border-only + body-text): kit::paint_banner
             // рисует ТОЛЬКО фон баннера, action_button — забота потребителя.
             d.rect(lay.action_button, [0.0; 4], palette.palette_border, 6.0);
+            // Канон вертикали (issue #68, IN11): строковый бокс кегля
+            // по центру кнопки действия баннера.
             d.label(
-                UiRect::new(
-                    lay.action_button.x,
-                    lay.action_button.y + 4.0,
-                    lay.action_button.w,
-                    16.0,
-                ),
+                canvas_ui::kit::text_area_vcentered(lay.action_button, 11.0),
                 restore_text,
                 color_to_rgba(palette.body),
                 11.0,
@@ -313,13 +315,10 @@ impl App {
             } else {
                 head_text
             };
+            let head_zone =
+                UiRect::new(head[0] + 10.0, head[1], (head[2] - 20.0).max(0.0), head[3]);
             d.label(
-                canvas_ui::geometry::UiRect::new(
-                    head[0] + 10.0,
-                    head[1] + 8.0,
-                    (head[2] - 20.0).max(0.0),
-                    16.0,
-                ),
+                canvas_ui::kit::text_area_vcentered(head_zone, 12.0),
                 &head_text,
                 color_to_rgba(palette.title),
                 12.0,
@@ -394,13 +393,14 @@ impl App {
                     PaintAlign::Left,
                 );
             } else {
+                let row_zone = UiRect::new(
+                    rects.row[0] + 10.0,
+                    rects.row[1],
+                    (rects.pct[0] - rects.row[0] - 20.0).max(0.0),
+                    rects.row[3],
+                );
                 d.label(
-                    canvas_ui::geometry::UiRect::new(
-                        rects.row[0] + 10.0,
-                        rects.row[1] + 8.0,
-                        (rects.pct[0] - rects.row[0] - 20.0).max(0.0),
-                        16.0,
-                    ),
+                    canvas_ui::kit::text_area_vcentered(row_zone, 11.5),
                     &format!("{} → {}", param_label, item.to_title),
                     color_to_rgba(if item.state == ItemState::Rejected {
                         palette.quote
@@ -422,11 +422,9 @@ impl App {
                     9.0,
                 );
                 d.label(
-                    canvas_ui::geometry::UiRect::new(
-                        rects.pct[0],
-                        rects.pct[1] + 3.0,
-                        rects.pct[2],
-                        14.0,
+                    canvas_ui::kit::text_area_vcentered(
+                        UiRect::new(rects.pct[0], rects.pct[1], rects.pct[2], rects.pct[3]),
+                        10.0,
                     ),
                     &pct_text,
                     color_to_rgba(palette.body),
@@ -460,11 +458,14 @@ impl App {
                 6.0,
             );
             d.label(
-                canvas_ui::geometry::UiRect::new(
-                    rects.accept[0],
-                    rects.accept[1] + 3.0,
-                    rects.accept[2],
-                    15.0,
+                canvas_ui::kit::text_area_vcentered(
+                    UiRect::new(
+                        rects.accept[0],
+                        rects.accept[1],
+                        rects.accept[2],
+                        rects.accept[3],
+                    ),
+                    10.5,
                 ),
                 self.tr(keys::AUTOLINK_ACCEPT),
                 color_to_rgba(if accept_on_kit {
@@ -498,11 +499,14 @@ impl App {
                 6.0,
             );
             d.label(
-                canvas_ui::geometry::UiRect::new(
-                    rects.reject[0],
-                    rects.reject[1] + 3.0,
-                    rects.reject[2],
-                    15.0,
+                canvas_ui::kit::text_area_vcentered(
+                    UiRect::new(
+                        rects.reject[0],
+                        rects.reject[1],
+                        rects.reject[2],
+                        rects.reject[3],
+                    ),
+                    10.5,
                 ),
                 self.tr(keys::AUTOLINK_REJECT),
                 color_to_rgba(if reject_on_kit {
@@ -530,26 +534,27 @@ impl App {
             0.0,
         );
         if !compact {
+            let hint_zone = UiRect::new(
+                footer[0] + 16.0,
+                footer[1] + 10.0,
+                // Ширина подсказки: не перекрывать кнопки футера.
+                // Прежняя формула `footer[2] - 3*FOOT_BTN_W - 40` давала
+                // 366px — подсказка наезжала на «Отклонить все» (левая
+                // кнопка начинается на 448px от правого края). Корректная
+                // ширина = footer_w − правый отступ (16) − CREATE_W − 2·(
+                // FOOT_BTN_W + 10) − левый отступ (16) − зазор (10).
+                (footer[2]
+                    - autolink_ui::CREATE_W
+                    - 2.0 * autolink_ui::FOOT_BTN_W
+                    - 2.0 * 10.0
+                    - 16.0
+                    - 16.0
+                    - 10.0)
+                    .max(120.0),
+                15.0,
+            );
             d.label(
-                canvas_ui::geometry::UiRect::new(
-                    footer[0] + 16.0,
-                    footer[1] + 10.0,
-                    // Ширина подсказки: не перекрывать кнопки футера.
-                    // Прежняя формула `footer[2] - 3*FOOT_BTN_W - 40` давала
-                    // 366px — подсказка наезжала на «Отклонить все» (левая
-                    // кнопка начинается на 448px от правого края). Корректная
-                    // ширина = footer_w − правый отступ (16) − CREATE_W − 2·(
-                    // FOOT_BTN_W + 10) − левый отступ (16) − зазор (10).
-                    (footer[2]
-                        - autolink_ui::CREATE_W
-                        - 2.0 * autolink_ui::FOOT_BTN_W
-                        - 2.0 * 10.0
-                        - 16.0
-                        - 16.0
-                        - 10.0)
-                        .max(120.0),
-                    15.0,
-                ),
+                canvas_ui::kit::text_area_vcentered(hint_zone, 10.5),
                 self.tr(keys::AUTOLINK_HINT),
                 color_to_rgba(palette.quote),
                 10.5,
@@ -576,7 +581,10 @@ impl App {
             7.0,
         );
         d.label(
-            canvas_ui::geometry::UiRect::new(create[0], create[1] + 6.0, create[2], 16.0),
+            canvas_ui::kit::text_area_vcentered(
+                UiRect::new(create[0], create[1], create[2], create[3]),
+                12.0,
+            ),
             &self.trf(
                 keys::AUTOLINK_CREATE,
                 &[("{n}", accepted.to_string().as_str())],
@@ -600,7 +608,10 @@ impl App {
                 7.0,
             );
             d.label(
-                canvas_ui::geometry::UiRect::new(rect[0], rect[1] + 6.0, rect[2], 16.0),
+                canvas_ui::kit::text_area_vcentered(
+                    UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                    11.5,
+                ),
                 self.tr(label),
                 color_to_rgba(palette.body),
                 11.5,
@@ -673,14 +684,16 @@ impl App {
                 palette.palette_border,
                 14.0,
             );
-            // Шапка: заголовок + крошки + ✕ + чип Stale
+            // Шапка: заголовок + крошки + ✕ + чип Stale (канон вертикали
+            // issue #68, IN11: строковый бокс кегля в зоне заголовка)
+            let title_zone = UiRect::new(
+                win[0] + 16.0,
+                win[1] + 10.0,
+                (win[2] - 240.0).max(120.0),
+                18.0,
+            );
             d.label(
-                UiRect::new(
-                    win[0] + 16.0,
-                    win[1] + 10.0,
-                    (win[2] - 240.0).max(120.0),
-                    18.0,
-                ),
+                canvas_ui::kit::text_area_vcentered(title_zone, 15.0),
                 self.tr(keys::EXPLAIN_TITLE),
                 color_to_rgba(palette.title),
                 15.0,
@@ -731,7 +744,7 @@ impl App {
                         // Рисуем «…» crumb (без акцентной подсветки).
                         d.rect(*rect, [0.0; 4], palette.palette_border, 6.0);
                         d.label(
-                            UiRect::new(rect.x, rect.y + 2.5, rect.w, 13.0),
+                            canvas_ui::kit::text_area_vcentered(*rect, 10.5),
                             label,
                             color_to_rgba(palette.body),
                             10.5,
@@ -750,8 +763,10 @@ impl App {
                         palette.palette_border,
                         6.0,
                     );
+                    let ta = canvas_ui::kit::text_area_vcentered(*rect, 10.5);
                     d.label(
-                        UiRect::new(rect.x + 6.0, rect.y + 2.5, (rect.w - 10.0).max(8.0), 13.0),
+                        // x-инсет крошки сохранён; вертикаль — канон (IN11).
+                        UiRect::new(rect.x + 6.0, ta.y, (rect.w - 10.0).max(8.0), ta.h),
                         label,
                         if selected {
                             color_to_rgba(palette.text_on_accent)
@@ -784,7 +799,10 @@ impl App {
                 7.0,
             );
             d.label(
-                UiRect::new(close[0], close[1] + 2.0, close[2], 17.0),
+                canvas_ui::kit::text_area_vcentered(
+                    UiRect::new(close[0], close[1], close[2], close[3]),
+                    14.0,
+                ),
                 "×",
                 color_to_rgba(palette.body),
                 14.0,
@@ -801,7 +819,10 @@ impl App {
                     14.0,
                 );
                 d.label(
-                    UiRect::new(chip[0], chip[1] + 5.0, chip[2], 14.0),
+                    canvas_ui::kit::text_area_vcentered(
+                        UiRect::new(chip[0], chip[1], chip[2], chip[3]),
+                        11.5,
+                    ),
                     self.tr(keys::EXPLAIN_STALE),
                     color_to_rgba(palette.text_on_accent),
                     11.5,
@@ -959,7 +980,10 @@ impl App {
                     14.0,
                 );
                 d.label(
-                    UiRect::new(toggle[0], toggle[1] + 7.5, toggle[2], 16.0),
+                    canvas_ui::kit::text_area_vcentered(
+                        UiRect::new(toggle[0], toggle[1], toggle[2], toggle[3]),
+                        13.0,
+                    ),
                     self.tr(if ltr {
                         keys::EXPLAIN_DIR_LTR
                     } else {
@@ -995,7 +1019,10 @@ impl App {
                     14.0,
                 );
                 d.label(
-                    UiRect::new(toggle[0], toggle[1] + 7.5, toggle[2], 16.0),
+                    canvas_ui::kit::text_area_vcentered(
+                        UiRect::new(toggle[0], toggle[1], toggle[2], toggle[3]),
+                        13.0,
+                    ),
                     self.tr(if on {
                         keys::EXPLAIN_DEFENSE_EXIT
                     } else {
@@ -1042,7 +1069,10 @@ impl App {
                         6.0,
                     );
                     d.label(
-                        UiRect::new(rect[0], rect[1] + 6.5, rect[2], 16.0),
+                        canvas_ui::kit::text_area_vcentered(
+                            UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                            13.0,
+                        ),
                         self.tr(key),
                         if ks == kit::KitState::Hovered {
                             color_to_rgba(palette.text_on_accent)
@@ -1152,9 +1182,13 @@ impl App {
                 // шапка с заголовком узла + по строке на лист; кривые уже
                 // приходят в порты строк (рендер кривых не меняется).
                 if !laid.rows.is_empty() {
-                    // Шапка: заголовок узла в верхней зоне TABLE_HEADER_H
+                    // Шапка: заголовок узла по центру верхней зоны
+                    // TABLE_HEADER_H (канон вертикали issue #68, IN11:
+                    // строковый бокс кегля; масштаб — как у зоны)
+                    let head_zone =
+                        UiRect::new(tx, rect[1], text_w, explain_ui::TABLE_HEADER_H * scale);
                     d.label(
-                        UiRect::new(tx, rect[1] + 6.0 * scale, text_w, 16.0),
+                        canvas_ui::kit::text_area_vcentered(head_zone, font(12.0)),
                         &node.title,
                         color_to_rgba(palette.title),
                         font(12.0),
@@ -1353,7 +1387,9 @@ impl App {
                 }
                 // 1) Заголовок ноды-таблицы
                 d.label(
-                    UiRect::new(tx, rect[1] + 7.0 * scale, text_w, 16.0),
+                    // Стек контента карточки: заголовок/значение/формула/адрес
+                    // шагают по кеглю от верхней кромки — раскладка, не центрирование.
+                    UiRect::new(tx, rect[1] + 7.0 * scale, text_w, 16.0), // v3:allow стек контента карточки (IN11)
                     &node.title,
                     color_to_rgba(palette.title),
                     font(12.0),
@@ -1469,7 +1505,10 @@ impl App {
                         7.0,
                     );
                     d.label(
-                        UiRect::new(badge[0], badge[1] + 1.5, bw, 12.0),
+                        canvas_ui::kit::text_area_vcentered(
+                            UiRect::new(badge[0], badge[1], bw, bh),
+                            9.5,
+                        ),
                         &self.trf(
                             keys::EXPLAIN_EXPAND_BADGE,
                             &[("n", vis.hidden_descendants[laid.idx].to_string().as_str())],
@@ -1525,7 +1564,10 @@ impl App {
                         7.0,
                     );
                     d.label(
-                        UiRect::new(rect[0], rect[1] + 3.0, rect[2], 15.0),
+                        canvas_ui::kit::text_area_vcentered(
+                            UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+                            12.0,
+                        ),
                         glyph,
                         color_to_rgba(palette.text_on_accent),
                         12.0,

@@ -1842,7 +1842,9 @@ pub(crate) fn k4_paint(
     // Подписи строк состояний/вариантов (левая колонка, 11px muted —
     // паттерн подписей Buttons в overlays.rs).
     for (area, cap) in &k4.labels {
-        d.label_left(*area, &text(*cap), p.text_muted, 11.0);
+        // Область построена в row_label_at через kit::text_area_vcentered —
+        // дублировать канон здесь не нужно.
+        d.label_left(*area, &text(*cap), p.text_muted, 11.0); // v3:allow компонентный строковый бокс row_label_at (IN13)
     }
 
     // --- W2 ----------------------------------------------------------------
@@ -1857,7 +1859,7 @@ pub(crate) fn k4_paint(
             &text(K4Caption::Key(crate::i18n::keys::KIT_BANNER_LABEL)),
             style.label_color,
             12.0,
-        );
+        ); // v3:allow компонентный строковый бокс banner BANNER_LABEL_LINE_H (IN13)
         d.control(
             r.lay.action_button,
             &kit::button_style(ButtonVariant::Secondary, r.state, p),
@@ -1888,7 +1890,7 @@ pub(crate) fn k4_paint(
                 &text(K4Caption::Key(crate::i18n::keys::KIT_CHAT_AUTHOR)),
                 style.text_color,
                 9.0,
-            );
+            ); // v3:allow компонентный строковый бокс chat_bubble CHAT_HEADER_H (IN13)
         }
         let msg_key = match r.kind {
             ChatBubbleKind::Normal => crate::i18n::keys::KIT_CHAT_MESSAGE,
@@ -1899,7 +1901,7 @@ pub(crate) fn k4_paint(
             &text(K4Caption::Key(msg_key)),
             style.text_color,
             11.0,
-        );
+        ); // v3:allow компонентный стек строк chat_bubble CHAT_LINE_H (IN11)
     }
 
     // Crumbs: чипы; активная крошка — Selected (crumbs_active_index),
@@ -1952,9 +1954,10 @@ pub(crate) fn k4_paint(
             &text(K4Caption::Key(crate::i18n::keys::KIT_RADIO_CARD_LABEL)),
             style.label_color,
             12.0,
-        );
+        ); // v3:allow компонентный строковый бокс radio_card RADIO_LABEL_LINE_H (IN13)
         if let Some(desc) = c.lay.desc {
-            d.label_left(desc, "LaTeX · MathML", style.desc_color, 11.0);
+            // Область — компонентный бокс RADIO_DESC_LINE_H из radio_card.
+            d.label_left(desc, "LaTeX · MathML", style.desc_color, 11.0); // v3:allow компонентный строковый бокс radio_card (IN13)
         }
     }
 
@@ -1970,12 +1973,17 @@ pub(crate) fn k4_paint(
                 p.panel_border,
                 canvas_core::tokens::RADIUS_PANEL,
             );
+            // Канон вертикали (issue #68, IN11): строковый бокс подписи
+            // панели — по центру панели; x-инсеты SPACING_SM сохранены.
             d.label_left(
-                UiRect::new(
-                    rect.x + canvas_core::tokens::SPACING_SM,
-                    rect.y + canvas_core::tokens::SPACING_SM,
-                    (rect.w - 2.0 * canvas_core::tokens::SPACING_SM).max(0.0),
-                    14.0,
+                kit::text_area_vcentered(
+                    UiRect::new(
+                        rect.x + canvas_core::tokens::SPACING_SM,
+                        rect.y,
+                        (rect.w - 2.0 * canvas_core::tokens::SPACING_SM).max(0.0),
+                        rect.h,
+                    ),
+                    11.0,
                 ),
                 &text(K4Caption::Key(key)),
                 p.text_muted,
@@ -2196,7 +2204,7 @@ pub(crate) fn k4_paint(
                 &text(r.body),
                 p.text_muted,
                 11.0,
-            );
+            ); // v3:allow тело аккордеона — топ-анкерный контент-стек с токен-паддингом (IN11)
         }
     }
 
@@ -2283,7 +2291,7 @@ pub(crate) fn k4_paint(
             &text(r.body),
             p.text_muted,
             11.0,
-        );
+        ); // v3:allow тело поповера — топ-анкерный контент-стек с токен-паддингом (IN11)
         if r.arrow.w > 0.0 {
             d.rect(r.arrow, p.panel_fill, [0.0; 4], 2.0);
         }
