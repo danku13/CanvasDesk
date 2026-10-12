@@ -438,3 +438,21 @@ Work Log:
 Stage Summary:
 - #42 закрыт как завершённый: интеграция волн T/C/L/A/D полностью в main, все 4 sub-issues done, 7/7 пробелов подтверждены кодом
 - Tokens: scope=issue-42-status-audit
+
+---
+Task ID: M4-BLOCKER-85
+Agent: Super Z (main)
+Task: Отчёт владельца по #64 «тумблер настроек ничего не делает» → диагноз, фикс, гейты
+
+Work Log:
+- Диагноз: контракт draw==hit (FR-070) нарушен для настроек — M3-b перевела draw (overlays.rs:6708) и реестр (ui_registry.rs:1430) на ветку modals_adaptive, а pick (input.rs:2542) и wheel (input.rs:5214) всегда считали legacy. С флагом ON окно 880×620.8 vs 576×480 (1280×800): клик по видимому тумблеру у правого края → legacy-затемнение → модаль закрывалась. G4 не видел: его источник (реестр) корректен
+- Фикс c94b57b: App::settings_layout_current (единый источник pick/wheel, та же ветка флага; legacy дословно — паритет OFF); pick+wheel через helper; 2 регресс-теста (pick==draw при ON, adaptive шире legacy, wheel-зона/предел, паритет OFF)
+- Окружение: свежий контейнер — rustup 1.99.0 переустановлен (rsproxy), CARGO_TARGET_DIR=/tmp/my-project/cd-target
+- Гейты: fmt-check ✅, workspace test ✅ (вкл. G4), clippy ✅, lay7 ✅; token_lint ❌ pre-existing на main (export_html.rs hex, вне диффа — stash-проверка)
+- issue #85 создан → закрыт как completed с отчётом; #64 — комментарий о возобновлении приёмки
+- Пуш d5c8771..c94b57b
+
+Stage Summary:
+- Тумблер «Адаптивные модали (β)» работает на всех вьюпортах; приёмка #64 возобновляема с новым билдом
+- Урок для гейтов: draw==hit нужно проверять и на путях ввода (pick/wheel), не только на реестре
+Tokens: scope=m4-blocker-85
