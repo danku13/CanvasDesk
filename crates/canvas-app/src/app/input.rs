@@ -2539,12 +2539,13 @@ impl App {
             // offset, что у рисования (overlays.rs) и hit-rect'ов
             // (ui_registry.rs) — «ввод = тому, что видно».
             // FR-LLM-FIX: настройки для фильтрации AI-таба (BYOK-модель).
-            let layout = modal_layout_scrolled_with_settings(
-                self.settings_tab,
-                viewport,
-                self.settings_scroll_top,
-                &self.settings,
-            );
+            // Wave M M4 (#85, блокер приёмки #64): ветка флага
+            // `modals_adaptive` — как у рисования/реестра. До фикса pick
+            // всегда считал legacy-раскладку: с флагом ON модаль
+            // рисовалась адаптивной, а клики — по прежнему окну → тумблер/
+            // строки не кликались (клик по видимому тумблеру попадал в
+            // legacy-зону затемнения и закрывал модаль).
+            let layout = self.settings_layout_current(viewport);
             // Открытое выпадающее меню — первый приоритет: клик по
             // пункту применяет значение; клик мимо меню закрывает
             // ТОЛЬКО меню (модалка остаётся открытой — двухэтапный
@@ -5207,12 +5208,24 @@ impl App {
         // (y < 0) увеличивает offset.
         if self.settings_open {
             let viewport = self.viewport_logical();
-            // FR-LLM-FIX: настройки для фильтрации AI-таба (BYOK-модель).
-            let content = modal_layout_with_settings(self.settings_tab, viewport, &self.settings)
-                .content_rect;
+            // Wave M M4 (#85, блокер приёмки #64): зона колеса и предел —
+            // по ветке флага, как у рисования/pick («ввод = тому, что
+            // видно»). До фикса с флагом ON зона/предел считались по
+            // legacy-окну — колесо скроллило не ту зону. OFF — прежняя
+            // формула дословно (паритет бит-в-бит).
+            let (content, max) = if self.settings.modals_adaptive {
+                let lay = self.settings_layout_current(viewport);
+                (lay.content_rect, lay.scroll_max)
+            } else {
+                (
+                    modal_layout_with_settings(self.settings_tab, viewport, &self.settings)
+                        .content_rect,
+                    modal_scroll_max_filtered(self.settings_tab, viewport, &self.settings),
+                )
+            };
             if point_in_rect(content, self.cursor) {
-                // FR-LLM-FIX: предел прокрутки с учётом фильтрации AI-таба.
-                let max = modal_scroll_max_filtered(self.settings_tab, viewport, &self.settings);
+                // FR-LLM-FIX: предел прокрутки с учётом фильтрации AI-таба
+                // (legacy) / clamp адаптивной раскладки (ON, #85).
                 let dy = match delta {
                     MouseScrollDelta::LineDelta(_, y) => -y * PAN_PX_PER_LINE,
                     MouseScrollDelta::PixelDelta(pos) => -pos.y as f32 / self.scale_factor(),
