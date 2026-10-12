@@ -94,8 +94,12 @@ version = 2
 yanked = "deny"
 ignore = [
     # deps-W2 (трек #69): миграция wgpu 30 / glyphon 0.12 / cosmic-text 0.19
-    # убрала из дерева paste (RUSTSEC-2024-0436) и rustybuzz
-    # (RUSTSEC-2026-0206) — оба игнора сняты как мёртвые.
+    # убрала rustybuzz (RUSTSEC-2026-0206 — заменён harfrust в cosmic-text
+    # 0.19) — игнор снят как мёртвый. paste (RUSTSEC-2024-0436) вернул:
+    # wgpu 30 его больше не тянет, но дерево --all-features получает его
+    # через statrs 0.17 → nalgebra 0.32 → simba 0.8 (фича statrs в
+    # canvas-core); замена ждёт апстрим statrs/nalgebra.
+    "RUSTSEC-2024-0436",
     # RUSTSEC-2026-0192: ttf-parser 0.25.1 не сопровождается. Осталась
     # ОДНА копия (было три): fontdb→cosmic-text 0.19 и (через
     # owned_ttf_parser→ab_glyph→sctk-adwaita) winit 0.30 — обе линии
