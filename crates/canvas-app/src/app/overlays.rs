@@ -4575,7 +4575,7 @@ impl App {
         // кнопка в зоне опций (верхний слот; primary, открывает менеджер).
         if state.cta().is_some() {
             let rect = if onb_compact {
-                onboarding_ui::button_rect_touch(card, OnboardingButton::Cta)
+                onboarding_ui::button_rect_touch(card, OnboardingButton::Cta, "", &mut m, &mut fs)
             } else {
                 onboarding_ui::cta_rect(card)
             };
@@ -4608,13 +4608,18 @@ impl App {
             OnboardingButton::Skip,
             kit::ButtonVariant::Ghost,
             self.tr(keys::ONBOARDING_SKIP).to_owned(),
-            onboarding_ui::skip_label_font(k),
+            // Миграция Skip на измеренную kit-кнопку: кегль паритетен кнопкам
+            // футера (13·k, канон кита) — прежний отдельный кегль 11 удалён.
+            onboarding_ui::button_label_font(k),
         ));
         for (button, variant, label, font) in &buttons {
+            // Skip — измеренная кнопка (ширина по подписи, kit-канон высоты);
+            // замерщик общий с раскладкой карточки (draw==hit — input.rs мерит
+            // тем же кеглем/семейством). Остальные кнопки label не читают.
             let rect = if onb_compact {
-                onboarding_ui::button_rect_touch(card, *button)
+                onboarding_ui::button_rect_touch(card, *button, label, &mut m, &mut fs)
             } else {
-                onboarding_ui::button_rect(card, *button)
+                onboarding_ui::button_rect(card, *button, label, &mut m, &mut fs)
             };
             let mut widget = WidgetState::default();
             widget.set_pointer(point_in_rect(rect, self.cursor), false);

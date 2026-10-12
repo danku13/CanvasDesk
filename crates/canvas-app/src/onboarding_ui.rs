@@ -329,23 +329,54 @@ pub fn button_w(k: f32) -> f32 {
 pub fn button_h(k: f32) -> f32 {
     ONBOARDING_BUTTON_H * k
 }
-/// Skip: 64×22 база, отступ от верха 10.
-pub fn skip_w(k: f32) -> f32 {
-    64.0 * k
-}
-pub fn skip_h(k: f32) -> f32 {
-    22.0 * k
-}
+/// Skip: отступ кнопки от верха карточки (база 10).
 pub fn skip_top(k: f32) -> f32 {
     10.0 * k
 }
-/// Кегль подписей кнопок футера (13) и Skip (11).
+/// Кегль подписей кнопок футера и Skip (13 — канон кита BUTTON_FONT_SIZE).
 pub fn button_label_font(k: f32) -> f32 {
     13.0 * k
 }
-pub fn skip_label_font(k: f32) -> f32 {
-    11.0 * k
+
+/// Ширина Skip по подписи (миграция на kit::button_layout-канон — снятый
+/// TODO onboarding button_layout, полировка ui-kit кнопки 2026-10):
+/// текст + 2·BUTTON_PAD_H·k, минимум — высота кнопки (квадрат, как в ките
+/// `button_size`). Высота — `button_h(k)` = BUTTON_HEIGHT·k (канон 30 —
+/// паритет Prev/Next); прежний фикс 64×22 и отдельный кегль 11 удалены
+/// (64 px впритык к «Пропустить» без пада — измерение убирает риск клипа
+/// RU-подписи).
+fn skip_width(label: &str, k: f32, m: &mut TextMeasurer, fs: &mut cosmic_text::FontSystem) -> f32 {
+    let text_w = if label.is_empty() {
+        0.0
+    } else {
+        m.width_of(fs, label, FAMILY, button_label_font(k))
+    };
+    (text_w + kit::BUTTON_PAD_H * 2.0 * k).max(button_h(k))
 }
+
+/// Rect кнопки «Пропустить» (Skip) — измеренная Ghost-кнопка: ширина по
+/// подписи ([`skip_width`]), высота канона кита; позиция — правый верх
+/// карточки с инсидом `pad(k)` (выход виден всегда — NN/g), отступ от
+/// верха [`skip_top`]. Кегль подписи — `button_label_font(k)` (тот же, что
+/// у кнопок футера — паритет подписанных Ghost-кнопок карточек).
+/// I-1: при k=1 геометрия меняется 64×22 → ~(измеренная)×30 — сознательный
+/// полирол-шифт (решение владельца, задача «полировка ui-kit кнопка»).
+pub fn skip_rect(
+    card: [f32; 4],
+    label: &str,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> [f32; 4] {
+    let k = card_scale(card[2]);
+    let w = skip_width(label, k, m, fs).min((card[2] - pad(k) * 2.0).max(0.0));
+    [
+        card[0] + card[2] - pad(k) - w,
+        card[1] + skip_top(k),
+        w,
+        button_h(k),
+    ]
+}
+
 /// Диаметр прогресс-точки и зазор между точками.
 pub fn dot(k: f32) -> f32 {
     ONBOARDING_DOT * k
@@ -605,41 +636,28 @@ pub fn progress_dots(card: [f32; 4]) -> (Vec<f32>, f32) {
 
 /// Rect кнопки карточки (футер прибит к низу карточки — при клампе высоты
 /// кнопки остаются достижимы): Prev — слева, Next — справа (оба в футере);
-/// Skip — в правом верхнем углу карточки (выход виден всегда — NN/g).
-//
-// K5/FR-070: `Skip` — это подписанная прямоугольная кнопка 64×22
-// («Пропустить»), НЕ каноническая «×» в углу модали. Поэтому `Skip` НЕ
-// является миграционным кандидатом для `kit::stage_close_button` (тот
-// возвращает квадрат `ICON_BUTTON_SIZE`=26×26 под глиф «×», а Skip —
-// широкая кнопка-призрак с подписью). Этот TODO — НЕ close-button
-// migration (вопреки FR-070 тегу), а кнопочный layout-миграция.
-//
-// O2 (Task O / FR-UI-FOOTER): Prev/Next carousel footer migrated to
-// `kit::split_footer_buttons` (Agent L's split-footer kit component).
-// Pattern: Prev on LEFT (slot.x + inset), Next on RIGHT (slot.right -
-// inset - W), inset = ONBOARDING_PAD = 24, gap = GAP_CONTROLS (8,
-// unused — 1 button per side). Skip stays manual (top-right corner —
-// NOT in the footer slot). Positions are 1:1 with the previous
-// hand-rolled formula (footer_y = card.bottom - FOOTER_H + (FOOTER_H -
-// BTN_H)/2; Prev.x = card.x + PAD; Next.x = card.right - PAD - W) —
-// I-1: zero visual jump.
-//
-// Будущая миграция Skip — на `kit::button_layout` (измеренный размер
-// подписи + `BUTTON_PAD_H` × 2, высота `BUTTON_HEIGHT`=30). Требует:
-// 1. Сигнатуру `button_rect(card, button, m, fs, family, size)` —
-//    вместо текущей без замерщика (10+ callers в onboarding_ui.rs,
-//    app/overlays.rs:3669, app.rs:13310 — большая площадь рефактора).
-// 2. UX-ревью: размер меняется с 64×22 на ~(80–100)×30 (ширина
-//    измеренной подписи «Пропустить» + 2·BUTTON_PAD_H=12; высота — kit
-//    canonical `BUTTON_HEIGHT`=30). Это сдвиг позиции кнопки в карточке
-//    (примерно +6px по высоте, +16–36px по ширине).
-// 3. Стиль: `kit::button_style(ButtonVariant::Ghost, KitState::Normal,
-//    palette)` — ghost-кнопка без заливки/рамки, hover → accent border.
-//
-// Оставлено как TODO до отдельной волны onboarding button_layout
-// (I-1: ноль скачка). Паритет с другими подписанными кнопками-призраками
-// в карточках (например suggest-cards).
-pub fn button_rect(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
+/// Skip — измеренная Ghost-кнопка правого верхнего угла карточки
+/// ([`skip_rect`]: ширина по подписи, высота канона кита; выход виден
+/// всегда — NN/g).
+///
+/// Миграция Skip на kit::button_layout-канон (полировка ui-kit кнопки
+/// 2026-10, снятый TODO onboarding button_layout): прежний фикс 64×22×k
+/// с отдельным кеглем 11 заменён измеренной шириной (текст + 2·BUTTON_PAD_H·k)
+/// и канонической высотой `button_h(k)` = BUTTON_HEIGHT·k — паритет Prev/Next.
+/// Сигнатура несёт замерщик и подпись Skip (геометрия зависит от языка —
+/// RU «Пропустить» / EN «Skip»); call-сайты (рендер/ввод) уже владеют
+/// TextMeasurer'ом — общий с раскладкой карточки, отдельного пул-кадра нет.
+/// Остальные кнопки — фикс-геометрия ×k (CR-032), замер им не нужен:
+/// skip_label/m/fs читает только Skip-ветка. Состояния/стили — забота
+/// рендера (`kit::button_style(ButtonVariant::Ghost, …)` — паритет
+/// подписанным Ghost-кнопкам карточек).
+pub fn button_rect(
+    card: [f32; 4],
+    button: OnboardingButton,
+    skip_label: &str,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> [f32; 4] {
     let k = card_scale(card[2]);
     match button {
         OnboardingButton::Prev | OnboardingButton::Next => {
@@ -659,12 +677,7 @@ pub fn button_rect(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
                 _ => [col[0] + col[2] - pad(k) - button_w(k), y, button_w(k), h],
             }
         }
-        OnboardingButton::Skip => [
-            card[0] + card[2] - pad(k) - skip_w(k),
-            card[1] + skip_top(k),
-            skip_w(k),
-            skip_h(k),
-        ],
+        OnboardingButton::Skip => skip_rect(card, skip_label, m, fs),
         // CR-031: финальные CTA-опции — полноширинные кнопки над футером
         // ([`option_rects`]; в футере их нет)
         OnboardingButton::FinalGallery => option_rects(card)[0],
@@ -695,11 +708,17 @@ pub fn step_has_cta_zone(step: usize) -> bool {
 /// «Начать самому» (нижняя зона карточки). FR-097: на coarse-указателе
 /// тач-цели кнопок дотягиваются до 44 лог. px (hit-only, кламп в карточку —
 /// расширенная зона не выходит за оверлей; на точном указателе — прежние
-/// зоны).
+/// зоны). Skip — измеренная кнопка ([`skip_rect`]): `skip_label` —
+/// локализованная подпись (та же, что в рендере — draw==hit), замерщик —
+/// общий с раскладкой карточки; для не-Skip веток не читается (передаётся
+/// пустая строка).
 pub fn button_at(
     card: [f32; 4],
     state: &OnboardingState,
     point: [f32; 2],
+    skip_label: &str,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
 ) -> Option<OnboardingButton> {
     // CR-031/S2: тач-расширение клампится в текстовую колонку (кнопки
     // живут в колонке, а не во всей карточке).
@@ -737,15 +756,15 @@ pub fn button_at(
         // «Далее»/«Готово»: не рисуется только на финале FR-028
         // (карточка мультиканваса несёт «Готово» — путь завершения
         // без создания канваса).
-        if hit(button_rect(card, OnboardingButton::Next)) {
+        if hit(button_rect(card, OnboardingButton::Next, "", m, fs)) {
             return Some(OnboardingButton::Next);
         }
     }
-    if hit(button_rect(card, OnboardingButton::Skip)) {
+    if hit(button_rect(card, OnboardingButton::Skip, skip_label, m, fs)) {
         return Some(OnboardingButton::Skip);
     }
     // «Назад» только не на первом шаге
-    if state.step > 0 && hit(button_rect(card, OnboardingButton::Prev)) {
+    if state.step > 0 && hit(button_rect(card, OnboardingButton::Prev, "", m, fs)) {
         return Some(OnboardingButton::Prev);
     }
     None
@@ -882,9 +901,16 @@ pub fn option_rects_touch(card: [f32; 4]) -> [[f32; 4]; 2] {
 
 /// Rect кнопки карточки в адаптивном Compact (T-M R1/R2): Prev/Next —
 /// полноширинная пара 44 в футере (зазор 8, инсет — пад колонки), Skip —
-/// 64×44 в правом верхнем углу (цель ≥44), CTA-опции — тач-вариант.
-/// Иллюстрация и арт не затронуты (аудит M0 §4: «арт не трогать»).
-pub fn button_rect_touch(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
+/// измеренная по подписи ([`skip_width`]) высотой 44 в правом верхнем углу
+/// (цель ≥44), CTA-опции — тач-вариант. Иллюстрация и арт не затронуты
+/// (аудит M0 §4: «арт не трогать»). `skip_label` читает только Skip-ветка.
+pub fn button_rect_touch(
+    card: [f32; 4],
+    button: OnboardingButton,
+    skip_label: &str,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
+) -> [f32; 4] {
     let k = card_scale(card[2]);
     let col = text_column(card);
     match button {
@@ -897,12 +923,15 @@ pub fn button_rect_touch(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
                 _ => [col[0] + col[2] - pad(k) - w, y, w, BTN_H_TOUCH],
             }
         }
-        OnboardingButton::Skip => [
-            card[0] + card[2] - pad(k) - skip_w(k),
-            card[1] + skip_top(k),
-            skip_w(k),
-            BTN_H_TOUCH,
-        ],
+        OnboardingButton::Skip => {
+            let w = skip_width(skip_label, k, m, fs);
+            [
+                card[0] + card[2] - pad(k) - w,
+                card[1] + skip_top(k),
+                w,
+                BTN_H_TOUCH,
+            ]
+        }
         OnboardingButton::FinalGallery => option_rects_touch(card)[0],
         OnboardingButton::FinalEmpty => option_rects_touch(card)[1],
         OnboardingButton::Cta => option_rects_touch(card)[0],
@@ -912,11 +941,15 @@ pub fn button_rect_touch(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
 /// Hit-test кнопок карточки в адаптивном Compact — те же rect'ы, что
 /// рендер ([`button_rect_touch`]); цели уже ≥44 (T-M R1) — coarse-
 /// расширение FR-097 не добавляется, семантика доступности та же
-/// («Назад» на первом шаге отсутствует, «Пропустить» всегда).
+/// («Назад» на первом шаге отсутствует, «Пропустить» всегда). Skip —
+/// измеренная: `skip_label`/замерщик — те же, что в рендере (draw==hit).
 pub fn button_at_touch(
     card: [f32; 4],
     state: &OnboardingState,
     point: [f32; 2],
+    skip_label: &str,
+    m: &mut TextMeasurer,
+    fs: &mut cosmic_text::FontSystem,
 ) -> Option<OnboardingButton> {
     let hit = |rect: [f32; 4]| {
         point[0] >= rect[0]
@@ -933,17 +966,23 @@ pub fn button_at_touch(
             return Some(OnboardingButton::FinalEmpty);
         }
     } else {
-        if state.cta().is_some() && hit(button_rect_touch(card, OnboardingButton::Cta)) {
+        if state.cta().is_some() && hit(button_rect_touch(card, OnboardingButton::Cta, "", m, fs)) {
             return Some(OnboardingButton::Cta);
         }
-        if hit(button_rect_touch(card, OnboardingButton::Next)) {
+        if hit(button_rect_touch(card, OnboardingButton::Next, "", m, fs)) {
             return Some(OnboardingButton::Next);
         }
     }
-    if hit(button_rect_touch(card, OnboardingButton::Skip)) {
+    if hit(button_rect_touch(
+        card,
+        OnboardingButton::Skip,
+        skip_label,
+        m,
+        fs,
+    )) {
         return Some(OnboardingButton::Skip);
     }
-    if state.step > 0 && hit(button_rect_touch(card, OnboardingButton::Prev)) {
+    if state.step > 0 && hit(button_rect_touch(card, OnboardingButton::Prev, "", m, fs)) {
         return Some(OnboardingButton::Prev);
     }
     None
@@ -1568,6 +1607,60 @@ mod tests {
         layout_sync(viewport, step, language, "default", &mut scroll)
     }
 
+    /// Тест-обёртки кнопочной геометрии: Skip — измеренная кнопка
+    /// ([`skip_rect`]), подпись RU (замер тем же кеглем, что и рендер);
+    /// замерщик на вызов (паттерн [`measurer`]).
+    fn btn_rect(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
+        let (mut m, mut fs) = measurer();
+        button_rect(
+            card,
+            button,
+            i18n::tr(Language::Ru, keys::ONBOARDING_SKIP),
+            &mut m,
+            &mut fs,
+        )
+    }
+    fn btn_at(
+        card: [f32; 4],
+        state: &OnboardingState,
+        point: [f32; 2],
+    ) -> Option<OnboardingButton> {
+        let (mut m, mut fs) = measurer();
+        button_at(
+            card,
+            state,
+            point,
+            i18n::tr(Language::Ru, keys::ONBOARDING_SKIP),
+            &mut m,
+            &mut fs,
+        )
+    }
+    fn btn_rect_touch(card: [f32; 4], button: OnboardingButton) -> [f32; 4] {
+        let (mut m, mut fs) = measurer();
+        button_rect_touch(
+            card,
+            button,
+            i18n::tr(Language::Ru, keys::ONBOARDING_SKIP),
+            &mut m,
+            &mut fs,
+        )
+    }
+    fn btn_at_touch(
+        card: [f32; 4],
+        state: &OnboardingState,
+        point: [f32; 2],
+    ) -> Option<OnboardingButton> {
+        let (mut m, mut fs) = measurer();
+        button_at_touch(
+            card,
+            state,
+            point,
+            i18n::tr(Language::Ru, keys::ONBOARDING_SKIP),
+            &mut m,
+            &mut fs,
+        )
+    }
+
     /// Раскладка шага с внешним скролл-состоянием и ролью (тесты скролла).
     fn layout_sync(
         viewport: [f32; 2],
@@ -1719,7 +1812,7 @@ mod tests {
                     OnboardingButton::Next,
                     OnboardingButton::Skip,
                 ] {
-                    let rect = button_rect(card, button);
+                    let rect = btn_rect(card, button);
                     assert!(rect[0] >= card[0] && rect[0] + rect[2] <= card[0] + card[2]);
                     assert!(rect[1] >= card[1] && rect[1] + rect[3] <= card[1] + card[3]);
                 }
@@ -1750,9 +1843,9 @@ mod tests {
             // правом верхнем углу карточки (выход виден всегда — NN/g,
             // дизайн [`button_rect`]: `card[1] + 10`), в футер не входит,
             // но обязан быть внутри карточки.
-            let next = button_rect(card, OnboardingButton::Next);
+            let next = btn_rect(card, OnboardingButton::Next);
             assert!(next[1] >= footer_top - 0.01, "CTA выше футера: {next:?}");
-            let skip = button_rect(card, OnboardingButton::Skip);
+            let skip = btn_rect(card, OnboardingButton::Skip);
             assert!(
                 skip[0] >= card[0]
                     && skip[1] >= card[1]
@@ -1792,7 +1885,7 @@ mod tests {
             };
             let state = OnboardingState { step };
             assert_eq!(
-                button_at(card, &state, [cta_rect[0] + 5.0, cta_rect[1] + 10.0]),
+                btn_at(card, &state, [cta_rect[0] + 5.0, cta_rect[1] + 10.0]),
                 Some(cta),
                 "CTA достижим на шаге {step}"
             );
@@ -1860,7 +1953,7 @@ mod tests {
             "зона иллюстрации содержательна"
         );
         // Кнопки футера — в колонке, не по всей карточке
-        let next = button_rect(card, OnboardingButton::Next);
+        let next = btn_rect(card, OnboardingButton::Next);
         assert!(next[0] >= col[0], "Next левее колонки");
         // Фолбэк: узкое окно — колонка = карточка, иллюстрации нет
         let narrow = layout([320.0, 240.0], 0, Language::Ru).card;
@@ -1878,35 +1971,35 @@ mod tests {
         let viewport = [1600.0, 900.0];
         let mut state = OnboardingState::default();
         let card = layout(viewport, state.step, Language::Ru).card;
-        let next = button_rect(card, OnboardingButton::Next);
+        let next = btn_rect(card, OnboardingButton::Next);
         assert_eq!(
-            button_at(card, &state, [next[0] + 5.0, next[1] + 10.0]),
+            btn_at(card, &state, [next[0] + 5.0, next[1] + 10.0]),
             Some(OnboardingButton::Next)
         );
-        let skip = button_rect(card, OnboardingButton::Skip);
+        let skip = btn_rect(card, OnboardingButton::Skip);
         assert_eq!(
-            button_at(card, &state, [skip[0] + 5.0, skip[1] + 10.0]),
+            btn_at(card, &state, [skip[0] + 5.0, skip[1] + 10.0]),
             Some(OnboardingButton::Skip)
         );
         // Первый шаг: «Назад» нет — даже по его rect
-        let prev = button_rect(card, OnboardingButton::Prev);
+        let prev = btn_rect(card, OnboardingButton::Prev);
         assert_eq!(
-            button_at(card, &state, [prev[0] + 5.0, prev[1] + 10.0]),
+            btn_at(card, &state, [prev[0] + 5.0, prev[1] + 10.0]),
             None,
             "«Назад» на первом шаге отсутствует"
         );
         // Второй шаг: «Назад» есть
         state.next();
         let card = layout(viewport, state.step, Language::Ru).card;
-        let prev = button_rect(card, OnboardingButton::Prev);
+        let prev = btn_rect(card, OnboardingButton::Prev);
         assert_eq!(
-            button_at(card, &state, [prev[0] + 5.0, prev[1] + 10.0]),
+            btn_at(card, &state, [prev[0] + 5.0, prev[1] + 10.0]),
             Some(OnboardingButton::Prev)
         );
         // Точка в теле карточки — глотается (канвас не получает)
         let body_point = [card[0] + card[2] / 2.0, card[1] + card[3] / 2.0];
         assert!(point_in_card(card, body_point));
-        assert_eq!(button_at(card, &state, body_point), None);
+        assert_eq!(btn_at(card, &state, body_point), None);
         // Мимо карточки — не в карточке
         assert!(!point_in_card(card, [10.0, 10.0]));
 
@@ -1916,20 +2009,20 @@ mod tests {
         let card = layout(viewport, choice.step, Language::Ru).card;
         // Rect «Далее» — от карточки выбора (высота карточки зависит от
         // шага — карточка центрируется, rect со шага 0 сюда не годится)
-        let next = button_rect(card, OnboardingButton::Next);
+        let next = btn_rect(card, OnboardingButton::Next);
         let [gallery, empty] = option_rects(card);
         assert_eq!(
-            button_at(card, &choice, [gallery[0] + 5.0, gallery[1] + 10.0]),
+            btn_at(card, &choice, [gallery[0] + 5.0, gallery[1] + 10.0]),
             Some(OnboardingButton::FinalGallery),
             "CTA «Открыть шаблонную схему» достижим на финале FR-028"
         );
         assert_eq!(
-            button_at(card, &choice, [empty[0] + 5.0, empty[1] + 10.0]),
+            btn_at(card, &choice, [empty[0] + 5.0, empty[1] + 10.0]),
             Some(OnboardingButton::FinalEmpty),
             "CTA «Начать самому» достижим на финале FR-028"
         );
         assert_eq!(
-            button_at(card, &choice, [next[0] + 5.0, next[1] + 10.0]),
+            btn_at(card, &choice, [next[0] + 5.0, next[1] + 10.0]),
             None,
             "«Далее» на финале FR-028 отсутствует"
         );
@@ -1941,14 +2034,14 @@ mod tests {
         };
         let card = layout(viewport, last.step, Language::Ru).card;
         let cta = cta_rect(card);
-        let next = button_rect(card, OnboardingButton::Next);
+        let next = btn_rect(card, OnboardingButton::Next);
         assert_eq!(
-            button_at(card, &last, [cta[0] + 5.0, cta[1] + 10.0]),
+            btn_at(card, &last, [cta[0] + 5.0, cta[1] + 10.0]),
             Some(OnboardingButton::Cta),
             "CTA «Создать канвас» достижим на последнем шаге"
         );
         assert_eq!(
-            button_at(card, &last, [next[0] + 5.0, next[1] + 10.0]),
+            btn_at(card, &last, [next[0] + 5.0, next[1] + 10.0]),
             Some(OnboardingButton::Next),
             "«Готово» на последнем шаге присутствует (завершение без CTA)"
         );
@@ -2155,10 +2248,26 @@ mod tests {
             (centers[1] - centers[0] - (dot(k) + dot_gap(k))).abs() < 1e-3,
             "зазор точек масштабирован"
         );
-        let next = button_rect(card, OnboardingButton::Next);
+        let next = btn_rect(card, OnboardingButton::Next);
         assert!((next[3] - button_h(k)).abs() < 1e-3, "высота кнопки ×k");
-        let skip = button_rect(card, OnboardingButton::Skip);
-        assert!((skip[2] - 64.0 * k).abs() < 0.01 && (skip[3] - 22.0 * k).abs() < 0.01);
+        let skip = btn_rect(card, OnboardingButton::Skip);
+        // Skip — измеренная кнопка (миграция на kit-канон, снятый TODO):
+        // высота = канон button_h(k); ширина = подпись + 2·BUTTON_PAD_H·k
+        // (пин 64×22×k снят — фиксированная ширина не выражает язык).
+        assert!(
+            (skip[3] - button_h(k)).abs() < 1e-3,
+            "высота Skip = канон ×k"
+        );
+        let (mut m, mut fs) = measurer();
+        let label = i18n::tr(Language::Ru, keys::ONBOARDING_SKIP);
+        assert!(
+            (skip[2]
+                - (m.width_of(&mut fs, label, FAMILY, button_label_font(k))
+                    + kit::BUTTON_PAD_H * 2.0 * k))
+                .abs()
+                < 0.01,
+            "ширина Skip измеренная"
+        );
         let col = text_column(card);
         assert!(next[0] >= col[0], "Next в колонке");
         assert!(skip[0] + skip[2] <= card[0] + card[2], "Skip в карточке");
@@ -2198,17 +2307,17 @@ mod tests {
         assert_eq!(text_column(card), card, "фолбэк — вся карточка");
         // Тач-футер: Next 44 в футер-зоне 60 (последние 60px колонки,
         // кнопка центрирована — 8px от низа листа): T-M R1/R2.
-        let next = button_rect_touch(card, OnboardingButton::Next);
+        let next = btn_rect_touch(card, OnboardingButton::Next);
         assert_eq!(next[3], BTN_H_TOUCH);
         assert!((next[1] + next[3] - (card[1] + card[3] - 8.0)).abs() < 0.01);
-        let prev = button_rect_touch(card, OnboardingButton::Prev);
-        let prev_absent = button_at_touch(
+        let prev = btn_rect_touch(card, OnboardingButton::Prev);
+        let prev_absent = btn_at_touch(
             card,
             &OnboardingState { step: 0 },
             [prev[0] + 1.0, prev[1] + 1.0],
         );
         assert!(prev_absent.is_none(), "«Назад» на первом шаге отсутствует");
-        let prev_hit = button_at_touch(
+        let prev_hit = btn_at_touch(
             card,
             &OnboardingState { step: 1 },
             [prev[0] + 1.0, prev[1] + 1.0],
@@ -2218,14 +2327,14 @@ mod tests {
             Some(OnboardingButton::Prev),
             "со 2-го шага «Назад» есть"
         );
-        let next_hit = button_at_touch(
+        let next_hit = btn_at_touch(
             card,
             &OnboardingState { step: 0 },
             [next[0] + 2.0, next[1] + 2.0],
         );
         assert_eq!(next_hit, Some(OnboardingButton::Next));
         // Skip — тач-цель 44 в правом верхнем углу.
-        let skip = button_rect_touch(card, OnboardingButton::Skip);
+        let skip = btn_rect_touch(card, OnboardingButton::Skip);
         assert_eq!(skip[3], BTN_H_TOUCH);
         assert!(skip[0] + skip[2] <= card[0] + card[2] + 0.01);
         // Тело заканчивается ВЫШЕ тач-футера (без перекрытия CTA).
@@ -2267,7 +2376,7 @@ mod tests {
         // Высота ≤ 0.8·eff = 620.8 (card-кламп доли).
         assert!(card[3] <= 620.8 + 1e-3, "высота ≤ 0.8·eff: {}", card[3]);
         // M/E — прежние метрики футера/опций (тач — только Compact).
-        let next = button_rect(card, OnboardingButton::Next);
+        let next = btn_rect(card, OnboardingButton::Next);
         assert!((next[3] - button_h(card_scale(card[2]))).abs() < 1e-3);
         // 800×560: ширина сжимается к 0.8·eff = 620.8 (< 720) — фолбэк.
         let mid = card_layout_flex(

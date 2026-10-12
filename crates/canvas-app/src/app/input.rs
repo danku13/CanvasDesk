@@ -1929,9 +1929,23 @@ impl App {
             };
             let card = lay.card;
             let hit = if onb_compact {
-                onboarding_ui::button_at_touch(card, state, self.cursor)
+                onboarding_ui::button_at_touch(
+                    card,
+                    state,
+                    self.cursor,
+                    self.tr(crate::i18n::keys::ONBOARDING_SKIP),
+                    &mut m,
+                    &mut fs,
+                )
             } else {
-                onboarding_ui::button_at(card, state, self.cursor)
+                onboarding_ui::button_at(
+                    card,
+                    state,
+                    self.cursor,
+                    self.tr(crate::i18n::keys::ONBOARDING_SKIP),
+                    &mut m,
+                    &mut fs,
+                )
             };
             match hit {
                 Some(OnboardingButton::Next) => {

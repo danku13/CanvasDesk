@@ -27,11 +27,19 @@
 //! Конвенции прямоугольников: canvas-app использует обе — `[x, y, w, h]`
 //! (`crate::point_in_rect`, онбординг) и `[x0, y0, x1, y1]` на входе
 //! `app::support::rect_xywh`. Хелперы — для обеих (`*_xywh` / `*_xyxy`).
+//!
+//! Полировка кнопки 2026-10: математика расширения/клампа перенесена в кит
+//! (`canvas_ui::kit::{touch_expand, touch_hit, MIN_TOUCH_TARGET}` — LAY8.3,
+//! единый источник с Component Button `touch_hit`); здесь — тонкие мосты
+//! конвенций `[x, y, w, h]` / `[x0, y0, x1, y1]` + coarse-флаг платформы.
 
 use canvas_core::web_bridge;
+use canvas_ui::geometry::UiRect;
+use canvas_ui::kit::{touch_expand as kit_touch_expand, touch_hit as kit_touch_hit};
 
 /// Минимальная сторона тач-цели, лог. px (Apple HIG / Material — 44).
-pub const MIN_TOUCH_TARGET: f32 = 44.0;
+/// Делегация кита: `canvas_ui::kit::MIN_TOUCH_TARGET` (LAY8.3).
+pub const MIN_TOUCH_TARGET: f32 = canvas_ui::kit::MIN_TOUCH_TARGET;
 
 /// Coarse-указатель активен? (тач — основной ввод).
 pub fn pointer_coarse() -> bool {
@@ -39,20 +47,21 @@ pub fn pointer_coarse() -> bool {
 }
 
 /// Расширить rect `[x, y, w, h]` до `min` по обеим осям центрированно
-/// (уже большая сторона не сжимается).
+/// (уже большая сторона не сжимается). Математика — кит
+/// (`kit::touch_expand`, LAY8.3); здесь — мост конвенции xywh.
 pub fn expand_xywh(rect: [f32; 4], min: f32) -> [f32; 4] {
-    let [x, y, w, h] = rect;
-    let dw = (min - w).max(0.0);
-    let dh = (min - h).max(0.0);
-    [x - dw / 2.0, y - dh / 2.0, w + dw, h + dh]
+    let e = kit_touch_expand(UiRect::new(rect[0], rect[1], rect[2], rect[3]), min);
+    [e.x, e.y, e.w, e.h]
 }
 
 /// Расширить rect `[x0, y0, x1, y1]` до `min` по обеим осям (центрированно).
+/// Математика — кит (`kit::touch_expand`, LAY8.3); мост конвенции xyxy.
 pub fn expand_xyxy(rect: [f32; 4], min: f32) -> [f32; 4] {
-    let [x0, y0, x1, y1] = rect;
-    let dw = (min - (x1 - x0)).max(0.0);
-    let dh = (min - (y1 - y0)).max(0.0);
-    [x0 - dw / 2.0, y0 - dh / 2.0, x1 + dw / 2.0, y1 + dh / 2.0]
+    let e = kit_touch_expand(
+        UiRect::new(rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1]),
+        min,
+    );
+    [e.x, e.y, e.x + e.w, e.y + e.h]
 }
 
 /// Пересечение `[x, y, w, h]`-ректов (пустое — нулевая ширина/высота).
@@ -66,12 +75,17 @@ pub fn intersect_xywh(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
 
 /// Хит-зона `[x, y, w, h]` для coarse-указателя: расширение до
 /// [`MIN_TOUCH_TARGET`] с клампом в `container` (те же `[x, y, w, h]`).
-/// На точном указателе — rect без изменений.
+/// На точном указателе — rect без изменений. Математика — кит
+/// (`kit::touch_hit`, LAY8.3); coarse-флаг — platform-мост (FR-097).
 pub fn touch_hit_xywh(rect: [f32; 4], container: [f32; 4]) -> [f32; 4] {
     if !pointer_coarse() {
         return rect;
     }
-    intersect_xywh(expand_xywh(rect, MIN_TOUCH_TARGET), container)
+    let hit = kit_touch_hit(
+        UiRect::new(rect[0], rect[1], rect[2], rect[3]),
+        UiRect::new(container[0], container[1], container[2], container[3]),
+    );
+    [hit.x, hit.y, hit.w, hit.h]
 }
 
 /// LAY-W15 (LAY1.2 «ввод = тому, что видно»): разрешить тач внутри группы
