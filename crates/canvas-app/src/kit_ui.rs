@@ -4490,8 +4490,16 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
         }
         let style = kit::button_style(kit::ButtonVariant::Secondary, kit::KitState::Normal, p);
         d.rect(*r, style.fill, style.border, 4.0);
+        // Тело аккордеона — контент-стек (панель DEMO_ACCORDION_BODY_H),
+        // строки от верхнего пада; топ-анкер осознанный (IN11).
         d.label_left(
-            UiRect::new(r.x + 12.0, r.y + 8.0, r.w - 24.0, 16.0),
+            // v3:allow тело аккордеона — топ-анкерный контент-стек (IN11)
+            UiRect::new(
+                r.x + 12.0,
+                r.y + canvas_core::tokens::SPACING_SM,
+                r.w - 24.0,
+                16.0,
+            ),
             &label(crate::i18n::keys::KIT_DEMO_ACCORDION_BODY),
             p.text_muted,
             11.0,
@@ -4720,12 +4728,18 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
                 elevation: canvas_ui::kit::Elevation::None,
             };
             d.control(wc.nav_rail_sidebar, &panel_style);
+            // Канон вертикали (issue #68, IN11): подпись плейсхолдера —
+            // строковый бокс по центру панели; x-инсеты Spacing::Sm
+            // сохранены (одиночная подпись пункта — не контент-стек).
             d.label_left(
-                UiRect::new(
-                    wc.nav_rail_sidebar.x + canvas_ui::kit::Spacing::Sm.px(),
-                    wc.nav_rail_sidebar.y + canvas_ui::kit::Spacing::Sm.px(),
-                    wc.nav_rail_sidebar.w - 2.0 * canvas_ui::kit::Spacing::Sm.px(),
-                    16.0,
+                kit::text_area_vcentered(
+                    UiRect::new(
+                        wc.nav_rail_sidebar.x + canvas_ui::kit::Spacing::Sm.px(),
+                        wc.nav_rail_sidebar.y,
+                        wc.nav_rail_sidebar.w - 2.0 * canvas_ui::kit::Spacing::Sm.px(),
+                        wc.nav_rail_sidebar.h,
+                    ),
+                    11.0,
                 ),
                 &label(crate::i18n::keys::KIT_DEMO_NAV_RAIL_SIDEBAR),
                 p.text_muted,
@@ -5013,13 +5027,23 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
             elevation: canvas_ui::kit::Elevation::Md,
         };
         d.control(*mp, &modal_cs);
+        // Модалка — топ-анкерный стек title+body (IN11): заголовок и тело
+        // идут от верха панели с токен-паддингом (заголовок — не подпись
+        // контрола, а шапка документа диалога).
         d.label_left(
-            UiRect::new(mp.x + 16.0, mp.y + 12.0, mp.w - 56.0, 20.0),
+            // v3:allow модалка — топ-анкерный стек title+body (IN11)
+            UiRect::new(
+                mp.x + 16.0,
+                mp.y + canvas_core::tokens::SPACING_LG,
+                mp.w - 56.0,
+                20.0,
+            ),
             &label(crate::i18n::keys::KIT_DEMO_MODAL_TITLE),
             p.text_title,
             13.0,
         );
         d.label_left(
+            // v3:allow модалка — топ-анкерный стек title+body (IN11)
             UiRect::new(mp.x + 16.0, mp.y + 44.0, mp.w - 32.0, 40.0),
             &label(crate::i18n::keys::KIT_DEMO_MODAL_BODY),
             p.text,
@@ -5114,8 +5138,16 @@ pub(crate) fn draw_demo_extras(ctx: &mut DemoDrawCtx) {
     if let Some(bubble) = &dl.popover_bubble {
         let style = kit::modal_style(p);
         d.rect(*bubble, style.fill, style.border, 6.0);
+        // Тело поповера — многострочный контент-стек (IN11): строки от
+        // верхнего пада SPACING_MD; центрирование исказило бы поле.
         d.label_left(
-            UiRect::new(bubble.x + 12.0, bubble.y + 10.0, bubble.w - 24.0, 44.0),
+            // v3:allow тело поповера — топ-анкерный контент-стек (IN11)
+            UiRect::new(
+                bubble.x + 12.0,
+                bubble.y + canvas_core::tokens::SPACING_MD,
+                bubble.w - 24.0,
+                44.0,
+            ),
             &label(crate::i18n::keys::KIT_DEMO_ACCORDION_BODY),
             p.text,
             11.0,

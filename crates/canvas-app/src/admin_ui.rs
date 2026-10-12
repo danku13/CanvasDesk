@@ -1484,10 +1484,10 @@ pub(crate) fn draw_components(
             &[("{n}", &(i + 1).to_string())],
         );
         // Канон вертикали (issue #68, IN11): строковый бокс по центру строки
-        // (внутренний rect с симметричным падом — центр совпадает с рядом).
+        // (x-инсет сохранён; вертикальный пад убран — центр даёт канон).
         d.label_left(
             kit::text_area_vcentered(
-                UiRect::new(rect.x + 8.0, rect.y + 4.0, rect.w - 16.0, rect.h - 8.0),
+                UiRect::new(rect.x + 8.0, rect.y, rect.w - 16.0, rect.h),
                 12.0,
             ),
             &text,
@@ -2036,10 +2036,14 @@ pub(crate) fn draw_fill(
             11.0,
         );
     }
-    // Названия контейнеров (левая колонка)
+    // Названия контейнеров (левая колонка) — канон вертикали issue #68,
+    // IN11: строковый бокс кегля по центру слота ряда матрицы.
     for row in &fill.rows {
         d.label_left(
-            UiRect::new(row.slot.x, row.slot.y + 4.0, VARIANT_LABEL_W, 16.0),
+            kit::text_area_vcentered(
+                UiRect::new(row.slot.x, row.slot.y, VARIANT_LABEL_W, row.slot.h),
+                11.0,
+            ),
             &label(row.title_key),
             p.text_muted,
             11.0,
@@ -2205,12 +2209,9 @@ fn draw_list_demo(
                     &[("{n}", &(i + 1).to_string())],
                 );
                 // Канон вертикали (issue #68, IN11): строковый бокс по центру
-                // строки (симметричный пад — центр совпадает с рядом).
+                // строки (x-инсет сохранён; вертикальный пад убран — центр даёт канон).
                 d.label_left(
-                    kit::text_area_vcentered(
-                        UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 16.0, r.h - 8.0),
-                        12.0,
-                    ),
+                    kit::text_area_vcentered(UiRect::new(r.x + 8.0, r.y, r.w - 16.0, r.h), 12.0),
                     &text,
                     p.text,
                     12.0,
@@ -2241,12 +2242,9 @@ fn draw_list_demo(
                     &[("{n}", &(i + 1).to_string())],
                 );
                 // Канон вертикали (issue #68, IN11): строковый бокс по центру
-                // строки (симметричный пад — центр совпадает с рядом).
+                // строки (x-инсет сохранён; вертикальный пад убран — центр даёт канон).
                 d.label_left(
-                    kit::text_area_vcentered(
-                        UiRect::new(r.x + 8.0, r.y + 4.0, r.w - 16.0, r.h - 8.0),
-                        12.0,
-                    ),
+                    kit::text_area_vcentered(UiRect::new(r.x + 8.0, r.y, r.w - 16.0, r.h), 12.0),
                     &text,
                     p.text,
                     12.0,
@@ -2291,12 +2289,17 @@ fn draw_card_demo(
         [0.0; 4],
         0.0,
     );
+    // Канон вертикали (issue #68, IN11): строковый бокс по центру шапки
+    // карточки (x-инсет сохранён).
     d.label_left(
-        UiRect::new(
-            card.header.x + 8.0,
-            card.header.y + 5.0,
-            card.header.w - 16.0,
-            16.0,
+        kit::text_area_vcentered(
+            UiRect::new(
+                card.header.x + 8.0,
+                card.header.y,
+                card.header.w - 16.0,
+                card.header.h,
+            ),
+            12.0,
         ),
         crate::i18n::tr(canvas_core::Language::Ru, crate::i18n::keys::KIT_CARD_TITLE),
         p.text_title,
@@ -2310,7 +2313,7 @@ fn draw_card_demo(
             d.label_left(
                 UiRect::new(
                     card.body.x + 8.0,
-                    card.body.y + 4.0,
+                    card.body.y + 4.0, // v3:allow стек строк демо-карточки, шаг 18 (IN11)
                     card.body.w - 16.0,
                     16.0,
                 ),
@@ -2321,7 +2324,7 @@ fn draw_card_demo(
             d.label_left(
                 UiRect::new(
                     card.body.x + 8.0,
-                    card.body.y + 22.0,
+                    card.body.y + 22.0, // v3:allow стек строк демо-карточки, шаг 18 (IN11)
                     card.body.w - 16.0,
                     16.0,
                 ),
@@ -2343,7 +2346,8 @@ fn draw_card_demo(
                 d.label_left(
                     UiRect::new(
                         card.body.x + 8.0,
-                        card.body.y + 4.0 + i as f32 * 18.0,
+                        // Список строк демо-карточки: шаг 18 — раскладка стека.
+                        card.body.y + 4.0 + i as f32 * 18.0, // v3:allow стек строк (IN11)
                         card.body.w - 16.0,
                         16.0,
                     ),
@@ -2852,18 +2856,23 @@ pub(crate) fn draw_canvas(
             *border,
             canvas_core::tokens::CARD_CORNER_RADIUS,
         );
+        // Канон вертикали (issue #68, IN11): заголовок демо-карточки —
+        // строковый бокс кегля по центру карточки (x-инсеты сохранены).
         d.label_left(
-            UiRect::new(rect.x + 10.0, rect.y + 6.0, rect.w - 20.0, 16.0),
+            kit::text_area_vcentered(
+                UiRect::new(rect.x + 10.0, rect.y, rect.w - 20.0, rect.h),
+                12.0,
+            ),
             crate::i18n::tr(lang, crate::i18n::keys::KIT_CARD_TITLE),
             p.text_title,
             12.0,
         );
         d.label_left(
-            UiRect::new(
-                rect.right() + 8.0,
-                rect.y + 8.0,
-                VARIANT_LABEL_W * 2.0,
-                16.0,
+            // Канон вертикали (issue #68, IN11): подпись демо по центру
+            // высоты демо (зеркально edge_demos ниже).
+            kit::text_area_vcentered(
+                UiRect::new(rect.right() + 8.0, rect.y, VARIANT_LABEL_W * 2.0, rect.h),
+                12.0,
             ),
             crate::i18n::tr(lang, key),
             p.text_muted,
@@ -2899,12 +2908,12 @@ pub(crate) fn draw_canvas(
         d.rect(dot, *color, [0.0; 4], canvas_core::tokens::EDGE_DOT);
     }
     for (key, area, size, color) in &lay.port_demos {
+        // Канон вертикали (issue #68, IN11): подпись по центру высоты
+        // демо — на одной ординате с центрированным портом.
         d.label_left(
-            UiRect::new(
-                area.right() + 8.0,
-                area.y + 8.0,
-                VARIANT_LABEL_W * 2.0,
-                16.0,
+            kit::text_area_vcentered(
+                UiRect::new(area.right() + 8.0, area.y, VARIANT_LABEL_W * 2.0, area.h),
+                12.0,
             ),
             crate::i18n::tr(lang, key),
             p.text_muted,
@@ -2916,12 +2925,17 @@ pub(crate) fn draw_canvas(
     // Пересборка поверхностей (волна 2): карточка с табличным телом
     // (FR-061) — хром карточки + строки paint_row по готовой геометрии.
     if let Some(table) = &lay.node_table {
+        // Канон вертикали (issue #68, IN11): подпись по центру высоты
+        // демо-карточки (зеркально подписям выше).
         d.label_left(
-            UiRect::new(
-                table.card.right() + 8.0,
-                table.card.y + 8.0,
-                VARIANT_LABEL_W * 2.0,
-                16.0,
+            kit::text_area_vcentered(
+                UiRect::new(
+                    table.card.right() + 8.0,
+                    table.card.y,
+                    VARIANT_LABEL_W * 2.0,
+                    table.card.h,
+                ),
+                12.0,
             ),
             crate::i18n::tr(lang, crate::i18n::keys::ADMIN_NODE_TABLE),
             p.text_muted,
@@ -2944,12 +2958,17 @@ pub(crate) fn draw_canvas(
             [0.0; 4],
             0.0,
         );
+        // Канон вертикали (issue #68, IN11): строковый бокс по центру
+        // шапки таблицы (x-инсет сохранён).
         d.label_left(
-            UiRect::new(
-                table.header.x + 8.0,
-                table.header.y + 3.0,
-                table.header.w - 16.0,
-                16.0,
+            kit::text_area_vcentered(
+                UiRect::new(
+                    table.header.x + 8.0,
+                    table.header.y,
+                    table.header.w - 16.0,
+                    table.header.h,
+                ),
+                12.0,
             ),
             crate::i18n::tr(lang, crate::i18n::keys::KIT_CARD_TITLE),
             p.text_title,

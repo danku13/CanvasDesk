@@ -1213,7 +1213,12 @@ impl App {
             ),
         );
         chrome.label(
-            UiRect::new(close[0], close[1] + 3.0, close[2], 14.0),
+            // Канон вертикали (issue #68, IN11): глиф «×» — строковый бокс
+            // кегля по центру кнопки закрытия.
+            kit::text_area_vcentered(
+                UiRect::new(close[0], close[1], close[2], close[3]),
+                font(12.0),
+            ),
             "×",
             color_to_rgba(palette.body),
             font(12.0),
@@ -1360,7 +1365,11 @@ impl App {
                 texts.push(OwnedScreenText {
                     height: 0.0,
                     text: title,
-                    origin: transform.map_point([node.x + 12.0, node.y + 8.0]),
+                    // Заголовок живой карточки — первый элемент топ-анкерного
+                    // стека контента (заголовок → строки по BODY_LINE_HEIGHT →
+                    // футер, инвариант вертикали FR-025): офсет от угла —
+                    // раскладка, не центрирование.
+                    origin: transform.map_point([node.x + 12.0, node.y + 8.0]), // v3:allow заголовок — стек живой карточки (IN11)
                     width: transform.map_size(title_w_world),
                     font_size: font(13.0),
                     color: palette.title,
@@ -1415,10 +1424,13 @@ impl App {
                 } else {
                     palette.quote
                 };
+                // Тело — топ-анкерный стек строк по BODY_LINE_HEIGHT
+                // (инвариант вертикали FR-025, константы раскладки карточки);
+                // +2 — посадка строки в слот результата.
                 texts.push(OwnedScreenText {
                     height: 0.0,
                     text: mx.ellipsis(line.trim_end(), line_budget, 12.0),
-                    origin: transform.map_point([node.x + BODY_PADDING, row_y + 2.0]),
+                    origin: transform.map_point([node.x + BODY_PADDING, row_y + 2.0]), // v3:allow стек строк тела (IN11)
                     width: transform.map_size(node.width - BODY_PADDING * 2.0),
                     font_size: font(12.0),
                     color,
@@ -1538,12 +1550,15 @@ impl App {
                     4.0 * s,
                 );
                 if let Some(slot) = slot_line.as_deref() {
-                    // Лейбл слота выхода — приглушённый тон (подпись порта)
+                    // Лейбл слота выхода — приглушённый тон (подпись порта).
+                    // Пилюля анкерена к точке порта (FR-044): двухрежимная
+                    // раскладка строк (30px двухстрочный стек / 18px однострочный,
+                    // строка прижата к порту) — не центрирование в контроле.
                     chrome.label(
                         stage_area(
                             &transform,
                             bx + 6.0,
-                            by + if two_line { 3.0 } else { 13.0 },
+                            by + if two_line { 3.0 } else { 13.0 }, // v3:allow пилюля порта: стек строк (IN11)
                             w,
                             12.0,
                         ),
@@ -1642,11 +1657,13 @@ impl App {
                 );
                 if matches!(pill_mode, calc_panel_ui::PillZoneMode::Full) {
                     let addr = mx.ellipsis(&self.stage_edge_addr_text(edge), text_budget, 12.0);
+                    // Двухстрочный стек пилюли: адрес (+5) и значение (+18),
+                    // шаги — раскладка стека, не центрирование (IN11).
                     chrome.label(
                         stage_area(
                             &transform,
                             pill_rect.x + 12.0,
-                            pill_rect.y + 5.0,
+                            pill_rect.y + 5.0, // v3:allow двухстрочный стек пилюли (IN11)
                             pill_rect.w - 16.0,
                             14.0,
                         ),
@@ -1678,13 +1695,19 @@ impl App {
                         &self.stage_edge_value_text(edge),
                     );
                     let combined = mx.ellipsis(&combined, text_budget, 11.0);
+                    // Канон вертикали (issue #68, IN13): строковый бокс кегля
+                    // по центру пилюли; x-инсеты сохранены (stage_area).
+                    let ta = kit::text_area_vcentered(
+                        UiRect::new(pill_rect.x, pill_rect.y, pill_rect.w, pill_rect.h),
+                        font(11.0),
+                    );
                     chrome.label(
                         stage_area(
                             &transform,
                             pill_rect.x + 12.0,
-                            pill_rect.y + (pill_rect.h - 12.0) / 2.0,
+                            ta.y,
                             pill_rect.w - 16.0,
-                            13.0,
+                            ta.h,
                         ),
                         &combined,
                         color_to_rgba(dim_text_color(palette.title, alpha)),
@@ -1718,14 +1741,14 @@ impl App {
                     palette.palette_border,
                     9.0 * s,
                 );
+                // Канон вертикали (issue #68, IN13): строковый бокс кегля
+                // по центру индикатора; x-инсеты сохранены (stage_area).
+                let ta = kit::text_area_vcentered(
+                    UiRect::new(ind.x, ind.y, ind.w, ind.h),
+                    font(10.0),
+                );
                 chrome.label(
-                    stage_area(
-                        &transform,
-                        ind.x + 6.0,
-                        ind.y + (ind.h - 11.0) / 2.0,
-                        ind.w - 12.0,
-                        12.0,
-                    ),
+                    stage_area(&transform, ind.x + 6.0, ta.y, ind.w - 12.0, ta.h),
                     &self.trf(text_key, &[("n", &n.to_string())]),
                     color_to_rgba(palette.quote),
                     font(10.0),
@@ -1789,25 +1812,29 @@ impl App {
                 canvas_ui::geometry::UiRect::new(px, py, panel.rect[2], panel.rect[3]),
                 &kit::panel_style_of(palette.menu_fill, palette.palette_border, 10.0, 0.0),
             );
+            // Канон вертикали (issue #68, IN11): строковый бокс кегля по
+            // центру зоны заголовка колонки (PANEL_TITLE_H из раскладки).
+            let vars_title = canvas_ui::geometry::UiRect::new(
+                ox + panel.vars_title[0],
+                oy + panel.vars_title[1],
+                panel.vars_title[2],
+                panel.vars_title[3],
+            );
             d.label(
-                canvas_ui::geometry::UiRect::new(
-                    ox + panel.vars_title[0],
-                    oy + panel.vars_title[1] + 2.0,
-                    panel.vars_title[2],
-                    16.0,
-                ),
+                canvas_ui::kit::text_area_vcentered(vars_title, font(11.0)),
                 self.tr(keys::STAGE_CALC_VARS),
                 kit_palette.text_title,
                 font(11.0),
                 PaintAlign::Left,
             );
+            let formulas_title = canvas_ui::geometry::UiRect::new(
+                ox + panel.formulas_title[0],
+                oy + panel.formulas_title[1],
+                panel.formulas_title[2],
+                panel.formulas_title[3],
+            );
             d.label(
-                canvas_ui::geometry::UiRect::new(
-                    ox + panel.formulas_title[0],
-                    oy + panel.formulas_title[1] + 2.0,
-                    panel.formulas_title[2],
-                    16.0,
-                ),
+                canvas_ui::kit::text_area_vcentered(formulas_title, font(11.0)),
                 self.tr(keys::STAGE_CALC_FORMULAS),
                 kit_palette.text_title,
                 font(11.0),
@@ -1908,8 +1935,10 @@ impl App {
                     8.0 * s,
                 );
                 let title_budget = (card_w - 16.0).max(0.0);
+                // Мини-карточка — двухстрочный стек (заголовок + счётчик,
+                // паддинги раскладки стека, не центрирование).
                 chrome.label(
-                    stage_area(&transform, src.x + 8.0, ext_y + 4.0, card_w - 16.0, 12.0),
+                    stage_area(&transform, src.x + 8.0, ext_y + 4.0, card_w - 16.0, 12.0), // v3:allow мини-карточка: стек 2 строк (IN11)
                     &mx.ellipsis(&ext.title, title_budget, 10.5),
                     color_to_rgba(dim_text_color(palette.body, dim_alpha)),
                     font(10.5),

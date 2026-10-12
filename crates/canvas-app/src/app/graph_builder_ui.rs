@@ -120,9 +120,19 @@ impl App {
         );
 
         // === Заголовок «Генерация графа» =================================
+        // Канон вертикали (issue #68, IN11/IN13): заголовок+подзаголовок —
+        // топ-анкерный стек строк диалога; строковые боксы — line_metrics
+        // кеглей 16/11 (ручные 20/14 убраны). Шаг стека sub_y — прежний
+        // (+22): он зеркалится hit-тестом (graph_builder_hit, draw==hit,
+        // UR-005) — менять только в паре с ним.
         let title_y = dialog_y + PAD;
+        let title_lh = canvas_ui::kit::line_metrics(16.0).line_height;
+        let sub_lh = canvas_ui::kit::line_metrics(11.0).line_height;
         d.label_left(
-            UiRect::new(dialog_x + PAD, title_y, dialog_w - PAD * 2.0, 20.0),
+            canvas_ui::kit::text_area_vcentered(
+                UiRect::new(dialog_x + PAD, title_y, dialog_w - PAD * 2.0, title_lh),
+                16.0,
+            ),
             "Генерация графа",
             kit_palette.text_title,
             16.0,
@@ -135,7 +145,10 @@ impl App {
             None => "· оценка ~$0.02".to_owned(),
         };
         d.label_left(
-            UiRect::new(dialog_x + PAD, sub_y, dialog_w - PAD * 2.0, 14.0),
+            canvas_ui::kit::text_area_vcentered(
+                UiRect::new(dialog_x + PAD, sub_y, dialog_w - PAD * 2.0, sub_lh),
+                11.0,
+            ),
             &format!("Режим: {} {}", mode_label, cost_str),
             kit_palette.text_muted,
             11.0,
@@ -164,17 +177,20 @@ impl App {
         } else {
             kit_palette.text
         };
+        // Многострочная textarea — контент-поле с топ-анкером (IN11):
+        // строки текста идут от верхнего пада SPACING_S (прежний литерал 6);
+        // центрировать первую строку в поле нельзя — исказит поле.
         d.label_left(
             UiRect::new(
                 ta_rect.x + 8.0,
-                ta_rect.y + 6.0,
+                ta_rect.y + canvas_core::tokens::SPACING_S,
                 ta_rect.w - 16.0,
                 ta_rect.h - 12.0,
             ),
             &ta_text,
             ta_color,
             12.0,
-        );
+        ); // v3:allow многострочная textarea — топ-анкерный контент (IN11)
 
         // === Mode selector — 3 radio-cards (вертикально) =================
         let modes_y = ta_y + TEXTAREA_H + 12.0;
@@ -200,17 +216,13 @@ impl App {
             let mc_rect = UiRect::new(dialog_x + PAD, mc_y, ta_w, MODE_CARD_H);
             let selected = self.graph_builder.mode == *mode;
             let hovered = point_in_rect([mc_rect.x, mc_mc_y(mc_y), ta_w, MODE_CARD_H], self.cursor);
-            // J2 (Task J / FR-UI-RADIO): migrate style computation to
-            // `kit::radio_card` — card_fill/card_border/indicator_fill/
-            // label_color/desc_color now come from the kit's (selected,
-            // state) → palette slots mapping (1:1 with the previous manual
-            // match — I-1: zero visual jump). Geometry (indicator 16×16
-            // glyph at y=8, label.y=6, desc.y=24) preserved as-is — kit's
-            // canonical indicator 12×12 at y=center/label.y=8/desc.y=30
-            // differs from existing layout; full geometry migration would
-            // cause ~6px visual shift of label/desc rows + indicator resize
-            // 16→12 — separate wave of UI-geometry canonicalization
-            // (analogous to Agent G's close-button TODOs).
+            // J2 (Task J / FR-UI-RADIO): стили — из `kit::radio_card`
+            // (слоты (selected, state), 1:1 с прежним match). X/ширины и
+            // индикатор 16×16 сохранены; вертикаль label/desc — канон
+            // компонента (RADIO_*_LINE_H, пад SPACING_SM, зазор SPACING_S —
+            // волна V3 #68; прежние ручные label.y=6/desc.y=24 удалены;
+            // полный переезд геометрии с ресайзом индикатора 16→12 —
+            // отдельная волна, прецедент J2).
             let state = if hovered {
                 canvas_ui::kit::KitState::Hovered
             } else {
@@ -233,24 +245,53 @@ impl App {
             d.control(mc_rect, &mc_style);
             // Radio dot ◉ / ○ — glyph fallback (kit's paint_radio_card draws
             // a filled circle 12×12 at canonical centered position; existing
-            // uses glyph "◉"/"○" in 14px font at y=8 — preserved 1:1).
+            // uses glyph "◉"/"○" in 14px font — бокс индикатора 16×16 с
+            // падом SPACING_SM сохранён; строковый бокс глифа — канон #68).
             let dot_glyph = if selected { "◉" } else { "○" };
             d.label_left(
-                UiRect::new(mc_rect.x + 8.0, mc_rect.y + 8.0, 16.0, 16.0),
+                canvas_ui::kit::text_area_vcentered(
+                    UiRect::new(
+                        mc_rect.x + 8.0,
+                        mc_rect.y + canvas_core::tokens::SPACING_SM,
+                        16.0,
+                        16.0,
+                    ),
+                    14.0,
+                ),
                 dot_glyph,
                 rc_style.indicator_fill,
                 14.0,
             );
-            // Label (bold) — position preserved.
+            // Label (bold) / Description — вертикаль по канону
+            // kit::radio_card (V3 #68); x/ширины прежние.
+            let label_y = mc_rect.y + canvas_core::tokens::SPACING_SM;
+            let desc_y = label_y
+                + canvas_ui::component::radio_card::RADIO_LABEL_LINE_H
+                + canvas_core::tokens::SPACING_S;
             d.label_left(
-                UiRect::new(mc_rect.x + 28.0, mc_rect.y + 6.0, 100.0, 16.0),
+                canvas_ui::kit::text_area_vcentered(
+                    UiRect::new(
+                        mc_rect.x + 28.0,
+                        label_y,
+                        100.0,
+                        canvas_ui::component::radio_card::RADIO_LABEL_LINE_H,
+                    ),
+                    12.0,
+                ),
                 label,
                 rc_style.label_color,
                 12.0,
             );
-            // Description (приглушённый) — position preserved.
             d.label_left(
-                UiRect::new(mc_rect.x + 28.0, mc_rect.y + 24.0, ta_w - 36.0, 14.0),
+                canvas_ui::kit::text_area_vcentered(
+                    UiRect::new(
+                        mc_rect.x + 28.0,
+                        desc_y,
+                        ta_w - 36.0,
+                        canvas_ui::component::radio_card::RADIO_DESC_LINE_H,
+                    ),
+                    11.0,
+                ),
                 desc,
                 rc_style.desc_color,
                 11.0,
@@ -374,11 +415,16 @@ impl App {
                 preview.edges.len()
             );
             d.label_left(
-                UiRect::new(
-                    prev_rect.x + 8.0,
-                    prev_rect.y + 6.0,
-                    prev_rect.w - 16.0,
-                    16.0,
+                // Канон вертикали (issue #68, IN11): строковый бокс кегля 11
+                // в слоте строки превью; верхний пад SPACING_S (прежний 6).
+                canvas_ui::kit::text_area_vcentered(
+                    UiRect::new(
+                        prev_rect.x + 8.0,
+                        prev_rect.y + canvas_core::tokens::SPACING_S,
+                        prev_rect.w - 16.0,
+                        16.0,
+                    ),
+                    11.0,
                 ),
                 &prev_label,
                 kit_palette.accent,

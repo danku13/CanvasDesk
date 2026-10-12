@@ -487,9 +487,9 @@ impl App {
         // сжимается первой, ellipsis по фактической ширине области.
         // model_area — уже строковый бокс канона (text_area_vcentered в
         // head_row_layout) — рисуется как есть.
-        d.label_left(head.model_area, &model_fitted, kit_palette.text_title, 12.5);
-        // Подпись провайдера — pill-чип контент-ширины
-        // (border-radius:99px, padding:1px 7px, font 9.5px), flex:none.
+        d.label_left(head.model_area, &model_fitted, kit_palette.text_title, 12.5); // v3:allow компонентный строковый бокс head_row_layout (IN13)
+                                                                                    // Подпись провайдера — pill-чип контент-ширины
+                                                                                    // (border-radius:99px, padding:1px 7px, font 9.5px), flex:none.
         let prov_chip_rect = head.prov_chip;
         let prov_chip_style =
             canvas_ui::kit::chip_style(canvas_ui::kit::KitState::Normal, &kit_palette);

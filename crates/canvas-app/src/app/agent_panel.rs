@@ -634,26 +634,39 @@ impl App {
         );
 
         // === Шапка: bolt ⚡ + title + sub + close ✕ =======================
-        let head_y = panel_y + 8.0;
+        // Канон вертикали (issue #68, IN11/IN13): шапка — стек двух строк
+        // (title 13 / sub 9); строковые боксы — line_metrics кеглей, блок
+        // строк центрирован в полосе HEAD_H (ручные офсеты +1/+2/+16
+        // удалены). X/ширины/кегли сохранены.
+        let head_band = UiRect::new(panel_x, panel_y, panel_w, HEAD_H);
+        let title_lh = canvas_ui::kit::line_metrics(13.0).line_height;
+        let sub_lh = canvas_ui::kit::line_metrics(9.0).line_height;
+        let head_y = head_band.y + (head_band.h - title_lh - sub_lh) / 2.0;
         // FR-ICONS/UR-005: болт — SVG-иконка `zap` (глиф ⚡ отсутствовал в
         // сабсете — тофу в wasm; теперь есть и в атласе, и в сабсете).
-        let bolt_rect = UiRect::new(panel_x + PAD, head_y + 2.0, 20.0, 20.0);
+        // Вертикаль болта — центр блока строк шапки (как ✕ — центр полосы).
+        let bolt_dy = (title_lh + sub_lh) * 0.5 - 10.0;
+        let bolt_rect = UiRect::new(panel_x + PAD, head_y + bolt_dy, 20.0, 20.0);
         d.icon(bolt_rect, "zap", "⚡", kit_palette.accent, 14.0);
-        // Заголовок «AI Агент».
-        d.label_left(
-            UiRect::new(panel_x + PAD + 22.0, head_y + 1.0, 180.0, 14.0),
-            "AI Агент",
-            kit_palette.text_title,
+        // Заголовок «AI Агент» — строковый бокс кегля 13 (канон #68).
+        let title_ta = canvas_ui::kit::text_area_vcentered(
+            UiRect::new(panel_x + PAD + 22.0, head_y, 180.0, title_lh),
             13.0,
         );
-        // Подзаголовок (одна строка, приглушённый).
-        d.label_left(
+        d.label_left(title_ta, "AI Агент", kit_palette.text_title, 13.0);
+        // Подзаголовок (одна строка, приглушённый) — строковый бокс кегля 9
+        // под строкой заголовка (шаг стека = высота строки).
+        let sub_ta = canvas_ui::kit::text_area_vcentered(
             UiRect::new(
                 panel_x + PAD + 22.0,
-                head_y + 16.0,
+                head_y + title_lh,
                 panel_w - PAD * 2.0 - 22.0,
-                12.0,
+                sub_lh,
             ),
+            9.0,
+        );
+        d.label_left(
+            sub_ta,
             "tool-calling · 42 MCP-инструмента · PRD-0010 F-4",
             kit_palette.text_muted,
             9.0,
@@ -829,7 +842,7 @@ impl App {
                     line,
                     kit_palette.text_muted,
                     BUBBLE_FONT,
-                );
+                ); // v3:allow переносимый hint — топ-анкерный стек строк переноса (IN11)
                 line_y += line_h;
             }
         } else {
@@ -873,7 +886,14 @@ impl App {
                             canvas_core::tokens::RADIUS_PANEL,
                         );
                         d.control(*bubble, &user_style);
-                        d.label_left(*text_rect, label, user_style.text, BUBBLE_FONT);
+                        // Канон вертикали (issue #68, IN11): строковый бокс
+                        // текста бабла по центру контент-поля.
+                        d.label_left(
+                            canvas_ui::kit::text_area_vcentered(*text_rect, BUBBLE_FONT),
+                            label,
+                            user_style.text,
+                            BUBBLE_FONT,
+                        );
                     }
                     AgentMsgGeom::Bot {
                         cb,
@@ -896,12 +916,15 @@ impl App {
                         d.control(cb.rect, &bot_style);
                         // «AI Агент» header — kit layout.header_area.
                         if let Some(header_area) = &cb.header_area {
+                            // Область — компонентный бокс CHAT_HEADER_H из chat_bubble.
                             d.label_left(*header_area, "AI Агент", kit_palette.text_muted, 9.0);
+                            // v3:allow компонентный строковый бокс chat_bubble (IN13)
                         }
                         // Text body — kit layout.text_area.
-                        d.label_left(cb.text_area, text, style.text_color, BUBBLE_FONT);
-                        // tool_calls — моноширинные строки, по kit
-                        // layout.tool_call_rows[i] rect'ам.
+                        // Область — компонентный стек строк (n·CHAT_LINE_H).
+                        d.label_left(cb.text_area, text, style.text_color, BUBBLE_FONT); // v3:allow компонентный стек строк chat_bubble (IN11)
+                                                                                         // tool_calls — моноширинные строки, по kit
+                                                                                         // layout.tool_call_rows[i] rect'ам.
                         for (i, tc) in tool_calls.iter().enumerate() {
                             let status_glyph = match tc.status {
                                 ToolCallStatus::Pending => "…",
@@ -921,10 +944,10 @@ impl App {
                                 &format!("{} {}  {}", status_glyph, tc.tool_name, tc.args_summary),
                                 kit_palette.text_muted,
                                 10.0,
-                            );
-                            // Status glyph — отдельным цветом (поверх серого).
-                            // Канон вертикали (issue #68, IN11): строковый бокс
-                            // глифа по центру строки tool_call.
+                            ); // v3:allow компонентная строка tool_call CHAT_TOOL_CALL_H (IN13)
+                               // Status glyph — отдельным цветом (поверх серого).
+                               // Канон вертикали (issue #68, IN11): строковый бокс
+                               // глифа по центру строки tool_call.
                             d.label_left(
                                 canvas_ui::kit::text_area_vcentered(
                                     UiRect::new(tc_rect.x, tc_rect.y, 14.0, 14.0),
