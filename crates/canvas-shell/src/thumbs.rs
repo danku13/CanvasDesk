@@ -154,7 +154,7 @@ fn hbitmap_to_rgba(hbm: &HBITMAP) -> Result<Thumbnail, CoreError> {
 /// BGRA → RGBA с распаковкой premultiplied alpha (shell отдаёт premultiplied).
 /// Чистая функция — тестируется без COM.
 pub fn bgra_to_rgba(pixels: &mut [u8]) {
-    for px in pixels.chunks_exact_mut(4) {
+    for px in pixels.as_chunks_mut::<4>().0 {
         let (b, g, r, a) = (px[0], px[1], px[2], px[3]);
         let (r, g, b) = if a > 0 && a < 255 {
             let scale = 255.0 / f32::from(a);
