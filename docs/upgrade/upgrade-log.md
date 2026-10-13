@@ -514,6 +514,14 @@ licenses, docs/lay7/v3-ui линты, llm-proxy, artifacts ×3)
   POST-политика 403: ран будет отклонён, пока владелец не добавит
   upgrade/render-stack (Settings → Environments → github-pages →
   Deployment branches and tags); после клика — Re-run jobs / пуш
+- Финал деплоя: владелец выполнил оба клика — Source: GitHub
+  Actions (build_type=workflow по API) + environment-политики
+  [main, upgrade/render-stack]; ложный след «Source: branch» при
+  diagnose-сессии был временным режимом: GitHub сам пушил «Create
+  CNAME» в обе ветки и задеплоил старый main-бандл с битыми
+  /CanvasDesk/app/*-ссылками; этот триггер-коммит запускает
+  pages-web на ветке — первый деплой бандла wgpu-30 с
+  public-url /app под доменом
 
 ### Верификация
 
@@ -525,10 +533,14 @@ licenses, docs/lay7/v3-ui линты, llm-proxy, artifacts ×3)
 - Релизный бандл — ✅ trunk+wasm-opt пайплайн, прогон в браузере
 - Размер §8.8 — ⚠️ 14.9 МБ raw / 5.9 МБ gzip — бюджет превышен,
   решение за W6 (см. решение 6)
-- Pages-preview — 🔄 Source=GitHub Actions ✅; домен
-  app.canvasdesk.tech прикреплён, DNS валиден, InvalidDNSError
+- Pages-preview — 🔄 Source=GitHub Actions ✅ (build_type=workflow,
+  подтверждено API после клика владельца); домен
+  app.canvasdesk.tech прикреплён, DNS валиден (авторитативные
+  ns1/ns2.reg.ru + DoH Google/Cloudflare), InvalidDNSError
   снялся (гонка валидации), сертификат в выпуске (new → ready,
   затем Enforce HTTPS — secure context для WebGPU); пайплайн
-  домен-адаптивен (public-url /app при cname). Остался один барьер —
-  environment-правило [main] (клик владельца), после него деплой:
-  ре-ран/пуш
+  домен-адаптивен (public-url /app при cname);
+  environment-барьер снят (политики [main,
+  upgrade/render-stack]); триггер-коммит этого журнала → деплой:
+  ожидание зелёного рана pages-web и пина /app/*.wasm = 200
+  под доменом
