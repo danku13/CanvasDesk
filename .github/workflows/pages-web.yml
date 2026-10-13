@@ -18,7 +18,11 @@ name: Pages (web + docs)
 # загрузка ≤5 с на 25 Мбит/с).
 on:
   push:
-    branches: [main]
+    # upgrade/render-stack — трек #69 (deps-W5): pages-preview на каждый пуш
+    # ветки: workflow_dispatch отвергается токеном сессии (403 admin rights;
+    # pages:write тоже нет) — тот же обход, что ci.yml в W1 (2e9d8ffa).
+    # После merge трека строку можно сузить обратно до [main].
+    branches: [main, upgrade/render-stack]
     paths:
       - "crates/canvas-web/**"
       - "crates/canvas-core/**"
