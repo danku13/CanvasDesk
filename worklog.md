@@ -7,6 +7,7 @@ Tokens (правило учёта токенов — AGENTS.md). Записи д
 
 ## Journal index (все записи: текущие и архивные)
 
+- 2026-10-13 | DEPS-W3/#73 (сессия web-b86179c7) | Рантайм-волна W3 после скачка wgpu 30/glyphon 0.12/cosmic-text 0.19: lavapipe (software-Vulkan из .deb без root) — полный прогон workspace на РЕАЛЬНОМ адаптере 3443/0/4 (15/16 GPU-бинарей не скипнулись, паритет CI-уловки «ложной зелёности» закрыт); AtlasFull/LRU-аудит glyphon 0.12 — интеракция корректна (trim=очистка glyphs_in_use, эвикция в try_allocate, 0 повторов/0 паник); perf-дрейф к W0 нулевой: 174.2 μs (+1.6%) / 172.1 μs (−2.3%) при пороге ±20%; снапшоты 221/0 + html5 16/0 не дрейфнули; тег upgrade/step-3-runtime; ручной чек-лист desktop — в #73, ждёт подписи владельца | worklog.md (текущий)
 - 2026-10-13 | DEPS-W0/#70 (сессия web-b86179c7) | Заморозка базлайнов рендер-стека до перехода на wgpu 30/glyphon 0.12/cosmic-text 0.19 (трек #69): тег pre-render-upgrade на main @ 086036a; docs/upgrade/{baseline-deps.txt (523 строки), baseline-inventory.md (51 ломающийся call-site cosmic-text: text.rs 39/edit.rs 7/app.rs 3/shaper.rs 2; wgpu Instance×6/present×1/8 пайплайнов/8 WGSL/4 сэмплера; glyphon ×13 файлов), baseline-perf.md (perf_baseline 171.4 μs, perf_flex 176.1 μs — бюджеты <1000 μs PASS, относительный дрейф к dev-машине 45.1/29.4 μs ожидаемо красный в сэндбоксе)}; контрольные числа: 3447 тестов workspace, 220+1 снапшот-тестов зелёные, 15+1 html5 зелёные | worklog.md (текущий)
 - 2026-10-12 | UI-SYSTEMIC-PLAN (сессия web-0a539c42) | Системные решения по вёрстке (анализ находок второй модели): верификация 3 корней по коду (234 label-вызова в 9 файлах, 7 формул кареток, факторы 1.1/1.3), решения P1 VAnchor-рендер / P2 single-writer подписи / P3 kit::caret_rect / P4 LineMetrics, гейты-линты на каждый класс, мета-ответ «почему криво после волн» (6 механизмов) + триада Конвенция→Миграция→Гейт + WASM pixel-diff, волны V1/V2/V3 | worklog.md (текущий)
 - 2026-10-12 | CR-036/#63 (сессия web-b5714086-2f9f-44a0-af82-302aa182533b) | Фикс вёрстки верхнего хрома после CR-035 (директивы владельца): WEB_TOOLBAR_INSET удалён — кластер ⚙/☼/RU-EN/? у кромки y=12..48; чип топ-право слева от «?» (ChipAnchor, сжатие/перенос ряд №2, гейт агент-панели); author-bar 5 иконок топ-лево (DOM-паритет, бренды в атласе); клампы хоткеев/flyout о chip_left_bound; тур #gpu-canvas-chip + TourOptions.hooks; wasm_audit HELP [1118,30] (прежний — в кнопку ЯЗЫКА); контракт-тест top_chrome; user-docs; #63 closed (VLM-верификация деплоя); #58 — коммент с вариантами решения | worklog.md (текущий)
@@ -442,3 +443,25 @@ Stage Summary:
 - W2 закрыта с превышением DoD: не только компиляция, но и зелёные тесты+CI на 3 ОС; W3 (рантайм-запуски) и W4 (регенерация эталонов) существенно упрощены — эталоны уже зелёные
 - Урок задокументирован в upgrade-log (решение 8): неявный шейпинг glyphon исчез — скрытые зависимости от него ловятся только платформами с GPU
 Tokens: in≈900000, out≈120000, total≈1020000, model=GLM-5.3, scope=DEPS-W2/#72
+
+---
+Task ID: DEPS-W3/#73 (сессия web-b86179c7)
+Agent: Super Z (main)
+Task: Рантайм на desktop после скачка версий (трек #69, волна W3 — issue #73): смоки/не-эталонные тесты на реальном GPU-пути, AtlasFull/LRU-аудит, тег upgrade/step-3-runtime
+
+Work Log:
+- Окружение агента восстановлено после сброса сэндбокса (третий сброс за трек): rsproxy-тулчейн rustc 1.99.0 (та же версия, что W0/W2 — сопоставимость чисел), полный checkout, filemode off; ветка upgrade/render-stack синхронизирована (пины: wgpu 30.0.1/glyphon 0.12.0/cosmic-text 0.19.0)
+- Статусы по запросу владельца «проставь статусы в issues»: доска Projects v2 через GraphQL с ghp_-токеном — схема API изменилась (root-поле projectV2 удалено → node(id); ProjectV2.name → title; мутация value теперь объект {singleSelectOptionId} вместо строки); скрипт scripts/gh_projects.py (вне репо) адаптирован; #71 и #73 → In Progress (#69 уже был, #70/#72 Done)
+- lavapipe (software-Vulkan): mesa-vulkan-drivers 25.0.7 .deb скачан с deb.debian.org, распакован dpkg-deb -x без root; VK_ICD_FILENAMES + LD_LIBRARY_PATH; A/B-подтверждение: без ICD «GPU-адаптер недоступен, headless-тест пропущен», с ICD — реальный GPU-путь wgpu 30 (Instance → adapter → device → offscreen render → readback → pixel-asserts)
+- Полный прогон cargo test --workspace --no-fail-fast НА АДАПТЕРЕ: 3443 passed / 0 failed / 4 ignored (96 таргетов); 0 GPU-скипов — 15/16 GPU-бинарей canvas-render реальный путь (render_smoke, editing_suppress, text_body_smoke, thumbs_smoke, zorder_smoke, …); grid_gl_smoke скип — Backends::GL (паритет ubuntu-CI); catch: ловушка W2 «скип без адаптера маскирует регресс» закрыта и для агентных сессий
+- AtlasFull/LRU (шаг 3 брифа): сверка с исходниками glyphon 0.12 (text_atlas.rs: trim()=очистка glyphs_in_use, эвикция LRU в try_allocate, grow() до max texture dimension) + CanvasDesk call-сайты (viewport.update 1×/кадр text.rs:3337 — uniform только при смене разрешения; atlas.trim() после всех групп text.rs:5500; retry-once text.rs:535); рантайм: 0 AtlasFull-логов / 0 паник — частота повторов не выросла, интеракция корректна, фиксы не нужны
+- Perf (ранний сигнал W4/W6): perf_baseline 171.4→174.2 μs (+1.6%), perf_flex 176.1→172.1 μs (−2.3%) — порог ±20% не тронут; абсолютные бюджеты <1000 μs PASS; относительные чеки к dev-эталонам 45.1/29.4 μs красные — машинная зависимость W0, baseline-файлы не тронуты
+- Эталоны: snapshot 221/0, html5_demos 16/0 — дрейфа нет (W4 = регенерация-ноуп, подтверждение вывода W2); ожидаемые брифом падения grid_gl_smoke/render_smoke/itog_label_metrics/fit_note_repro не реализовались
+- Рантайм на реальном железе: подтверждение владельца (сборка+запуск ветки, TG 2026-10-13) + macOS artifacts-джоба на CI (WindowServer); ручной чек-лист (шаг 2 брифа) оформлен комментарием в #73 — ждёт подписи владельца
+- docs/upgrade/upgrade-log.md: карта волн обновлена (W2 ✅, W3 ✅ с оговоркой подписи), раздел W3 (решения 1–4, журнал, верификация); docs-only коммит + тег upgrade/step-3-runtime
+
+Stage Summary:
+- W3 верификация завершена без единого regression-фикса: рантайм нового стека подтверждён на трёх уровнях — реальный GPU-путь в сэндбоксе (lavapipe, 15/16 GPU-тестов), реальное железо владельца (сборка+запуск), CI ×3 ОС (12/12 на ветке)
+- Ключевая техника волны: software-Vulkan без root — переиспользуется в W4/W6 для рантайм-гейтов в агентных сессиях
+- Открытый пункт: подпись владельца по чек-листу #73 (запуск/таблицы-GFM/скролл-зум/редактирование/тема/F9) — единственное, что держит закрытие волны
+Tokens: in≈450000, out≈55000, total≈505000, model=GLM-5.3, scope=DEPS-W3/#73
