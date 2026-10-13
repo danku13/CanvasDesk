@@ -485,3 +485,26 @@ Stage Summary:
 - W4 закрыта как документированный НОУП: эталоны нового стека не дрейфнули ни в одной категории, регенерация не потребовалась — нулевой дифф-шум в PR, откат тривиален
 - Оставшиеся волны: W5 (web/wasm32) и W6 (финализация) — обе опираются на здоровые теги step-3-runtime/step-4-snapshots
 Tokens: in≈120000, out≈20000, total≈140000, model=GLM-5.3, scope=DEPS-W4/#74
+---
+Task ID: DEPS-W5/#75 (сессия web-b86179c7)
+Agent: Super Z (main)
+Task: Web/wasm32 после скачка версий (трек #69, волна W5 — issue #75): сборка + WebGPU/WebGL2-фолбэк + pages-preview
+
+Work Log:
+- Окружение восстановлено после четвёртого сброса сэндбокса за трек: shallow-клон разморожен (refspec */heads, filemode off, sparse-checkout off — docs/assets полные), rsproxy-тулчейн rustc 1.99.0 + wasm32-таргет; инструменты web-пайплайна: trunk 0.21.14 (prebuilt), wasm-bindgen-cli 0.2.127 (cargo install — prebuilt-ассета у релиза нет, причина cargo install в CI), wasm-opt binaryen 125 (prebuilt)
+- Шаг 1 брифа (wasm-check паритет): time-audit 0 нарушений + cargo check wasm32 ×7 крейтов (набор CI-джобы) — зелёный за 1m13s; CI ветки df0f821 уже 12/12 (wasm-check SUCCESS)
+- Шаг 3 брифа (лимиты): сверка с исходниками wgpu-types 30.0.1 — downlevel_webgl2_defaults наследует 2048-кап текстур от downlevel_defaults (НЕ изменился) → boost_gl_limits (gpu.rs:47) валиден как на wgpu 22; apply_limit_buckets (новое поле RequestAdapterOptions, анти-фингерпринтинг) — наш явный false = дефолт = сырые лимиты адаптера; код-изменений не требуется, тесты boost (5) зелёные в CI
+- Шаг 2 брифа (браузер): новый сценарий scripts/wasm_ui_w5_scenario.mjs (репо-артефакт волны) — оракулы: адаптер-логи, счётчик request_adapter, стабильность кадра, wheel-зум, dblclick+кириллический ввод, page-error/panic; стенд debug-wasm (wasm_ui_test.sh процедура) + релизный бандл; Chromium headed под Xvfb (Playwright), ?ui=demo
+- Вердикты: WebGPU — адаптер attempt=1 (BROWSER_WEBGPU), стабильность 0 px, wheel 18401 px, ввод 609937 px, 0 паник; WebGL2-фолбэк (--disable-features=WebGPU) — РОВНО 3 bounded-попытки (default→high-performance→low-power) → ступень GL ANGLE, стабильность 0 px, wheel 18375 px, ввод 612730 px, 0 паник — зацикливание retry (риск брифа из семантики wgpu 30) НЕ подтверждилось; релизный бандл — те же зелёные оракулы
+- Наблюдение: dblclick в витрине демо пересоздаёт App (второй Renderer) — в одном прогоне работают оба бэкенда (WebGPU-инициализация + capture-GL при consent в localStorage, FR-091 v2) — ожидаемое поведение, не регрессия
+- Релизный бандл (процедура pages-web локально): trunk --release 4m32s + wasm-opt -Oz 19.6→14.9 МБ; binaryen 125 справляется с wgpu-30-wasm — пайплайн деплоя валиден; ГРАБЛЯ: NO_COLOR=1 в агентном сэндбоксе ломает trunk→cargo 1.99 (--no-color 1 невалиден) — CI не затронут (web_bundle.sh ставит NO_COLOR=false), локально env -u NO_COLOR
+- Размер бандла: 14.9 МБ raw / 5.9 МБ gzip-прокси (brotli снимет CI) — бюджет §8.8 (≤8 МБ raw / ≤4 МБ brotli) ПРЕВЫШЕН: бюджет писался до первого реального деплоя /app (Pages legacy, бандл никогда не публиковался); решение (принять/поднять/оптимизировать) — W6/владелец, задокументировано в upgrade-log §W5 решение 6
+- Pages-preview: репо в legacy-режиме Pages (Source: branch main/docs) — deploy-pages@v4 требует Source: GitHub Actions; оба токена без pages:write (PATCH /pages → 404); interim: draft-release w5-web-preview с zip-бандлом + инструкция локального прогона (http.server); полный деплой — workflow_dispatch pages-web.yml на ветке сразу после переключения Source владельцем (один клик, Settings → Pages)
+- Урок платформы (не репо): последовательность «[m» в tool-выводах съедается ANSI-санитайзером — «branches: [main]» отображается как «branches: ain]»; диагноз «порча workflow-файла» был ложным (od/git-blob-sha доказали корректность), фиксы не потребовались; будущие сессии: не диагностировать «порчу» по отображаемым скобкам — проверять od-дампом/sha
+- Коммит волны: сценарий + upgrade-log §W5 + worklog; тег upgrade/step-5-web после зелёного CI
+
+Stage Summary:
+- Web-стек нового поколения (wgpu 30/glyphon 0.12/cosmic-text 0.19) верифицирован в браузере в ОБОИХ режимах: WebGPU (адаптер с 1-й попытки) и WebGL2-фолбэк (ровно 3 bounded-retry → GL) — ключевой риск брифа (зацикливание retry при строжайшей семантике request_adapter v30) закрыт лог-доказательством
+- Пайплайн pages-web воспроизведён локально до конца (trunk+wasm-opt) — деплой CI соберёт бандл; размер 14.9 МБ raw превышает бюджет §8.8 — прозрачная находка с вариантами решения для W6
+- Pages-preview: draft-release (немедленно) + ожидание одного клика владельца (Source: GitHub Actions) для живого деплоя
+Tokens: in≈300000, out≈45000, total≈345000, model=GLM-5.3, scope=DEPS-W5/#75
