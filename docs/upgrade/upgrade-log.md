@@ -533,14 +533,22 @@ licenses, docs/lay7/v3-ui линты, llm-proxy, artifacts ×3)
 - Релизный бандл — ✅ trunk+wasm-opt пайплайн, прогон в браузере
 - Размер §8.8 — ⚠️ 14.9 МБ raw / 5.9 МБ gzip — бюджет превышен,
   решение за W6 (см. решение 6)
-- Pages-preview — 🔄 Source=GitHub Actions ✅ (build_type=workflow,
-  подтверждено API после клика владельца); домен
-  app.canvasdesk.tech прикреплён, DNS валиден (авторитативные
+- Pages-preview — ✅ ГОТОВО: ран 38459047509 (c04b949e) —
+  все 18 шагов зелёные (Jekyll → trunk release + wasm-opt →
+  «База public-url» → deploy-pages), 4m27s;
+  http://app.canvasdesk.tech/app/ — index ссылается на
+  /app/canvas-web-17a7e69787c840e8.js + _bg.wasm (домен-адаптивная
+  база сработала), пины 200: js 175 869 B, wasm 14 893 119 B
+  (= релизный бандл W5 до байта); браузерный смоук задеплоенных
+  байтов (localhost, headless Chromium): WebGL2-фолбэк —
+  «рендер инициализирован backend=Gl format=Rgba8Unorm
+  present_mode=Fifo», окно 1280×577, канвас из OPFS, реестр
+  виджетов 3, LLM-швы, 0 ошибок страницы, скриншот с живым
+  контентом (566 цветов); Source=GitHub Actions
+  (build_type=workflow), environment-политики [main,
+  upgrade/render-stack]; DNS валиден (авторитативные
   ns1/ns2.reg.ru + DoH Google/Cloudflare), InvalidDNSError
-  снялся (гонка валидации), сертификат в выпуске (new → ready,
-  затем Enforce HTTPS — secure context для WebGPU); пайплайн
-  домен-адаптивен (public-url /app при cname);
-  environment-барьер снят (политики [main,
-  upgrade/render-stack]); триггер-коммит этого журнала → деплой:
-  ожидание зелёного рана pages-web и пина /app/*.wasm = 200
-  под доменом
+  снялся (гонка валидации). Осталось: LE-сертификат (state=new,
+  очередь GitHub) → Enforce HTTPS → WebGPU (secure context);
+  до того — WebGL2-фолбэк (http-каноникал)
+
