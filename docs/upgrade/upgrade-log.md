@@ -17,7 +17,7 @@
 | W2 | #72 | Скачок версий + API-миграция до зелёной компиляции | ✅ Done (тег upgrade/step-2-compile, CI 12/12) |
 | W3 | #73 | Рантайм desktop: запуск + smoke + не-эталонные тесты | ✅ Done (lavapipe-рантайм в сэндбоксе, тег upgrade/step-3-runtime; ручной чек-лист — в #73, ждёт подписи владельца) |
 | W4 | #74 | Регенерация 220+15 эталонов по протоколу осознанного диффа | ✅ Done — документированный НОУП: дифф-кандидатов 0, эталоны не тронуты (тег upgrade/step-4-snapshots; сводная таблица — #74, в PR-описание при открытии) |
-| W5 | #75 | Web/wasm32: сборка + WebGPU/WebGL2 + pages-preview | Todo |
+| W5 | #75 | Web/wasm32: сборка + WebGPU/WebGL2 + pages-preview | ✅ Done — агентная верификация: wasm-check, сценарии WebGPU и WebGL2-фолбэка (оракулы адаптера/retry/стабильности/ввода), релизный бандл; pages-preview — interim через draft-release, Pages-деплой ждёт переключения Source владельцем (тег upgrade/step-5-web) |
 | W6 | #76 | Финализация: cargo-deny, perf-гейт, CHANGELOG, merge-commit | Todo |
 
 ---
@@ -336,3 +336,125 @@ licenses, docs/lay7/v3-ui линты, llm-proxy, artifacts ×3)
 - Эталоны без UPDATE — ✅ 0 упавших = 0 дифф-кандидатов (протокол §1)
 - Категория unknown — ✅ пуста (протокол §3 выполнен вакуумно)
 - Файлы 220/15 — ✅ нетронуты (протокол §4 контрольные числа)
+
+## W5 — web/wasm32: WebGPU + WebGL2-фолбэк + релизный бандл + pages-preview
+
+**Дата:** 2026-10-13 · **Issue:** #75 · **Статус:** ✅ завершена (агентная
+верификация; Pages-деплой — за владельцем: переключение Source в Settings)
+
+### Решения
+
+1. **wasm-check воспроизведён локально — паритет с CI.** Time-audit
+   (прямые `std::time` в web-крейтах — 0) + `cargo check --target
+   wasm32-unknown-unknown` по набору CI-джобы (core/render/widgets/
+   mcp/scene/mcp-headless/web) — зелёный за 1m13s на свежем сэндбоксе.
+   CI на коммите ветки (df0f821) — 12/12, wasm-check SUCCESS: волна
+   стартовала с зелёного wasm-гейта.
+2. **Аудит лимитов GL-пути (шаг 3 брифа): код gpu.rs:47 остаётся
+   валидным на wgpu 30, изменения не нужны.** Проверено по исходникам
+   wgpu-types 30.0.1: `downlevel_webgl2_defaults()` наследует
+   `max_texture_dimension_2d = 2048` от `downlevel_defaults()` —
+   2048-кап НЕ изменился, значит `boost_gl_limits` (поднятие до
+   реального максимума адаптера для HiDPI-canvas, FR-WASM-02 §8) так
+   же необходим, как на wgpu 22. Новое поле `apply_limit_buckets`
+   (RequestAdapterOptions, wgpu 30) — анти-фингерпринтинговое
+   бакетирование лимитов; CanvasDesk явно передаёт `false` (= дефолт):
+   `adapter.limits()` возвращает сырые лимиты, boost берёт настоящий
+   максимум адаптера. Тесты boost_gl_limits (5) зелёные в CI.
+3. **Retry FR-WEBGPU-DIAG не зацикливается — семантика wgpu 30
+   подтвердилась логами.** Режим WebGL2-фолбэка (Chromium,
+   `--disable-features=WebGPU`): ровно 3 bounded-попытки
+   `request_adapter` (default → high-performance → low-power,
+   интервал 50 мс), затем ступень 2 GL — консоль фиксирует
+   «3 retry попытки исчерпаны — фолбэк на GL (WebGL2)». Цикла нет,
+   WARN-трейл полный, адаптер GL (ANGLE/SwiftShader) получен с 1-й
+   попытки. В режиме WebGPU адаптер разрешается с 1-й попытки —
+   retry вообще не включается.
+4. **Чек-лист брифа закрыт агентными оракулами (шаг 2) — сценарий
+   `scripts/wasm_ui_w5_scenario.mjs` (новый, в репо).** Стенд:
+   debug-wasm (процедура wasm_ui_test.sh) + релизный бандл (trunk
+   0.21.14), Chromium headed под Xvfb (Playwright), `?ui=demo`,
+   два режима — WebGPU (SwiftShader-Vulkan) и WebGL2-фолбэк:
+
+   | Оракул | WebGPU | WebGL2-фолбэк |
+   |---|---|---|
+   | адаптер получен (лог GpuContext::new) | ✅ attempt=1 | ✅ GL attempt=1 (после 3 null WebGPU) |
+   | строка «web GPU-бэкенд выбран» | ✅ BROWSER_WEBGPU | ✅ GL |
+   | попыток request_adapter | 1 | 4 = 3 null + 1 GL |
+   | канва рисует (тёмные пиксели кадра) | 97.94 % | 97.95 % |
+   | стабильность кадра A→B | 0 px | 0 px |
+   | скролл/зум (wheel, пиксельный дифф) | 18 401 px | 18 375 px |
+   | инлайн-ввод (dblclick + «Правка W5 кириллица») | 609 937 px | 612 730 px |
+   | page-error/panic | 0 | 0 |
+
+   Кириллица: ввод принят, ошибок шейпинга/атласа/глифов в консоли
+   нет; скриншоты `target/wasm_ui/w5_*.png` (обе темы/режимы).
+   Наблюдение: dblclick в витрине демо пересоздаёт App — в одном
+   прогоне exercising'ются оба бэкенда (WebGPU-инициализация +
+   capture-GL при consent в localStorage); ожидаемое поведение
+   FR-091 v2, не регрессия.
+5. **Релизный бандл собирается и оптимизируется (процедура pages-web
+   воспроизведена локально): пайплайн wgpu 30 проходит целиком.**
+   trunk 0.21.14 --release (LTO thin) + wasm-bindgen-cli 0.2.127
+   (= Cargo.lock) + wasm-opt -Oz (binaryen 125 — справляется с
+   wgpu-30-wasm). Грабля окружения: `NO_COLOR=1` в агентном сэндбоксе
+   ломает trunk→cargo 1.99 (`--no-color 1` невалиден); CI не затронут
+   (`web_bundle.sh` ставит `NO_COLOR=false` — валидное значение),
+   локально лечится `env -u NO_COLOR`.
+6. **Размер бандла ПРЕВЫШАЕТ бюджет §8.8 — честная находка волны,
+   решение за W6/владельцем.** wasm: 19.6 МБ → wasm-opt -Oz →
+   **14.9 МБ raw** (js 176 КБ, index 159 КБ); gzip -9 = 5.9 МБ
+   (brotli на CI даст точное число, ожидаемо ~5 МБ). Бюджет
+   wasm-port §8.8 — ≤8 МБ raw / ≤4 МБ brotli, загрузка ≤5 с на
+   25 Мбит/с — превышен по raw (×1.9) и по brotli (~×1.25). Контекст:
+   бюджет писался до деплоя /app (Pages был в legacy-режиме, бандл
+   никогда не публиковался и не контролировался); wgpu 30 +
+   harfrust-стек тяжелее wgpu 22. Оценка загрузки: 14.9 МБ raw ≈
+   4.8 с, brotli ~5 МБ ≈ 1.7 с на 25 Мбит/с — с компрессией
+   укладывается в ≤5 с. Опции: принять (приватный инструмент),
+   поднять бюджет, или отдельная задача оптимизации размера
+   (opt-level="z", strip, анализ по крейтам).
+7. **Pages-preview: interim через draft-release; Pages-деплой — за
+   владельцем (один клик).** Репозиторий в legacy-режиме Pages
+   (Source: Deploy from a branch, main/docs) — `deploy-pages@v4`
+   в pages-web.yml требует Source: GitHub Actions (инструкция в
+   шапке workflow и README «Веб-версия»; README предупреждает про
+   план Pro/Team для приватного репо). Оба токена сессии без
+   pages:write — PATCH build_type через API отвергнут (404).
+   Действия: (а) draft-release `w5-web-preview` с zip-бандлом +
+   инструкцией локального прогона — доступен владельцу немедленно;
+   (б) владельцу переключить Settings → Pages → Source: GitHub
+   Actions, после чего агент запускает workflow_dispatch
+   pages-web.yml на ветке — живой preview на
+   danku13.github.io/CanvasDesk/app/ (приватный репо — виден только
+   владельцу). До переключения workflow_dispatch не запускался —
+   деплой гарантированно упал бы в legacy-режиме.
+
+### Журнал
+
+- Окружение восстановлено после сброса сэндбокса (четвёртый за трек):
+  rustc 1.99.0 (rsproxy, версия W0–W4), wasm32-таргет, полные
+  checkout/шрифты, trunk/wasm-bindgen-cli/wasm-opt (prebuilt где есть)
+- wasm_gate --check (ступени 0–1): аудит времени 0 нарушений;
+  cargo check wasm32 ×7 крейтов — зелёный
+- Сценарии W5: webgpu/webgl2/release-webgpu — 3 прогона, все
+  оракулы зелёные, логи `target/wasm_ui/w5_*_logs.txt`
+- Релизный бандл: trunk build 4m32s (кэш возобновляемый),
+  wasm-opt -Oz 19.6→14.9 МБ, отчёт размеров снят
+- Draft-release w5-web-preview: zip бандла + README локального
+  прогона (python3 -m http.server)
+- Коммит волны: сценарий + docs; тег `upgrade/step-5-web` после
+  зелёного CI
+
+### Верификация
+
+- wasm-check локально — ✅ (паритет CI 12/12 на df0f821)
+- Аудит лимитов — ✅ 2048-кап не изменился, boost_gl_limits валиден,
+  apply_limit_buckets=false корректен (исходники wgpu-types 30.0.1)
+- WebGPU-сценарий — ✅ все оракулы (адаптер/стабильность/zoom/ввод)
+- WebGL2-фолбэк — ✅ ровно 3 retry → GL, рендер живой, 0 паник
+- Релизный бандл — ✅ trunk+wasm-opt пайплайн, прогон в браузере
+- Размер §8.8 — ⚠️ 14.9 МБ raw / 5.9 МБ gzip — бюджет превышен,
+  решение за W6 (см. решение 6)
+- Pages-preview — 🔄 interim через draft-release; полный Pages-деплой
+  ждёт переключения Source владельцем
