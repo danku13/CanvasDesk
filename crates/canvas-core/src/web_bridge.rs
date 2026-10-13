@@ -19,15 +19,24 @@
 //! - [`POINTER_COARSE`] — coarse-указатель (тач — основной ввод);
 //!   источник `matchMedia("(pointer: coarse)")` в canvas-web. На нативе
 //!   false: тачскрины Windows идут через OS-эмуляцию мыши (FR-092),
-//!   поведение натива не меняется.
+//!   поведение натива не меняется. Thread-local (W3 #73): писатель —
+//!   главный поток web-рантайма, читатели — hit-тесты того же потока,
+//!   поэтому изоляция по потокам не меняет продуктовую семантику, но
+//!   устраняет межтестовую гонку параллельного libtest (flake macOS CI:
+//!   переключения coarse видели непиненные hit-тесты palette/whatif_ui —
+//!   upgrade-log §W3, решение 5).
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::cell::Cell;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// FR-096: поколение тач-нажатия (см. модульную доку).
 pub static TOUCH_PRESS_GEN: AtomicU64 = AtomicU64::new(0);
 
-/// FR-097: coarse-указатель — тач-экран основной ввод (см. модульную доку).
-pub static POINTER_COARSE: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    /// FR-097: coarse-указатель — тач-экран основной ввод (см. модульную
+    /// доку; thread-local — W3 #73, гонка параллельных тестов).
+    pub static POINTER_COARSE: Cell<bool> = const { Cell::new(false) };
+}
 
 /// FR-096: зафиксировать новое тач-нажатие (вызывает canvas-app на
 /// `Action::Press` машины жеста).
@@ -42,12 +51,12 @@ pub fn touch_press_gen() -> u64 {
 
 /// FR-097: записать признак coarse-указателя (вызывает canvas-web).
 pub fn set_pointer_coarse(coarse: bool) {
-    POINTER_COARSE.store(coarse, Ordering::Relaxed);
+    POINTER_COARSE.set(coarse);
 }
 
 /// FR-097: coarse-указатель активен? (читает canvas-app в hit-тестах).
 pub fn pointer_coarse() -> bool {
-    POINTER_COARSE.load(Ordering::Relaxed)
+    POINTER_COARSE.get()
 }
 
 #[cfg(test)]
