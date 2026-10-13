@@ -103,13 +103,37 @@ jobs:
           sudo apt-get install -y -q brotli
           wasm-opt --version
 
-      # База public-url = имя репозитория (project-pages): /CanvasDesk/app/
+      # База public-url — домен-адаптивно (deps-W5, решение 12): с
+      # кастомным доменом сайт живёт в корне домена (GitHub 301 мапит
+      # danku13.github.io/CanvasDesk/x → <домен>/x), ассеты обязаны
+      # ссылаться на /app/...; без домена — база project-pages
+      # /<repo>/app. cname читаем из Pages API: GITHUB_TOKEN уже имеет
+      # pages:write (permissions), gh предустановлен на runner; сбой
+      # API (2 попытки) → консервативный фолбэк на путь репозитория.
+      - name: База public-url (cname из Pages API)
+        id: base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CNAME=$(gh api "repos/${GITHUB_REPOSITORY}/pages" --jq '.cname // ""' 2>/dev/null || true)
+          if [ -z "$CNAME" ]; then
+            sleep 3
+            CNAME=$(gh api "repos/${GITHUB_REPOSITORY}/pages" --jq '.cname // ""' 2>/dev/null || true)
+          fi
+          if [ -n "$CNAME" ]; then
+            BASE="/app"
+            echo "custom domain: ${CNAME} -> public-url ${BASE}/"
+          else
+            BASE="/$(basename "$GITHUB_REPOSITORY")/app"
+            echo "no custom domain -> public-url ${BASE}/"
+          fi
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+
       - name: Сборка web-бандла (trunk release + wasm-opt -Oz) в /app
         env:
           CARGO_INCREMENTAL: "0"
         run: |
-          BASE="/$(basename "$GITHUB_REPOSITORY")/app"
-          scripts/web_bundle.sh --public-url "$BASE/" --dist _site/app
+          scripts/web_bundle.sh --public-url "${{ steps.base.outputs.base }}/" --dist _site/app
 
       - uses: actions/upload-pages-artifact@v3
         with:
