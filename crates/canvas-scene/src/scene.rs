@@ -2259,12 +2259,12 @@ impl SceneState {
 mod reserve_tests {
     use super::*;
     use crate::measure::install_measured_reserve;
+    // Общий лок установок глобального мока уровня 2 (RESERVE_INSTALL_LOCK
+    // в measure.rs): сериализация с refit-тестами measure — гонка подмены
+    // мока ловилась флейком CI 2026-10-13 (ран 38460257938).
+    use crate::measure::RESERVE_INSTALL_LOCK as INSTALL_LOCK;
     use canvas_core::Node;
     use std::path::PathBuf;
-    use std::sync::Mutex;
-
-    /// Параллельные тесты меняют глобальный уровень 2 (install) — сериализуем.
-    static INSTALL_LOCK: Mutex<()> = Mutex::new(());
 
     fn scene_with(node: Node) -> SceneState {
         let mut canvas = Canvas::default();

@@ -262,6 +262,16 @@ pub fn install_measured_reserve(f: MeasuredReserveFn) {
     *guard = Some(f);
 }
 
+/// Тест-лок установок `MEASURED_RESERVE`: общий для установщиков мока —
+/// refit-тестов `measure.rs::tests` и всех `scene.rs::reserve_tests`
+/// (сериализация подмены глобальной функции уровня 2). Гонка ловилась
+/// флейком CI `first_meeting_grows_stale_height_without_shrink:
+/// 140 >= 180` (2026-10-13, ран 38460257938): параллельный refit-тест
+/// ставил identity-мок между install(+40) и recompute_flow сцены —
+/// grown равен чистой оценке, needed — оценке + 40.
+#[cfg(test)]
+pub(crate) static RESERVE_INSTALL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Текущее измерение уровня 2: установленное приложением или оценка.
 /// FR-069 хвосты (T9-сессия 2026-09-24): `auto_rows` — зеркало
 /// `estimated_result_reserve_height` (ряд подписи зоны авто-строк).
@@ -700,6 +710,11 @@ mod tests {
     /// формула, детерминированно).
     #[test]
     fn refit_to_measured_content_grows_and_shrinks() {
+        // Сериализация с scene::reserve_tests — общий глобальный мок уровня 2
+        // (гонка установок ловилась флейком CI 2026-10-13, ран 38460257938).
+        let _guard = RESERVE_INSTALL_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         // Установка уровня 2 = None → fallback на оценку уровня 1 (без
         // шейпинга, детерминированно). Для теста достаточно: measured_reserve
         // = estimated_result_reserve_height при None.
@@ -754,6 +769,11 @@ mod tests {
     /// (шапка + зазор + один ряд + паддинг); усадка ниже порога бессмысленна.
     #[test]
     fn refit_to_measured_content_respects_min_bound() {
+        // Сериализация с scene::reserve_tests — общий глобальный мок уровня 2
+        // (гонка установок ловилась флейком CI 2026-10-13, ран 38460257938).
+        let _guard = RESERVE_INSTALL_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         install_measured_reserve(
             |text, width, lines, desc, expanded, footer, sigma, auto_rows| {
                 estimated_result_reserve_height(

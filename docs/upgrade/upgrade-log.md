@@ -522,6 +522,22 @@ licenses, docs/lay7/v3-ui линты, llm-proxy, artifacts ×3)
   /CanvasDesk/app/*-ссылками; этот триггер-коммит запускает
   pages-web на ветке — первый деплой бандла wgpu-30 с
   public-url /app под доменом
+- Флейк CI пойман по корню (ран 38460257938, gates ubuntu,
+  docs-only коммит 797bfbf1 — код идентичен зелёному c04b949e):
+  `scene::reserve_tests::first_meeting_grows_stale_height_without_shrink`
+  паника «140 >= 180» = гонка глобального мока MEASURED_RESERVE:
+  refit-тесты measure.rs (706/757) ставят identity-мок БЕЗ лока,
+  INSTALL_LOCK из scene.rs им не общий; числа сходятся точно
+  (grown = чистая оценка = identity-мок, needed = оценка + 40
+  = мок сцены). Фикс (тест-инфраструктура, продукт не тронут):
+  общий `RESERVE_INSTALL_LOCK` (cfg(test), measure.rs) — берут
+  все 6 scene::reserve_tests (алиас вместо локального статика)
+  и оба refit-теста measure; верификация 10×148 зелёных, fmt
+  + clippy -D warnings чистые. Класс тот же, что флейк
+  POINTER_COARSE в W3. Прим.: читатели мока вне reserve/refit
+  тестов (не-инсталляторы) по-прежнему видят последний
+  установленный мок — пред-существующее поведение, вне скоупа
+  фикса, кандидит в W6 (reset-хелпер/снапшот-семантика)
 
 ### Верификация
 
