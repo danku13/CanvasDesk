@@ -21,8 +21,10 @@ on:
   push:
     branches: [upgrade/render-stack]
     paths: ["docs/upgrade/domain-revalidate.flag"]
-  workflow_dispatch: # ручной запуск (кнопка Run workflow) при необходимости
-  repository_dispatch: # программный триггер (POST /dispatches, contents:write)
+  workflow_dispatch: # ручной запуск (кнопка Run workflow)
+  repository_dispatch: # программный триггер (POST /dispatches)
+  schedule:
+    - cron: "*/20 * * * *" # deps-W5: автономный прогон до победного (актор github-actions[bot], без капсулы PAT); после Enforce HTTPS график удалить
 
 permissions:
   contents: read
