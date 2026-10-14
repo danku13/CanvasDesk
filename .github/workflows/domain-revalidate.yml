@@ -1,0 +1,97 @@
+name: Pages domain revalidation
+
+# deps-W5 (#75), подсессия 4: одноразовый перезапуск верификации кастомного
+# домена app.canvasdesk.tech. InvalidDNSError застрял на стороне GitHub после
+# Source-флипа 13 окт; DNS-зона проверена извне и безупречна (делегация
+# корректна, DNSSEC выключен, 6 публичных резолверов + авторитативные
+# ns1/ns2.reg.ru отвечают CNAME стабильно). Обычные деплои чек-статус не
+# перезапускают.
+#
+# Почему здесь: PAT сессии имеет только pages:read (PUT /pages → 403),
+# а GITHUB_TOKEN в Actions получает pages:write (permissions ниже) —
+# поэтому домен-менеджмент делегирован этому workflow. Последовательность
+# ровно та, что делает UI: Remove custom domain → Re-add → (ждём выпуск
+# LE-сертификата) → Enforce HTTPS. Idempotent: при уже включённом
+# https_enforced ничего не делает.
+#
+# Триггер: push, меняющий docs/upgrade/domain-revalidate.flag (флаг-файл),
+# чтобы не мешать обычным деплоям; повторный запуск — правкой флага.
+
+on:
+  push:
+    branches: [upgrade/render-stack]
+    paths: ["docs/upgrade/domain-revalidate.flag"]
+  workflow_dispatch: # ручной запуск при необходимости
+
+permissions:
+  contents: read
+  pages: write
+
+concurrency:
+  group: "domain-revalidate"
+  cancel-in-progress: false
+
+jobs:
+  revalidate:
+    name: remove / re-add / enforce https
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Inspect Pages state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euxo pipefail
+          gh api "repos/$REPO/pages" --jq '{cname, status, https_enforced, html_url}'
+          if [ "$(gh api "repos/$REPO/pages" --jq '.https_enforced')" = "true" ]; then
+            echo "ALREADY_ENFORCED=1" >> "$GITHUB_ENV"
+            echo "https_enforced=true — пропуск (idempotent)"
+          fi
+
+      - name: Remove custom domain
+        if: env.ALREADY_ENFORCED != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euxo pipefail
+          echo '{"cname": null}' | gh api -X PUT "repos/$REPO/pages" --input - --silent
+          echo "removed; пауза 30 c (сброс чек-статуса)"
+          sleep 30
+          gh api "repos/$REPO/pages" --jq '{cname, https_enforced}'
+
+      - name: Re-add custom domain
+        if: env.ALREADY_ENFORCED != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euxo pipefail
+          echo '{"cname": "app.canvasdesk.tech"}' | gh api -X PUT "repos/$REPO/pages" --input - --silent
+          echo "re-added; пауза 20 c (запуск DNS-check + очередь LE)"
+          sleep 20
+          gh api "repos/$REPO/pages" --jq '{cname, https_enforced}'
+
+      - name: Wait for Let's Encrypt certificate and enforce HTTPS
+        if: env.ALREADY_ENFORCED != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DOM: app.canvasdesk.tech
+        run: |
+          set -uo pipefail
+          issued=0
+          for i in $(seq 1 120); do
+            subj=$(echo | openssl s_client -servername "$DOM" -connect "$DOM:443" 2>/dev/null | openssl x509 -noout -subject 2>/dev/null || true)
+            echo "poll#$i subj='${subj:-none}'"
+            case "$subj" in *canvasdesk*) issued=1; break;; esac
+            sleep 30
+          done
+          if [ "$issued" = "1" ]; then
+            echo "сертификат выпущен → Enforce HTTPS"
+            echo '{"cname": "app.canvasdesk.tech", "https_enforced": true}' | gh api -X PUT "repos/$REPO/pages" --input - --silent
+          else
+            echo "::warning::сертификат не выпущен за 60 мин — enforce пропущен (проверить DNS-check в UI и перезапустить флагом)"
+          fi
+          gh api "repos/$REPO/pages" --jq '{cname, status, https_enforced, html_url}'
