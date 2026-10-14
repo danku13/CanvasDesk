@@ -568,3 +568,13 @@ licenses, docs/lay7/v3-ui линты, llm-proxy, artifacts ×3)
   очередь GitHub) → Enforce HTTPS → WebGPU (secure context);
   до того — WebGL2-фолбэк (http-каноникал)
 
+
+### 2026-10-14 · W5 (#75) · перезапуск верификации домена
+- InvalidDNSError у app.canvasdesk.tech висит в UI (кэш-чек GitHub),
+  при этом DNS безупречен: делегирование .tech→ns1/ns2.reg.ru
+  совпадает с зоной, DNSSEC выключен (нет DS/DNSKEY), 6 публичных
+  резолверов NOERROR+CNAME, авторитативные стабильны (DO-бит, TCP/UDP),
+  negative-TTL 3 ч. Убран устаревший корневой CNAME-артефакт от
+  Source-флипа (003f8da7) — при Actions-источнике файл не нужен и
+  сбивает доменную логику при будущих переключениях; этот пуш
+  перезапускает deploy-pages → ревалидация домена и очередь LE.
