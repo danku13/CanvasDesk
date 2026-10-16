@@ -80,7 +80,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: dtolnay/rust-toolchain@stable
+      # cargo-deny-action@v2 красный на раннерах с 2026-10-14 (~44с,
+      # регресс образа ubuntu-latest на фоне миграции на 26.04 —
+      # actions/runner-images#14748); локальный cargo deny check зелёный.
+      # Временная замена на явные шаги с пиновым cargo-deny 0.20.2
+      # (та же версия, что бандлит action v2.1.1). Вернуть action после
+      # починки образа/релиза действия.
+      - name: Install cargo-deny 0.20.2 (prebuilt musl)
+        run: |
+          curl -sL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz | tar xz
+          mv cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny "$HOME/.cargo/bin/"
+      - name: cargo deny check
+        run: cargo deny check
 
   # LAY-W12→W14 (аудит layouts-2026-10 §5; ревью layouts-w1-w12-review.md
   # §3.1 P1-2, §3.2 P2-5/P2-6): регрессионный гейт LAY7 — python3-сканер
