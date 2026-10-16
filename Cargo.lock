@@ -294,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-app"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "canvas-llm",
  "include_dir",
@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-graph-builder"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "canvas-core",
@@ -356,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-llm"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "getrandom 0.3.4",
@@ -374,7 +374,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-mcp"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-mcp-headless"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "canvas-core",
@@ -394,11 +394,11 @@ dependencies = [
 
 [[package]]
 name = "canvas-preview-host"
-version = "0.5.0"
+version = "0.6.0"
 
 [[package]]
 name = "canvas-render"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "canvas-core",
@@ -419,7 +419,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-scene"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "canvas-core",
  "canvas-render",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-shell"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "arboard",
  "canvas-core",
@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-suggest"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "canvas-llm",
@@ -458,7 +458,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-ui"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "canvas-core",
  "cosmic-text",
@@ -466,7 +466,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-web"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "canvas-app",
@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "canvas-widgets"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "canvas-core",
  "image",
