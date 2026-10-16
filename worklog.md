@@ -456,3 +456,24 @@ Stage Summary:
 - Тумблер «Адаптивные модали (β)» работает на всех вьюпортах; приёмка #64 возобновляема с новым билдом
 - Урок для гейтов: draw==hit нужно проверять и на путях ввода (pick/wheel), не только на реестре
 Tokens: scope=m4-blocker-85
+
+---
+Task ID: RELEASE-V060
+Agent: Super Z (main)
+Task: Очередной релиз «со всеми доработками» — v0.6.0-alpha (359 коммитов после v0.5.0)
+
+Work Log:
+- Актуализация: origin/main ушёл вперёд соседними сессиями (c94b57b фикс #85 pick/wheel настроек, CNAME + deps-W5 домен app.canvasdesk.tech #75) — reset на b6ed49c
+- #64-блокер: уже снят соседней сессией (issue #85 closed, c94b57b: settings_layout_current — единый источник pick/wheel, draw==hit восстановлен) — верифицировано спот-чеком input.rs:2548/5217 ← app.rs:7460
+- Диагноз красного CI на main (629–631): падает ТОЛЬКО licenses (cargo-deny), за 44с — сетевой клон advisory-db в раннере; локально cargo-deny 0.20.2 ЗЕЛЁНЫЙ (advisories/bans/licenses/sources ok) — ложный красный инцидентного окна GitHub
+- Локальные гейты на b6ed49c: fmt ✅, check ✅, lay7 ✅, doc_lint ✅ (973 ссылки); cargo test: 909 passed / 3 failed — palette::layout_hit_and_triggers, whatif_ui::overrides_list_layout_* (16 vs 17 рядов) — средозависимость измерения текста (fallback-шрифты контейнера); CI gates ubuntu/macos/windows на b6ed49c — SUCCESS (авторитетно)
+- Токен-блокер: старый PAT без Contents:write (пуш/релизы 401/403/404) → владелец выдал новый PAT; пуш и REST-запись восстановлены
+- Бамп 0.5.0 → 0.6.0: Cargo.toml (13 крейтов) + Cargo.lock через cargo check (без ручных правок — урок 6f22f24) + запись 2026-10-16 (release) в «Историю изменений» роадмапа
+- Коммит 9f00a4cd запушен; тег v0.6.0 запушен; GitHub Release v0.6.0-alpha создан (id 414974969, prerelease, двуязычные ноты EN+RU)
+- build-all (тег) / Pages / CI — запущены, артефакты приложит softprops к существующему релизу
+
+Stage Summary:
+- Релиз v0.6.0-alpha опубликован: https://github.com/danku13/CanvasDesk/releases/tag/v0.6.0
+- Вошло: UI-кит T/C/L/A/D+INT, Wave M адаптивные модали β (эпик #55), K4-витрина (#62), мульканвас C1–C5 (FR-104–108), CR-035 web-ui (#57/#60), хотфикс #56, доки-контур v2.1 (#33), EN-волны (#24), use-cases (#47), инфра домена (#75)
+- Открытое: мониторинг CI 9f00a4cd (licenses-джоба) и build-all (артефакты); приёмка #64 — за владельцем на новом билде Pages
+Tokens: scope=release-v060
