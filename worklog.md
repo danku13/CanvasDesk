@@ -477,3 +477,19 @@ Stage Summary:
 - Вошло: UI-кит T/C/L/A/D+INT, Wave M адаптивные модали β (эпик #55), K4-витрина (#62), мульканвас C1–C5 (FR-104–108), CR-035 web-ui (#57/#60), хотфикс #56, доки-контур v2.1 (#33), EN-волны (#24), use-cases (#47), инфра домена (#75)
 - Открытое: мониторинг CI 9f00a4cd (licenses-джоба) и build-all (артефакты); приёмка #64 — за владельцем на новом билде Pages
 Tokens: scope=release-v060
+
+---
+Task ID: RELEASE-V060-FIXUP
+Agent: Super Z (main)
+Task: Релиз v0.6.0-alpha — доводка: notices-дрифт (build-all) и красный licenses-джоб (CI)
+
+Work Log:
+- build-all по тегу v0.6.0 упал: дрифт THIRD-PARTY-NOTICES.md — deps-волны после v0.5.0 меняли Cargo.lock без перегенерации (306 vs 288 MIT-крейтов, +sha2 0.10.9); перегенерировано локально cargo-about 0.9.2 (= latest = версия CI), коммит 83e01ac8, тег перемещён force-push на фикс
+- build-all повторно: SUCCESS — артефакты приложены к релизу (linux 31MB, macos universal + .app, windows 26MB, THIRD-PARTY-NOTICES.md)
+- CI на 83e01ac: все гейты зелёные, licenses (cargo-deny-action@v2) снова красный — действие не менялось с июля (v2.1.1), регресс среды раннеров (миграция ubuntu-latest на 26.04, runner-images#14748); замена на явные шаги (checkout + rust-toolchain@stable + prebuilt musl 0.20.2) — коммит 7e2078eb
+- CI на 7e2078eb: SUCCESS — main полностью зелёный
+
+Stage Summary:
+- Релиз v0.6.0-alpha: собран, опубликован с артефактами, main зелёный, Pages задеплоен
+- Долг: вернуть cargo-deny-action@v2 после починки образа раннеров (маркер-комментарий в ci.yml)
+Tokens: scope=release-v060-fixup
