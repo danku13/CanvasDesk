@@ -1,15 +1,13 @@
 name: Pages domain diagnostics
 
-# deps-W5 (#75), подсессия 7: прежний «Pages domain revalidation» (Remove→Re-add
-# через GITHUB_TOKEN) мёртв — GitHub блокирует управление Pages-сайтом для всех
-# интеграционных токенов: fine-grained PAT → 403 «by personal access token»,
-# GITHUB_TOKEN в ране (даже с выданным Pages:write) → 403 «by integration»,
-# что доказано логами ранов 38633787625 / 38635481070 / 38635845225 /
-# 38655469782 / 38667813240 / 38694885350. Cron удалён, чтобы не плодить
-# падающие раны каждые 20 минут. Файл оставлен как чистая диагностика
-# DNS/HTTPS с инфраструктуры GitHub Actions (Azure US) — вантаж, близкий к
-# DNS-чекерам самого GitHub. Запуск: правка этого файла (push на main)
-# или кнопка Run workflow.
+# deps-W5 (#75), подсессия 12: диагностика верификации домена canvasdesk.tech.
+# Прежние факты: управление Pages-сайтом через API недоступно интеграционным
+# токенам (PAT/GITHUB_TOKEN → 403), поэтому файл — только read-only пробы.
+# Задача прогона: показать, что видит инфраструктура GitHub/Azure при запросе
+# TXT-записи верификации _github-pages-challenge-danku13.canvasdesk.tech
+# (в DNS у ns1/ns2.reg.ru сейчас значение 68e2902377d8fe3611559d8d7d916b,
+# TTL 86400; раньше было 3ba5cba28fae69bb1090079ab25b51 — значение менялось).
+# Триггер: push этого файла на main или кнопка Run workflow.
 
 on:
   push:
@@ -26,20 +24,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probe app.canvasdesk.tech
+      - name: Probe verification TXT and Pages hosts
         run: |
           set -x
-          echo "=== resolv.conf ==="
-          cat /etc/resolv.conf
-          echo "=== default resolver ==="
+          echo "=== TXT verification record ==="
+          dig +noall +answer TXT _github-pages-challenge-danku13.canvasdesk.tech
+          dig +noall +answer TXT _github-pages-challenge-danku13.canvasdesk.tech @9.9.9.9
+          dig +noall +answer TXT _github-pages-challenge-danku13.canvasdesk.tech @8.8.8.8
+          dig +noall +answer TXT _github-pages-challenge-danku13.canvasdesk.tech @1.1.1.1
+          echo "=== authoritative ==="
+          dig +noall +answer TXT _github-pages-challenge-danku13.canvasdesk.tech @ns1.reg.ru
+          dig +noall +answer TXT _github-pages-challenge-danku13.canvasdesk.tech @ns2.reg.ru
+          echo "=== app / apex ==="
           dig +noall +answer app.canvasdesk.tech CNAME
-          dig +noall +answer app.canvasdesk.tech A
-          echo "=== authoritative ns1/ns2.reg.ru ==="
-          dig +noall +answer @ns1.reg.ru app.canvasdesk.tech CNAME
-          dig +noall +answer @ns2.reg.ru app.canvasdesk.tech CNAME
-          echo "=== apex ==="
           dig +noall +answer canvasdesk.tech A
-          echo "=== HTTP / HTTPS ==="
-          curl -sS -m 15 -o /dev/null -w 'http  %{http_code}\n' http://app.canvasdesk.tech/app/ || true
+          echo "=== HTTPS ==="
           curl -sS -m 15 -o /dev/null -w 'https %{http_code}\n' https://app.canvasdesk.tech/app/ || true
-          echo | openssl s_client -servername app.canvasdesk.tech -connect app.canvasdesk.tech:443 2>/dev/null | openssl x509 -noout -subject -issuer 2>/dev/null || echo "TLS: no cert"
+          echo | openssl s_client -servername app.canvasdesk.tech -connect app.canvasdesk.tech:443 2>/dev/null | openssl x509 -noout -subject 2>/dev/null || echo "TLS: no cert"
